@@ -1,0 +1,154 @@
+---
+GLEP: 83
+Title: EAPI deprecation
+Author: Ulrich Müller <ulm@gentoo.org>
+Type: Informational
+Status: Active
+Version: 2
+Created: 2022-06-30
+Last-Modified: 2024-09-08
+Post-History: 2022-07-11, 2022-07-31, 2024-08-30, 2024-09-01
+Content-Type: text/x-rst
+---
+
+
+Abstract
+========
+
+Introduce standardized criteria for deprecation and banning of EAPIs.
+
+
+Motivation
+==========
+
+So far, old EAPIs were deprecated by the Gentoo Council in an ad-hoc
+manner.  No fixed criteria were used, resulting in unpredictable
+deprecation times after approval of newer EAPIs.  Standardized
+criteria for deprecation and banning will make the life cycle of EAPIs
+more predictable.
+
+
+Specification
+=============
+
+A *deprecated EAPI* is no longer required for the upgrade path of
+users' systems.  Its use is discouraged, and tools like pkgcheck will
+warn about this [#COUNCIL-20130409]_.
+
+A *banned EAPI* must no longer be used, neither for new ebuilds, nor
+for updating of existing ebuilds [#COUNCIL-20140311]_.
+
+The Gentoo Council will deprecate an EAPI when one or more newer
+Council-approved EAPIs are supported by the stable version of Portage,
+namely
+
+* two newer EAPIs, one of them supported for at least 24 months, or
+* one newer EAPI, supported for at least 48 months.
+
+The Gentoo Council will ban a deprecated EAPI when
+
+* 24 months have passed since its deprecation, and
+* it is used by fewer than 5 % of ebuilds in the Gentoo repository.
+
+EAPIs used in profiles are outside the scope of this GLEP.
+
+
+Rationale
+=========
+
+Timing of EAPI deprecation is a trade-off between different factors.
+On the one hand, the total number of EAPIs in active use should be
+limited; this will prevent the learning curve for new developers and
+contributors from becoming too steep and will help to reduce code
+complexity, e.g. in eclasses.
+
+On the other hand, an upgrade path to a stable system is guaranteed
+for one year, plus limited support for systems that are outdated more
+than a year [#COUNCIL-20091109]_.  Therefore, previous EAPIs are still
+required during that time.  A period of 24 months before deprecation
+has been chosen, which is more than the required minimum and will
+allow projects to support a longer upgrade path.
+
+Requiring two newer EAPIs before deprecation will allow ebuilds that
+are otherwise seldom updated to be bumped to the next but one EAPI
+immediately.  However, deprecation of an EAPI should not be deferred
+forever, so it can be effected after a longer waiting period of 48
+months even if only one newer EAPI exists at that point.
+
+A delay of 24 months between deprecation and ban will give ebuild
+authors enough time to update.  This is especially relevant for
+overlays and downstream distributions.  An additional requirement for
+banning an EAPI is that fewer than 5 % of ebuilds are using the EAPI
+in question.  This requirement is defined to help keep the number of
+ebuild updates (and bug reports requesting them) manageable, as a
+banned EAPI is sufficient reason for updating an ebuild.
+
+
+Example
+=======
+
+Under this policy, EAPI 7 will be deprecated when either
+
+* Portage has supported EAPI 8 for 24 months, and supports another
+  later EAPI (e.g. EAPI 9), or
+* Portage has supported EAPI 8 for 48 months.
+
+Portage has supported EAPI 8 since 2021-07-05.  The first condition
+would be fulfilled after 2023-07-05, as soon as an EAPI 9 is also
+supported.  The second condition would be fulfilled after 2025-07-05.
+
+
+Backwards Compatibility
+=======================
+
+The following table compares the actual dates of deprecations and bans
+[#PMS-PROJECT]_ with the dates that would have resulted from the
+criteria proposed in this GLEP ("new date").
+
+====  ==========  ===========  ===========  ==========  ======  ===========  ==========  ======
+EAPI  Portage     Gentoo repo  deprecated               diff.   banned                   diff.
+----  ----------  -----------  -----------------------  ------  -----------------------  ------
+\     stable      usage < 5 %  actual date  new date    months  actual date  new date    months
+====  ==========  ===========  ===========  ==========  ======  ===========  ==========  ======
+0     2005-12-26  2017-02-28   2014-02-25   2009-12-11  -50     2016-01-10   2017-02-28  +14
+1     2007-12-11  2009-10-25   2013-04-09   2011-01-08  -27     2014-03-11   2013-01-08  -14
+2     2009-01-08  2015-03-27   2013-04-09   2012-03-08  -13     2014-03-11   2015-03-27  +12
+3     2010-03-08  2015-01-16   2014-02-25   2013-03-17  -11     2016-01-10   2015-03-17  -10
+4     2011-03-17  2018-01-11   2015-10-11   2016-01-17   +3     2018-04-08   2018-01-17   -3
+5     2012-12-11  2021-06-15   2018-05-13   2018-06-27   +1     2021-08-08   2021-06-15   -2
+6     2016-01-17  2022-11-06   2021-07-11   2021-07-05    0                  2023-07-05
+                  [*]_
+7     2018-06-27
+8     2021-07-05
+====  ==========  ===========  ===========  ==========  ======  ===========  ==========  ======
+
+.. [*] Extrapolated date, obtained by fitting data between 2021-01-01
+   and 2022-07-31 with an exponential function.
+
+
+References
+==========
+
+.. [#COUNCIL-20130409] "EAPI deprecation",
+   Gentoo Council meeting summary 2013-04-09
+   (https://projects.gentoo.org/council/meeting-logs/20130409-summary.txt).
+   Note: The original quote says "Repoman" instead of "pkgcheck".
+
+.. [#COUNCIL-20140311] "Ban on EAPI 1 and 2 should extend to updating
+   EAPI in existing ebuilds", Gentoo Council meeting summary 2014-03-11
+   (https://projects.gentoo.org/council/meeting-logs/20140311-summary.txt)
+
+.. [#COUNCIL-20091109] "Upgrade path for old systems",
+   Gentoo Council meeting summary 2009-11-09
+   (https://projects.gentoo.org/council/meeting-logs/20091109-summary.txt)
+
+.. [#PMS-PROJECT] Gentoo Package Manager Specification project
+   (https://wiki.gentoo.org/wiki/Project:Package_Manager_Specification#EAPI_life_cycle)
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.

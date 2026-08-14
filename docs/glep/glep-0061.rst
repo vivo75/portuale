@@ -1,0 +1,163 @@
+---
+GLEP: 61
+Title: Manifest2 compression
+Author: Robin Hugh Johnson <robbat2@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2008-10-22
+Last-Modified: 2018-04-08
+Post-History: 2009-12-01, 2010-01-31
+Content-Type: text/x-rst
+Requires: 44
+---
+
+Status
+======
+Implementation is complete. Marked as Final by decision of the Gentoo
+Council on 2018-04-08.
+
+Abstract
+========
+Deals with compression of large Manifest2 files.
+
+Motivation
+==========
+With the introduction of MetaManifest, and full-tree Manifest coverage,
+we are faced with the possibility of having very large Manifests.
+
+Preliminary experiments with MetaManifest, show that with just the
+existing per-package Manifests, the full MetaManifest (top-level only,
+no first-level sub directories), for a tree including metadata/, exceeds
+8MiB in size. Applying common compression can achieve a 50-60% reduction
+in this size.
+
+Additionally, some of the larger already-existing Manifests in the tree
+can also be reduced.
+
+This GLEP is not mandatory for the tree-signing specification, but
+instead helps to cut down the size impact of large Manifest2 files, some
+of which are already present in the tree. As such, it is also able to
+stand on its own.
+
+Specification
+=============
+Creation of compressed Manifests:
+---------------------------------
+32KiB is suggested as a arbitrary cut-off point to start generating
+compressed Manifest2 files.
+
+The compression must only applied during the creation of a tree intended
+for end users. No Manifests stored in a VCS should be compressed in the
+VCS. For the main gentoo-portage tree, this means that the compressed
+Manifests should be generated using the CVS to Rsync process.
+
+The Manifest compression process is required to ensure that inconsistent
+compressed versions do not exist.
+
+Validation of Manifests:
+------------------------
+When searching for a Manifest2 file, if the basename form does not
+exist, the package manager should search in the same location using
+common compressed suffixes, and use the compressed file in place of the
+Manifest2.
+
+gzip, bzip2, lzma, xz should all be supported if available on the given
+platform. In the case that multiple versions exist, the package manager
+should simply pick one - they should be identical, differing only in
+compression.
+
+Example Results with a 32KiB cut-off, gzip algorithm
+====================================================
+As of 2010-01-30, the suggested cut-off would impact the following 21 existing
+Manifests, for a saving of nearly 900KiB::
+
+  Size   Path
+   65788 app-doc/linux-gazette/Manifest
+   75739 app-office/openoffice-bin/Manifest
+   40534 app-text/texlive-core/Manifest
+   41710 dev-texlive/texlive-bibtexextra/Manifest
+   38197 dev-texlive/texlive-documentation-english/Manifest
+  129610 dev-texlive/texlive-fontsextra/Manifest
+   36022 dev-texlive/texlive-humanities/Manifest
+  686118 dev-texlive/texlive-latexextra/Manifest
+   43392 dev-texlive/texlive-latexrecommended/Manifest
+   33375 dev-texlive/texlive-mathextra/Manifest
+   39781 dev-texlive/texlive-pictures/Manifest
+   69567 dev-texlive/texlive-pstricks/Manifest
+   75460 dev-texlive/texlive-publishers/Manifest
+   50879 dev-texlive/texlive-science/Manifest
+   36711 kde-base/kde-l10n/Manifest
+   36539 media-gfx/bootsplash-themes/Manifest
+   33058 net-fs/autofs/Manifest
+   39781 www-client/firefox-bin/Manifest
+   48983 www-client/icecat/Manifest
+   60213 www-client/mozilla-firefox/Manifest
+   39065 x11-themes/gkrellm-themes/Manifest
+  
+
+Additionally, with the MetaManifest proposal, the following new manifests would
+also be compressed, for a saving of nearly 4MiB::
+
+  Size    Path
+    33442 app-admin/Manifest
+    71073 app-dicts/Manifest
+    35923 app-emacs/Manifest
+    45808 app-misc/Manifest
+    50169 app-text/Manifest
+   112786 dev-java/Manifest
+    65581 dev-libs/Manifest
+    42619 dev-lisp/Manifest
+   182163 dev-perl/Manifest
+    96198 dev-python/Manifest
+    58963 dev-ruby/Manifest
+    59736 dev-util/Manifest
+    58338 eclass/Manifest
+    55749 kde-base/Manifest
+   110064 licenses/Manifest
+    35262 media-gfx/Manifest
+    53995 media-libs/Manifest
+    55607 media-plugins/Manifest
+    71911 media-sound/Manifest
+    34835 media-video/Manifest
+  5747849 metadata/Manifest
+    47452 net-analyzer/Manifest
+    65989 net-misc/Manifest
+   316787 profiles/Manifest
+    67784 sys-apps/Manifest
+    48971 x11-misc/Manifest
+    41475 x11-plugins/Manifest
+  
+
+Backwards Compatibility
+=======================
+The package Manifests should also be maintained as ONLY uncompressed in
+CVS.
+
+For processing of all existing per-package Manifests, if compression is
+used, it should be done in parallel to the existing Manifests, to
+provide for a changeover period. Newer versions of Portage may later
+choose to exclude all non-compressed Manifests during emerge --sync if
+compressed versions are guaranteed to exist on the servers.
+
+MetaManifests may come into existence as compressed from the start, as
+do not have an backwards compatibility issues.
+
+As a side note, this breaks all manual interaction with Manifests
+such as grep, and so should only be applied to large Manifest2 files,
+such as the MetaManifest. 
+
+References
+==========
+.. [GLEP44] Mauch, M. (2005) GLEP44 - Manifest2 format.
+   https://www.gentoo.org/glep/glep-0044.html
+
+Copyright
+=========
+Copyright (c) 2005-2010 by Robin Hugh Johnson.
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.
+
+.. vim: tw=72 ts=2 expandtab:

@@ -1,0 +1,348 @@
+---
+GLEP: 65
+Title: Post-install QA checks
+Author: Michał Górny <mgorny@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 2
+Created: 2014-10-26
+Last-Modified: 2019-02-23
+Post-History: 2014-10-30, 2017-10-17
+Content-Type: text/x-rst
+---
+
+Status
+======
+
+This GLEP has been accepted on the 2017-11-12 Council meeting.
+Implementation is complete, therefore marked as final.
+
+
+Abstract
+========
+
+This GLEP provides two kinds of QA check: checks run on the installation image
+once ``src_install`` returns, and checks run on the live system once
+``pkg_postinst`` returns. The checks can be provided by the Package Manager,
+repositories, packages (installed system-wide) and the system administrator.
+The QA checks can inspect the installation image or live system, output
+and store both user- and machine-oriented QA warning logs, manipulate files
+and abort the install.
+
+
+Motivation
+==========
+
+The current Portage versions have two main QA check mechanisms: repoman
+and post-install QA checks. While repoman is usually considered more
+important, it has severe limitations. In particular, it is run on repository
+without executing the ebuild, therefore it is incapable of inspecting
+the installed files. This is where post-install QA checks become useful.
+
+Over time, many different QA checks have been added to Portage. That includes
+checks corresponding to generic Gentoo rules (like filesystem hierarchy,
+security requirements), checks enforcing Gentoo team policies, and checks
+enforcing correct eclass usage. Some of the checks depend on external tools
+being present.
+
+Keeping those checks directly in Portage sources has two major disadvantages:
+
+1. The checks can not be properly updated without Portage upgrade.
+   In particular, a change in a QA check becomes fully effective when
+   the relevant Portage version becomes stable and the user upgrades.
+   There is no easy way to keep QA checks in sync with eclasses.
+
+2. Gentoo-specific checks are enforced for all repositories and derived
+   distributions. Modifying the QA check list requires forking Portage.
+
+
+Specification
+=============
+
+QA check types
+--------------
+
+There are two kinds of QA checks defined in this specification:
+
+1. Post-install QA checks (``install-qa-check.d``),
+
+2. Post-merge QA checks (``postinst-qa-check.d``).
+
+The post-install QA checks are are executed after the ``src_install`` ebuild
+phase finishes but before the binary package is built or the ``pkg_preinst``
+phase is executed. They can use the same commands as are permitted
+in ``src_install``, and access the installation image ``${D}``
+and the temporary directory ``${T}``.
+
+In case of severe QA issues, the checks are allowed to alter the contents of
+the installation image in order to sanitize them, or call the ``die`` function
+to abort the build.
+
+The post-merge QA checks are executed after the ``pkg_postinst`` ebuild phase
+finishes. They can use the same commands as are permitted in ``pkg_postinst``,
+and access the installed system location ``${ROOT}`` and the temporary
+directory ``${T}``.
+
+The checks are allowed to alter the contents of the filesystem to the same
+degree as ``pkg_postinst`` phase is. They must not call ``die``.
+
+QA check file format & locations
+--------------------------------
+
+QA checks are stored as bash scripts. The checks are identified and ordered
+by file name. If files with same names are present in multiple locations,
+the file in location with the highest priority is used.
+
+The specification defines four sources of QA checks, listed in the order
+of increasing priority:
+
+1. internal checks included in the Package Manager,
+2. repository-specific QA checks,
+3. package-installed QA checks,
+4. sysadmin-defined QA checks.
+
+The internal checks are stored in Package Manager-specific location and should
+be installed along with the Package Manager. It is recommended that only
+generic checks are included in the Package Manager and not checks specific to
+Gentoo policies, packages or eclasses included in Gentoo.
+
+Repository-specific QA checks are included in ``metadata/install-qa-check.d``
+and ``metadata/postinst-qa-check.d`` directories of a repository.
+For an ebuild in question, the repository containing it and its masters are
+traversed for QA checks, with priority decreasing with each inheritance level.
+
+The package-installed QA checks are located in ``/usr/lib/install-qa-check.d``
+and ``/usr/lib/postinst-qa-check.d``, and are intended to be installed
+by packages. The sysadmin-defined QA checks are located
+in ``/usr/local/lib/install-qa-check.d``
+and ``/usr/local/lib/postinst-qa-check.d``.
+
+QA check script format
+----------------------
+
+QA checks are sourced as bash scripts by the Package Manager. QA scripts are
+run in an isolated subshell, and therefore can safely alter the environment
+and change the working directory. QA scripts must always end with a command
+terminating with a successful exit code.
+
+Aside from the standard PMS functions, two additional commands are provided:
+
+1. ``eqawarn`` to output QA warnings to user,
+2. ``eqatag`` to store machine-readable information about QA issues.
+
+Repository-defined QA checks are allowed to ``inherit`` eclasses from
+the repository providing the check or any of its masters. The same
+inheritance rules apply as to ebuilds in the particular repository. Sourced
+eclasses do not affect the final ebuild metadata or phase functions.
+
+Function specification
+----------------------
+
+eqawarn
+~~~~~~~
+Synopsis
+  ``eqawarn <message>...``
+
+Output the specified message to the user as a QA warning, if the QA warning
+output is enabled. The message can contain escape sequences, and they will be
+interpreted according to the rules for ``echo -e`` bash built-in.
+
+The mechanism for enabling QA warning output and the specific output
+facilities are defined by the Package Manager.
+
+eqatag
+~~~~~~
+Synopsis
+  ``eqatag [-v] <tag> [<key>=<value>...] [<file>...]``
+
+Tag the package with specific QA issues. The *tag* parameter is
+a well-defined name identifying specific QA issue. The tag can be additionally
+associated with some data in key-value form and/or one or more *files*.
+The file paths are relative to the installation root (``${D}`` in post-install
+checks or ``${ROOT}`` in post-merge), and need to start with a leading slash.
+
+If ``-v`` (verbose) parameter is passed, the function will also output
+newline-delimited list of files using ``eqawarn``. This is intended
+as a short-hand for both storing machine-readable and outputting user-readable
+QA warnings.
+
+The mechanism used to store tags is defined by the Package Manager. The tag
+names are defined by the specific QA checks. However, it is recommended that
+tags are named hierarchically, with words being concatenated using a dot
+``.``, and that the first word matches QA check filename. For example,
+the tags used by ``60bash-completion`` check would be named
+``bash-completion.missing-alias`` and ``bash-completion.deprecated-have``.
+
+
+Rationale
+=========
+
+QA check types
+--------------
+
+The two types of QA checks were created to account for different kinds
+of common mistakes in ebuilds.
+
+Post-install QA checks can be used to verify the installation image before
+it is merged to a live system or published as a binary package. They can
+account for various problems caused by the ebuild code up to and including
+``src_install``, the upstream code executed as part of any of those phases
+and the supplied files.
+
+Post-merge QA checks can be used to verify the state of system after
+the package is merged and its ``pkg_postinst`` phase is executed. They mostly
+aim to detect missing postinst actions but can do other live system integrity
+checks.
+
+QA check file format & locations
+--------------------------------
+
+The multiple locations for QA checks aim to get the best coverage for various
+requirements.
+
+The checks installed along with the Package Manager are meant to cover
+the generic cases and other checks that rely on Package Manager internals.
+Unlike other categories of QA checks, those checks apply to a single Package
+Manager only and can therefore use internal API. However, it is recommended
+that this category is used scarcely.
+
+Storing checks in the repository allows developers to strictly bind them to
+a specific version of the distribution and update them along with the relevant
+policies and/or eclasses. In particular, rules enforced by Gentoo policies
+and eclasses don't have to apply to other distributions using Portage.
+
+The QA checks are applied to sub-repositories (via ``masters`` attribute)
+likewise eclasses. This makes sure that the majority of repositories don't
+lose QA checks. The QA checks related to eclasses are inherited the same way
+as eclasses are. Similarly to eclasses, sub-repositories can override
+(or disable) QA checks.
+
+System-wide QA checks present the opportunity of installing QA checks along
+with packages. In the past, some QA checks were run only conditionally
+depending on existence of external checker software. Instead, the software
+packages can install their own QA checks directly.
+
+The administrative override via ``/usr/local`` is a natural extension
+of system-wide QA checks. Additionally, it can be used by the sysadmin
+to override or disable practically any other QA check, either internal Portage
+or repository-wide.
+
+Sharing the QA checks has the additional advantage of having unified QA tools
+for all Package Managers.
+
+QA check script format
+----------------------
+
+Use of bash is aimed to match the ebuild format.  The choice of functions aims
+at portability between Package Managers.
+
+The scripts are run in isolated subshell to simplify the checks and reduce
+the risk of accidental cross-script issues.
+
+The script need to end with a successful command as a result of bash
+limitation::
+
+    source foo || die "source failed"
+
+The ``source`` call either returns the exit code of last command in the script
+or unsuccessful exit code in case of sourcing error. In order to distinguish
+between the two, we need to guarantee that the script always returns
+successfully.
+
+The extra ``eqawarn`` log function aims to provide the user with distinction
+between important user-directed warnings and developer-oriented QA issues.
+The ``eqatag`` function aims to store check results in a machine-readable
+format for further processing.
+
+Inheriting eclasses makes it possible to reuse code and improve
+maintainability. The possibility is mostly intended for eclass-specific checks
+that may want to e.g. obtain search paths from the eclass.
+
+Inheriting is allowed only in repository-specific since it is the only
+location where availability of eclasses can be assumed. For system-wide
+checks, we can't assume that the source repository will be available when
+ebuild in question is processed.
+
+Function specification
+----------------------
+eqawarn
+~~~~~~~
+
+This function is already considered well-defined at the time of writing. It is
+supported by Portage and stubbed in ``eutils.eclass``. Therefore,
+the specification aims to be a best match between the current implementation
+and the PMS definition of ``ewarn`` function. The latter specifically involves
+making the output and output control mechanisms PM-defined.
+
+eqatag
+~~~~~~
+
+This functions is defined in order to allow external tools to parse results
+of QA checks easily, tinderbox in particular. The name ``eqatag`` alludes
+to the process of 'tagging' files with QA labels.
+
+The original proposal has used the name ``eqalog`` but it was rejected because
+of potential confusion with user-oriented ``elog`` function.
+
+The tags can be associated both with files and abstract data to accommodate
+the widest range of checks. The additional data is provided in key-value form
+to allow extending or changing the format easily. The file path format is
+meant to match the canonical ``/usr/bin/foo`` paths.
+
+The requirement of leading slash allows the function to safely distinguish
+between key-value data (assuming the key name must not start with a slash)
+and files.
+
+The ``-v`` argument works as a short-hand for an expected-to-be-common
+practice of::
+
+    eqawarn "The following files are frobnicated incorrectly:"
+    eqawarn
+    eqatag -v frobnicate "${files[@]}"
+    eqawarn
+    eqawarn "Please consult http://example.com/frobnicate for more details."
+
+which would be output as::
+
+     * The following files are frobnicated incorrectly:
+     *
+     *   /usr/bin/frobnicatee
+     *   /usr/bin/other-frobnicatee
+     *
+     * Please consult http://example.com/frobnicate for more details.
+
+The mechanism for storing the results is left implementation-defined because
+both the method of running builds and their location varies through Package
+Managers. The original proposal used a well-defined format in ``${T}/qa.log``.
+
+
+Backwards Compatibility
+=======================
+
+Past versions of the Package Managers will only use their own built-in checks,
+and will not be affected by the specification.
+
+Compliant versions of the Package Manager will split the built-in checks into
+multiple files. When particular checks are moved into the repository, the name
+will be retained so that the repository copy will override the built-in check
+and no duplicate checking will happen.
+
+The transferred checks will be removed in the future versions of the Package
+Manager. However, since they will support this GLEP, the relevant checks will
+be used from the repository anyway.
+
+
+Reference implementation
+========================
+
+The reference implementation of ``install-qa-check.d`` is available in Portage
+starting with version 2.2.15 (released 2014-12-04). The support
+for ``postinst-qa-check.d`` was added in 2.3.9 (released 2017-09-19).
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

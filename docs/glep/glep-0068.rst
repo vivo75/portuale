@@ -1,0 +1,562 @@
+---
+GLEP: 68
+Title: Package and category metadata
+Author: Michał Górny <mgorny@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1.5
+Created: 2016-03-14
+Last-Modified: 2026-05-09
+Post-History: 2016-03-16, 2018-02-20, 2022-05-22, 2022-10-07, 2023-02-22,
+              2026-05-09
+Content-Type: text/x-rst
+Requires: 67
+Replaces: 34, 46, 56
+---
+
+Abstract
+========
+
+This GLEP specifies the format of files used to describe category and package
+metadata (``metadata.xml``).
+
+
+Motivation
+==========
+
+At the moment of writing this GLEP, category and package ``metadata.xml``
+lacked proper specification. PMS Appendix A [#PMS-A]_ specified that
+the format of this file is beyond its scope, deferring the specification
+to the DTD file.
+
+The original metadata.dtd file [#METADATA-DTD]_ (the version before cleanups
+related to this spec) did not serve well as the specification. Due to
+the technical limitations on DTD format, it was both unable to enforce
+the specification fully and explain it in a readable form. Furthermore,
+it lacked some important details such as the format of ``<pkg/>`` entries.
+
+Besides that, there were numerous alterations to the format. GLEP 34 added
+metadata files for category descriptions, GLEP 46 added upstream information,
+GLEP 56 added USE flag descriptions, GLEP 67 altered the maintainer
+descriptions. Furthermore, there were additions and removals done without
+a formal specification, e.g. addition of slot descriptions.
+
+Sadly, some of those GLEPs are partially in conflict with other specifications
+— for example, the ``<pkg/>`` element as described in GLEP 56 is different
+than the one originally proposed and used in metadata.xml.
+
+Therefore, the motivation for this GLEP is to provide unified, clear
+and complete specification for both category-wide and package-wide
+metadata.xml files. It is meant to combine previous GLEPs, relevant
+discussions and implementation in order to provide the specification that is
+closest to the originally intended meaning while preserving best compatibility
+with existing tools and data.
+
+
+Specification
+=============
+
+Metadata files
+--------------
+
+This specification provides two kinds of metadata files: category metadata
+files and package metadata files. Both kinds of files use the XML 1.0 file
+format [#XML10]_. They must not use external markup declarations, as defined
+in the XML specification. While they may reference or include a DTD, the parser
+must not fetch or process it.
+
+The data structure of metadata files is defined in this GLEP. The elements
+and attributes do not use namespaces. Conforming files must not contain
+any elements or attributes that are not defined in this specification.
+However, parsers should ignore any unknown elements or attributes in order
+to permit future extension.
+
+Category metadata files are named ``metadata.xml`` and located inside category
+directories in an ebuild repository. Their structure is described
+in `Category metadata`_ section.
+
+Package metadata files are named ``metadata.xml`` and located inside package
+directories in an ebuild repository. Their structure is described
+in `Package metadata`_ section.
+
+Text data
+---------
+
+The following text data types are used:
+
+- text data,
+- multi-line text data.
+
+In case of text data, all whitespace inside the element is normalized
+(consecutive whitespace sequences are replaced by a single SP). Trailing
+and leading whitespace is stripped.
+
+In case of multi-line text data, all whitespace except for newline characters
+is normalized. Newlines are used to delimit lines of text. Leading
+and trailing lines of text that are either empty or consist purely of
+whitespace are stripped. Afterwards, the whitespace belonging to
+the indentation common to all non-empty lines of text is stripped.
+
+Optionally, interspersing text with ``<cat/>`` and ``<pkg/>`` elements can be
+allowed. In this case, ``<cat/>`` element is used to reference a category
+inside the repository, and must contain a valid category name. ``<pkg/>``
+is used to reference a package, and must contain a valid qualified package
+name.
+
+Common attributes
+-----------------
+
+The following common attributes are allowed on multiple elements:
+
+- language specifiers,
+- restriction specifiers.
+
+Language specifiers are used whenever an element supports variants
+in different languages. In this case, each occurrence of the element may
+contain an optional ``lang=""`` attribute that contains an IETF language tag
+[#BCP-47]_. In case no ``lang=""`` attribute is provided, an implicit default
+of ``en`` is assumed.
+
+Restriction specifiers are used whenever an element supports restricting to
+specific package versions. In this case, each occurence of the element may
+contain an optional ``restrict=""`` attribute that contains an EAPI 5
+dependency specification that has to match one or more versions of the
+package. In this case, the metadata provided by the element applies only to
+the package versions matching the restriction.
+
+Category metadata
+-----------------
+
+The category metadata file uses ``<catmetadata/>`` top-level element. This
+element can contain, in any order:
+
+- zero or more ``<longdescription/>`` elements containing category
+  descriptions in different languages (at most one for each language).
+  The category description is formed of multi-line text, optionally
+  interspersed with ``<cat/>`` and ``<pkg/>`` elements.
+
+Package metadata
+----------------
+Top-level structure
+~~~~~~~~~~~~~~~~~~~
+The package metadata file uses ``<pkgmetadata/>`` top-level element. This
+element can contain, in any order:
+
+- zero or more ``<longdescription/>`` elements containing package descriptions
+  in different languages, possibly restricted to specific package versions
+  (at most one for each combination of language and package version).
+  The package description is formed of multi-line text, optionally
+  interspersed with ``<cat/>`` and ``<pkg/>`` elements.
+
+- zero or more ``<maintainer/>`` elements listing package maintainers,
+  optionally restricted to specific package versions. The maintainer format
+  is detailed in `Maintainer descriptions`_.
+
+- zero or more ``<slots/>`` elements containing slot descriptions in different
+  languages (at most one for each language), as detailed
+  in `Slot descriptions`_.
+
+- zero or more ``<stabilize-allarches/>`` elements, possibly restricted
+  to specific package versions (at most one for each version) whose presence
+  indicates that the appropriate ebuilds are suitable for simultaneously
+  marking stable on all architectures where a previous version is stable
+  after arch testing on one of them (i.e. if the package is known to be fully
+  arch-independent).
+
+- zero or more ``<straight-to-stable/>`` elements, possibly restricted
+  to specific package versions (at most one for each version) whose presence
+  indicates that stable keywords should be retained on version bumps (i.e. as
+  a recommendation for developers, which may be overridden if stabilization is
+  deemed inappropriate).
+
+- zero or more ``<use/>`` elements containing USE flag descriptions
+  in different languages (at most one for each language), as detailed
+  in `USE flag descriptions`_.
+
+- at most one ``<upstream/>`` element providing information on upstream
+  of the package, as detailed in `Upstream descriptions`_.
+
+Maintainer descriptions
+~~~~~~~~~~~~~~~~~~~~~~~
+Each ``<maintainer/>`` element describes a single maintainer.
+
+The ``<maintainer/>`` element has an obligatory ``type=""`` attribute whose
+value can be either ``person`` or ``project``.
+
+The ``<maintainer/>`` element contains the following elements, in any order:
+
+- exactly one ``<email/>`` element that contains the maintainer's e-mail
+  address (used as unique identifier),
+
+- at most one ``<name/>`` element that contains the maintainer's
+  human-readable name (real name or nickname),
+
+- zero or more ``<description/>`` elements that explain the role
+  of the maintainer in different languages (at most one ``<description/>``
+  for each language).
+
+Slot descriptions
+~~~~~~~~~~~~~~~~~
+Each ``<slots/>`` element describes slots of a package (in specific language).
+
+The ``<slots/>`` element can contain the following elements:
+
+- zero or more ``<slot/>`` elements describing specific ebuild slots
+  (at most one for each slot name).
+  The ``<slot/>`` element contains an obligatory ``name=""`` attribute stating
+  the slot to which the description applies, and contains slot description as
+  text. Alternatively, a slot name of ``*`` can be used to indicate a single
+  description applying to all slots (no other ``<slot/>`` elements may be used
+  in this case).
+
+- at most one ``<subslots/>`` element describing the role of subslots (all
+  of them) as text.
+
+USE flag descriptions
+~~~~~~~~~~~~~~~~~~~~~
+Each ``<use/>`` element describes USE flags of a package (in specific
+language).
+
+The ``<use/>`` element can contain the following elements:
+
+- zero or more ``<flag/>`` elements describing specific USE flags, optionally
+  restricted to specific package versions (at most one entry for a combination
+  of USE flag name and package version). The ``<flag/>`` element contains
+  an obligatory ``name=""`` attribute stating the name of the USE flag to
+  which the description applies, and contains text, optionally interspersed
+  with ``<cat/>`` and ``<pkg/>`` elements.
+
+Upstream descriptions
+~~~~~~~~~~~~~~~~~~~~~
+The ``<upstream/>`` element provides information on the upstream of a package.
+It contains the following elements:
+
+- zero or more ``<maintainer/>`` elements listing package's upstream
+  maintainers, as described in `Upstream maintainer descriptions`_,
+
+- at most one ``<changelog/>`` element containing URL to an on-line copy
+  of upstream changelog,
+
+- zero or more ``<doc/>`` elements containing URLs to on-line copies
+  of upstream documentation in different languages (at most one for each
+  language),
+
+- at most one ``<bugs-to/>`` element containing upstream bug reporting URL,
+  that can optionally be a ``mailto:`` URL,
+
+- zero or more ``<remote-id/>`` elements listing package identities on package
+  identification trackers. Each of those elements has an obligatory
+  ``type=""`` attribute that matches a pre-defined name of package
+  identification tracker, and a value that is an identifier specific to
+  the tracker. The list of available trackers and their specific identifiers
+  are outside scope of this specification.
+
+Upstream maintainer descriptions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Each ``<maintainer/>`` element inside ``<upstream/>`` describes a single
+upstream maintainer.
+
+The ``<maintainer/>`` element has an optional ``status=""`` attribute whose
+value can be either ``active`` or ``inactive``. If not specified, an implicit
+``unknown`` value is assumed.
+
+The ``<maintainer/>`` element has the following attributes, in any order:
+
+- at most one ``<email/>`` element that contains the maintainer's e-mail
+  address,
+
+- exactly one ``<name/>`` element that contains the maintainer's
+  human-readable name (real name or nickname).
+
+
+Rationale
+=========
+
+Information sources
+-------------------
+
+The basic source of information on current metadata.xml format was
+``metadata.dtd`` as of 2016-03-02 [#ORIGINAL-METADATA-XML]_. Whenever the DTD
+was unclear, appropriate GLEPs were referenced in order to deduce the original
+intent. Whenever the GLEPs were unclear or the elements missed GLEPs, original
+mailing list discussions were referenced.
+
+Removed elements
+----------------
+
+Compared to the original DTD, the following elements were removed (both
+in the spec and in the updated DTD file):
+
+- package-scope ``<changelog/>`` element was removed. It dates back to the
+  original metadata.xml proposal [#ORIGINAL-METADATA-XML]_ but it was never
+  implemented — instead, plain text ChangeLogs were used. Furthermore,
+  GLEP 46 introduced ``<changelog/>`` inside ``<upstream/>`` with
+  different type which collided with the global declaration due to DTD
+  limitations.
+
+- package-scope ``<natural-name/>`` element was removed. It was available for
+  1.5yr and after that time, it reached four packages providing it and no
+  known tool supporting/using it. It was used only to provide a copy of
+  package name with correct case (e.g. libressl -> LibreSSL), therefore
+  the information provided by it was considered redundant.
+
+- top-level ``<packages/>`` variant was removed. It was never used and it was
+  really unclear what its use would be. In any case, this made the DTD
+  simpler.
+
+<pkg/> value format
+-------------------
+
+A debate on valid format of ``<pkg/>`` element values preceded the writing of
+this GLEP. The DTD did not specify a value format restriction on this, only
+suggested that it is used *for cross-linking*. Further on, GLEP 56 redefined
+its value to *a valid CP or CPV*. The practical uses did not include
+the latter case; however, it was common to include EAPI 1 slot specifiers or
+even EAPI 5 slot operators following the qualified package names.
+
+After finding the Doug Goldstein's blog post on introduction of <pkg/>
+elements [#USE-FLAG-METADATA]_, it turned out that the original intent was to
+*allow cross-linking/referencing from packages.gentoo.org*. Since the latter
+uses qualified package names as identifiers, it was decided to restrict
+``<pkg/>`` elements to reference those. For entries that include slot
+specifiers, it is recommended to move the slot specifiers out of ``<pkg/>``
+element.
+
+Language identifiers
+--------------------
+
+Originally, the DTD used implicit default value of ``C``. However, this value
+was not in line with real language specifiers found in ``metadata.xml``.
+The latter usually took form of ISO 639-1 language codes which do not form
+a valid (complete) locale identifiers, while the former is not a valid
+language identifier in any of the considered standards. Furthermore, since
+``en`` was commonly used to identify English in metadata.xml files,
+and no tools relied on the implicit default defined in the DTD, it was decided
+to change the implicit default to ``en``.
+
+Language identifiers were later updated to allow full IETF language tags,
+so that codes like ``pt-BR`` or ``zh-Hant`` can be represented.
+
+Package restrictions
+--------------------
+
+Originally, the DTD described the ``restrict=""`` attribute as: *the format
+of this attribute is equal to the format of DEPEND lines in ebuilds.* This
+specification is based upon this definition. However, for practical reasons it
+added three clarifications to it:
+
+- only package dependency specifications are allowed (i.e. no USE-conditionals
+  or multiple dependency specifications),
+
+- EAPI 5 dependency specifications are allowed. Although ``metadata.xml``
+  provides no EAPI identification mechanism, the top-level profile directory
+  specifies EAPI 5, and Portage supports EAPI 5 since 2012.
+
+- only dependencies referencing the same package are allowed.
+
+Furthermore, DTD added a special case for ``*`` value that *applies if there
+are no other tags that apply*. This behavior was not used at all, and being
+at least a bit confusing (compared to the common use of ``*`` to imply
+matching everything), it was removed.
+
+Upstream block
+--------------
+
+The upstream block was defined by GLEP 46. However, this GLEP is ambiguous
+at the best. Tiziano Müller (one of the original authors) has explained
+the intent behind most of the elements of the GLEP.
+
+In particular, he confirmed that the GLEP lists all elements that are allowed
+explicitly, and no implicit inclusions were meant to be allowed. This means
+that the ``<maintainer/>`` element does not allow a ``<description/>``.
+
+He also confirmed that unless noted otherwise, elements were not allowed to
+be used more than once. This affects ``<bugs-to/>`` and ``<changelog/>``
+elements. Repetitions of ``<doc/>`` were only allowed because DTD technically
+didn't permit restricting them while allowing uses of different languages.
+
+At the time of writing this GLEP, only a single Gentoo package was using
+multiple ``<bugs-to/>`` elements, and no packages were using multiple
+``<changelog/>`` or ``<doc/>`` elements (or non-English docs). For this
+reason, this GLEP enforces the original intent of *at most one* element.
+
+Rationale for upstream maintainer descriptions
+----------------------------------------------
+
+The proper contents of the ``<maintainer/>`` elements in ``<upstream/>``
+blocks were unclear in the DTD since the technical file format limitation
+implied that all elements and attributes added for the Gentoo maintainers
+also applied to upstream maintainers, and vice versa.
+
+The comments in the DTD clearly separated attributes between the two —
+i.e.  stated that the ``type`` attribute is used only for Gentoo maintainers,
+while the ``status`` attribute is used only for upstream maintainers. However,
+package version restrictions and maintainer descriptions were also implicitly
+allowed on them. Since neither of the two was allowed by GLEP 46, this
+specification disallows them.
+
+
+Backwards Compatibility
+=======================
+
+This specification does not introduce any new elements or attributes compared
+to the current DTD. Therefore, all ``metadata.xml`` files created in its
+compliance will be read correctly by the existing tools and will conform
+to the current DTD.
+
+However, this specification is more strict than the rules enforced by the DTD.
+Therefore, not all existing ``metadata.xml`` will be conforming to the spec,
+even though they would be correct according to the DTD. New tools will
+consider the files incorrect and request developers to fix them.
+
+
+Reference implementation
+========================
+
+Parsing metadata.xml
+--------------------
+
+Since the metadata.xml format provided by this specification is compatible
+with existing tool, no new implementation is required for reading those files.
+
+Checking metadata.xml validity
+------------------------------
+
+To provide more strict checking of metadata.xml files, XML schema file is
+provided in the Gentoo xml-schema repository [#XML-SCHEMA]_. This schema
+provides:
+
+- element structure checks,
+
+- data duplication checks (e.g. multiple descriptions for the same flag
+  but see below),
+
+- partial value correctness checks.
+
+The limitations of the schema are:
+
+- values are verified using simple regular expressions, so not all format
+  violations will be caught (e.g. the rule will consider ``app-foo/bar-1``
+  a valid qualified package name when the version suffix is disallowed),
+
+- cross-references can not be checked (package references, category
+  references, URLs, project identifiers),
+
+- ``<maintainer type=""/>`` correctness can not be checked,
+
+- data duplication checks are done per ``restrict=""`` value rather than
+  per every package version matched by the restriction. Therefore, multiple
+  definitions that are applied to a single package by two different
+  ``restrict=""`` rules will not be caught.
+
+Example metadata.xml file
+-------------------------
+
+.. code:: xml
+
+    <?xml version='1.0' encoding='UTF-8'?>
+    <pkgmetadata>
+      <maintainer type='person'>
+        <email>developer@example.com</email>
+        <name>Example Developer</name>
+      </maintainer>
+      <maintainer type='person' restrict='dev-libs/foo:11'>
+        <email>anotherdev@example.com</email>
+        <name>Another Developer</name>
+        <description>CC only on bugs for libfoo.so.11</description>
+      </maintainer>
+      <maintainer type='project'>
+        <email>project@example.com</email>
+        <name>Example Project</name>
+      </maintainer>
+      <maintainer type='person'>
+        <email>upstream@example.com</email>
+        <name>Upstream Developer</name>
+        <description>Upstream developer, wishing to be CC-ed on bugs</description>
+      </maintainer>
+      <longdescription>
+        First paragraph of extensive description.
+
+        Second paragraph.
+      </longdescription>
+      <longdescription lang='de'>
+        Erster Absatz mit detaillierter Beschreibung.
+
+        Zweiter Absatz.
+      </longdescription>
+      <slots>
+        <slot name='11'>Compatibility slot providing libfoo.so.11 only.</slot>
+        <subslots>
+          Match SONAME of libfoo.so.
+        </subslots>
+      </slots>
+      <slots lang='de'>
+        <slot name='11'>Kompatibilitäts-Slot, installiert ausschließlich libfoo.so.11.</slot>
+        <subslots>
+          Subslot ist stets identisch mit dem SONAME von libfoo.so.
+        </subslots>
+      </slots>
+      <use>
+        <flag name='foo'>Enables foo feature</flag>
+        <flag name='bar' restrict='&lt;dev-libs/foo-12'>Enables bar feature (requires <pkg>dev-libs/bar</pkg>)</flag>
+        <flag name='bar' restrict='&gt;=dev-libs/foo-12'>Enables bar feature</flag>
+      </use>
+      <use lang='de'>
+        <flag name='foo'>Konfiguriert das Paket mit Unterstützung für foo</flag>
+        <flag name='bar' restrict='&lt;dev-libs/foo-12'>Konfiguriert das Paket mit Unterstützung für bar (benötigt <pkg>dev-libs/bar</pkg>)</flag>
+        <flag name='bar' restrict='&gt;=dev-libs/foo-12'>Konfiguriert das Paket mit Unterstützung für bar</flag>
+      </use>
+      <upstream>
+        <maintainer status='active'>
+          <email>upstream@example.com</email>
+          <name>Upstream Developer</name>
+        </maintainer>
+        <maintainer status='inactive'>
+          <!-- e-mail unknown -->
+          <name>John Smith</name>
+        </maintainer>
+        <changelog>http://www.example.com/releases.html</changelog>
+        <doc>http://www.example.com/doc.html</doc>
+        <doc lang='de'>http://www.example.com/doc.de.html</doc>
+        <bugs-to>http://www.example.com/issues.html</bugs-to>
+        <remote-id type='foohub'>example/foo</remote-id>
+      </upstream>
+    </pkgmetadata>
+
+German translations provided by tamiko.
+
+
+References
+==========
+
+.. [#PMS-A] PMS Appendix A
+   https://projects.gentoo.org/pms/5/pms.html#x1-163000A
+
+.. [#METADATA-DTD] The original metadata.dtd file
+   https://gitweb.gentoo.org/data/dtd.git/tree/metadata.dtd?id=a908a93b5afe295359e0a01814c9bef8b5268bcd
+
+.. [#XML10] Extensible Markup Language (XML) 1.0 (Fifth Edition)
+   https://www.w3.org/TR/xml/
+
+.. [#BCP-47] BCP 47: "Tags for identifying languages",
+   https://tools.ietf.org/rfc/bcp/bcp47.txt
+
+.. [#ORIGINAL-METADATA-XML] The original metadata.xml proposal:
+   Paul de Vrieze. "IMPORTANT: The proposal for the metadata.xml file".
+   gentoo-dev mailing list, 2003-06-27,
+   Message-ID 200306272248.38169.pauldv\@gentoo.org,
+   https://archives.gentoo.org/gentoo-dev/message/cbcc15e9906c0165976ad66d4343ba7a
+
+.. [#USE-FLAG-METADATA] Doug Goldstein: USE flag metadata
+   https://cardoe.wordpress.com/2007/11/19/use-flag-metadata/
+
+.. [#XML-SCHEMA] Gentoo XML schema
+   https://gitweb.gentoo.org/data/xml-schema.git/
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.

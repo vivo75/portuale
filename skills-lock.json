@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "rust-refactor-helper": {
+      "source": "actionbook/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-refactor-helper/SKILL.md",
+      "computedHash": "614d54b2b16a57965412a3fff048c6d36e6f1535fcbb9ac2cf71e7a987e5a119"
+    }
+  }
+}

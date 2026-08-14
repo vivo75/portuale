@@ -1,0 +1,118 @@
+---
+GLEP: 31
+Title: Character Sets for Portage Tree Items
+Author: Ciaran McCreesh <ciaranm@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2004-10-27
+Last-Modified: 2014-01-17
+Post-History: 2004-10-28, 2004-11-01, 2004-11-11
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+
+A set of guidelines regarding what characters are permissible in the
+portage tree and how they should be encoded is required.
+
+Status
+======
+
+Approved on 2004-11-08 assuming that implementation will include
+documentation for correctly encoding files within nano.
+
+Motivation
+==========
+
+At present we have several developers and many more users whose names
+require characters (for example, accents) which are not part of the
+standard 'safe' 0..127 ASCII range. There is no current standard on how
+these should be represented, leading to inconsistency across the tree.
+
+Although the issues involved have been discussed informally many times, no
+official decision has been made.
+
+Specification
+=============
+
+ChangeLog and Metadata Character Sets
+-------------------------------------
+
+It is proposed that UTF-8 ([1]_) is used for encoding ChangeLog and
+metadata.xml files inside the portage tree.
+
+UTF-8 allows the full range of Unicode ([2]_) characters to be expressed,
+which is necessary given the diversity of the Gentoo developer- and
+user-base.  It is character-compatible with ASCII for the 0..127
+characters and does not significantly increase the storage requirements
+for files which consist mainly of American English characters. It is
+widely supported, widely used and an official standard.
+
+The ISO-8859-* character sets ([3]_) would *not* be appropriate since they
+cannot express the full range of required characters.
+
+Ebuild and Eclass Character Sets
+--------------------------------
+
+For the same reasons as previously, it is proposed that UTF-8 is used as
+the official encoding for ebuild and eclass files.
+
+However, developers should be warned that any code which is parsed by bash
+(in other words, non-comments), and any output which is echoed to the
+screen (for example, einfo messages) or given to portage (for example any
+of the standard global variables) must not use anything outside the
+regular ASCII 0..127 range for compatibility purposes.
+
+files/ Entries Character Sets
+-----------------------------
+
+Patches must clearly be in the same character set as the file they are
+patching. For other files/ entries (for example, GNOME desktop files),
+consistency with the upstream-recommended character set is most sensible.
+
+Suitable Characters for File and Directory Names
+------------------------------------------------
+
+Characters outside the ASCII 0..127 range cannot safely be used for file
+or directory names. (Of course, not all characters inside the ASCII 0..127
+range can be used safely either.)
+
+Backwards Compatibility
+=======================
+
+The existing tree uses a mixture of encodings. It would be straightforward
+to fix existing ChangeLogs and metadata files to use UTF-8.
+
+The ``echangelog`` tool is character-set agnostic. In order to properly
+enter UTF-8, developers would have to switch to a UTF-8 shell session.
+This only applies if the developer is entering new text which uses 'fancy'
+characters -- existing characters are not mangled.
+
+Certain text editors are incapable of handling UTF-8 cleanly. However,
+since the ``echangelog`` tool is generally the correct way to generate
+ChangeLog entries, this should not be a major problem. Generating
+metadata.xml files correctly in these editors could become problematic.
+The ``vim`` and ``emacs`` editors, which appear to be most widely used,
+are both capable of handling UTF-8 cleanly -- for vim, this could be
+configured automatically via the ``gentoo-syntax`` ([4]_) package.
+
+References
+==========
+
+.. [1] RFC 3629: UTF-8, a transformation format of ISO 10646
+       http://www.ietf.org/rfc/rfc3629.txt
+.. [2] ISO/IEC 10646 (Universal Multiple-Octet Coded Character Set)
+.. [3] ISO/IEC 8859 (8-bit single-byte coded graphic character sets)
+.. [4] The app-vim/gentoo-syntax package,
+       https://developer.berlios.de/projects/gentoo-syntax/
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.
+
+.. vim: set tw=74 fileencoding=utf-8 :

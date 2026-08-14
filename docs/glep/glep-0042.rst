@@ -1,0 +1,527 @@
+---
+GLEP: 42
+Title: Critical News Reporting
+Author: Ciaran McCreesh <ciaranm@gentoo.org>,
+        Stephen Bennett <spb@gentoo.org>,
+        Zac Medico <zmedico@gentoo.org>,
+        Ulrich Müller <ulm@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 4
+Created: 2005-10-31
+Last-Modified: 2023-02-22
+Post-History: 2005-11-01, 2005-11-05, 2005-11-07, 2005-12-11, 2005-12-13,
+              2005-12-18, 2006-01-05, 2006-03-02, 2006-03-06, 2006-06-12,
+              2006-09-05, 2016-03-10, 2017-11-27
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+
+This GLEP proposes a new way of informing users about important updates and news
+related to the tree.
+
+Motivation
+==========
+
+Although most package updates are clean and require little user action,
+occasionally an upgrade requires user intervention.  Recent examples of the
+latter include the ``gcc-3.4`` stabilisation on ``x86`` and the ``mysql-4.1``
+database format changes.
+
+There are currently several ways of delivering important news items to our
+users, none of them particularly effective:
+
+* Gentoo Weekly News
+* The ``gentoo-announce``, ``gentoo-user`` and ``gentoo-dev`` mailing lists
+* The Gentoo Forums
+* The main Gentoo website
+* RSS feeds of Gentoo news
+* ``einfo`` and ``ewarn`` messages in ``pkg_setup`` or ``pkg_postinst``
+
+A more reliable way of getting news of critical updates out to users is required
+to avoid repeats of various prior upgrade debacles. This GLEP proposes a
+solution based around pushing news items out to the user via the ``rsync`` tree.
+
+.. Important:: This GLEP does not seek to replace or modify ``einfo`` messages
+   which are displayed post-install. That is a separate issue which is handled
+   by ``elog`` [#bug-11359]_.
+
+Requirements
+============
+
+An adequate solution must meet all of the following requirements:
+
+Preemptive
+    Users should be told of changes *before* they break a system, not after the
+    damage has already been done. Ideally, the system administrator would be
+    given ample warning to plan difficult upgrades and changes, rather than only
+    being told just before action is necessary.
+
+No user subscription required
+    It has already been demonstrated [#forums-apache2]_ that many users do not
+    read the ``gentoo-announce`` mailing list or ``RSS`` feeds. A solution that
+    requires subscription has no advantage over current methods.
+
+No user monitoring required
+    It has already been demonstrated [#forums-apache2]_ that many users do not
+    read news items posted to the Gentoo website, or do not read news items
+    until it is too late. A solution that relies upon active monitoring of a
+    particular source has no advantage over current methods.
+
+Relevant
+    System administrators who do not use a particular package should not have to
+    read news items which affect purely that package. Some news items may be of
+    relevance to most or all users, but those that are not should not be forced
+    upon users unnecessarily.
+
+Lightweight
+    It is not reasonable to expect all users to have an MTA, web browser, email
+    client, cron daemon or text processing suite available on their system.
+    Users must not be forced to install unreasonable extra software to be able
+    to read news items.
+
+No privacy violations
+    Users of the solution should not be required to provide information about
+    their systems (for example, IP addresses or installed packages).
+
+Multiple delivery method support
+    Some users may wish to view news items via email, some via a terminal and
+    some via a web browser. A solution should either support all of these
+    methods or (better still) make it simple to write clients for displaying
+    news items in different ways.
+
+The following characteristics would be desirable:
+
+Internationalisable
+    Being able to provide messages in multiple languages may be beneficial.
+
+Quality control
+    There should be some way to ensure that badly written or irrelevant messages
+    are not sent out, for example by inexperienced developers or those whose
+    English language skills are below par.
+
+Simple for developers
+    Posting news items should be as simple as is reasonably possible.
+
+Simple for users
+    Reading relevant news items should be as simple as is reasonably possible.
+
+Compatibility with existing and future news sources
+    A news system would ideally be able to be integrated with existing news
+    sources (for example, Forums, GWN, the main Gentoo website) without
+    excessive difficulty. Similarly, easy interoperation with any future news
+    sources should not be precluded.
+
+Specification
+=============
+
+Overview
+--------
+
+News items are published and delivered to users as follows:
+
+1. A news item is written. The format to be used is described below.
+
+2. The news item is reviewed, following the process described in
+   `News Item Quality Control`_.
+
+3. The news item is committed to a VCS repository.
+   From here, it is merged with the rsync tree. This is described in `News Item
+   Distribution`_.
+
+4. Users fetch the news item when they sync. This ensures that the news items in
+   question are pushed to the user before the user accidentally makes an
+   unwanted change. No changes to the existing rsync process are required by
+   this GLEP.
+
+5. The package manager filters the news item and, if it is relevant, marks the
+   news item for reading. The package manager should also display a notice
+   informing the user that there are unread news items.
+
+6. The news item is handled by the user's choice of news item reader. See `News
+   Item Clients`_.
+
+Required Portage Enhancements
+-----------------------------
+
+The following extensions to Portage are required:
+
+* Every repository (including overlays) will require a unique identifier. It is
+  assumed that an identifier will be a string consisting of characters from
+  ``a`` to ``z``, ``A`` to ``Z``, ``0`` to ``9``, ``+`` (plus), ``-`` (hyphen)
+  ``_`` (underscore).
+
+* Portage must provide a way for external programs to obtain a list of all
+  repository identifiers for a given system. It is assumed that this will be in
+  the form of a ``portageq`` command (e.g. ``portageq get_repo_ids``).
+
+* Portage must provide a way for external programs to obtain the base path for
+  a repository with a given ID. It is assumed that this will be in the form of
+  a ``portageq`` command (e.g. ``portageq get_repo_root gentoo-x86``).
+
+* Portage must extend ``portageq has_version`` to support restrictions to a
+  given repository ID.
+
+* Portage must extend ``portageq`` to implement a command which returns whether
+  or not the profile used for a given repository ID is exactly the given profile
+  (e.g. ``portageq profile_used default-linux/sparc/sparc64/2004.3
+  gentoo-x86``).
+
+These extensions are assumed during the following specification.
+
+News Item Identities
+--------------------
+
+Each news item will have a unique identifier. This identifier will be in the
+form ``yyyy-mm-dd-short-name``, where ``yyyy`` is the year (e.g. ``2005``),
+``mm`` is the month (``01`` through ``12``) and dd is the day of the month
+(``01`` through ``31``). The ``short-name`` is a very short name describing the
+news item (e.g. ``yoursql-updates``), consisting only of the characters ``a-z``,
+``0-9``, ``+`` (plus), ``-`` (hyphen) and ``_`` (underscore). While there is no
+hard restriction on the length of ``short-name``, limiting it to 20 characters
+is strongly recommended.
+
+News Item Directories
+---------------------
+
+Each news item will be represented by a directory whose name is the same as the
+news item's identifier.
+
+The directory will contain a file named ``yyyy-mm-dd-short-name.en.txt``, which
+contains the text of the news item, in English, in the format described below.
+
+Any translations of a news item will be provided in additional files. Their
+name ``yyyy-mm-dd-short-name.lang.txt`` is obtained from the original filename
+by replacing ``en`` with another IETF language tag [#bcp-47]_. However, only
+the English version of a news item is authoritative.  This anglocentricity is
+justified by precedent [#glep-34]_.
+
+News Item Files
+---------------
+
+A news item file is a text file, encoded using UTF-8 [#rfc-3629]_ for
+compatibility with and for the same reasons as existing Gentoo documentation
+[#docs-policy]_ and the tree [#glep-31]_.
+
+A news item file's content will consist of an RFC 822 style header [#rfc-822]_
+followed by the main body of the message as plain text. This GLEP defines
+various optional and mandatory headers. Future GLEPs may propose new headers —
+tools handling these news items must ignore any unrecognised header.
+
+.. Note:: A previous version of this GLEP had required that news items must
+   be signed with a detached OpenPGP signature. This was deemed no longer
+   necessary after moving news items to a Git repository with commit signing,
+   and deployment of full-tree verification per GLEP 74 [#glep-74]_.
+
+News Item Headers
+'''''''''''''''''
+
+The following headers describe the purpose and format of the news item:
+
+``Title:``
+    A short (maximum 50 characters) descriptive title. Mandatory.
+
+``Author:``
+    Author's name and email address, in the form ``Real Name <email@address>``.
+    Mandatory; multiple author headers may be specified if appropriate.
+
+``Translator:``
+    For translated news items, the translator's name and email address. Multiple
+    translator headers may be specified if appropriate.
+
+``Content-Type:``
+    Only in news item format ``1.0``, where it is mandatory and must be
+    ``text/plain``.
+
+``Posted:``
+    Date of posting, in ``yyyy-mm-dd`` format (e.g. 2005-12-18) for
+    compatibility with GLEP 45 [#glep-45]_. The date must be represented
+    in UTC (Coordinated Universal Time). Translations should use the date
+    of the original news item. Mandatory.
+
+``Revision:``
+    Initially 1. Should be incremented every time a change is made to the news
+    item. Changes that require a re-read of the news item (i.e., most changes
+    that are not spelling or formatting related) should instead use a new news
+    item. Mandatory.
+
+``News-Item-Format:``
+    Known formats are ``1.0`` and ``2.0``.  Future revisions to the format
+    may increment the minor number for forwards-compatible changes (i.e.,
+    still allowing older tools to process the new format), or the major
+    number for major changes.
+
+The following headers are used for filtering:
+
+``Display-If-Installed:``
+    A package dependency specification (for example, ``>=sys-devel/gcc-5``
+    or ``www-servers/apache``) conforming to EAPI 0 [#PMS]_ in news item
+    format ``1.0`` or to EAPI 5 in format ``2.0``.  If the user has the
+    package specified installed from the repository from which the news item
+    was obtained, the news item should be displayed.
+
+``Display-If-Keyword:``
+    A keyword [#glep-22]_ name, for example ``mips`` or ``x86-fbsd``. If the
+    user is on the keyword in question, the news item should be displayed.
+
+``Display-If-Profile:``
+    A profile path, for example ``default/linux/sparc/13.0``. If the
+    user is using the exact profile in question, the news item should be
+    displayed. This header may be used to replace ``deprecated`` files in the
+    future.  In news item format ``2.0``, a terminal asterisk immediately
+    following a slash acts as a wildcard for any further path components,
+    for example ``default/linux/*``.
+
+.. Note:: When performing package moves, developers must also update any
+   relevant ``Display-If-Installed`` headers in news files.
+
+The algorithm used to determine whether a news item is 'relevant' is as
+follows:
+
+* For each ``Display-If-`` header type which occurs at least once:
+
+  + The news item is not relevant if none of the headers of this type are
+    successfully matched.
+
+* Otherwise the news item is relevant.
+
+In particular, if no ``Display-If-`` header is specified, a news item will be
+relevant for all users.
+
+This algorithm was chosen because it makes conditions like "display this news
+item for ``YourSQL`` users who are on ``sparc`` or ``x86-obsd`` relatively
+simple to specify — it is believed that these kinds of condition are far more
+likely to occur than "display this news item for people using ``YourSQL``, or
+for people on ``sparc`` or ``x86-obsd``\" or "display these news items for
+people who use ``YourSQL`` and who are on both ``sparc`` and ``x86-obsd``\".
+
+News Item Body
+''''''''''''''
+
+The header section must be followed by a blank line, then the main body of the
+text.
+
+The text body should be wrapped at 72 characters. No fancy formatting or tab
+characters should be used — the news item may be being displayed directly to a
+terminal. Paragraphs should be separated by a blank line.
+
+Hyperlinks may be used to refer to further information (for example, an upgrade
+guide). However, the main body of the news item should be descriptive and not
+simply a "read this link" text. It is assumed that the user will have access to
+a web browser *somewhere*, but not necessarily on the box which is being
+administrated — this will be the case on many servers and routers, for example.
+
+Example News Item
+'''''''''''''''''
+
+`This hypothetical news item`__ could be used for an upgrade to the
+``YourSQL`` database format which breaks forward compatibility.
+
+.. __: glep-0042-extras/example-news-item.txt
+
+News Item Quality Control
+-------------------------
+
+There have been complaints regarding the comprehensibility of some upgrade
+notices and news items in the past. This is understandable — not every Gentoo
+developer speaks English as a first language. However, for the sake of clarity,
+professionalism and avoiding making us look like prats, it is important that any
+language problems be corrected before inflicting a news item upon end users.
+
+Thus, at least 72 hours before a proposed news item is committed, it must be
+posted to the ``gentoo-dev`` mailing list and ``Cc:``\ed to ``pr@gentoo.org``
+(exceptions may be made in exceptional circumstances). Any complaints — for
+example regarding wording, clarity or accuracy — **must** be addressed before
+the news item goes live.
+
+News items must only be for **important** changes that may cause serious upgrade
+or compatibility problems. Ordinary upgrade messages and non-critical news items
+should remain in ``einfo`` notices. The importance of the message to its
+intended audience should be justified with the proposal.
+
+.. Important:: The filtering system means that it is appropriate to send out
+   news items which are aimed at users of an uncommon package or architecture.
+   Thus, the justification should be in the form "this message is important to
+   YourSQL users because ...", not "YourSQL is important because ...".
+
+News Item Distribution
+----------------------
+
+Server Side
+'''''''''''
+
+News items are to be made available via the standard rsync tree. This removes
+any need for polling of a remote source.
+
+A new repository will be created for news items. The type (CVS or Subversion),
+location and access controls on this repository are beyond the scope of this
+GLEP.
+
+.. Note:: A previous draft of this GLEP instead used the main ``gentoo-x86``
+   tree. This was changed following advice from Infrastructure
+   [#ramereth-repo]_. Both solutions have the same end result.
+
+The contents of this repository will automatically be merged with the main rsync
+tree, placing the items in a ``metadata/news/`` directory. The method used for
+merging these items and the frequency at which it will occur is beyond the scope
+of this GLEP; a similar setup is already used for merging GLSAs into the rsync
+tree.
+
+Client Side
+'''''''''''
+
+Whenever relevant unread news items are found, the package manager will create a
+file named ``/var/lib/gentoo/news/news-${repoid}.unread`` (if it does not
+already exist) and append the news item identifier (eg
+``2005-11-01-yoursql-updates``) on a new line.
+
+All news item related files should be root owned and in the ``portage`` group
+with the group write (and, for directories, execute) bits set. News files should
+be world readable.
+
+Notification that new relevant news items will be displayed via the
+``emerge`` tool in a similar way to the existing "configuration files need
+updating" messages:
+
+::
+
+    * Important: there are 5 unread news items.
+    * Type emerge --help news to learn how to read news files.
+
+Checks for new news messages should be displayed:
+
+* After an ``emerge sync``
+* After an ``emerge --pretend``
+* Before an ``emerge <target>`` (which may also include a red warning message)
+
+The package manager does not need to know how to launch the user's choice of
+news client. This is consistent with the way configuration file updates are
+handled.
+
+The package manager may use a timestamp check file to avoid having to process
+news items unnecessarily.
+
+The package manager must keep track of news items that have already been added
+to the unread list to avoid repeatedly marking a deleted news item. This could
+be handled via a ``news-${repoid}.skip`` file containing the IDs of news items
+that have already been added to a ``news-${repoid}.unread`` file, but this
+method is not required by this GLEP.
+
+Users who really don't care about news items can use ``rsync_excludes`` to
+filter out the ``metadata/news/`` directory.
+
+News Item Clients
+-----------------
+
+Once a news item is marked for reading, third party tools (or traditional core
+Unix tools) can be used to display and view the news files.
+
+When a news item is read, its name should be removed from the
+``news-${repoid}.unread`` file. If a news client acts as an interactive reader
+rather than a gateway, it should then add the name to a ``news-${repoid}.read``
+file in the same directory with the same file format.
+
+An ``eselect`` [#eselect]_ module shall be created as the 'suggested' display
+tool; other display tools (for example, a news to email forwarder, which would
+be ideal for users who sync on a ``cron``) are left as options for those who
+desire them.
+
+News Item Removal
+-----------------
+
+News items can be removed (by removing the news file from the main tree) when
+they are no longer relevant, if they are made obsolete by a future news item or
+after a long period of time. This is the same as the method used for ``updates``
+entries.
+
+Integration with Existing Systems
+=================================
+
+It would be simple to convert these news items into the format used for news
+items on the Gentoo website or posts for the ``gentoo-announce`` mailing list.
+
+There is an existing automated tool [#forums-glsa]_ for posting GLSAs to the
+forums. A similar tool can be used for these news items.
+
+Backwards Compatibility
+=======================
+
+Backwards compatibility is not a concern here. Existing tools will simply ignore
+the ``news/`` directory.
+
+Reference Implementation
+========================
+
+A reference implementation of the required package manager support can be found
+in Paludis [#paludis]_, along with a reference newsreader implemented as an
+eselect module [#eselect-news]_.
+
+Credits
+=======
+
+The idea behind notifying users of news updates via Portage comes from Stuart
+Herbert [#stuart-blog]_.
+
+Thanks to Lance Albertson, Stephen Bennett, Donnie Berkholz, Grant Goodyear,
+Brian Harring, Marius Mauch, Dan Meltzer, Jason Stubbs, Paul de Vrieze and Alec
+Warner for input.  Some of the ideas presented here are theirs, others go
+completely against their suggestions.
+
+Example Files
+=============
+
+`example-news-item.txt <glep-0042-extras/example-news-item.txt>`_
+    An example news item.
+
+References
+==========
+
+.. [#bcp-47] BCP 47: "Tags for identifying languages",
+     https://tools.ietf.org/rfc/bcp/bcp47.txt
+.. [#bug-11359] Bugzilla Bug 11359
+   "[NEW FEATURE] pkg_postinst/pkg_preinst ewarn/einfo logging",
+   https://bugs.gentoo.org/show_bug.cgi?id=11359
+.. [#docs-policy] Gentoo XML Guide, Daniel Robbins et al.,
+     http://www.gentoo.org/doc/en/xml-guide.xml
+.. [#eselect] eselect modular framework for configuration and
+     administration utilities,
+     http://www.gentoo.org/proj/en/eselect/index.xml
+.. [#forums-glsa] Forums user GLSA,
+     http://forums.gentoo.org/profile.php?mode=viewprofile&u=55648
+.. [#forums-apache2] Forums thread "Gentoo Apache2 Config Change Idiocy",
+     http://forums.gentoo.org/viewtopic-t-384368.html
+.. [#glep-22] GLEP 22: "New "keyword" system to incorporate various
+     userlands/kernels/archs", Grant Goodyear,
+     https://www.gentoo.org/glep/glep-0022.html
+.. [#glep-31] GLEP 31: "Character Sets for Portage Tree Items", Ciaran
+     McCreesh,
+     https://www.gentoo.org/glep/glep-0031.html
+.. [#glep-34] GLEP 34: "Per-Category metadata.xml Files", Ciaran McCreesh,
+     https://www.gentoo.org/glep/glep-0034.html
+.. [#glep-45] GLEP 45: "GLEP date format", Henrik Brix Andersen,
+     https://www.gentoo.org/glep/glep-0045.html
+.. [#glep-74] GLEP 74: "Full-tree verification using Manifest files",
+     Michał Górny, Robin Hugh Johnson, Ulrich Müller,
+     https://www.gentoo.org/glep/glep-0074.html
+.. [#ramereth-repo] "Re: [gentoo-dev] GLEP ??: Critical News Reporting",
+     Lance Albertson, Message-ID 436B721C.20203\@gentoo.org,
+     https://archives.gentoo.org/gentoo-dev/message/4204839d4091758c3bad1dbd18ed16f7
+.. [#rfc-822] RFC 822 "Standard for the format of ARPA Internet text messages"
+.. [#rfc-3629] RFC 3629: "UTF-8, a transformation format of ISO 10646"
+       http://www.ietf.org/rfc/rfc3629.txt
+.. [#paludis] Paludis homepage, http://paludis.berlios.de
+.. [#eselect-news] news.eselect, http://svn.berlios.de/svnroot/repos/paludis/trunk/eselect/news.eselect
+.. [#stuart-blog] "Favouring an automatic news mechanism", Stuart Herbert,
+     http://stu.gnqs.org/diary/gentoo.php/2005/10/28/favouring_an_automatic_news_mechanism
+.. [#PMS] https://wiki.gentoo.org/wiki/Project:Package_Manager_Specification
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.
+
+.. vim: set tw=80 fileencoding=utf-8 spell spelllang=en et :

@@ -1,0 +1,194 @@
+---
+GLEP: 72
+Title: Architecture stability status file
+Author: Andreas K. Hüttel <dilfridge@gentoo.org>,
+        Michał Górny <mgorny@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2017-05-06
+Last-Modified: 2021-06-17
+Post-History: 2017-05-06, 2020-04-10
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+
+This GLEP provides specifications for a new file in the profiles base
+directory, ``arches.desc``. Its intent is to allow more fine-grained repoman
+check control, and in particular to help moving architectures from stable to
+testing while keeping the testing dependency tree consistent, or moving
+architectures from testing to stable while easily preparing a consistent
+stable dependency tree.
+
+``arches.desc`` specifies whether an architecture, as opposed to a profile,
+is to be considered stable. It does not replace profiles.desc, but supplements
+it; profiles.desc still describes the profiles of each architecture.
+
+We use the term architecture here in the colloquial sense, as also used by
+the Package Manager Specification in section 4.4.1 (describing profiles.desc),
+and corresponding in the terminology of GLEP 53 to a "keyword" (which,
+however, even if more precise is not consistently used in practice).
+
+
+Motivation
+==========
+
+At the moment we have several cases where repoman finds its limits:
+
+a) An architecture loses its stable status (imagine c128), but
+   the architecture team doesn't want to drop all the stable keywords since
+   they are useful for stage building. Since the stable keywords on c128 are
+   only an arch-team-internal thing, everyone is allowed to drop the latest
+   stable version of a package, and it's the arch team's responsibility to
+   keep their "unofficial stable tree" straight. This is how at the time
+   of the writing of this GLEP s390, sh, and m68k are handled.
+
+   Right now this means that we have to set all *profiles* of this arch to
+   profile status ``exp`` in profiles.desc, otherwise repoman throws errors
+   about a broken stable dependency tree. If we do that, repoman does however
+   also not check ~c128 consistency, meaning that the ~c128 dependency tree
+   will soon be broken as well due to negligence.  Given arches.conf as
+   described below, one could set the architecture c128 to "transitional" status
+   and keep stable profiles. This results in stable keywords being ignored,
+   but consistency of the ~c128 dependency tree is still enforced.
+
+b) An architecture prepares for becoming a stable architecture (think arm64).
+   So, first the ~arm64 dependency tree should be fine, and then stable
+   keywords can be added. However, to avoid repoman errors as long
+   as the stable dependency tree is not complete yet, the profiles need to be
+   set to dev/exp, and again this brings the danger of the ~arm64 dependency
+   tree getting inadvertently broken. Again the combination of setting the
+   architecture to "transitional" in arches.desc and profiles to stable helps.
+
+Finally, at the moment the "semi-official" algorithm to figure out if an
+architecture is stable in the colloquial sense (e.g., requires stabilization
+requests) is to check if the architecture has any stable profile. This makes
+non-stable arches which want to keep a consistent dependency tree (think mips)
+impossible. Reading the architecture status from arches.desc instead solves
+this problem.
+
+
+Specifications for profiles/arches.desc
+=======================================
+
+File and format
+---------------
+
+In the main profiles directory, a file ``arches.desc`` is added. Name
+and location are chosen in analogy to the existing ``profiles.desc`` file.
+The format of ``arches.desc`` is as follows:
+
+Every ``#`` starts a comment; the character and the rest of the line
+are ignored.  Every blank line is ignored. Otherwise the file consists of two
+whitespace-separated columns:
+
+- first column: architecture name (keyword), which must be unique
+- second column: one of the three values ``stable``, ``transitional``,
+  ``testing``
+
+Additional columns are ignored to allow for future revisions of this document.
+
+If the file does not exist, it is treated as if it were empty.
+
+An example arches.desc file might look as follows::
+
+    # Example arches.desc file
+    amd64   stable
+    x86     stable        # not for long
+
+    sparc   transitional
+    m68k    testing
+
+Initial value in the gentoo repository
+--------------------------------------
+
+On introduction, the setting will be ``stable`` for all architectures using
+stable keywords, and ``testing`` for those that do not (``alpha``, ``mips``,
+``riscv``, Prefix profiles at the moment).
+
+Meaning of the values
+---------------------
+stable
+~~~~~~
+Stable means that the architecture is actively maintaining stable keywords.
+When dependency graphs of packages with stable keywords are tested, they
+are tested separately for ``arch`` and ``~arch`` systems.
+
+Stable architectures are listed first in keyword-relevant contexts (``eshowkw``,
+Bugzilla) and developers are expected to file stabilization requests on these
+arches.
+
+This is the current behaviour and shall be the default if nothing is specified
+for an architecture.
+
+transitional
+~~~~~~~~~~~~
+Transitional means that the architecture does not maintain a consistent stable
+dependency graph but uses stable keywords on some packages.  When dependency
+graphs of packages with stable keywords are tested, they are tested only
+for ``~arch`` systems, i.e. stable keywords are ignored.
+
+Transitional architectures are generally listed after stable architectures,
+possibly mixed with testing.  Developers are expected to file stabilization
+requests.
+
+A new switch for linting tools may be provided to temporarily upgrade
+an architecture from ``transitional`` to ``stable`` status (for architecture
+team work).
+
+testing
+~~~~~~~
+Testing means that the architecture does not use stable keywords at all.
+Presence of such keywords is considered an error.  Consistency is tested
+only for ``~arch``.
+
+arches.desc in slave repositories
+---------------------------------
+
+If ``arches.desc`` is present in several repositories, then each file affects
+packages in the repository in question.  If the file does not specify a value
+for given arch, the value from the master repository is used.  However, using
+it in multiple repositories is discouraged.
+
+Note that the stability status override affects only packages in the slave
+repository and their direct dependencies.  If an arch is set to ``testing``,
+then master repositories are still permitted to use stable keywords.  If it is
+set to ``stable``, then missing stable keywords in dependencies from the master
+repository will cause dependency graph inconsistency.
+
+
+Backwards Compatibility
+=======================
+
+Essentially two cases need to be discussed. Here "old system" designates a
+Gentoo installation where package manager and/or utilities do not provide
+arches.desc support yet, "new system" an installation where they do.
+
+arches.desc present and old system
+----------------------------------
+
+Utilities ignore the unknown file.
+
+Repoman and other tools may emit surplus dependency errors when profiles are
+checked on arches that are ``transitional`` (they check the consistency
+of the stable tree alone, which may fail, since ``arch`` is supposed to be
+treated like ``~arch``). This affects only development work and can be fixed
+by updating repoman.
+
+No arches.desc present and new system, or arch not listed in arches.desc
+------------------------------------------------------------------------
+
+Arches are treated as "stable" by repoman (the current behaviour), with
+profile status according to profiles.desc. Gentoolkit and other tools trying
+to determine a list of stable arches shall fall back to the current method
+of determining stable arches by scanning profiles.desc for stable profiles.
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License. To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.

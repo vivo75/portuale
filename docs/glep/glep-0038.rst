@@ -1,0 +1,149 @@
+---
+GLEP: 38
+Title: Status of forum moderators in the Gentoo project
+Author: Christian Hartmann <christian.hartmann at email.de>,
+        Wernfried Haas <w.haas at xover.htu.tuwien.ac.at>,
+        Tom Knight <tomk at gentoo.org>
+Type: Informational
+Status: Final
+Version: 1
+Created: 2005-05-06
+Last-Modified: 2019-11-07
+Post-History: 2005-06-17, 2005-06-28, 2005-10-17
+Content-Type: text/x-rst
+---
+
+
+Abstract
+========
+
+Global moderators and site admins should also go through the mentoring process
+and become official Gentoo staff.
+
+Motivation
+==========
+
+At the time of writing the forums are apart from the recruiting process and 
+people helping out there are not made an official part of Gentoo. This GLEP
+aims on creating and establishing a recruitment and mentoring process for
+moderators and site admins of forums.gentoo.org. By doing this we hopefully
+achieve a (even) better moderation quality and stop the complaints about
+moderators not being staff. Moderators and site admins do not need cvs
+access.
+
+Moderators and site admins are doing a hard job for the community as well as all
+the other projects do but they get no voice in the gentoo internals. Recent events
+such as the election of trustees or the new metastructure poll are effectively
+affecting the forums, so the wish to be part of the decision as an equal member 
+is present among the moderators.
+
+Moderators are often a contact person between users and developers, so we
+should try to improve the communication between these two groups of people. As
+moderators are pretty much exposed to the public (forums users, but also used
+as contact person for requests that should go to the PR department or the
+trustees) they need to have some knowledge about Gentoo's internal structure
+as well as contact to the other developers.
+
+The current training process for new moderators works pretty well even though
+there are no official guidelines how to do it. As part of this proposal a more
+detailed procedure for the training process will be established to make it
+more reproducible. It also gives us the possibility to document the things
+happening already today in the current training process.
+
+The status of the Gentoo Forums has been undefined for quite some time. Since
+it is using the gentoo.org domain it should be considered an official project.
+People working on an official project should be developers or staff following Gentoo's
+general policy. At the moment the persons with direct access to the database
+are developers. Being moderator could be considered an improved forums rank
+that does not have impact on Gentoo's infrastructure, but since moderators and
+administrators are able to delete, move and edit posts on the forum willingly,
+their level of access should be considered developer like. Many users may not
+be aware of the difference between moderators and developers, so the actions of a
+moderator may represent Gentoo Linux to them anyway.
+
+Specification
+=============
+
+To obtain a certain kind of quality assurance and to (create and) ensure that
+upcoming moderators know about the forums guidelines a document and processes
+will have to be created and established that the recruits need to follow.
+This document (called `Moderators handbook/FAQ`_) will include the moderation guidelines 
+as they are currently available in the moderators forum plus a FAQ that was created as 
+a possible candidate for a forums-quiz. The guidelines and the FAQ should help the 
+moderator to get some general information about how to moderate the forums.
+
+Suggested procedure for becoming global moderator: Existing moderators can
+suggest a user to become a moderator. The ability of the new moderator to
+deal with people in a kind way and to detect misplaced posts, etc usually
+also has been reviewed by the other moderators already since they can read
+their previous posts and suggestions in the forums feedback threads. If they
+accept, they will become moderator on the forums. A bug will be filed on
+b.g.o containing information about the new moderator. Afterwards they must
+answer the staff quiz that will be revisited by devrel. The quiz then will
+be sent to recruiters@g.o for revision. Becoming staff member is not
+optional, but mandatory.
+
+The first month is supposed to be a test period, if the moderator
+does not do anything in that time or messes up in another way, they will be
+restored to their old user status. The mentor(s) and everyone of the forums team
+are encouraged to help the new moderator if they are unsure how to deal with a
+situation.
+
+Rationale
+=========
+
+The process of acquiring new developers seems to work for the rest of Gentoo
+Linux quite well. A mentoring system has been chosen since new moderators were
+mentored unofficially by the other moderators anyway. This means more or less
+writing down things that have been done already.
+It was discussed to add a forums-specific quiz to the process of acquiring new
+moderators. 
+Devrel's standing on that is that it is up to the moderators how a new moderator is 
+chosen. Since the old process worked fine so far and some people among the moderators
+didn't exactly like the idea of a quiz, we chose not to make one. A document containing the 
+questions collected for the quiz in form of a FAQ together with the moderation 
+guidelines seems to be a more feasible approach. The new moderators are supposed to 
+read the FAQ as well as they had to take a quiz, so they will learn the information 
+given in this document.
+
+Backwards Compatibility
+=======================
+
+Moderators who are currently inactive (Bodhisattva status) should be
+considered akin to retired developers and will have to take the staff quiz
+if they return to moderation activities. New moderators should have to go
+through the mentoring process in any case as stated above.
+
+Moderators in national forums: In our internal discussion it turned out that not
+all moderators in the national forums are able to speak english well, which
+would be a requirement to become a staff member. We decided that it would
+counter productive to make it mandatory for them. Becoming a staff member is
+optional for these moderators.
+
+As a side effect of the discussion about the glep among the moderators 
+as well as in discussions with other developers and devrel, it turned
+out that the forums have never been assigned to a toplevel project in the 
+general organization of the Gentoo project. Forums don't really seem to fit 
+into one of the current categories as they are related to the infrastructure
+and the documentation project. We suggest putting it in the other category 
+or making a separate one for the forums. 
+
+Reference Implementation
+========================
+
+- `Moderators handbook/FAQ`_
+- `Becoming a developer`_
+- `Staff quiz`_
+- `Thread on gentoo-dev`_
+
+..  _Moderators handbook/FAQ: https://wiki.gentoo.org/wiki/Project:Forums/Forum_guide
+..  _Becoming a developer: https://www.gentoo.org/get-involved/become-developer/
+..  _Staff quiz: https://projects.gentoo.org/comrel/recruiters/quizzes/staff-quiz.txt
+..  _Thread on gentoo-dev: https://archives.gentoo.org/gentoo-dev/message/df817579a5f741c02717fe238ff30661
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

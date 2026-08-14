@@ -1,0 +1,677 @@
+---
+GLEP: 78
+Title: Gentoo binary package container format
+Author: Michał Górny <mgorny@gentoo.org>,
+        Sheng Yu <syu.os@protonmail.com>
+Type: Standards Track
+Status: Final
+Version: 1.1
+Created: 2018-11-15
+Last-Modified: 2026-01-20
+Post-History: 2018-11-17, 2019-07-08, 2021-09-13, 2021-09-22, 2022-05-28,
+              2022-09-21
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+
+This GLEP proposes a new binary package container format for Gentoo.
+The current tbz2/XPAK format is shortly described, and its deficiencies
+are explained.  Accordingly, the requirements for a new format are set
+and a gpkg format satisfying them is proposed.  The rationale for
+the design decisions is provided.
+
+
+Motivation
+==========
+
+The current Portage binary package format
+-----------------------------------------
+
+The historical ``.tbz2`` binary package format used by Portage is
+a concatenation of two distinct formats: header-oriented compressed .tar
+format (used to hold package files) and trailer-oriented custom XPAK
+format (used to hold metadata)  [#MAN-XPAK]_.  The format has already
+been extended incompatibly twice.
+
+The first time, support for storing multiple successive builds of binary
+package for a single ebuild version has been added.  This feature relies
+on appending additional hyphen, followed by an integer to the package
+filename.  It is disabled by default (preserving backwards
+compatibility) and controlled by ``binpkg-multi-instance`` feature.
+
+The second time, support for additional compression formats has been
+added.  When format other than bzip2 is used, the ``.tbz2`` suffix
+is replaced by ``.xpak`` and Portage relies on magic bytes to detect
+compression used.  For backwards compatibility, Portage still defaults
+to using bzip2; compression program can be switched using
+``BINPKG_COMPRESS`` configuration variable.
+
+Additionally, there have been minor changes to the stored metadata
+and file storage policies.  In particular, behavior regarding
+``INSTALL_MASK``, controllable file compression and stripping has
+changed over time.
+
+
+The advantages of tbz2/XPAK format
+----------------------------------
+
+The tbz2/XPAK format used by Portage has three interesting features:
+
+1. **Each binary package is fully contained within a single file.**
+   While this might seem unnecessary, it makes it easier for the user
+   to transfer binary packages without having to be concerned about
+   finding all the necessary files to transfer.
+
+2. **The binary packages are compatible with regular compressed
+   tarballs, most of the time.**  With notable exceptions of historical
+   versions of pbzip2 and the recent zstd compressor, tbz2/XPAK packages
+   can be extracted using regular tar utility with a compressor
+   implementation that discards trailing garbage.
+
+3. **The metadata is uncompressed, and can be efficiently accessed
+   without decompressing package contents.**  This includes
+   the possibility of rewriting it (e.g. as a result of package moves)
+   without the necessity of repacking the files.
+
+
+Transparency problem with the current binary package format
+-----------------------------------------------------------
+
+Notwithstanding its advantages, the tbz2/XPAK format has a significant
+design fault that consists of two issues:
+
+1. **The XPAK format is a custom binary format with explicit use
+   of binary-encoded file offsets and field lengths.**  As such, it is
+   non-trivial to read or edit without specialized tools.  Such tools
+   are currently implemented separately from the package manager,
+   as part of the portage-utils toolkit, written in C [#PORTAGE-UTILS]_.
+
+2. **The tarball compatibility feature relies on obscure feature of
+   ignoring trailing garbage in compressed files**.  While this is
+   implemented consistently in most of the compressors, this feature
+   is not really a part of specification but rather traditional
+   behavior.  Given that the original reasons for this no longer apply,
+   new compressor implementations are likely to miss support for this.
+
+Both of the issues make the format hard to use without dedicated tools,
+or when the tools misbehave.  This impacts the following scenarios:
+
+A. **Using binary packages for system recovery.**  In case of serious
+   breakage, it is really preferable that the format depends on as few
+   tools a possible, and especially not on Gentoo-specific tools.
+
+B. **Inspecting binary packages in detail exceeding standard package
+   manager facilities.**
+
+C. **Modifying binary packages in ways not predicted by the package
+   manager authors.**  A real-life example of this is working around
+   broken ``pkg_*`` phases which prevent the package from being
+   installed.
+
+
+OpenPGP extensibility problem
+-----------------------------
+
+There are at least three obvious ways in which the current format could
+be extended to support OpenPGP signatures, and each of them has its own
+distinct problem:
+
+1. **Adding a detached signature.**  This option is non-intrusive but
+   causes the format to no longer be contained in a single file.
+
+2. **Wrapping the package in OpenPGP message format.**  This would use
+   a standard format and make verification and unpacking relatively
+   easy.  However, it would break backwards compatibility and add
+   explicit dependency on OpenPGP implementation in order to unpack
+   the package.
+
+3. **Adding OpenPGP signature as extra XPAK member.**  This is
+   the clever solution.  It implies strengthening the dependency
+   on custom tooling, now additionally necessary to extract
+   the signature and reconstruct the original file to accommodate
+   verification.
+
+
+Goals for a new container format
+--------------------------------
+
+All of the above considered, the new format should combine
+the advantages of the existing format and at the same time address its
+deficiencies whenever possible.  Furthermore, since a format replacement
+is taking place it is worthwhile to consider additional goals that could
+be satisfied with little change.
+
+The following obligatory goals have been set for a replacement format:
+
+1. **The packages must remain contained in a single file.**  As a matter
+   of user convenience, it should be possible to transfer binary
+   packages without having to use multiple files, and to install them
+   from any location.
+
+2. **The file format must be entirely based on common file formats,
+   respecting best practices, with as little customization as necessary
+   to satisfy the requirements.**  The format should be transparent
+   enough to let user inspect and manipulate it without special tooling
+   or detailed knowledge.
+
+3. **The file format must be able to detect its own data corruption.**
+   In particular, it needs to contain the checksum of its own data for
+   package manager to be able to verify its integrity without relying
+   on additional files.
+
+4. **The file format must provide support for OpenPGP signatures.**
+   Preferably, it should use standard OpenPGP message formats.
+
+5. **The file format must allow for efficient metadata updates.**
+   In particular, it should be possible to update the metadata without
+   having to recompress package files.
+
+Additionally, the following optional goals have been noted:
+
+A. **The file format should account for easy recognition both through
+   filename and through contents.**  Preferably, it should have distinct
+   features making it possible to detect it via file(1).
+
+B. **The file format should provide for partial fetching of binary
+   packages.**  It should be possible to easily fetch and read
+   the package metadata without having to download the whole package.
+
+C. **The file format should allow for metadata compression.**
+
+D. **The file format should make future extensions easily possible
+   without breaking backwards compatibility.**
+
+
+Specification
+=============
+
+The container format
+--------------------
+
+The gpkg package container is an uncompressed .tar archive whose filename
+should use ``.gpkg.tar`` suffix.
+
+The archive contains a number of files.  All package-related files
+should be stored in a single directory whose name matches the package
+filename after stripping the ``.gpkg.tar`` suffix.  However,
+the implementation must be able to process an archive where
+the directory name is mismatched.  There should be no explicit archive
+member entry for the directory.
+
+The package directory contains the following members, in order:
+
+1. The package format identifier file ``gpkg-1`` (required).
+
+2. The metadata archive ``metadata.tar${comp}``, optionally compressed
+   (required).
+
+3. A signature for the metadata archive: ``metadata.tar${comp}.sig``
+   (optional).
+
+4. The filesystem image archive ``image.tar${comp}``, optionally
+   compressed (required).
+
+5. A signature for the filesystem image archive:
+   ``image.tar${comp}.sig`` (optional).
+
+6. The package Manifest data file ``Manifest``, optionally clear-text
+   signed (required).
+
+It is recommended that relative order of the archive members is
+preserved.  However, implementations must support archives with members
+out of order.
+
+The container may be extended with additional members in the future.
+If the Manifest is present, all files contained in the archive must
+be listed in it and verify successfully.  The package manager should
+ignore unknown files but preserve them across package updates.
+
+For a binary package to be considered signed and suitable for
+authenticity verification, the Manifest file must be present and contain
+a valid signature.  It is recommended to include detached signatures
+for archive members as well.
+
+
+Permitted .tar format features
+------------------------------
+
+The tar archives should use either the POSIX ustar format as defined
+by POSIX.1-2017 [#POSIX-USTAR]_ or a subset of the ustar-compatible
+GNU tar format as described in the GNU tar manual [#GNU-TAR]_ with
+the following (optional) extensions:
+
+- long pathnames and long linknames,
+
+- base-256 encoding of large file sizes.
+
+Other extensions should be avoided whenever possible.
+
+
+The package identifier file
+---------------------------
+
+The package identifier file serves the purpose of identifying the binary
+package format and its version.
+
+The implementations must include a package identifier file named
+``gpkg-1``.  The filename includes package format version;
+implementations should reject packages which do not contain this file
+as unsupported format.
+
+The file can have any contents.  Normally, it should be empty.
+
+Furthermore, this file should be included in the .tar archive
+as the first member.  This makes it possible to use it as an additional
+magic at a fixed location that can be used by tools such as file(1)
+to easily distinguish Gentoo binary packages from regular .tar archives.
+
+
+The metadata archive
+--------------------
+
+The metadata archive stores the package metadata needed for the package
+manager to process it.  The archive should be included at the beginning
+of the binary package in order to make it possible to read it out of
+partially fetched binary package, and to avoid fetching the remaining
+part of the package if not necessary.
+
+The archive contains a single directory called ``metadata``.  In this
+directory, the individual metadata keys are stored as files.  The exact
+keys and metadata format is outside the scope of this specification.
+
+The package manager may need to modify the package metadata.  In this
+case, it should replace the metadata archive without having to alter
+other package members.
+
+The metadata archive can optionally be compressed.  It can also be
+supplemented with a detached OpenPGP signature.
+
+
+The image archive
+-----------------
+
+The image archive stores all the files to be installed by the binary
+package.  It should be included as the last of the files in the binary
+package container.
+
+The archive contains a single directory called ``image``.  Inside this
+directory, all package files are stored in filesystem layout, relative
+to the root directory.
+
+The image archive can optionally be compressed.  It can also be
+supplemented with a detached OpenPGP signature.
+
+
+Archive member compression
+--------------------------
+
+The archive members outlined above support optional compression using
+one of the compressed file formats supported by the package manager.
+The list of compression types is maintained in GLEP 74 [#GLEP74]_.
+The package manager may implement an arbitrary subset of compressed file
+formats.  However, it is recommended that it can uncompress all formats
+that are not listed as deprecated.
+
+The implementations must support archive members being uncompressed,
+and must support using different compression types for different files.
+
+When compressing an archive member, the member filename should be
+suffixed using the suffix for the particular compressed file type
+specified in GLEP 74.
+
+
+The package Manifest file
+-------------------------
+
+The Manifest file must include digests of all files in the binary
+package container, except for itself.  The purpose of this file is
+to provide the package manager with an ability to detect corruption
+or alteration of the binary package before attempting to read
+the inner archive contents.  This file also provides protection against
+signature reuse/replacement attacks if the OpenPGP signatures are used.
+
+The implementation follows the Manifest specifications in GLEP 74
+and uses the ``DATA`` tag for files within the container.
+If the package is using OpenPGP signatures, the Manifest file must also
+include a cleartext OpenPGP signature as defined in GLEP 74 [#GLEP74]_.
+
+The implementation should be able to detect checksum mismatches,
+as well as missing, duplicate, or extraneous files within
+the container.  In the case of verification failure, no subsequent
+operations on the archive should be performed.
+
+
+OpenPGP member signatures
+-------------------------
+
+The archive members and Manifest support optional OpenPGP signatures.
+The implementations must allow the user to specify whether OpenPGP
+signatures are to be expected in remotely fetched packages.
+
+If the signatures are expected and the archive member is unsigned,
+the package manager must reject processing it.  If the signature does
+not verify, the package manager must reject processing the corresponding
+archive member.  In particular, it must not attempt decompressing
+compressed members in those circumstances.
+
+The signatures are created as binary detached OpenPGP signature files
+as defined by RFC 4880 § 11.4 or a subsequent standard, with filename
+corresponding to the member filename with ``.sig`` suffix appended
+[#RFC4880]_.
+
+The exact details regarding creating and verifying signatures, as well
+as maintaining and distributing keys are outside the scope of this
+specification.
+
+
+Rationale
+=========
+
+Package formats used by other distributions
+-------------------------------------------
+
+The research on the new package format included investigating
+the possibility of reusing solutions from other operating system
+distributions.  While reusing a foreign package format would be
+interesting, the differences in Gentoo metadata structure would prevent
+any real compatibility.  Some degree of compatibility might be achieved
+through adapting the Gentoo metadata, however the costs of such
+a solution would probably outweigh its usefulness.
+
+Debian and its derivates are using the .deb package format.  This is
+a nested archive format, with the outer archive being of ar format,
+and containing nested tarballs of control information (metadata)
+and data  [#DEB-FORMAT]_.
+
+Red Hat, its derivates and some less related distributions are using
+the RPM format.  It is a custom binary format, storing metadata directly
+and using a trailer cpio archive to store package files.
+
+Arch Linux is using xz-compressed tarballs (suffixed ``.pkg.tar.xz``)
+as its binary package format.  The tarballs contain package files
+on top-level, with specially named dotfiles used for package metadata.
+OpenPGP signatures are stored as detached ``.sig`` files alongside
+packages.
+
+Exherbo is using the pbins format.  In this format, the binary package
+metadata is stored in repository alike ebuilds, and the binary package
+files are stored separately and downloaded alike source tarballs.
+
+
+Nested archive format
+---------------------
+
+The basic problem in designing the new format was how to embed multiple
+data streams (metadata, image) into a single file.  Traditionally, this
+has been done via using two non-conflicting file formats.  However,
+while such a solution is clever, it suffers in terms of transparency.
+
+Therefore, it has been established that the new format should really
+consist of a single archive format, with all necessary data
+transparently accessible inside the file.  Consequently, it has been
+debated how different parts of binary package data should be stored
+inside that archive.
+
+The proposal to continue storing image data as top-level data
+in the package format, and store metadata as special directory in that
+structure has been discarded as a case of in-band signalling.
+
+Finally, the proposal has been shaped to store different kinds of data
+as nested archives in the outer binary package container.  Besides
+providing a clean way of accessing different kinds of information, it
+makes it possible to add separate OpenPGP signatures to them.
+
+
+Inner vs. outer compression
+---------------------------
+
+One of the points in the new format debate was whether the binary
+package as a whole should be compressed vs. compressing individual
+members.  The first option may seem as an obvious choice, especially
+given that with a larger data set, the compression may proceed more
+effectively.  However, it has a single strong disadvantage: compression
+prevents random access and manipulation of the binary package members.
+
+While for the purpose of reading binary packages, the problem could be
+circumvented through convenient member ordering and avoiding disjoint
+reads of the binary package, metadata updates would either require
+recompressing the whole package (which could be really time consuming
+with large packages) or applying complex techniques such as splitting
+the compressed archive into multiple compressed streams.
+
+This considered, the simplest solution is to apply compression to
+the individual package members, while leaving the container format
+uncompressed.  It provides fast random access to the individual members,
+as well as capability of updating them without the necessity of
+recompressing other files in the container.
+
+This also makes it possible to easily protect compressed files using
+standard OpenPGP detached signature format.  All this combined,
+the package manager may perform partial fetch of binary package, verify
+the signature of its metadata member and process it without having to
+fetch the potentially-large image part.
+
+
+Container and archive formats
+-----------------------------
+
+During the debate, the actual archive formats to use were considered.
+The .tar format seemed an obvious choice for the image archive since
+it is the only widely deployed archive format that stores all kinds
+of file metadata on POSIX systems.  However, multiple options for
+the outer format has been debated.
+
+Firstly, the ZIP format has been proposed as the only commonly supported
+format supporting adding files from stdin (i.e. making it possible to
+pipe the inner archives straight into the container without using
+temporary files).  However, this format has been clearly rejected
+as both not being present in the system set, and being trailer-based
+and therefore unusable without having to fetch the whole file.
+
+Secondly, the ar and cpio formats were considered.  The former is used
+by Debian and its derivative binary packages; the latter is used by Red
+Hat derivatives.  Both formats have the advantage of having less
+historical baggage than .tar, and having less overhead.  However, both
+are also rather obscure (especially given that ar is actually provided
+by GNU binutils rather than as a stand-alone archiver), considered
+obsolete by POSIX and both have file size limitations smaller than .tar.
+
+Thirdly, SquashFS was another interesting option.  Its main advantage is
+transparent compression support and ability to mount as a filesystem.
+However, it has a significant implementation complexity, including mount
+management and necessity of fallback to unsquashfs.  Since the image
+needs to be writable for the pre-installation manipulations, using it
+via a mount would additionally require some kind of overlay filesystem.
+Using it as top-level format has no real gain over a pipeline with tar,
+and is certainly less portable.  Therefore, there does not seem to be
+a benefit in using SquashFS.
+
+All that considered, it has been decided that there is no purpose
+in using a second archive format in the specification unless it has
+significant advantage to .tar.  Therefore, .tar has also been used
+as outer package format, even though it has larger overhead than other
+formats (mostly due to padding).
+
+
+.tar portability issues
+-----------------------
+
+The modern .tar dialects could be considered dirty extensions
+of the original .tar format.  Three variants may be considered
+of interest: POSIX ustar, pax (newer POSIX standard) and GNU tar.
+All three formats are supported by GNU tar, whose presence on systems
+used to create binary packages could be relied on.  Therefore,
+the portability concerns are related mostly to being able to read
+and modify binary packages in scenarios of GNU tar being unavailable.
+
+For the purpose of this specification, detailed research on portability
+of individual tar features has been conducted.  The research concluded:
+
+    Judging by the test results, the most portability could be
+    achieved by:
+
+    - using strict POSIX ustar format whenever possible,
+
+    - using GNU format for long paths (that do not fit in ustar format),
+
+    - using base-256 (+ pax if already used) encoding for large files,
+
+    - using pax (+ octal or base-256) for high-range/precision
+      timestamps and user/group identifiers,
+
+    - using pax attributes for extended metadata and/or volume label.
+      [#TAR-PORTABILITY]_
+
+It has been determined that for the purpose of binary package we really
+only need to be concerned about long paths and huge files.  Therefore,
+the above was limited to the three first points and a guideline was
+formed from them.
+
+Debian has a similar guideline for the inner tar of their package
+format  [#DEB-FORMAT]_.
+
+
+.tar security issues
+--------------------
+
+Some of the original features of .tar are obsolete with the modern
+usage.
+
+Firstly, .tar permits duplicate files to exist [#TARDUP]_.
+The later duplicate files overwrite the previously extracted files when
+extracting all files in order.  This is useful for incremental
+backups.  However, a general-purpose archiving tools may choose
+arbitrary files matching a path name, leading to checksum
+or signature bypass.  To prevent this, duplicate files are forbidden
+from existing.
+
+Secondly, .tar lacks integrity checks, except for the header
+self-check.  Data corruption can usually be detected through
+integrity checks in the additional compression layer.  However,
+this does not provide a way of verifying the integrity
+of the compressed data in advance.  For this reason, an additional
+Manifest file is included that provides checksums for other
+files in the archive.  A corrupted Manifest invalidates the whole
+package.
+
+Thirdly, many .tar implementations have various security problems,
+including the Python tarfile module [#ISSUE21109]_.  They provide
+multiple attack vectors, e.g. permitting overwriting files outside
+the destination directory using special filenames, symlinks, hard links
+or device files.  For this purpose, only regular files are permitted
+inside the container.  It is recommended to process the container data
+in place rather than extracting it.
+
+
+Member ordering
+---------------
+
+The member ordering is explicitly specified in order to provide for
+trivially reading metadata from partially fetched archives.
+By requiring the metadata archive to be stored before the image archive,
+the package manager may stop fetching after reading it and save
+bandwidth and/or space.
+
+
+Detached OpenPGP signatures
+---------------------------
+
+The use of detached OpenPGP signatures is to provide authenticity checks
+for binary packages.  Covering the complete members with signatures
+provide for trivial verification of all metadata and image contents
+respectively, without having to invent custom mechanisms for combining
+them.  Covering the compressed archives helps to prevent zipbomb
+attacks.  Covering the individual members rather than the whole package
+provides for verification of partially fetched binary packages.
+
+However, signing individual files does not guarantee that all members
+are originating from the same binary package.  This opens up
+the possibility of a replacement/reuse attack, e.g. combining the signed
+metadata from foo-1.1 with signed image from foo-1.0.  The new binary
+package passes the signature check.  To prevent this type of attack,
+we need the additional Manifest file and its signature to verify
+the authenticity of the complete binary package.
+
+
+Format versioning
+-----------------
+
+The format is versioned through an explicit file, with the version
+stored in the filename.  If the format changes incompatibly,
+the filename changes and old implementations do not recognize it
+as a valid package.
+
+Previously, the format tried to avoid an explicit file for this purpose
+and used volume label instead.  However, the use of label has been
+renounced due to unforeseen portability issues.
+
+
+Backwards Compatibility
+=======================
+
+The format does not preserve backwards compatibility with the tbz2
+packages.  It has been established that preserving compatibility with
+the old format was impossible without making the new format even worse
+than the old one was.
+
+For example, adding any visible members to the tarball would cause
+them to be installed to the filesystem by old Portage versions.  Working
+around this would require some kind of awful hacks that would oppose
+the goal of using simple and transparent package format.
+
+
+Reference Implementation
+========================
+
+The gpkg format is supported by Portage since version 3.0.36
+[#PORTAGE-3.0.36]_.
+
+
+References
+==========
+
+.. [#MAN-XPAK] xpak - The XPAK Data Format used with Portage binary
+   packages
+   (https://dev.gentoo.org/~zmedico/portage/doc/man/xpak.5.html)
+
+.. [#PORTAGE-UTILS] portage-utils: Small and fast Portage helper tools
+   written in C
+   (https://packages.gentoo.org/packages/app-portage/portage-utils)
+
+.. [#POSIX-USTAR] The Open Group Base Specifications Issue 7, 2018
+   edition, pax - portable archive interchange, ustar Interchange Format
+   (https://pubs.opengroup.org/onlinepubs/9699919799/utilities/pax.html#tag_20_92_13_06)
+
+.. [#GNU-TAR] GNU tar: an archiver tool, Appendix E Tar Internals
+   (https://www.gnu.org/software/tar/manual/html_node/Tar-Internals.html)
+
+.. [#GLEP74] GLEP 74: Full-tree verification using Manifest files
+   (https://www.gentoo.org/glep/glep-0074.html)
+
+.. [#RFC4880] RFC 4880: OpenPGP Message Format
+   (https://www.rfc-editor.org/rfc/rfc4880)
+
+.. [#DEB-FORMAT] deb(5) — Debian binary package format
+   (https://manpages.debian.org/unstable/dpkg-dev/deb.5.en.html)
+
+.. [#TAR-PORTABILITY] Michał Górny, Portability of tar features
+   (https://dev.gentoo.org/~mgorny/articles/portability-of-tar-features.html)
+
+.. [#PORTAGE-3.0.36] Portage version 3.0.36
+   (https://gitweb.gentoo.org/proj/portage.git/commit/?h=portage-3.0.36)
+
+.. [#TARDUP] tar: Multiple Members with the Same Name
+   (https://www.gnu.org/software/tar/manual/html_node/multiple.html)
+
+.. [#ISSUE21109] Python tarfile: Traversal attack vulnerability
+   (https://bugs.python.org/issue21109)
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.

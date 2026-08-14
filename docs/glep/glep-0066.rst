@@ -1,0 +1,467 @@
+---
+GLEP: 66
+Title: Gentoo Git Workflow
+Author: Michał Górny <mgorny@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1.1
+Created: 2017-07-24
+Last-Modified: 2018-09-18
+Post-History: 2017-07-25, 2017-09-28, 2017-10-11, 2018-09-18
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+This GLEP specifies basic standards and recommendations for using git
+with the Gentoo ebuild repository.  It covers only Gentoo-specific
+policies, and is not meant to be a complete guide.
+
+
+Change log
+==========
+v1.1
+  Updated the ``Signed-off-by`` footer tag description to account
+  for newly-approved copyright policy.
+
+
+Motivation
+==========
+Although the main Gentoo repository is using git for two years already,
+developers still lack official documentation on how to use git
+consistently.  Most of the developers learn spoken standards from others
+and follow them.  This eventually brings consistency to some extent
+but is suboptimal.  Furthermore, it results in users having to learn
+things the hard way instead of having proper documentation to follow.
+
+There were a few attempts to standardize git use over the time.  Most
+noteworthy are Gentoo git workflow [#GENTOO_GIT_WORKFLOW]_
+and Gentoo GitHub [#GENTOO_GITHUB]_ articles.  However, they are not any
+kind of official standards, and they have too broad focus to become one.
+There was also an initial GLEP attempt but it never even reached
+the draft stage.
+
+This GLEP aims to finally provide basic standardization for the use of
+git in the Gentoo repository.  It aims to focus purely
+on Gentoo-specific standards and not git usage in general.  It doesn't
+mean to be a complete guide but a formal basis on top of which official
+guides could be created.
+
+
+Specification
+=============
+
+Branching model
+---------------
+The main branch of the Gentoo repository is the ``master`` branch.  All
+Gentoo developers push their work straight to the master branch,
+provided that the commits meet the minimal quality standards.
+The master branch is also used straight for continuous user repository
+deployment.
+
+Since multiple developers work on master concurrently, they may be
+required to rebase multiple times before being able to push.  Developers
+are requested not to use workflows that could prevent others from
+pushing, e.g. pushing single commits frequently instead of staging them
+and using a single push.
+
+Developers can use additional branches to facilitate review and testing
+of long-term projects of larger scale.  However, since git fetches all
+branches by default, they should be used scarcely.  For smaller
+projects, local branches or repository forks are preferred.
+
+Unless stated otherwise, the rules set by this specification apply to
+the master branch only.  The development branches can use relaxed rules.
+
+Rewriting history (i.e. force pushes) of the master branch is forbidden.
+
+
+Merge commits
+-------------
+The use of merge commits in the Gentoo repository is strongly
+discouraged.  Usually it is preferable to rebase instead.  However,
+the developers are allowed to use merge commits in justified cases.
+Merge commits can be only used to merge additional branches, the use
+of implicit ``git pull`` merges is entirely forbidden.
+
+In a merge commit that is committed straight to the Gentoo repository,
+the first parent is expected to reference an actual Gentoo commit
+preceding the merge, while the remaining parents can be used to
+reference commits originating from external repositories.  The commits
+on the ancestry path of the first parent (up to the next merge commit)
+are required to conform to this specification.  The commits on remaining
+ancestry paths can use relaxed rules.
+
+
+OpenPGP signatures
+------------------
+Each commit in the Gentoo repository must be signed using
+the committer's OpenPGP key.  Furthermore, each push to the repository
+must be signed using the key belonging to the developer performing
+the push (matched via the SSH key).
+
+The requirements for OpenPGP keys are covered by GLEP 63 [#GLEP63]_.
+
+
+Splitting commits
+-----------------
+Git commits are lightweight, and the developers are encouraged to split
+their commits to improve readability and the ability of reverting
+specific sub-changes.  When choosing how to split the commits,
+the developers should consider the following three rules:
+
+1. Use atomic commits — one commit per logical change.
+2. Split commits at logical unit (package, eclass, profile…) boundaries.
+3. Avoid creating commits that are 'broken' — e.g. are incomplete, have
+   uninstallable packages.
+
+It is technically impossible to always respect all of the three rules,
+so developers have to balance between them at their own discretion.
+Side changes that are implied by other change (e.g. revbump due to some
+change) should be included in the first commit requiring them.  Commits
+should be ordered to avoid breakage, and follow logical ordering
+whenever possible.
+
+Examples:
+
+- When doing a version bump, it is usually not reasonable to split every
+  necessary logical change into separate commit since the interim
+  commits would correspond to a broken package.  However, if the package
+  has a live ebuild, it *might* be reasonable to perform split logical
+  changes on the live ebuild, then create a release as another logical
+  step.
+
+- When doing one or more changes that require a revision bump, bump
+  the revision in the commit including the first change.  Split
+  the changes into multiple logical commits without further revision
+  bumps — since they are going to be pushed in a single push, the user
+  will not be exposed to interim state.
+
+- When adding a new version of a package that should be masked, you can
+  include the ``package.mask`` edit in the commit adding it.
+  Alternatively, you can add the mask in a split commit *preceding*
+  the bump.
+
+- When doing a minor change to a large number of packages, it is
+  reasonable to do so in a single commit.  However, when doing a major
+  change (e.g. a version bump), it is better to split commits on package
+  boundaries.
+
+
+Commit messages
+---------------
+A standard git commit message consists of three parts, in order:
+a summary line, an optional body and an optional set of tags.  The parts
+are separated by a single empty line.
+
+The summary line is included in the short logs (``git log --oneline``,
+gitweb, GitHub, mail subject) and therefore should provide a short yet
+accurate description of the change.  The summary line starts with
+a logical unit name, followed by a colon, a space and a short
+description of the most important changes.  If a bug is associated with
+a change, then it can be included in the summary line
+as ``bug #nnnnnn``.  The summary line must not exceed 69 characters,
+and must not be wrapped.
+
+The suggested logical unit name formats are:
+
+- for a package, ``category/package: …``;
+- for an eclass, ``name.eclass: …``;
+- for other directories or files, their path or filename (as long
+  as a developer reading the commit messages is able to figure out what
+  it is) — e.g. ``licenses/foo: …``, ``package.mask: …``.
+
+The body is included in the full commit log (``git log``, detailed
+commit info on gitweb/GitHub, mail body).  It is optional, and it can be
+used to describe the commit in more detail if the summary line is not
+sufficient.  It is generally a good idea to repeat the information
+contained in the summary (except for the logical unit) since the summary
+is frequently formatted as a title and not adjacent to the body.
+The body should be wrapped at 72 characters.  It can contain multiple
+paragraphs, separated by empty lines.
+
+The tag part is included in the full commit log as an extension to
+the body.  It consists of one or more lines consisting of a key,
+followed by a colon and a space, followed by value.  Git does not
+enforce any standardization of the keys, and the tag format is *not*
+meant for machine processing.
+
+A few tags of common use are:
+
+- user-related tags:
+
+  - ``Acked-by: Full Name <email@example.com>`` — commit approved
+    by another person (usually without detailed review),
+  - ``Reported-by: Full Name <email@example.com>``,
+  - ``Reviewed-by: Full Name <email@example.com>`` — usually indicates
+    full review,
+  - ``Signed-off-by: Full Name <email@example.com>`` — GCO/DCO approval
+    (defined by GLEP 76 [#GLEP76]_),
+  - ``Suggested-by: Full Name <email@example.com>``,
+  - ``Tested-by: Full Name <email@example.com>``.
+
+- commit-related tags:
+
+  - ``Fixes: commit-id (commit message)`` — to indicate fixing
+    an earlier commit,
+  - ``Reverts: commit-id (commit message)`` — to indicate reverting
+    an earlier commit,
+
+- bug tracker-related tags:
+
+  - ``Bug: https://bugs.gentoo.org/NNNNNN`` — to reference a bug;
+    the commit will be linked in a comment,
+  - ``Closes: https://bugs.gentoo.org/NNNNNN`` — to automatically close
+    a Gentoo bug (RESOLVED/FIXED, linking the commit),
+  - ``Closes: https://github.com/gentoo/gentoo/pull/NNNN`` —
+    to automatically close a pull request on GitHub, GitLab, BitBucket
+    or a compatible service (where the commits are mirrored),
+
+- package manager tags:
+
+  - ``Package-Manager: …`` — used by repoman to indicate Portage
+    version,
+  - ``RepoMan-Options: …`` — used by repoman to indicate repoman
+    options.
+
+
+Rationale
+=========
+
+Branching model
+---------------
+The model of multiple developers pushing concurrently to the repository
+containing all packages is preserved from CVS.  The developers have
+discussed the possibility of using other models, in particular of using
+multiple branches for developers that are afterwards automatically
+merged into the master branch.  However, it was determined that there is
+no need to use a more complex model at the moment and the potential
+problems with them outweighed the benefits.
+
+The necessity of rebasing is a natural consequence of concurrent work,
+along with the ban of reverse merge commits.  Since rebasing a number
+of commits can take a few seconds or even more, another developer
+sometimes commits during that time, enforcing another rebase.
+
+In the past, there were cases of developers using automated scripts
+which created single commits, ran repoman and pushed them straight to
+the repository.  This resulted in pushes from a single developer every
+10-15 seconds which made it impossible for other developers to rebase
+larger commit batches.  This kind of workflow is therefore strongly
+discouraged.
+
+Creating multiple short-time branches is discouraged as it implies
+additional transfer for users cloning the repository and additional
+maintenance burden.  Since the git migration, the developers have
+created a few branches on the repository, and did not maintain them.
+The Infra team had to query the developers about the state
+of the branches and clean them up.  Keeping branches local or hosting
+them outside Gentoo Infra (e.g. on GitHub) reduces the burden on our
+users, even if the developers do not clean after themselves.
+
+
+Merge commits
+-------------
+Merge commits have been debated multiple times in various media,
+in particular IRC.  They have very verbose opponents whose main argument
+is that they make history unreadable.  At the same time, it has been
+frequently pointed out that merge commits have valid use cases.
+To satisfy both groups, this specification strongly discourages merge
+commits but allows their use in justified cases.
+
+Most importantly, the implicit merge commits created by ``git pull``
+are forbidden.  Those merges have no real value or justified use case,
+and since they are created implicitly by default there have been
+historical cases where developers pushed them unintentionally.  They are
+banned explicitly to emphasize the necessity of adjusting git
+configuration to the developers.
+
+When processing merge commits, it is important to explicitly distinguish
+the parent that represents 'real' Gentoo history from the one(s) that
+represent external branches.  The former can either be an existing
+Gentoo commit or a commit that the developer has prepared (on top of
+existing Gentoo history) before merging the branch.  For this reason, it
+is important to enforce the full set of Gentoo policies on this parent
+and the commits preceding it.  On the other hand, the external branches
+can be treated similarly to development branches.  Relaxing the rules
+for external branches also makes it possible to merge user contributions
+with original user OpenPGP signatures, while adding a final developer
+signature on top of the merge commit.
+
+When using ``git merge foo``, the first parent represents the current
+``HEAD`` and the second one the merged branch.  This is the model
+used by the specification.
+
+
+OpenPGP signatures
+------------------
+The signature requirements strictly correspond to the git setup deployed
+by the Infrastructure team.
+
+The commit signatures provide an ability to verify the authenticity
+of all commits throughout the Gentoo repository history (to the point
+of git conversion).  The push signatures mostly serve the purpose
+of additional authentication for the developer pushing a specific set
+of commits.
+
+
+Splitting commits
+-----------------
+The goal of the commit splitting rules is to make the best use of git
+while avoiding enforcing too much overhead on the developer
+and optimizing to avoid interim broken commits.
+
+Splitting commits by logical changes improves the readability and makes
+it easier to revert a specific change while preserving the remaining
+(irrelevant) changes.  The changes done by a developer are easier
+to comprehend when the reviewer can follow them in the specific order
+done by the author, rather than combined with other changes.
+
+Splitting commits on logical unit boundary was used since CVS times.
+Mostly it improves readability via making it possible to include
+the unit (package, eclass…) name in the commit message — so that
+developers perceive what specific packages are affected by the change
+without having to look into diffstat.
+
+Requiring commits to be non-'broken' is meant to preserve a good quality
+git history of the repository.  This means that the users can check
+an interim commit out without risking a major problem such as a missing
+dependency that is being added by the commit following it.  It also
+makes it safer to revert the most recent changes with reduced risk
+of exposing a breakage.
+
+Those rules partially overlap, and if that is the case, the developers
+are expected to use common sense to determine the course of action that
+gives the best result.  Furthermore, requiring the strict following
+of the rules would mean a lot of additional work for developers
+and a lot of additional commits for no real benefit.
+
+The examples are provided to make it possible for the developers to get
+a 'feeling' how to work with the rules.
+
+
+Commit messages
+---------------
+The basic commit message format is similar to the one used by other
+projects, and provides for reasonably predictable display of results.
+
+The summary line is meant to provide a good concise summary
+of the changes.  It is included in the short logs, and should include
+all the information to help developer determine whether he is interested
+in looking into the commit details.  Including the logical unit name
+accounts for the fact that most of the Gentoo commits are specific
+to those units (e.g. packages).  The length limit is meant to avoid
+wrapping the shortlog — which could result in unreadable ``git log
+--oneline`` or ugly mid-word ellipsis on GitHub.
+
+The body is meant to provide the detailed information for a commit.
+It is usually displayed verbatim, and the use of paragraphs along with
+line wrapping is meant to improve readability.  The body should include
+the information contained in the summary since the two are sometimes
+really disjoint, and expecting the user to read body as a continuation
+of summary is confusing.  For example, in ``git send-email``,
+the summary line is used to construct the mail's subject
+and is therefore disjoint from the body.
+
+The tag section is a traditional way of expressing quasi-machine-
+readable data.  However, the commit messages are not really suited
+for machine use and only a few tags are actually processed by scripts.
+The specification tries to provide a concise set of potentially useful
+tags collected from various projects (the Linux kernel, X.org).  Those
+tags can be used interchangeably with plaintext explanation in the body.
+
+The only tag defined by git itself is the ``Signed-off-by`` line,
+that is created by ``git commit -s``.  While git does not define
+the precise meaning of it, it is commonly used to reference Certificate
+of Origin sign-off.
+
+The tags subject to machine processing are the ``Bug`` and ``Closes``
+lines.  Both are used by git.gentoo.org to handle Gentoo Bugzilla
+and the latter is also used by GitHub to automatically close pull
+requests (and issues — however, Gentoo does not use GitHub's issue
+tracker).  GitHub, GitLab, Bitbucket, git.gentoo.org also support
+``Fixes`` and ``Resolves`` tags (and the first three also some
+variations of them), however ``Closes`` has been already established
+in Gentoo and is used for consistency.
+
+All the remaining tags serve purely as a user convenience.
+
+Historically, Gentoo has been using a few tags starting with ``X-``.
+However, this practice was abandoned once it has been pointed out that
+git does not enforce any standard set of tags, and therefore indicating
+non-standard tags is meaningless.
+
+Gentoo developers are still frequently using ``Gentoo-Bug`` tag,
+sometimes followed by ``Gentoo-Bug-URL``.  Using both
+simultaneously is meaningless (they are redundant), and using the former
+has no advantages over using the classic ``#nnnnnn`` form in the summary
+or the body.
+
+Using full URLs in ``Closes`` is necessary to properly namespace
+the action to the Gentoo services and avoid accidentally closing
+incorrect issues or pull requests when the commit is mirrored or cherry-
+picked into another repository.  For consistency, they are also used
+for ``Bug`` and should be used for any future tags that might be
+introduced.  This also ensures that the URLs are automatically converted
+into hyperlinks by various tools.
+
+Including the bug number in the summary of the commit message causes
+willikins to automatically expand on the bug on ``#gentoo-commits``.
+
+
+Backwards Compatibility
+=======================
+Most of the new policy will apply to the commits following its approval.
+Backwards compatibility is not relevant there.
+
+One particular point that affects commits retroactively is the OpenPGP
+signing.  However, it has been an obligatory requirement enforced by
+the infrastructure since the git switch.  Therefore, all the git history
+conforms to that.
+
+
+Reference Implementation
+========================
+All of the elements requiring explicit implementation on the git
+infrastructure are implemented already.  In particular this includes:
+
+- blocking force pushes on the ``master`` branch,
+- requiring signed commits on the ``master`` branch,
+- requiring signed pushes to the repository.
+
+The remaining elements are either non-obligatory or non-enforceable
+at infrastructure level.
+
+RepoMan suggests starting the commit message with package name since
+commit 46dafadff58da0 [#REPOMAN_PKG_NAME_COMMIT]_.
+
+Acknowledgements
+================
+Most of the foundations for this specification were laid out by Julian
+Ospald (hasufell) in his initial version of Gentoo git workflow
+[#GENTOO_GIT_WORKFLOW]_ article.
+
+
+References
+==========
+.. [#GENTOO_GIT_WORKFLOW] Gentoo Git Workflow (on Gentoo Wiki)
+   (https://wiki.gentoo.org/wiki/Gentoo_git_workflow)
+
+.. [#GENTOO_GITHUB] Gentoo GitHub (on Gentoo Wiki)
+   (https://wiki.gentoo.org/wiki/Gentoo_GitHub)
+
+.. [#GLEP63] GLEP 63: Gentoo GPG key policies
+   (https://www.gentoo.org/glep/glep-0063.html)
+
+.. [#GLEP76] GLEP 76: Copyright policy
+   (https://www.gentoo.org/glep/glep-0076.html)
+
+.. [#REPOMAN_PKG_NAME_COMMIT]
+   (https://gitweb.gentoo.org/proj/portage.git/commit/?id=46dafadff58da0220511f20480b73ad09f913430)
+
+
+Copyright
+=========
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

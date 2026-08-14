@@ -1,0 +1,75 @@
+---
+GLEP: 28
+Title: Expiration of inactive GLEPs
+Author: Grant Goodyear <g2boojum@gentoo.org>
+Type: Informational
+Status: Active
+Version: 1
+Created: 2004-06-02
+Last-Modified: 2018-12-01
+Post-History: 2004-06-02, 2004-07-20
+Content-Type: text/x-rst
+---
+
+
+Status
+======
+
+This GLEP was approved on 2004-06-14.
+
+Abstract
+========
+
+To keep inactive GLEPs from lingering in a limbo state, Draft GLEPs that have
+been inactive for more than 60 days and Accepted GLEPs that have been
+inactive for over six months should be marked "deferred" due to inactivity
+(and, presumably, lack of interest).
+
+
+Motivation
+==========
+
+Right now a number of GLEPs have been in "Draft" status for as much as 11
+months, with no obvious activity occurring to either submit the GLEP for
+approval or to withdraw it as a bad idea.  Similarly, although it has not yet
+really been a problem, Accepted GLEPs also have the potential to linger
+without any indication that they are moving forward toward being finalized.
+Having a "timeout" period for GLEPs should spur GLEP authors to remain active
+in either getting support for or finalizing  GLEPs.
+
+Specification
+=============
+
+
+If a Draft GLEP is inactive for more than 60 days or an Accepted GLEP is
+inactive for more than six months, then it would be marked as "deferred" on
+the main `GLEP page`_.  Inactivity is defined simply as the GLEP author has
+not contacted the GLEP editors with either an update or a request to submit
+the GLEP for approval (in the case of a Draft GLEP) or a request that the GLEP
+be marked final (in the case of an Accepted GLEP).
+
+.. _GLEP page: https://www.gentoo.org/glep/
+
+A GLEP that has been marked "deferred" may be reopened by request of the GLEP
+author or a Gentoo manager, as long as that request also includes either an
+update or a note submitting the GLEP for approval or finalization.
+
+Rationale
+=========
+
+The GLEP editors have better things to do than chase after GLEP authors to
+find out how their GLEPs are progressing.  This GLEP should help.
+
+
+Backwards Compatibility
+=======================
+
+Not really an issue here.
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

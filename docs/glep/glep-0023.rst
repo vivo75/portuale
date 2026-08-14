@@ -1,0 +1,192 @@
+---
+GLEP: 23
+Title: Handling of ACCEPT_LICENSE
+Author: Jason Stubbs <jstubbs@gentoo.org>,
+        Marius Mauch <genone@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2004-03-09
+Last-Modified: 2022-05-03
+Post-History: 2004-03-08, 2004-03-10, 2004-10-25, 2006-11-18, 2006-11-21
+Content-Type: text/x-rst
+---
+
+
+Status Update
+=============
+
+Repoman has been updated to check for the LICENSE syntax.  Portage now handles
+ACCEPT_LICENSE and license groups, with NON-MUST-HAVE-READ's role handled
+by @EULA.  Marking as Final as of 2014-01-16.
+
+Abstract
+========
+
+Currently, every ebuild in the main Gentoo repository is required to have a
+valid LICENSE entry.  However, the syntax of this entry is not officially
+defined and the entry itself is only used when outputting package
+details.
+
+Motivation
+==========
+
+Many users wish to regulate the software they install with regards to
+licenses for various reasons [1]_.  Some want a system free of any
+software that is not OSI-approved; others are simply curious as to what
+licenses they are implicitly accepting.
+
+Furthermore, some software requires that a user interactively accept its
+license for its author's to consider it legally binding.  This is
+currently implemented using ``eutils.eclass``.
+
+
+Specification
+=============
+
+Ebuild LICENSE Variable
+-----------------------
+
+Most ebuilds are for software which is released under a single license.
+In these cases, the current LICENSE variable can remain as is.  For
+example:
+
+::
+
+	LICENSE="single-license"
+
+However, there are several ebuilds for software which is released under
+several licenses, of which the user must accept one, some or all [2]_.
+To complicate this, some ebuilds include optional components which fall
+under a different license.
+
+To accommodate these cases, LICENSE syntax should accommodate all
+functionality offered by a DEPEND string.  To keep things simple, this
+GLEP proposes that the syntax be identical.  For example:
+
+::
+
+	LICENSE="mandatory-license
+	    || ( choosable-licence1 chooseable-license-2 )
+	    useflag? ( optional-component-license )"
+
+
+License names may contain [a-zA-Z0-9] (english alphanumeric characters),
+_ (underscore), - (hyphen), . (dot) and + (plus sign).  They must not
+begin with a hyphen, a dot or a plus sign.
+
+License Groups
+--------------
+
+Almost all users are willing to install any software that is
+FSF-approved.  Other users are willing to install any software and
+implicitly accept its license.  To this end, implementations will also
+need to handle grouping of licenses.
+
+At a minimum, there needs to be the groups ``GPL-COMPATIBLE``,
+``FSF-APPROVED``, ``OSI-APPROVED`` and ``NON-MUST-HAVE-READ``.
+``NON-MUST-HAVE-READ`` licenses are those that don't require manual
+acceptance for to be considered legally binding.  This is the current
+behaviour of portage.
+
+These groups are defined in a new file ``license_groups`` in
+the ``profiles`` subdirectory of the tree (or overlays).
+Details of handling groups defined in overlays is implementation dependent.
+
+The format of this file is
+
+::
+
+	<groupname> <license1> <license2> ... <licenseN>
+
+Also any line starting with # is ignored and may be used for comments.
+Group names use the same syntax as normal license names.  Also license
+groups may contain other groups.
+License groups may not contain negated elements, so a group
+
+::
+
+	mygroup foo -bar -bla
+
+is illegal.
+
+
+ACCEPT_LICENSE
+--------------
+
+This GLEP proposes that a user be able to explicitly accept or decline
+licenses by editing a new variable ``ACCEPT_LICENSE`` in
+``/etc/make.conf``.  Again, to keep things simple, the syntax should be
+similar to that of other incrementals.  For example:
+
+::
+
+	ACCEPT_LICENSE="-* accepted-license -declined-license"
+
+As an extension, ``ACCEPT_LICENSE`` must also support `license groups`_.
+This GLEP proposes that the license group be prepended by the special
+character "``@``".  For example:
+
+::
+
+	ACCEPT_LICENSE="-* @FSF-APPROVED"
+
+License groups may be negated with the result that all elements of that group
+are also negated.
+
+Portage will also offer a package.license facility to offer this functionality
+on a per-package base (analog to package.keywords), other implementations may
+implement such a facility differently or not at all.
+
+Behaviour
+---------
+
+Unaccepted licenses will be treated like any other masked package, that is
+the user interface of an implementation will display a message listing any
+license that has to be accepted before the package can be merged with a
+pointer to the exact license text.
+
+Past versions of this document proposed to handle license-masked packages
+like blockers, but this would be inconsistent with other visibility
+filters as well as the current blocker system (as a blocker affects two
+packages) and be more complicated to implement.
+
+Rationale
+=========
+
+An implementation of this proposal should make it easy for users wishing
+to regulate their software without affecting those that don't.
+
+
+Reference Implementation
+========================
+
+Available in portage svn repository under main/branches/license-masking
+
+
+Backwards Compatibility
+=======================
+
+There should be no change to the user experience without the user
+explicitly choosing to do so.  This mandates that the
+configuration variable be named ``ACCEPT_LICENSE`` as some users may
+already have it set due to ebuilds using ``eutils.eclass``'s
+implementation.  It also mandates that the default ``ACCEPT_LICENSE`` be
+set to ``@NON-MUST-HAVE-READ`` in the main Gentoo repository as implementations
+are not required to provide an internal default.
+
+References
+==========
+
+.. [1] Gentoo Linux Bug 17367
+       (https://bugs.gentoo.org/17367)
+.. [2] Gentoo Linux Bug 34146
+       (https://bugs.gentoo.org/34146)
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

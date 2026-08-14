@@ -1,0 +1,102 @@
+---
+GLEP: 53
+Title: Keywording scheme
+Author: Fabian Groffen <grobian@gentoo.org>,
+        Diego Pettenò <flameeyes@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2005-12-11
+Last-Modified: 2017-10-13
+Post-History: 2007-04-13
+Content-Type: text/x-rst
+Replaces: 22
+---
+
+
+
+Abstract
+========
+
+This GLEP is a replacement of the keywording scheme from GLEP 22
+[#GLEP22]_.  The current use of keywords is retained in favour of
+4-tuple keywords.  This GLEP defines how current keywords are to be
+interpreted, and how future keywords should be constructed.
+
+
+Motivation
+==========
+
+Although the state of GLEP 22 [#GLEP22]_ is final, its keywording scheme
+was never propagated through the tree.  In fact, 4-tuple keywords are
+not used at all.  This GLEP defines a keywording scheme that is
+compatible with the scheme that is currently in use.
+
+
+Rationale
+=========
+
+The Gentoo/Alt project deals with different Operating Systems and
+architectures.  Recently Gentoo/FreeBSD for Sparc was introduced after
+support for x86 platforms.  This yielded in another new keyword.
+For these kind of platforms, a single field keyword is not enough to
+properly describe the OS and architecture.  While four fields in a
+keyword are overkill, two fields in a keyword should be enough for
+everyone.
+
+
+Backwards Compatibility
+=======================
+
+The proposed keywording scheme is fully compatible with the current
+situation of the portage tree, this in contrast to GLEP 22.  The
+variables provided by GLEP 22 can't be extracted from the new keyword,
+but since GLEP 22-style keywords aren't in the tree at the moment, that
+is not a problem.  The same information can be extracted from the
+``CHOST`` variable, if necessary.  No modifications to ebuilds will have
+to be made.
+
+
+Specification
+=============
+
+Keywords will consist out of two parts separated by a hyphen (``-``).
+The left hand part of the keyword is the architecture, such as `x86`,
+`sparc` or `ppc`.  The right hand part indicates the operating system or
+distribution, such as `linux`, `macos`, `solaris` or `fbsd`.  If the
+right hand part is omitted, it implies the operating system/distribution
+type is GNU/Linux.  In such case the hyphen is also omitted.  Examples
+of such keywords are ``x86`` and ``sparc-fbsd``.  This is fully
+compatible with the current keywords used in the tree.  Examples of
+OS/distributions for the right hand side of the keyword are:
+
+::
+
+	(linux)          GNU/Linux (Gentoo biased, but not fixed)
+	fbsd             FreeBSD
+	macos            Apple Mac OS
+	solaris          Sun Solaris
+
+Both architecture as well as OS/distribution are lower-case ASCII
+(alpha) numeric character sequences.  A valid keyword matches the
+following expression:
+
+	``[a-z0-9]+(-[a-z0-9]+)?``
+
+Note that no limit on the length of both fields in the keyword are
+imposed.  However, we cannot overemphasize our preference to keep
+keywords small and sensible.
+
+ 
+
+.. [#GLEP22] GLEP 22, New "keyword" system to incorporate various
+   userlands/kernels/archs, Goodyear,
+   (https://www.gentoo.org/glep/glep-0022.html)
+
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.

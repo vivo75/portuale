@@ -1,0 +1,313 @@
+---
+GLEP: 77
+Title: Gentoo General Resolution
+Author: Michał Górny <mgorny@gentoo.org>
+Type: Standards Track
+Status: Final
+Version: 1
+Created: 2018-06-22
+Last-Modified: 2026-05-20
+Post-History: 2018-06-28
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+
+This GLEP defines the procedure of a ‘general resolution’ that can
+be used by developers to enforce Council's responsibility towards their
+electorate.  The general resolution can be used to overrule a Council
+decision or disband the Council with a 2:1 majority vote of all
+developers.
+
+
+Motivation
+==========
+
+The GLEP 39 metastructure defines the Council as an elected body
+of Gentoo developer representatives.  The Council decides on global
+issues and handles appeals from disciplinary actions.  While the Council
+should naturally represent their electorate, the metastructure does not
+define a precise way of exercising this responsibility.  [#GLEP39]_
+
+In the past, a few developers have expressed their dissatisfaction with
+some of the Council decisions.  However, the Council members lacked
+a good way of determining whether those opinions expressed the feelings
+of the majority of developers, or were limited to a small group.
+At the same time, disagreeing developers had no way of answering
+the same question without raising inevitable hostility between
+developers.
+
+This GLEP aims to introduce a mechanism of a ‘general resolution’ that
+can be used by developers to override Council decisions, or initiate
+a vote of no confidence against the Council.  This introduces a clear
+method of expressing and verifying disagreement with the proceedings
+of the Council at any point during its term.
+
+This mechanism is inspired by the ‘general resolution’ defined
+by the Debian Constitution [#DEBIAN-CONSTITUTION]_.  It has been
+originally suggested by Matthias Maier [#MAIER-20180403]_.
+
+
+Specification
+=============
+
+Possible subjects for a general resolution
+------------------------------------------
+
+The general resolution provides for the following possibilities:
+
+1. Overruling (voiding) any Council decision, provided that:
+
+   a. the Council decision in question is final (i.e. a general
+      resolution can not be used to bypass the Council),
+
+   b. the decision can be made without disclosing any information that
+      is considered confidential (e.g. appeals of disciplinary actions
+      cannot be the subject of a general resolution).
+
+2. Initiating a vote of no confidence against Council members, resulting
+   in a new Council election.
+
+
+Formal procedure of a general resolution
+----------------------------------------
+
+The general resolution mechanism is defined as follows:
+
+1. A Gentoo developer (or a group of Gentoo developers) defines
+   the subject of the general resolution --- the specific motion
+   to void, or other request as defined in the previous section.
+
+2. The requestor gathers initial support for their proposal.  In order
+   for general resolution vote to be possible, the request needs to
+   be supported by *N1* developers.  Developers second the request
+   by stating their approval along with the subject of the general
+   resolution.  This shall happen in text form with an OpenPGP-signed
+   e-mail sent to the original requestor.
+
+3. Once the signed approvals of *N1* developers are collected,
+   the requestor sends a ‘Request for a general resolution’
+   to the gentoo-dev mailing list.  The request shall include
+   the subject of the resolution, all signed approvals
+   from the seconding developers, and a rationale for further
+   discussion.  The discussion is open for at least two weeks.
+
+4. The elections project shall confirm that all formal requirements
+   for a general resolution are fulfilled, and shall state a timeline
+   for voting.  The voting period shall start no sooner than two weeks
+   after the request, and shall last for two weeks.  All active Gentoo
+   developers at the time when the request is published on the mailing
+   list are eligible to vote.
+
+5. The developers vote on the motion of the general resolution.
+   In order for the motion to pass, it must result in a ratio
+   of positive to negative votes of at least 2:1.  Additionally,
+   the number of positive votes must be at least *N2*.
+
+The developer counts are initially defined as:
+
+- *N1*: 2 times the square root of the number of active Gentoo
+  developers,
+
+- *N2*: one fourth of active Gentoo developers but no less than *N1*.
+
+The numbers are not rounded.  All quorums are defined as ‘no less than’.
+
+
+Rationale
+=========
+
+Limitations in subject
+----------------------
+
+The main purpose of the general resolution mechanism is to provide a way
+for developers to overrule Council decisions or to disband the Council
+whenever necessary.  It is not meant to be used as a regular procedure
+for making decisions.  Its limitations and the procedure has been
+specifically designed to focus on that.
+
+Most notably, only final Council decisions can be overruled
+via a general resolution.  This aims to prevent developers
+from attempting to bypass the Council and abuse the general resolution
+as a generic decision-making process.  Furthermore, for simplicity
+the general resolution does not provide means to alter the motion
+or make a new one --- it only provides for voiding
+the previously-approved motion.
+
+The general resolution involves a vote of all developers.  For this
+reason, it is essential that all developers know the rationale
+for the request and have access to all the data.  This is why
+the process involves a public discussion prior to the vote, and why it
+can't be used for the purposes of cancelling disciplinary actions.
+If developers believe that the Council is unjustly rejecting
+disciplinary action appeals, they can request the vote of no confidence.
+
+The alternative option of a vote of no confidence is provided for
+the case when developers believe that Council members are repeatedly
+neglecting their duty towards the developers.  This option makes it
+possible to disband the Council mid-term and run a new Council election.
+If the vote of no confidence passes, the Council members lose their
+seats immediately and there is no Council until the election finishes.
+
+
+Limitations in procedure
+------------------------
+
+Since the general resolution requires a vote of all developers, this
+GLEP provides further procedural restrictions in order to prevent
+developers from abusing the process to repeatedly call all-developer
+votes.
+
+Most notably, the general resolution vote can be called only
+if the required number of developers second the motion first.  It is
+recommended that the initial support is collected via private channels,
+to avoid creating unnecessary peaks of ‘me too’ traffic on the Gentoo
+mailing lists.  OpenPGP signatures are used to confirm the authenticity
+of developer support; the signed messages are required to contain
+the original motion in order to prevent reusing earlier approvals
+for a new motion.
+
+The minimal number of developers initially supporting the general
+resolution has been selected to prevent abuse by small groups
+of developers while making it possible to actually collect support
+for justified use of general resolution.
+
+The 2:1 majority of votes requirement, as well as quorum, also mean
+to discourage developers from trying to abuse the process.  Since
+the decisions made this way indicate serious accusations towards
+the Council members, it is important that they are actually supported
+by significant population of developers.
+
+The quorum (*N2*, defined as one fourth of active developers) is
+intentionally lower than the turnout at the recent Council elections
+(39% in 2017, 37% in 2016).  It is defined in terms of positive votes
+in order to satisfy the criterium of monotonicity (i.e. prevent ‘no’
+votes from helping the motion to pass).
+
+
+The numbers in practice
+-----------------------
+
+Let's assume the developer count to be 200 active developers.
+
+*N1* is defined as twice the square root of 200 then which equals
+approximate 28.3 developers.  Therefore, in order to call for general
+resolution one does need the support of 29 developers.  The number does
+not grow quick with new developers being admitted — it would be 34.6
+for 300 developers, 40 for 400 developers.
+
+*N2* is defined as one fourth of active developers, and the majority
+of votes is defined as 2:1.  This means that for a motion to pass, it
+must be approved by at least 50 active developers, with no more than
+25 developers actively opposing it.  For every developer voting ‘no’
+above the 25, at least two developers need to vote ‘yes’ for the motion
+to pass.
+
+
+Example procedure of a general resolution
+-----------------------------------------
+
+Let's consider the following example.  On 2018-02-30 the Council has
+passed a motion that changed the default init system for Gentoo
+to systemd.  The developer community at large seems to disagree with
+this decision.  The developer community consists of 200 developers.
+
+One of the developers puts forward the following subject:
+
+  Void the 2018-02-30 Council decision regarding changing the default
+  init system to systemd.
+
+He finds 28 other developers who disagree with the Council decision,
+and sends this text to them.  They add a cleartext signature to it,
+and send it back.  He adds his own signed subject, and prepares a text
+file with 29 signed subjects.
+
+At this point, he sends the following mail to gentoo-dev:
+
+  Dear developer community,
+
+  I would like to call for a general resolution regarding the following
+  subject:
+
+    Void the 2018-02-30 Council decision regarding changing the default
+    init system to systemd.
+
+  I believe this was a very bad decision because ...
+
+He appropriately attaches the signed approvals as a text file to
+the mail.  At this point, the discussion on the topic can begin.
+
+A member of elections project notices the request and starts processing
+it.  First he determines the cutoff date for the vote and creates
+an appropriate list of eligible developers.  He downloads the signed
+approvals and uses GnuPG to verify all the signatures.  Afterwards, he
+confirms that the keys used match the fingerprints of 29 distinct
+developers at the cutoff date.
+
+The elections project member sets up vote for the presented subject
+to start two weeks from the initial mail.  He sends a reply
+to the original post with the schedule and voting instructions.
+
+Once the voting period is over, the elections project collect results.
+They are as follows:
+
+* 74 developers voted ‘yes’,
+* 37 developers voted ‘no’,
+* remaining developers either abstained or did not vote.
+
+Firstly, the quorum is verified.  In this instance, 50 ‘yes’ votes are
+required to satisfy the quorum.  Since 74 developers have voted ‘yes’,
+the quorum is satisfied.
+
+Secondly, the ratio is verified.  Since 37 developers have voted ‘no’,
+there needs to be at least 74 ‘yes’.  Since exactly 74 developers have
+voted ‘yes’, the motion passes.
+
+The Council decision is void then.  The previous default init system
+is restored.
+
+
+Backwards Compatibility
+=======================
+
+n/a
+
+
+Reference Implementation
+========================
+
+n/a
+
+
+Credits
+=======
+
+- Matthias Maier proposed the initial idea and proofread this GLEP
+  thoroughly.
+
+- Ulrich Müller provided an early review of this GLEP and discovered
+  that the original quorum proposal violated the monotonicity criterion.
+
+
+References
+==========
+
+.. [#GLEP39] GLEP 39: An "old-school" metastructure proposal with
+   "boot for being a slacker"
+   (https://www.gentoo.org/glep/glep-0039.html)
+
+.. [#DEBIAN-CONSTITUTION] Debian Constitution
+   (https://www.debian.org/devel/constitution.en.html)
+
+.. [#MAIER-20180403] Matthias Maier.  "Re: Call for agenda items -
+   Council meeting 2018-04-08".  gentoo-project mailing list,
+   2018-04-03, Message-ID 87a7ulktqz.fsf\@gentoo.org
+   (https://archives.gentoo.org/gentoo-project/message/973be0a662b3cc74aa118a1128dcac9e)
+
+
+Copyright
+=========
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0
+International License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/4.0/.

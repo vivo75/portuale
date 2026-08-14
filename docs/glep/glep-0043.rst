@@ -1,0 +1,126 @@
+---
+GLEP: 43
+Title: GLEP File Hosting
+Author: Ciaran McCreesh <ciaranm@gentoo.org>
+Type: Informational
+Status: Final
+Version: 1
+Created: 2005-11-07
+Last-Modified: 2014-01-23
+Post-History: 2005-11-07
+Content-Type: text/x-rst
+---
+
+Abstract
+========
+
+This GLEP proposes the creation of a reliable hosting location for data (e.g.
+sample code) associated with GLEPs.
+
+Status
+======
+
+This GLEP has been approved by the GLEP editor and marked Final on 2005-11-13.
+
+Motivation
+==========
+
+Some GLEPs come with non-trivial example files or code which are part of the
+specification. There are two methods which have been used to handle this
+previously:
+
+* Include the code inline in the GLEP using a code (``::``) segment. This is
+  less than ideal for larger code samples as it leads to considerable clutter.
+* Place the files on a developer's webspace on ``dev.gentoo.org``. This is not
+  particularly reliable -- developers may leave or accidentally restructure
+  their webspace, and a GLEP is intended to be a *permanent* specification.
+
+This GLEP proposes that GLEP authors be allowed to make use of the main Gentoo
+webserver for hosting content relevant to their GLEP.
+
+.. Important:: The hosting proposed is for files related to the **proposal**
+   (e.g. example code which clarifies part of the specification), not a full
+   implementation of the proposal.
+
+Specification
+=============
+
+Once a GLEP number has been allocated, developers (or the GLEP editors) may
+create a directory in CVS named ``glep-xxxx-extras/`` (where ``xxxx`` is the
+GLEP's number) under the main GLEP directory. This directory may be used by
+files which are part of the proposal.
+
+Any hyperlinks to files inside this directory should use relative paths. This
+prevents breakages in the case of directory structure changes.
+
+GLEPs which use this directory may include an 'Example Files' heading with a
+list of links to the associated files.
+
+Example
+-------
+
+Consider the following GLEP segment, which has been taken from a draft of
+GLEP 42 [#glep-42]_:
+
+::
+
+    Example News Item
+    '''''''''''''''''
+
+    The following hypothetical news item could be used for an upgrade to the
+    ``YourSQL`` database format which breaks forward compatibility. It should be
+    named ``2005-11/2005-11-01-yoursql-upgrades.en.txt``.
+
+    ::
+
+        # Lots and lots of lines of example news item
+
+The news item in question is clearly part of the proposal, but including it
+inline is messy. Under this proposal, the main GLEP segment would read:
+
+::
+
+    Example News Item
+    '''''''''''''''''
+
+    `This hypothetical news item`__ could be used for an upgrade to the
+    ``YourSQL`` database format which breaks forward compatibility. It would be
+    named ``2005-11/2005-11-01-yoursql-upgrades.en.txt``.
+
+    .. __: glep-0042-extras/example-news-item.txt
+
+The example news item would then be placed in
+``glep-0042-extras/example-news-item.txt``\.
+
+Similar changes would be made for the longer example code segments. The GLEP
+could also gain a new section along the lines of:
+
+::
+
+    Example Files
+    =============
+
+    `example-news-item.txt <glep-0042-extras/example-news-item.txt>`_
+        An example news item.
+    `news-mailer.bash <glep-0042-extras/news-mailer.bash>`_
+        A ``bash`` script which delivers news items via email.
+
+Backwards Compatibility
+=======================
+
+Not an issue.
+
+References
+==========
+
+.. [#glep-42] GLEP 42: Critical news reporting, Ciaran McCreesh,
+   https://www.gentoo.org/glep/glep-0042.html
+
+Copyright
+=========
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 3.0
+Unported License.  To view a copy of this license, visit
+https://creativecommons.org/licenses/by-sa/3.0/.
+
+.. vim: set tw=80 fileencoding=utf-8 spell spelllang=en et :
