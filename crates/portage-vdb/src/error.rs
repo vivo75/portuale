@@ -4,6 +4,9 @@ use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
+/// `Result` with this crate's [`Error`].
+pub type Result<T> = std::result::Result<T, Error>;
+
 /// Every failure of an [`InstalledDb`](crate::InstalledDb) or [`WriteTxn`](crate::WriteTxn).
 #[derive(Debug)]
 #[non_exhaustive]

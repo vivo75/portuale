@@ -27,9 +27,50 @@ mod files;
 mod files_write;
 #[cfg(feature = "vdb-redb")]
 mod redb_db;
+#[cfg(feature = "vdb-sqlite")]
+mod sqlite;
 mod types;
-pub use error::Error;
+pub use error::{Error, Result};
+pub use files_write::{format_preserved_libs, parse_preserved_libs};
 pub use types::*;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// The 23 single-line fields of the consolidated `metadata` file, sorted.
+/// `CONTENTS` and `NEEDED*` are line-oriented and excluded. The set is part
+/// of the format: change it only with [`METADATA_FILE_FORMAT_VERSION`].
+// Portage: lib/portage/vartree.py, _METADATA_FILE_FIELDS
+pub const METADATA_FILE_FIELDS: &[&str] = &[
+    "BDEPEND",
+    "BUILD_ID",
+    "BUILD_TIME",
+    "CHOST",
+    "COUNTER",
+    "DEFINED_PHASES",
+    "DEPEND",
+    "DESCRIPTION",
+    "EAPI",
+    "HOMEPAGE",
+    "IDEPEND",
+    "IUSE",
+    "KEYWORDS",
+    "LICENSE",
+    "PDEPEND",
+    "PROPERTIES",
+    "PROVIDES",
+    "RDEPEND",
+    "REQUIRES",
+    "RESTRICT",
+    "SLOT",
+    "USE",
+    "repository",
+];
+
+/// Portage's `_METADATA_FILE_FORMAT_VERSION`.
+pub const METADATA_FILE_FORMAT_VERSION: u32 = 1;
+
+/// Whether `name` is one of the [`METADATA_FILE_FIELDS`].
+pub fn in_metadata_file(name: &str) -> bool {
+    METADATA_FILE_FIELDS.contains(&name)
+}

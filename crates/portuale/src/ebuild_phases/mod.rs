@@ -13,7 +13,9 @@
 //! Backend: a genuine `bash` subprocess by default, embedded brush via `--shell brush`.
 // Portage: doebuild.py, bin/ebuild.sh
 
+mod depend_phase;
 mod sandbox;
+pub(crate) use depend_phase::*;
 pub use sandbox::*;
 
 use brush_builtins::ShellBuilderExt as _;

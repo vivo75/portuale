@@ -28,4 +28,10 @@ fn valid_float(s: &str) -> bool {
     };
     v >= 0.0
 }
+
+// ---------------------------------------------------------------------
+// VDB backend selection
+// ---------------------------------------------------------------------
+
+use portage_vdb::BackendKind;
 use std::path::{Path, PathBuf};

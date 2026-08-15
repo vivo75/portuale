@@ -57,3 +57,5 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use std::sync::{OnceLock, RwLock};
+
+pub use portage_vdb::{METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, in_metadata_file};
