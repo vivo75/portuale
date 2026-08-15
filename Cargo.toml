@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/portage-versions",
+    "crates/portage-util",
     "crates/portage-vdb",
     "crates/portage-dep",
     "crates/portage-use-reduce",

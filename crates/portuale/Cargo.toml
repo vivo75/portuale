@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+portage-util = { path = "../portage-util" }
 portage-dep = { path = "../portage-dep" }
 portage-repo = { path = "../portage-repo" }
 # feat#157 (#305): the installed-package database interface; the merge

@@ -1335,6 +1335,7 @@ dependencies = [
  "portage-fetch",
  "portage-profile",
  "portage-repo",
+ "portage-util",
  "portage-versions",
 ]
 
@@ -1644,6 +1645,7 @@ version = "0.1.0"
 dependencies = [
  "blake2",
  "md-5",
+ "portage-util",
  "sha1",
  "sha2",
 ]
@@ -1652,6 +1654,7 @@ dependencies = [
 name = "portage-profile"
 version = "0.1.0"
 dependencies = [
+ "portage-util",
  "regex",
 ]
 
@@ -1669,6 +1672,7 @@ dependencies = [
  "portage-required-use",
  "portage-solver",
  "portage-use-reduce",
+ "portage-util",
  "portage-vdb",
  "portage-versions",
  "resolvo",
@@ -1696,10 +1700,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "portage-util"
+version = "0.1.0"
+
+[[package]]
 name = "portage-vdb"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "portage-util",
  "redb",
  "rusqlite",
 ]
@@ -1731,6 +1740,7 @@ dependencies = [
  "portage-profile",
  "portage-repo",
  "portage-use-reduce",
+ "portage-util",
  "portage-vdb",
  "portage-versions",
  "regex",

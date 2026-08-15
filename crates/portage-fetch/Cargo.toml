@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+portage-util = { path = "../portage-util" }
 # Real Manifest2 digest verification (lib/portage/manifest.py's own
 # MANIFEST2_HASH_DEFAULTS = {"BLAKE2B", "SHA512"}) -- another deliberate,
 # documented dependency, same waiver as brush-core/regex/md-5/filetime in

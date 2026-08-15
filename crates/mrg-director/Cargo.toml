@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+portage-util = { path = "../portage-util" }
 # The contract-typed inputs/outputs (ResolveRequest/GraphResult/etc.) and
 # the re-export hooks (active_resolver) live in portage-repo. This crate
 # is the interchangeable-traits layer the mrg director names so each

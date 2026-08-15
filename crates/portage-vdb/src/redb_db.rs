@@ -101,7 +101,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::MetadataStamp;
+use crate::files::owner_wanted;
+use crate::{Error, MetadataStamp};
 use redb::{
     Database, MultimapTableDefinition, ReadOnlyDatabase, ReadOnlyTable, ReadTransaction,
     ReadableDatabase, ReadableTable, TableDefinition,

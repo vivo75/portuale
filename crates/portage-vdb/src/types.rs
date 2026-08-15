@@ -5,6 +5,8 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::Error;
+
 /// State of the `#dir_mtime=` stamp of an entry's consolidated
 /// `metadata` file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

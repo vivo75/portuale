@@ -90,6 +90,34 @@ pub(crate) fn quarter_sort_key(name: &str) -> (i32, i32, String) {
     (i32::MAX, 0, name.to_string())
 }
 
+/// Every directive from one repo's `profiles/updates/`, quarter files
+/// in `(year, quarter)` order.
+pub(crate) fn grab_updates_for_repo(repo_location: &Path) -> Vec<UpdateCmd> {
+    let updpath = repo_location.join("profiles").join("updates");
+    let Ok(rd) = portage_util::read_dir_entries(&updpath) else {
+        return Vec::new();
+    };
+    let mut files: Vec<(PathBuf, (i32, i32, String))> = rd
+        .into_iter()
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                return None;
+            }
+            Some((e.path(), quarter_sort_key(&name)))
+        })
+        .collect();
+    files.sort_by(|a, b| a.1.cmp(&b.1));
+    let mut cmds = Vec::new();
+    for (path, _) in files {
+        if let Ok(text) = fs::read_to_string(&path) {
+            cmds.extend(parse_updates_content(&text));
+        }
+    }
+    cmds
+}
+
 /// Apply one `move` to one atom token: if its `cp` is `old`, rewrite
 /// just the `cat/pkg` part, preserving the rest. Chained moves are
 /// handled by the caller applying every command in order.

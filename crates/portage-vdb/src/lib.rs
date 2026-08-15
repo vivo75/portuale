@@ -22,9 +22,13 @@
 //! keys, file names, `aux_get` values, world atoms, preserved-libs records
 //! and config memory are `String` (decoded, lossy for `aux_get`).
 
+mod error;
+mod files;
+mod files_write;
 #[cfg(feature = "vdb-redb")]
 mod redb_db;
 mod types;
+pub use error::Error;
 pub use types::*;
 
 use std::path::{Path, PathBuf};

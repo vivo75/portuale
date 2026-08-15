@@ -2,6 +2,40 @@
 
 use crate::*;
 
+/// Reads every non-comment, non-blank, trimmed line from `path`, which
+/// may be a single file or a directory of fragments. A directory is read
+/// in `portage_util::recursive_config_files` order; a missing path yields
+/// an empty list, not an error.
+// Portage: lib/portage/util/__init__.py, _recursive_file_list
+pub(crate) fn read_config_lines(path: &Path) -> Result<Vec<String>, Error> {
+    fn read_file_lines(path: &Path) -> Result<Vec<String>, Error> {
+        let text = fs::read_to_string(path).map_err(|e| Error::ReadFile {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+        Ok(text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(String::from)
+            .collect())
+    }
+
+    let mut lines = Vec::new();
+    // Missing paths stay empty (not an error); unreadable ones report.
+    if path.symlink_metadata().is_err() {
+        return Ok(lines);
+    }
+    let files = portage_util::recursive_config_files(path).map_err(|e| Error::ReadFile {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    for entry in files {
+        lines.extend(read_file_lines(&entry)?);
+    }
+    Ok(lines)
+}
+
 /// Scopes each of `lines` (raw `package.mask`/`.unmask` entries, a
 /// leading `-` meaning removal) to `repo_name` by appending `::name` to
 /// atoms without an explicit repo part. A leading `-` is preserved ahead
