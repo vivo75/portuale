@@ -2,6 +2,27 @@
 
 use crate::ebuild_phases::*;
 
+/// Which shell executes a phase, and every `bin/*.sh` sourced along with it.
+///
+/// `Bash` (**the default**) is a genuine `bash <bin_dir>/ebuild.sh <phase>`
+/// subprocess — Portage's `_doebuild_spawn` shape (`EBUILD_SH_ARGS="$*"` picks up
+/// `<phase>`, and the tail really calls `__ebuild_main ${EBUILD_SH_ARGS}` and exits).
+///
+/// `Brush` is an embedded `brush_core::Shell` (see `Cargo.toml` for the pinned commit).
+/// It never sets `EBUILD_SH_ARGS` — a bare `exit` inside an embedded shell would kill
+/// the host process — so it uses "source, then separately `invoke_function`" instead.
+///
+/// `Bash` is the default because brush's `declare -f` serializer corrupts function
+/// bodies containing redirected here-documents; `__save_ebuild_env` runs `declare -f`
+/// between phases, so essentially every compiled package broke. `Brush` stays via
+/// `--shell brush` (a portuale-only flag, not in `ebuild_options::OPTIONS`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShellBackend {
+    #[default]
+    Bash,
+    Brush,
+}
+
 /// The `src_*` phases sandboxing applies to. Portage sandboxes every phase outside
 /// `_unsandboxed_phases` and unshares every phase outside `_ipc_phases`; for the
 /// phases run here both come out to this list. `nofetch` is excluded (its own
@@ -69,4 +90,100 @@ pub(crate) fn fs_sandbox_for_phase(phase: &str, features: &str) -> bool {
         );
     });
     false
+}
+
+/// Namespace/confinement wrappers for one phase's bash subprocess.
+/// Portage: doebuild.py, _doebuild_spawn
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Isolation {
+    /// `FEATURES=network-sandbox` (`CLONE_NEWNET`).
+    pub(crate) net: bool,
+    /// `FEATURES=ipc-sandbox` (`CLONE_NEWIPC`).
+    pub(crate) ipc: bool,
+    /// `FEATURES=mount-sandbox` (`CLONE_NEWNS` + `mount --make-rslave /`).
+    pub(crate) mount: bool,
+    /// `FEATURES=pid-sandbox` (`CLONE_NEWPID`; `--fork` for the init, `--mount-proc`
+    /// for the new `/proc` mount).
+    pub(crate) pid: bool,
+    /// `FEATURES=sandbox`/`usersandbox` (Portage's `spawn_sandbox`).
+    pub(crate) fs_sandbox: bool,
+}
+
+impl Isolation {
+    pub(crate) fn any_unshare(&self) -> bool {
+        self.net || self.ipc || self.mount || self.pid
+    }
+    /// `unshare(1)` flags, `--map-root-user` first so it works non-root (Portage
+    /// unshares only as `uid == 0`).
+    pub(crate) fn unshare_flags(&self) -> Vec<&'static str> {
+        let mut f = vec!["--map-root-user"];
+        if self.net {
+            f.push("--net");
+        }
+        if self.ipc {
+            f.push("--ipc");
+        }
+        if self.mount {
+            f.push("--mount");
+        }
+        if self.pid {
+            f.extend(["--pid", "--fork", "--mount-proc"]);
+        }
+        f
+    }
+}
+
+/// A blocking `Command` running `bash <script> <arg>` (Portage's `EBUILD_SH_BINARY`
+/// shape) wrapped per `iso`:
+/// `unshare <flags> -- sh -c '<config>; exec "$@"' _ [sandbox] bash <script> <arg>`.
+/// The `sh` shim configures inside each namespace what Portage's `_exec2` does
+/// (loopback + workaround addresses for `--net`, `--make-rslave` for `--mount`);
+/// `bin/*.sh` itself does the `SANDBOX_ON`/`addread`/`addwrite` setup from the env.
+/// Portage: doebuild.py, process.py
+pub(crate) fn sandbox_wrapped_command(
+    script: &Path,
+    arg: &str,
+    iso: Isolation,
+) -> std::process::Command {
+    use std::ffi::OsString;
+
+    let mut argv: Vec<OsString> = Vec::new();
+    if iso.fs_sandbox {
+        // Presence was already confirmed before `iso.fs_sandbox` was set.
+        if let Some(bin) = sandbox_binary() {
+            argv.push(bin.into());
+        }
+    }
+    argv.push("bash".into());
+    argv.push(script.into());
+    argv.push(arg.into());
+
+    if !iso.any_unshare() {
+        let mut c = std::process::Command::new(&argv[0]);
+        c.args(&argv[1..]);
+        return c;
+    }
+
+    let mut shim = String::new();
+    if iso.net {
+        shim.push_str(
+            "ip link set lo up 2>/dev/null; \
+             ip addr add 10.0.0.1/8 dev lo 2>/dev/null; \
+             ip -6 addr add fd::1/8 dev lo 2>/dev/null; ",
+        );
+    }
+    if iso.mount {
+        shim.push_str("mount --make-rslave / 2>/dev/null; ");
+    }
+    shim.push_str("exec \"$@\"");
+
+    let mut c = std::process::Command::new("unshare");
+    c.args(iso.unshare_flags())
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(shim)
+        .arg("portuale-sandbox")
+        .args(&argv);
+    c
 }

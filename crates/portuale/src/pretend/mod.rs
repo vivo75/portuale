@@ -40,3 +40,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use std::process::ExitCode;
+
+/// The `--backtrack` budget when the flag is absent: Portage's own default
+/// (`0` only under `--nodeps`). Single source for the initializer and `--help`.
+// Portage: _emerge/depgraph.py, _backtrack_depgraph
+const DEFAULT_BACKTRACK_MAX: u32 = 20;
