@@ -124,3 +124,15 @@ pub(crate) fn open_log_file(log_file: &Path) -> Result<LogSink, String> {
         }),
     })
 }
+
+/// Arguments of [`spawn_bash_script`].
+pub(crate) struct SpawnBashScriptArgs<'a> {
+    pub(crate) script: &'a Path,
+    pub(crate) argv_word: &'a str,
+    pub(crate) vars: Vec<(String, String)>,
+    pub(crate) iso: Isolation,
+    pub(crate) log_file: Option<&'a Path>,
+    /// Names the spawn in its failure message (`"phase setup"` reads
+    /// `spawning real bash for phase setup failed: …`).
+    pub(crate) context: &'a str,
+}

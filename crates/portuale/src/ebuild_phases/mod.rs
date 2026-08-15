@@ -16,12 +16,14 @@
 mod commands;
 mod depend_phase;
 mod environment;
+mod package_env;
 mod sandbox;
 mod scheduler_registry;
 
 pub use commands::*;
 pub(crate) use depend_phase::*;
 pub(crate) use environment::*;
+pub(crate) use package_env::*;
 pub use sandbox::*;
 pub(crate) use scheduler_registry::*;
 

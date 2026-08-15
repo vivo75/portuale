@@ -30,6 +30,13 @@ pub enum ShellBackend {
 /// Portage: doebuild.py, _doebuild_spawn
 pub(crate) const SANDBOXED_SRC_PHASES: &str = include_str!("sandboxed_src_phases.txt");
 
+/// The calling-env vars Portage's `config.environ()` carries into a phase (plus
+/// `CCACHE_*`/`DISTCC_*`). Phases spawn with the inherited env plus `phase_env_vars`
+/// overrides; without this filter CLI-only vars (e.g. `EMERGE_DEFAULT_OPTS`) would
+/// leak into the regenerated vdb `environment`.
+/// Portage: special_env_vars.py. One name per line.
+pub(crate) const ENVIRON_WHITELIST: &str = include_str!("environ_whitelist.txt");
+
 /// Whether `name` is a line of the one-name-per-line `table`.
 pub(crate) fn listed(table: &str, name: &str) -> bool {
     table.lines().any(|line| line == name)
