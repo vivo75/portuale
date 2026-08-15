@@ -46,7 +46,8 @@ use portage_dep::{Atom, Blocker, Operator, SlotOperator, match_from_list, parse_
 
 use portage_repo::{
     BlockerConflict, BlockerSatisfiedBy, ChangedDepsReportEntry, GraphEntry, PretendOutcome,
-    SlotConflict, all_installed_packages, config_root_from_env, root_from_env, split_pf,
+    SlotConflict, all_installed_packages, config_root_from_env, root_from_env,
+    slot_conflict_flag_sets, split_pf,
 };
 
 use std::collections::{BTreeMap, HashMap, HashSet};

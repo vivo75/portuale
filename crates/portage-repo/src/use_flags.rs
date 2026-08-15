@@ -397,6 +397,51 @@ pub struct ForcedOrMaskedFlagsArgs<'a> {
     pub config: &'a portage_profile::Config,
 }
 
+/// The same force/mask stack without the IUSE intersection (for the
+/// reinstall-for-flags path, which must also forgive a masked flag the
+/// new ebuild dropped from IUSE).
+/// Portage: lib/_emerge/depgraph.py, _reinstall_for_flags inputs
+pub(crate) fn forced_or_masked_flags_unfiltered(
+    keywords: &[String],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> HashSet<String> {
+    let stable = is_stable(IsStableArgs {
+        keywords,
+        candidate_str,
+        category,
+        package,
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    });
+    // Owned union of the two shared sets (both usually cache hits).
+    let mut result = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Force,
+        config,
+        candidate_str,
+        category,
+        package,
+        stable,
+    })
+    .as_ref()
+    .clone();
+    result.extend(
+        resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+            which: MaskOrForce::Mask,
+            config,
+            candidate_str,
+            category,
+            package,
+            stable,
+        })
+        .iter()
+        .cloned(),
+    );
+    result
+}
+
 /// Specificity ranking for config atoms: versioned/slotted atoms outrank
 /// bare ones; bounded wildcards (`*/*`, `category/*`) always rank lowest.
 /// Portage: best_match_to_list specificity table

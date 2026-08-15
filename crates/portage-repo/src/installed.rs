@@ -467,6 +467,98 @@ pub fn installed_pkg_iuse_and_use(
     )
 }
 
+/// The `(iuse_flag, enabled)` display list for a tree ebuild -- the resolver's own per-flag
+/// resolution (`effective_use_flags` over the candidate's `IUSE`). Lets `emerge --resume`
+/// populate reconstructed entries (which record only `cat/pkg-ver`); without it the build env
+/// gets an empty `USE=` and USE-conditional ebuilds `die`. Empty when unlocatable or IUSE-less.
+// Portage: pkg_use_display
+pub fn candidate_use_flags_display(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, bool)> {
+    let Some(candidate) = list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| cs.iter().find(|c| c.version == version).cloned())
+    else {
+        return Vec::new();
+    };
+    let pf = format!("{package}-{version}");
+    let Ok(metadata) = repo_aux_metadata(&candidate.repo_location, category, &pf) else {
+        return Vec::new();
+    };
+    let Some(iuse) = metadata.get("IUSE") else {
+        return Vec::new();
+    };
+    let candidate_str = format!(
+        "{category}/{package}-{version}:{}/{}::{}",
+        candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
+        config,
+        iuse,
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
+        category,
+        package,
+    });
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut display: Vec<(String, bool)> = iuse
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .filter(|flag| seen.insert(flag.clone()))
+        .map(|flag| {
+            let on = use_flags.contains(&flag);
+            (flag, on)
+        })
+        .collect();
+    display.sort_by_key(|p| alnum_sort_key(&p.0));
+    display
+}
+
+/// The package's **full** effective `USE` set -- everything `effective_use_flags` resolved
+/// enabled, including implicit profile flags no package declares in `IUSE`. The caller narrows
+/// it through `portage_profile::portage_use`. Empty when the candidate/md5-cache is unavailable.
+// Portage: bin/ebuild.sh use(), config.py; __dyn_install USE file
+pub fn candidate_effective_use_flags(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<String> {
+    let Some(candidate) = list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| cs.iter().find(|c| c.version == version).cloned())
+    else {
+        return Vec::new();
+    };
+    let pf = format!("{package}-{version}");
+    let Ok(metadata) = repo_aux_metadata(&candidate.repo_location, category, &pf) else {
+        return Vec::new();
+    };
+    // A missing `IUSE` key is an empty `IUSE`, not missing metadata: the md5-cache
+    // writer omits empty fields, but the package still gets its implicit USE.
+    let iuse = metadata.get("IUSE").map(String::as_str).unwrap_or("");
+    let candidate_str = format!(
+        "{category}/{package}-{version}:{}/{}::{}",
+        candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
+        config,
+        iuse,
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
+        category,
+        package,
+    });
+    let mut sorted: Vec<String> = use_flags.iter().cloned().collect();
+    sorted.sort_by_key(|f| alnum_sort_key(f));
+    sorted
+}
+
 /// The vdb entry for `<category>/<package>-<version>`. Portuale never writes, so when the
 /// direct entry is absent (a package move renamed it) every `installed_cp_sources` name is
 /// tried, first existing directory wins. A missing entry returns the direct key (reads absent).

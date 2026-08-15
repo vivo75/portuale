@@ -206,3 +206,30 @@ pub fn installed_use_display_for(
 ) -> Vec<(String, String)> {
     skipped_update_installed_use_display_for(root, config, category, package, version)
 }
+
+/// Declared IUSE plus resolved USE for one version (highest-priority
+/// candidate). Empty when the version is gone or unreadable.
+pub fn slot_conflict_flag_sets(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> (HashSet<String>, HashSet<String>) {
+    let Some(cand) = list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| {
+            cs.iter()
+                .filter(|c| c.version == version)
+                .max_by_key(|c| c.repo_priority)
+                .cloned()
+        })
+    else {
+        return (HashSet::new(), HashSet::new());
+    };
+    match candidate_iuse_and_use(&cand, category, package, config) {
+        // Render-time only (slot-collision messages); one clone here.
+        Some((iuse, use_flags)) => (iuse, use_flags.as_ref().clone()),
+        None => (HashSet::new(), HashSet::new()),
+    }
+}

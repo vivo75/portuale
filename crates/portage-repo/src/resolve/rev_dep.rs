@@ -62,3 +62,18 @@ pub(crate) struct RevDepPin {
     /// The installed consumer `(category, package, version)`.
     pub(crate) consumer: (String, String, String),
 }
+
+/// The decided merge USE/IUSE for `category/package-version`. `None` when no
+/// readable candidate exists; callers fall back to ignoring USE.
+pub(crate) fn merge_use_state(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<(HashSet<String>, HashSet<String>)> {
+    let cands = list_candidates(repos, category, package).ok()?;
+    let cand = cands.iter().find(|c| c.version == version)?;
+    let (iuse, use_flags) = candidate_iuse_and_use(cand, category, package, config)?;
+    Some(((*use_flags).clone(), iuse))
+}

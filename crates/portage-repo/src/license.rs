@@ -265,3 +265,85 @@ pub(crate) fn resolve_acceptable_tokens(
     }
     acceptable
 }
+
+pub(crate) fn license_accepted(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    candidate_str: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    if candidate.license.trim().is_empty() {
+        return true;
+    }
+    let use_flags = use_flags_if_conditional(UseFlagsIfConditionalArgs {
+        value_str: &candidate.license,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+    });
+    let accept_tokens = resolve_accept_tokens(
+        &config.accept_license,
+        &config.package_license,
+        candidate_str,
+        category,
+        package,
+    );
+    let Ok(all_mentioned) = all_mentioned_tokens(&candidate.license) else {
+        return false;
+    };
+    let acceptable = resolve_acceptable_tokens(&accept_tokens, &all_mentioned);
+
+    match has_masked_license(&candidate.license, &use_flags, &acceptable) {
+        Ok(masked) => !masked,
+        Err(_) => false,
+    }
+}
+
+/// The license names `candidate`'s `LICENSE` still needs accepting -- empty when
+/// fully accepted (or empty, or unparseable). Sorted + deduped for display.
+// Portage: LicenseManager.getMissingLicenses in list form
+pub(crate) fn missing_licenses(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    candidate_str: &str,
+    config: &portage_profile::Config,
+) -> Vec<String> {
+    if candidate.license.trim().is_empty() {
+        return Vec::new();
+    }
+    let use_flags = use_flags_if_conditional(UseFlagsIfConditionalArgs {
+        value_str: &candidate.license,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+    });
+    let accept_tokens = resolve_accept_tokens(
+        &config.accept_license,
+        &config.package_license,
+        candidate_str,
+        category,
+        package,
+    );
+    let Ok(all_mentioned) = all_mentioned_tokens(&candidate.license) else {
+        return Vec::new();
+    };
+    let acceptable = resolve_acceptable_tokens(&accept_tokens, &all_mentioned);
+    let tokens: Vec<String> = candidate
+        .license
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+    let Ok(tree) = parse_license_tree(&tokens, &use_flags) else {
+        return Vec::new();
+    };
+    let mut names = tree_masked_license_names(&tree, &acceptable);
+    names.sort();
+    names.dedup();
+    names
+}
