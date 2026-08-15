@@ -1,11 +1,12 @@
 """Black-box contract suite for the `emerge --pretend` pilot slice (see
 PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the full
-scope writeup). Drives the real compiled `emerge` binary (multicall,
-dispatched via a real symlink -- not a neutral harness, since emerge is an
-actual product surface per PROMPT.md's testing decision) and the Python
-reference implementation identically, against the synthetic fixture tree
-at PORTING/fixtures, and asserts their combined stdout+stderr and exit
-codes match exactly.
+scope writeup, including the dependency-recursion follow-up in
+resolve_pretend_graph). Drives the real compiled `emerge` binary
+(multicall, dispatched via a real symlink -- not a neutral harness, since
+emerge is an actual product surface per PROMPT.md's testing decision) and
+the Python reference implementation identically, against the synthetic
+fixture tree at PORTING/fixtures, and asserts their stdout, stderr, and
+exit codes all match exactly.
 """
 
 import subprocess
@@ -30,6 +31,12 @@ CASES = [
     ("more than one atom", ["--pretend", "dev-libs/foo", "dev-libs/bar"], 2),
     ("missing --pretend", ["dev-libs/newpkg"], 2),
     ("unrecognized option", ["--deep", "dev-libs/newpkg"], 2),
+    ("recursion: basic dependency chain", ["--pretend", "dev-libs/withdeps"], 0),
+    ("recursion: diamond dependency dedup", ["--pretend", "dev-libs/diamond"], 0),
+    ("recursion: dependency cycle terminates", ["--pretend", "dev-libs/cycle-a"], 0),
+    ("recursion: any-of group resolves every alternative", ["--pretend", "dev-libs/anyof"], 0),
+    ("recursion: unresolvable dep doesn't fail the graph", ["--pretend", "dev-libs/missingdep"], 0),
+    ("recursion: dedup across DEPEND and RDEPEND", ["--pretend", "dev-libs/dualdep"], 0),
 ]
 
 
@@ -74,3 +81,46 @@ def test_missing_repos_conf_matches_between_implementations(
     assert python_result.returncode == 1
     assert rust_result.stdout == python_result.stdout
     assert rust_result.stderr == python_result.stderr
+
+
+def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
+    """Pins the exact recursion output for the diamond fixture (diamond ->
+    shared-a, shared-b -> common), not just parity with Python: "common"
+    must appear exactly once despite being reachable two ways, in
+    discovery order."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/diamond"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/diamond-1.0",
+        "[ebuild  N] dev-libs/shared-a-1.0",
+        "[ebuild  N] dev-libs/shared-b-1.0",
+        "[ebuild  N] dev-libs/common-1.0",
+    ]
+
+
+def test_any_of_group_resolves_every_alternative(emerge_binary, fixture_env):
+    """Pins the documented v1 any-of simplification: both alternatives of
+    `|| ( dev-libs/newpkg dev-libs/samepkg )` are considered, but only the
+    one that would newly merge (newpkg) is printed -- samepkg is already
+    installed and stays silent, same as any other already-satisfied dep."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/anyof"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/anyof-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_unresolvable_dependency_is_reported_not_silently_dropped(
+    emerge_binary, fixture_env
+):
+    """The top-level package still resolves and the graph doesn't fail,
+    but the unresolvable dependency is reported on stderr, not silently
+    omitted."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/missingdep"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/missingdep-1.0"]
+    assert (
+        result.stderr.strip()
+        == '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"'
+    )

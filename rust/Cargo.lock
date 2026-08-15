@@ -44,7 +44,16 @@ dependencies = [
 name = "portage-repo"
 version = "0.1.0"
 dependencies = [
+ "portage-dep",
+ "portage-use-reduce",
  "portage-versions",
+]
+
+[[package]]
+name = "portage-use-reduce"
+version = "0.1.0"
+dependencies = [
+ "regex",
 ]
 
 [[package]]
@@ -87,7 +96,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "use-reduce-harness"
 version = "0.1.0"
 dependencies = [
- "regex",
+ "portage-use-reduce",
 ]
 
 [[package]]

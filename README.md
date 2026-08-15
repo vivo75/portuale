@@ -7,9 +7,11 @@ skeleton) on the smallest meaningful slice. It has since grown three slices
 further into depgraph/config-resolution territory: atom matching (the
 foundational building block both subsystems are built on), USE-conditional
 dependency-string flattening (`use_reduce`, a real, heavily-used config.py/
-resolver primitive in its own right), and -- building on both -- a real,
-working `emerge --pretend category/package` for the single-atom,
-no-recursion case.
+resolver primitive in its own right), a real, working
+`emerge --pretend category/package`, and -- on top of that -- recursive
+DEPEND/RDEPEND resolution, so `--pretend` on a package with real
+dependencies reports the whole (deduped, cycle-safe) set of packages that
+would newly merge, not just the one you named.
 
 ## Layout
 
@@ -20,15 +22,18 @@ PORTING/
     portage-versions/          shared lib: port of lib/portage/versions.py (vercmp, ververify)
     portage-dep/                shared lib: v1 subset of Atom + match_from_list
                                  (extracted from atom-harness; see lib.rs's doc comment)
-    portage-repo/                repo/metadata/vdb access + resolution for
-                                 `emerge --pretend` (see lib.rs's doc comment)
+    portage-use-reduce/          shared lib: use_reduce(flat=True) (extracted from
+                                 use-reduce-harness; see lib.rs's doc comment)
+    portage-repo/                repo/metadata/vdb access + resolution + recursive
+                                 dependency-graph walk for `emerge --pretend`
+                                 (see lib.rs's doc comment on resolve_pretend_graph)
     versions-harness/          CLI harness over portage-versions
     atom-harness/               CLI harness over portage-dep
-    use-reduce-harness/         port of lib/portage/dep.py's use_reduce(flat=True)
-                                 (see use_reduce.rs's doc comment)
+    use-reduce-harness/         CLI harness over portage-use-reduce
     multicall/                 the real emerge/ebuild dispatch binary; `emerge`
-                                 implements --pretend (pretend.rs), everything else
-                                 (including all of `ebuild`) is still a dry-run stub
+                                 implements --pretend + dependency recursion
+                                 (pretend.rs), everything else (including all of
+                                 `ebuild`) is still a dry-run stub
   python/
     versions_harness.py        thin CLI wrapper around the real portage.versions
     atom_harness.py             thin CLI wrapper around the real portage.dep
@@ -105,32 +110,52 @@ PORTING/
   is allowed to *start* with a digit (`1notaflag` is valid per the real
   `useflag_re`), which is easy to assume is invalid and get wrong.
 - **`emerge --pretend category/package`** (the answer to "what's missing
-  for this to succeed?"): a real, working single-atom slice, built on both
-  `portage-dep` and `portage-versions`. `portage-repo` finds the main repo
-  via `repos.conf` (INI, `[DEFAULT] main-repo` / `[name] location`), lists
-  candidate versions from ebuild filenames in the repo, reads
-  `metadata/md5-cache/<cat>/<pf>` (plain `KEY=value` text -- confirmed
-  against a real vendored tree) for KEYWORDS/SLOT *without executing any
-  bash*, and checks the vdb (`<ROOT>/var/db/pkg`) for what's installed.
-  Visibility is hardcoded to `ACCEPT_KEYWORDS=amd64`; there's no
-  make.conf/profile stacking, no dependency recursion, no
-  package.mask/.use/.accept_keywords, no slot conflicts, no blockers, no
-  overlays, no backtracking -- all explicitly confirmed scope cuts before
-  implementing, not silent omissions (see the doc comment at the top of
-  `rust/portage-repo/src/lib.rs`). Config/target roots come from the real
-  `PORTAGE_CONFIGROOT`/`ROOT` environment variables (portage's own
-  mechanism, not a pilot invention -- see `lib/portage/const.py`), which is
-  what lets `PORTING/fixtures` be used hermetically in tests instead of the
-  real system tree. Output is a documented, simplified subset of real
-  `--pretend` formatting (`[ebuild  N] cat/pkg-1.2.3`,
-  `[ebuild  U] cat/pkg-2.0 (upgrade from 1.0)`, or an
-  already-installed/no-visible-candidate message), not byte-identical to
-  real emerge. Building this surfaced a real bug before it ever shipped: an
-  early version of the vdb directory scan let a sibling package sharing a
-  name prefix (`foo-bar` installed) get misread as an installed version of
-  `foo`; `rust/portage-repo/src/lib.rs`'s `sibling_package_prefix_does_not_contaminate_vdb_scan`
-  unit test reproduces it and pins the fix (verified by temporarily
-  reverting the fix and confirming the test fails the way predicted).
+  for this to succeed?"): a real, working slice, built on `portage-dep`,
+  `portage-versions`, and `portage-use-reduce`. `portage-repo` finds the
+  main repo via `repos.conf` (INI, `[DEFAULT] main-repo` / `[name]
+  location`), lists candidate versions from ebuild filenames in the repo,
+  reads `metadata/md5-cache/<cat>/<pf>` (plain `KEY=value` text --
+  confirmed against a real vendored tree) for KEYWORDS/SLOT/DEPEND/RDEPEND
+  *without executing any bash*, and checks the vdb (`<ROOT>/var/db/pkg`)
+  for what's installed. Visibility is hardcoded to `ACCEPT_KEYWORDS=amd64`;
+  there's no make.conf/profile stacking, no package.mask/.use/.accept_keywords,
+  no slot conflicts, no blockers, no overlays, no backtracking -- all
+  explicitly confirmed scope cuts before implementing, not silent
+  omissions (see the doc comment at the top of `rust/portage-repo/src/lib.rs`).
+  Config/target roots come from the real `PORTAGE_CONFIGROOT`/`ROOT`
+  environment variables (portage's own mechanism, not a pilot invention --
+  see `lib/portage/const.py`), which is what lets `PORTING/fixtures` be
+  used hermetically in tests instead of the real system tree. Output is a
+  documented, simplified subset of real `--pretend` formatting
+  (`[ebuild  N] cat/pkg-1.2.3`, `[ebuild  U] cat/pkg-2.0 (upgrade from 1.0)`,
+  or an already-installed/no-visible-candidate message), not
+  byte-identical to real emerge. Building this surfaced a real bug before
+  it ever shipped: an early version of the vdb directory scan let a
+  sibling package sharing a name prefix (`foo-bar` installed) get misread
+  as an installed version of `foo`; `rust/portage-repo/src/lib.rs`'s
+  `sibling_package_prefix_does_not_contaminate_vdb_scan` unit test
+  reproduces it and pins the fix (verified by temporarily reverting the
+  fix and confirming the test fails the way predicted).
+
+  **Dependency recursion** (`resolve_pretend_graph`): walks DEPEND+RDEPEND
+  (flattened via `portage-use-reduce` with `USE=""`, deduped across both
+  fields and across packages via a visited set, so diamond dependencies
+  and cycles are both handled -- a cycle fixture pair proves this
+  terminates rather than looping forever) for every package that would
+  newly merge or upgrade; an already-installed package's own deps are
+  presumed satisfied. Two more scope calls confirmed with the user before
+  implementing: `||` (any-of) groups resolve *every* alternative rather
+  than picking one, because `use_reduce(flat=True)` deliberately discards
+  group boundaries so there's no reliable way to identify "the first
+  alternative" without reimplementing non-flat structured mode (a
+  considerably bigger, separately out-of-scope piece of work); and an
+  unresolvable dependency doesn't fail the whole graph -- it still shows
+  up (flagged, on stderr) rather than being silently dropped. That
+  "silently dropped" framing was actually my first draft of the doc
+  comment; the `recursion_survives_an_unresolvable_dependency` unit test
+  caught that the code didn't match what the comment claimed, which is
+  what led to fixing the comment (the code's behavior -- report, don't
+  drop -- was the better one).
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -164,9 +189,9 @@ PORTING/
   runtime stage is `FROM scratch`: no libc, no shell, no busybox, nothing
   but the binaries and the fixture tree. `smoke_test.sh` builds that image
   and exercises `versions-harness`, `atom-harness`, `use-reduce-harness`,
-  a real `emerge --pretend` resolution against the fixture,
-  `ebuild`-dispatch, and batch mode inside it, exiting nonzero on any
-  failure.
+  a real `emerge --pretend` resolution (both a single package and a
+  multi-package dependency graph) against the fixture, `ebuild`-dispatch,
+  and batch mode inside it, exiting nonzero on any failure.
 
 Known simplification: `versions-harness`/`portage-versions` compare
 version components as `i128` rather than Python's arbitrary-precision
@@ -185,11 +210,14 @@ exists yet in this pilot), which mirrors a fallback path the real
 `PORTING/fixtures` is a small synthetic repo (not the vendored real tree
 used for benchmarking): `repos.conf`, a handful of ebuilds + matching
 md5-cache entries, and a fake vdb, covering new-install, upgrade,
-already-installed, not-visible (`~amd64`-only), nonexistent-package, and
-the sibling-package-prefix-ambiguity regression case. Its `location` in
-`repos.conf` is relative (resolved against `PORTAGE_CONFIGROOT`) purely so
-the fixture is portable across checkouts -- real `repos.conf` files always
-use absolute paths; see the comment in `portage-repo/src/lib.rs`.
+already-installed, not-visible (`~amd64`-only), nonexistent-package, the
+sibling-package-prefix-ambiguity regression case, and (for recursion) a
+basic dependency chain, a diamond dependency, a dependency cycle, an
+any-of (`||`) group, an unresolvable dependency, and a dependency listed
+in both DEPEND and RDEPEND. Its `location` in `repos.conf` is relative
+(resolved against `PORTAGE_CONFIGROOT`) purely so the fixture is portable
+across checkouts -- real `repos.conf` files always use absolute paths; see
+the comment in `portage-repo/src/lib.rs`.
 
 `gentoo_snapshot.json` was extracted from a full local Gentoo tree
 checkout (`/.gentoo/repos/gentoo` on the machine this was vendored on) with
@@ -256,6 +284,13 @@ FX="$(realpath PORTING/fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg     # -> [ebuild  N] ...
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/upgradepkg # -> [ebuild  U] ...
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg    # -> already installed
+
+# dependency recursion: diamond dependency, deduped (see PORTING/fixtures)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/diamond
+# [ebuild  N] dev-libs/diamond-1.0
+# [ebuild  N] dev-libs/shared-a-1.0
+# [ebuild  N] dev-libs/shared-b-1.0
+# [ebuild  N] dev-libs/common-1.0
 
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \

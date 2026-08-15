@@ -3,16 +3,28 @@
 (see PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the
 full scope writeup). Mirrors the exact same restricted v1 algorithm as the
 Rust side -- hardcoded ACCEPT_KEYWORDS=amd64, no profile/make.conf
-stacking, main repo only, no dependency recursion -- so the two can be
-contract-tested against each other, argv-for-argv and byte-for-byte on
-stdout, the same way every other pilot slice is.
+stacking, main repo only -- so the two can be contract-tested against each
+other, argv-for-argv and byte-for-byte on stdout, the same way every other
+pilot slice is.
+
+Dependency recursion (see resolve_pretend_graph) walks DEPEND+RDEPEND via
+the real portage.dep.use_reduce(flat=True), with its own documented scope
+cuts mirrored exactly from portage-repo/src/lib.rs's resolve_pretend_graph
+doc comment: || (any-of) groups resolve every alternative rather than
+picking one (flat mode discards group boundaries, so there's no reliable
+way to identify "the first" alternative from its output), blockers are
+skipped, cycles/duplicates are deduped via a visited set, and a
+dependency's own deps are only walked if it would newly merge or upgrade.
 
 This is NOT a wrapper around the real `emerge` binary (unlike the
 Python-side harnesses for versions/atom/use_reduce, which wrap real
 production code): the whole point of this slice is that config.py's and
 depgraph.py's real machinery is deliberately not being exercised yet, so
-there is no real code to wrap for the parts this script implements. It
-does reuse the real portage.versions.vercmp for version ordering.
+there is no real code to wrap for the top-level resolution algorithm this
+script implements. It does reuse real portage code where it exists at the
+right granularity: portage.versions.vercmp for version ordering,
+portage.dep.Atom/match_from_list for atom parsing and matching, and
+portage.dep.use_reduce for DEPEND/RDEPEND flattening.
 
 Usage mirrors the real emerge CLI (and the Rust multicall's `emerge`
 applet) directly:
@@ -25,11 +37,12 @@ variables, defaulting to "/" -- see lib/portage/const.py.
 import configparser
 import os
 import sys
+from collections import deque
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "lib"))
 
-from portage.dep import Atom
-from portage.exception import InvalidAtom
+from portage.dep import Atom, match_from_list, use_reduce
+from portage.exception import InvalidAtom, InvalidDependString
 from portage.versions import vercmp
 
 ACCEPT_KEYWORDS = "amd64"
@@ -140,13 +153,6 @@ def _max_version(versions):
     return best
 
 
-def select_best_visible(candidates):
-    visible = [c["version"] for c in candidates if is_visible(c)]
-    if not visible:
-        return None
-    return _max_version(visible)
-
-
 def installed_versions(root, category, package):
     cat_dir = os.path.join(root, "var", "db", "pkg", category)
     if not os.path.isdir(cat_dir):
@@ -161,14 +167,34 @@ def installed_versions(root, category, package):
     return versions
 
 
-def resolve_pretend(config_root, root, category, package):
-    """Returns a tuple whose first element is the outcome tag: "new",
-    "upgrade", "already_installed", or "no_visible_candidate"."""
-    _, repo_location = find_main_repo(config_root)
+def resolve_pretend(repo_location, root, atom_str):
+    """The single-atom v1 resolution decision: find the best visible
+    candidate matching `atom_str` (any atom portage-dep's v1 grammar
+    supports -- operator, slot, not just a bare category/package),
+    compare it against what's installed. Returns a tuple whose first
+    element is the outcome tag: "new", "upgrade", "already_installed", or
+    "no_visible_candidate"."""
+    atom = _parse_atom(atom_str)
+    if atom is None:
+        raise ResolutionError(f'invalid atom "{atom_str}"')
+    category, package = atom.cp.split("/", 1)
+
     candidates = list_candidates(repo_location, category, package)
-    best = select_best_visible(candidates)
-    if best is None:
+    visible = [c for c in candidates if is_visible(c)]
+    if not visible:
         return ("no_visible_candidate",)
+
+    # Reuses the real match_from_list rather than re-deriving
+    # version/slot matching rules here, mirroring portage-repo's Rust
+    # side exactly.
+    candidate_strs = [
+        f"{category}/{package}-{c['version']}:{c['slot']}" for c in visible
+    ]
+    by_str = dict(zip(candidate_strs, visible))
+    matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
+    if not matched:
+        return ("no_visible_candidate",)
+    best = _max_version([c["version"] for c in matched])
 
     installed = installed_versions(root, category, package)
     if best in installed:
@@ -176,6 +202,59 @@ def resolve_pretend(config_root, root, category, package):
     if installed:
         return ("upgrade", _max_version(installed), best)
     return ("new", best)
+
+
+def resolve_pretend_graph(config_root, root, atom_str):
+    """Recursively resolves `atom_str` and -- for packages that would
+    newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
+    Returns a list of (category, package, outcome) tuples, one per
+    distinct category/package visited, in discovery order. See the module
+    doc comment for the recursion's documented scope cuts."""
+    _, repo_location = find_main_repo(config_root)
+
+    visited = set()
+    entries = []
+    queue = deque([atom_str])
+
+    while queue:
+        current_atom_str = queue.popleft()
+        atom = _parse_atom(current_atom_str)
+        if atom is None:
+            continue
+        if atom.blocker:
+            continue
+        category, package = atom.cp.split("/", 1)
+        key = (category, package)
+        if key in visited:
+            continue
+        visited.add(key)
+
+        outcome = resolve_pretend(repo_location, root, current_atom_str)
+        entries.append((category, package, outcome))
+
+        if outcome[0] == "new":
+            version = outcome[1]
+        elif outcome[0] == "upgrade":
+            version = outcome[2]
+        else:
+            continue
+
+        pf = f"{package}-{version}"
+        try:
+            metadata = read_md5_cache(repo_location, category, pf)
+        except OSError:
+            continue
+        depstr = " ".join(metadata[k] for k in ("DEPEND", "RDEPEND") if metadata.get(k))
+        try:
+            flat_deps = use_reduce(depstr, flat=True)
+        except InvalidDependString:
+            continue
+        for tok in flat_deps:
+            if tok == "||":
+                continue
+            queue.append(tok)
+
+    return entries
 
 
 def _parse_atom(atom_str):
@@ -255,26 +334,43 @@ def run(args):
             file=sys.stderr,
         )
         return 2
-    category, package = atom.cp.split("/", 1)
-
     try:
-        outcome = resolve_pretend(_config_root(), _root(), category, package)
+        entries = resolve_pretend_graph(_config_root(), _root(), atom_arg)
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
 
-    tag = outcome[0]
-    if tag == "new":
-        print(f"[ebuild  N] {category}/{package}-{outcome[1]}")
+    # resolve_pretend_graph's BFS always visits the requested atom first,
+    # so entries[0] is the top-level package; its outcome keeps the exact
+    # messages/exit codes the single-atom (no-deps) case always had.
+    top_category, top_package, top_outcome = entries[0]
+    if top_outcome[0] == "no_visible_candidate":
+        print(f'!!! no visible ebuild for "{top_category}/{top_package}"', file=sys.stderr)
+        return 1
+    if top_outcome[0] == "already_installed" and len(entries) == 1:
+        print(
+            f"{top_category}/{top_package}-{top_outcome[1]} is already installed; "
+            "nothing to do"
+        )
         return 0
-    if tag == "upgrade":
-        print(f"[ebuild  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})")
-        return 0
-    if tag == "already_installed":
-        print(f"{category}/{package}-{outcome[1]} is already installed; nothing to do")
-        return 0
-    print(f'!!! no visible ebuild for "{category}/{package}"', file=sys.stderr)
-    return 1
+
+    for category, package, outcome in entries:
+        tag = outcome[0]
+        if tag == "new":
+            print(f"[ebuild  N] {category}/{package}-{outcome[1]}")
+        elif tag == "upgrade":
+            print(f"[ebuild  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})")
+        elif tag == "already_installed":
+            # Already-satisfied dependencies aren't shown, matching real
+            # emerge's usual "don't clutter the list" behavior -- the
+            # top-level already-installed case is handled above instead.
+            pass
+        else:
+            print(
+                f'!!! no visible ebuild for dependency "{category}/{package}"',
+                file=sys.stderr,
+            )
+    return 0
 
 
 if __name__ == "__main__":

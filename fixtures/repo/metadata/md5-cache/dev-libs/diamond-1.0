@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: diamond dependency, top
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/shared-a dev-libs/shared-b
+SLOT=0
+_md5_=0000000000000000000000000000000

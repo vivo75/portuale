@@ -63,6 +63,13 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend resolves a new install inside the scratch container" \
     test "${actual}" = "[ebuild  N] dev-libs/newpkg-1.0"
 
+# emerge --pretend recursion (diamond dependency: dedup + discovery order).
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/diamond)
+check "emerge --pretend resolves a dependency graph inside the scratch container" \
+    test "${actual}" = "$(printf '[ebuild  N] dev-libs/diamond-1.0\n[ebuild  N] dev-libs/shared-a-1.0\n[ebuild  N] dev-libs/shared-b-1.0\n[ebuild  N] dev-libs/common-1.0')"
+
 actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
 check "ebuild dispatch prints the ebuild stub" \
     grep -q "ebuild (pilot stub)" <<<"${actual}"

@@ -1,5 +1,5 @@
 // Neutral CLI test-harness binary for the use_reduce(flat=True) pilot
-// (see PORTING/PROMPT.md and use_reduce.rs's doc comment). Same
+// (see PORTING/PROMPT.md and portage-use-reduce/src/lib.rs's doc comment). Same
 // argv/output contract as PORTING/python/use_reduce_harness.py.
 //
 // Usage:
@@ -15,12 +15,10 @@
 //     -> reads "reduce <mode> <uselist> <token...>" lines from stdin, one
 //        result per line
 
-mod use_reduce;
-
+use portage_use_reduce::{use_reduce_flat, MatchMode};
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
-use use_reduce::{use_reduce_flat, MatchMode};
 
 fn format_reduce(mode: &str, uselist_arg: &str, tokens: &[String]) -> Result<String, String> {
     let mode = match mode {

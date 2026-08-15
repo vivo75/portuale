@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "portage-versions",
     "portage-dep",
+    "portage-use-reduce",
     "portage-repo",
     "versions-harness",
     "atom-harness",

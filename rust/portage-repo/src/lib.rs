@@ -14,9 +14,12 @@
 //     `--pretend` work without the bash dependency that real phase
 //     execution will eventually require (see PROMPT.md's "Deferred:
 //     ebuild phase execution").
-//   - No dependency recursion (DEPEND/RDEPEND are read into the metadata
-//     map but never walked), no package.mask/.use/.accept_keywords, no
-//     slot conflicts, no blockers, no virtuals, no backtracking.
+//   - No package.mask/.use/.accept_keywords, no slot conflicts, no
+//     virtuals, no backtracking.
+//
+// Dependency recursion (see `resolve_pretend_graph` below) walks DEPEND
+// and RDEPEND only, with its own documented scope cuts -- see that
+// function's doc comment.
 //
 // Config/target roots are read from the real `PORTAGE_CONFIGROOT` and
 // `ROOT` environment variables (portage's own mechanism for relocating
@@ -27,7 +30,7 @@
 
 use portage_versions::vercmp;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -240,13 +243,6 @@ fn vercmp_ordering(a: &str, b: &str) -> Ordering {
     }
 }
 
-pub fn select_best_visible(candidates: &[Candidate]) -> Option<&Candidate> {
-    candidates
-        .iter()
-        .filter(|c| is_visible(c))
-        .max_by(|a, b| vercmp_ordering(&a.version, &b.version))
-}
-
 /// Lists every installed version of `category/package` found in the vdb
 /// under `root` (`<root>/var/db/pkg/<category>/<package>-<version>/`).
 pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<String> {
@@ -272,22 +268,56 @@ pub enum PretendOutcome {
     AlreadyInstalled { version: String },
 }
 
-/// The whole v1 `emerge --pretend category/package` decision: find the
-/// best visible candidate in the main repo, compare it against what's
-/// installed. No dependency recursion -- see the module doc comment.
+/// The single-atom v1 `emerge --pretend` decision: find the best visible
+/// candidate matching `atom_str` in the given repo, compare it against
+/// what's installed. `atom_str` may be a full atom (operator, slot --
+/// anything portage-dep's v1 grammar supports), not just a bare
+/// category/package: this is what lets dependency atoms extracted from
+/// DEPEND/RDEPEND (see `resolve_pretend_graph`) reuse the exact same
+/// resolution logic as the top-level CLI atom.
 pub fn resolve_pretend(
-    config_root: &Path,
+    repo_location: &Path,
     root: &Path,
-    category: &str,
-    package: &str,
+    atom_str: &str,
 ) -> Result<PretendOutcome, String> {
-    let repo = find_main_repo(config_root)?;
-    let candidates = list_candidates(&repo.location, category, package)?;
-    let Some(best) = select_best_visible(&candidates) else {
+    let atom =
+        portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
+
+    let candidates = list_candidates(repo_location, &atom.category, &atom.package)?;
+    let visible: Vec<&Candidate> = candidates.iter().filter(|c| is_visible(c)).collect();
+    if visible.is_empty() {
+        return Ok(PretendOutcome::NoVisibleCandidate);
+    }
+
+    // Reuses portage-dep's already-verified match_from_list rather than
+    // re-deriving version/slot matching rules here; candidate strings are
+    // round-tripped back to their Candidate via `by_str` below.
+    let candidate_strs: Vec<String> = visible
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}",
+                atom.category, atom.package, c.version, c.slot
+            )
+        })
+        .collect();
+    let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    let matched = portage_dep::match_from_list(atom_str, &candidate_str_refs)
+        .ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
+
+    let mut by_str: HashMap<&str, &Candidate> = HashMap::new();
+    for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
+        by_str.insert(*s, *c);
+    }
+    let Some(best) = matched
+        .iter()
+        .filter_map(|m| by_str.get(m).copied())
+        .max_by(|a, b| vercmp_ordering(&a.version, &b.version))
+    else {
         return Ok(PretendOutcome::NoVisibleCandidate);
     };
 
-    let installed = installed_versions(root, category, package);
+    let installed = installed_versions(root, &atom.category, &atom.package);
     if installed.iter().any(|v| v == &best.version) {
         return Ok(PretendOutcome::AlreadyInstalled {
             version: best.version.clone(),
@@ -305,6 +335,119 @@ pub fn resolve_pretend(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphEntry {
+    pub category: String,
+    pub package: String,
+    pub outcome: PretendOutcome,
+}
+
+/// Recursively resolves `atom_str` and -- for packages that would newly
+/// merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first. Returns
+/// one `GraphEntry` per distinct category/package visited, in discovery
+/// order (not topologically sorted).
+///
+/// KNOWN, DOCUMENTED SCOPE CUTS (all confirmed with the user before
+/// implementing):
+///   - Only DEPEND and RDEPEND are walked, not BDEPEND/IDEPEND/PDEPEND;
+///     atoms are deduped across both fields (and across packages) via the
+///     shared visited set.
+///   - USE is always empty (matches the base slice's hardcoded
+///     ACCEPT_KEYWORDS-only visibility, no profile/make.conf), so
+///     use_reduce evaluates every `flag?` conditional as inactive and
+///     every `!flag?` as active.
+///   - `||` (any-of) groups: `use_reduce(flat=True)` deliberately discards
+///     group boundaries (that's what "flat" means), so there is no
+///     reliable way to identify "the first alternative" from its output
+///     without reimplementing non-flat structured mode -- a considerably
+///     bigger, previously out-of-scope piece of work (see
+///     portage-use-reduce's doc comment on why flat-only was chosen).
+///     Rather than take that on, v1 resolves *every* atom in an any-of
+///     group. This can pull in more than a real resolver would, but is
+///     never silently wrong about whether a dependency exists.
+///   - A dependency atom with no visible candidate does not fail the
+///     whole graph: it still gets a `GraphEntry` with
+///     `PretendOutcome::NoVisibleCandidate` (so it's visible in the
+///     output, not silently dropped), it's just not recursed into
+///     further, matching the "best effort" spirit of the rest of this
+///     pilot slice.
+///   - Blockers (`!foo/bar` tokens) are recognized and skipped, not
+///     resolved or enforced.
+///   - A package's dependencies are only walked if resolving it produced
+///     New or Upgrade; an already-installed package's own dependencies
+///     are presumed already satisfied (v1 has no --newuse/--changed-use
+///     equivalent).
+pub fn resolve_pretend_graph(
+    config_root: &Path,
+    root: &Path,
+    atom_str: &str,
+) -> Result<Vec<GraphEntry>, String> {
+    let repo = find_main_repo(config_root)?;
+
+    let mut visited: HashSet<(String, String)> = HashSet::new();
+    let mut entries = Vec::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+    queue.push_back(atom_str.to_string());
+
+    while let Some(current_atom) = queue.pop_front() {
+        let Some(atom) = portage_dep::parse_atom(&current_atom) else {
+            continue;
+        };
+        if atom.blocker != portage_dep::Blocker::None {
+            continue;
+        }
+        let key = (atom.category.clone(), atom.package.clone());
+        if !visited.insert(key.clone()) {
+            continue;
+        }
+
+        let outcome = resolve_pretend(&repo.location, root, &current_atom)?;
+        let resolved_version = match &outcome {
+            PretendOutcome::New { version } => Some(version.clone()),
+            PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+            _ => None,
+        };
+
+        entries.push(GraphEntry {
+            category: key.0.clone(),
+            package: key.1.clone(),
+            outcome,
+        });
+
+        let Some(version) = resolved_version else {
+            continue;
+        };
+
+        let pf = format!("{}-{version}", key.1);
+        let Ok(metadata) = read_md5_cache(&repo.location, &key.0, &pf) else {
+            continue;
+        };
+        let mut depstr = String::new();
+        for dep_key in ["DEPEND", "RDEPEND"] {
+            if let Some(d) = metadata.get(dep_key) {
+                depstr.push_str(d);
+                depstr.push(' ');
+            }
+        }
+        let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+        let Ok(flat_deps) = portage_use_reduce::use_reduce_flat(
+            &tokens,
+            &HashSet::new(),
+            portage_use_reduce::MatchMode::Normal,
+        ) else {
+            continue;
+        };
+        for tok in flat_deps {
+            if tok == "||" {
+                continue;
+            }
+            queue.push_back(tok);
+        }
+    }
+
+    Ok(entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,8 +461,10 @@ mod tests {
 
     fn resolve(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
-        resolve_pretend(&root, &root, category, package)
-            .unwrap_or_else(|e| panic!("resolve_pretend({category}/{package}) failed: {e}"))
+        let repo = find_main_repo(&root).expect("fixture repos.conf must resolve");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(&repo.location, &root, &atom_str)
+            .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
     #[test]
@@ -389,5 +534,110 @@ mod tests {
                 version: "2.0".to_string()
             }
         );
+    }
+
+    fn graph(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        resolve_pretend_graph(&root, &root, atom_str)
+            .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            .into_iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+            .collect()
+    }
+
+    #[test]
+    fn recursion_basic_chain() {
+        let entries = graph("dev-libs/withdeps");
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/withdeps".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/upgradepkg".to_string(),
+                    PretendOutcome::Upgrade {
+                        from: "1.0".to_string(),
+                        to: "2.0".to_string(),
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn recursion_dedupes_diamond_dependency() {
+        let entries = graph("dev-libs/diamond");
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "dev-libs/diamond",
+                "dev-libs/shared-a",
+                "dev-libs/shared-b",
+                "dev-libs/common",
+            ]
+        );
+        // "common" must appear exactly once despite being reachable via
+        // both shared-a and shared-b.
+        assert_eq!(names.iter().filter(|n| **n == "dev-libs/common").count(), 1);
+    }
+
+    #[test]
+    fn recursion_terminates_on_a_dependency_cycle() {
+        let entries = graph("dev-libs/cycle-a");
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["dev-libs/cycle-a", "dev-libs/cycle-b"]);
+    }
+
+    #[test]
+    fn recursion_resolves_every_any_of_alternative() {
+        // v1 documented simplification: || resolves every alternative,
+        // not just the first (see resolve_pretend_graph's doc comment).
+        let entries = graph("dev-libs/anyof");
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["dev-libs/anyof", "dev-libs/newpkg", "dev-libs/samepkg"]
+        );
+    }
+
+    #[test]
+    fn recursion_survives_an_unresolvable_dependency() {
+        // The top-level package still resolves, and the unresolvable
+        // dependency still shows up in the graph (as NoVisibleCandidate,
+        // not silently dropped) -- it just isn't recursed into further.
+        let entries = graph("dev-libs/missingdep");
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/missingdep".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/doesnotexist-anywhere".to_string(),
+                    PretendOutcome::NoVisibleCandidate
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn recursion_dedupes_across_depend_and_rdepend() {
+        let entries = graph("dev-libs/dualdep");
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["dev-libs/dualdep", "dev-libs/newpkg"]);
     }
 }
