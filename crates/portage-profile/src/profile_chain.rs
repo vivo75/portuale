@@ -108,6 +108,147 @@ pub(crate) fn repo_containing(
         .max_by_key(|(_, loc)| loc.as_os_str().len())
 }
 
+/// Arguments of [`expand_parent_colon`].
+pub(crate) struct ExpandParentColonArgs<'a> {
+    pub(crate) parent: &'a str,
+    pub(crate) current_repo: Option<&'a (String, PathBuf)>,
+    pub(crate) repos: &'a [(String, PathBuf)],
+    pub(crate) repo_aliases: &'a [(String, PathBuf)],
+    pub(crate) parents_file: &'a Path,
+    pub(crate) parent_colon_repos: &'a HashSet<String>,
+}
+
+/// Expands a profile `parent` line's cross-repo `:path`/`reponame:path`
+/// syntax to `<repo_location>/profiles/<rest>`. A line with no `:` (the
+/// plain relative-path form) is returned unchanged. A `:` line whose
+/// current repo does not declare `portage-2` is returned unchanged too:
+/// the `:` becomes a literal path component failing downstream, as in
+/// Portage.
+// Portage: LocationsManager._expand_parent_colon
+pub(crate) fn expand_parent_colon(args: ExpandParentColonArgs<'_>) -> Result<String, Error> {
+    let ExpandParentColonArgs {
+        parent,
+        current_repo,
+        repos,
+        repo_aliases,
+        parents_file,
+        parent_colon_repos,
+    } = args;
+    let Some(colon) = parent.find(':') else {
+        return Ok(parent.to_string());
+    };
+    // `allow_parent_colon` defaults true and is only overridden when the
+    // current node intersects a known repo; a node outside any repo keeps
+    // the permissive default.
+    let allowed = match current_repo {
+        None => true,
+        Some((name, _)) => parent_colon_repos.contains(name),
+    };
+    if !allowed {
+        return Ok(parent.to_string());
+    }
+    let repo_loc = if colon == 0 {
+        &current_repo
+            .ok_or_else(|| Error::ParentNotFoundOutsideRepos {
+                parent: parent.to_string(),
+                parents_file: parents_file.display().to_string(),
+            })?
+            .1
+    } else {
+        let repo_name = &parent[..colon];
+        // Canonical names and aliases share one namespace (an alias never
+        // shadows a canonical name), so check `repos` first, then aliases.
+        repos
+            .iter()
+            .chain(repo_aliases.iter())
+            .find(|(name, _)| name == repo_name)
+            .map(|(_, loc)| loc)
+            .ok_or_else(|| Error::ParentNotFoundUnknownRepo {
+                parent: parent.to_string(),
+                parents_file: parents_file.display().to_string(),
+                repo_name: repo_name.to_string(),
+            })?
+    };
+    Ok(repo_loc
+        .join("profiles")
+        .join(&parent[colon + 1..])
+        .to_string_lossy()
+        .into_owned())
+}
+
+/// Recursively resolves the profile inheritance chain starting at `leaf`,
+/// ancestors before descendants (parents in the order given),
+/// cycle/diamond-safe via a visited set on the canonicalized directory.
+/// `repos` is only needed for cross-repo `parent` entries (see
+/// `expand_parent_colon`); a chain with none never consults it.
+pub(crate) fn resolve_profile_chain(
+    leaf: &Path,
+    repos: &[(String, PathBuf)],
+    repo_aliases: &[(String, PathBuf)],
+    parent_colon_repos: &HashSet<String>,
+) -> Result<Vec<PathBuf>, Error> {
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut chain: Vec<PathBuf> = Vec::new();
+    visit_profile(VisitProfileArgs {
+        dir: leaf,
+        repos,
+        repo_aliases,
+        parent_colon_repos,
+        visited: &mut visited,
+        chain: &mut chain,
+    })?;
+    Ok(chain)
+}
+/// Arguments of [`visit_profile`].
+pub(crate) struct VisitProfileArgs<'a> {
+    pub(crate) dir: &'a Path,
+    pub(crate) repos: &'a [(String, PathBuf)],
+    pub(crate) repo_aliases: &'a [(String, PathBuf)],
+    pub(crate) parent_colon_repos: &'a HashSet<String>,
+    pub(crate) visited: &'a mut HashSet<PathBuf>,
+    pub(crate) chain: &'a mut Vec<PathBuf>,
+}
+
+pub(crate) fn visit_profile(args: VisitProfileArgs<'_>) -> Result<(), Error> {
+    let VisitProfileArgs {
+        dir,
+        repos,
+        repo_aliases,
+        parent_colon_repos,
+        visited,
+        chain,
+    } = args;
+    let canon = dir.canonicalize().map_err(|e| Error::ResolveProfile {
+        path: dir.display().to_string(),
+        source: e,
+    })?;
+    if !visited.insert(canon.clone()) {
+        return Ok(());
+    }
+    let current_repo = repo_containing(&canon, repos);
+    let parents_file = canon.join("parent");
+    for parent in read_parent_lines(&canon)? {
+        let expanded = expand_parent_colon(ExpandParentColonArgs {
+            parent: &parent,
+            current_repo: current_repo.as_ref(),
+            repos,
+            repo_aliases,
+            parents_file: &parents_file,
+            parent_colon_repos,
+        })?;
+        visit_profile(VisitProfileArgs {
+            dir: &canon.join(&expanded),
+            repos,
+            repo_aliases,
+            parent_colon_repos,
+            visited,
+            chain,
+        })?;
+    }
+    chain.push(canon);
+    Ok(())
+}
+
 /// Every `USE=` value from a repo's top-level `profiles/make.defaults`,
 /// in file order, each `${VAR}`-substituted against `scalars`. A missing
 /// file yields an empty list. `source` is not handled.
