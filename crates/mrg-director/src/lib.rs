@@ -78,3 +78,51 @@ pub enum MergeKind {
     /// Unpack a binpkg and merge it (`_emerge/Binpkg.py`).
     Binary,
 }
+
+// ---------------------------------------------------------------------------
+// Implementation markers (the single implementations that satisfy the
+// contracts today)
+// ---------------------------------------------------------------------------
+
+/// The filesystem `PackagesDb`: queries go through `portage_repo`
+/// helpers over `portage_vdb::for_root(root)`. One of two implementations
+/// (the other is [`MemoryDb`]); see notes for the production traffic.
+pub struct VdbReader<'a> {
+    root: &'a Path,
+}
+
+impl<'a> VdbReader<'a> {
+    /// A reader over `root` (`<root>/var/db/pkg`).
+    pub fn new(root: &'a Path) -> Self {
+        Self { root }
+    }
+}
+
+impl PackagesDb for VdbReader<'_> {
+    fn installed_versions(&self, category: &str, package: &str) -> Vec<String> {
+        // Portage `dbapi.cp_list` sorts highest-first; the vdb scan yields
+        // `read_dir` order, so sort here to honour the trait contract.
+        let mut versions = portage_repo::installed_versions(self.root, category, package);
+        versions.sort_by(|a, b| portage_versions::vercmp(b, a).unwrap_or(0).cmp(&0));
+        versions
+    }
+    fn contents_files(&self, category: &str, package: &str, version: &str) -> Vec<String> {
+        portage_repo::installed_contents_files(self.root, category, package, version)
+    }
+    fn reverse_dependents(
+        &self,
+        consumer_category: &str,
+        consumer_package: &str,
+        consumer_version: &str,
+    ) -> Vec<String> {
+        portage_repo::installed_reverse_dependents(
+            self.root,
+            consumer_category,
+            consumer_package,
+            consumer_version,
+        )
+    }
+    fn root(&self) -> &Path {
+        self.root
+    }
+}

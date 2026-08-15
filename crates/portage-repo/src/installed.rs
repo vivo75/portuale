@@ -126,6 +126,60 @@ pub fn installed_contents_files(
         .collect()
 }
 
+/// Every installed `category/package-version` whose recorded `DEPEND`/`RDEPEND`/`BDEPEND`/
+/// `PDEPEND` (each flattened against its own vdb `USE`) names an atom the installed consumer
+/// satisfies. Blocker atoms never count. Sorted, deduplicated; empty when nothing depends on it.
+// Portage: vardb.match(atom)
+pub fn installed_reverse_dependents(
+    root: &Path,
+    consumer_category: &str,
+    consumer_package: &str,
+    consumer_version: &str,
+) -> Vec<String> {
+    let (slot, sub_slot) =
+        read_vdb_slot(root, consumer_category, consumer_package, consumer_version);
+    let candidate =
+        format!("{consumer_category}/{consumer_package}-{consumer_version}:{slot}/{sub_slot}");
+    let db = portage_vdb::for_root(root);
+    // A database backend narrows the entries via its dependency index; the
+    // reduction and match below are the same code as the scan's. `files` (and a
+    // backend that cannot answer) keeps the scan.
+    if db.kind() != portage_vdb::BackendKind::Files
+        && let Some(found) = indexed_reverse_dependents(
+            db.as_ref(),
+            consumer_category,
+            consumer_package,
+            consumer_version,
+            &candidate,
+        )
+    {
+        return found;
+    }
+    let mut out = std::collections::BTreeSet::new();
+    for pkg in all_installed_packages(root) {
+        if pkg.category == consumer_category
+            && pkg.package == consumer_package
+            && pkg.version == consumer_version
+        {
+            continue;
+        }
+        let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+        for key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND"] {
+            let depstr = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+            if depstr_names_consumer(
+                &depstr,
+                &use_flags,
+                consumer_category,
+                consumer_package,
+                &candidate,
+            ) {
+                out.insert(format!("{}/{}-{}", pkg.category, pkg.package, pkg.version));
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
 /// Whether `depstr`, flattened against `use_flags`, has a non-blocker atom that
 /// `candidate` (`cat/pkg-ver:slot/subslot`) satisfies. Shared by both halves of
 /// [`installed_reverse_dependents`].
