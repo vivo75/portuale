@@ -16,3 +16,14 @@ pub(crate) fn split_slot(raw: &str) -> (String, String) {
         None => (raw.to_string(), raw.to_string()),
     }
 }
+
+/// Reads `<root>/var/db/pkg/<category>/<package>-<version>/SLOT` and
+/// splits it via `split_slot` (the sub-slot kept, not discarded).
+pub(crate) fn read_vdb_slot(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> (String, String) {
+    split_slot(&read_vdb_string(root, category, package, version, "SLOT"))
+}

@@ -261,6 +261,38 @@ pub(crate) fn vdb_aux_get(
     String::new()
 }
 
+/// Reads a vdb aux file (e.g. `USE`/`IUSE`) as a flag-name set, one per
+/// whitespace-separated token, `+`/`-` IUSE default markers stripped. A missing
+/// file is an empty set, not an error. Served from [`vdb_aux_get`].
+pub(crate) fn read_vdb_flag_set(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    filename: &str,
+) -> HashSet<String> {
+    vdb_aux_get(root, category, package, version, filename)
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect()
+}
+
+/// `(IUSE, USE)` bare-name flag sets from an installed package's vdb, for a use-dep check
+/// against an already-merged package. The recorded `USE` is final: `[flag]` holds iff
+/// `flag ∈ USE`; `[flag(+)]`/`[flag(-)]` fall back to the default only when `flag ∉ IUSE`.
+// Portage: vardb.match honouring a cat/pkg[flag] atom
+pub fn installed_pkg_iuse_and_use(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> (HashSet<String>, HashSet<String>) {
+    (
+        read_vdb_flag_set(root, category, package, version, "IUSE"),
+        read_vdb_flag_set(root, category, package, version, "USE"),
+    )
+}
+
 /// The vdb entry for `<category>/<package>-<version>`. Portuale never writes, so when the
 /// direct entry is absent (a package move renamed it) every `installed_cp_sources` name is
 /// tried, first existing directory wins. A missing entry returns the direct key (reads absent).
@@ -283,6 +315,21 @@ pub(crate) fn resolve_vdb_entry(
         }
     }
     direct
+}
+
+/// Reads a vdb aux file as a raw string (e.g. `DEPEND`/`RDEPEND`) -- unlike `read_vdb_flag_set`,
+/// the value stays intact for `use_reduce_flat`. A missing file is an empty string.
+/// Whitespace-normalised like `_aux_get`; line-oriented keys (`CONTENTS`, `NEEDED.*`) bypass
+/// normalisation via [`vdb_aux_get`], whose validated snapshot also avoids per-key opens.
+// Portage: vartree._aux_get
+pub(crate) fn read_vdb_string(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    filename: &str,
+) -> String {
+    vdb_aux_get(root, category, package, version, filename)
 }
 
 /// Flattens `depstr` against `use_flags` into dependency-atom tokens (`||`

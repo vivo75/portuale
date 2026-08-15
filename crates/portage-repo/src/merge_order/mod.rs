@@ -21,4 +21,6 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use std::path::Path;
 
-use crate::{CandidateSource, RepoConfig, all_installed_packages};
+use crate::{
+    CandidateSource, RepoConfig, all_installed_packages, read_vdb_flag_set, read_vdb_slot,
+};
