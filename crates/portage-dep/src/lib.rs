@@ -14,6 +14,7 @@
 //! - A bare atom whose name ends in something version-like (`foo-bar-2`) is
 //!   rejected as ambiguous, per PMS.
 
+use portage_versions::vercmp;
 use regex::Regex;
 use std::cell::RefCell;
 use std::collections::HashMap;
