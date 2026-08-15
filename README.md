@@ -543,6 +543,25 @@ PORTING/
   subset rather than an invented one, matching the "documented,
   simplified subset" spirit of every other output-formatting decision in
   this pilot.
+
+  **BDEPEND/PDEPEND/IDEPEND in recursion**: dependency recursion now
+  concatenates and flattens all five real dependency-string keys --
+  `DEPEND`, `RDEPEND`, `BDEPEND` (build-time-only, EAPI 7+), `PDEPEND`
+  (post-merge), `IDEPEND` (install-time, EAPI 8+, rare) -- fully closing
+  a scope cut this pilot had named explicitly since the original
+  recursion follow-up. Real portage's own merge ordering treats these
+  differently (BDEPEND must be satisfied on the *build host* before
+  compiling starts; PDEPEND only needs to be satisfied *after* this
+  package itself merges; IDEPEND only at install time), but that
+  distinction is meaningless for a `--pretend`-only pilot with no real
+  merge ordering or phase execution to begin with (see `PROMPT.md`'s
+  "Deferred: ebuild phase execution") -- so v1 treats all five uniformly
+  as "a dependency this package needs, resolve and report it", the same
+  simplification already applied to blockers and slot conflicts
+  elsewhere in this recursion. Mechanically small: one line changed on
+  each side (the list of metadata keys concatenated into the flattened
+  dependency string), reusing every other piece of recursion machinery
+  (dedup, `||` handling, blocker extraction) unmodified.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -617,7 +636,10 @@ covering new-install, upgrade, already-installed, not-visible
 (`~amd64`-only), nonexistent-package, the sibling-package-prefix-ambiguity
 regression case, (for recursion) a basic dependency chain, a diamond
 dependency, a dependency cycle, an any-of (`||`) group, an unresolvable
-dependency, and a dependency listed in both DEPEND and RDEPEND, and (for
+dependency, a dependency listed in both DEPEND and RDEPEND, and three
+single-key packages (`bdependpkg`/`pdependpkg`/`idependpkg`) each pulling
+in `newpkg` via just BDEPEND, PDEPEND, or IDEPEND alone -- proving each
+of the three is actually walked, not just DEPEND/RDEPEND -- and (for
 profile resolution) a three-level same-repo profile chain
 (`profiles/base`, `profiles/arch/amd64`, `profiles/default` -- the latter
 inheriting from both of the former, in that order) plus `make.conf`
@@ -762,6 +784,13 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/diamond
 # [ebuild  N] dev-libs/shared-a-1.0
 # [ebuild  N] dev-libs/shared-b-1.0
 # [ebuild  N] dev-libs/common-1.0
+
+# BDEPEND/PDEPEND/IDEPEND are walked too, not just DEPEND/RDEPEND -- v1
+# makes no distinction between any of the five real dependency-string
+# keys (no real merge ordering exists yet for the distinction to matter)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/bdependpkg
+# [ebuild  N] dev-libs/bdependpkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
 
 # real profile/make.conf resolution: "foo" is enabled by the fixture's
 # profile chain, so this package's foo?-gated dependency is pulled in

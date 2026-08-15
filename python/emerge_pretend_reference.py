@@ -34,19 +34,25 @@ and needs a separate bounded fallback -- real Atom already handles
 "*/*"/"category/*"/"*/package" correctly via its own extended_syntax path
 (verified empirically to agree with the Rust side's bounded matcher for
 exactly those forms). package.use (see effective_use_flags) is applied per
-package, not globally: each package's own DEPEND/RDEPEND are flattened
+package, not globally: each package's own dependency strings are flattened
 against its own effective USE set (base config["use_flags"] plus any
 matching package.use entry's tokens), never leaking into a sibling or
 dependency's own resolution.
 
-Dependency recursion (see resolve_pretend_graph) walks DEPEND+RDEPEND via
-the real portage.dep.use_reduce(flat=True), with its own documented scope
-cuts mirrored exactly from portage-repo/src/lib.rs's resolve_pretend_graph
-doc comment: || (any-of) groups resolve every alternative rather than
-picking one (flat mode discards group boundaries, so there's no reliable
-way to identify "the first" alternative from its output), cycles/
-duplicates (by exact atom text) are deduped via a visited set, and a
-dependency's own deps are only walked if it would newly merge or upgrade.
+Dependency recursion (see resolve_pretend_graph) walks all five real
+dependency-string keys -- DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND --
+concatenated and flattened together with no distinction between them:
+real portage's own merge ordering treats these differently, but that's
+meaningless for a --pretend-only pilot with no real merge ordering to
+begin with, so v1 treats all five uniformly as "a dependency this package
+needs, resolve and report it". Flattening itself uses the real
+portage.dep.use_reduce(flat=True), with its own documented scope cuts
+mirrored exactly from portage-repo/src/lib.rs's resolve_pretend_graph doc
+comment: || (any-of) groups resolve every alternative rather than picking
+one (flat mode discards group boundaries, so there's no reliable way to
+identify "the first" alternative from its output), cycles/duplicates (by
+exact atom text) are deduped via a visited set, and a dependency's own
+deps are only walked if it would newly merge or upgrade.
 Two different SLOTs of the same package are genuinely separate,
 independent entries -- real portage allows multiple slots to coexist in
 one merge list (e.g. dev-lang/python:3.11 and :3.12 side by side), so
@@ -70,7 +76,7 @@ there is no real code to wrap for the top-level resolution algorithm this
 script implements. It does reuse real portage code where it exists at the
 right granularity: portage.versions.vercmp for version ordering,
 portage.dep.Atom/match_from_list for atom parsing and matching, and
-portage.dep.use_reduce for DEPEND/RDEPEND flattening.
+portage.dep.use_reduce for dependency-string flattening.
 
 Usage mirrors the real emerge CLI (and the Rust multicall's `emerge`
 applet) directly:
@@ -671,9 +677,10 @@ def resolve_blockers(root, pending, entries):
 
 def resolve_pretend_graph(config_root, root, atoms, config):
     """Recursively resolves every atom in `atoms` and -- for packages that
-    would newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
-    Returns a dict with keys "entries" (a list of (category, package,
-    outcome, blockers, slot, use_display) tuples, one per distinct
+    would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
+    IDEPEND atoms, breadth-first. Returns a dict with keys "entries" (a
+    list of (category, package, outcome, blockers, slot, use_display)
+    tuples, one per distinct
     category/package/slot combination visited, in discovery order --
     unlike a package name alone, two DIFFERENT slots of the same package
     are both real, independent entries, mirroring how real portage
@@ -818,7 +825,11 @@ def resolve_pretend_graph(config_root, root, atoms, config):
             metadata = read_md5_cache(repo_location, category, pf)
         except OSError:
             continue
-        depstr = " ".join(metadata[k] for k in ("DEPEND", "RDEPEND") if metadata.get(k))
+        depstr = " ".join(
+            metadata[k]
+            for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
+            if metadata.get(k)
+        )
         candidate_str = f"{category}/{package}-{version}:{slot}"
         use_flags = effective_use_flags(
             config["use_flags"], config["package_use"], candidate_str, category, package

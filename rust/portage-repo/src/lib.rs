@@ -520,7 +520,7 @@ pub fn resolve_pretend(
     }
 }
 
-/// A blocker atom (from a package's own DEPEND/RDEPEND) that matches
+/// A blocker atom (from a package's own dependency strings) that matches
 /// either a currently-installed package or another package this same
 /// `resolve_pretend_graph` run would also newly merge/upgrade. Purely
 /// informational (see `resolve_pretend_graph`'s doc comment): v1 makes no
@@ -562,7 +562,7 @@ pub struct GraphEntry {
     pub use_flags_display: Vec<(String, bool)>,
 }
 
-/// A blocker atom found while flattening one package's own DEPEND/RDEPEND,
+/// A blocker atom found while flattening one package's own dependency strings,
 /// not yet matched against anything -- collected during the BFS in
 /// `resolve_pretend_graph` and resolved in a single post-pass (see
 /// `resolve_blockers`) once the whole graph's New/Upgrade set is known, so
@@ -687,12 +687,13 @@ pub struct GraphResult {
 }
 
 /// Recursively resolves every atom in `atoms` and -- for packages that
-/// would newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
-/// Returns one `GraphEntry` per distinct category/package/slot combination
-/// visited, in discovery order (not topologically sorted): unlike a
-/// package name alone, two *different* slots of the same package are
-/// both real, independent entries (each gets its own recursion into its
-/// own DEPEND/RDEPEND) -- mirroring how real portage genuinely allows
+/// would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
+/// IDEPEND atoms, breadth-first. Returns one `GraphEntry` per distinct
+/// category/package/slot combination visited, in discovery order (not
+/// topologically sorted): unlike a package name alone, two *different*
+/// slots of the same package are both real, independent entries (each
+/// gets its own recursion into its own dependency strings) -- mirroring
+/// how real portage genuinely allows
 /// multiple slots of the same package to coexist in one merge list (the
 /// entire point of `SLOT`, e.g. `dev-lang/python:3.11` and
 /// `dev-lang/python:3.12` side by side). A *conflict* only exists when
@@ -717,7 +718,7 @@ pub struct GraphResult {
 /// (top-level or not) is even attempted.
 ///
 /// Each package's own `package.use` overrides (see `effective_use_flags`)
-/// only affect how *that* package's own DEPEND/RDEPEND are flattened --
+/// only affect how *that* package's own dependency strings are flattened --
 /// they never leak into a sibling or dependency's resolution, matching
 /// real portage's per-package USE. The same already-computed
 /// `effective_use_flags` result, filtered down to just this package's own
@@ -727,11 +728,22 @@ pub struct GraphResult {
 ///
 /// KNOWN, DOCUMENTED SCOPE CUTS (all confirmed with the user before
 /// implementing):
-///   - Only DEPEND and RDEPEND are walked, not BDEPEND/IDEPEND/PDEPEND;
-///     atoms whose *exact text* repeats (e.g. a shared dependency, or a
-///     cycle) are deduped via a visited-atom-text set purely to guarantee
-///     termination -- see below for how repeat visits to the same
-///     resolved category/package/slot are actually handled.
+///   - All five real dependency-string keys are walked (DEPEND, RDEPEND,
+///     BDEPEND, PDEPEND, IDEPEND), concatenated and flattened together
+///     with no distinction between them: real portage's own merge
+///     ordering treats these differently (BDEPEND must be satisfied on
+///     the build host before compiling; PDEPEND only after this package
+///     itself merges; IDEPEND only at install time) -- meaningless
+///     distinctions for a `--pretend`-only pilot with no real merge
+///     ordering or phase execution to begin with (see PROMPT.md's
+///     "Deferred: ebuild phase execution"), so v1 treats all five as "a
+///     dependency this package needs, resolve and report it" uniformly,
+///     the same "report, don't enforce" simplification already applied to
+///     blockers and slot conflicts below. Atoms whose *exact text*
+///     repeats (e.g. a shared dependency, or a cycle) are deduped via a
+///     visited-atom-text set purely to guarantee termination -- see below
+///     for how repeat visits to the same resolved category/package/slot
+///     are actually handled.
 ///   - `config` (USE, ACCEPT_KEYWORDS, package.mask/.unmask/.accept_keywords)
 ///     is supplied by the caller (computed via `portage_profile::resolve_config`
 ///     -- see that crate's doc comment for what real profile/make.conf/
@@ -771,7 +783,7 @@ pub struct GraphResult {
 ///     New or Upgrade; an already-installed package's own dependencies
 ///     are presumed already satisfied (v1 has no --newuse/--changed-use
 ///     equivalent). This also means blockers -- and slot conflicts -- are
-///     only ever detected from New/Upgrade packages' own DEPEND/RDEPEND;
+///     only ever detected from New/Upgrade packages' own dependency strings;
 ///     an already-installed package's blockers are never inspected, same
 ///     as the rest of its dependencies.
 pub fn resolve_pretend_graph(
@@ -930,7 +942,7 @@ pub fn resolve_pretend_graph(
             continue;
         };
         let mut depstr = String::new();
-        for dep_key in ["DEPEND", "RDEPEND"] {
+        for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
             if let Some(d) = metadata.get(dep_key) {
                 depstr.push_str(d);
                 depstr.push(' ');
@@ -1363,6 +1375,31 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn recursion_walks_bdepend_pdepend_idepend_same_as_depend_rdepend() {
+        for pkg in ["bdependpkg", "pdependpkg", "idependpkg"] {
+            let entries = graph(&format!("dev-libs/{pkg}"));
+            assert_eq!(
+                entries,
+                vec![
+                    (
+                        format!("dev-libs/{pkg}"),
+                        PretendOutcome::New {
+                            version: "1.0".to_string()
+                        }
+                    ),
+                    (
+                        "dev-libs/newpkg".to_string(),
+                        PretendOutcome::New {
+                            version: "1.0".to_string()
+                        }
+                    ),
+                ],
+                "{pkg}"
+            );
+        }
     }
 
     #[test]

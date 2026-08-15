@@ -64,6 +64,9 @@ CASES = [
     ("recursion: any-of group resolves every alternative", ["--pretend", "dev-libs/anyof"], 0),
     ("recursion: unresolvable dep doesn't fail the graph", ["--pretend", "dev-libs/missingdep"], 0),
     ("recursion: dedup across DEPEND and RDEPEND", ["--pretend", "dev-libs/dualdep"], 0),
+    ("recursion: BDEPEND is walked", ["--pretend", "dev-libs/bdependpkg"], 0),
+    ("recursion: PDEPEND is walked", ["--pretend", "dev-libs/pdependpkg"], 0),
+    ("recursion: IDEPEND is walked", ["--pretend", "dev-libs/idependpkg"], 0),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     ("package.mask: hidden, no unmask", ["--pretend", "dev-libs/hardmaskedpkg"], 1),
     ("package.mask + package.unmask: masked then unmasked", ["--pretend", "dev-libs/maskedandunmaskedpkg"], 0),
@@ -165,6 +168,27 @@ def test_any_of_group_resolves_every_alternative(emerge_binary, fixture_env):
         "[ebuild  N] dev-libs/anyof-1.0",
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
+
+
+def test_bdepend_pdepend_idepend_are_walked_same_as_depend_rdepend(
+    emerge_binary, fixture_env
+):
+    """Prior to this slice, resolve_pretend_graph only concatenated
+    DEPEND+RDEPEND before flattening -- a package whose only dependency
+    was declared via BDEPEND (build-time, EAPI 7+), PDEPEND (post-merge),
+    or IDEPEND (install-time, EAPI 8+, rare) would silently resolve with
+    no dependencies at all. v1 makes no distinction between any of the
+    five real dependency-string keys (this pilot has no real merge
+    ordering for the distinction to matter to), so each of these three
+    single-key fixtures must still pull in dev-libs/newpkg exactly like
+    dev-libs/withdeps's own DEPEND/RDEPEND-based fixture does."""
+    for pkg in ("bdependpkg", "pdependpkg", "idependpkg"):
+        result = _run([str(emerge_binary)], ["--pretend", f"dev-libs/{pkg}"], fixture_env)
+        assert result.returncode == 0, pkg
+        assert result.stdout.splitlines() == [
+            f"[ebuild  N] dev-libs/{pkg}-1.0",
+            "[ebuild  N] dev-libs/newpkg-1.0",
+        ], pkg
 
 
 def test_unresolvable_dependency_is_reported_not_silently_dropped(
