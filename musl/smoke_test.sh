@@ -71,6 +71,12 @@ actual=$(printf 'vercmp 1.0 1.0\nververify 1.0_pre2\n' \
 check "batch mode inside scratch container" \
     test "${actual}" = "$(printf '0\nTrue')"
 
+# atom-harness: correctness spot check for the atom-matching pilot slice.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/atom-harness "${IMAGE}" \
+    match ">=dev-libs/foo-1.2.3" "dev-libs/foo-1.0" "dev-libs/foo-2.0")
+check "atom-harness match via explicit entrypoint" \
+    test "${actual}" = "dev-libs/foo-2.0"
+
 echo
 if [ "${fail}" -eq 0 ]; then
     echo "musl smoke test: PASS (image ${IMAGE})"

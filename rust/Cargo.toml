@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["versions-harness", "multicall"]
+members = ["portage-versions", "versions-harness", "atom-harness", "multicall"]
 
 [workspace.package]
 edition = "2021"

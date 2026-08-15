@@ -12,8 +12,6 @@
 //                                               mode: avoids per-op
 //                                               fork/exec overhead)
 
-mod versions;
-
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
@@ -23,7 +21,7 @@ fn dispatch(op: &str, args: &[&str]) -> Result<String, String> {
             let [v1, v2] = args else {
                 return Err(format!("vercmp expects 2 args, got {}", args.len()));
             };
-            Ok(match versions::vercmp(v1, v2) {
+            Ok(match portage_versions::vercmp(v1, v2) {
                 Some(n) => n.to_string(),
                 None => "None".to_string(),
             })
@@ -32,7 +30,7 @@ fn dispatch(op: &str, args: &[&str]) -> Result<String, String> {
             let [v] = args else {
                 return Err(format!("ververify expects 1 arg, got {}", args.len()));
             };
-            Ok(if versions::ververify(v) {
+            Ok(if portage_versions::ververify(v) {
                 "True"
             } else {
                 "False"
