@@ -12,8 +12,9 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
 use super::db_err;
 use crate::files::{normalise_aux_bytes, translate_aux_slot};
 use crate::{
-    ConfigMemory, Counter, DepClass, EntryKey, Error, IndexCounts, METADATA_FILE_FIELDS,
-    METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, Result, World, WorldSets,
+    ConfigMemory, Counter, DepClass, EntryImage, EntryKey, Error, IndexCounts,
+    METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, Result,
+    World, WorldSets, WriteTxn,
 };
 
 trait Be<T> {

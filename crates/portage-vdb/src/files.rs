@@ -6,11 +6,6 @@
 //! [`Error::Unsupported`] naming the plan step that moves it.
 
 use crate::types::DIR_MODE_MASK;
-use crate::{
-    BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryKey, Error, FileMeta,
-    METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, Result,
-    Snapshot, World, WorldSets, in_metadata_file,
-};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
@@ -20,8 +15,36 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::files_write::FilesTxn;
+use crate::{
+    BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFile, EntryImage, EntryKey,
+    EntryStat, Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION,
+    MetadataStamp, PreservedLibs, Result, Snapshot, World, WorldSets, WriteTxn, in_metadata_file,
+};
+
 /// The VDB directory under a root, joined without canonicalising.
 pub(crate) const VDB_PATH: &str = "var/db/pkg";
+
+/// The `files` backend for one root, or for one bare VDB directory.
+#[derive(Debug, Clone)]
+pub struct FilesDb {
+    /// The root the D4 stores live under; `None` for a bare VDB directory.
+    root: Option<PathBuf>,
+    /// `<root>/var/db/pkg`, or the directory given to `open_vdb_dir`.
+    vdb: PathBuf,
+}
+
+impl FilesDb {
+    /// The root given to [`FilesDb::new`]; `None` for a bare VDB directory.
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
+    /// `<root>/var/db/pkg` (or the bare VDB directory), no I/O.
+    pub(crate) fn vdb_path(&self) -> &Path {
+        &self.vdb
+    }
+}
 
 /// `st_mtime` of `p` in nanos, 0 when missing or unreadable: the
 /// invalidation signal for category-scoped caches (every vdb mutation
@@ -40,6 +63,15 @@ pub(crate) fn is_absent(e: &io::Error) -> bool {
         e.kind(),
         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
     )
+}
+
+fn file_meta_of(name: String, st: &fs::Metadata) -> FileMeta {
+    FileMeta {
+        name,
+        len: st.len(),
+        mode: st.mode(),
+        mtime_ns: st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128,
+    }
 }
 
 /// Parse and validate a consolidated `metadata` snapshot: `#format=`
@@ -129,6 +161,107 @@ pub(crate) fn translate_aux_slot(key: &str, value: String) -> String {
     value
 }
 
+impl FilesDb {
+    /// `<vdb>/<category>/<pf>`, no I/O.
+    fn entry_dir(&self, key: &EntryKey) -> PathBuf {
+        self.vdb.join(&key.category).join(&key.pf)
+    }
+
+    /// A cheap fingerprint of the VDB structure: the vdb dir's mtime plus
+    /// every category dir's mtime, xor-folded with a count. ~30 `stat`s vs
+    /// the ~2000 `SLOT` reads a full scan does.
+    fn fingerprint(&self) -> u64 {
+        let vdb = self.vdb.as_path();
+        let Ok(cats) = portage_util::read_dir_entries(vdb) else {
+            return 0;
+        };
+        let mut acc = dir_mtime_nanos(vdb);
+        let mut count: u64 = 0;
+        for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
+            acc ^= dir_mtime_nanos(&cat.path()).rotate_left((count % 61) as u32 + 1);
+            count += 1;
+        }
+        acc ^ count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    }
+
+    /// Portage's `_aux_get` for one in-set key: `stat` the package dir
+    /// once, try the consolidated `metadata` snapshot (a validated one is
+    /// *complete*, so a missing field is `""` with no `open()`), otherwise
+    /// read the individual file. `None` when the entry does not exist.
+    /// The invalid-`SLOT` -> `"0"` translation applies, via
+    /// [`translate_aux_slot`]; the `EAPI == "" -> "0"` one does not.
+    // Portage: lib/portage/vartree.py, _aux_get
+    pub(crate) fn aux_get_field(&self, key: &EntryKey, field: &str) -> Option<String> {
+        // One `statx` for both the existence test and the `st_mtime_ns`
+        // validity check below.
+        let dir = self.entry_dir(key);
+        let st = fs::metadata(&dir).ok().filter(|st| st.is_dir())?;
+        let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
+
+        // Per-instance metadata keyed on the dir's `st_mtime_ns`: a snapshot
+        // fills all 23 fields at once, the fallback resolves lazily per
+        // key. An in-place field rewrite leaves the dir mtime alone, so a
+        // value read once is served until the dir changes. Thread-local,
+        // so the lookup stays lock-free.
+        type CacheKey = (PathBuf, String, String);
+        type AuxCache = HashMap<CacheKey, (i128, Rc<HashMap<String, String>>)>;
+        thread_local! {
+            static AUX_CACHE: RefCell<AuxCache> = RefCell::new(HashMap::new());
+        }
+        let cache_key = (self.vdb.clone(), key.category.clone(), key.pf.clone());
+
+        // The `stat` above is the validity signal, paid on every call; the
+        // memo removes the snapshot read and the per-key `open`.
+        let cached = AUX_CACHE.with(|c| {
+            c.borrow()
+                .get(&cache_key)
+                .filter(|(mtime, _)| *mtime == dir_mtime_ns)
+                .map(|(_, map)| Rc::clone(map))
+        });
+        if let Some(map) = cached {
+            if let Some(v) = map.get(field) {
+                return Some(translate_aux_slot(field, v.clone()));
+            }
+            // This key is not resolved yet; drop the shared handle before
+            // mutating so `Rc::make_mut` can reuse it.
+            drop(map);
+            let value = translate_aux_slot(field, read_vdb_file(&dir.join(field)));
+            AUX_CACHE.with(|c| {
+                if let Some((_, map)) = c.borrow_mut().get_mut(&cache_key) {
+                    Rc::make_mut(map).insert(field.to_string(), value.clone());
+                }
+            });
+            return Some(value);
+        }
+
+        // Miss or dir-mtime change: read and validate the snapshot once.
+        let mut map: HashMap<String, String> =
+            match read_metadata_file(&dir.join("metadata"), dir_mtime_ns) {
+                Some(snapshot) => {
+                    // A validated snapshot is complete: pre-fill every
+                    // member so an absent one is `""` with no `open()`.
+                    let mut m = snapshot;
+                    for &f in METADATA_FILE_FIELDS {
+                        m.entry(f.to_string()).or_default();
+                    }
+                    m
+                }
+                None => HashMap::new(),
+            };
+        let value = map
+            .get(field)
+            .cloned()
+            .unwrap_or_else(|| read_vdb_file(&dir.join(field)));
+        let value = translate_aux_slot(field, value);
+        map.insert(field.to_string(), value.clone());
+        AUX_CACHE.with(|c| {
+            c.borrow_mut()
+                .insert(cache_key, (dir_mtime_ns, Rc::new(map)));
+        });
+        Some(value)
+    }
+}
+
 /// The claims of one entry's `CONTENTS` text: a line whose first two
 /// words are a kind (`obj`, `sym`, `dir`, `dev`, `fif`, `bin`) and a path
 /// claims that path; one leading `/` is ignored on both sides. Each claim
@@ -167,4 +300,402 @@ pub(crate) fn todo_step<T>(what: &str, step: &str) -> Result<T> {
     Err(Error::Unsupported(format!(
         "FilesDb::{what} is not implemented yet (feat#157 {step})"
     )))
+}
+
+impl InstalledDb for FilesDb {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Files
+    }
+
+    fn vdb_dir(&self) -> Option<PathBuf> {
+        Some(self.vdb.clone())
+    }
+
+    fn generation(&self) -> Result<u64> {
+        Ok(self.fingerprint())
+    }
+
+    fn category_generation(&self, category: &str) -> Result<u64> {
+        Ok(dir_mtime_nanos(&self.vdb.join(category)))
+    }
+
+    fn entries(&self) -> Result<Vec<EntryKey>> {
+        let mut out = Vec::new();
+        let Ok(cats) = portage_util::read_dir_entries(&self.vdb) else {
+            return Ok(out);
+        };
+        for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
+            let category = cat.file_name().to_string_lossy().to_string();
+            let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
+                continue;
+            };
+            for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
+                let dirname = pkg.file_name().to_string_lossy().to_string();
+                // An in-progress `-MERGING-<pf>` entry is never installed.
+                if portage_util::is_merging_vdb_entry(&dirname) {
+                    continue;
+                }
+                out.push(EntryKey::new(category.clone(), dirname));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The category directories of the VDB, in listing order; empty when
+    /// the VDB cannot be listed.
+    fn categories(&self) -> Result<Vec<String>> {
+        let Ok(cats) = portage_util::read_dir_entries(&self.vdb) else {
+            return Ok(Vec::new());
+        };
+        Ok(cats
+            .into_iter()
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect())
+    }
+
+    fn pending_entries(&self) -> Result<Vec<EntryKey>> {
+        let mut out = Vec::new();
+        let Ok(cats) = portage_util::read_dir_entries(&self.vdb) else {
+            return Ok(out);
+        };
+        for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
+            let category = cat.file_name().to_string_lossy().to_string();
+            let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
+                continue;
+            };
+            for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {
+                let dirname = pkg.file_name().to_string_lossy().to_string();
+                if let Some(pf) = dirname.strip_prefix(portage_util::MERGING_IDENTIFIER) {
+                    out.push(EntryKey::new(category.clone(), pf));
+                }
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    fn category_entries(&self, category: &str) -> Result<Vec<String>> {
+        let Ok(entries) = portage_util::read_dir_entries(&self.vdb.join(category)) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for e in entries.into_iter().filter(|e| {
+            // `d_type` fast path; the `path().is_dir()` fallback covers
+            // symlinked entries and `DT_UNKNOWN` filesystems.
+            e.file_type().is_ok_and(|t| t.is_dir()) || e.path().is_dir()
+        }) {
+            let name = e.file_name().to_string_lossy().to_string();
+            // An in-progress `-MERGING-<pf>` entry is never installed.
+            if portage_util::is_merging_vdb_entry(&name) {
+                continue;
+            }
+            out.push(name);
+        }
+        Ok(out)
+    }
+
+    fn has_entry(&self, key: &EntryKey) -> Result<bool> {
+        // One `statx`.
+        Ok(fs::metadata(self.entry_dir(key)).is_ok_and(|st| st.is_dir()))
+    }
+
+    fn aux_get(&self, key: &EntryKey, field: &str) -> Result<Option<String>> {
+        if !in_metadata_file(field) {
+            return Err(Error::Invalid(format!(
+                "aux_get key {field:?} is not one of the 23 metadata fields (use read_file)"
+            )));
+        }
+        Ok(self.aux_get_field(key, field))
+    }
+
+    fn snapshot(&self) -> Result<Arc<Snapshot>> {
+        todo_step("snapshot", "S3.2")
+    }
+
+    fn list_files(&self, key: &EntryKey) -> Result<Option<Vec<FileMeta>>> {
+        let dir = self.entry_dir(key);
+        if !fs::metadata(&dir).is_ok_and(|st| st.is_dir()) {
+            return Ok(None);
+        }
+        let entries =
+            portage_util::read_dir_entries(&dir).map_err(|e| Error::io(dir.clone(), e))?;
+        let mut out = Vec::new();
+        for e in entries {
+            let path = e.path();
+            let Some(name) = e.file_name().to_str().map(str::to_string) else {
+                return Err(Error::Invalid(format!(
+                    "{}: entry file name is not UTF-8",
+                    path.display()
+                )));
+            };
+            let st = fs::metadata(&path).map_err(|e| Error::io(path.clone(), e))?;
+            if st.is_file() {
+                out.push(file_meta_of(name, &st));
+            }
+        }
+        Ok(Some(out))
+    }
+
+    fn file_meta(&self, key: &EntryKey, name: &str) -> Result<Option<FileMeta>> {
+        let path = self.entry_dir(key).join(name);
+        match fs::metadata(&path) {
+            Ok(st) => Ok(Some(file_meta_of(name.to_string(), &st))),
+            Err(e) if is_absent(&e) => Ok(None),
+            Err(e) => Err(Error::io(path, e)),
+        }
+    }
+
+    fn read_file(&self, key: &EntryKey, name: &str) -> Result<Option<Vec<u8>>> {
+        // One `open`, no separate existence `stat`.
+        let path = self.entry_dir(key).join(name);
+        match fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if is_absent(&e) => Ok(None),
+            Err(e) => Err(Error::io(path, e)),
+        }
+    }
+
+    fn read_file_at(
+        &self,
+        key: &EntryKey,
+        name: &str,
+        off: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        use std::os::unix::fs::FileExt as _;
+        let path = self.entry_dir(key).join(name);
+        let file = match fs::File::open(&path) {
+            Ok(f) => f,
+            Err(e) if is_absent(&e) => return Ok(None),
+            Err(e) => return Err(Error::io(path, e)),
+        };
+        let st = file.metadata().map_err(|e| Error::io(path.clone(), e))?;
+        if !st.is_file() {
+            return Ok(None);
+        }
+        // Never allocate more than the file can still give.
+        let want = (len as u64).min(st.len().saturating_sub(off)) as usize;
+        let mut buf = vec![0u8; want];
+        let mut done = 0;
+        while done < want {
+            match file.read_at(&mut buf[done..], off + done as u64) {
+                Ok(0) => break,
+                Ok(n) => done += n,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(Error::io(path, e)),
+            }
+        }
+        buf.truncate(done);
+        Ok(Some(buf))
+    }
+
+    fn read_pending_file(&self, key: &EntryKey, name: &str) -> Result<Option<Vec<u8>>> {
+        self.read_pending(key, name)
+    }
+
+    /// One named file of every live entry, in listing order. A file that
+    /// cannot be read is `None`, whatever the reason; an unreadable VDB
+    /// or category directory ends or skips the listing.
+    fn read_file_all(&self, name: &str) -> Result<Vec<(EntryKey, Option<Vec<u8>>)>> {
+        let mut out = Vec::new();
+        let Ok(categories) = portage_util::read_dir_entries(&self.vdb) else {
+            return Ok(out);
+        };
+        let category_names: Vec<String> = categories
+            .into_iter()
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        for category in category_names {
+            let category_path = self.vdb.join(&category);
+            let Ok(packages) = portage_util::read_dir_entries(&category_path) else {
+                continue;
+            };
+            let pf_names: Vec<String> = packages
+                .into_iter()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            for pf in pf_names {
+                if portage_util::is_merging_vdb_entry(&pf) {
+                    continue;
+                }
+                let data = fs::read(category_path.join(&pf).join(name)).ok();
+                out.push((EntryKey::new(category.clone(), pf), data));
+            }
+        }
+        Ok(out)
+    }
+
+    /// A whole live entry for a converter: every file with its bytes, mode
+    /// and mtime, the directory's mode and mtime, and the `metadata` stamp
+    /// state. `None` when the entry does not exist.
+    fn entry_image(&self, key: &EntryKey) -> Result<Option<EntryImage>> {
+        let dir = self.entry_dir(key);
+        let dst = match fs::metadata(&dir) {
+            Ok(st) if st.is_dir() => st,
+            Ok(_) => return Ok(None),
+            Err(e) if is_absent(&e) => return Ok(None),
+            Err(e) => return Err(Error::io(dir, e)),
+        };
+        let dir_mtime_ns = dst.mtime() as i128 * 1_000_000_000 + dst.mtime_nsec() as i128;
+        let entries =
+            portage_util::read_dir_entries(&dir).map_err(|e| Error::io(dir.clone(), e))?;
+        let mut files = Vec::new();
+        for e in entries {
+            let path = e.path();
+            let Some(name) = e.file_name().to_str().map(str::to_string) else {
+                return Err(Error::Invalid(format!(
+                    "{}: entry file name is not UTF-8",
+                    path.display()
+                )));
+            };
+            let st = fs::metadata(&path).map_err(|e| Error::io(path.clone(), e))?;
+            if !st.is_file() {
+                continue;
+            }
+            let data = fs::read(&path).map_err(|e| Error::io(path.clone(), e))?;
+            files.push(EntryFile {
+                meta: file_meta_of(name, &st),
+                data,
+            });
+        }
+        files.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
+        let metadata_stamp = match files.iter().find(|f| f.meta.name == "metadata") {
+            None => MetadataStamp::Absent,
+            Some(f) => {
+                let valid = std::str::from_utf8(&f.data)
+                    .ok()
+                    .and_then(parse_metadata_text)
+                    .is_some_and(|(_, stamp)| stamp == Some(dir_mtime_ns));
+                if valid {
+                    MetadataStamp::Valid
+                } else {
+                    MetadataStamp::Stale
+                }
+            }
+        };
+        Ok(Some(EntryImage {
+            key: key.clone(),
+            files,
+            dir_mode: dst.mode() & DIR_MODE_MASK,
+            dir_mtime_ns,
+            metadata_stamp,
+        }))
+    }
+
+    fn entry_stat(&self, key: &EntryKey) -> Result<Option<EntryStat>> {
+        let dir = self.entry_dir(key);
+        let dst = match fs::metadata(&dir) {
+            Ok(st) if st.is_dir() => st,
+            Ok(_) => return Ok(None),
+            Err(e) if is_absent(&e) => return Ok(None),
+            Err(e) => return Err(Error::io(dir, e)),
+        };
+        let dir_mtime_ns = dst.mtime() as i128 * 1_000_000_000 + dst.mtime_nsec() as i128;
+        let Some(mut files) = self.list_files(key)? else {
+            return Ok(None);
+        };
+        files.sort_by(|a, b| a.name.cmp(&b.name));
+        // Only the small `metadata` file is read, to judge its stamp.
+        let metadata_stamp = if files.iter().any(|f| f.name == "metadata") {
+            let path = dir.join("metadata");
+            let valid = fs::read(&path)
+                .ok()
+                .and_then(|b| String::from_utf8(b).ok())
+                .and_then(|t| parse_metadata_text(&t))
+                .is_some_and(|(_, stamp)| stamp == Some(dir_mtime_ns));
+            if valid {
+                MetadataStamp::Valid
+            } else {
+                MetadataStamp::Stale
+            }
+        } else {
+            MetadataStamp::Absent
+        };
+        Ok(Some(EntryStat {
+            files,
+            dir_mode: dst.mode() & DIR_MODE_MASK,
+            dir_mtime_ns,
+            metadata_stamp,
+        }))
+    }
+
+    fn reverse_dependents(&self, _cp: &str, _classes: &[DepClass]) -> Result<Vec<DepRecord>> {
+        todo_step(
+            "reverse_dependents",
+            "S2: on files the scan stays in portage-repo over aux_get, S1.3",
+        )
+    }
+
+    /// File owners: each entry's `CONTENTS` is read (a missing,
+    /// unreadable or non-UTF-8 file owns nothing) and every claim is
+    /// paired with the first of `paths` it matches (see [`claim_paths`]).
+    /// The package-move fallback and the `<package>-<version>` split stay
+    /// above this crate.
+    fn owners(&self, paths: &[&[u8]]) -> Result<Vec<(Vec<u8>, EntryKey)>> {
+        let mut out = Vec::new();
+        let wanted = owner_wanted(paths);
+        let Ok(categories) = portage_util::read_dir_entries(&self.vdb) else {
+            return Ok(out);
+        };
+        for category_entry in categories {
+            let category_path = category_entry.path();
+            if !category_path.is_dir() {
+                continue;
+            }
+            let category = category_entry.file_name().to_string_lossy().to_string();
+            let Ok(packages) = portage_util::read_dir_entries(&category_path) else {
+                continue;
+            };
+            for pkg_entry in packages {
+                if !pkg_entry.path().is_dir() {
+                    continue;
+                }
+                let pf = pkg_entry.file_name().to_string_lossy().to_string();
+                if portage_util::is_merging_vdb_entry(&pf) {
+                    continue;
+                }
+                let key = EntryKey::new(category.clone(), pf);
+                let _ = self.has_entry(&key);
+                let Some(text) = self
+                    .read_file(&key, "CONTENTS")
+                    .ok()
+                    .flatten()
+                    .and_then(|b| String::from_utf8(b).ok())
+                else {
+                    continue;
+                };
+                claim_paths(&text, &key, &wanted, &mut out);
+            }
+        }
+        Ok(out)
+    }
+
+    fn world(&self) -> Result<World> {
+        self.read_world()
+    }
+
+    fn world_sets(&self) -> Result<WorldSets> {
+        self.read_world_sets()
+    }
+
+    fn preserved_libs(&self) -> Result<PreservedLibs> {
+        Ok(self.read_preserved_libs())
+    }
+
+    fn config_memory(&self) -> Result<ConfigMemory> {
+        Ok(self.read_config_memory())
+    }
+
+    fn counter(&self) -> Result<Option<Counter>> {
+        Ok(self.read_counter())
+    }
+
+    /// No I/O and no lock: the `files` transaction applies each call when it is made
+    /// (crate doc item 20).
+    fn begin_write(&self) -> Result<Box<dyn WriteTxn + '_>> {
+        Ok(Box::new(FilesTxn::new(self)))
+    }
 }

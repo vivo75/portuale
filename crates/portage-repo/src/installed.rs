@@ -29,6 +29,62 @@ pub(crate) fn depstr_names_consumer(
     })
 }
 
+/// The database-backend half of [`installed_reverse_dependents`]: the backend's
+/// raw records for the consumer's `category/package` (a superset), put through
+/// the same per-entry steps as the scan. `None` when the backend cannot answer,
+/// so the caller falls back to the scan.
+pub(crate) fn indexed_reverse_dependents(
+    db: &dyn portage_vdb::InstalledDb,
+    consumer_category: &str,
+    consumer_package: &str,
+    consumer_version: &str,
+    candidate: &str,
+) -> Option<Vec<String>> {
+    use portage_vdb::DepClass;
+    let cp = format!("{consumer_category}/{consumer_package}");
+    let records = db
+        .reverse_dependents(
+            &cp,
+            &[
+                DepClass::Depend,
+                DepClass::Rdepend,
+                DepClass::Bdepend,
+                DepClass::Pdepend,
+            ],
+        )
+        .ok()?;
+    let mut out = std::collections::BTreeSet::new();
+    for rec in records {
+        let Some((name, version)) = split_pf(&rec.key.pf) else {
+            continue;
+        };
+        let (category, package) = apply_updates_to_cp(&rec.key.category, &name);
+        if category == consumer_category
+            && package == consumer_package
+            && version == consumer_version
+        {
+            continue;
+        }
+        let use_flags: HashSet<String> = rec
+            .use_flags
+            .split_whitespace()
+            .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+            .collect();
+        if rec.deps.iter().any(|(_, depstr)| {
+            depstr_names_consumer(
+                depstr,
+                &use_flags,
+                consumer_category,
+                consumer_package,
+                candidate,
+            )
+        }) {
+            out.insert(format!("{category}/{package}-{version}"));
+        }
+    }
+    Some(out.into_iter().collect())
+}
+
 /// Flattens `depstr` against `use_flags` into dependency-atom tokens (`||`
 /// dropped) for order-independent comparison. `None` if `depstr` doesn't parse.
 pub(crate) fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Option<HashSet<String>> {

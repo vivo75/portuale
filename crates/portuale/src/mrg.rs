@@ -10,6 +10,8 @@
 
 use clap::builder::PossibleValuesParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+use portage_vdb::InstalledDb;
 use std::process::ExitCode;
 
 /// Portage's `valid_integers` (`int(s) >= 0`).

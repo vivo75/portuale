@@ -19,9 +19,10 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension as _, params};
 mod write;
 use crate::files::owner_wanted;
 use crate::{
-    BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryKey, Error,
-    FileMeta, METADATA_FILE_FIELDS, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result,
-    Snapshot, World, WorldSets, in_metadata_file,
+    BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryFile, EntryImage,
+    EntryKey, EntryStat, Error, FileMeta, InstalledDb, METADATA_FILE_FIELDS, MetadataStamp,
+    PreservedLibs, PreservedLibsEntry, Result, Snapshot, World, WorldSets, WriteTxn,
+    in_metadata_file,
 };
 
 fn db_err(path: &Path, e: rusqlite::Error) -> Error {
