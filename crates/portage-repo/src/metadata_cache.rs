@@ -10,6 +10,28 @@ pub type AuxMetadataProvider = fn(&Path, &str, &str) -> Result<HashMap<String, S
 
 pub(crate) static AUX_METADATA_PROVIDER: OnceLock<AuxMetadataProvider> = OnceLock::new();
 
+/// The resolved [`RepoConfig`] for one repo location, memoised per path.
+/// `None` when the process's own config does not describe that location
+/// at all -- direct fixture/unit-test callers keep local fallbacks then.
+pub(crate) fn repo_config_for_location(repo_location: &Path) -> Option<RepoConfig> {
+    type Memo = HashMap<PathBuf, Option<RepoConfig>>;
+    static MEMO: OnceLock<RwLock<Memo>> = OnceLock::new();
+    let memo = MEMO.get_or_init(|| RwLock::new(HashMap::new()));
+
+    if let Ok(guard) = memo.read()
+        && let Some(hit) = guard.get(repo_location)
+    {
+        return hit.clone();
+    }
+    let found = find_repos_impl(&config_root_from_env(), false)
+        .ok()
+        .and_then(|repos| repos.into_iter().find(|r| r.location == repo_location));
+    if let Ok(mut guard) = memo.write() {
+        guard.insert(repo_location.to_path_buf(), found.clone());
+    }
+    found
+}
+
 /// The fallback shared by a missing entry and an entry the validator
 /// rejects: fallback memo, recursion guard, provider. A provider failure
 /// always surfaces as the original `failure` (never stale data), which
@@ -72,6 +94,60 @@ pub(crate) fn provide_aux_metadata(
     }
 }
 
+/// Whether the on-disk entry passes Portage's `validate_entry` for the
+/// `md5_database` (pairs) format, memoised per path. Validates the raw
+/// text, not the `read_md5_cache` map (which rewrites `*DEPEND` values).
+///
+/// `true` when the ebuild is missing (trust the entry) and when `pf` is
+/// not a `package-version` name at all.
+pub(crate) fn md5_cache_entry_is_valid(repo_location: &Path, category: &str, pf: &str) -> bool {
+    let cache_path = repo_location
+        .join("metadata")
+        .join("md5-cache")
+        .join(category)
+        .join(pf);
+    type Validity = HashMap<PathBuf, bool>;
+    static VALID: OnceLock<RwLock<Validity>> = OnceLock::new();
+    let validity = VALID.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Ok(guard) = validity.read()
+        && let Some(valid) = guard.get(&cache_path)
+    {
+        return *valid;
+    }
+    let is_valid = (|| {
+        let Some((package, _version)) = split_pf(pf) else {
+            return true;
+        };
+        let ebuild = repo_location
+            .join(category)
+            .join(&package)
+            .join(format!("{pf}.ebuild"));
+        if !ebuild.is_file() {
+            return true;
+        }
+        let Ok(text) = fs::read_to_string(&cache_path) else {
+            // `read_md5_cache` already failed; keep trusting the entry.
+            return true;
+        };
+        // Only `_eclasses_` validation needs the masters chain, so keep the
+        // common eclass-less entry off the repo-config path.
+        let needs_eclasses = text.lines().any(|line| {
+            line.strip_prefix("_eclasses_=")
+                .is_some_and(|value| !value.trim().is_empty())
+        });
+        let masters = if needs_eclasses {
+            md5_dict::repo_masters_for_location(repo_location)
+        } else {
+            Vec::new()
+        };
+        md5_dict::entry_is_valid(&text, &ebuild, repo_location, &masters, false)
+    })();
+    if let Ok(mut guard) = validity.write() {
+        guard.insert(cache_path, is_valid);
+    }
+    is_valid
+}
+
 /// Whether Portage would read this repo's pregenerated aux metadata from
 /// `metadata/md5-cache`: the **first known** entry of
 /// [`RepoConfig::cache_formats`] is `md5-dict`.
@@ -87,4 +163,93 @@ pub fn pregen_md5_cache_enabled(repo: &RepoConfig) -> bool {
         .iter()
         .find(|f| f.as_str() == "md5-dict" || f.as_str() == "pms")
         .is_some_and(|f| f.as_str() == "md5-dict")
+}
+
+/// Whether the process's resolved `FEATURES` names `metadata-transfer`
+/// (which removes the pregen repo cache rung entirely), resolved once per
+/// process. `false` whenever the config cannot be resolved (fail open).
+/// Portage: porttree.py's `_create_pregen_cache` gate.
+pub(crate) fn metadata_transfer_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| metadata_transfer_in_config(&config_root_from_env(), &root_from_env()))
+}
+
+/// The resolved-config half of [`metadata_transfer_enabled`], split out
+/// so a unit test can point it at a fixture config root without touching
+/// the process environment.
+pub(crate) fn metadata_transfer_in_config(config_root: &Path, root: &Path) -> bool {
+    let Ok(repos) = find_repos_impl(config_root, false) else {
+        return false;
+    };
+    let Some(main_repo) = repos.iter().find(|r| r.is_main) else {
+        return false;
+    };
+    let overlay_repos: Vec<(String, PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+    let repo_masters: HashMap<String, Vec<PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+    let repo_aliases: Vec<(String, PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+    portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root,
+        main_repo_location: &main_repo.location,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &repo_aliases,
+        main_repo_name: &main_repo.name,
+        repo_masters: &repo_masters,
+        eroot: root,
+    })
+    .map(|config| {
+        config
+            .resolved_incremental("FEATURES")
+            .or_else(|| {
+                config
+                    .other_vars
+                    .get("FEATURES")
+                    .cloned()
+                    .map(|f| f.split_whitespace().map(String::from).collect::<Vec<_>>())
+            })
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f == "metadata-transfer")
+    })
+    .unwrap_or(false)
+}
+
+/// Whether `repo_location` ships a usable `metadata/md5-cache`, memoised
+/// per repo path: the rung-selection predicate every md5-cache reader uses.
+///
+/// `true` means aux metadata can be read from the md5-cache dir; `false`
+/// means it must come from the provider path. A location the process
+/// config does not describe keeps the "the directory exists" fallback for
+/// direct fixture/unit-test callers. This flag only says the rung is in
+/// use -- a written directory may still hold entries the validator rejects.
+pub fn has_usable_md5_cache(repo_location: &Path) -> bool {
+    type UsableFlags = HashMap<PathBuf, bool>;
+    static FLAGS: OnceLock<RwLock<UsableFlags>> = OnceLock::new();
+    let flags = FLAGS.get_or_init(|| RwLock::new(HashMap::new()));
+
+    if let Ok(guard) = flags.read()
+        && let Some(usable) = guard.get(repo_location)
+    {
+        return *usable;
+    }
+
+    let usable = match repo_config_for_location(repo_location) {
+        // The md5-cache gate first so a `pms`-first repo skips the
+        // (memoised, but full-config) FEATURES resolution.
+        Some(repo) => pregen_md5_cache_enabled(&repo) && !metadata_transfer_enabled(),
+        None => repo_location.join("metadata").join("md5-cache").is_dir(),
+    };
+    if let Ok(mut guard) = flags.write() {
+        guard.insert(repo_location.to_path_buf(), usable);
+    }
+    usable
 }

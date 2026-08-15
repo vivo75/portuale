@@ -152,3 +152,25 @@ fn eclass_md5(path: &Path) -> Option<String> {
     }
     md5
 }
+
+/// The `masters`-then-self chain a validator needs for `_eclasses_`, memoised per
+/// repo location. An undescribed repo (or unreadable config) yields an empty
+/// chain: `_eclasses_` then fails validation, so `depend` re-runs (the safe side).
+pub fn repo_masters_for_location(repo_location: &Path) -> Vec<PathBuf> {
+    type Memo = HashMap<PathBuf, Vec<PathBuf>>;
+    static MEMO: OnceLock<RwLock<Memo>> = OnceLock::new();
+    let memo = MEMO.get_or_init(|| RwLock::new(HashMap::new()));
+
+    if let Ok(guard) = memo.read()
+        && let Some(masters) = guard.get(repo_location)
+    {
+        return masters.clone();
+    }
+    let masters = crate::repo_config_for_location(repo_location)
+        .map(|repo| repo.masters)
+        .unwrap_or_default();
+    if let Ok(mut guard) = memo.write() {
+        guard.insert(repo_location.to_path_buf(), masters.clone());
+    }
+    masters
+}

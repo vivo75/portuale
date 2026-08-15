@@ -118,6 +118,27 @@ pub(crate) fn grab_updates_for_repo(repo_location: &Path) -> Vec<UpdateCmd> {
     cmds
 }
 
+pub fn global_package_updates() -> &'static [UpdateCmd] {
+    if !PACKAGE_MOVES_ENABLED.load(AtomicOrdering::Relaxed) {
+        return &[];
+    }
+    static CACHE: OnceLock<Vec<UpdateCmd>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let config_root = config_root_from_env();
+        let Ok(repos) = find_repos(&config_root) else {
+            return Vec::new();
+        };
+        let mut cmds = Vec::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        for repo in &repos {
+            if seen.insert(repo.location.clone()) {
+                cmds.extend(grab_updates_for_repo(&repo.location));
+            }
+        }
+        cmds
+    })
+}
+
 /// Apply one `move` to one atom token: if its `cp` is `old`, rewrite
 /// just the `cat/pkg` part, preserving the rest. Chained moves are
 /// handled by the caller applying every command in order.
@@ -191,6 +212,24 @@ pub(crate) fn apply_slotmove_to_token(
     format!("{prefix}:{new_slotpart}")
 }
 
+/// Every `cat/pkg` that could be the first command to touch an atom:
+/// the union of every `move`'s `old` and every `slotmove`'s `cp`,
+/// grouped `category -> package names` for borrow-only lookups.
+pub(crate) fn update_move_targets() -> &'static HashMap<String, HashSet<String>> {
+    static TARGETS: OnceLock<HashMap<String, HashSet<String>>> = OnceLock::new();
+    TARGETS.get_or_init(|| {
+        let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+        for cmd in global_package_updates() {
+            let (cat, pkg) = match cmd {
+                UpdateCmd::Move { old, .. } => old,
+                UpdateCmd::SlotMove { cp, .. } => cp,
+            };
+            map.entry(cat.clone()).or_default().insert(pkg.clone());
+        }
+        map
+    })
+}
+
 /// `Some(rewritten)` only when a command actually changed the token,
 /// `None` when byte-identical (no `String` allocated).
 pub(crate) fn apply_updates_to_atom_with(
@@ -223,6 +262,17 @@ pub(crate) fn apply_updates_to_atom_with(
     }
     // A cp-matching but token-identical command still reports unchanged.
     if cur == atom { None } else { Some(cur) }
+}
+
+/// Whitespace-preserving pass over a `*DEPEND` string: rewrite every
+/// atom token, leave separators and non-atom tokens untouched.
+/// `Some(rewritten)` only when a token changed, else `None`.
+/// Portage: portage.update, update_dbentry
+pub fn apply_updates_to_dep_string(dep: &str) -> Option<String> {
+    if global_package_updates().is_empty() || dep.trim().is_empty() {
+        return None;
+    }
+    apply_updates_to_dep_string_with(dep, global_package_updates(), update_move_targets())
 }
 
 pub(crate) fn apply_updates_to_dep_string_with(
@@ -281,4 +331,18 @@ pub(crate) fn move_chain_map_with(
         }
     }
     map
+}
+
+pub(crate) fn move_chain_map() -> &'static HashMap<(String, String), (String, String)> {
+    static MAP: OnceLock<HashMap<(String, String), (String, String)>> = OnceLock::new();
+    MAP.get_or_init(|| move_chain_map_with(global_package_updates()))
+}
+
+/// The forward `move` destination for a `cat/pkg` (chains applied):
+/// one [`move_chain_map`] lookup, identity when nothing moved it.
+pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
+    match move_chain_map().get(&(category.to_string(), package.to_string())) {
+        Some(dest) => dest.clone(),
+        None => (category.to_string(), package.to_string()),
+    }
 }
