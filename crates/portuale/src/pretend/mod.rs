@@ -24,6 +24,8 @@ use crate::ebuild_merge;
 
 use crate::ebuild_phases;
 
+use portage_dep::{Atom, Blocker, Operator, SlotOperator};
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use std::path::Path;

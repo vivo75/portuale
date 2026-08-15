@@ -33,6 +33,61 @@ const REPO: &str = r"[A-Za-z0-9_][A-Za-z0-9_-]*";
 // portage-use-reduce to avoid a cross-crate dependency).
 const USEFLAG: &str = r"[A-Za-z0-9][A-Za-z0-9+_@-]*";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Blocker {
+    None,
+    Weak,   // "!"
+    Strong, // "!!"
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Operator {
+    None,
+    Eq,
+    /// `=*` (PMS 8.3.1): compare only the given version components; see `matches_version`.
+    EqGlob,
+    Gt,
+    Ge,
+    Lt,
+    Le,
+    Tilde,
+}
+
+impl Operator {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Operator::None => "",
+            Operator::Eq => "=",
+            Operator::EqGlob => "=*",
+            Operator::Gt => ">",
+            Operator::Ge => ">=",
+            Operator::Lt => "<",
+            Operator::Le => "<=",
+            Operator::Tilde => "~",
+        }
+    }
+
+    fn from_str(s: &str) -> Operator {
+        match s {
+            "=" => Operator::Eq,
+            ">" => Operator::Gt,
+            ">=" => Operator::Ge,
+            "<" => Operator::Lt,
+            "<=" => Operator::Le,
+            "~" => Operator::Tilde,
+            _ => unreachable!("regex only captures known operators, got {s:?}"),
+        }
+    }
+}
+
+/// A slot operator (PMS 8.3.3): `:*` (`Star`) or `:=`/`:slot=` (`Equals`).
+/// A rebuild-trigger signal only; it never affects matching (see `matches_slot`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlotOperator {
+    Star,
+    Equals,
+}
+
 /// A USE dependency's operator (PMS 8.3.4): one of the six prefix+suffix forms.
 /// Only `Enabled`/`Disabled` constrain a candidate's USE state when matching;
 /// the four parent-conditional forms are resolved by
@@ -60,6 +115,34 @@ pub struct UseDep {
     pub flag: String,
     pub op: UseDepOp,
     pub default: Option<UseDepDefault>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Atom {
+    pub blocker: Blocker,
+    pub operator: Operator,
+    pub category: String,
+    pub package: String,
+    pub version: Option<String>,
+    pub revision: Option<String>,
+    pub slot: Option<String>,
+    pub sub_slot: Option<String>,
+    pub slot_operator: Option<SlotOperator>,
+    /// `None` if there is no `[...]`; `Some` is never empty (`foo[]` is invalid).
+    /// `match_from_list` ignores it; see `use_deps_satisfied`.
+    pub use_deps: Option<Vec<UseDep>>,
+    /// `::reponame` (PMS 3.1.5), `None` if absent; see `matches_repo`.
+    pub repo: Option<String>,
+}
+
+impl Atom {
+    /// The version including its revision (`1.2.3-r1`), as fed to `vercmp`.
+    fn full_version(&self) -> Option<String> {
+        self.version.as_ref().map(|v| match &self.revision {
+            Some(r) => format!("{v}-r{r}"),
+            None => v.clone(),
+        })
+    }
 }
 
 fn atom_regex() -> &'static Regex {
@@ -136,6 +219,98 @@ fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
         deps.push(UseDep { flag, op, default });
     }
     Some(deps)
+}
+
+fn parse_atom_uncached(s: &str) -> Option<Atom> {
+    let caps = atom_regex().captures(s)?;
+
+    let blocker = match caps.name("blocker").map(|m| m.as_str()) {
+        None => Blocker::None,
+        Some("!") => Blocker::Weak,
+        Some("!!") => Blocker::Strong,
+        Some(_) => unreachable!(),
+    };
+
+    let (operator, category, package, version, revision) = if let Some(op) = caps.name("op") {
+        let operator = match caps.name("glob") {
+            // PMS 8.3.1: `*` is illegal with any operator but `=`.
+            Some(_) if op.as_str() != "=" => return None,
+            Some(_) => Operator::EqGlob,
+            None => Operator::from_str(op.as_str()),
+        };
+        (
+            operator,
+            caps.name("vcat").unwrap().as_str().to_string(),
+            caps.name("vpkg").unwrap().as_str().to_string(),
+            Some(caps.name("ver").unwrap().as_str().to_string()),
+            caps.name("rev").map(|m| m.as_str().to_string()),
+        )
+    } else {
+        // Ambiguous per PMS (`foo-bar-2`).
+        // Portage: lib/portage/dep/__init__.py, Atom.__init__
+        if caps.name("ambiguous").is_some() {
+            return None;
+        }
+        (
+            Operator::None,
+            caps.name("cat").unwrap().as_str().to_string(),
+            caps.name("pkg").unwrap().as_str().to_string(),
+            None,
+            None,
+        )
+    };
+
+    // A bare trailing ":" matches the regex but is invalid.
+    let (slot, sub_slot, slot_operator) = (match caps.name("slotpart") {
+        None => Some((None, None, None)),
+        Some(m) if m.as_str().is_empty() => None,
+        Some(_) => {
+            let slot = caps.name("slot").map(|m| m.as_str().to_string());
+            let sub_slot = caps.name("subslot").map(|m| m.as_str().to_string());
+            let slot_operator = match caps.name("slotop").map(|m| m.as_str()) {
+                None => None,
+                // An explicit slot combined with "*" is invalid.
+                Some("*") if slot.is_some() => return None,
+                Some("*") => Some(SlotOperator::Star),
+                Some("=") => Some(SlotOperator::Equals),
+                Some(_) => unreachable!(),
+            };
+            Some((slot, sub_slot, slot_operator))
+        }
+    })?;
+
+    let use_deps = match caps.name("usedeps") {
+        None => None,
+        Some(m) => Some(parse_use_deps(m.as_str())?),
+    };
+
+    let repo = caps.name("repo").map(|m| m.as_str().to_string());
+
+    Some(Atom {
+        blocker,
+        operator,
+        category,
+        package,
+        version,
+        revision,
+        slot,
+        sub_slot,
+        slot_operator,
+        use_deps,
+        repo,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidate {
+    pub category: String,
+    pub package: String,
+    pub version: String,
+    pub revision: Option<String>,
+    pub slot: Option<String>,
+    pub sub_slot: Option<String>,
+    /// `::reponame` suffix, `None` if absent ("repo unknown"); see `matches_repo`.
+    pub repo: Option<String>,
 }
 
 fn candidate_regex() -> &'static Regex {
