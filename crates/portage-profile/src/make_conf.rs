@@ -129,6 +129,19 @@ pub(crate) fn shlex_token(raw: &str) -> String {
     out
 }
 
+/// Expand `${VAR}`/`$VAR` in a [`shlex_token`]-processed value: config
+/// names set earlier win, else the process environment, else empty.
+/// Malformed references expand to empty without warning.
+// Portage: portage/util/__init__.py, varexpand
+pub(crate) fn substitute(value: &str, scalars: &HashMap<String, String>) -> String {
+    portage_util::varexpand(value, |name| {
+        scalars
+            .get(name)
+            .cloned()
+            .or_else(|| std::env::var(name).ok())
+    })
+}
+
 /// Parse one `KEY=value` line, returning the shlex-tokenized value.
 /// `None` for comments, blanks, or non-assignments (conditionals,
 /// function defs, …).

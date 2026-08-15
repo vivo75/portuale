@@ -34,6 +34,41 @@ pub(crate) fn note_incremental(config: &mut Config, key: &str, value: &str) {
 /// file's final one (sourced files re-assign; the last wins).
 pub(crate) struct IncrementalSnapshot(pub(crate) Vec<(String, usize)>);
 
+impl IncrementalSnapshot {
+    pub(crate) fn take(config: &Config) -> Self {
+        Self(
+            TRACKED_INCREMENTALS
+                .iter()
+                .map(|key| {
+                    (
+                        (*key).to_string(),
+                        config
+                            .incremental_sources
+                            .get(*key)
+                            .map(Vec::len)
+                            .unwrap_or(0),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// Collapse everything appended since `take` to the file's final
+    /// assignment (no-op when the file assigned nothing).
+    pub(crate) fn restore(self, config: &mut Config) {
+        for (key, depth) in self.0 {
+            let Some(sources) = config.incremental_sources.get_mut(&key) else {
+                continue;
+            };
+            if sources.len() > depth {
+                let last = sources.last().cloned().unwrap_or_default();
+                sources.truncate(depth);
+                sources.push(last);
+            }
+        }
+    }
+}
+
 /// Fold stacked token layers with Portage's incremental semantics
 /// (`-*` clears, `-tok` discards, bare/`+`-prefixed adds), then sort.
 /// Shared by [`Config::resolved_incremental`] and the `Packages`-index
