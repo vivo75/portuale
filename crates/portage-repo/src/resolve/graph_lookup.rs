@@ -2,6 +2,50 @@
 
 use crate::*;
 
+/// One `||` alternative atom matched at cp level (version, slot and use-deps all
+/// stripped), or a `virtual/`, or a blocker (vacuously satisfied). Used to bump a
+/// `||` alternative into the installed rank so an already-installed branch wins over
+/// a first-listed one that would need a new merge.
+/// Portage: dep_check.py, dep_zapdeps (all_installed).
+///
+/// Deliberately does NOT re-check the atom's own use-deps against the installed
+/// package's recorded `USE`: the cp-level predicate is blind to `[use]` by
+/// construction. The USE side is a separate fact (`all_use_satisfied`) that
+/// `disjunction_preference` computes and combines with this one itself.
+pub(crate) fn atom_cp_installed(root: &Path, atom_str: &str) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if atom.blocker != portage_dep::Blocker::None || atom.category == "virtual" {
+        return true;
+    }
+    !installed_candidates(root, &atom.category, &atom.package).is_empty()
+}
+
+/// One `||` alternative atom matched fully -- version/slot AND its `[use]` deps
+/// against the matching installed version's own recorded vdb `USE` (a flag the ebuild
+/// has since dropped from `IUSE` but the installed copy was built with still counts).
+/// No blocker/virtual exemption here, unlike `atom_cp_installed`.
+/// Portage: dep_check.py, dep_zapdeps (the `not all_available` classification).
+pub(crate) fn atom_matches_installed(
+    root: &Path,
+    atom_str: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    best_installed_matching(root, atom_str, config).is_some()
+}
+
+/// The highest installed version matching `atom_str` whose recorded vdb `USE`
+/// satisfies its `[use]` deps -- the version `atom_matches_installed` reports. Split
+/// out so `resolve_pretend` can return that exact version, not merely existence.
+pub(crate) fn best_installed_matching(
+    root: &Path,
+    atom_str: &str,
+    config: &portage_profile::Config,
+) -> Option<String> {
+    best_installed_match(root, atom_str, None, &|| config.iuse_effective.clone())
+}
+
 /// `best_installed_matching` with the two inputs a caller outside the resolver
 /// supplies itself (the native `portageq` `has_version` / `best_version`):
 ///
