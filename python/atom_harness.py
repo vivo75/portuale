@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Neutral CLI test-harness binary (Python side) for the atom-matching
-pilot -- see PORTING/PROMPT.md and PORTING/rust/atom-harness/src/atom.rs
+pilot -- see PORTING/PROMPT.md and PORTING/rust/portage-dep/src/lib.rs
 for the deliberately narrowed v1 grammar this exercises. Wraps the real
 portage.dep.Atom / portage.dep.match_from_list rather than reimplementing
 them, and rejects any atom that uses a feature outside the v1 subset (USE
-deps, extended/wildcard syntax, build-ids, repo constraints, slot
-operators, the "=*" glob operator) so both harnesses agree on the same
-input language rather than Python silently accepting a wider one.
+deps, extended/wildcard syntax, build-ids, repo constraints, the "=*"
+glob operator) so both harnesses agree on the same input language rather
+than Python silently accepting a wider one. Slot operators (":=", ":*",
+":slot=") ARE in the v1 subset -- see portage-dep's own doc comment on
+why (real portage's own matching logic, _match_slot, ignores
+slot_operator entirely; only Atom.slot/.sub_slot matter for matching, so
+supporting the syntax needed no new matching logic on either side).
 
 Usage:
     atom_harness.py parse <atom>              -> tab-separated fields, or "INVALID"
@@ -42,7 +46,6 @@ def _parse_v1_atom(s):
         or a.extended_syntax
         or a.build_id is not None
         or a.repo is not None
-        or a.slot_operator is not None
         or a.operator not in _SUPPORTED_OPERATORS
     ):
         return None
@@ -75,6 +78,7 @@ def _format_parse(s):
         revision,
         a.slot or "",
         a.sub_slot or "",
+        a.slot_operator or "",
     ]
     return "\t".join(fields)
 

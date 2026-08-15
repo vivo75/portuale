@@ -11,7 +11,7 @@
 //                                              "match <atom> <cand...>" lines
 //                                              from stdin, one result per line
 
-use portage_dep::{parse_atom, Blocker};
+use portage_dep::{parse_atom, Blocker, SlotOperator};
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
@@ -24,6 +24,11 @@ fn format_parse(s: &str) -> String {
         Blocker::Weak => "!",
         Blocker::Strong => "!!",
     };
+    let slot_operator = match a.slot_operator {
+        None => "",
+        Some(SlotOperator::Star) => "*",
+        Some(SlotOperator::Equals) => "=",
+    };
     let fields = [
         blocker,
         a.operator.as_str(),
@@ -33,6 +38,7 @@ fn format_parse(s: &str) -> String {
         a.revision.as_deref().unwrap_or(""),
         a.slot.as_deref().unwrap_or(""),
         a.sub_slot.as_deref().unwrap_or(""),
+        slot_operator,
     ];
     fields.join("\t")
 }

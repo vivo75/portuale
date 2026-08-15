@@ -48,7 +48,10 @@ CASES = [
     ("weak-blocker top-level atom: not a valid target", ["--pretend", "!dev-libs/newpkg"], 2),
     ("USE-dep top-level atom: outside v1 grammar entirely", ["--pretend", "dev-libs/foo[bar]"], 1),
     ("repo-constrained top-level atom: outside v1 grammar entirely", ["--pretend", "dev-libs/foo::gentoo"], 1),
-    ("slot-operator top-level atom: outside v1 grammar entirely", ["--pretend", "dev-libs/foo:0="], 1),
+    ("slot-operator top-level atom: now in v1 grammar, resolves New", ["--pretend", "dev-libs/foo:0="], 0),
+    ("slot-operator top-level atom, no explicit slot: resolves New", ["--pretend", "dev-libs/foo:="], 0),
+    ("bare trailing colon top-level atom: still invalid", ["--pretend", "dev-libs/foo:"], 1),
+    ("explicit slot + \"*\" top-level atom: still invalid", ["--pretend", "dev-libs/foo:0*"], 1),
     ("syntactically invalid atom", ["--pretend", "not an atom!"], 1),
     ("no atom given", ["--pretend"], 2),
     ("missing --pretend", ["dev-libs/newpkg"], 2),
@@ -67,6 +70,7 @@ CASES = [
     ("recursion: BDEPEND is walked", ["--pretend", "dev-libs/bdependpkg"], 0),
     ("recursion: PDEPEND is walked", ["--pretend", "dev-libs/pdependpkg"], 0),
     ("recursion: IDEPEND is walked", ["--pretend", "dev-libs/idependpkg"], 0),
+    ("recursion: slot-operator dependency atoms are resolved, not dropped", ["--pretend", "dev-libs/slotoperatorpkg"], 0),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     ("package.mask: hidden, no unmask", ["--pretend", "dev-libs/hardmaskedpkg"], 1),
     ("package.mask + package.unmask: masked then unmasked", ["--pretend", "dev-libs/maskedandunmaskedpkg"], 0),
@@ -193,6 +197,32 @@ def test_bdepend_pdepend_idepend_are_walked_same_as_depend_rdepend(
             f"[ebuild  N] dev-libs/{pkg}-1.0",
             "[ebuild  N] dev-libs/newpkg-1.0",
         ], pkg
+
+
+def test_slot_operator_dependency_atoms_resolve_both_forms(emerge_binary, fixture_env):
+    """dev-libs/slotoperatorpkg's own RDEPEND is
+    "dev-libs/newpkg:= dev-libs/multislotpkg:1=" -- both real slot-operator
+    forms (PMS 8.3.3). Prior to this slice, portage-dep's v1 grammar
+    didn't parse slot operators AT ALL, and resolve_pretend_graph's BFS
+    loop treats a parse failure as "not a dependency, skip it"
+    (`let Some(atom) = parse_atom(..) else { continue }`), not as an
+    unresolvable one -- so both tokens would have been silently dropped
+    from the graph entirely: no entry, no error, nothing. This was a
+    genuine Rust-only parity bug, not just a documented gap: the Python
+    reference side's own dependency-atom parsing always used the real,
+    unrestricted portage.dep.Atom (only the CLI's top-level-atom
+    validation narrowed the grammar), so it already resolved this
+    fixture correctly before this slice touched anything on the Python
+    side at all. ":=" (no explicit slot) must pull in newpkg regardless
+    of its slot; ":1=" (an explicit slot) must resolve multislotpkg's
+    SLOT=1 version specifically (2.0), not its SLOT=0 version (1.0)."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/slotoperatorpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/slotoperatorpkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+        "[ebuild  N] dev-libs/multislotpkg-2.0",
+    ]
 
 
 def test_unresolvable_dependency_is_reported_not_silently_dropped(

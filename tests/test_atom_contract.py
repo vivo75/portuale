@@ -1,5 +1,5 @@
 """Black-box contract suite for the atom-matching pilot (see
-PORTING/PROMPT.md and PORTING/rust/atom-harness/src/atom.rs). Drives the
+PORTING/PROMPT.md and PORTING/rust/portage-dep/src/lib.rs). Drives the
 Python harness (a thin wrapper around the real portage.dep.Atom /
 match_from_list) and the Rust harness identically via subprocess, and
 asserts their outputs are byte-for-byte the same. Neither harness's
@@ -31,10 +31,16 @@ PARSE_VALID_ATOMS = [
     "=dev-libs/foo-1.0b",  # letter suffix
     "=dev-libs/foo-1.0_pre2",  # underscore suffix
     "=dev-libs/foo-1.0_alpha3-r4",
+    "dev-libs/foo:=",  # slot operator, no explicit slot: any slot acceptable
+    "dev-libs/foo:*",  # same, "*" form
+    "dev-libs/foo:0=",  # slot operator with an explicit slot ("slot=" form)
+    "dev-libs/foo:0/1=",  # slot operator with an explicit slot AND sub-slot
+    ">=dev-libs/foo-1.0:0=",  # slot operator combined with a version operator
 ]
 
 # Not valid at all, or valid PMS atoms that use a feature outside the v1
-# grammar this pilot ports (see atom.rs's module doc comment).
+# grammar this pilot ports (see portage-dep/src/lib.rs's module doc
+# comment).
 PARSE_INVALID_ATOMS = [
     "not-an-atom",
     "dev-libs/",
@@ -45,10 +51,12 @@ PARSE_INVALID_ATOMS = [
     "dev-libs/foo::gentoo",  # repo constraint: out of v1 scope
     "=dev-libs/foo-1.2.3*",  # glob operator: out of v1 scope
     "*/foo-1",  # extended/wildcard syntax: out of v1 scope
-    "dev-libs/foo:0=",  # slot operator: out of v1 scope
     "dev-libs/foo-1.0@2",  # build id: out of v1 scope
     "dev-libs/foo-bar-2",  # bare atom whose package name would end in
     "dev-libs/foo-2",  # something version-like: ambiguous under PMS, rejected
+    "dev-libs/foo:",  # bare trailing ":" with nothing after it: invalid
+    "dev-libs/foo:0*",  # explicit slot combined with "*": invalid ("*" means
+                         # "any slot", contradictory with a specific one)
 ]
 
 
@@ -111,6 +119,17 @@ MATCH_CASES = [
     # a candidate with no slot info must still pass a slotted atom, per the
     # real match_from_list's "unknown slot isn't filtered" behavior.
     ("dev-libs/foo:2", ["dev-libs/foo-1.0", "dev-libs/foo-1.0:2"]),
+    # slot operators, no explicit slot: match every candidate regardless
+    # of its own slot -- matches_slot's early "atom.slot is None" return,
+    # same path a plain unslotted atom already takes.
+    ("dev-libs/foo:=", CANDIDATES),
+    ("dev-libs/foo:*", CANDIDATES),
+    # slot operator WITH an explicit slot ("slot=" form): filters by that
+    # slot exactly like a plain ":slot" atom would -- the operator itself
+    # adds no additional matching constraint.
+    ("dev-libs/foo:2=", CANDIDATES),
+    ("dev-libs/foo:3=", CANDIDATES),
+    ("dev-libs/foo:9=", CANDIDATES),  # explicit slot nothing matches
 ]
 
 

@@ -136,16 +136,45 @@ PORTING/
   a dependency atom against candidate package versions, so it's the
   natural next layer above `versions-harness` (which it depends on for
   `vercmp`). Deliberately scoped to a documented v1 grammar subset (no USE
-  deps, wildcards, build-ids, repo constraints, or slot operators -- see
-  the doc comment at the top of `rust/portage-dep/src/lib.rs`); the
-  Python harness explicitly rejects anything outside that subset as
-  `INVALID` so both sides agree on the same input language. Includes a
-  faithful port of an easy-to-miss PMS rule: a bare atom whose package name
-  is followed by something version-shaped (`foo-bar-2`) is rejected as
-  ambiguous, not silently accepted. (`portage-dep` later gained a
-  *separate*, deliberately bounded wildcard-atom matcher --
+  deps, wildcards, build-ids, or repo constraints -- see the doc comment
+  at the top of `rust/portage-dep/src/lib.rs`); the Python harness
+  explicitly rejects anything outside that subset as `INVALID` so both
+  sides agree on the same input language. Includes a faithful port of an
+  easy-to-miss PMS rule: a bare atom whose package name is followed by
+  something version-shaped (`foo-bar-2`) is rejected as ambiguous, not
+  silently accepted. (`portage-dep` later gained a *separate*,
+  deliberately bounded wildcard-atom matcher --
   `*/*`/`category/*`/`*/package` only -- for package.mask/.unmask/
   .accept_keywords, without touching this grammar or contract at all.)
+
+  **Slot operators** (`:=`, `:*`, `:slot=` -- PMS 8.3.3) were added to the
+  grammar later, closing the last of the originally-deferred features
+  (USE deps, wildcards, build-ids, repo constraints, and EAPI
+  parametrization all remain out of scope; those four are a fundamentally
+  bigger undertaking each, slot operators were not). `SlotOperator` mirrors
+  real portage's own two-stage parse (`_get_atom_re` captures the raw text
+  after `:`, `_get_slot_dep_re` re-parses it), including its two rejection
+  rules verified directly against real `Atom`: a bare trailing `:` with
+  nothing after it (`dev-libs/foo:`) is invalid, and an explicit slot
+  combined with `*` (`dev-libs/foo:0*`) is invalid ("any slot" is
+  meaningless alongside a specific one). *Matching* needed zero new code
+  at all: real `_match_slot` never consults `slot_operator`, only
+  `Atom.slot`/`.sub_slot` -- a bare `:=`/`:*` atom has `slot == None`,
+  which `matches_slot`'s existing early-return (mirroring real
+  `match_from_list`'s own `if mydep.slot is not None:` guard) already
+  treated as "no slot restriction" before this slice touched anything.
+  This closed a genuine, previously-silent **parity bug**, not just a
+  scope gap: `resolve_pretend_graph`'s BFS loop treats a dependency token
+  that fails to parse as "not a dependency, skip it," not as an
+  unresolvable one, so any real DEPEND/RDEPEND using a slot operator
+  (extremely common in real ebuilds, e.g. `dev-libs/foo:0=` for
+  ABI-rebuild tracking) was silently dropped from the graph on the Rust
+  side -- no entry, no `NoVisibleCandidate`, no warning. The Python
+  reference side never had this bug: its own dependency-atom parsing
+  always used the real, unrestricted `portage.dep.Atom` (only the CLI's
+  top-level-atom validation narrowed the grammar), so it already resolved
+  slot-operator dependencies correctly, undetected only because no
+  fixture had ever exercised the case.
 - **`use-reduce-harness`**: ports `use_reduce(flat=True)` -- USE-conditional
   (`flag? ( ... )`) and any-of (`|| ( ... )`) dependency-string flattening.
   Unlike `atom-harness`, this is *not* a narrowed grammar: flat mode's
@@ -656,9 +685,11 @@ integers. See the comment at the top of
 
 Known scope cut: `atom-harness` ports a documented v1 subset of the real
 atom grammar (see above and the doc comment in
-`rust/atom-harness/src/atom.rs`) -- USE deps, wildcards, build-ids, repo
-constraints, slot operators, and EAPI parametrization are all deferred.
-Candidates for matching are plain `category/package-version[-rN][:slot[/subslot]]`
+`rust/portage-dep/src/lib.rs`) -- USE deps, wildcards, build-ids, repo
+constraints, and EAPI parametrization are all deferred (slot operators
+`:=`/`:*`/`:slot=` are now supported -- see the "Slot operators"
+paragraph in "What this proves" above). Candidates
+for matching are plain `category/package-version[-rN][:slot[/subslot]]`
 strings rather than full Package objects (no package-db/depgraph model
 exists yet in this pilot), which mirrors a fallback path the real
 `match_from_list` already supports.
@@ -673,8 +704,12 @@ dependency, a dependency cycle, an any-of (`||`) group, an unresolvable
 dependency, a dependency listed in both DEPEND and RDEPEND, and three
 single-key packages (`bdependpkg`/`pdependpkg`/`idependpkg`) each pulling
 in `newpkg` via just BDEPEND, PDEPEND, or IDEPEND alone -- proving each
-of the three is actually walked, not just DEPEND/RDEPEND -- and (for
-profile resolution) a three-level same-repo profile chain
+of the three is actually walked, not just DEPEND/RDEPEND -- a package
+(`slotoperatorpkg`) whose own RDEPEND uses real slot-operator syntax
+(`dev-libs/newpkg:=`, no explicit slot; `dev-libs/multislotpkg:1=`, an
+explicit slot, resolving specifically the SLOT=1 version) proving those
+dependency tokens are now resolved rather than silently dropped, and
+(for profile resolution) a three-level same-repo profile chain
 (`profiles/base`, `profiles/arch/amd64`, `profiles/default` -- the latter
 inheriting from both of the former, in that order) plus `make.conf`
 sourcing `/etc/make.local`, and a package whose dependency is gated on a
@@ -807,6 +842,15 @@ PORTING/rust/target/release/atom-harness parse ">=dev-libs/foo-1.2.3-r1:2"
 # match_from_list-equivalent: prints the matching candidates, comma-joined
 PORTING/rust/target/release/atom-harness match ">=dev-libs/foo-1.2.3" \
     dev-libs/foo-1.0 dev-libs/foo-2.0
+
+# slot operators: ":=" (no explicit slot) matches regardless of slot,
+# ":slot=" filters to that slot exactly like a plain ":slot" atom would
+PORTING/rust/target/release/atom-harness match "dev-libs/foo:=" \
+    dev-libs/foo-1.0:0 dev-libs/foo-2.0:1
+# dev-libs/foo-1.0:0,dev-libs/foo-2.0:1
+PORTING/rust/target/release/atom-harness match "dev-libs/foo:1=" \
+    dev-libs/foo-1.0:0 dev-libs/foo-2.0:1
+# dev-libs/foo-2.0:1
 ```
 
 Try the use_reduce harness:
@@ -843,6 +887,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/diamond
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/bdependpkg
 # [ebuild  N] dev-libs/bdependpkg-1.0
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# real slot-operator dependency atoms (":=" and ":1=") are resolved, not
+# silently dropped -- ":1=" specifically resolves multislotpkg's SLOT=1
+# version (2.0), not its SLOT=0 version (1.0)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/slotoperatorpkg
+# [ebuild  N] dev-libs/slotoperatorpkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N] dev-libs/multislotpkg-2.0
 
 # real profile/make.conf resolution: "foo" is enabled by the fixture's
 # profile chain, so this package's foo?-gated dependency is pulled in

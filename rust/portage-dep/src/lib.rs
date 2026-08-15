@@ -3,18 +3,36 @@
 // "atom matching" pilot slice from PORTING/PROMPT.md's depgraph/config
 // resolution follow-up work.
 //
-// KNOWN, DOCUMENTED SCOPE CUT vs. the real grammar (see
-// PORTING/rust/atom-harness/README.md for the rationale): `Atom`/
-// `parse_atom`/`match_from_list` support no USE deps (`foo[bar]`), no
-// extended/wildcard atoms (`*/foo-1`), no build-ids (`foo-1.0@2`), no repo
-// constraint (`::gentoo`), no slot operators (`:=`, `:*`), no `=*` glob
-// version operator, and no EAPI parametrization (the real grammar changes
-// shape per-EAPI). The Python harness (PORTING/python/atom_harness.py)
-// explicitly rejects atoms using any of these features as INVALID, so
-// both sides agree on the same input language rather than Rust silently
-// accepting a narrower one. (A separate, bounded wildcard-atom API is
-// further down in this file, for package.mask/.unmask/.accept_keywords
-// matching only -- it doesn't change any of the above.)
+// KNOWN, DOCUMENTED SCOPE CUT vs. the real grammar (PMS chapter 8):
+// `Atom`/`parse_atom`/`match_from_list` support no USE deps (`foo[bar]`),
+// no extended/wildcard atoms (`*/foo-1`), no build-ids (`foo-1.0@2`), no
+// repo constraint (`::gentoo`), no `=*` glob version operator, and no
+// EAPI parametrization (the real grammar changes shape per-EAPI --
+// slot-operator support itself is EAPI 5+, but since nothing here is
+// EAPI-parametrized in the first place, it's just always recognized, the
+// same way every other EAPI-gated feature already ported is). The Python
+// harness (PORTING/python/atom_harness.py) explicitly rejects atoms
+// using any of the still-excluded features as INVALID, so both sides
+// agree on the same input language rather than Rust silently accepting a
+// narrower one. (A separate, bounded wildcard-atom API is further down
+// in this file, for package.mask/.unmask/.accept_keywords matching only
+// -- it doesn't change any of the above.)
+//
+// Slot operators (`:=`, `:*`, `:slot=` -- PMS 8.3.3) ARE supported: see
+// `SlotOperator`, `atom_regex`'s doc comment on the two-stage parse this
+// needed (mirroring real portage's own `_get_atom_re`/`_get_slot_dep_re`
+// split), and `matches_slot`'s doc comment on why *matching* needed zero
+// changes at all -- real `_match_slot` ignores `slot_operator` entirely,
+// consulting only `Atom.slot`/`.sub_slot`, both of which this crate
+// already modeled correctly before slot operators existed. This closed a
+// real, previously-silent bug in `portage-repo`'s dependency recursion:
+// any DEPEND/RDEPEND token using a slot operator (extremely common in
+// real ebuilds, e.g. `dev-libs/foo:0=` for ABI-rebuild tracking) failed
+// to parse under the old grammar and was silently dropped from the graph
+// entirely -- no entry, no `NoVisibleCandidate`, no warning -- since
+// `resolve_pretend_graph`'s BFS loop treats a parse failure as "not a
+// dependency at all" (`let Some(atom) = parse_atom(..) else { continue };`),
+// not as an unresolvable one.
 //
 // Candidates for match_from_list are plain strings shaped like
 // `category/package-version[-rN][:slot[/subslot]]` -- not full Package
@@ -88,6 +106,20 @@ impl Operator {
     }
 }
 
+/// A slot-operator dependency (PMS 8.3.3) -- `:*` (`Star`, any slot
+/// acceptable, no explicit slot) or `:=`/`:slot=` (`Equals`, any slot
+/// acceptable if no explicit slot is given, otherwise restricted to that
+/// slot -- see `Atom::slot`). Purely a rebuild-trigger signal in real
+/// portage (whether a dependency needs rebuilding when the matched
+/// package's sub-slot changes); irrelevant to whether an atom *matches* a
+/// candidate, which is exactly why `matches_slot` needs zero changes to
+/// support this -- see its doc comment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlotOperator {
+    Star,
+    Equals,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Atom {
     pub blocker: Blocker,
@@ -98,6 +130,7 @@ pub struct Atom {
     pub revision: Option<String>,
     pub slot: Option<String>,
     pub sub_slot: Option<String>,
+    pub slot_operator: Option<SlotOperator>,
 }
 
 impl Atom {
@@ -114,8 +147,16 @@ impl Atom {
 fn atom_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
+        // The whole post-":" slot expression is wrapped in its own
+        // "slotpart" group (mirroring real portage's two-stage approach --
+        // _get_atom_re captures the raw text after ":", then
+        // _get_slot_dep_re re-parses it) so parse_atom can tell "no ':' at
+        // all" (group absent) apart from "':' present but empty" (group
+        // matched an empty string), which PMS says is invalid (see the
+        // "if self.slot is None and self.slot_operator is None: raise"
+        // check in Atom.__init__).
         Regex::new(&format!(
-            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r\d+)?)?)(?::(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?$"
+            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r\d+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?$"
         ))
         .unwrap()
     })
@@ -158,8 +199,29 @@ pub fn parse_atom(s: &str) -> Option<Atom> {
         )
     };
 
-    let slot = caps.name("slot").map(|m| m.as_str().to_string());
-    let sub_slot = caps.name("subslot").map(|m| m.as_str().to_string());
+    // "slotpart" present but empty means a bare trailing ":" with nothing
+    // after it -- syntactically matched by the regex (both the slot and
+    // the operator sub-groups are individually optional) but explicitly
+    // invalid per PMS/Atom.__init__ (see atom_regex's doc comment).
+    let (slot, sub_slot, slot_operator) = (match caps.name("slotpart") {
+        None => Some((None, None, None)),
+        Some(m) if m.as_str().is_empty() => None,
+        Some(_) => {
+            let slot = caps.name("slot").map(|m| m.as_str().to_string());
+            let sub_slot = caps.name("subslot").map(|m| m.as_str().to_string());
+            let slot_operator = match caps.name("slotop").map(|m| m.as_str()) {
+                None => None,
+                // An explicit slot combined with "*" is invalid -- "*"
+                // means "any slot", which is meaningless alongside a
+                // specific one (see Atom.__init__'s corresponding check).
+                Some("*") if slot.is_some() => return None,
+                Some("*") => Some(SlotOperator::Star),
+                Some("=") => Some(SlotOperator::Equals),
+                Some(_) => unreachable!(),
+            };
+            Some((slot, sub_slot, slot_operator))
+        }
+    })?;
 
     Some(Atom {
         blocker,
@@ -170,6 +232,7 @@ pub fn parse_atom(s: &str) -> Option<Atom> {
         revision,
         slot,
         sub_slot,
+        slot_operator,
     })
 }
 
@@ -240,6 +303,16 @@ fn matches_version(atom: &Atom, candidate: &Candidate) -> bool {
 /// if the atom specifies one. A candidate with no slot info at all always
 /// passes (matches match_from_list's behavior for plain-string candidates
 /// it can't determine a slot for -- see the module doc comment).
+///
+/// `atom.slot_operator` is never consulted here, deliberately: real
+/// `_match_slot` doesn't look at it either -- only real `match_from_list`'s
+/// own `if mydep.slot is not None:` guard (mirrored by the `atom.slot`
+/// check below) decides whether slot-filtering happens at all. A bare
+/// `:=`/`:*` atom has `slot == None` (no explicit slot was given), so it
+/// already falls through this same early-return and matches any slot;
+/// `:slot=` has `slot == Some(..)`, so it's filtered exactly like a plain
+/// `:slot` atom would be. This is why adding slot-operator *parsing*
+/// needed no changes at all to slot-operator *matching*.
 fn matches_slot(atom: &Atom, candidate: &Candidate) -> bool {
     let Some(atom_slot) = &atom.slot else {
         return true;
