@@ -86,6 +86,25 @@ pub(crate) fn set_seed_holds_instance(args: SetSeedHoldsInstanceArgs<'_>) -> boo
     })
 }
 
+/// [`resolve_blockers_with_seeds`] without set seeds (the solver bridge and
+/// the unit tests carry none).
+pub(crate) fn resolve_blockers(
+    root: &Path,
+    pending: &[PendingBlocker],
+    entries: &[GraphEntry],
+    blocker_retry_closure: &HashSet<(String, String)>,
+    buildpkgonly: bool,
+) -> Vec<FiledBlocker> {
+    resolve_blockers_with_seeds(ResolveBlockersWithSeedsArgs {
+        root,
+        pending,
+        entries,
+        blocker_retry_closure,
+        buildpkgonly,
+        set_seed_atoms: &[],
+    })
+}
+
 /// Arguments of [`graph_has_parent`].
 pub(crate) struct GraphHasParentArgs<'a> {
     pub(crate) category: &'a str,

@@ -16,3 +16,8 @@ pub enum Deep {
     Unlimited,
     Bounded(u32),
 }
+
+/// Backtracking: `(cat, pkg)` targeted by an atom -> every puller this pass, as
+/// `(parent_cat, parent_pkg, parent_version, atom_text)`. A top-level atom is
+/// recorded with empty parent fields.
+pub(crate) type SlotPullers = HashMap<(String, String), Vec<(String, String, String, String)>>;

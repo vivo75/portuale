@@ -22,6 +22,17 @@ pub(crate) fn is_visible_uncached_calls() -> u64 {
     IV_UNCACHED_CALLS.with(std::cell::Cell::get)
 }
 
+/// The keyword `--autounmask` would suggest for `candidate`: the first
+/// non-`-`-prefixed `KEYWORDS` token (`None` if empty or all `-`). A
+/// `-`-prefixed token means "explicitly unsupported", never a suggestion.
+pub(crate) fn suggested_keyword(candidate: &Candidate) -> Option<&str> {
+    candidate
+        .keywords
+        .iter()
+        .find(|k| !k.starts_with('-'))
+        .map(String::as_str)
+}
+
 pub(crate) fn vercmp_ordering(a: &str, b: &str) -> Ordering {
     match vercmp(a, b) {
         Some(n) if n > 0 => Ordering::Greater,

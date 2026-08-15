@@ -9,3 +9,16 @@ fn cfg_165() -> portage_profile::Config {
         ..Default::default()
     }
 }
+
+// ---- `file_blocker_conflicts` and
+// `collect_unwalked_installed_blockers` (Portage `_validate_blockers`). ----
+/// Arguments of [`filed_165`].
+struct Filed165Args<'a> {
+    owner: (&'a str, &'a str),
+    owner_version: &'a str,
+    atom: &'a str,
+    strong: bool,
+    target: (&'a str, &'a str, &'a str),
+    unsolvable: bool,
+    satisfied_by: Option<BlockerSatisfiedBy>,
+}

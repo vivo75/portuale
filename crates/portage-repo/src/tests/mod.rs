@@ -118,6 +118,19 @@ mod tests_164 {
             deps: Vec::new(),
         }
     }
+
+    fn new_164(package: &str, version: &str, parent: &str) -> GraphEntry {
+        entry_164(Entry164Args {
+            category: "dev-libs",
+            package,
+            outcome: PretendOutcome::New {
+                version: version.to_string(),
+            },
+            required_by: vec![("dev-libs".to_string(), parent.to_string())],
+            repo: Some("testrepo"),
+            source: CandidateSource::Ebuild,
+        })
+    }
 }
 
 fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {
@@ -163,4 +176,5 @@ mod tests_165;
 
 mod tests_166;
 
+mod blockers;
 mod tests_184;

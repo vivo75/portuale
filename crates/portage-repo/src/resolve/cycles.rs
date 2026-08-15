@@ -3,6 +3,45 @@
 
 use crate::*;
 
+/// Whether a fresh single-node self-loop closed by a kept `||` self-branch
+/// may retry with the branch demoted. Multi-node rings, inline self-deps
+/// and installed instances keep the report-no-retry path.
+// Portage: dep_check.py, preferred_in_graph (pass-1 self choice)
+pub(crate) fn cycle_restartable(
+    entries: &[GraphEntry],
+    kept: &[HashSet<usize>],
+    cycle: &[String],
+    root: &Path,
+) -> bool {
+    let [node_cpv] = cycle else {
+        return false;
+    };
+    let Some((cat, pkg, _)) = split_cpv(node_cpv) else {
+        return false;
+    };
+    // Fresh only: the demoted retry must never pull installed subgraphs.
+    if !installed_candidates(root, &cat, &pkg).is_empty() {
+        return false;
+    }
+    let Some(owner_idx) = entries.iter().position(|e| {
+        e.category == cat && e.package == pkg && merge_bound_cpv(e).as_deref() == Some(node_cpv)
+    }) else {
+        return false;
+    };
+    let Some(owner_cpv) = merge_bound_cpv(&entries[owner_idx]) else {
+        return false;
+    };
+    entries[owner_idx].deps.iter().enumerate().any(|(ei, d)| {
+        d.alt.is_some()
+            && kept[owner_idx].contains(&ei)
+            && d.category == cat
+            && d.package == pkg
+            && !d.priority.optional
+            && portage_dep::match_from_list(&d.atom, &[owner_cpv.as_str()])
+                .is_some_and(|m| !m.is_empty())
+    })
+}
+
 /// Splits `category/package-version` into its three parts (the last `-`
 /// boundary whose right half verifies as a version).
 pub fn split_cpv(cpv: &str) -> Option<(String, String, String)> {
