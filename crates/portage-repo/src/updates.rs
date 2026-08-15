@@ -346,3 +346,62 @@ pub fn apply_updates_to_cp(category: &str, package: &str) -> (String, String) {
         None => (category.to_string(), package.to_string()),
     }
 }
+
+pub(crate) type InstalledCpSourcesMap = HashMap<(String, String), Vec<(String, String)>>;
+
+/// Inverted [`move_chain_map`]: destination -> the `Move` commands'
+/// `old` cps landing on it, in command order. Built once, so the
+/// lookup is a single `HashMap` get.
+pub(crate) fn installed_cp_sources_map_with(cmds: &[UpdateCmd]) -> InstalledCpSourcesMap {
+    let chain = move_chain_map_with(cmds);
+    let mut map: InstalledCpSourcesMap = HashMap::new();
+    for cmd in cmds {
+        if let UpdateCmd::Move { old, .. } = cmd {
+            // Group by resolved destination, in command order, deduped
+            // (a cycle's target is already `out[0]`).
+            let dest = chain.get(old).cloned().unwrap_or_else(|| old.clone());
+            if dest == *old {
+                continue;
+            }
+            let bucket = map.entry(dest).or_default();
+            if !bucket.contains(old) {
+                bucket.push(old.clone());
+            }
+        }
+    }
+    map
+}
+
+pub(crate) fn installed_cp_sources_map() -> &'static InstalledCpSourcesMap {
+    static MAP: OnceLock<InstalledCpSourcesMap> = OnceLock::new();
+    MAP.get_or_init(|| installed_cp_sources_map_with(global_package_updates()))
+}
+
+/// Every `cat/pkg` whose `move` chain lands here (including itself),
+/// so a vdb query for the new name also scans the old directory.
+pub fn installed_cp_sources(category: &str, package: &str) -> Vec<(String, String)> {
+    let target = (category.to_string(), package.to_string());
+    let mut out = vec![target.clone()];
+    if let Some(extra) = installed_cp_sources_map().get(&target) {
+        out.extend(extra.iter().cloned());
+    }
+    out
+}
+
+/// Test seam for [`installed_cp_sources`]: the same lookup against
+/// an explicit command list.
+#[cfg(test)]
+pub(crate) fn installed_cp_sources_with(
+    category: &str,
+    package: &str,
+    cmds: &[UpdateCmd],
+) -> Vec<(String, String)> {
+    let target = (category.to_string(), package.to_string());
+    let mut out = vec![target.clone()];
+    if let Some(extra) = installed_cp_sources_map_with(cmds).get(&target) {
+        out.extend(extra.iter().cloned());
+    }
+    out
+}
+
+pub(crate) type SlotMoveMap = HashMap<(String, String), Vec<(String, String)>>;

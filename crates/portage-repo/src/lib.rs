@@ -27,7 +27,11 @@ mod metadata_cache;
 mod reinstall;
 mod repo_config;
 mod resolve;
+mod slot_operator;
 mod updates;
+
+#[cfg(test)]
+mod tests;
 
 pub use binary_index::*;
 pub use binpkg_use::*;
@@ -44,6 +48,7 @@ pub use metadata_cache::*;
 pub use reinstall::*;
 pub use repo_config::*;
 pub use resolve::*;
+pub use slot_operator::*;
 pub use updates::*;
 
 use portage_versions::vercmp;

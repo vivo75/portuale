@@ -1,6 +1,8 @@
 mod cycles;
 mod entry;
 mod feedback;
+mod or_preference;
+mod pretend;
 mod result;
 mod rev_dep;
 mod skipped;
@@ -8,6 +10,8 @@ mod slot_conflict;
 pub use cycles::*;
 pub use entry::*;
 pub(crate) use feedback::*;
+pub(crate) use or_preference::*;
+pub use pretend::*;
 pub use result::*;
 pub(crate) use rev_dep::*;
 pub use skipped::*;
