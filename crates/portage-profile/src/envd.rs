@@ -12,6 +12,33 @@ pub(crate) struct EnvdParse {
     pub(crate) sets_path: bool,
 }
 
+pub(crate) fn parse_envd_text(text: &str) -> EnvdParse {
+    let mut seed: HashMap<String, String> = HashMap::new();
+    let mut vars: HashMap<String, String> = HashMap::new();
+    let mut incremental_layers: HashMap<String, Vec<String>> = HashMap::new();
+    for line in logical_lines(text) {
+        let t = line.trim();
+        let l = t.strip_prefix("export ").unwrap_or(t);
+        if let Some((key, raw_value)) = parse_kv_line(l) {
+            let value = substitute(&raw_value, &seed);
+            seed.insert(key.to_string(), value.clone());
+            if TRACKED_INCREMENTALS.contains(&key) {
+                incremental_layers.insert(
+                    key.to_string(),
+                    value.split_whitespace().map(String::from).collect(),
+                );
+            }
+            vars.insert(key.to_string(), value);
+        }
+    }
+    let sets_path = vars.contains_key("PATH");
+    EnvdParse {
+        vars,
+        incremental_layers,
+        sets_path,
+    }
+}
+
 /// Every `USE=` value in `<eroot>/etc/profile.env`, in file order, for
 /// `effective_use_flags` to fold in. A missing file yields an empty list.
 // Portage: config.py, configdict["env.d"]["USE"]

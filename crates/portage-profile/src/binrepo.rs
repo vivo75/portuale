@@ -45,3 +45,127 @@ impl BinRepo {
         std::path::PathBuf::from(uri)
     }
 }
+
+/// Parses `binrepos.conf`, appends implicit `PORTAGE_BINHOST` entries,
+/// and returns the repos sorted by `(priority, name)`.
+// Portage: binrepo/config.py, BinRepoConfigLoader
+pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
+    let normalize = |u: &str| u.trim_end_matches('/').to_string();
+    let mut repos: Vec<BinRepo> = Vec::new();
+    let mut seen_uris: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // INI sections.
+    let mut section: Option<String> = None;
+    let mut sync_uri: Option<String> = None;
+    let mut priority: i32 = 0;
+    let mut location: Option<String> = None;
+    let mut verify_signature = true;
+    let mut frozen = false;
+    #[allow(clippy::type_complexity)]
+    let flush = |section: &mut Option<String>,
+                 sync_uri: &mut Option<String>,
+                 priority: &mut i32,
+                 location: &mut Option<String>,
+                 verify_signature: &mut bool,
+                 frozen: &mut bool,
+                 repos: &mut Vec<BinRepo>,
+                 seen: &mut std::collections::HashSet<String>| {
+        if let (Some(name), Some(uri)) = (section.take(), sync_uri.take()) {
+            let uri = uri.trim_end_matches('/').to_string();
+            seen.insert(uri.clone());
+            repos.push(BinRepo {
+                name,
+                sync_uri: uri,
+                priority: *priority,
+                location: location.take(),
+                verify_signature: *verify_signature,
+                frozen: *frozen,
+            });
+        }
+        *priority = 0;
+        *location = None;
+        *verify_signature = true;
+        *frozen = false;
+    };
+    for line in binrepos_conf.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(inner) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            flush(
+                &mut section,
+                &mut sync_uri,
+                &mut priority,
+                &mut location,
+                &mut verify_signature,
+                &mut frozen,
+                &mut repos,
+                &mut seen_uris,
+            );
+            section = Some(inner.trim().to_string());
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            match k.trim() {
+                // `${VAR}` expands from the environment (relocatable fixtures).
+                "sync-uri" => sync_uri = Some(substitute(v.trim(), &HashMap::new())),
+                "priority" => priority = v.trim().parse().unwrap_or(0),
+                "location" => location = Some(substitute(v.trim(), &HashMap::new())),
+                "verify-signature" => {
+                    verify_signature = matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "true" | "yes" | "1" | "on"
+                    )
+                }
+                "frozen" => {
+                    frozen = matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "true" | "yes" | "1" | "on"
+                    )
+                }
+                _ => {}
+            }
+        }
+    }
+    flush(
+        &mut section,
+        &mut sync_uri,
+        &mut priority,
+        &mut location,
+        &mut verify_signature,
+        &mut frozen,
+        &mut repos,
+        &mut seen_uris,
+    );
+    repos.retain(|r| r.name != "DEFAULT");
+
+    // Implicit PORTAGE_BINHOST entries, reversed with incrementing priority.
+    let mut current_priority = 0;
+    for uri in portage_binhost.split_whitespace().rev() {
+        let uri = normalize(uri);
+        if seen_uris.insert(uri.clone()) {
+            current_priority += 1;
+            let name = uri
+                .split_once("://")
+                .map(|(_, rest)| rest.to_string())
+                .unwrap_or_else(|| uri.clone());
+            repos.push(BinRepo {
+                name,
+                sync_uri: uri,
+                priority: current_priority,
+                // No `<EPREFIX>/var/cache/binhost/<name>` fallback with `PORTAGE_BINHOST`.
+                location: None,
+                verify_signature: true,
+                frozen: false,
+            });
+        }
+    }
+
+    repos.sort_by(|a, b| {
+        a.priority
+            .cmp(&b.priority)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    repos
+}

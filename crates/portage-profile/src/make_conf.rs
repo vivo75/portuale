@@ -161,6 +161,77 @@ pub(crate) fn parse_kv_line(line: &str) -> Option<(&str, String)> {
     Some((key, shlex_token(&line[eq + 1..])))
 }
 
+/// Process one make.conf-style file, following `source <path>` directives
+/// (absolute paths resolve against `config_root` chroot-style). A missing
+/// sourced file is silently skipped; cycles are visited once.
+pub(crate) fn process_make_conf_file(
+    path: &Path,
+    config_root: &Path,
+    scalars: &mut HashMap<String, String>,
+    config: &mut Config,
+    visited_sources: &mut HashSet<PathBuf>,
+) -> Result<(), Error> {
+    let canon = match path.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return Ok(()), // missing file: lenient no-op
+    };
+    if !visited_sources.insert(canon.clone()) {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&canon).map_err(|e| Error::ReadFile {
+        path: canon.display().to_string(),
+        source: e,
+    })?;
+    for line in logical_lines(&text) {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("source ") {
+            let sourced = rest.trim();
+            let sourced_path = Path::new(sourced);
+            let resolved = if sourced_path.is_absolute() {
+                config_root.join(sourced_path.strip_prefix("/").unwrap_or(sourced_path))
+            } else {
+                canon
+                    .parent()
+                    .map(|p| p.join(sourced_path))
+                    .unwrap_or_else(|| sourced_path.to_path_buf())
+            };
+            process_make_conf_file(&resolved, config_root, scalars, config, visited_sources)?;
+            continue;
+        }
+        let Some((key, raw_value)) = parse_kv_line(trimmed) else {
+            continue;
+        };
+        let value = substitute(&raw_value, scalars);
+        note_incremental(config, key, &value);
+        note_higher(config, key);
+        if matches!(
+            key,
+            "ACCEPT_LICENSE" | "ACCEPT_PROPERTIES" | "ACCEPT_RESTRICT"
+        ) {
+            config.accept_raw_layers.push((
+                AcceptRawLayer::Conf,
+                key.to_string(),
+                value.split_whitespace().map(String::from).collect(),
+            ));
+        }
+        match key {
+            "USE" => {
+                apply_use_incremental(&value, &mut config.use_flags);
+                config.conf_use_tokens.push(value.clone());
+            }
+            "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
+            "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
+            "USE_EXPAND_UNPREFIXED" => apply_incremental(&value, &mut config.use_expand_unprefixed),
+            "USE_EXPAND_IMPLICIT" => apply_incremental(&value, &mut config.use_expand_implicit),
+            "IUSE_IMPLICIT" => apply_incremental(&value, &mut config.iuse_implicit),
+            "USE_EXPAND_HIDDEN" => apply_incremental(&value, &mut config.use_expand_hidden),
+            _ => {}
+        }
+        scalars.insert(key.to_string(), value);
+    }
+    Ok(())
+}
+
 /// Read one `/etc/portage/env/<name>` file as ordered `(KEY, value)`
 /// pairs, expanding `source` lines in place. `${VAR}` stays literal for
 /// the caller to substitute. A missing file yields an empty list.
@@ -196,6 +267,28 @@ pub(crate) fn read_env_file_kv(
         }
         if let Some((key, raw_value)) = parse_kv_line(trimmed) {
             out.push((key.to_string(), raw_value));
+        }
+    }
+    out
+}
+
+/// Expand one `package.env` entry's env files in order, threading each
+/// assignment into the expand map for later lines. Per-package values
+/// never flow back into the global map.
+pub(crate) fn expand_package_env_files(
+    env_dir: &Path,
+    files: &[String],
+    config_root: &Path,
+    scalars: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut map = scalars.clone();
+    let mut out = Vec::new();
+    for name in files {
+        let mut visited = HashSet::new();
+        for (key, raw_value) in read_env_file_kv(&env_dir.join(name), config_root, &mut visited) {
+            let value = substitute(&raw_value, &map);
+            map.insert(key.clone(), value.clone());
+            out.push((key, value));
         }
     }
     out
