@@ -78,3 +78,61 @@ pub fn split_pf(pf: &str) -> Option<(String, String)> {
     }
     None
 }
+
+pub(crate) fn list_candidates_uncached(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+) -> Result<Vec<Candidate>, Error> {
+    let mut candidates = Vec::new();
+    for repo in repos {
+        let pkg_dir = repo.location.join(category).join(package);
+        if !pkg_dir.is_dir() {
+            continue;
+        }
+        let entries = portage_util::read_dir_entries(&pkg_dir).map_err(|e| Error::ReadFile {
+            path: pkg_dir.display().to_string(),
+            source: e,
+        })?;
+
+        for entry in entries {
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            let Some(stem) = file_name.strip_suffix(".ebuild") else {
+                continue;
+            };
+            let Some(version) = strip_version_prefix(stem, package) else {
+                continue;
+            };
+            let Ok(metadata) = repo_aux_metadata(&repo.location, category, stem) else {
+                continue;
+            };
+            let keywords = metadata
+                .get("KEYWORDS")
+                .map(|s| s.split_whitespace().map(String::from).collect())
+                .unwrap_or_default();
+            let (slot, sub_slot) =
+                split_slot(metadata.get("SLOT").map(String::as_str).unwrap_or(""));
+            candidates.push(Candidate {
+                version: version.to_string(),
+                keywords,
+                slot,
+                sub_slot,
+                repo_location: repo.location.clone(),
+                repo_priority: repo.priority,
+                repo_name: repo.name.clone(),
+                license: metadata.get("LICENSE").cloned().unwrap_or_default(),
+                iuse: metadata.get("IUSE").cloned().unwrap_or_default(),
+                properties: metadata.get("PROPERTIES").cloned().unwrap_or_default(),
+                restrict: metadata.get("RESTRICT").cloned().unwrap_or_default(),
+                source: CandidateSource::Ebuild,
+                binary_use: None,
+                remote: false,
+                build_id: None,
+                build_time: None,
+                binary_deps: HashMap::new(),
+            });
+        }
+    }
+    Ok(candidates)
+}
