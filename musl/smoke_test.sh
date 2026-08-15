@@ -131,6 +131,23 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend reports a weak blocker against an in-graph package inside the scratch container" \
     test "${actual}" = "$(printf '[ebuild  N] dev-libs/graphblockerparent-1.0\n[ebuild  N] dev-libs/blockerpartnerpkg-1.0\n[ebuild  N] dev-libs/weakblockerpkg-1.0\n[blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")')"
 
+# emerge --pretend against the overlay repo (see
+# PORTING/fixtures/etc/portage/repos.conf, which registers a second,
+# higher-priority repo alongside the main one, and PORTING/fixtures/overlay):
+# an overlay-only package is found, and a same-version tie across both
+# repos is broken toward the higher-priority overlay copy.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/overlayonlypkg)
+check "emerge --pretend finds an overlay-only package inside the scratch container" \
+    test "${actual}" = "[ebuild  N] dev-libs/overlayonlypkg-1.0"
+
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/overlaytiepkg)
+check "emerge --pretend breaks a same-version repo tie toward the higher-priority overlay inside the scratch container" \
+    test "${actual}" = "$(printf '[ebuild  N] dev-libs/overlaytiepkg-1.0\n[ebuild  N] dev-libs/newpkg-1.0')"
+
 actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
 check "ebuild dispatch prints the ebuild stub" \
     grep -q "ebuild (pilot stub)" <<<"${actual}"

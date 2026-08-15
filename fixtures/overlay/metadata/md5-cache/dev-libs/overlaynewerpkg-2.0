@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: newer version (2.0) lives in the overlay, older version (1.0) lives in the main repo -- proves candidates are gathered from every repo and the best version overall wins regardless of which repo it's in
+EAPI=8
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

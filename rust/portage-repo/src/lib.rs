@@ -2,10 +2,26 @@
 // slice (see PORTING/PROMPT.md's depgraph/config-resolution follow-up
 // work, and PORTING/README.md for the full scope writeup).
 //
+// Overlays: every `[reponame]` section in `repos.conf` with a `location`
+// (not just `[DEFAULT] main-repo`) is now a candidate source -- see
+// `find_repos`. Candidates for a given category/package are gathered from
+// ALL configured repos (mirroring real `portdbapi.cp_list`, which does
+// the same: an overlay isn't "consulted only if the main repo has
+// nothing," every repo's ebuilds are real candidates), sorted ascending
+// by `(priority, name)` exactly like real portage's own `prepos_order`,
+// so a tie between two repos providing the identical version is broken
+// in favor of the higher-priority one (see `resolve_pretend`'s final
+// `max_by`). A repo's `priority` is its explicit `repos.conf` value if
+// present, else `-1000` for the main repo (real portage's own default --
+// see `lib/portage/repository/config.py`) or `0` for anything else.
+//
 // KNOWN, DOCUMENTED SCOPE CUTS for v1 (all confirmed with the user before
 // implementing):
-//   - Only the main repo (`repos.conf`'s `[DEFAULT] main-repo`) is
-//     consulted; overlays are ignored.
+//   - No per-repo `package.mask`/`.unmask`/`profiles/`, no `masters`
+//     (eclass inheritance across repos), no `::repo`-constrained atoms
+//     (out of `portage-dep`'s v1 grammar already) -- overlays only widen
+//     *which ebuilds are candidates*, nothing about how they're
+//     evaluated once found.
 //   - Ebuild metadata comes from `metadata/md5-cache/<cat>/<pf>` (plain
 //     `KEY=value` text -- confirmed against a real vendored tree), never
 //     from executing the ebuild in bash. This is deliberate: it lets
@@ -60,6 +76,7 @@ pub fn root_from_env() -> PathBuf {
 pub struct RepoConfig {
     pub name: String,
     pub location: PathBuf,
+    pub priority: i32,
 }
 
 fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>) {
@@ -90,8 +107,14 @@ fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>
 
 /// Parses `repos.conf` (a file, or -- as on this pilot's dev machine -- a
 /// directory of `*.conf` files merged in sorted-filename order) and
-/// returns the `[DEFAULT] main-repo`'s location. Overlays are ignored.
-pub fn find_main_repo(config_root: &Path) -> Result<RepoConfig, String> {
+/// returns every `[reponame]` section that has a `location` (the main
+/// repo plus any overlays), sorted ascending by `(priority, name)` --
+/// matching real portage's own `prepos_order` (see
+/// `lib/portage/repository/config.py`), which is also the order
+/// `list_candidates` below iterates them in, so a tie between two repos
+/// providing the identical version is broken toward the higher-priority
+/// one.
+pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, String> {
     let repos_conf_path = config_root.join("etc/portage/repos.conf");
     let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
 
@@ -124,25 +147,48 @@ pub fn find_main_repo(config_root: &Path) -> Result<RepoConfig, String> {
         .ok_or("no [DEFAULT] main-repo in repos.conf")?
         .clone();
 
-    let location = sections
-        .get(&main_repo)
-        .and_then(|s| s.get("location"))
-        .ok_or_else(|| format!("no location for repo {main_repo:?} in repos.conf"))?
-        .clone();
-    let location = PathBuf::from(location);
-    // Real repos.conf always uses absolute locations; relative ones are a
-    // pilot/testing convenience so the fixture tree under PORTING/fixtures
-    // can be committed without a machine-specific absolute path baked in.
-    let location = if location.is_absolute() {
-        location
-    } else {
-        config_root.join(location)
-    };
+    let mut repos: Vec<RepoConfig> = Vec::new();
+    for (name, kv) in &sections {
+        if name == "DEFAULT" {
+            continue;
+        }
+        let Some(location) = kv.get("location") else {
+            continue;
+        };
+        let location = PathBuf::from(location);
+        // Real repos.conf always uses absolute locations; relative ones
+        // are a pilot/testing convenience so the fixture tree under
+        // PORTING/fixtures can be committed without a machine-specific
+        // absolute path baked in.
+        let location = if location.is_absolute() {
+            location
+        } else {
+            config_root.join(location)
+        };
+        // An explicit "priority" wins; otherwise the main repo defaults
+        // to -1000 (real portage's own default -- see
+        // lib/portage/repository/config.py) and every other repo to 0.
+        let priority = kv
+            .get("priority")
+            .and_then(|p| p.parse::<i32>().ok())
+            .unwrap_or(if *name == main_repo { -1000 } else { 0 });
+        repos.push(RepoConfig {
+            name: name.clone(),
+            location,
+            priority,
+        });
+    }
 
-    Ok(RepoConfig {
-        name: main_repo,
-        location,
-    })
+    if !repos.iter().any(|r| r.name == main_repo) {
+        return Err(format!("no location for repo {main_repo:?} in repos.conf"));
+    }
+
+    repos.sort_by(|a, b| {
+        a.priority
+            .cmp(&b.priority)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(repos)
 }
 
 /// Reads `metadata/md5-cache/<category>/<pf>` (`pf` = "package-version",
@@ -172,6 +218,13 @@ pub struct Candidate {
     pub version: String,
     pub keywords: Vec<String>,
     pub slot: String,
+    /// Which repo this candidate's ebuild/metadata actually lives in --
+    /// needed once there's more than one (see `list_candidates`), both to
+    /// re-read this exact package's own DEPEND/RDEPEND later
+    /// (`resolve_pretend_graph`) and to break a same-version tie between
+    /// two repos toward the higher-priority one (`resolve_pretend`).
+    pub repo_location: PathBuf,
+    pub repo_priority: i32,
 }
 
 /// A directory entry's name is only accepted as `<package>-<version>` if
@@ -189,50 +242,60 @@ fn strip_version_prefix<'a>(dir_name: &'a str, package: &str) -> Option<&'a str>
     }
 }
 
-/// Lists every version of `category/package` that has an ebuild in the
-/// repo, with metadata (KEYWORDS, SLOT) from the md5-cache. A candidate
-/// whose cache entry is missing or unreadable is silently skipped (v1
-/// doesn't distinguish "stale cache" from "doesn't exist" -- both just
-/// mean "not visible").
+/// Lists every version of `category/package` that has an ebuild in ANY of
+/// `repos`, with metadata (KEYWORDS, SLOT) from each repo's own md5-cache
+/// -- mirroring real `portdbapi.cp_list`, which gathers candidates from
+/// every configured repo the same way, not just the first one that has
+/// the package. `repos` is iterated in the order given (see
+/// `find_repos`'s ascending `(priority, name)` sort), and each resulting
+/// `Candidate` remembers which repo it came from. A candidate whose cache
+/// entry is missing or unreadable is silently skipped (v1 doesn't
+/// distinguish "stale cache" from "doesn't exist" -- both just mean "not
+/// visible"); a repo with no directory at all for this category/package
+/// simply contributes nothing, same as before.
 pub fn list_candidates(
-    repo_location: &Path,
+    repos: &[RepoConfig],
     category: &str,
     package: &str,
 ) -> Result<Vec<Candidate>, String> {
-    let pkg_dir = repo_location.join(category).join(package);
-    if !pkg_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let entries =
-        fs::read_dir(&pkg_dir).map_err(|e| format!("reading {}: {e}", pkg_dir.display()))?;
-
     let mut candidates = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-        let Some(stem) = file_name.strip_suffix(".ebuild") else {
+    for repo in repos {
+        let pkg_dir = repo.location.join(category).join(package);
+        if !pkg_dir.is_dir() {
             continue;
-        };
-        let Some(version) = strip_version_prefix(stem, package) else {
-            continue;
-        };
-        let Ok(metadata) = read_md5_cache(repo_location, category, stem) else {
-            continue;
-        };
-        let keywords = metadata
-            .get("KEYWORDS")
-            .map(|s| s.split_whitespace().map(String::from).collect())
-            .unwrap_or_default();
-        let slot = metadata
-            .get("SLOT")
-            .map(|s| s.split('/').next().unwrap_or("0").to_string())
-            .unwrap_or_else(|| "0".to_string());
-        candidates.push(Candidate {
-            version: version.to_string(),
-            keywords,
-            slot,
-        });
+        }
+        let entries =
+            fs::read_dir(&pkg_dir).map_err(|e| format!("reading {}: {e}", pkg_dir.display()))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            let Some(stem) = file_name.strip_suffix(".ebuild") else {
+                continue;
+            };
+            let Some(version) = strip_version_prefix(stem, package) else {
+                continue;
+            };
+            let Ok(metadata) = read_md5_cache(&repo.location, category, stem) else {
+                continue;
+            };
+            let keywords = metadata
+                .get("KEYWORDS")
+                .map(|s| s.split_whitespace().map(String::from).collect())
+                .unwrap_or_default();
+            let slot = metadata
+                .get("SLOT")
+                .map(|s| s.split('/').next().unwrap_or("0").to_string())
+                .unwrap_or_else(|| "0".to_string());
+            candidates.push(Candidate {
+                version: version.to_string(),
+                keywords,
+                slot,
+                repo_location: repo.location.clone(),
+                repo_priority: repo.priority,
+            });
+        }
     }
     Ok(candidates)
 }
@@ -380,14 +443,15 @@ pub enum PretendOutcome {
 }
 
 /// The single-atom v1 `emerge --pretend` decision: find the best visible
-/// candidate matching `atom_str` in the given repo, compare it against
-/// what's installed. `atom_str` may be a full atom (operator, slot --
-/// anything portage-dep's v1 grammar supports), not just a bare
-/// category/package: this is what lets dependency atoms extracted from
-/// DEPEND/RDEPEND (see `resolve_pretend_graph`) reuse the exact same
-/// resolution logic as the top-level CLI atom.
+/// candidate matching `atom_str` across all of `repos` (the main repo and
+/// any overlays -- see `find_repos`), compare it against what's
+/// installed. `atom_str` may be a full atom (operator, slot -- anything
+/// portage-dep's v1 grammar supports), not just a bare category/package:
+/// this is what lets dependency atoms extracted from DEPEND/RDEPEND (see
+/// `resolve_pretend_graph`) reuse the exact same resolution logic as the
+/// top-level CLI atom.
 pub fn resolve_pretend(
-    repo_location: &Path,
+    repos: &[RepoConfig],
     root: &Path,
     atom_str: &str,
     config: &portage_profile::Config,
@@ -395,7 +459,7 @@ pub fn resolve_pretend(
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
 
-    let candidates = list_candidates(repo_location, &atom.category, &atom.package)?;
+    let candidates = list_candidates(repos, &atom.category, &atom.package)?;
     let visible: Vec<&Candidate> = candidates
         .iter()
         .filter(|c| is_visible(c, &atom.category, &atom.package, config))
@@ -424,10 +488,16 @@ pub fn resolve_pretend(
     for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
         by_str.insert(*s, *c);
     }
+    // Ties on identical version (possible once more than one repo can
+    // provide it) are broken toward the higher-priority repo, matching
+    // real portage's own `(pkg.version, repo.priority)` sort in
+    // `portdbapi.cp_list`.
     let Some(best) = matched
         .iter()
         .filter_map(|m| by_str.get(m).copied())
-        .max_by(|a, b| vercmp_ordering(&a.version, &b.version))
+        .max_by(|a, b| {
+            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+        })
     else {
         return Ok(PretendOutcome::NoVisibleCandidate);
     };
@@ -631,7 +701,7 @@ pub fn resolve_pretend_graph(
     atom_str: &str,
     config: &portage_profile::Config,
 ) -> Result<Vec<GraphEntry>, String> {
-    let repo = find_main_repo(config_root)?;
+    let repos = find_repos(config_root)?;
 
     let mut visited: HashSet<(String, String)> = HashSet::new();
     let mut entries = Vec::new();
@@ -653,7 +723,7 @@ pub fn resolve_pretend_graph(
             continue;
         }
 
-        let outcome = resolve_pretend(&repo.location, root, &current_atom, config)?;
+        let outcome = resolve_pretend(&repos, root, &current_atom, config)?;
         let resolved_version = match &outcome {
             PretendOutcome::New { version } => Some(version.clone()),
             PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
@@ -671,8 +741,28 @@ pub fn resolve_pretend_graph(
             continue;
         };
 
+        // The resolved version may have come from any of `repos` (not
+        // necessarily the main one), so re-derive which repo it actually
+        // lives in -- reusing `list_candidates` rather than threading a
+        // repo location back out of `PretendOutcome`, since more than one
+        // repo could in principle carry the identical version, tie-broken
+        // the same way `resolve_pretend` itself does.
+        let Ok(repo_candidates) = list_candidates(&repos, &key.0, &key.1) else {
+            continue;
+        };
+        let Some(resolved) = repo_candidates
+            .iter()
+            .filter(|c| c.version == version)
+            .max_by_key(|c| c.repo_priority)
+        else {
+            continue;
+        };
+        let slot = resolved.slot.clone();
+        let repo_location = resolved.repo_location.clone();
+        graph_slots.insert(key.clone(), slot.clone());
+
         let pf = format!("{}-{version}", key.1);
-        let Ok(metadata) = read_md5_cache(&repo.location, &key.0, &pf) else {
+        let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {
             continue;
         };
         let mut depstr = String::new();
@@ -682,11 +772,6 @@ pub fn resolve_pretend_graph(
                 depstr.push(' ');
             }
         }
-        let slot = metadata
-            .get("SLOT")
-            .map(|s| s.split('/').next().unwrap_or("0").to_string())
-            .unwrap_or_else(|| "0".to_string());
-        graph_slots.insert(key.clone(), slot.clone());
         let candidate_str = format!("{}/{}-{version}:{slot}", key.0, key.1);
         let use_flags = effective_use_flags(
             &config.use_flags,
@@ -767,9 +852,9 @@ mod tests {
 
     fn resolve(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
-        let repo = find_main_repo(&root).expect("fixture repos.conf must resolve");
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repo.location, &root, &atom_str, &test_config())
+        resolve_pretend(&repos, &root, &atom_str, &test_config())
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -825,11 +910,55 @@ mod tests {
     /// synthetic `test_config()`.
     fn resolve_real(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
-        let repo = find_main_repo(&root).expect("fixture repos.conf must resolve");
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repo.location, &root, &atom_str, &config)
+        resolve_pretend(&repos, &root, &atom_str, &config)
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn fixture_overlay_only_package_is_found() {
+        // dev-libs/overlayonlypkg exists only in the fixture's overlay
+        // repo (see PORTING/fixtures/etc/portage/repos.conf), not the
+        // main repo -- proving the overlay is actually searched, not
+        // just present in repos.conf.
+        assert_eq!(
+            resolve_real("dev-libs", "overlayonlypkg"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fixture_best_version_wins_regardless_of_which_repo_has_it() {
+        // dev-libs/overlaynewerpkg-1.0 is in the main repo, -2.0 is in
+        // the overlay -- the higher version wins even though it isn't
+        // in the main (lower-priority) repo.
+        assert_eq!(
+            resolve_real("dev-libs", "overlaynewerpkg"),
+            PretendOutcome::New {
+                version: "2.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fixture_same_version_tie_across_repos_is_broken_toward_higher_priority() {
+        // dev-libs/overlaytiepkg-1.0 exists identically-versioned in both
+        // the main repo (priority -1000, no deps) and the overlay
+        // (priority 10, RDEPENDs on dev-libs/newpkg): resolving it must
+        // pull in newpkg, proving the overlay's own copy -- not the main
+        // repo's -- is the one whose metadata got read.
+        let full_names: Vec<String> = graph_entries_real("dev-libs/overlaytiepkg")
+            .into_iter()
+            .map(|e| format!("{}/{}", e.category, e.package))
+            .collect();
+        assert_eq!(
+            full_names,
+            vec!["dev-libs/overlaytiepkg", "dev-libs/newpkg"]
+        );
     }
 
     #[test]
@@ -1159,6 +1288,8 @@ mod tests {
             version: version.to_string(),
             keywords: keywords.iter().map(|s| s.to_string()).collect(),
             slot: "0".to_string(),
+            repo_location: PathBuf::new(),
+            repo_priority: 0,
         }
     }
 

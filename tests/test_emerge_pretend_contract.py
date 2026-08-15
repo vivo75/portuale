@@ -3,15 +3,17 @@ PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the full
 scope writeup, including the dependency-recursion follow-up in
 resolve_pretend_graph, the profile/make.conf -> real USE/ACCEPT_KEYWORDS
 follow-up in portage-profile, the package.mask/.unmask/.accept_keywords/
-.use follow-up on top of that, and the blocker-reporting follow-up on top
-of that). Drives the real compiled `emerge` binary (multicall, dispatched
+.use follow-up on top of that, the blocker-reporting follow-up on top of
+that, and the overlays (multiple repos.conf repos) follow-up on top of
+that). Drives the real compiled `emerge` binary (multicall, dispatched
 via a real symlink -- not a neutral harness, since emerge is an actual
 product surface per PROMPT.md's testing decision) and the Python
 reference implementation identically, against the synthetic fixture tree
 at PORTING/fixtures (whose repos.conf/make.profile/make.conf/
 package.mask/package.unmask/package.accept_keywords/package.use now drive
-real config resolution, not hardcoded values), and asserts their stdout,
-stderr, and exit codes all match exactly.
+real config resolution, not hardcoded values, and whose repos.conf now
+defines a second, higher-priority overlay repo alongside the main one),
+and asserts their stdout, stderr, and exit codes all match exactly.
 """
 
 import subprocess
@@ -52,6 +54,9 @@ CASES = [
     ("package.use: entry disables a flag that is on globally", ["--pretend", "dev-libs/packageusedisablepkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
+    ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
+    ("overlay: best version wins across repos", ["--pretend", "dev-libs/overlaynewerpkg"], 0),
+    ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
 ]
 
 
@@ -290,3 +295,38 @@ def test_unrelated_package_reports_no_blockers(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/diamond"], fixture_env)
     assert result.returncode == 0
     assert "[blocks]" not in result.stdout
+
+
+def test_overlay_only_package_is_found(emerge_binary, fixture_env):
+    """dev-libs/overlayonlypkg exists only in the fixture's overlay repo
+    (see PORTING/fixtures/etc/portage/repos.conf), not the main repo --
+    proving the overlay is actually searched, not just present in
+    repos.conf."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/overlayonlypkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/overlayonlypkg-1.0"
+
+
+def test_best_version_wins_regardless_of_which_repo_has_it(emerge_binary, fixture_env):
+    """dev-libs/overlaynewerpkg-1.0 is in the main repo, -2.0 is in the
+    overlay -- the higher version wins even though it isn't in the main
+    (lower-priority) repo."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/overlaynewerpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/overlaynewerpkg-2.0"
+
+
+def test_same_version_tie_across_repos_is_broken_toward_higher_priority(
+    emerge_binary, fixture_env
+):
+    """dev-libs/overlaytiepkg-1.0 exists identically-versioned in both the
+    main repo (priority -1000, no deps) and the overlay (priority 10,
+    RDEPENDs on dev-libs/newpkg): resolving it must pull in newpkg,
+    proving the overlay's own copy -- not the main repo's -- is the one
+    whose metadata got read."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/overlaytiepkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/overlaytiepkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]

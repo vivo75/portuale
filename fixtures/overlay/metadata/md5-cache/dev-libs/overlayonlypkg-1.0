@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: exists only in the overlay repo, not the main repo, proving overlays are actually searched
+EAPI=8
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

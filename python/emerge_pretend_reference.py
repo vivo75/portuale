@@ -2,9 +2,20 @@
 """Python reference implementation for the `emerge --pretend` pilot slice
 (see PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the
 full scope writeup). Mirrors the exact same restricted v1 algorithm as the
-Rust side -- main repo only -- so the two can be contract-tested against
-each other, argv-for-argv and byte-for-byte on stdout, the same way every
-other pilot slice is.
+Rust side so the two can be contract-tested against each other,
+argv-for-argv and byte-for-byte on stdout, the same way every other pilot
+slice is.
+
+Overlays (see find_repos/list_candidates): candidates for a given
+category/package are gathered from every repos.conf repo with a
+location, main plus any overlays -- mirroring real portdbapi.cp_list,
+which does the same (an overlay isn't consulted only if the main repo
+has nothing). Repos are sorted ascending by (priority, name), matching
+real portage's own prepos_order, so a tie between two repos providing
+the identical version is broken toward the higher-priority one (see
+_best_candidate). A repo's priority is its explicit repos.conf value if
+present, else -1000 for the main repo (real portage's own default) or 0
+for anything else.
 
 USE/ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use (see
 resolve_config) come from a real profile chain + make.conf + package.*,
@@ -86,7 +97,15 @@ def _root():
     return os.environ.get("ROOT") or "/"
 
 
-def find_main_repo(config_root):
+def find_repos(config_root):
+    """Parses repos.conf and returns every [reponame] section that has a
+    location (the main repo plus any overlays) as a list of dicts with
+    "name"/"location"/"priority", sorted ascending by (priority, name) --
+    matching real portage's own prepos_order (see
+    lib/portage/repository/config.py), which is also the order
+    list_candidates below iterates them in, so a tie between two repos
+    providing the identical version is broken toward the higher-priority
+    one. Mirrors portage-repo/src/lib.rs's find_repos exactly."""
     repos_conf = os.path.join(config_root, "etc", "portage", "repos.conf")
     if os.path.isdir(repos_conf):
         files = sorted(
@@ -106,17 +125,33 @@ def find_main_repo(config_root):
     if not main_repo:
         raise ResolutionError("no [DEFAULT] main-repo in repos.conf")
 
-    location = parser.get(main_repo, "location", fallback=None)
-    if location is None:
+    repos = []
+    for name in parser.sections():
+        location = parser.get(name, "location", fallback=None)
+        if location is None:
+            continue
+        # Real repos.conf always uses absolute locations; relative ones
+        # are a pilot/testing convenience -- see the matching comment in
+        # portage-repo/src/lib.rs.
+        if not os.path.isabs(location):
+            location = os.path.join(config_root, location)
+        # An explicit "priority" wins; otherwise the main repo defaults
+        # to -1000 (real portage's own default -- see
+        # lib/portage/repository/config.py) and every other repo to 0.
+        priority_str = parser.get(name, "priority", fallback=None)
+        try:
+            priority = int(priority_str) if priority_str is not None else None
+        except ValueError:
+            priority = None
+        if priority is None:
+            priority = -1000 if name == main_repo else 0
+        repos.append({"name": name, "location": location, "priority": priority})
+
+    if not any(r["name"] == main_repo for r in repos):
         raise ResolutionError(f'no location for repo "{main_repo}" in repos.conf')
 
-    # Real repos.conf always uses absolute locations; relative ones are a
-    # pilot/testing convenience -- see the matching comment in
-    # portage-repo/src/lib.rs.
-    if not os.path.isabs(location):
-        location = os.path.join(config_root, location)
-
-    return main_repo, location
+    repos.sort(key=lambda r: (r["priority"], r["name"]))
+    return repos
 
 
 def _read_config_lines(path):
@@ -210,25 +245,45 @@ def read_md5_cache(repo_location, category, pf):
     return result
 
 
-def list_candidates(repo_location, category, package):
-    pkg_dir = os.path.join(repo_location, category, package)
-    if not os.path.isdir(pkg_dir):
-        return []
+def list_candidates(repos, category, package):
+    """Lists every version of category/package that has an ebuild in ANY
+    of `repos`, with metadata (KEYWORDS, SLOT) from each repo's own
+    md5-cache -- mirroring real portdbapi.cp_list, which gathers
+    candidates from every configured repo the same way, not just the
+    first one that has the package. `repos` is iterated in the order
+    given (see find_repos's ascending (priority, name) sort), and each
+    resulting candidate remembers which repo it came from (repo_location/
+    repo_priority) -- needed once there's more than one, both to re-read
+    that exact package's own DEPEND/RDEPEND later and to break a
+    same-version tie toward the higher-priority repo. Mirrors
+    portage-repo/src/lib.rs's list_candidates exactly."""
     candidates = []
-    for name in os.listdir(pkg_dir):
-        if not name.endswith(".ebuild"):
+    for repo in repos:
+        pkg_dir = os.path.join(repo["location"], category, package)
+        if not os.path.isdir(pkg_dir):
             continue
-        stem = name[: -len(".ebuild")]
-        version = _strip_version_prefix(stem, package)
-        if version is None:
-            continue
-        try:
-            metadata = read_md5_cache(repo_location, category, stem)
-        except OSError:
-            continue
-        keywords = metadata.get("KEYWORDS", "").split()
-        slot = metadata.get("SLOT", "0").split("/")[0]
-        candidates.append({"version": version, "keywords": keywords, "slot": slot})
+        for name in os.listdir(pkg_dir):
+            if not name.endswith(".ebuild"):
+                continue
+            stem = name[: -len(".ebuild")]
+            version = _strip_version_prefix(stem, package)
+            if version is None:
+                continue
+            try:
+                metadata = read_md5_cache(repo["location"], category, stem)
+            except OSError:
+                continue
+            keywords = metadata.get("KEYWORDS", "").split()
+            slot = metadata.get("SLOT", "0").split("/")[0]
+            candidates.append(
+                {
+                    "version": version,
+                    "keywords": keywords,
+                    "slot": slot,
+                    "repo_location": repo["location"],
+                    "repo_priority": repo["priority"],
+                }
+            )
     return candidates
 
 
@@ -497,10 +552,25 @@ def resolve_config(config_root):
     }
 
 
-def resolve_pretend(repo_location, root, atom_str, config):
+def _best_candidate(candidates):
+    """Picks the best of `candidates` by version, breaking a tie on an
+    identical version toward the higher-priority repo -- mirroring
+    portage-repo/src/lib.rs's max_by(vercmp_ordering(...).then(repo_priority))
+    exactly, since more than one repo can now provide the identical
+    version."""
+    best = candidates[0]
+    for c in candidates[1:]:
+        cmp = vercmp(c["version"], best["version"]) or 0
+        if cmp > 0 or (cmp == 0 and c["repo_priority"] > best["repo_priority"]):
+            best = c
+    return best
+
+
+def resolve_pretend(repos, root, atom_str, config):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
-    supports -- operator, slot, not just a bare category/package),
+    supports -- operator, slot, not just a bare category/package) across
+    all of `repos` (the main repo and any overlays -- see find_repos),
     compare it against what's installed. Returns a tuple whose first
     element is the outcome tag: "new", "upgrade", "already_installed", or
     "no_visible_candidate"."""
@@ -509,7 +579,7 @@ def resolve_pretend(repo_location, root, atom_str, config):
         raise ResolutionError(f'invalid atom "{atom_str}"')
     category, package = atom.cp.split("/", 1)
 
-    candidates = list_candidates(repo_location, category, package)
+    candidates = list_candidates(repos, category, package)
     visible = [c for c in candidates if is_visible(c, category, package, config)]
     if not visible:
         return ("no_visible_candidate",)
@@ -524,7 +594,7 @@ def resolve_pretend(repo_location, root, atom_str, config):
     matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
     if not matched:
         return ("no_visible_candidate",)
-    best = _max_version([c["version"] for c in matched])
+    best = _best_candidate(matched)["version"]
 
     installed = installed_versions(root, category, package)
     if best in installed:
@@ -597,7 +667,7 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
     is a list of conflict dicts (see resolve_blockers), only ever
     non-empty for New/Upgrade entries. See the module doc comment for the
     recursion's documented scope cuts."""
-    _, repo_location = find_main_repo(config_root)
+    repos = find_repos(config_root)
 
     visited = set()
     entries = []
@@ -618,7 +688,7 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
             continue
         visited.add(key)
 
-        outcome = resolve_pretend(repo_location, root, current_atom_str, config)
+        outcome = resolve_pretend(repos, root, current_atom_str, config)
         entries.append((category, package, outcome, []))
 
         if outcome[0] == "new":
@@ -628,14 +698,26 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
         else:
             continue
 
+        # The resolved version may have come from any of `repos` (not
+        # necessarily the main one), so re-derive which repo it actually
+        # lives in -- reusing list_candidates rather than threading a
+        # repo location back out of resolve_pretend's outcome tuple,
+        # since more than one repo could in principle carry the identical
+        # version, tie-broken the same way resolve_pretend itself does.
+        repo_candidates = [c for c in list_candidates(repos, category, package) if c["version"] == version]
+        if not repo_candidates:
+            continue
+        resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
+        slot = resolved["slot"]
+        repo_location = resolved["repo_location"]
+        graph_slots[key] = slot
+
         pf = f"{package}-{version}"
         try:
             metadata = read_md5_cache(repo_location, category, pf)
         except OSError:
             continue
         depstr = " ".join(metadata[k] for k in ("DEPEND", "RDEPEND") if metadata.get(k))
-        slot = metadata.get("SLOT", "0").split("/")[0]
-        graph_slots[key] = slot
         candidate_str = f"{category}/{package}-{version}:{slot}"
         use_flags = effective_use_flags(
             config["use_flags"], config["package_use"], candidate_str, category, package

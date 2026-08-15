@@ -17,11 +17,14 @@ overrides from `package.mask`, `package.unmask`, and
 `package.accept_keywords` -- what's visible at all -- per-package USE
 overrides from `package.use`, so a single package's own `DEPEND`/
 `RDEPEND` can be flattened against a USE set that differs from every
-other package's, the same way real portage does it, and, on top of all
-of that, blocker (`!atom`/`!!atom`) reporting: a package's blocker atoms
-are matched against both currently-installed packages and the rest of
-the same resolution's New/Upgrade set, and shown -- not resolved or
-enforced, since `--pretend` itself never touches anything real.
+other package's, the same way real portage does it, blocker
+(`!atom`/`!!atom`) reporting: a package's blocker atoms are matched
+against both currently-installed packages and the rest of the same
+resolution's New/Upgrade set, and shown -- not resolved or enforced,
+since `--pretend` itself never touches anything real -- and, on top of
+all of that, overlays: candidates for a package now come from every
+repo `repos.conf` defines, main plus any number of overlays, not just
+the one main repo.
 
 ## Layout
 
@@ -39,10 +42,10 @@ PORTING/
     portage-profile/             shared lib: real USE/ACCEPT_KEYWORDS from a
                                  profile chain + make.conf, plus package.mask/
                                  .unmask/.accept_keywords/.use (see lib.rs's doc comment)
-    portage-repo/                repo/metadata/vdb access + resolution + recursive
-                                 dependency-graph walk + blocker reporting for
-                                 `emerge --pretend` (see lib.rs's doc comment on
-                                 resolve_pretend_graph)
+    portage-repo/                multi-repo (main + overlays)/metadata/vdb access +
+                                 resolution + recursive dependency-graph walk +
+                                 blocker reporting for `emerge --pretend` (see
+                                 lib.rs's doc comment on resolve_pretend_graph)
     versions-harness/          CLI harness over portage-versions
     atom-harness/               CLI harness over portage-dep
     use-reduce-harness/         CLI harness over portage-use-reduce
@@ -134,15 +137,16 @@ PORTING/
 - **`emerge --pretend category/package`** (the answer to "what's missing
   for this to succeed?"): a real, working slice, built on `portage-dep`,
   `portage-versions`, `portage-use-reduce`, and `portage-profile`.
-  `portage-repo` finds the main repo via `repos.conf` (INI, `[DEFAULT]
-  main-repo` / `[name] location`), lists candidate versions from ebuild
-  filenames in the repo, reads `metadata/md5-cache/<cat>/<pf>` (plain
-  `KEY=value` text -- confirmed against a real vendored tree) for
+  `portage-repo` finds every configured repo via `repos.conf` (INI,
+  `[DEFAULT] main-repo` / any number of `[name] location` sections -- the
+  main repo plus overlays), lists candidate versions from ebuild
+  filenames across all of them, reads `metadata/md5-cache/<cat>/<pf>`
+  (plain `KEY=value` text -- confirmed against a real vendored tree) for
   KEYWORDS/SLOT/DEPEND/RDEPEND *without executing any bash*, and checks
   the vdb (`<ROOT>/var/db/pkg`) for what's installed. There's still no
-  slot conflicts, no overlays, no backtracking -- all explicitly
-  confirmed scope cuts before implementing, not silent omissions (see the
-  doc comment at the top of `rust/portage-repo/src/lib.rs`).
+  slot conflicts, no backtracking -- all explicitly confirmed scope cuts
+  before implementing, not silent omissions (see the doc comment at the
+  top of `rust/portage-repo/src/lib.rs`).
   Config/target roots come from the real `PORTAGE_CONFIGROOT`/`ROOT`
   environment variables (portage's own mechanism, not a pilot invention --
   see `lib/portage/const.py`), which is what lets `PORTING/fixtures` be
@@ -281,6 +285,30 @@ PORTING/
   prefix text, which was checked and confirmed empirically to agree with
   it for exactly the weak/strong split portage-dep's `Blocker` enum
   already carries).
+
+  **Overlays**: `find_repos` now returns every `[reponame]` section in
+  `repos.conf` that has a `location` -- the main repo plus any number of
+  overlays -- not just `[DEFAULT] main-repo`. `list_candidates` gathers
+  ebuilds from ALL of them for a given category/package, mirroring real
+  `portdbapi.cp_list` (an overlay isn't "consulted only if the main repo
+  has nothing"; every repo's ebuilds are real candidates), and each
+  resulting `Candidate` remembers which repo it actually came from
+  (`repo_location`/`repo_priority`) so a package's own DEPEND/RDEPEND can
+  later be re-read from the *right* repo, not always the main one.
+  Repos are sorted ascending by `(priority, name)`, exactly matching real
+  portage's own `prepos_order` (see
+  `lib/portage/repository/config.py`) -- a repo's priority is its
+  explicit `repos.conf` value if set, else `-1000` for the main repo
+  (real portage's own default) or `0` for anything else -- so a tie
+  between two repos providing the *identical* version is broken toward
+  the higher-priority one, both for version selection
+  (`resolve_pretend`'s final `max_by`) and for which repo's metadata gets
+  read for that package's own dependencies (`resolve_pretend_graph`).
+  Deliberately out of scope: per-repo `package.mask`/`.unmask`/
+  `profiles/`, `masters` (eclass inheritance across repos), and
+  `::repo`-constrained atoms (already excluded by `portage-dep`'s v1
+  grammar) -- overlays only widen *which ebuilds are candidates*, nothing
+  about how they're evaluated once found.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -318,12 +346,14 @@ PORTING/
   dependency graph, a real-profile-derived USE flag gating a dependency,
   a `package.mask`-hidden package staying hidden, a masked-then-
   `package.unmask`-ed package becoming visible again, a `package.use`
-  entry both enabling and disabling a per-package flag, and a strong and
-  a weak blocker match each being reported) against the fixture,
+  entry both enabling and disabling a per-package flag, a strong and a
+  weak blocker match each being reported, an overlay-only package being
+  found, and a same-version tie across the main repo and the overlay
+  being broken toward the higher-priority one) against the fixture,
   `ebuild`-dispatch, and batch mode inside it, exiting nonzero on any
-  failure -- including proving the fixture's `make.profile` symlink and
-  multi-parent chain survive the image `COPY` and still resolve
-  correctly.
+  failure -- including proving the fixture's `make.profile` symlink,
+  multi-parent chain, and second `repos.conf` repo all survive the image
+  `COPY` and still resolve correctly.
 
 Known simplification: `versions-harness`/`portage-versions` compare
 version components as `i128` rather than Python's arbitrary-precision
@@ -352,10 +382,10 @@ profile resolution) a three-level same-repo profile chain
 inheriting from both of the former, in that order) plus `make.conf`
 sourcing `/etc/make.local`, and a package whose dependency is gated on a
 USE flag that only a correctly-resolved profile/make.conf stack would
-actually enable. `repos.conf`'s `location` is relative (resolved against
-`PORTAGE_CONFIGROOT`) purely so the fixture is portable across checkouts
--- real `repos.conf` files always use absolute paths; see the comment in
-`portage-repo/src/lib.rs`.
+actually enable. `repos.conf`'s repos both use relative `location`s
+(resolved against `PORTAGE_CONFIGROOT`) purely so the fixture is
+portable across checkouts -- real `repos.conf` files always use absolute
+paths; see the comment in `portage-repo/src/lib.rs`.
 
 `PORTING/fixtures/etc/portage/package.mask`, `package.unmask`, and
 `package.accept_keywords` exercise the mask/unmask/accept_keywords slice:
@@ -385,6 +415,20 @@ parent RDEPENDs on both of the other two so they resolve New in the same
 graph; `weakblockerpkg`'s own RDEPEND is `"!dev-libs/blockerpartnerpkg"`,
 a weak blocker that can only be matched against the graph's own
 New/Upgrade set, since `blockerpartnerpkg` isn't installed anywhere).
+
+`PORTING/fixtures/overlay` is a second repo, registered in
+`repos.conf` alongside the main one with an explicit `priority = 10`
+(the main repo's own priority is left unset, so it defaults to real
+portage's own `-1000`), exercising the overlays slice: `overlayonlypkg`
+(exists only in the overlay, proving it's actually searched, not just
+listed in `repos.conf`), `overlaynewerpkg` (`1.0` in the main repo,
+`2.0` in the overlay -- the higher version wins regardless of which repo
+has it, since priority only ever breaks a tie on an *identical*
+version), and `overlaytiepkg` (identically-versioned `1.0` in both
+repos, but only the overlay's copy `RDEPEND`s on `dev-libs/newpkg` --
+resolving it pulls `newpkg` in, proving the higher-priority overlay's
+copy, not the main repo's, is the one whose own metadata actually got
+read).
 
 `gentoo_snapshot.json` was extracted from a full local Gentoo tree
 checkout (`/.gentoo/repos/gentoo` on the machine this was vendored on) with
@@ -507,6 +551,18 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/graphblockerp
 # [ebuild  N] dev-libs/blockerpartnerpkg-1.0
 # [ebuild  N] dev-libs/weakblockerpkg-1.0
 # [blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")
+
+# overlays: a package that exists only in the overlay repo (see
+# PORTING/fixtures/etc/portage/repos.conf) is found
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayonlypkg
+# [ebuild  N] dev-libs/overlayonlypkg-1.0
+
+# same version in both repos: the higher-priority overlay's own copy is
+# the one actually used, proven by its RDEPEND (not the main repo copy's)
+# pulling in dev-libs/newpkg
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaytiepkg
+# [ebuild  N] dev-libs/overlaytiepkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
 
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \

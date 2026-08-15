@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: same version (1.0) exists in both the main repo (this copy, no deps) and the overlay (priority 10, RDEPENDs on dev-libs/newpkg) -- see dev-libs/overlaytiepkg in the overlay
+EAPI=8
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000
