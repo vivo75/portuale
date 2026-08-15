@@ -66,6 +66,63 @@ pub type AuxMetadataProvider = fn(&Path, &str, &str) -> Result<HashMap<String, S
 
 pub(crate) static AUX_METADATA_PROVIDER: OnceLock<AuxMetadataProvider> = OnceLock::new();
 
+/// The single entry point for a repo's aux metadata for `category/pf`.
+/// Every production `read_md5_cache` call site goes through here.
+///
+/// A cache miss *or* an entry `md5_cache_entry_is_valid` rejects asks the
+/// registered depend-phase provider for the metadata the cache cannot
+/// supply. With no provider registered a miss keeps `Error::ReadFile` and
+/// an invalid entry is returned as-is, so cached repos are untouched. An
+/// entry whose ebuild is gone is trusted outright. Provider results are
+/// memoised per cp for the process lifetime.
+/// Portage: porttree.py's `_pull_valid_cache` falling through to
+/// `doebuild(mydo="depend")`.
+///
+/// When [`has_usable_md5_cache`] is false the md5-cache rung is skipped
+/// outright and the provider path is entered directly -- then the entry
+/// bytes are never read, even when present and valid.
+pub fn repo_aux_metadata(
+    repo_location: &Path,
+    category: &str,
+    pf: &str,
+) -> Result<std::sync::Arc<HashMap<String, String>>, Error> {
+    if !has_usable_md5_cache(repo_location) {
+        return provide_aux_metadata(
+            repo_location,
+            category,
+            pf,
+            Error::PregenCacheUnavailable {
+                path: repo_location
+                    .join("metadata/md5-cache")
+                    .join(category)
+                    .join(pf)
+                    .display()
+                    .to_string(),
+            },
+        );
+    }
+    match read_md5_cache(repo_location, category, pf) {
+        Ok(map) => {
+            if md5_cache_entry_is_valid(repo_location, category, pf) {
+                return Ok(map);
+            }
+            if AUX_METADATA_PROVIDER.get().is_none() {
+                return Ok(map);
+            }
+            let invalid = Error::StaleMd5Cache {
+                path: repo_location
+                    .join("metadata/md5-cache")
+                    .join(category)
+                    .join(pf)
+                    .display()
+                    .to_string(),
+            };
+            provide_aux_metadata(repo_location, category, pf, invalid)
+        }
+        Err(read_err) => provide_aux_metadata(repo_location, category, pf, read_err),
+    }
+}
+
 /// The resolved [`RepoConfig`] for one repo location, memoised per path.
 /// `None` when the process's own config does not describe that location
 /// at all -- direct fixture/unit-test callers keep local fallbacks then.
