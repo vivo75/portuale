@@ -6,6 +6,7 @@
 // surface by name even where a flag is not implemented. `portuale --help`
 // lists the applets.
 
+mod binpkg;
 mod ebuild_merge;
 mod ebuild_options;
 mod ebuild_phases;

@@ -15,10 +15,14 @@
 //! `CONTENTS` line order has no semantic meaning.
 
 use crate::ebuild_phases;
+mod installed_instance;
 mod options;
+mod plib_registry;
 mod protect;
 mod tree;
+pub(crate) use installed_instance::*;
 pub use options::*;
+pub(crate) use plib_registry::*;
 pub(crate) use protect::*;
 pub(crate) use tree::*;
 
