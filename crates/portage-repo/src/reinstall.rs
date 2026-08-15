@@ -95,3 +95,19 @@ pub(crate) fn new_repo_changed(
     };
     vdb_repo != current_repo_name
 }
+
+/// A candidate's own `is_valid_flag` domain: its declared `IUSE` unioned
+/// with the profile's EAPI 5+ `IUSE_EFFECTIVE` (`config.iuse_effective`).
+/// Used only for a USE-dep's `.required`/`(+)`/`(-)` check -- deliberately
+/// NOT for `--newuse`'s IUSE-*presence* diff, which must stay strictly
+/// declared-IUSE.
+/// Portage: pkg.iuse.is_valid_flag.
+pub(crate) fn valid_iuse(
+    declared: &HashSet<String>,
+    config: &portage_profile::Config,
+) -> HashSet<String> {
+    if config.iuse_effective.is_empty() {
+        return declared.clone();
+    }
+    declared.union(&config.iuse_effective).cloned().collect()
+}

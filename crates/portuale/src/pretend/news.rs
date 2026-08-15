@@ -2,6 +2,26 @@
 
 use crate::pretend::*;
 
+/// Print the `IMPORTANT: N news items need reading` block if any repo has
+/// unread items, else ` * No news items were found.` (unless `--quiet`).
+/// A news item is valid iff its `News-Item-Format:` header matches `[12].*`,
+/// and relevant iff every `Display-If-*` kind it carries has a matching
+/// value. The printed count is `len(.unread)`, not a live recompute: once
+/// counted, an item stays counted until removed from `.unread`.
+/// Portage: _emerge/actions.py; portage/news.py, NewsManager
+pub struct FilesystemNews<'a> {
+    /// The repo checkout (`metadata/news` lives under it).
+    pub repo_location: &'a Path,
+    /// The `::reponame` owning the state files.
+    pub repo_name: &'a str,
+    /// The `${ROOT}` the `Display-If-Installed` atoms match against and
+    /// the state files live under.
+    pub root: &'a Path,
+    /// The profile/`ARCH` the `Display-If-Profile` / `Display-If-Keyword`
+    /// restrictions match against.
+    pub context: &'a NewsContext,
+}
+
 /// The non-vdb restrictions plus the state-file ownership, built once per
 /// run by [`news_context`].
 /// Portage: portage/news.py, NewsManager
@@ -21,6 +41,162 @@ pub struct NewsContext {
     /// The host's `PORTAGE_GRPNAME` group (default `portage`), 0 when that
     /// group does not exist. Read from `/etc/group` only.
     pub portage_gid: u32,
+}
+
+/// The pure result of one [`FilesystemNews::evaluate`]: the state-file
+/// sets as found (`*_orig`) plus the re-evaluated sets the caller writes
+/// back when they changed.
+pub struct NewsEvaluation {
+    /// `.unread` as found on disk.
+    pub unread_orig: HashSet<String>,
+    /// `.unread` after evaluation (newly relevant added, `.read`
+    /// applied).
+    pub unread: HashSet<String>,
+    /// `.skip` as found on disk.
+    pub skip_orig: HashSet<String>,
+    /// `.skip` after evaluation (newly relevant added, permanent).
+    pub skip: HashSet<String>,
+}
+
+impl FilesystemNews<'_> {
+    /// Evaluate one repo's news items: every item not already in `.read`
+    /// or `.skip` is (re-)evaluated, and a valid, relevant one is added
+    /// to both the `unread` and `skip` accumulators. `None` when the repo
+    /// has no `metadata/news` directory at all.
+    /// Portage: portage/news.py, NewsManager.updateItems
+    pub fn evaluate(&self) -> Option<NewsEvaluation> {
+        let news_dir = self.repo_location.join("metadata/news");
+        let Ok(entries) = portage_util::read_dir_entries(&news_dir) else {
+            return None;
+        };
+        // `.read` + `.skip`: an id in either is not counted.
+        // Portage: portage/news.py, NewsManager.updateItems
+        let news_state_dir = self.root.join("var/lib/gentoo/news");
+        let read_state_file = |suffix: &str| -> HashSet<String> {
+            grab_news_state_file(
+                &news_state_dir.join(format!("news-{}.{}", self.repo_name, suffix)),
+            )
+            .into_iter()
+            .collect()
+        };
+        let read_only = read_state_file("read");
+        let skip_orig = read_state_file("skip");
+        let unread_orig = read_state_file("unread");
+        let read: HashSet<String> = read_only
+            .iter()
+            .cloned()
+            .chain(skip_orig.iter().cloned())
+            .collect();
+
+        let ids: Vec<String> = entries
+            .into_iter()
+            .filter(|e| e.path().is_dir())
+            .filter_map(|e| e.file_name().to_str().map(String::from))
+            .collect();
+
+        // Every item not already in `.skip` is (re-)evaluated; a valid,
+        // relevant one joins both accumulators, permanently.
+        // Portage: portage/news.py, NewsManager.updateItems
+        let mut unread = unread_orig.clone();
+        let mut skip = skip_orig.clone();
+        for id in ids {
+            if read.contains(&id) {
+                continue;
+            }
+            let item = news_dir.join(&id).join(format!("{id}.en.txt"));
+            let Ok(text) = std::fs::read_to_string(&item) else {
+                continue;
+            };
+            if !news_item_valid(&text) {
+                continue;
+            }
+            if news_item_relevant(&text, self.root, self.context) {
+                unread.insert(id.clone());
+                skip.insert(id);
+            }
+        }
+        // The count is `len(.unread)`: once added, an item stays counted.
+        // `.read` models `eselect news read`, applied lazily each run.
+        // Portage: portage/news.py, getUnreadItems
+        for id in &read_only {
+            unread.remove(id);
+        }
+        Some(NewsEvaluation {
+            unread_orig,
+            unread,
+            skip_orig,
+            skip,
+        })
+    }
+}
+
+impl mrg_director::NewsSelector for FilesystemNews<'_> {
+    fn unread_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .evaluate()
+            .map(|eval| eval.unread.into_iter().collect())
+            .unwrap_or_default();
+        ids.sort();
+        ids
+    }
+
+    fn repo_name(&self) -> String {
+        self.repo_name.to_string()
+    }
+}
+
+/// One ` * IMPORTANT: N news items need reading for repository '<repo>'.`
+/// line per repo with a nonzero count, then the `eselect news read` hint.
+/// An all-zero map prints nothing at all. Shared by `--check-news` and the
+/// count notice so the two can never drift apart.
+/// Portage: portage/news.py, display_news_notifications
+pub(crate) fn print_news_notifications(per_repo: &[(String, usize)], color: &Colorizer) -> bool {
+    let mut first = true;
+    for (repo, count) in per_repo {
+        if *count > 0 {
+            if first {
+                println!();
+                first = false;
+            }
+            println!(
+                "{} {count} news items need reading for repository '{repo}'.",
+                color.c("WARN", " * IMPORTANT:")
+            );
+        }
+    }
+    if !first {
+        println!(
+            "{} Use {} to view new items.\n",
+            color.c("WARN", " *"),
+            color.c("GOOD", "eselect news read")
+        );
+    }
+    !first
+}
+
+/// Whether `news` is in the resolved `FEATURES`: the notice's own gate.
+/// Pure predicate so the gate stays unit-pinned.
+/// Portage: post_emerge.py, display_news_notification
+pub(crate) fn news_notice_enabled(config: &portage_profile::Config) -> bool {
+    config_features_list(config).iter().any(|t| t == "news")
+}
+
+/// Read one news state file: each line split on whitespace, cut at the
+/// first `#`-led token, re-joined; empty results dropped. A missing file
+/// reads as empty.
+/// Portage: portage/util/__init__.py, grabfile
+pub(crate) fn grab_news_state_file(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| {
+            line.split_whitespace()
+                .take_while(|tok| !tok.starts_with('#'))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|l| !l.is_empty())
+        .collect()
 }
 
 /// Prepare the state directory first; a permission failure returns before
@@ -63,4 +239,195 @@ pub(crate) fn apply_news_permissions(path: &Path, context: &NewsContext, mode: u
         return false;
     }
     true
+}
+
+/// Build the [`NewsContext`]: the profile path, `ARCH`, `PORTAGE_INST_UID`
+/// and the portage group id.
+/// Portage: portage/news.py, NewsManager
+pub(crate) fn news_context(
+    repos: &[portage_repo::RepoConfig],
+    config_root: &Path,
+    config: &portage_profile::Config,
+) -> NewsContext {
+    let var = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|v| !v.is_empty())
+            .or_else(|| config.other_vars.get(name).cloned())
+    };
+    let grpname = var("PORTAGE_GRPNAME").unwrap_or_else(|| "portage".to_string());
+    NewsContext {
+        profile: news_profile_path(repos, config_root),
+        has_profile: config_profile_dir(config_root).is_some(),
+        arch: config.other_vars.get("ARCH").cloned().unwrap_or_default(),
+        inst_uid: var("PORTAGE_INST_UID")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0),
+        portage_gid: host_group_gid(&grpname).unwrap_or(0),
+    }
+}
+
+/// The profile path with the main repo's `<location>/profiles/` prefix
+/// removed; a profile outside it stays a full path (matching no
+/// `Display-If-Profile`).
+/// Portage: portage/news.py, NewsManager
+pub(crate) fn news_profile_path(
+    repos: &[portage_repo::RepoConfig],
+    config_root: &Path,
+) -> Option<String> {
+    let main = repos.iter().find(|r| r.is_main)?;
+    let make_profile = config_profile_dir(config_root)?;
+    let real = std::fs::canonicalize(&make_profile).ok()?;
+    let real = real.to_string_lossy().into_owned();
+    let base = format!("{}/", main.location.join("profiles").to_string_lossy());
+    Some(real.strip_prefix(&base).map(str::to_string).unwrap_or(real))
+}
+
+/// The profile directory: `<config_root>/etc/portage/make.profile`, else
+/// the deprecated `<config_root>/etc/make.profile`, whichever is a directory.
+/// Portage: portage/locations.py, LocationsManager
+pub(crate) fn config_profile_dir(config_root: &Path) -> Option<std::path::PathBuf> {
+    [
+        config_root.join("etc/portage/make.profile"),
+        config_root.join("etc/make.profile"),
+    ]
+    .into_iter()
+    .find(|p| p.is_dir())
+}
+
+/// The running host's group database (`/etc/group`), never `${ROOT}`'s.
+/// Portage: portage/data.py, portage_gid
+pub(crate) fn host_group_gid(name: &str) -> Option<u32> {
+    std::fs::read_to_string("/etc/group")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let mut f = line.split(':');
+            (f.next() == Some(name))
+                .then(|| f.nth(1).and_then(|g| g.parse::<u32>().ok()))
+                .flatten()
+        })
+}
+
+/// The format version as `Some(true)` for a 1.x item and `Some(false)` for
+/// 2.x; `None` means "no valid format header". The first `1.*`/`2.*` header
+/// line wins.
+/// Portage: portage/news.py, NewsItem.parse
+pub(crate) fn news_item_format(text: &str) -> Option<bool> {
+    for line in text.lines() {
+        if let Some(v) = line.strip_prefix("News-Item-Format:").map(str::trim) {
+            if v.starts_with("1.") || v == "1" {
+                return Some(true);
+            }
+            if v.starts_with("2.") || v == "2" {
+                return Some(false);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn news_item_valid(text: &str) -> bool {
+    let Some(is_1x) = news_item_format(text) else {
+        return false;
+    };
+    // A malformed `Display-If-Installed` atom fails the whole item, and a
+    // 1.x item only allows atoms without slot info or use-deps (EAPI 0
+    // lacks both); a 2.x atom keeps the permissive parse-at-all check. A
+    // 1.x `Display-If-Profile` value allows `*` only as a trailing `/*`.
+    // Portage: portage/news.py, NewsItem.isValid
+    let profile_valid = |value: &str| {
+        !is_1x || !value.contains('*') || {
+            let head = value.strip_suffix("/*").unwrap_or(value);
+            !head.is_empty() && !head.contains('*')
+        }
+    };
+    text.lines()
+        .filter_map(|l| l.strip_prefix("Display-If-Profile:").map(str::trim))
+        .all(profile_valid)
+        && text
+            .lines()
+            .filter_map(|l| l.strip_prefix("Display-If-Installed:").map(str::trim))
+            .all(|atom| match parse_atom(atom) {
+                Some(a) => {
+                    !is_1x
+                        || (a.slot.is_none()
+                            && a.sub_slot.is_none()
+                            && a.slot_operator.is_none()
+                            && a.use_deps.is_none())
+                }
+                None => false,
+            })
+}
+
+/// No restriction -> relevant; otherwise each `Display-If-*` kind is OR'd
+/// within and AND'd across:
+/// - `Display-If-Installed`: a full atom match against every installed
+///   version of the atom's `cat/pkg`, with `[use]`-deps post-filtered
+///   against the matched version's own vdb `IUSE`/`USE`.
+/// - `Display-If-Profile`: a 2.x `…/*` value matches every profile under
+///   that prefix, anything else must equal the profile path exactly.
+/// - `Display-If-Keyword`: verbatim equality with `ARCH`.
+///
+/// Portage: portage/news.py, NewsItem.isRelevant
+pub(crate) fn news_item_relevant(text: &str, root: &Path, context: &NewsContext) -> bool {
+    let is_2x = news_item_format(text) == Some(false);
+    let values = |key: &str| -> Vec<&str> {
+        text.lines()
+            .filter_map(|l| l.strip_prefix(key).map(str::trim))
+            .collect()
+    };
+    let installed_atoms = values("Display-If-Installed:");
+    let profiles = values("Display-If-Profile:");
+    let keywords = values("Display-If-Keyword:");
+    let installed_ok = installed_atoms.is_empty()
+        || installed_atoms.iter().any(|atom_str| {
+            let Some(atom) = parse_atom(atom_str) else {
+                return false;
+            };
+            let use_deps = atom.use_deps.as_deref().filter(|d| !d.is_empty());
+            portage_repo::installed_candidates(root, &atom.category, &atom.package)
+                .iter()
+                .any(|(version, slot, sub_slot)| {
+                    let candidate = format!(
+                        "{}/{}-{version}:{slot}/{sub_slot}",
+                        atom.category, atom.package
+                    );
+                    if !match_from_list(atom_str, &[candidate.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                    {
+                        return false;
+                    }
+                    // The atom's use-deps are enforced against this version's
+                    // own recorded USE.
+                    // Portage: portage/news.py, DisplayInstalledRestriction
+                    match use_deps {
+                        None => true,
+                        Some(uds) => {
+                            let (iuse, use_flags) = portage_repo::installed_pkg_iuse_and_use(
+                                root,
+                                &atom.category,
+                                &atom.package,
+                                version,
+                            );
+                            portage_dep::use_deps_satisfied(uds, &iuse, &use_flags)
+                        }
+                    }
+                })
+        });
+    let profile_ok = profiles.is_empty()
+        || profiles
+            .iter()
+            .any(|value| match context.profile.as_deref() {
+                Some(profile) => {
+                    if is_2x && value.ends_with("/*") {
+                        profile.starts_with(&value[..value.len() - 1])
+                    } else {
+                        profile == *value
+                    }
+                }
+                None => false,
+            });
+    let keyword_ok = keywords.is_empty() || keywords.contains(&context.arch.as_str());
+    installed_ok && profile_ok && keyword_ok
 }

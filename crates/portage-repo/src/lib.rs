@@ -31,6 +31,8 @@ mod repo_config;
 mod resolve;
 mod slot_operator;
 mod updates;
+mod use_display;
+mod use_flags;
 mod visibility;
 mod visibility_use_flip;
 
@@ -55,6 +57,8 @@ pub use repo_config::*;
 pub use resolve::*;
 pub use slot_operator::*;
 pub use updates::*;
+pub use use_display::*;
+pub use use_flags::*;
 pub use visibility::*;
 pub use visibility_use_flip::*;
 

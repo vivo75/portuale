@@ -80,6 +80,24 @@ pub enum MergeKind {
 }
 
 // ---------------------------------------------------------------------------
+// NewsSet
+// ---------------------------------------------------------------------------
+
+/// A **news / security-item selector**: the swappable relevance decision
+/// behind `--check-news` (and a future `@security` GLSA read).
+/// Portage: `portage/news.py` (`Item.isRelevant` / `isValid`); the GLSA
+/// half stays gated on `@security` entering scope (see notes).
+pub trait NewsSelector {
+    /// The `metadata/news/<id>` item id of every valid, not-already-read,
+    /// currently-relevant item this selector reads.
+    fn unread_ids(&self) -> Vec<String>;
+
+    /// The repo whose `metadata/news` this selector reads, for the
+    /// `… news items need reading for repository '<repo>'.` line.
+    fn repo_name(&self) -> String;
+}
+
+// ---------------------------------------------------------------------------
 // Implementation markers (the single implementations that satisfy the
 // contracts today)
 // ---------------------------------------------------------------------------

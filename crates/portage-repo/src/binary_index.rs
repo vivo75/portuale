@@ -132,6 +132,54 @@ pub(crate) fn remote_binary_index_override(
         .and_then(|table| table.read().unwrap().get(pkgdir).cloned())
 }
 
+/// Every package under `<source_root>/var/db/pkg` as a `Packages`-style record
+/// (Portage `bintree._populate_additional` reads the vdb the same way). Keys
+/// mirror what `binary_candidates_from_index` / `read_binary_metadata` read.
+pub(crate) fn quickpkg_direct_index_entries(source_root: &Path) -> Vec<HashMap<String, String>> {
+    let mut out = Vec::new();
+    for pkg in all_installed_packages(source_root) {
+        let (cat, name, ver) = (
+            pkg.category.as_str(),
+            pkg.package.as_str(),
+            pkg.version.as_str(),
+        );
+        let read = |key: &str| read_vdb_string(source_root, cat, name, ver, key);
+        let raw_slot = read("SLOT");
+        let slot = if raw_slot.is_empty() {
+            "0".to_string()
+        } else {
+            raw_slot
+        };
+        let mut entry: HashMap<String, String> = HashMap::new();
+        entry.insert("CPV".to_string(), format!("{cat}/{name}-{ver}"));
+        entry.insert("SLOT".to_string(), slot);
+        for key in [
+            "KEYWORDS",
+            "USE",
+            "IUSE",
+            "LICENSE",
+            "PROPERTIES",
+            "RESTRICT",
+            "DEPEND",
+            "RDEPEND",
+            "BDEPEND",
+            "PDEPEND",
+            "IDEPEND",
+        ] {
+            let v = read(key);
+            if !v.is_empty() {
+                entry.insert(key.to_string(), v);
+            }
+        }
+        let repo = read("repository");
+        if !repo.is_empty() {
+            entry.insert("REPO".to_string(), repo);
+        }
+        out.push(entry);
+    }
+    out
+}
+
 /// Picks one `Packages` entry of `cat/pkg-version` (binpkg-multi-instance
 /// aware). `Some(id)` selects exactly that `BUILD_ID`;
 /// `None` the newest build -- highest `(BUILD_TIME, BUILD_ID)`, Portage

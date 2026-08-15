@@ -17,7 +17,10 @@
 //! JSON line. `--verbose` (`-v`, optional value) and short-flag bundling (`-pv`)
 //! follow Portage's value-taking rules; `--help` wins wherever it appears.
 
+use crate::color::{self, Colorizer};
+
 mod args;
+mod env_config;
 mod news;
 mod removal;
 mod world;
@@ -26,6 +29,7 @@ mod world;
 mod tests;
 
 pub(crate) use args::*;
+pub(crate) use env_config::*;
 pub use news::*;
 pub(crate) use removal::*;
 pub(crate) use world::*;

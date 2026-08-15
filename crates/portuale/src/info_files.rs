@@ -11,6 +11,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+use crate::color::Colorizer;
+
 /// An `already installed` file is not an error.
 const ALREADY_EXISTS: &str = "already exists, for file `";
 

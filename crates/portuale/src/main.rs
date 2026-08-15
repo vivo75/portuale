@@ -7,6 +7,7 @@
 // lists the applets.
 
 mod binpkg;
+mod color;
 mod ebuild_merge;
 mod ebuild_options;
 mod ebuild_phases;

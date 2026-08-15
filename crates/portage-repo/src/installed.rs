@@ -94,6 +94,17 @@ pub fn installed_pkg_repo(root: &Path, category: &str, package: &str, version: &
     }
 }
 
+/// The `SLOT` of the vdb entry named by its directory name `pf`, through the shared
+/// [`vdb_aux_get`] seam: normalised `"slot/sub_slot"`, present-but-invalid reads as `"0"`,
+/// `""` with no `SLOT` file or an unsplittable `pf`. Callers keep their own defaulting.
+// Portage: aux_get, _get_slot_re
+pub fn vdb_entry_slot(root: &Path, category: &str, pf: &str) -> String {
+    let Some((package, version)) = split_pf(pf) else {
+        return String::new();
+    };
+    vdb_aux_get(root, category, &package, &version, "SLOT")
+}
+
 /// Every installed version of `category/package` under `root`.
 pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<String> {
     installed_candidates(root, category, package)

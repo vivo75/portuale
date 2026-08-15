@@ -17,6 +17,7 @@ mod commands;
 mod depend_phase;
 mod environment;
 mod package_env;
+mod runtime_paths;
 mod sandbox;
 mod scheduler_registry;
 
@@ -24,6 +25,7 @@ pub use commands::*;
 pub(crate) use depend_phase::*;
 pub(crate) use environment::*;
 pub(crate) use package_env::*;
+pub(crate) use runtime_paths::*;
 pub use sandbox::*;
 pub(crate) use scheduler_registry::*;
 
