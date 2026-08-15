@@ -24,7 +24,7 @@ use crate::ebuild_merge;
 
 use crate::ebuild_phases;
 
-use portage_dep::{Atom, Blocker, Operator, SlotOperator, parse_atom};
+use portage_dep::{Atom, Blocker, Operator, SlotOperator, match_from_list, parse_atom};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 

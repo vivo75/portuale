@@ -333,6 +333,15 @@ pub struct Candidate {
     pub repo: Option<String>,
 }
 
+impl Candidate {
+    fn full_version(&self) -> String {
+        match &self.revision {
+            Some(r) => format!("{}-r{}", self.version, r),
+            None => self.version.clone(),
+        }
+    }
+}
+
 fn candidate_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -340,6 +349,30 @@ fn candidate_regex() -> &'static Regex {
             r"^(?P<cat>{CAT})/(?P<pkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?(?::(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?:::(?P<repo>{REPO}))?$"
         ))
         .unwrap()
+    })
+}
+
+pub fn parse_candidate(s: &str) -> Option<Candidate> {
+    if let Some(hit) = CANDIDATE_CACHE.with(|c| c.borrow().get(s).cloned()) {
+        return hit;
+    }
+    let parsed = parse_candidate_uncached(s);
+    CANDIDATE_CACHE.with(|c| {
+        c.borrow_mut().insert(s.to_string(), parsed.clone());
+    });
+    parsed
+}
+
+fn parse_candidate_uncached(s: &str) -> Option<Candidate> {
+    let caps = candidate_regex().captures(s)?;
+    Some(Candidate {
+        category: caps.name("cat").unwrap().as_str().to_string(),
+        package: caps.name("pkg").unwrap().as_str().to_string(),
+        version: caps.name("ver").unwrap().as_str().to_string(),
+        revision: caps.name("rev").map(|m| m.as_str().to_string()),
+        slot: caps.name("slot").map(|m| m.as_str().to_string()),
+        sub_slot: caps.name("subslot").map(|m| m.as_str().to_string()),
+        repo: caps.name("repo").map(|m| m.as_str().to_string()),
     })
 }
 
@@ -366,6 +399,106 @@ fn glob_compare_string(version: &str, revision: &Option<String>) -> String {
         Some(r) => format!("{normalized}-r{r}"),
         None => normalized,
     }
+}
+
+/// Version-operator check for a candidate that already matched category/package.
+fn matches_version(atom: &Atom, candidate: &Candidate) -> bool {
+    match atom.operator {
+        Operator::None => true,
+        Operator::Eq => vercmp(&candidate.full_version(), &atom.full_version().unwrap()) == Some(0),
+        // `=*` is a literal prefix match, not vercmp, but only at a component
+        // boundary: "1*" must not match "10".
+        // Portage: lib/portage/dep/__init__.py, match_from_list
+        Operator::EqGlob => {
+            let atom_cmp = glob_compare_string(atom.version.as_ref().unwrap(), &atom.revision);
+            let cand_cmp = glob_compare_string(&candidate.version, &candidate.revision);
+            let Some(rest) = cand_cmp.strip_prefix(&atom_cmp) else {
+                return false;
+            };
+            match rest.chars().next() {
+                None => true,
+                Some('.' | '_' | '-') => true,
+                Some(next) => {
+                    let last_is_digit = atom_cmp
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_ascii_digit());
+                    last_is_digit != next.is_ascii_digit()
+                }
+            }
+        }
+        Operator::Tilde => candidate.version == *atom.version.as_ref().unwrap(),
+        Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
+            match vercmp(&candidate.full_version(), &atom.full_version().unwrap()) {
+                None => false,
+                Some(cmp) => match atom.operator {
+                    Operator::Gt => cmp > 0,
+                    Operator::Ge => cmp >= 0,
+                    Operator::Lt => cmp < 0,
+                    Operator::Le => cmp <= 0,
+                    _ => unreachable!(),
+                },
+            }
+        }
+    }
+}
+
+/// Exact slot match; sub-slot only if the atom has one. A candidate with no
+/// slot always passes.
+///
+/// `slot_operator` is deliberately ignored, as in Portage's `_match_slot`: a
+/// bare `:=`/`:*` has no slot so matches any, and `:slot=` filters like `:slot`.
+fn matches_slot(atom: &Atom, candidate: &Candidate) -> bool {
+    let Some(atom_slot) = &atom.slot else {
+        return true;
+    };
+    let Some(candidate_slot) = &candidate.slot else {
+        return true;
+    };
+    if candidate_slot != atom_slot {
+        return false;
+    }
+    match &atom.sub_slot {
+        None => true,
+        Some(atom_sub) => candidate.sub_slot.as_deref() == Some(atom_sub.as_str()),
+    }
+}
+
+/// Rejects only a candidate carrying a known, different repo; a repo-less
+/// candidate means "unknown" and always passes. An atom without `::repo`
+/// never filters.
+/// Portage: lib/portage/dep/__init__.py, match_from_list (final repo filter)
+fn matches_repo(atom: &Atom, candidate: &Candidate) -> bool {
+    match &atom.repo {
+        None => true,
+        Some(want) => match &candidate.repo {
+            None => true,
+            Some(have) => have == want,
+        },
+    }
+}
+
+/// Returns the candidates (input order) matching `atom_str`; `None` if the
+/// atom doesn't parse. Unparseable candidates are skipped.
+/// Portage: lib/portage/dep/__init__.py, match_from_list
+pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec<&'a str>> {
+    let atom = parse_atom(atom_str)?;
+    Some(
+        candidates
+            .iter()
+            .copied()
+            .filter(|c| {
+                let Some(candidate) = parse_candidate(c) else {
+                    return false;
+                };
+                candidate.category == atom.category
+                    && candidate.package == atom.package
+                    && matches_version(&atom, &candidate)
+                    && matches_slot(&atom, &candidate)
+                    && matches_repo(&atom, &candidate)
+            })
+            .collect(),
+    )
 }
 
 // --- Bounded wildcard atoms (package.mask/.unmask/.accept_keywords) ---

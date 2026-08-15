@@ -1588,6 +1588,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "portage-profile"
+version = "0.1.0"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "portage-repo"
 version = "0.1.0"
 dependencies = [
@@ -1596,6 +1603,7 @@ dependencies = [
  "portage-atom-pubgrub",
  "portage-atom-resolvo",
  "portage-dep",
+ "portage-profile",
  "portage-solver",
  "portage-use-reduce",
  "portage-versions",
@@ -1641,6 +1649,7 @@ dependencies = [
  "libc",
  "md-5",
  "portage-dep",
+ "portage-profile",
  "portage-repo",
  "portage-use-reduce",
  "portage-versions",

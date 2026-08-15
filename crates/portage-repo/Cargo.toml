@@ -13,6 +13,7 @@ md-5 = "0.10"
 portage-versions = { path = "../portage-versions" }
 portage-dep = { path = "../portage-dep" }
 portage-use-reduce = { path = "../portage-use-reduce" }
+portage-profile = { path = "../portage-profile" }
 # Real `vartree._aux_env_search` (`dbapi/vartree.py:1059`): `emerge
 # --info <atom>`'s installed block reads CHOST/CFLAGS/CXXFLAGS/
 # FEATURES/LDFLAGS from the vdb's `environment.bz2`, which real

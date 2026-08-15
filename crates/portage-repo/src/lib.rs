@@ -9,7 +9,15 @@
 //! from `PORTAGE_CONFIGROOT` and `ROOT`, defaulting to `/`.
 // Portage: lib/portage/const.py, lib/portage/repository/config.py, portdbapi.cp_list
 
+mod depclean;
+mod info_pkgs;
+mod installed;
+mod masked_deps;
 mod resolve;
+pub use depclean::*;
+pub use info_pkgs::*;
+pub use installed::*;
+pub use masked_deps::*;
 pub use resolve::*;
 
 use portage_versions::vercmp;

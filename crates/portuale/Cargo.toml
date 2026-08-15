@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 portage-dep = { path = "../portage-dep" }
 portage-repo = { path = "../portage-repo" }
+portage-profile = { path = "../portage-profile" }
 portage-use-reduce = { path = "../portage-use-reduce" }
 # Real `cpv_sort_key()` version ordering for `--unmerge`/`-C`'s own
 # `selected`/`omitted`/`All selected packages` display (real
