@@ -185,6 +185,15 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild
 check "ebuild dispatch prints the ebuild stub" \
     grep -q "ebuild (pilot stub)" <<<"${actual}"
 
+# ebuild CLI surface recognition (see multicall/src/ebuild_options.rs): a
+# real ebuild command this pilot doesn't implement is still accepted as
+# a no-op (real phase execution is deferred, not this), but a genuinely
+# invalid command name is rejected clearly, even with nothing else in
+# the image to fall back on.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild not-a-real-phase 2>&1 || true)
+check "ebuild rejects an unrecognized command by name inside the scratch container" \
+    grep -q 'not one of the valid ebuild commands' <<<"${actual}"
+
 # batch mode inside the minimal container, to make sure stdin plumbing
 # works with no shell/coreutils present to help it along.
 actual=$(printf 'vercmp 1.0 1.0\nververify 1.0_pre2\n' \

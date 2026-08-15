@@ -80,6 +80,16 @@ def emerge_binary(multicall_binary: Path, tmp_path_factory: pytest.TempPathFacto
 
 
 @pytest.fixture(scope="session")
+def ebuild_binary(multicall_binary: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A real `ebuild` symlink to the multicall binary, so tests exercise
+    the same argv[0]-dispatch path a real installation would use."""
+    link_dir = tmp_path_factory.mktemp("ebuild-symlink")
+    link = link_dir / "ebuild"
+    link.symlink_to(multicall_binary)
+    return link
+
+
+@pytest.fixture(scope="session")
 def emerge_pretend_python() -> list[str]:
     return [sys.executable, str(EMERGE_PRETEND_PYTHON_REFERENCE)]
 

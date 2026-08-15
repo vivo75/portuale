@@ -9,7 +9,12 @@
 // pretend.rs). Everything else -- real merges, phase execution via
 // `ebuild`, and anything about `emerge` beyond that one slice -- is still
 // a dry-run/read-only stub (see PROMPT.md, "Scope of the first port").
+// Both applets recognize their real CLI surface by name (see
+// emerge_options.rs/ebuild_options.rs) even where the underlying
+// behavior isn't implemented.
 
+mod ebuild;
+mod ebuild_options;
 mod emerge_options;
 mod pretend;
 
@@ -39,9 +44,7 @@ fn run_emerge(args: &[String]) -> ExitCode {
 }
 
 fn run_ebuild(args: &[String]) -> ExitCode {
-    println!("ebuild (pilot stub): dry-run only, no phase execution yet");
-    println!("args: {args:?}");
-    ExitCode::SUCCESS
+    ebuild::run(args)
 }
 
 fn run(applet: Applet, args: &[String]) -> ExitCode {

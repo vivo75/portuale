@@ -35,13 +35,19 @@ verified (against a fixture shaped exactly like the real Gentoo tree's
 `virtual/pager`) to already resolve correctly through the existing
 category-listing and any-of-group machinery, since a virtual is just an
 ordinary ebuild with an any-of `RDEPEND` -- no separate PROVIDE
-mechanism exists in modern portage. Most recently, the `emerge` CLI
-itself grew a full option surface: every real emerge option and action
-from `lib/_emerge/main.py` is now recognized by name, so using one this
+mechanism exists in modern portage. The `emerge` CLI itself then grew a
+full option surface: every real emerge option and action from
+`lib/_emerge/main.py` is now recognized by name, so using one this
 pilot doesn't implement (of which there are, by design, still many --
 only `--pretend`/`-p` is actually implemented) gets a specific "that's a
 real emerge option, just not implemented here" message instead of a
-generic "unsupported option" one indistinguishable from a typo.
+generic "unsupported option" one indistinguishable from a typo. Most
+recently, `ebuild` got the equivalent treatment for its own, much
+smaller CLI (`bin/ebuild`'s six options and `doebuild()`'s 29 valid
+commands): still a pure no-op stub -- real phase execution stays
+deferred -- but it now recognizes real ebuild syntax and only rejects
+input that's genuinely invalid, rather than the original bare stub,
+which accepted anything at all without looking at it.
 
 ## Layout
 
@@ -72,9 +78,11 @@ PORTING/
                                  real profile/make.conf config (pretend.rs),
                                  recognizes every real emerge option/action by
                                  name (emerge_options.rs) even though only
-                                 --pretend/-p is implemented, and everything
-                                 else (including all of `ebuild`) is still a
-                                 dry-run stub
+                                 --pretend/-p is implemented; `ebuild` recognizes
+                                 its own real options/commands by name
+                                 (ebuild.rs/ebuild_options.rs) but remains a
+                                 pure no-op dry-run stub -- real phase execution
+                                 is still deferred
   python/
     versions_harness.py        thin CLI wrapper around the real portage.versions
     atom_harness.py             thin CLI wrapper around the real portage.dep
@@ -406,6 +414,46 @@ PORTING/
   needing to skip over it). `--help`/`-h` is recognized as an
   unimplemented action like any other; a real, pilot-specific `--help`
   would be its own separate slice.
+
+  **`ebuild`'s own CLI surface**: the same treatment, applied to
+  `ebuild`'s much smaller real surface -- `multicall/src/ebuild_options.rs`
+  transcribes `bin/ebuild`'s own `argparse` setup (six options:
+  `--force`/`--color`/`--debug`/`--version`/`--ignore-default-opts`/
+  `--skip-manifest`, none with short aliases) and, more usefully,
+  `doebuild()`'s own `validcommands` list (29 real commands -- not just
+  the EAPI phase names in `lib/portage/const.py`'s `EBUILD_PHASES`, but
+  the full set `doebuild()` itself accepts, including non-phase actions
+  like `clean`/`digest`/`manifest`/`merge`/`qmerge`/`rpm`/`unmerge`/
+  `depend`/`fetch`/`fetchall`/`cleanrm`/`help`). Unlike `emerge`, where
+  a recognized-but-unimplemented flag is fatal, `ebuild`'s pre-existing
+  behavior was to accept *anything at all* as a silent no-op -- and
+  `PORTING/tests/test_multicall.py`'s own dispatch-proof tests (`ebuild
+  foo-1.0.ebuild merge`, asserting success) depend on that continuing to
+  work. So the split here is different: a real option/command (even
+  though none of them do anything) still succeeds, still prints the
+  `"ebuild (pilot stub)"` marker those tests check for -- only input
+  that isn't valid `ebuild` syntax *at all* (an unrecognized option, a
+  filename not ending in `.ebuild`, an unrecognized command, or missing
+  required args) is now rejected, with exit codes mirroring real
+  `ebuild`'s own conventions (`2` for "missing required args", real
+  argparse's `parser.error()`; `1` for everything else, real `ebuild`'s
+  own `err()` helper and `doebuild()`'s own return value for an
+  unrecognized command). `--color`, the one real value-taking option,
+  needed actual value-skipping this time (unlike `emerge_options.rs`,
+  where it turned out to be unnecessary): since recognized options don't
+  stop parsing here, `ebuild --color y foo.ebuild merge` needs `"y"`
+  correctly consumed as `--color`'s value, or it would be misread as the
+  ebuild file itself. Deliberately out of scope, and deliberately
+  deviating from real `bin/ebuild`'s own quirk: real `ebuild` uses
+  argparse's `parse_known_args`, which silently swallows an unrecognized
+  flag into the positional-args list rather than rejecting it (usually
+  surfacing later as a confusing "does not end with '.ebuild'" error);
+  this pilot reports an unrecognized option immediately and specifically
+  instead, matching `emerge`'s own clearer philosophy. `ebuild` still has
+  no Python reference implementation to contract-test against -- it has
+  no real behavior to keep in sync between two implementations, so
+  `test_multicall.py`'s black-box tests against the real compiled binary
+  are the only test surface, same as before this slice.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -451,10 +499,11 @@ PORTING/
   coexisting instead of one silently overwriting the other, a
   `virtual/*` atom resolving as a dependency with no dedicated code
   involved, and a real-but-unimplemented option like `--deep` being
-  named specifically in the CLI's refusal message) against the fixture,
-  `ebuild`-dispatch, and batch mode inside it, exiting nonzero on any
-  failure -- including proving the fixture's `make.profile` symlink,
-  multi-parent chain, and second
+  named specifically in the CLI's refusal message), `ebuild`-dispatch
+  (still succeeding as a no-op for real, valid syntax like `merge`, but
+  now rejecting a genuinely unrecognized command by name), and batch
+  mode inside it, exiting nonzero on any failure -- including proving
+  the fixture's `make.profile` symlink, multi-parent chain, and second
   `repos.conf` repo all survive the image `COPY` and still resolve
   correctly.
 
@@ -729,11 +778,31 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
     python3 PORTING/python/emerge_pretend_reference.py --pretend dev-libs/newpkg
 ```
 
-Try the `ebuild` stub (unchanged, still a dry-run placeholder):
+Try the `ebuild` stub (still a dry-run placeholder -- no real phase
+execution -- but it now recognizes real ebuild syntax; see
+ebuild.rs/ebuild_options.rs):
 
 ```sh
 ln -sf "$(realpath PORTING/rust/target/release/multicall)" /tmp/ebuild
+
+# a real, valid ebuild command -- still just a no-op stub
 /tmp/ebuild foo-1.0.ebuild merge
+# ebuild (pilot stub): dry-run only, no phase execution yet (see
+# PROMPT.md's "Deferred: ebuild phase execution")
+# ebuild file: "foo-1.0.ebuild"
+# commands: ["merge"]
+
+# real invocations often chain several phases in one call
+/tmp/ebuild foo-1.0.ebuild clean compile install
+
+# a real, value-taking option (--color y) is recognized and its value
+# correctly skipped, not misread as the ebuild file
+/tmp/ebuild --color y foo-1.0.ebuild merge
+
+# a command that isn't one of doebuild()'s own valid commands is
+# rejected, not silently accepted like the original bare stub did
+/tmp/ebuild foo-1.0.ebuild not-a-real-phase
+# ebuild: "not-a-real-phase" is not one of the valid ebuild commands
 ```
 
 Run the contract suite (builds the Rust binaries itself; requires `cargo`
