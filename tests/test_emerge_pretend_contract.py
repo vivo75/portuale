@@ -88,6 +88,11 @@ CASES = [
     ("multi-atom: all requested atoms already installed", ["--pretend", "dev-libs/samepkg", "dev-libs/samepkg"], 0),
     ("multi-atom: a nonexistent atom aborts the whole run, first-bad-wins", ["--pretend", "dev-libs/does-not-exist", "dev-libs/newpkg"], 1),
     ("multi-atom: a later nonexistent atom still aborts the whole run", ["--pretend", "dev-libs/newpkg", "dev-libs/does-not-exist"], 1),
+    ("--verbose is now implemented, not rejected", ["--pretend", "--verbose", "dev-libs/newpkg"], 0),
+    ("-v short alias is now implemented, not rejected", ["--pretend", "-v", "dev-libs/newpkg"], 0),
+    ("without --verbose, USE= is never shown even for a package with IUSE", ["--pretend", "dev-libs/useflagpkg"], 0),
+    ("-v on a package with no IUSE at all: no USE= line", ["--pretend", "-v", "dev-libs/newpkg"], 0),
+    ("-v combined with a real-but-unimplemented option: still rejected", ["--pretend", "-v", "--deep", "dev-libs/newpkg"], 2),
 ]
 
 
@@ -522,6 +527,57 @@ def test_blocker_top_level_atom_is_rejected_not_silently_dropped(emerge_binary, 
     )
 
 
+def test_verbose_shows_use_flags_gated_by_profile_and_make_conf(emerge_binary, fixture_env):
+    """dev-libs/useflagpkg declares IUSE="foo missingflag"; the fixture
+    profile chain resolves "foo" enabled and "missingflag" disabled (see
+    portage-profile's own fixture test) -- -v must show both, enabled
+    plain and disabled "-"-prefixed, alphabetically ordered. Without -v,
+    no USE= appears at all, even though the same data was computed."""
+    verbose = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert verbose.returncode == 0
+    assert verbose.stdout.splitlines()[0] == '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+
+    quiet = _run([str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg"], fixture_env)
+    assert quiet.returncode == 0
+    assert quiet.stdout.splitlines()[0] == "[ebuild  N] dev-libs/useflagpkg-1.0"
+    assert "USE=" not in quiet.stdout
+
+
+def test_verbose_use_flags_reflect_package_use_overrides(emerge_binary, fixture_env):
+    """Reuses the package.use fixtures from the package.use slice:
+    packageuseenablepkg's own IUSE="pkguseflag" is enabled only via a
+    */packageuseenablepkg wildcard entry (off globally), and
+    packageusedisablepkg's own IUSE="foo" is disabled only via a
+    dev-libs/packageusedisablepkg entry (on globally) -- -v's USE=
+    display must reflect the same per-package effective_use_flags result
+    dependency recursion itself already uses, not the global set."""
+    enable = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/packageuseenablepkg"], fixture_env
+    )
+    assert enable.stdout.splitlines()[0] == (
+        '[ebuild  N] dev-libs/packageuseenablepkg-1.0  USE="pkguseflag"'
+    )
+
+    disable = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/packageusedisablepkg"], fixture_env
+    )
+    assert disable.stdout.splitlines() == [
+        '[ebuild  N] dev-libs/packageusedisablepkg-1.0  USE="-foo"'
+    ]
+
+
+def test_verbose_on_a_package_with_no_iuse_shows_no_use_line(emerge_binary, fixture_env):
+    """dev-libs/newpkg declares no IUSE at all -- -v must not print an
+    empty USE="" line, matching real portage's own "nothing to show"
+    behavior (_create_use_string returns "" when there's nothing to
+    join)."""
+    result = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/newpkg-1.0"]
+
+
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
     """virtual/texteditor is shaped exactly like a real virtual (e.g.
     virtual/pager in the real Gentoo tree, confirmed by inspection): an
@@ -567,7 +623,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--deep" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p is implemented so far; see "
+        "implemented in this pilot (only --pretend/-p and --verbose/-v are implemented so far; see "
         "PROMPT.md)"
     )
 
@@ -581,7 +637,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p is implemented so far; see "
+        "implemented in this pilot (only --pretend/-p and --verbose/-v are implemented so far; see "
         "PROMPT.md)"
     )
 
@@ -595,7 +651,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     assert result.returncode == 2
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
-        "implemented in this pilot (only --pretend/-p is implemented so far; see "
+        "implemented in this pilot (only --pretend/-p and --verbose/-v are implemented so far; see "
         "PROMPT.md)"
     )
     assert result.stderr.strip() == expected

@@ -64,6 +64,32 @@ use std::process::ExitCode;
 /// would happen" spirit: v1 neither refuses nor changes the exit code for
 /// a blocker match, strong or weak (see resolve_pretend_graph's doc
 /// comment).
+/// `  USE="flag1 -flag2"` (two leading spaces, matching real `--pretend
+/// -v`'s own line format), or an empty string when `--verbose` wasn't
+/// given or this entry has no IUSE-declared flags at all -- see
+/// `GraphEntry::use_flags_display`'s doc comment. Real portage's own USE
+/// display additionally colorizes and diffs against the previously
+/// installed version's IUSE (`*`/`%` markers) and groups by USE_EXPAND;
+/// this pilot shows none of that, just the plain enabled/disabled set,
+/// alphabetically sorted.
+fn use_suffix(entry: &GraphEntry, verbose: bool) -> String {
+    if !verbose || entry.use_flags_display.is_empty() {
+        return String::new();
+    }
+    let flags: Vec<String> = entry
+        .use_flags_display
+        .iter()
+        .map(|(flag, enabled)| {
+            if *enabled {
+                flag.clone()
+            } else {
+                format!("-{flag}")
+            }
+        })
+        .collect();
+    format!("  USE=\"{}\"", flags.join(" "))
+}
+
 fn print_blockers(entry: &GraphEntry, owner_version: &str) {
     for b in &entry.blockers {
         let strength = if b.strong { "hard" } else { "soft" };
@@ -82,11 +108,14 @@ fn print_blockers(entry: &GraphEntry, owner_version: &str) {
 pub fn run(args: &[String]) -> ExitCode {
     let mut atom_args: Vec<&str> = Vec::new();
     let mut pretend = false;
+    let mut verbose = false;
 
     for arg in args {
         let arg = arg.as_str();
         if arg == "--pretend" || arg == "-p" {
             pretend = true;
+        } else if arg == "--verbose" || arg == "-v" {
+            verbose = true;
         } else if !arg.starts_with('-') {
             atom_args.push(arg);
         } else if let Some(found) = emerge_options::lookup(arg) {
@@ -102,8 +131,8 @@ pub fn run(args: &[String]) -> ExitCode {
             };
             eprintln!(
                 "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
-                 implemented in this pilot (only --pretend/-p is implemented so far; \
-                 see PROMPT.md)",
+                 implemented in this pilot (only --pretend/-p and --verbose/-v are \
+                 implemented so far; see PROMPT.md)",
                 found.canonical
             );
             return ExitCode::from(2);
@@ -173,13 +202,20 @@ pub fn run(args: &[String]) -> ExitCode {
     for entry in entries {
         match &entry.outcome {
             PretendOutcome::New { version } => {
-                println!("[ebuild  N] {}/{}-{version}", entry.category, entry.package);
+                println!(
+                    "[ebuild  N] {}/{}-{version}{}",
+                    entry.category,
+                    entry.package,
+                    use_suffix(entry, verbose)
+                );
                 print_blockers(entry, version);
             }
             PretendOutcome::Upgrade { from, to } => {
                 println!(
-                    "[ebuild  U] {}/{}-{to} (upgrade from {from})",
-                    entry.category, entry.package
+                    "[ebuild  U] {}/{}-{to} (upgrade from {from}){}",
+                    entry.category,
+                    entry.package,
+                    use_suffix(entry, verbose)
                 );
                 print_blockers(entry, to);
             }

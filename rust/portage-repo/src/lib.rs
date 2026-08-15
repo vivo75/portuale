@@ -552,6 +552,14 @@ pub struct GraphEntry {
     /// comment on multi-slot support), `None` for `AlreadyInstalled`/
     /// `NoVisibleCandidate`.
     pub slot: Option<String>,
+    /// This package's own IUSE-declared flags (default markers stripped),
+    /// each paired with whether `effective_use_flags` resolved it enabled
+    /// -- alphabetically sorted, matching real `--pretend -v`'s own
+    /// ordering. Only ever non-empty for `New`/`Upgrade` entries whose
+    /// md5-cache metadata was readable, same as `blockers`. Always
+    /// computed regardless of `--verbose` (cheap; the CLI layer decides
+    /// whether to print it) -- see pretend.rs.
+    pub use_flags_display: Vec<(String, bool)>,
 }
 
 /// A blocker atom found while flattening one package's own DEPEND/RDEPEND,
@@ -711,7 +719,11 @@ pub struct GraphResult {
 /// Each package's own `package.use` overrides (see `effective_use_flags`)
 /// only affect how *that* package's own DEPEND/RDEPEND are flattened --
 /// they never leak into a sibling or dependency's resolution, matching
-/// real portage's per-package USE.
+/// real portage's per-package USE. The same already-computed
+/// `effective_use_flags` result, filtered down to just this package's own
+/// IUSE-declared flags, is also attached to every New/Upgrade entry as
+/// `GraphEntry::use_flags_display`, for `--pretend -v`'s USE="..." display
+/// -- see pretend.rs.
 ///
 /// KNOWN, DOCUMENTED SCOPE CUTS (all confirmed with the user before
 /// implementing):
@@ -852,6 +864,7 @@ pub fn resolve_pretend_graph(
                 outcome,
                 blockers: Vec::new(),
                 slot: None,
+                use_flags_display: Vec::new(),
             });
             continue;
         };
@@ -901,13 +914,15 @@ pub fn resolve_pretend_graph(
             }
             continue;
         }
-        resolved_slots.insert(slot_key, entries.len());
+        let entry_idx = entries.len();
+        resolved_slots.insert(slot_key, entry_idx);
         entries.push(GraphEntry {
             category: key.0.clone(),
             package: key.1.clone(),
             outcome,
             blockers: Vec::new(),
             slot: Some(slot.clone()),
+            use_flags_display: Vec::new(),
         });
 
         let pf = format!("{}-{version}", key.1);
@@ -929,6 +944,24 @@ pub fn resolve_pretend_graph(
             &key.0,
             &key.1,
         );
+
+        // IUSE's own "+flag"/"-flag" default markers only matter for
+        // resolving a flag's default when nothing else decides it --
+        // already handled upstream, wherever `use_flags` itself came
+        // from -- so display only needs the bare flag name, paired with
+        // whatever `use_flags` (the real resolved set) says.
+        if let Some(iuse) = metadata.get("IUSE") {
+            let mut display: Vec<(String, bool)> = iuse
+                .split_whitespace()
+                .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+                .map(|flag| {
+                    let enabled = use_flags.contains(&flag);
+                    (flag, enabled)
+                })
+                .collect();
+            display.sort_by(|a, b| a.0.cmp(&b.0));
+            entries[entry_idx].use_flags_display = display;
+        }
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat(
             &tokens,
@@ -1683,6 +1716,7 @@ mod tests {
             },
             blockers: Vec::new(),
             slot: Some("0".to_string()),
+            use_flags_display: Vec::new(),
         }
     }
 

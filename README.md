@@ -511,6 +511,38 @@ PORTING/
   to still produce the same "invalid atom" outcome Rust's own `parse_atom`
   would (returning `None` outright for that input) -- verified empirically
   atom-by-atom against `atom-harness parse` rather than assumed.
+
+  **USE flags in `--pretend -v` output**: `--verbose`/`-v` moves from
+  "recognized, not implemented" to a second real, implemented flag
+  alongside `--pretend`/`-p` -- grounded against real portage's own gating
+  logic (`lib/_emerge/resolver/output_helpers.py`'s
+  `print_use_string = self.verbosity != 1 or "--verbose" in myopts`):
+  USE flags are off by default and only shown with `-v`, exactly like real
+  `emerge`. Each `New`/`Upgrade` `GraphEntry` now carries
+  `use_flags_display`, the already-computed `effective_use_flags` result
+  (the same set dependency recursion itself flattens DEPEND/RDEPEND
+  against) filtered down to just this package's own IUSE-declared flags
+  -- IUSE is newly read from the same md5-cache metadata DEPEND/RDEPEND
+  already come from, with its own `+`/`-` default markers stripped to get
+  the bare flag name (a flag's default only matters for resolving USE
+  when nothing else decides it, which is already handled wherever
+  `effective_use_flags` gets its input -- display only needs the name and
+  the final enabled/disabled verdict). This is always computed, never
+  gated on `--verbose` itself, keeping `resolve_pretend_graph`'s behavior
+  otherwise identical either way; the CLI layer alone decides whether to
+  print it, appending `  USE="flag1 -flag2"` (two leading spaces,
+  alphabetically sorted, enabled plain / disabled `-`-prefixed) after the
+  package spec on its `[ebuild ...]` line, or nothing at all for a
+  package with no IUSE. Real portage's own USE display is considerably
+  more elaborate than this -- colorized, diffed against the previously
+  installed version's IUSE with `*`/`%` change markers, forced/masked
+  flags in parens, `USE_EXPAND` grouping (`VIDEO_CARDS`, etc.) -- none of
+  which this pilot has the underlying data (or terminal-color
+  infrastructure, unused anywhere else in this pilot) to reproduce; v1
+  shows only the plain enabled/disabled set, which is a real, useful
+  subset rather than an invented one, matching the "documented,
+  simplified subset" spirit of every other output-formatting decision in
+  this pilot.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -846,12 +878,23 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg:0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend '!!dev-libs/newpkg'
 # emerge (pilot v1): "!!dev-libs/newpkg" is a blocker, not a valid emerge target  (exit 2)
 
+# --verbose/-v is real and implemented: USE flags are off by default,
+# same as real emerge, and only shown with -v -- alphabetically sorted,
+# limited to this package's own IUSE (foo enabled, missingflag disabled,
+# per the fixture profile chain)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/useflagpkg
+# [ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
+# [ebuild  N] dev-libs/newpkg-1.0
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useflagpkg
+# [ebuild  N] dev-libs/useflagpkg-1.0   (no -v: no USE= at all)
+# [ebuild  N] dev-libs/newpkg-1.0
+
 # CLI surface recognition: a real emerge option this pilot doesn't
 # implement is named specifically, not lumped in with a typo
 /tmp/emerge --deep dev-libs/newpkg
 # emerge (pilot v1): option "--deep" is a real emerge option, but is not
-# implemented in this pilot (only --pretend/-p is implemented so far;
-# see PROMPT.md)
+# implemented in this pilot (only --pretend/-p and --verbose/-v are
+# implemented so far; see PROMPT.md)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message

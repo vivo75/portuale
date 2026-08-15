@@ -632,7 +632,7 @@ def resolve_blockers(root, pending, entries):
         candidates = list(
             installed_candidates(root, pb["target_category"], pb["target_package"])
         )
-        for category, package, outcome, _blockers, slot in entries:
+        for category, package, outcome, _blockers, slot, _use_display in entries:
             if (category, package) != target_key:
                 continue
             if outcome[0] == "new":
@@ -673,16 +673,18 @@ def resolve_pretend_graph(config_root, root, atoms, config):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
     Returns a dict with keys "entries" (a list of (category, package,
-    outcome, blockers, slot) tuples, one per distinct category/package/
-    slot combination visited, in discovery order -- unlike a package name
-    alone, two DIFFERENT slots of the same package are both real,
-    independent entries, mirroring how real portage genuinely allows
-    multiple slots of the same package to coexist in one merge list) and
-    "slot_conflicts" (a list of conflict dicts -- see below). `blockers`
-    is a list of conflict dicts (see resolve_blockers), `slot` is the
-    resolved SLOT string; both are only ever non-empty/non-None for
-    New/Upgrade entries. See the module doc comment for the recursion's
-    documented scope cuts.
+    outcome, blockers, slot, use_display) tuples, one per distinct
+    category/package/slot combination visited, in discovery order --
+    unlike a package name alone, two DIFFERENT slots of the same package
+    are both real, independent entries, mirroring how real portage
+    genuinely allows multiple slots of the same package to coexist in one
+    merge list) and "slot_conflicts" (a list of conflict dicts -- see
+    below). `blockers` is a list of conflict dicts (see resolve_blockers),
+    `slot` is the resolved SLOT string, `use_display` is a sorted list of
+    (flag, enabled) pairs for this package's own IUSE-declared flags (for
+    --pretend -v's USE="..." display -- see run() below); all three are
+    only ever non-empty/non-None for New/Upgrade entries. See the module
+    doc comment for the recursion's documented scope cuts.
 
     `atoms` seeds the BFS queue together, in the order given, before any
     dependency is ever pushed -- so all of them are dequeued and resolved
@@ -766,7 +768,7 @@ def resolve_pretend_graph(config_root, root, atoms, config):
             if key in other_outcomes:
                 continue
             other_outcomes.add(key)
-            entries.append((category, package, outcome, [], None))
+            entries.append((category, package, outcome, [], None, []))
             continue
 
         # The resolved version may have come from any of `repos` (not
@@ -807,8 +809,9 @@ def resolve_pretend_graph(config_root, root, atoms, config):
                     }
                 )
             continue
-        resolved_slots[slot_key] = len(entries)
-        entries.append((category, package, outcome, [], slot))
+        entry_idx = len(entries)
+        resolved_slots[slot_key] = entry_idx
+        entries.append((category, package, outcome, [], slot, []))
 
         pf = f"{package}-{version}"
         try:
@@ -820,6 +823,18 @@ def resolve_pretend_graph(config_root, root, atoms, config):
         use_flags = effective_use_flags(
             config["use_flags"], config["package_use"], candidate_str, category, package
         )
+        # IUSE's own "+flag"/"-flag" default markers only matter for
+        # resolving a flag's default when nothing else decides it --
+        # already handled upstream, wherever use_flags itself came from --
+        # so display only needs the bare flag name, paired with whatever
+        # use_flags (the real resolved set) says. Mirrors
+        # portage-repo/src/lib.rs's resolve_pretend_graph exactly.
+        if metadata.get("IUSE"):
+            display = sorted(
+                (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
+                for flag in metadata["IUSE"].split()
+            )
+            entries[entry_idx] = (category, package, outcome, [], slot, display)
         try:
             flat_deps = use_reduce(depstr, flat=True, uselist=use_flags)
         except InvalidDependString:
@@ -852,7 +867,7 @@ def resolve_pretend_graph(config_root, root, atoms, config):
     # `entries.iter_mut().find(...)`, which also attaches to the first
     # match.
     blockers_by_owner = {}
-    for category, package, _o, blockers, _slot in entries:
+    for category, package, _o, blockers, _slot, _use_display in entries:
         blockers_by_owner.setdefault((category, package), blockers)
     for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
         blockers_by_owner[owner_key].append(conflict)
@@ -879,9 +894,9 @@ def _parse_atom(atom_str):
 # `argument_options` dict, and `actions` frozenset), so that using any
 # real emerge flag this pilot doesn't implement yet produces a clear
 # "recognized, but not implemented" message -- distinct from a
-# genuinely unknown/misspelled flag. Only --pretend/-p is actually
-# implemented (see run() below); every table here exists purely for
-# recognition, not behavior. Mirrors
+# genuinely unknown/misspelled flag. Only --pretend/-p and --verbose/-v
+# are actually implemented (see run() below); every table here exists
+# purely for recognition, not behavior. Mirrors
 # PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
 # three tables exactly, so both sides report identical text for
 # identical input (verified by the shared contract suite).
@@ -1016,7 +1031,6 @@ _VALUE_OPTIONS = [
     ("--usepkg", "-k"),
     ("--usepkgonly", "-K"),
     ("--usepkg-exclude-live", None),
-    ("--verbose", "-v"),
     ("--verbose-missing-ebuilds", None),
     ("--verbose-slot-rebuilds", None),
     ("--with-test-deps", None),
@@ -1096,10 +1110,13 @@ def _has_unsupported_top_level_features(a):
 def run(args):
     atom_args = []
     pretend = False
+    verbose = False
 
     for arg in args:
         if arg in ("--pretend", "-p"):
             pretend = True
+        elif arg in ("--verbose", "-v"):
+            verbose = True
         elif not arg.startswith("-"):
             atom_args.append(arg)
         else:
@@ -1109,8 +1126,8 @@ def run(args):
                 kind = "action" if category == "action" else "option"
                 print(
                     f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
-                    "but is not implemented in this pilot (only --pretend/-p is "
-                    "implemented so far; see PROMPT.md)",
+                    "but is not implemented in this pilot (only --pretend/-p and "
+                    "--verbose/-v are implemented so far; see PROMPT.md)",
                     file=sys.stderr,
                 )
             else:
@@ -1167,13 +1184,29 @@ def run(args):
                 f'("{b["atom_str"]}")'
             )
 
-    for category, package, outcome, blockers, _slot in entries:
+    def use_suffix(use_display):
+        # "  USE=\"flag1 -flag2\"", matching real --pretend -v's own line
+        # format, or "" when --verbose wasn't given or there's no
+        # IUSE-declared flags at all. Real portage's own USE display
+        # additionally colorizes and diffs against the previously
+        # installed version's IUSE (*/% markers) and groups by
+        # USE_EXPAND; this pilot shows none of that, just the plain
+        # enabled/disabled set, alphabetically sorted.
+        if not verbose or not use_display:
+            return ""
+        flags = [flag if enabled else f"-{flag}" for flag, enabled in use_display]
+        return '  USE="{}"'.format(" ".join(flags))
+
+    for category, package, outcome, blockers, _slot, use_display in entries:
         tag = outcome[0]
         if tag == "new":
-            print(f"[ebuild  N] {category}/{package}-{outcome[1]}")
+            print(f"[ebuild  N] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
-            print(f"[ebuild  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})")
+            print(
+                f"[ebuild  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})"
+                f"{use_suffix(use_display)}"
+            )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "already_installed":
             # Already-satisfied dependencies aren't shown, matching real

@@ -3,9 +3,10 @@
 // `argument_options` dict, and `actions` frozenset), so that using any
 // real emerge flag this pilot doesn't implement yet produces a clear
 // "recognized, but not implemented" message -- distinct from a
-// genuinely unknown/misspelled flag. Only `--pretend`/`-p` is actually
-// implemented (see pretend.rs); every table here exists purely for
-// recognition, not behavior. Mirrored exactly in
+// genuinely unknown/misspelled flag. Only `--pretend`/`-p` and
+// `--verbose`/`-v` are actually implemented (see pretend.rs); every
+// table here exists purely for recognition, not behavior. Mirrored
+// exactly in
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
 // (verified by the shared contract suite).
@@ -42,9 +43,9 @@ pub struct Lookup {
 
 /// Real boolean (no-argument) options, from `main.py`'s `options` list
 /// plus its two `longopt_aliases` entries (`--cols`, `--skip-first`) --
-/// `--pretend`/`-p` itself is deliberately excluded, since it's
-/// implemented and handled directly by the caller, not through this
-/// "not implemented" table.
+/// `--pretend`/`-p` and `--verbose`/`-v` are both deliberately excluded,
+/// since they're implemented and handled directly by the caller, not
+/// through this "not implemented" table.
 pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--alphabetical", None),
     ("--ask-enter-invalid", None),
@@ -169,7 +170,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--usepkg", Some("-k")),
     ("--usepkgonly", Some("-K")),
     ("--usepkg-exclude-live", None),
-    ("--verbose", Some("-v")),
     ("--verbose-missing-ebuilds", None),
     ("--verbose-slot-rebuilds", None),
     ("--with-test-deps", None),
