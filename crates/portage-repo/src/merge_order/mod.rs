@@ -15,12 +15,15 @@
 
 use std::cmp::Reverse;
 mod prelude;
+mod priority;
 pub(crate) use prelude::*;
+pub use priority::*;
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use std::path::Path;
 
 use crate::{
-    CandidateSource, RepoConfig, all_installed_packages, read_vdb_flag_set, read_vdb_slot,
+    BlockerSatisfiedBy, CandidateSource, CircularDepChild, GraphEntry, PretendOutcome, RepoConfig,
+    RootCp, VisibilityProvenance, all_installed_packages, read_vdb_flag_set, read_vdb_slot,
 };

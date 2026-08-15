@@ -11,6 +11,7 @@
 
 pub mod md5_dict;
 mod merge_order;
+mod resolver_trace;
 
 mod binary_index;
 mod binpkg_use;
@@ -24,12 +25,14 @@ mod installed;
 mod license;
 mod masked_deps;
 mod metadata_cache;
+mod provenance;
 mod reinstall;
 mod repo_config;
 mod resolve;
 mod slot_operator;
 mod updates;
 mod visibility;
+mod visibility_use_flip;
 
 #[cfg(test)]
 mod tests;
@@ -46,12 +49,16 @@ pub use installed::*;
 pub(crate) use license::*;
 pub use masked_deps::*;
 pub use metadata_cache::*;
+pub use provenance::*;
 pub use reinstall::*;
 pub use repo_config::*;
 pub use resolve::*;
 pub use slot_operator::*;
 pub use updates::*;
 pub use visibility::*;
+pub use visibility_use_flip::*;
+
+pub use merge_order::{DepEdge, DepPriority};
 
 use portage_versions::vercmp;
 

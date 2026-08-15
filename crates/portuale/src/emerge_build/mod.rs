@@ -10,6 +10,6 @@ mod tests;
 
 use crate::ebuild_phases;
 
-use portage_repo::{Candidate, CandidateSource, RepoConfig};
+use portage_repo::{Candidate, CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
 
 use std::path::{Path, PathBuf};

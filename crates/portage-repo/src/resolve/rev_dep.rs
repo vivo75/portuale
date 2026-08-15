@@ -47,3 +47,18 @@ pub(crate) fn built_slot_operator_rebuild_trigger(atom_str: &str, existing_str: 
     let relaxed = relax_built_slot_operator_atom(atom_str);
     portage_dep::match_from_list(&relaxed, &[existing_str]).is_some_and(|m| !m.is_empty())
 }
+
+/// One installed consumer's recorded atom broken by this pass's upgrade, with
+/// the consumer attached (Portage's nomerge node, as a triple).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RevDepPin {
+    /// The upgraded `category/package`.
+    pub(crate) cp: (String, String),
+    /// The consumer's recorded atom, normalised by
+    /// `reverse_dep_constraint_atom`.
+    pub(crate) atom: String,
+    /// Verbatim text (with `[use]` deps), for notices only.
+    pub(crate) raw_atom: String,
+    /// The installed consumer `(category, package, version)`.
+    pub(crate) consumer: (String, String, String),
+}
