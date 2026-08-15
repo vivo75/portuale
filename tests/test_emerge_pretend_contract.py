@@ -5,8 +5,12 @@ resolve_pretend_graph, the profile/make.conf -> real USE/ACCEPT_KEYWORDS
 follow-up in portage-profile, the package.mask/.unmask/.accept_keywords/
 .use follow-up on top of that, the blocker-reporting follow-up on top of
 that, the overlays (multiple repos.conf repos) follow-up on top of that,
-and the slot-conflict-reporting follow-up on top of that). Drives the
-real compiled `emerge` binary (multicall, dispatched via a real symlink
+and the slot-conflict-reporting follow-up on top of that -- plus a
+virtuals check confirming, against a fixture shaped exactly like the
+real virtual/pager, that virtual/* atoms need no dedicated code at all:
+they're ordinary packages with an any-of RDEPEND, already covered by
+existing machinery). Drives the real compiled `emerge` binary
+(multicall, dispatched via a real symlink
 -- not a neutral harness, since emerge is an actual product surface per
 PROMPT.md's testing decision) and the Python reference implementation
 identically, against the synthetic fixture tree at PORTING/fixtures
@@ -60,6 +64,8 @@ CASES = [
     ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
     ("slot conflict: two incompatible version constraints on one slot", ["--pretend", "dev-libs/slotconflictparent"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
+    ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
+    ("virtual: resolved as a dependency", ["--pretend", "dev-libs/virtualconsumerpkg"], 0),
 ]
 
 
@@ -370,3 +376,37 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
         "[ebuild  N] dev-libs/multislotpkg-2.0",
     ]
     assert "[slot conflict]" not in result.stdout
+
+
+def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
+    """virtual/texteditor is shaped exactly like a real virtual (e.g.
+    virtual/pager in the real Gentoo tree, confirmed by inspection): an
+    ordinary ebuild whose RDEPEND is a "|| ( ... )" any-of group of real
+    providers, no PROVIDE mechanism or special resolution involved. It
+    must resolve through the exact same category + any-of-group
+    machinery as any other package -- v1's documented any-of behavior
+    (resolve every alternative, only show the one that would newly
+    merge) picks dev-libs/newpkg (New) over dev-libs/samepkg (already
+    installed, stays silent)."""
+    result = _run([str(emerge_binary)], ["--pretend", "virtual/texteditor"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] virtual/texteditor-0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_virtual_is_resolved_as_a_dependency(emerge_binary, fixture_env):
+    """dev-libs/virtualconsumerpkg RDEPENDs on virtual/texteditor --
+    proving a virtual/ atom extracted from another package's own
+    DEPEND/RDEPEND resolves identically to the top-level case above,
+    with no virtual-specific code path anywhere in this pilot."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/virtualconsumerpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/virtualconsumerpkg-1.0",
+        "[ebuild  N] virtual/texteditor-0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]

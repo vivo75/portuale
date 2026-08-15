@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture virtual, shaped exactly like a real one (e.g. virtual/pager): an ordinary ebuild whose RDEPEND is an any-of group of real providers -- no PROVIDE mechanism, no special resolution
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=|| ( dev-libs/newpkg dev-libs/samepkg )
+SLOT=0
+_md5_=0000000000000000000000000000000

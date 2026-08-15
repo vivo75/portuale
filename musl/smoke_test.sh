@@ -165,6 +165,15 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend lets different slots of the same package coexist inside the scratch container" \
     test "${actual}" = "$(printf '[ebuild  N] dev-libs/multislotparent-1.0\n[ebuild  N] dev-libs/multislotpkg-1.0\n[ebuild  N] dev-libs/multislotpkg-2.0')"
 
+# emerge --pretend against a virtual (see dev-libs/virtualconsumerpkg and
+# virtual/texteditor, shaped exactly like the real virtual/pager): needs
+# no dedicated code, just the ordinary category + any-of-group machinery.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/virtualconsumerpkg)
+check "emerge --pretend resolves a virtual as a dependency inside the scratch container" \
+    test "${actual}" = "$(printf '[ebuild  N] dev-libs/virtualconsumerpkg-1.0\n[ebuild  N] virtual/texteditor-0\n[ebuild  N] dev-libs/newpkg-1.0')"
+
 actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
 check "ebuild dispatch prints the ebuild stub" \
     grep -q "ebuild (pilot stub)" <<<"${actual}"

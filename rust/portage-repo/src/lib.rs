@@ -28,7 +28,7 @@
 //     `--pretend` work without the bash dependency that real phase
 //     execution will eventually require (see PROMPT.md's "Deferred:
 //     ebuild phase execution").
-//   - No slot conflicts, no virtuals, no backtracking.
+//   - No virtuals, no backtracking.
 //
 // USE/ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use are no
 // longer hardcoded: they're computed by `portage_profile::resolve_config`
@@ -1137,6 +1137,35 @@ mod tests {
             result.entries[1..].iter().map(|e| e.slot.clone()).collect();
         assert_eq!(slots, vec![Some("0".to_string()), Some("1".to_string())]);
         assert!(result.slot_conflicts.is_empty());
+    }
+
+    #[test]
+    fn fixture_virtual_resolves_through_ordinary_category_and_any_of_machinery() {
+        // virtual/texteditor is shaped exactly like a real virtual (e.g.
+        // virtual/pager in the real Gentoo tree, confirmed by
+        // inspection): an ordinary ebuild whose RDEPEND is a
+        // "|| ( ... )" any-of group of real providers -- no PROVIDE
+        // mechanism, no dedicated virtuals resolution code anywhere in
+        // this pilot. Both alternatives resolve (v1's documented any-of
+        // behavior): dev-libs/newpkg as New, dev-libs/samepkg as
+        // AlreadyInstalled (multicall's own printing layer is what hides
+        // already-installed dependencies from --pretend's stdout, not
+        // resolve_pretend_graph itself).
+        let entries = graph_entries_real("virtual/texteditor");
+        let full_names: Vec<String> = entries
+            .iter()
+            .map(|e| format!("{}/{}", e.category, e.package))
+            .collect();
+        assert_eq!(
+            full_names,
+            vec!["virtual/texteditor", "dev-libs/newpkg", "dev-libs/samepkg"]
+        );
+        assert_eq!(
+            entries[2].outcome,
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
     }
 
     #[test]

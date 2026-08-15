@@ -30,7 +30,12 @@ enforce" way blockers are, while two atoms simply requesting
 *different* slots of the same package now correctly resolve as two
 independent, coexisting entries instead of one silently overwriting the
 other, matching how real portage genuinely allows multiple slots of the
-same package side by side.
+same package side by side. The most recent addition needed no new code
+at all: `virtual/*` atoms, verified (against a fixture shaped exactly
+like the real Gentoo tree's `virtual/pager`) to already resolve
+correctly through the existing category-listing and any-of-group
+machinery, since a virtual is just an ordinary ebuild with an any-of
+`RDEPEND` -- no separate PROVIDE mechanism exists in modern portage.
 
 ## Layout
 
@@ -348,6 +353,24 @@ PORTING/
   `resolve_blockers` be fixed to check *every* graph-resolved slot of a
   blocker's target package, not just whichever one happened to be
   recorded last.
+
+  **Virtuals**: unlike every other follow-up in this series, this one is
+  pure verification -- no resolution code changed at all. Real
+  `virtual/*` packages (checked directly against the vendored Gentoo
+  tree's own `virtual/pager`, not assumed) turn out to be nothing more
+  than ordinary ebuilds in a category named `virtual`, whose `RDEPEND`
+  is a plain `|| ( ... )` any-of group of real providers -- there is no
+  separate PROVIDE-based virtuals mechanism in modern portage for this
+  pilot to have missed. Since `portage-repo` already treats every
+  category identically (no special-casing anywhere) and already
+  resolves every alternative of an any-of group (the documented v1
+  simplification from the recursion follow-up), a `virtual/foo` atom --
+  whether given directly or reached via another package's own
+  DEPEND/RDEPEND -- was already being resolved correctly before this
+  slice existed. What this slice actually adds is a fixture package
+  (`virtual/texteditor`, deliberately shaped like `virtual/pager`: an
+  any-of `RDEPEND` over two real fixture packages) and contract tests
+  that pin this down, so it stays proven rather than merely assumed.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -389,12 +412,14 @@ PORTING/
   weak blocker match each being reported, an overlay-only package being
   found, a same-version tie across the main repo and the overlay being
   broken toward the higher-priority one, a genuine slot conflict being
-  reported, and two different slots of the same package correctly
-  coexisting instead of one silently overwriting the other) against the
-  fixture, `ebuild`-dispatch, and batch mode inside it, exiting nonzero
-  on any failure -- including proving the fixture's `make.profile`
-  symlink, multi-parent chain, and second `repos.conf` repo all survive
-  the image `COPY` and still resolve correctly.
+  reported, two different slots of the same package correctly
+  coexisting instead of one silently overwriting the other, and a
+  `virtual/*` atom resolving as a dependency with no dedicated code
+  involved) against the fixture, `ebuild`-dispatch, and batch mode
+  inside it, exiting nonzero on any failure -- including proving the
+  fixture's `make.profile` symlink, multi-parent chain, and second
+  `repos.conf` repo all survive the image `COPY` and still resolve
+  correctly.
 
 Known simplification: `versions-harness`/`portage-versions` compare
 version components as `i128` rather than Python's arbitrary-precision
@@ -482,6 +507,13 @@ non-conflict case, `multislotpkg` (two versions in *different* slots --
 `1.0`/`SLOT="0"` and `2.0`/`SLOT="1"`) and `multislotparent` (RDEPENDs on
 `multislotpkg:0` and `multislotpkg:1` explicitly, so both must resolve
 as independent entries, not a conflict).
+
+`virtual/texteditor` and `dev-libs/virtualconsumerpkg` exercise
+virtuals: the former is deliberately shaped like the real Gentoo tree's
+own `virtual/pager` (an ordinary ebuild, `RDEPEND="|| ( dev-libs/newpkg
+dev-libs/samepkg )"`), the latter simply `RDEPEND`s on it, proving a
+virtual reached as a dependency resolves the same way as one requested
+directly.
 
 `gentoo_snapshot.json` was extracted from a full local Gentoo tree
 checkout (`/.gentoo/repos/gentoo` on the machine this was vendored on) with
@@ -634,6 +666,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/multislotpare
 # [ebuild  N] dev-libs/multislotparent-1.0
 # [ebuild  N] dev-libs/multislotpkg-1.0
 # [ebuild  N] dev-libs/multislotpkg-2.0
+
+# virtuals: virtual/texteditor is shaped like the real virtual/pager (an
+# ordinary ebuild, any-of RDEPEND) -- no dedicated resolution code exists
+# for it, or is needed
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/virtualconsumerpkg
+# [ebuild  N] dev-libs/virtualconsumerpkg-1.0
+# [ebuild  N] virtual/texteditor-0
+# [ebuild  N] dev-libs/newpkg-1.0
 
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
