@@ -78,3 +78,18 @@ pub(crate) enum InstalledSide {
     Existing,
     Current,
 }
+
+/// `` `cat/pkg-ver:slot/sub_slot::repo` `` for a conflicting parent; empty for
+/// a top-level parent. Shared by both conflict report builders.
+pub(crate) fn slot_conflict_puller_cpv(
+    repos: &[RepoConfig],
+    pc: &str,
+    pp: &str,
+    pv: &str,
+) -> String {
+    if pc.is_empty() {
+        return String::new();
+    }
+    let (psub, prepo, pslot) = slot_conflict_meta(repos, pc, pp, pv);
+    format!("{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}")
+}

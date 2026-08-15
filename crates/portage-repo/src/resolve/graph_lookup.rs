@@ -109,6 +109,67 @@ pub fn best_installed_match(
         .max_by(|a, b| vercmp_ordering(a, b))
 }
 
+/// Whether one atom is satisfied by a package already added to the graph this run
+/// (merge-bound), with `[use]` deps checked against that entry's resolved USE.
+/// Portage matches against full package objects -- slot included -- so the candidate
+/// carries the entry's `:slot[/sub-slot]`; a slotless entry falls back to the bare
+/// cpv (matching slotless used to over-match `:slot` atoms). Split out so the
+/// circular-self-dep check can ask the same question for one atom.
+/// Portage: dep_check.py, dep_zapdeps (all_in_graph).
+///
+/// Returns `false` for an empty or all-blocker alternative (nothing to be "in
+/// graph"); the caller's own zero-atom / circular-self handling covers those first.
+pub(crate) fn atom_matches_graph(
+    atom_str: &str,
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+    queued_cps: &HashSet<(String, String)>,
+) -> bool {
+    let Some(parsed) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if parsed.blocker != portage_dep::Blocker::None {
+        return false;
+    }
+    if queued_cps.contains(&(parsed.category.clone(), parsed.package.clone())) {
+        return true;
+    };
+    let use_deps = parsed.use_deps.unwrap_or_default();
+    entries.iter().any(|e| {
+        let Some(cpv) = merge_bound_cpv(e) else {
+            return false;
+        };
+        if e.category != parsed.category || e.package != parsed.package {
+            return false;
+        }
+        let mut candidate = cpv;
+        if let Some(slot) = &e.slot {
+            candidate.push(':');
+            candidate.push_str(slot);
+            if let Some(sub_slot) = &e.sub_slot {
+                candidate.push('/');
+                candidate.push_str(sub_slot);
+            }
+        }
+        if portage_dep::match_from_list(atom_str, &[candidate.as_str()])
+            .is_none_or(|m| m.is_empty())
+        {
+            return false;
+        }
+        if use_deps.is_empty() {
+            return true;
+        }
+        let enabled: HashSet<String> = e
+            .use_flags_display
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| f.clone())
+            .collect();
+        let iuse: HashSet<String> = e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
+        portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
+    })
+}
+
 /// The visible tree candidates matching `atom_str` (USE deps ignored) after the
 /// backtrack loop's `runtime_pkg_mask` constraints, as `(version, slot)` -- the listing
 /// half of `atom_currently_satisfiable`, returned rather than collapsed to a bool so
