@@ -166,6 +166,15 @@ pub(crate) fn keywords_accepted(args: KeywordsAcceptedArgs<'_>) -> bool {
     (has_testing && accepted.contains("~*")) || (has_stable && accepted.contains("*"))
 }
 
+pub(crate) struct IsStableArgs<'a> {
+    pub(crate) keywords: &'a [String],
+    pub(crate) candidate_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) accept_keywords: &'a HashSet<String>,
+    pub(crate) package_accept_keywords: &'a [(String, Vec<String>)],
+}
+
 pub(crate) fn vercmp_ordering(a: &str, b: &str) -> Ordering {
     match vercmp(a, b) {
         Some(n) if n > 0 => Ordering::Greater,
