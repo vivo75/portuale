@@ -11,9 +11,30 @@
 //                                              "match <atom> <cand...>" lines
 //                                              from stdin, one result per line
 
-use portage_dep::{parse_atom, Blocker, SlotOperator};
+use portage_dep::{parse_atom, Blocker, SlotOperator, UseDep, UseDepDefault, UseDepOp};
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
+
+/// Reconstructs one use-dep token's canonical text ("{prefix}{flag}{default}{suffix}"),
+/// matching real `a.use.tokens`' own original-text preservation byte for
+/// byte, since this pilot's grammar doesn't normalize anything the token
+/// regex didn't already require.
+fn format_use_dep(u: &UseDep) -> String {
+    let (prefix, suffix) = match u.op {
+        UseDepOp::Enabled => ("", ""),
+        UseDepOp::Disabled => ("-", ""),
+        UseDepOp::IfParentEnabled => ("", "?"),
+        UseDepOp::IfParentDisabled => ("!", "?"),
+        UseDepOp::EqualParent => ("", "="),
+        UseDepOp::OppositeParent => ("!", "="),
+    };
+    let default = match u.default {
+        None => "",
+        Some(UseDepDefault::Enabled) => "(+)",
+        Some(UseDepDefault::Disabled) => "(-)",
+    };
+    format!("{prefix}{}{default}{suffix}", u.flag)
+}
 
 fn format_parse(s: &str) -> String {
     let Some(a) = parse_atom(s) else {
@@ -29,6 +50,16 @@ fn format_parse(s: &str) -> String {
         Some(SlotOperator::Star) => "*",
         Some(SlotOperator::Equals) => "=",
     };
+    let use_deps = a
+        .use_deps
+        .as_ref()
+        .map(|deps| {
+            deps.iter()
+                .map(format_use_dep)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
     let fields = [
         blocker,
         a.operator.as_str(),
@@ -39,6 +70,7 @@ fn format_parse(s: &str) -> String {
         a.slot.as_deref().unwrap_or(""),
         a.sub_slot.as_deref().unwrap_or(""),
         slot_operator,
+        &use_deps,
     ];
     fields.join("\t")
 }

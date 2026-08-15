@@ -1143,20 +1143,16 @@ def _lookup_option(token):
 def _has_unsupported_top_level_features(a):
     """Real portage.dep.Atom (used by _parse_atom, unlike Rust's own
     narrowed portage-dep crate) successfully parses grammar Rust's v1
-    subset doesn't at all -- USE deps, repo constraints, wildcards,
-    build-ids. portage-dep's Atom struct (see its own source) has no
-    fields for any of these, so a Rust-side parse_atom call on the same
-    text returns None outright -- the same "invalid atom" outcome as
-    genuinely malformed input, not the "blocker, not a valid target"
-    outcome _is_blocker_atom below covers. Operator, plain slot, AND slot
-    operator (":=" / ":*" / ":slot=") are all representable on the Rust
-    side, so none of them are checked here."""
-    return (
-        a.use is not None
-        or a.repo is not None
-        or a.extended_syntax
-        or a.build_id is not None
-    )
+    subset doesn't at all -- repo constraints, wildcards, build-ids.
+    portage-dep's Atom struct (see its own source) has no fields for any
+    of these, so a Rust-side parse_atom call on the same text returns
+    None outright -- the same "invalid atom" outcome as genuinely
+    malformed input, not the "blocker, not a valid target" outcome
+    _is_blocker_atom below covers. Operator, plain slot, slot operator
+    (":=" / ":*" / ":slot=" ), AND USE deps ("[bar]" and every other PMS
+    8.3.4 form) are all representable on the Rust side, so none of them
+    are checked here."""
+    return a.repo is not None or a.extended_syntax or a.build_id is not None
 
 
 def run(args):

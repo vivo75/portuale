@@ -36,6 +36,20 @@ PARSE_VALID_ATOMS = [
     "dev-libs/foo:0=",  # slot operator with an explicit slot ("slot=" form)
     "dev-libs/foo:0/1=",  # slot operator with an explicit slot AND sub-slot
     ">=dev-libs/foo-1.0:0=",  # slot operator combined with a version operator
+    "dev-libs/foo[bar]",  # USE dep, "must be enabled" form
+    "dev-libs/foo[-bar]",  # "must be disabled" form
+    "dev-libs/foo[bar?]",  # "enabled if enabled on the owner" form
+    "dev-libs/foo[!bar?]",  # "disabled if disabled on the owner" form
+    "dev-libs/foo[bar=]",  # "same as the owner" form
+    "dev-libs/foo[!bar=]",  # "opposite of the owner" form
+    "dev-libs/foo[bar(+)]",  # 4-style default: assume enabled if not in IUSE
+    "dev-libs/foo[bar(-)]",  # 4-style default: assume disabled if not in IUSE
+    "dev-libs/foo[bar(+)=]",  # default combined with an operator form
+    "dev-libs/foo[bar,-baz,qux?]",  # multiple comma-separated requirements
+    "dev-libs/foo[bar(+),bar(+)]",  # same flag repeated with a CONSISTENT default: fine
+    "dev-libs/foo:0[bar]",  # USE dep combined with a plain slot
+    "dev-libs/foo:0=[bar]",  # USE dep combined with a slot operator
+    ">=dev-libs/foo-1.0[bar]",  # USE dep combined with a version operator
 ]
 
 # Not valid at all, or valid PMS atoms that use a feature outside the v1
@@ -46,8 +60,6 @@ PARSE_INVALID_ATOMS = [
     "dev-libs/",
     "/foo",
     "dev-libs/foo-1.2.3",  # bare version with no operator: not a valid atom
-    "dev-libs/foo[bar]",  # USE dep: out of v1 scope
-    "dev-libs/foo[-bar]",
     "dev-libs/foo::gentoo",  # repo constraint: out of v1 scope
     "=dev-libs/foo-1.2.3*",  # glob operator: out of v1 scope
     "*/foo-1",  # extended/wildcard syntax: out of v1 scope
@@ -57,6 +69,14 @@ PARSE_INVALID_ATOMS = [
     "dev-libs/foo:",  # bare trailing ":" with nothing after it: invalid
     "dev-libs/foo:0*",  # explicit slot combined with "*": invalid ("*" means
                          # "any slot", contradictory with a specific one)
+    "dev-libs/foo[]",  # empty USE-dep brackets: invalid
+    "dev-libs/foo[-bar=]",  # "-" prefix combined with "=" suffix: not a real
+    "dev-libs/foo[-bar?]",  # operator, even though the per-token regex alone
+                             # would syntactically match it
+    "dev-libs/foo[bar(+),bar(-)]",  # same flag, conflicting 4-style defaults
+    "dev-libs/foo[bar(+),-bar]",  # same flag, default vs. no-default conflict
+    "dev-libs/foo[bar][baz]",  # two bracket groups: only one is ever allowed
+    "dev-libs/foo[ bar]",  # whitespace inside the brackets: invalid
 ]
 
 
@@ -130,6 +150,14 @@ MATCH_CASES = [
     ("dev-libs/foo:2=", CANDIDATES),
     ("dev-libs/foo:3=", CANDIDATES),
     ("dev-libs/foo:9=", CANDIDATES),  # explicit slot nothing matches
+    # USE deps: parsed but never enforced by matching (see portage-dep's
+    # module doc comment) -- verified this isn't an invented divergence:
+    # real match_from_list, given these same plain-string candidates
+    # (no .use/.iuse attributes), skips its own USE-dep filtering
+    # entirely too, so "[bar]" and "[-bar]" must match the identical set.
+    ("dev-libs/foo[bar]", CANDIDATES),
+    ("dev-libs/foo[-bar]", CANDIDATES),
+    ("dev-libs/foo:2[bar?]", CANDIDATES),  # combined with a slot restriction
 ]
 
 
@@ -146,10 +174,10 @@ def test_match_of_invalid_atom_is_invalid_in_both(
     atom_harness_python, atom_harness_rust
 ):
     python_result = _run(
-        atom_harness_python, "match", "dev-libs/foo[bar]", *CANDIDATES
+        atom_harness_python, "match", "dev-libs/foo::gentoo", *CANDIDATES
     )
     rust_result = _run(
-        [str(atom_harness_rust)], "match", "dev-libs/foo[bar]", *CANDIDATES
+        [str(atom_harness_rust)], "match", "dev-libs/foo::gentoo", *CANDIDATES
     )
     assert python_result == "INVALID"
     assert rust_result == python_result
@@ -158,7 +186,14 @@ def test_match_of_invalid_atom_is_invalid_in_both(
 def test_batch_mode_output_matches(atom_harness_python, atom_harness_rust):
     """Exercises benchmark-shaped batch mode: many operations fed to a
     single process invocation via stdin."""
-    lines = [f"parse {a}" for a in PARSE_VALID_ATOMS + PARSE_INVALID_ATOMS]
+    # The batch protocol is a single whitespace-delimited line per
+    # operation ("parse <atom>"), so an atom containing a literal space
+    # (e.g. the "[ bar]" invalid-USE-dep case) can't be represented in it
+    # at all -- unrelated to what this test is actually exercising (many
+    # operations in one process), so it's excluded here; it's still
+    # covered by the single-shot parity test above.
+    all_atoms = [a for a in PARSE_VALID_ATOMS + PARSE_INVALID_ATOMS if " " not in a]
+    lines = [f"parse {a}" for a in all_atoms]
     lines += [f"match {atom} {' '.join(candidates)}" for atom, candidates in MATCH_CASES]
     stdin_data = "\n".join(lines) + "\n"
 

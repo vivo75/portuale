@@ -42,6 +42,29 @@
 // ":slot" suffix convention) as a fallback when candidates aren't Package
 // objects.
 //
+// USE deps (`foo[bar]`, `foo[bar?,!baz=,qux(+)]` -- PMS 8.3.4, all 7
+// per-flag forms plus 4-style `(+)`/`(-)` defaults) ARE parsed -- see
+// `UseDep`/`UseDepOp`/`UseDepDefault` and `parse_use_deps` -- but
+// deliberately NOT enforced when matching: `matches_version`/
+// `matches_slot`/`match_from_list` never consult `Atom::use_deps` at
+// all, a documented, deliberate v1 simplification (this pilot's
+// dependency-graph model has no per-package IUSE/USE state to check a
+// use-dep against, and the `opt=`/`opt?` forms would additionally need
+// the *atom-owning* package's own USE state, not just the candidate's --
+// a considerably bigger, separately out-of-scope piece of work). This
+// isn't an invented divergence from real portage, though: verified
+// empirically, real `match_from_list` given the same plain-string
+// candidates this pilot uses already behaves identically -- its own
+// USE-dep filtering is skipped entirely for any candidate that isn't a
+// real Package object with `.use`/`.iuse` attributes (see the `hasattr`
+// check in `lib/portage/dep/__init__.py`'s `match_from_list`), which is
+// exactly the plain-string-candidate case here. Before USE deps were
+// parseable at all, an atom using one wasn't just "under-enforced" --
+// it was rejected as `INVALID` outright, which for a *dependency* atom
+// extracted from DEPEND/RDEPEND meant `resolve_pretend_graph`'s BFS
+// silently dropped it from the graph entirely (same class of bug the
+// slot-operator follow-up found and fixed -- see that doc comment).
+//
 // One easy-to-miss PMS rule that IS ported: a bare (no-operator) atom
 // whose package name is followed by something that looks like a version
 // (e.g. "foo-bar-2", which could be read as package "foo-bar" version "2")
@@ -61,6 +84,11 @@ const CAT: &str = r"[A-Za-z0-9_][A-Za-z0-9+_.-]*";
 const PKG: &str = r"[A-Za-z0-9_][A-Za-z0-9+_-]*?";
 const VER: &str = r"\d+(?:\.\d+)*[a-z]?(?:_(?:pre|p|beta|alpha|rc)\d*)*";
 const SLOT: &str = r"[A-Za-z0-9][A-Za-z0-9+_.-]*";
+// Identical to real portage's own `_useflag_re` (lib/portage/dep/__init__.py)
+// and already mirrored once in `portage-use-reduce`'s own `useflag_re` --
+// duplicated here rather than added as a cross-crate dependency, since
+// it's a single-line regex literal, not shared logic.
+const USEFLAG: &str = r"[A-Za-z0-9][A-Za-z0-9+_@-]*";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Blocker {
@@ -120,6 +148,40 @@ pub enum SlotOperator {
     Equals,
 }
 
+/// A 2-style or 4-style USE dependency's operator (PMS 8.3.4) -- which of
+/// the 6 real `prefix`+`suffix` combinations (real portage's own
+/// `_usedep_re` groups) a single flag spec uses. `EqualParent`/
+/// `OppositeParent` and `IfParentEnabled`/`IfParentDisabled` are both
+/// conditional on the *atom-owning* package's own USE state, not just the
+/// candidate's -- irrelevant here since `Atom::use_deps` is parsed but
+/// never consulted by matching (see the module doc comment).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UseDepOp {
+    Enabled,          // "flag"
+    Disabled,         // "-flag"
+    IfParentEnabled,  // "flag?"
+    IfParentDisabled, // "!flag?"
+    EqualParent,      // "flag="
+    OppositeParent,   // "!flag="
+}
+
+/// A 4-style USE dependency's default (PMS 8.3.4): what to assume when
+/// the ebuild being matched against doesn't have `flag` in
+/// IUSE_REFERENCEABLE at all. Parsed for fidelity/round-tripping; never
+/// consulted by matching, same as the rest of `UseDep`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UseDepDefault {
+    Enabled,  // "(+)"
+    Disabled, // "(-)"
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseDep {
+    pub flag: String,
+    pub op: UseDepOp,
+    pub default: Option<UseDepDefault>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Atom {
     pub blocker: Blocker,
@@ -131,6 +193,11 @@ pub struct Atom {
     pub slot: Option<String>,
     pub sub_slot: Option<String>,
     pub slot_operator: Option<SlotOperator>,
+    /// `None` for no `[...]` at all; `Some(v)` (`v` always non-empty --
+    /// `foo[]` is invalid, same as real portage) for a present one, in
+    /// original left-to-right order. Never consulted by matching -- see
+    /// the module doc comment.
+    pub use_deps: Option<Vec<UseDep>>,
 }
 
 impl Atom {
@@ -155,11 +222,88 @@ fn atom_regex() -> &'static Regex {
         // matched an empty string), which PMS says is invalid (see the
         // "if self.slot is None and self.slot_operator is None: raise"
         // check in Atom.__init__).
+        // "usedeps" mirrors real portage's own permissive `\[.*\]` outer
+        // capture (`_use` in lib/portage/dep/__init__.py): validated in a
+        // second stage by `parse_use_deps`, same two-stage split as the
+        // slot part above.
         Regex::new(&format!(
-            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r\d+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?$"
+            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r\d+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?P<usedeps>\[.*\])?$"
         ))
         .unwrap()
     })
+}
+
+fn use_dep_token_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(&format!(
+            r"^(?P<prefix>[!-]?)(?P<flag>{USEFLAG})(?P<default>\(\+\)|\(-\))?(?P<suffix>[?=]?)$"
+        ))
+        .unwrap()
+    })
+}
+
+/// Parses the raw `[...]` text (brackets included) captured by
+/// `atom_regex`'s permissive `usedeps` group into a validated
+/// `Vec<UseDep>`, mirroring real portage's own two-stage approach
+/// (`Atom.__init__`'s use-dep loop, not a separate regex function this
+/// time -- there's no dedicated `_get_usedep_re`-equivalent split out on
+/// the Rust side, but the algorithm is the same): split on `,`, validate
+/// each token against `use_dep_token_regex`, and validate that only the
+/// 6 real `prefix`+`suffix` combinations appear (`-flag=`/`-flag?` are
+/// syntactically matched by the per-token regex but not real operators --
+/// verified empirically against real portage, which rejects them too).
+/// Also validates that a flag's `(+)`/`(-)` default, if any, is
+/// consistent across every token mentioning that flag within this same
+/// atom (`foo[bar(+),bar(-)]` and `foo[bar(+),-bar]` are both invalid --
+/// same empirically-verified real behavior), so the accept/reject
+/// boundary matches real `Atom` exactly, even though the *values* are
+/// never consulted by matching (see the module doc comment).
+fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
+    let inner = raw.strip_prefix('[')?.strip_suffix(']')?;
+    if inner.is_empty() {
+        return None;
+    }
+    let mut deps = Vec::new();
+    // "has a default at all" per flag, so a later token for the same
+    // flag with a *different* has-default state (regardless of which
+    // specific default) is caught too -- mirrors real Atom.__init__'s
+    // three-way missing_enabled/missing_disabled/no_default bookkeeping.
+    let mut seen_defaults: std::collections::HashMap<String, Option<UseDepDefault>> =
+        std::collections::HashMap::new();
+    for token in inner.split(',') {
+        let caps = use_dep_token_regex().captures(token)?;
+        let flag = caps.name("flag").unwrap().as_str().to_string();
+        let prefix = caps.name("prefix").map(|m| m.as_str()).unwrap_or("");
+        let suffix = caps.name("suffix").map(|m| m.as_str()).unwrap_or("");
+        let op = match (prefix, suffix) {
+            ("", "") => UseDepOp::Enabled,
+            ("-", "") => UseDepOp::Disabled,
+            ("", "?") => UseDepOp::IfParentEnabled,
+            ("!", "?") => UseDepOp::IfParentDisabled,
+            ("", "=") => UseDepOp::EqualParent,
+            ("!", "=") => UseDepOp::OppositeParent,
+            _ => return None, // "-flag=" / "-flag?": syntactically matched, not a real operator
+        };
+        let default = match caps.name("default").map(|m| m.as_str()) {
+            None => None,
+            Some("(+)") => Some(UseDepDefault::Enabled),
+            Some("(-)") => Some(UseDepDefault::Disabled),
+            Some(_) => unreachable!(),
+        };
+        match seen_defaults.entry(flag.clone()) {
+            std::collections::hash_map::Entry::Occupied(e) => {
+                if *e.get() != default {
+                    return None;
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(default.clone());
+            }
+        }
+        deps.push(UseDep { flag, op, default });
+    }
+    Some(deps)
 }
 
 pub fn parse_atom(s: &str) -> Option<Atom> {
@@ -223,6 +367,11 @@ pub fn parse_atom(s: &str) -> Option<Atom> {
         }
     })?;
 
+    let use_deps = match caps.name("usedeps") {
+        None => None,
+        Some(m) => Some(parse_use_deps(m.as_str())?),
+    };
+
     Some(Atom {
         blocker,
         operator,
@@ -233,6 +382,7 @@ pub fn parse_atom(s: &str) -> Option<Atom> {
         slot,
         sub_slot,
         slot_operator,
+        use_deps,
     })
 }
 
