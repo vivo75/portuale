@@ -1,10 +1,13 @@
-// Profile-chain + make.conf resolution for real USE/ACCEPT_KEYWORDS (see
+// Profile-chain + make.conf + package.mask/.unmask/.accept_keywords
+// resolution for real USE/ACCEPT_KEYWORDS/visibility (see
 // PORTING/PROMPT.md's depgraph/config-resolution follow-up work, and
 // PORTING/README.md for the full scope writeup). Replaces the base
 // `emerge --pretend` slice's hardcoded `ACCEPT_KEYWORDS="amd64"`/`USE=""`
 // with the real mechanism: a profile inheritance chain (`make.profile` ->
 // `parent` files) plus `/etc/portage/make.conf`, each level's
-// `make.defaults` contributing incremental USE/ACCEPT_KEYWORDS tokens.
+// `make.defaults` contributing incremental USE/ACCEPT_KEYWORDS tokens,
+// plus per-package overrides from `/etc/portage/package.mask`,
+// `package.unmask`, and `package.accept_keywords`.
 //
 // KNOWN, DOCUMENTED SCOPE CUTS (confirmed with the user before
 // implementing):
@@ -16,9 +19,8 @@
 //     under v1; testing this mechanism needs a same-repo synthetic
 //     fixture chain instead (see PORTING/fixtures/repo/profiles).
 //   - USE_EXPAND (LINGUAS, VIDEO_CARDS, ...), wildcard `_*` IUSE-aware
-//     expansion, package.use/.mask/.accept_keywords, use.mask/.force, the
-//     `packages` file, and ARCH-based KEYWORDS-format validation are all
-//     out of scope.
+//     expansion, `package.use`, `use.mask`/`.force`, the `packages` file,
+//     and ARCH-based KEYWORDS-format validation are all out of scope.
 //   - Only the `defaults` (profile) and `conf` (make.conf) layers of real
 //     config.py's `USE_ORDER` are implemented -- no `env`, `pkginternal`,
 //     `features`, `repo`, `env.d`, or per-package (`pkg`) layers.
@@ -30,6 +32,18 @@
 //     plain scalar for `${VAR}` substitution purposes (last-value-wins,
 //     no incremental merge), matching how it's actually used in real
 //     profiles (e.g. ARCH feeding `ACCEPT_KEYWORDS="${ARCH}"`).
+//   - `package.mask`/`.unmask`/`.accept_keywords` are read from
+//     `/etc/portage/` (user-level) ONLY -- real portage also stacks
+//     repo-level `profiles/package.mask` and a `package.mask`/
+//     `package.unmask` pair at every profile level, each combinable via
+//     `-atom` removal across all three sources. Replicating that fully
+//     would be close to the size of the whole profile-chain mechanism
+//     again; this pilot only supports `-atom` removal *within* the
+//     user-level `package.mask` itself (e.g. across multiple files if
+//     it's a directory), not against a repo/profile-level mask that
+//     doesn't exist here. `package.unmask` is a separate, simpler
+//     per-candidate override check (masked-unless-also-unmasked), not
+//     real portage's own incremental stacking.
 //
 // One real, deliberately-preserved quirk from lib/portage/package/ebuild/
 // config.py (see the comment above its `expand_map.pop("USE", None)`):
@@ -53,6 +67,16 @@ use std::sync::OnceLock;
 pub struct Config {
     pub use_flags: HashSet<String>,
     pub accept_keywords: HashSet<String>,
+    /// Raw atom or bounded-wildcard-atom strings (see
+    /// `portage_dep::parse_wildcard_atom`) from `package.mask`, with
+    /// `-atom` removal already applied within this source.
+    pub package_mask: Vec<String>,
+    /// Raw atom or bounded-wildcard-atom strings from `package.unmask`.
+    pub package_unmask: Vec<String>,
+    /// (atom-or-wildcard string, extra accepted keyword tokens) pairs
+    /// from `package.accept_keywords`. A `"**"` keyword token means
+    /// "accept any keyword" for matching packages.
+    pub package_accept_keywords: Vec<(String, Vec<String>)>,
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -239,11 +263,95 @@ fn process_make_conf_file(
     Ok(())
 }
 
-/// Computes the real USE/ACCEPT_KEYWORDS `Config` for `config_root`: the
-/// profile chain rooted at `<config_root>/etc/portage/make.profile` (if
-/// it exists -- a missing profile is not an error, it just contributes
-/// nothing), then `<config_root>/etc/portage/make.conf` (if it exists) as
-/// the final, highest-priority layer.
+/// Reads every non-comment, non-blank, trimmed line from `path`, which
+/// may be a single file or (like `repos.conf` elsewhere in this pilot) a
+/// directory of files merged in sorted-filename order. A missing path
+/// yields an empty list, not an error.
+fn read_config_lines(path: &Path) -> Result<Vec<String>, String> {
+    fn read_file_lines(path: &Path) -> Result<Vec<String>, String> {
+        let text =
+            fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+        Ok(text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(String::from)
+            .collect())
+    }
+
+    let mut lines = Vec::new();
+    if path.is_dir() {
+        let mut entries: Vec<PathBuf> = fs::read_dir(path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.is_file())
+            .collect();
+        entries.sort();
+        for entry in entries {
+            lines.extend(read_file_lines(&entry)?);
+        }
+    } else if path.is_file() {
+        lines.extend(read_file_lines(path)?);
+    }
+    Ok(lines)
+}
+
+/// `package.mask`: each line is an atom/wildcard-atom to mask, or (with a
+/// leading `-`) a removal of an exact previously-added entry -- see the
+/// module doc comment for how this differs from real portage's full
+/// repo+profile+user stacking.
+fn load_package_mask(config_root: &Path) -> Result<Vec<String>, String> {
+    let path = config_root.join("etc/portage/package.mask");
+    let mut list: Vec<String> = Vec::new();
+    for line in read_config_lines(&path)? {
+        match line.strip_prefix('-') {
+            Some(removed) => list.retain(|x| x != removed),
+            None => list.push(line),
+        }
+    }
+    Ok(list)
+}
+
+/// `package.unmask`: each line is an atom/wildcard-atom that cancels a
+/// matching `package.mask` entry for that specific candidate. A leading
+/// `-` isn't meaningful here (real portage doesn't use it in
+/// package.unmask); such a line is skipped defensively.
+fn load_package_unmask(config_root: &Path) -> Result<Vec<String>, String> {
+    let path = config_root.join("etc/portage/package.unmask");
+    Ok(read_config_lines(&path)?
+        .into_iter()
+        .filter(|l| !l.starts_with('-'))
+        .collect())
+}
+
+/// `package.accept_keywords`: each line is `<atom-or-wildcard>
+/// <keyword...>`. A line with no keyword tokens after the atom is a
+/// documented no-op for v1 (real portage gives it EAPI/ARCH-dependent
+/// implicit meaning this pilot doesn't implement).
+fn load_package_accept_keywords(config_root: &Path) -> Result<Vec<(String, Vec<String>)>, String> {
+    let path = config_root.join("etc/portage/package.accept_keywords");
+    let mut result = Vec::new();
+    for line in read_config_lines(&path)? {
+        let mut parts = line.split_whitespace();
+        let Some(atom) = parts.next() else {
+            continue;
+        };
+        let keywords: Vec<String> = parts.map(String::from).collect();
+        if keywords.is_empty() {
+            continue;
+        }
+        result.push((atom.to_string(), keywords));
+    }
+    Ok(result)
+}
+
+/// Computes the real USE/ACCEPT_KEYWORDS/visibility `Config` for
+/// `config_root`: the profile chain rooted at
+/// `<config_root>/etc/portage/make.profile` (if it exists -- a missing
+/// profile is not an error, it just contributes nothing), then
+/// `<config_root>/etc/portage/make.conf` (if it exists) as the final,
+/// highest-priority USE/ACCEPT_KEYWORDS layer, then
+/// `package.mask`/`.unmask`/`.accept_keywords`.
 pub fn resolve_config(config_root: &Path) -> Result<Config, String> {
     let mut config = Config::default();
     let mut scalars: HashMap<String, String> = HashMap::new();
@@ -275,6 +383,10 @@ pub fn resolve_config(config_root: &Path) -> Result<Config, String> {
             &mut visited_sources,
         )?;
     }
+
+    config.package_mask = load_package_mask(config_root)?;
+    config.package_unmask = load_package_unmask(config_root)?;
+    config.package_accept_keywords = load_package_accept_keywords(config_root)?;
 
     Ok(config)
 }
@@ -370,6 +482,42 @@ mod tests {
         assert_eq!(
             config.use_flags,
             HashSet::from(["sharedflag".to_string(), "topflag".to_string()])
+        );
+    }
+
+    #[test]
+    fn package_mask_unmask_accept_keywords_load_correctly() {
+        let root = std::env::temp_dir().join("portage-profile-test-package-star");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+
+        // package.mask: two atoms added, then one removed via "-atom" --
+        // only the surviving one should remain.
+        fs::write(
+            portage_dir.join("package.mask"),
+            "dev-libs/foo\ndev-libs/bar\n-dev-libs/bar\n",
+        )
+        .unwrap();
+        // package.unmask: unrelated to the removal above -- a completely
+        // separate list, checked per-candidate by the caller.
+        fs::write(portage_dir.join("package.unmask"), "dev-libs/baz\n").unwrap();
+        // package.accept_keywords: a normal entry, a "**" entry, and a
+        // bare-atom (no keywords) line that must be a no-op.
+        fs::write(
+            portage_dir.join("package.accept_keywords"),
+            "dev-qt/* ~amd64\nsci-misc/live-thing **\ndev-libs/bare-no-op\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(&root).expect("config with package.* files must resolve");
+        assert_eq!(config.package_mask, vec!["dev-libs/foo".to_string()]);
+        assert_eq!(config.package_unmask, vec!["dev-libs/baz".to_string()]);
+        assert_eq!(
+            config.package_accept_keywords,
+            vec![
+                ("dev-qt/*".to_string(), vec!["~amd64".to_string()]),
+                ("sci-misc/live-thing".to_string(), vec!["**".to_string()]),
+            ]
         );
     }
 }

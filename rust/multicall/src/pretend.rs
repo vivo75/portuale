@@ -80,13 +80,7 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let entries = match resolve_pretend_graph(
-        &config_root,
-        &root,
-        atom_str,
-        &config.use_flags,
-        &config.accept_keywords,
-    ) {
+    let entries = match resolve_pretend_graph(&config_root, &root, atom_str, &config) {
         Ok(entries) => entries,
         Err(e) => {
             eprintln!("emerge: {e}");

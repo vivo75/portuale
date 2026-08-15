@@ -12,14 +12,13 @@
 //     `--pretend` work without the bash dependency that real phase
 //     execution will eventually require (see PROMPT.md's "Deferred:
 //     ebuild phase execution").
-//   - No package.mask/.use/.accept_keywords, no slot conflicts, no
-//     virtuals, no backtracking.
+//   - No package.use, no slot conflicts, no virtuals, no backtracking.
 //
-// USE and ACCEPT_KEYWORDS are no longer hardcoded: they're computed by
-// `portage_profile::resolve_config` (real profile chain + make.conf, with
-// its own documented scope cuts -- see that crate's doc comment) and
-// threaded through `resolve_pretend`/`resolve_pretend_graph` as plain
-// parameters, keeping this crate decoupled from profile-parsing concerns.
+// USE/ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords are no longer
+// hardcoded: they're computed by `portage_profile::resolve_config` (real
+// profile chain + make.conf + package.*, with its own documented scope
+// cuts -- see that crate's doc comment) and threaded through
+// `resolve_pretend`/`resolve_pretend_graph` as a `&portage_profile::Config`.
 //
 // Dependency recursion (see `resolve_pretend_graph` below) walks DEPEND
 // and RDEPEND only, with its own documented scope cuts -- see that
@@ -231,11 +230,70 @@ pub fn list_candidates(
     Ok(candidates)
 }
 
-pub fn is_visible(candidate: &Candidate, accept_keywords: &HashSet<String>) -> bool {
+/// Whether `entry` (a `package.mask`/`.unmask`/`.accept_keywords` line)
+/// matches this specific candidate. Two-tier: try the real, already-
+/// verified `portage_dep::match_from_list` first (covers the vast
+/// majority of real entries: versioned, slotted, bare atoms), and only
+/// fall back to portage-dep's separate, bounded wildcard-atom matcher
+/// (`*/*`, `category/*`, `*/package`) if that fails to parse `entry` at
+/// all.
+fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, package: &str) -> bool {
+    if let Some(matches) = portage_dep::match_from_list(entry, &[candidate_str]) {
+        return !matches.is_empty();
+    }
+    match portage_dep::parse_wildcard_atom(entry) {
+        Some(w) => portage_dep::wildcard_atom_matches(&w, category, package),
+        None => false,
+    }
+}
+
+/// A candidate is visible if it isn't masked (matches a `package.mask`
+/// entry and no `package.unmask` entry) and its KEYWORDS intersect the
+/// accepted set -- the global `config.accept_keywords`, plus any extra
+/// keywords contributed by a matching `package.accept_keywords` entry,
+/// with a `"**"` token in such an entry meaning "accept unconditionally"
+/// for matching candidates (even ones with empty/no KEYWORDS).
+pub fn is_visible(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}",
+        candidate.version, candidate.slot
+    );
+
+    let masked = config
+        .package_mask
+        .iter()
+        .any(|m| matches_config_entry(m, &candidate_str, category, package))
+        && !config
+            .package_unmask
+            .iter()
+            .any(|u| matches_config_entry(u, &candidate_str, category, package));
+    if masked {
+        return false;
+    }
+
+    let mut accept_any = false;
+    let mut extra_keywords: HashSet<&str> = HashSet::new();
+    for (atom, keywords) in &config.package_accept_keywords {
+        if matches_config_entry(atom, &candidate_str, category, package) {
+            if keywords.iter().any(|k| k == "**") {
+                accept_any = true;
+            }
+            extra_keywords.extend(keywords.iter().map(String::as_str));
+        }
+    }
+    if accept_any {
+        return true;
+    }
+
     candidate
         .keywords
         .iter()
-        .any(|k| accept_keywords.contains(k))
+        .any(|k| config.accept_keywords.contains(k) || extra_keywords.contains(k.as_str()))
 }
 
 fn vercmp_ordering(a: &str, b: &str) -> Ordering {
@@ -282,7 +340,7 @@ pub fn resolve_pretend(
     repo_location: &Path,
     root: &Path,
     atom_str: &str,
-    accept_keywords: &HashSet<String>,
+    config: &portage_profile::Config,
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
@@ -290,7 +348,7 @@ pub fn resolve_pretend(
     let candidates = list_candidates(repo_location, &atom.category, &atom.package)?;
     let visible: Vec<&Candidate> = candidates
         .iter()
-        .filter(|c| is_visible(c, accept_keywords))
+        .filter(|c| is_visible(c, &atom.category, &atom.package, config))
         .collect();
     if visible.is_empty() {
         return Ok(PretendOutcome::NoVisibleCandidate);
@@ -359,11 +417,12 @@ pub struct GraphEntry {
 ///   - Only DEPEND and RDEPEND are walked, not BDEPEND/IDEPEND/PDEPEND;
 ///     atoms are deduped across both fields (and across packages) via the
 ///     shared visited set.
-///   - `use_flags`/`accept_keywords` are supplied by the caller (computed
-///     via `portage_profile::resolve_config` -- see that crate's doc
-///     comment for what real profile/make.conf mechanics are and aren't
-///     implemented) rather than being read here; this crate stays
-///     decoupled from profile-parsing concerns.
+///   - `config` (USE, ACCEPT_KEYWORDS, package.mask/.unmask/.accept_keywords)
+///     is supplied by the caller (computed via `portage_profile::resolve_config`
+///     -- see that crate's doc comment for what real profile/make.conf/
+///     package.* mechanics are and aren't implemented) rather than being
+///     read here; this crate stays decoupled from profile-parsing logic
+///     even though it now depends on portage-profile for the `Config` type.
 ///   - `||` (any-of) groups: `use_reduce(flat=True)` deliberately discards
 ///     group boundaries (that's what "flat" means), so there is no
 ///     reliable way to identify "the first alternative" from its output
@@ -389,8 +448,7 @@ pub fn resolve_pretend_graph(
     config_root: &Path,
     root: &Path,
     atom_str: &str,
-    use_flags: &HashSet<String>,
-    accept_keywords: &HashSet<String>,
+    config: &portage_profile::Config,
 ) -> Result<Vec<GraphEntry>, String> {
     let repo = find_main_repo(config_root)?;
 
@@ -411,7 +469,7 @@ pub fn resolve_pretend_graph(
             continue;
         }
 
-        let outcome = resolve_pretend(&repo.location, root, &current_atom, accept_keywords)?;
+        let outcome = resolve_pretend(&repo.location, root, &current_atom, config)?;
         let resolved_version = match &outcome {
             PretendOutcome::New { version } => Some(version.clone()),
             PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
@@ -442,7 +500,7 @@ pub fn resolve_pretend_graph(
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat(
             &tokens,
-            use_flags,
+            &config.use_flags,
             portage_use_reduce::MatchMode::Normal,
         ) else {
             continue;
@@ -470,21 +528,26 @@ mod tests {
     }
 
     /// These unit tests exercise portage-repo's own resolution logic in
-    /// isolation, independent of real profile/make.conf parsing (that's
-    /// portage-profile's job, tested separately) -- so visibility is
-    /// pinned to a fixed "amd64" set here, matching what the fixture's
-    /// real profile chain also happens to resolve to (see
-    /// PORTING/fixtures/repo/profiles and test_emerge_pretend_contract.py
-    /// for the end-to-end version of this).
-    fn test_accept_keywords() -> HashSet<String> {
-        HashSet::from(["amd64".to_string()])
+    /// isolation, independent of real profile/make.conf/package.* parsing
+    /// (that's portage-profile's job, tested separately) -- so visibility
+    /// is pinned to a fixed "amd64"-only, no-overrides config here,
+    /// matching what the fixture's real profile chain also happens to
+    /// resolve to (see PORTING/fixtures/repo/profiles and
+    /// test_emerge_pretend_contract.py for the end-to-end version of
+    /// this). Constructed directly (not via portage_profile::resolve_config)
+    /// so these tests don't depend on real file parsing at all.
+    fn test_config() -> portage_profile::Config {
+        portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            ..Default::default()
+        }
     }
 
     fn resolve(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
         let repo = find_main_repo(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repo.location, &root, &atom_str, &test_accept_keywords())
+        resolve_pretend(&repo.location, &root, &atom_str, &test_config())
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -535,6 +598,82 @@ mod tests {
         );
     }
 
+    /// Unlike `resolve()`, uses the fixture's *real* resolved config
+    /// (package.mask/.unmask/.accept_keywords included), not the
+    /// synthetic `test_config()`.
+    fn resolve_real(category: &str, package: &str) -> PretendOutcome {
+        let root = fixtures_root();
+        let repo = find_main_repo(&root).expect("fixture repos.conf must resolve");
+        let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(&repo.location, &root, &atom_str, &config)
+            .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn fixture_package_mask_hides_with_no_unmask() {
+        assert_eq!(
+            resolve_real("dev-libs", "hardmaskedpkg"),
+            PretendOutcome::NoVisibleCandidate
+        );
+    }
+
+    #[test]
+    fn fixture_package_unmask_cancels_the_matching_mask() {
+        assert_eq!(
+            resolve_real("dev-libs", "maskedandunmaskedpkg"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fixture_package_mask_minus_atom_removal_is_unaffected() {
+        // dev-libs/samepkg is masked then immediately un-masked via
+        // "-dev-libs/samepkg" within package.mask itself -- it must
+        // resolve completely normally (already installed), not as if it
+        // were ever masked.
+        assert_eq!(
+            resolve_real("dev-libs", "samepkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fixture_package_accept_keywords_wildcard_extends_visibility() {
+        assert_eq!(
+            resolve_real("dev-libs", "wildcardkeywordpkg"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fixture_package_accept_keywords_double_star_accepts_no_keywords_package() {
+        assert_eq!(
+            resolve_real("dev-libs", "livekeywordpkg"),
+            PretendOutcome::New {
+                version: "9999".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fixture_unrelated_masked_by_keywords_package_is_still_hidden() {
+        // Regression guard: the "*/wildcardkeywordpkg" package.accept_keywords
+        // entry is scoped to that package name only (not "dev-libs/*"),
+        // specifically so it can't accidentally make dev-libs/maskedpkg
+        // visible too.
+        assert_eq!(
+            resolve_real("dev-libs", "maskedpkg"),
+            PretendOutcome::NoVisibleCandidate
+        );
+    }
+
     /// Regression test: a sibling package sharing a name prefix
     /// ("foo-bar" installed) must not be misread as an installed version
     /// of "foo" when scanning the vdb category directory. Without the
@@ -559,17 +698,11 @@ mod tests {
 
     fn graph(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        resolve_pretend_graph(
-            &root,
-            &root,
-            atom_str,
-            &HashSet::new(),
-            &test_accept_keywords(),
-        )
-        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-        .into_iter()
-        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-        .collect()
+        resolve_pretend_graph(&root, &root, atom_str, &test_config())
+            .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            .into_iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+            .collect()
     }
 
     #[test]
@@ -681,18 +814,112 @@ mod tests {
     fn real_resolved_use_flags_drive_dependency_recursion() {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
-        let entries = resolve_pretend_graph(
-            &root,
-            &root,
-            "dev-libs/useflagpkg",
-            &config.use_flags,
-            &config.accept_keywords,
-        )
-        .expect("resolve_pretend_graph must succeed");
+        let entries = resolve_pretend_graph(&root, &root, "dev-libs/useflagpkg", &config)
+            .expect("resolve_pretend_graph must succeed");
         let full_names: Vec<String> = entries
             .iter()
             .map(|e| format!("{}/{}", e.category, e.package))
             .collect();
         assert_eq!(full_names, vec!["dev-libs/useflagpkg", "dev-libs/newpkg"]);
+    }
+
+    fn candidate(version: &str, keywords: &[&str]) -> Candidate {
+        Candidate {
+            version: version.to_string(),
+            keywords: keywords.iter().map(|s| s.to_string()).collect(),
+            slot: "0".to_string(),
+        }
+    }
+
+    #[test]
+    fn package_mask_hides_a_matching_candidate() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_mask: vec!["dev-libs/foo".to_string()],
+            ..Default::default()
+        };
+        assert!(!is_visible(
+            &candidate("1.0", &["amd64"]),
+            "dev-libs",
+            "foo",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_unmask_cancels_a_matching_mask() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_mask: vec!["dev-libs/foo".to_string()],
+            package_unmask: vec!["dev-libs/foo".to_string()],
+            ..Default::default()
+        };
+        assert!(is_visible(
+            &candidate("1.0", &["amd64"]),
+            "dev-libs",
+            "foo",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_mask_wildcard_matches_whole_category() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_mask: vec!["dev-libs/*".to_string()],
+            ..Default::default()
+        };
+        assert!(!is_visible(
+            &candidate("1.0", &["amd64"]),
+            "dev-libs",
+            "anything",
+            &config
+        ));
+        assert!(is_visible(
+            &candidate("1.0", &["amd64"]),
+            "app-misc",
+            "anything",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_accept_keywords_wildcard_extends_visibility() {
+        // Globally only "amd64" is accepted, but a package.accept_keywords
+        // wildcard entry additionally accepts "~amd64" for dev-qt/*.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_accept_keywords: vec![("dev-qt/*".to_string(), vec!["~amd64".to_string()])],
+            ..Default::default()
+        };
+        assert!(is_visible(
+            &candidate("1.0", &["~amd64"]),
+            "dev-qt",
+            "qtcore",
+            &config
+        ));
+        // A package outside the wildcard doesn't get the extra keyword.
+        assert!(!is_visible(
+            &candidate("1.0", &["~amd64"]),
+            "dev-libs",
+            "foo",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_accept_keywords_double_star_accepts_unconditionally() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_accept_keywords: vec![("dev-libs/live".to_string(), vec!["**".to_string()])],
+            ..Default::default()
+        };
+        // No KEYWORDS at all (e.g. a live/9999 ebuild) is still visible.
+        assert!(is_visible(
+            &candidate("9999", &[]),
+            "dev-libs",
+            "live",
+            &config
+        ));
     }
 }

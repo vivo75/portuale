@@ -11,9 +11,11 @@ resolver primitive in its own right), a real, working
 `emerge --pretend category/package`, recursive DEPEND/RDEPEND resolution
 (so `--pretend` on a package with real dependencies reports the whole
 deduped, cycle-safe set of packages that would newly merge, not just the
-one you named), and -- replacing the last major hardcoded assumption --
-real USE/ACCEPT_KEYWORDS computed from an actual profile inheritance chain
-and make.conf, not a fixed stand-in.
+one you named), real USE/ACCEPT_KEYWORDS computed from an actual profile
+inheritance chain and make.conf (not a fixed stand-in), and -- the last
+remaining piece of "which packages are even visible" -- per-package
+overrides from `package.mask`, `package.unmask`, and
+`package.accept_keywords`.
 
 ## Layout
 
@@ -22,12 +24,15 @@ PORTING/
   PROMPT.md                    planning prompt this pilot implements
   rust/                        Rust workspace
     portage-versions/          shared lib: port of lib/portage/versions.py (vercmp, ververify)
-    portage-dep/                shared lib: v1 subset of Atom + match_from_list
-                                 (extracted from atom-harness; see lib.rs's doc comment)
+    portage-dep/                shared lib: v1 subset of Atom + match_from_list,
+                                 plus a separate bounded wildcard-atom matcher for
+                                 package.mask/.unmask/.accept_keywords (extracted
+                                 from atom-harness; see lib.rs's doc comment)
     portage-use-reduce/          shared lib: use_reduce(flat=True) (extracted from
                                  use-reduce-harness; see lib.rs's doc comment)
     portage-profile/             shared lib: real USE/ACCEPT_KEYWORDS from a
-                                 profile chain + make.conf (see lib.rs's doc comment)
+                                 profile chain + make.conf, plus package.mask/
+                                 .unmask/.accept_keywords (see lib.rs's doc comment)
     portage-repo/                repo/metadata/vdb access + resolution + recursive
                                  dependency-graph walk for `emerge --pretend`
                                  (see lib.rs's doc comment on resolve_pretend_graph)
@@ -93,12 +98,15 @@ PORTING/
   natural next layer above `versions-harness` (which it depends on for
   `vercmp`). Deliberately scoped to a documented v1 grammar subset (no USE
   deps, wildcards, build-ids, repo constraints, or slot operators -- see
-  the doc comment at the top of `rust/atom-harness/src/atom.rs`); the
+  the doc comment at the top of `rust/portage-dep/src/lib.rs`); the
   Python harness explicitly rejects anything outside that subset as
   `INVALID` so both sides agree on the same input language. Includes a
   faithful port of an easy-to-miss PMS rule: a bare atom whose package name
   is followed by something version-shaped (`foo-bar-2`) is rejected as
-  ambiguous, not silently accepted.
+  ambiguous, not silently accepted. (`portage-dep` later gained a
+  *separate*, deliberately bounded wildcard-atom matcher --
+  `*/*`/`category/*`/`*/package` only -- for package.mask/.unmask/
+  .accept_keywords, without touching this grammar or contract at all.)
 - **`use-reduce-harness`**: ports `use_reduce(flat=True)` -- USE-conditional
   (`flag? ( ... )`) and any-of (`|| ( ... )`) dependency-string flattening.
   Unlike `atom-harness`, this is *not* a narrowed grammar: flat mode's
@@ -125,9 +133,9 @@ PORTING/
   `KEY=value` text -- confirmed against a real vendored tree) for
   KEYWORDS/SLOT/DEPEND/RDEPEND *without executing any bash*, and checks
   the vdb (`<ROOT>/var/db/pkg`) for what's installed. There's still no
-  package.mask/.use/.accept_keywords, no slot conflicts, no blockers, no
-  overlays, no backtracking -- all explicitly confirmed scope cuts before
-  implementing, not silent omissions (see the doc comment at the top of
+  package.use, no slot conflicts, no blockers, no overlays, no
+  backtracking -- all explicitly confirmed scope cuts before implementing,
+  not silent omissions (see the doc comment at the top of
   `rust/portage-repo/src/lib.rs`).
   Config/target roots come from the real `PORTAGE_CONFIGROOT`/`ROOT`
   environment variables (portage's own mechanism, not a pilot invention --
@@ -185,9 +193,39 @@ PORTING/
   the real dev machine's own profile actually uses -- so testing this
   mechanism needed a new synthetic same-repo, multi-parent fixture chain
   rather than the real system profile), `USE_EXPAND`, wildcard `_*`
-  expansion, `package.use`/`.mask`/`.accept_keywords`, and every
-  `USE_ORDER` layer except `defaults` (profile) and `conf` (make.conf) --
-  see the doc comment at the top of `rust/portage-profile/src/lib.rs`.
+  expansion, `package.use`, and every `USE_ORDER` layer except `defaults`
+  (profile) and `conf` (make.conf) -- see the doc comment at the top of
+  `rust/portage-profile/src/lib.rs`.
+
+  **`package.mask`/`.unmask`/`.accept_keywords`**: the last piece of
+  "which packages are even visible" -- a candidate is masked if it matches
+  a `package.mask` entry and no `package.unmask` entry (a simpler
+  masked-unless-also-unmasked check, not real portage's own incremental
+  `-atom` stacking across repo/profile/user sources -- see below), and
+  `package.accept_keywords` extends the globally-accepted keyword set
+  per-atom, with a `"**"` token meaning "accept unconditionally" (even a
+  package with no `KEYWORDS` at all, like a live/9999 ebuild). Grounding
+  this against the real dev machine's own `/etc/portage/package.*` files
+  surfaced two things worth scoping explicitly: real `package.mask` is
+  actually stacked from *three* sources (repo-level `profiles/package.mask`,
+  per-profile `package.mask` in the inheritance chain, and user-level
+  `/etc/portage/package.mask`) -- replicating that fully would be close to
+  the size of the whole profile-chain slice again, so v1 only implements
+  the user-level file (with its own `-atom` removal, e.g. across multiple
+  files if `package.mask` is a directory); and real `package.use`/
+  `package.accept_keywords` lean heavily on wildcard atoms in practice
+  (`dev-qt/*`, `*/*`) that `portage-dep`'s v1 grammar explicitly excludes,
+  so matching a candidate against a `package.*` entry is two-tier: try the
+  real, already-verified atom grammar first (covers versioned/slotted
+  entries), and fall back to a new, deliberately bounded wildcard matcher
+  (`*/*`/`category/*`/`*/package` only, no partial-string globs like
+  `cat/pkg-*`) only if that fails to parse the entry at all. On the Python
+  side this fallback isn't needed at all: real `portage.dep.Atom(allow_wildcard=True)`
+  already handles exactly those bounded forms correctly via its own
+  `extended_syntax` path (verified empirically to agree with the Rust
+  side's bounded matcher for them, before relying on it). See the doc
+  comments in `rust/portage-profile/src/lib.rs` and
+  `rust/portage-dep/src/lib.rs` for the full scope writeup.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -222,11 +260,13 @@ PORTING/
   but the binaries and the fixture tree. `smoke_test.sh` builds that image
   and exercises `versions-harness`, `atom-harness`, `use-reduce-harness`,
   a real `emerge --pretend` resolution (a single package, a multi-package
-  dependency graph, and a real-profile-derived USE flag gating a
-  dependency) against the fixture, `ebuild`-dispatch, and batch mode
-  inside it, exiting nonzero on any failure -- including proving the
-  fixture's `make.profile` symlink and multi-parent chain survive the
-  image `COPY` and still resolve correctly.
+  dependency graph, a real-profile-derived USE flag gating a dependency,
+  a `package.mask`-hidden package staying hidden, and a masked-then-
+  `package.unmask`-ed package becoming visible again) against the
+  fixture, `ebuild`-dispatch, and batch mode inside it, exiting nonzero
+  on any failure -- including proving the fixture's `make.profile`
+  symlink and multi-parent chain survive the image `COPY` and still
+  resolve correctly.
 
 Known simplification: `versions-harness`/`portage-versions` compare
 version components as `i128` rather than Python's arbitrary-precision
@@ -259,6 +299,16 @@ actually enable. `repos.conf`'s `location` is relative (resolved against
 `PORTAGE_CONFIGROOT`) purely so the fixture is portable across checkouts
 -- real `repos.conf` files always use absolute paths; see the comment in
 `portage-repo/src/lib.rs`.
+
+`PORTING/fixtures/etc/portage/package.mask`, `package.unmask`, and
+`package.accept_keywords` exercise the mask/unmask/accept_keywords slice:
+`hardmaskedpkg` (masked, never unmasked, so it stays hidden),
+`maskedandunmaskedpkg` (masked, then unmasked, so it's visible again),
+`samepkg` (masked and then immediately un-masked via a `-dev-libs/samepkg`
+line within `package.mask` itself, proving `-atom` removal works, not just
+`package.unmask`), `wildcardkeywordpkg` (only `~amd64`, made visible by a
+`*/wildcardkeywordpkg ~amd64` wildcard entry), and `livekeywordpkg` (no
+`KEYWORDS` at all, like a live/9999 ebuild, made visible by a `**` entry).
 
 `gentoo_snapshot.json` was extracted from a full local Gentoo tree
 checkout (`/.gentoo/repos/gentoo` on the machine this was vendored on) with
@@ -338,6 +388,23 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/diamond
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useflagpkg
 # [ebuild  N] dev-libs/useflagpkg-1.0
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# package.mask: hidden, no matching package.unmask entry
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/hardmaskedpkg
+# !!! no visible ebuild for "dev-libs/hardmaskedpkg"  (exit 1)
+
+# package.mask + package.unmask: masked, then unmasked again -> visible
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/maskedandunmaskedpkg
+# [ebuild  N] dev-libs/maskedandunmaskedpkg-1.0
+
+# package.accept_keywords wildcard ("*/wildcardkeywordpkg ~amd64") makes an
+# otherwise ~amd64-only, not-globally-accepted package visible
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/wildcardkeywordpkg
+# [ebuild  N] dev-libs/wildcardkeywordpkg-1.0
+
+# package.accept_keywords "**" accepts a package with no KEYWORDS at all
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/livekeywordpkg
+# [ebuild  N] dev-libs/livekeywordpkg-9999
 
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \

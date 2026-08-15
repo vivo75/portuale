@@ -4,14 +4,17 @@
 // resolution follow-up work.
 //
 // KNOWN, DOCUMENTED SCOPE CUT vs. the real grammar (see
-// PORTING/rust/atom-harness/README.md for the rationale): no USE deps
-// (`foo[bar]`), no extended/wildcard atoms (`*/foo-1`), no build-ids
-// (`foo-1.0@2`), no repo constraint (`::gentoo`), no slot operators
-// (`:=`, `:*`), no `=*` glob version operator, and no EAPI parametrization
-// (the real grammar changes shape per-EAPI). The Python harness
-// (PORTING/python/atom_harness.py) explicitly rejects atoms using any of
-// these features as INVALID, so both sides agree on the same input
-// language rather than Rust silently accepting a narrower one.
+// PORTING/rust/atom-harness/README.md for the rationale): `Atom`/
+// `parse_atom`/`match_from_list` support no USE deps (`foo[bar]`), no
+// extended/wildcard atoms (`*/foo-1`), no build-ids (`foo-1.0@2`), no repo
+// constraint (`::gentoo`), no slot operators (`:=`, `:*`), no `=*` glob
+// version operator, and no EAPI parametrization (the real grammar changes
+// shape per-EAPI). The Python harness (PORTING/python/atom_harness.py)
+// explicitly rejects atoms using any of these features as INVALID, so
+// both sides agree on the same input language rather than Rust silently
+// accepting a narrower one. (A separate, bounded wildcard-atom API is
+// further down in this file, for package.mask/.unmask/.accept_keywords
+// matching only -- it doesn't change any of the above.)
 //
 // Candidates for match_from_list are plain strings shaped like
 // `category/package-version[-rN][:slot[/subslot]]` -- not full Package
@@ -275,4 +278,114 @@ pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec
             })
             .collect(),
     )
+}
+
+// --- Bounded wildcard atoms (package.mask/.unmask/.accept_keywords) ---
+//
+// A separate, additional API from everything above: `Atom`/`parse_atom`/
+// `match_from_list` are unchanged, so atom-harness's existing v1 grammar
+// contract (which explicitly rejects wildcard atoms as INVALID) is not
+// affected by any of this. This exists for package.mask/.unmask/
+// .accept_keywords matching (see portage-repo), where real files lean
+// heavily on wildcard atoms like "*/*" and "dev-qt/*" in practice.
+//
+// Deliberately bounded, not the full PMS extended-atom-syntax grab-bag:
+// only "*/*", "category/*", and "*/package" -- a literal "*" standing in
+// for an entire category or package name, not a partial-string glob like
+// "cat/pkg-*". No version operators, no slots on a wildcard atom (real
+// PMS extended atoms don't carry them either).
+
+fn cat_full_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(&format!("^{CAT}$")).unwrap())
+}
+
+fn pkg_full_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(&format!("^{PKG}$")).unwrap())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WildcardAtom {
+    pub category: Option<String>,
+    pub package: Option<String>,
+}
+
+/// Parses `s` as a wildcard atom. Returns `None` if `s` doesn't have
+/// exactly one `/`, either side fails to validate as a category/package
+/// token (or `*`), or neither side is actually a `*` (a plain atom with
+/// no wildcard at all isn't this grammar's job -- try `parse_atom` +
+/// `match_from_list` first, which covers versioned/slotted atoms this
+/// can't).
+pub fn parse_wildcard_atom(s: &str) -> Option<WildcardAtom> {
+    let (cat, pkg) = s.split_once('/')?;
+    if pkg.contains('/') {
+        return None;
+    }
+
+    let category = if cat == "*" {
+        None
+    } else if cat_full_re().is_match(cat) {
+        Some(cat.to_string())
+    } else {
+        return None;
+    };
+    let package = if pkg == "*" {
+        None
+    } else if pkg_full_re().is_match(pkg) {
+        Some(pkg.to_string())
+    } else {
+        return None;
+    };
+
+    if category.is_some() && package.is_some() {
+        return None;
+    }
+    Some(WildcardAtom { category, package })
+}
+
+pub fn wildcard_atom_matches(atom: &WildcardAtom, category: &str, package: &str) -> bool {
+    atom.category.as_deref().is_none_or(|c| c == category)
+        && atom.package.as_deref().is_none_or(|p| p == package)
+}
+
+#[cfg(test)]
+mod wildcard_tests {
+    use super::*;
+
+    #[test]
+    fn any_any_matches_everything() {
+        let w = parse_wildcard_atom("*/*").unwrap();
+        assert!(wildcard_atom_matches(&w, "dev-libs", "foo"));
+        assert!(wildcard_atom_matches(&w, "app-misc", "bar"));
+    }
+
+    #[test]
+    fn category_wildcard_matches_only_that_category() {
+        let w = parse_wildcard_atom("dev-qt/*").unwrap();
+        assert!(wildcard_atom_matches(&w, "dev-qt", "qtcore"));
+        assert!(!wildcard_atom_matches(&w, "dev-libs", "qtcore"));
+    }
+
+    #[test]
+    fn package_wildcard_matches_only_that_package_name() {
+        let w = parse_wildcard_atom("*/foo").unwrap();
+        assert!(wildcard_atom_matches(&w, "dev-libs", "foo"));
+        assert!(wildcard_atom_matches(&w, "app-misc", "foo"));
+        assert!(!wildcard_atom_matches(&w, "dev-libs", "bar"));
+    }
+
+    #[test]
+    fn plain_atom_with_no_wildcard_is_rejected() {
+        // Not this grammar's job -- callers should try parse_atom first.
+        assert_eq!(parse_wildcard_atom("dev-libs/foo"), None);
+    }
+
+    #[test]
+    fn malformed_input_is_rejected() {
+        assert_eq!(parse_wildcard_atom("no-slash-at-all"), None);
+        assert_eq!(parse_wildcard_atom("dev-libs/"), None);
+        assert_eq!(parse_wildcard_atom("/foo"), None);
+        assert_eq!(parse_wildcard_atom("dev-libs/foo/bar"), None);
+    }
 }

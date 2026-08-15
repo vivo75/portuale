@@ -1,0 +1,4 @@
+# fixture package.unmask: cancels the package.mask entry for this one
+# specific package; dev-libs/hardmaskedpkg has no matching entry here, so
+# it stays masked.
+dev-libs/maskedandunmaskedpkg

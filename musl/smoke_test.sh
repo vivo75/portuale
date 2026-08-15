@@ -81,6 +81,25 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend resolves real profile-derived USE flags inside the scratch container" \
     test "${actual}" = "$(printf '[ebuild  N] dev-libs/useflagpkg-1.0\n[ebuild  N] dev-libs/newpkg-1.0')"
 
+# emerge --pretend against package.mask/package.unmask (see
+# PORTING/fixtures/etc/portage/): a masked package stays hidden, and a
+# masked-then-unmasked one is visible, inside the minimal container.
+if "${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/hardmaskedpkg >/dev/null 2>&1; then
+    masked_exit=0
+else
+    masked_exit=$?
+fi
+check "emerge --pretend hides a package.mask-ed package inside the scratch container" \
+    test "${masked_exit}" -eq 1
+
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/maskedandunmaskedpkg)
+check "emerge --pretend respects package.unmask inside the scratch container" \
+    test "${actual}" = "[ebuild  N] dev-libs/maskedandunmaskedpkg-1.0"
+
 actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
 check "ebuild dispatch prints the ebuild stub" \
     grep -q "ebuild (pilot stub)" <<<"${actual}"

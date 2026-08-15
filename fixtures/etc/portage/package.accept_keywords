@@ -1,0 +1,7 @@
+# fixture package.accept_keywords: a bounded-wildcard entry (package name
+# only, deliberately not "dev-libs/*" so it can't accidentally affect
+# dev-libs/maskedpkg's own ~amd64-only-not-visible contract test) and a
+# "**" entry (accept unconditionally, including packages with no KEYWORDS
+# at all).
+*/wildcardkeywordpkg ~amd64
+dev-libs/livekeywordpkg **

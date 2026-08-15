@@ -1,14 +1,16 @@
 """Black-box contract suite for the `emerge --pretend` pilot slice (see
 PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the full
 scope writeup, including the dependency-recursion follow-up in
-resolve_pretend_graph and the profile/make.conf -> real USE/ACCEPT_KEYWORDS
-follow-up in portage-profile). Drives the real compiled `emerge` binary
+resolve_pretend_graph, the profile/make.conf -> real USE/ACCEPT_KEYWORDS
+follow-up in portage-profile, and the package.mask/.unmask/.accept_keywords
+follow-up on top of that). Drives the real compiled `emerge` binary
 (multicall, dispatched via a real symlink -- not a neutral harness, since
 emerge is an actual product surface per PROMPT.md's testing decision) and
 the Python reference implementation identically, against the synthetic
-fixture tree at PORTING/fixtures (whose repos.conf/make.profile/make.conf
-now drive real config resolution, not hardcoded values), and asserts their
-stdout, stderr, and exit codes all match exactly.
+fixture tree at PORTING/fixtures (whose repos.conf/make.profile/make.conf/
+package.mask/package.unmask/package.accept_keywords now drive real config
+resolution, not hardcoded values), and asserts their stdout, stderr, and
+exit codes all match exactly.
 """
 
 import subprocess
@@ -40,6 +42,11 @@ CASES = [
     ("recursion: unresolvable dep doesn't fail the graph", ["--pretend", "dev-libs/missingdep"], 0),
     ("recursion: dedup across DEPEND and RDEPEND", ["--pretend", "dev-libs/dualdep"], 0),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
+    ("package.mask: hidden, no unmask", ["--pretend", "dev-libs/hardmaskedpkg"], 1),
+    ("package.mask + package.unmask: masked then unmasked", ["--pretend", "dev-libs/maskedandunmaskedpkg"], 0),
+    ("package.mask: -atom removal leaves candidate unaffected", ["--pretend", "dev-libs/samepkg"], 0),
+    ("package.accept_keywords: wildcard extends visibility", ["--pretend", "dev-libs/wildcardkeywordpkg"], 0),
+    ("package.accept_keywords: ** accepts no-keywords package", ["--pretend", "dev-libs/livekeywordpkg"], 0),
 ]
 
 
@@ -144,3 +151,64 @@ def test_real_use_flags_from_profile_gate_a_dependency(emerge_binary, fixture_en
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
     assert "hiddendep" not in result.stdout
+
+
+def test_package_mask_hides_with_no_matching_unmask(emerge_binary, fixture_env):
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/hardmaskedpkg"], fixture_env)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == '!!! no visible ebuild for "dev-libs/hardmaskedpkg"'
+    )
+
+
+def test_package_unmask_cancels_a_matching_package_mask(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/maskedandunmaskedpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/maskedandunmaskedpkg-1.0"
+
+
+def test_package_mask_minus_atom_removal_leaves_candidate_unaffected(
+    emerge_binary, fixture_env
+):
+    """PORTING/fixtures/etc/portage/package.mask masks dev-libs/samepkg and
+    then immediately un-masks it again via "-dev-libs/samepkg" within the
+    same file -- it must resolve completely normally (already installed),
+    proving -atom removal actually took effect rather than the mask
+    lingering."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/samepkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "dev-libs/samepkg-1.0 is already installed; nothing to do"
+
+
+def test_package_accept_keywords_wildcard_extends_visibility(emerge_binary, fixture_env):
+    """dev-libs/wildcardkeywordpkg is only ~amd64 (not globally accepted),
+    but PORTING/fixtures/etc/portage/package.accept_keywords has a
+    "*/wildcardkeywordpkg ~amd64" entry that makes it visible."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/wildcardkeywordpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/wildcardkeywordpkg-1.0"
+
+
+def test_package_accept_keywords_double_star_accepts_no_keywords_package(
+    emerge_binary, fixture_env
+):
+    """dev-libs/livekeywordpkg has no KEYWORDS at all (like a live/9999
+    ebuild), but a "**" package.accept_keywords entry accepts it
+    unconditionally."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/livekeywordpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/livekeywordpkg-9999"
+
+
+def test_unrelated_masked_by_keywords_package_is_still_hidden(emerge_binary, fixture_env):
+    """Regression guard: the "*/wildcardkeywordpkg" package.accept_keywords
+    entry is scoped to that package name only (not "dev-libs/*"), so it
+    must not accidentally make dev-libs/maskedpkg visible too."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/maskedpkg"], fixture_env)
+    assert result.returncode == 1

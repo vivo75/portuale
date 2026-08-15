@@ -1,0 +1,8 @@
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source (see
+# portage-profile's doc comment on why real repo/profile-level masking
+# isn't implemented -- this only tests removal within the user-level file).
+dev-libs/hardmaskedpkg
+dev-libs/maskedandunmaskedpkg
+dev-libs/samepkg
+-dev-libs/samepkg

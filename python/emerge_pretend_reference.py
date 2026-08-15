@@ -6,14 +6,22 @@ Rust side -- main repo only -- so the two can be contract-tested against
 each other, argv-for-argv and byte-for-byte on stdout, the same way every
 other pilot slice is.
 
-USE/ACCEPT_KEYWORDS (see resolve_config) come from a real profile chain +
-make.conf, not a hardcoded stand-in -- mirroring
-PORTING/rust/portage-profile/src/lib.rs exactly (own implementation, not a
-wrapper around real config.py; see that crate's doc comment for the full
-algorithm and its documented scope cuts: no cross-repo profile parents,
-no USE_EXPAND, no package.use/.mask/.accept_keywords, only the
-`defaults`/`conf` USE_ORDER layers, and the real config.py quirk where
-`${VAR}` substitution excludes USE across profile levels).
+USE/ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords (see
+resolve_config) come from a real profile chain + make.conf + package.*,
+not a hardcoded stand-in -- mirroring PORTING/rust/portage-profile/src/lib.rs
+exactly (own implementation, not a wrapper around real config.py; see that
+crate's doc comment for the full algorithm and its documented scope cuts:
+no cross-repo profile parents, no USE_EXPAND, no package.use, only the
+`defaults`/`conf` USE_ORDER layers, user-level package.mask/.unmask/
+.accept_keywords only (no repo/profile-level stacking), and the real
+config.py quirk where `${VAR}` substitution excludes USE across profile
+levels). Matching a candidate against a package.mask/.unmask/
+.accept_keywords entry reuses the real portage.dep.Atom(allow_wildcard=True)
++ match_from_list directly, since -- unlike the Rust side, whose v1 Atom
+grammar rejects wildcard atoms outright and needs a separate bounded
+fallback -- real Atom already handles "*/*"/"category/*"/"*/package"
+correctly via its own extended_syntax path (verified empirically to agree
+with the Rust side's bounded matcher for exactly those forms).
 
 Dependency recursion (see resolve_pretend_graph) walks DEPEND+RDEPEND via
 the real portage.dep.use_reduce(flat=True), with its own documented scope
@@ -100,6 +108,59 @@ def find_main_repo(config_root):
     return main_repo, location
 
 
+def _read_config_lines(path):
+    """Reads every non-comment, non-blank, trimmed line from `path`, which
+    may be a single file or a directory of files merged in sorted-filename
+    order. A missing path yields an empty list, not an error."""
+
+    def read_file_lines(file_path):
+        with open(file_path) as f:
+            return [
+                line.strip()
+                for line in f
+                if line.strip() and not line.strip().startswith("#")
+            ]
+
+    lines = []
+    if os.path.isdir(path):
+        for name in sorted(os.listdir(path)):
+            file_path = os.path.join(path, name)
+            if os.path.isfile(file_path):
+                lines.extend(read_file_lines(file_path))
+    elif os.path.isfile(path):
+        lines.extend(read_file_lines(path))
+    return lines
+
+
+def _load_package_mask(config_root):
+    path = os.path.join(config_root, "etc", "portage", "package.mask")
+    result = []
+    for line in _read_config_lines(path):
+        if line.startswith("-"):
+            removed = line[1:]
+            result = [x for x in result if x != removed]
+        else:
+            result.append(line)
+    return result
+
+
+def _load_package_unmask(config_root):
+    path = os.path.join(config_root, "etc", "portage", "package.unmask")
+    return [line for line in _read_config_lines(path) if not line.startswith("-")]
+
+
+def _load_package_accept_keywords(config_root):
+    path = os.path.join(config_root, "etc", "portage", "package.accept_keywords")
+    result = []
+    for line in _read_config_lines(path):
+        parts = line.split()
+        atom, keywords = parts[0], parts[1:]
+        if not keywords:
+            continue
+        result.append((atom, keywords))
+    return result
+
+
 def _strip_version_prefix(dir_name, package):
     """A directory entry is only accepted as "<package>-<version>" if what
     follows the prefix looks like a version (starts with a digit) --
@@ -148,8 +209,48 @@ def list_candidates(repo_location, category, package):
     return candidates
 
 
-def is_visible(candidate, accept_keywords):
-    return bool(accept_keywords & set(candidate["keywords"]))
+def _matches_config_entry(entry, candidate_str, category, package):
+    """Whether `entry` (a package.mask/.unmask/.accept_keywords line)
+    matches this candidate. See the module doc comment: unlike the Rust
+    side, this reuses real Atom(allow_wildcard=True) + match_from_list
+    directly rather than needing a separate bounded wildcard fallback."""
+    try:
+        atom = Atom(entry, allow_wildcard=True)
+    except InvalidAtom:
+        return False
+    return bool(match_from_list(atom, [candidate_str]))
+
+
+def is_visible(candidate, category, package, config):
+    """A candidate is visible if it isn't masked (matches a package.mask
+    entry and no package.unmask entry) and its KEYWORDS intersect the
+    accepted set -- the global config["accept_keywords"], plus any extra
+    keywords contributed by a matching package.accept_keywords entry,
+    with a "**" token in such an entry meaning "accept unconditionally"
+    for matching candidates (even ones with empty/no KEYWORDS)."""
+    candidate_str = f"{category}/{package}-{candidate['version']}:{candidate['slot']}"
+
+    masked = any(
+        _matches_config_entry(m, candidate_str, category, package)
+        for m in config["package_mask"]
+    ) and not any(
+        _matches_config_entry(u, candidate_str, category, package)
+        for u in config["package_unmask"]
+    )
+    if masked:
+        return False
+
+    accept_any = False
+    extra_keywords = set()
+    for atom, keywords in config["package_accept_keywords"]:
+        if _matches_config_entry(atom, candidate_str, category, package):
+            if "**" in keywords:
+                accept_any = True
+            extra_keywords.update(keywords)
+    if accept_any:
+        return True
+
+    return bool((config["accept_keywords"] | extra_keywords) & set(candidate["keywords"]))
 
 
 def _max_version(versions):
@@ -301,13 +402,16 @@ def _process_make_conf_file(path, config_root, scalars, use_flags, accept_keywor
 
 
 def resolve_config(config_root):
-    """Computes real USE/ACCEPT_KEYWORDS: the profile chain rooted at
+    """Computes real USE/ACCEPT_KEYWORDS/package.mask/.unmask/
+    .accept_keywords: the profile chain rooted at
     <config_root>/etc/portage/make.profile (if it exists), then
     <config_root>/etc/portage/make.conf (if it exists) as the final,
-    highest-priority layer. Own implementation (not a wrapper around real
-    config.py), mirroring portage-profile/src/lib.rs's resolve_config
-    exactly -- see that crate's doc comment for the full algorithm and its
-    documented scope cuts."""
+    highest-priority USE/ACCEPT_KEYWORDS layer, then package.*. Own
+    implementation (not a wrapper around real config.py), mirroring
+    portage-profile/src/lib.rs's resolve_config exactly -- see that
+    crate's doc comment for the full algorithm and its documented scope
+    cuts. Returns a dict with keys "use_flags", "accept_keywords",
+    "package_mask", "package_unmask", "package_accept_keywords"."""
     use_flags = set()
     accept_keywords = set()
     scalars = {}
@@ -329,10 +433,16 @@ def resolve_config(config_root):
     if os.path.isfile(make_conf):
         _process_make_conf_file(make_conf, config_root, scalars, use_flags, accept_keywords, set())
 
-    return use_flags, accept_keywords
+    return {
+        "use_flags": use_flags,
+        "accept_keywords": accept_keywords,
+        "package_mask": _load_package_mask(config_root),
+        "package_unmask": _load_package_unmask(config_root),
+        "package_accept_keywords": _load_package_accept_keywords(config_root),
+    }
 
 
-def resolve_pretend(repo_location, root, atom_str, accept_keywords):
+def resolve_pretend(repo_location, root, atom_str, config):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
     supports -- operator, slot, not just a bare category/package),
@@ -345,7 +455,7 @@ def resolve_pretend(repo_location, root, atom_str, accept_keywords):
     category, package = atom.cp.split("/", 1)
 
     candidates = list_candidates(repo_location, category, package)
-    visible = [c for c in candidates if is_visible(c, accept_keywords)]
+    visible = [c for c in candidates if is_visible(c, category, package, config)]
     if not visible:
         return ("no_visible_candidate",)
 
@@ -369,7 +479,7 @@ def resolve_pretend(repo_location, root, atom_str, accept_keywords):
     return ("new", best)
 
 
-def resolve_pretend_graph(config_root, root, atom_str, use_flags, accept_keywords):
+def resolve_pretend_graph(config_root, root, atom_str, config):
     """Recursively resolves `atom_str` and -- for packages that would
     newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
     Returns a list of (category, package, outcome) tuples, one per
@@ -394,7 +504,7 @@ def resolve_pretend_graph(config_root, root, atom_str, use_flags, accept_keyword
             continue
         visited.add(key)
 
-        outcome = resolve_pretend(repo_location, root, current_atom_str, accept_keywords)
+        outcome = resolve_pretend(repo_location, root, current_atom_str, config)
         entries.append((category, package, outcome))
 
         if outcome[0] == "new":
@@ -411,7 +521,7 @@ def resolve_pretend_graph(config_root, root, atom_str, use_flags, accept_keyword
             continue
         depstr = " ".join(metadata[k] for k in ("DEPEND", "RDEPEND") if metadata.get(k))
         try:
-            flat_deps = use_reduce(depstr, flat=True, uselist=use_flags)
+            flat_deps = use_reduce(depstr, flat=True, uselist=config["use_flags"])
         except InvalidDependString:
             continue
         for tok in flat_deps:
@@ -500,10 +610,8 @@ def run(args):
         )
         return 2
     try:
-        use_flags, accept_keywords = resolve_config(_config_root())
-        entries = resolve_pretend_graph(
-            _config_root(), _root(), atom_arg, use_flags, accept_keywords
-        )
+        config = resolve_config(_config_root())
+        entries = resolve_pretend_graph(_config_root(), _root(), atom_arg, config)
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
