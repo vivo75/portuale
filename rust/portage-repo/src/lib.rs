@@ -4,8 +4,6 @@
 //
 // KNOWN, DOCUMENTED SCOPE CUTS for v1 (all confirmed with the user before
 // implementing):
-//   - ACCEPT_KEYWORDS is hardcoded to "amd64" (`ACCEPT_KEYWORDS` const
-//     below); make.conf/profile stacking is not read at all.
 //   - Only the main repo (`repos.conf`'s `[DEFAULT] main-repo`) is
 //     consulted; overlays are ignored.
 //   - Ebuild metadata comes from `metadata/md5-cache/<cat>/<pf>` (plain
@@ -16,6 +14,12 @@
 //     ebuild phase execution").
 //   - No package.mask/.use/.accept_keywords, no slot conflicts, no
 //     virtuals, no backtracking.
+//
+// USE and ACCEPT_KEYWORDS are no longer hardcoded: they're computed by
+// `portage_profile::resolve_config` (real profile chain + make.conf, with
+// its own documented scope cuts -- see that crate's doc comment) and
+// threaded through `resolve_pretend`/`resolve_pretend_graph` as plain
+// parameters, keeping this crate decoupled from profile-parsing concerns.
 //
 // Dependency recursion (see `resolve_pretend_graph` below) walks DEPEND
 // and RDEPEND only, with its own documented scope cuts -- see that
@@ -33,10 +37,6 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// v1 hardcodes visibility to stable amd64 only -- see the module doc
-/// comment.
-pub const ACCEPT_KEYWORDS: &str = "amd64";
 
 pub fn config_root_from_env() -> PathBuf {
     std::env::var_os("PORTAGE_CONFIGROOT")
@@ -231,8 +231,11 @@ pub fn list_candidates(
     Ok(candidates)
 }
 
-pub fn is_visible(candidate: &Candidate) -> bool {
-    candidate.keywords.iter().any(|k| k == ACCEPT_KEYWORDS)
+pub fn is_visible(candidate: &Candidate, accept_keywords: &HashSet<String>) -> bool {
+    candidate
+        .keywords
+        .iter()
+        .any(|k| accept_keywords.contains(k))
 }
 
 fn vercmp_ordering(a: &str, b: &str) -> Ordering {
@@ -279,12 +282,16 @@ pub fn resolve_pretend(
     repo_location: &Path,
     root: &Path,
     atom_str: &str,
+    accept_keywords: &HashSet<String>,
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
 
     let candidates = list_candidates(repo_location, &atom.category, &atom.package)?;
-    let visible: Vec<&Candidate> = candidates.iter().filter(|c| is_visible(c)).collect();
+    let visible: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| is_visible(c, accept_keywords))
+        .collect();
     if visible.is_empty() {
         return Ok(PretendOutcome::NoVisibleCandidate);
     }
@@ -352,10 +359,11 @@ pub struct GraphEntry {
 ///   - Only DEPEND and RDEPEND are walked, not BDEPEND/IDEPEND/PDEPEND;
 ///     atoms are deduped across both fields (and across packages) via the
 ///     shared visited set.
-///   - USE is always empty (matches the base slice's hardcoded
-///     ACCEPT_KEYWORDS-only visibility, no profile/make.conf), so
-///     use_reduce evaluates every `flag?` conditional as inactive and
-///     every `!flag?` as active.
+///   - `use_flags`/`accept_keywords` are supplied by the caller (computed
+///     via `portage_profile::resolve_config` -- see that crate's doc
+///     comment for what real profile/make.conf mechanics are and aren't
+///     implemented) rather than being read here; this crate stays
+///     decoupled from profile-parsing concerns.
 ///   - `||` (any-of) groups: `use_reduce(flat=True)` deliberately discards
 ///     group boundaries (that's what "flat" means), so there is no
 ///     reliable way to identify "the first alternative" from its output
@@ -381,6 +389,8 @@ pub fn resolve_pretend_graph(
     config_root: &Path,
     root: &Path,
     atom_str: &str,
+    use_flags: &HashSet<String>,
+    accept_keywords: &HashSet<String>,
 ) -> Result<Vec<GraphEntry>, String> {
     let repo = find_main_repo(config_root)?;
 
@@ -401,7 +411,7 @@ pub fn resolve_pretend_graph(
             continue;
         }
 
-        let outcome = resolve_pretend(&repo.location, root, &current_atom)?;
+        let outcome = resolve_pretend(&repo.location, root, &current_atom, accept_keywords)?;
         let resolved_version = match &outcome {
             PretendOutcome::New { version } => Some(version.clone()),
             PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
@@ -432,7 +442,7 @@ pub fn resolve_pretend_graph(
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat(
             &tokens,
-            &HashSet::new(),
+            use_flags,
             portage_use_reduce::MatchMode::Normal,
         ) else {
             continue;
@@ -459,11 +469,22 @@ mod tests {
             .expect("PORTING/fixtures must exist")
     }
 
+    /// These unit tests exercise portage-repo's own resolution logic in
+    /// isolation, independent of real profile/make.conf parsing (that's
+    /// portage-profile's job, tested separately) -- so visibility is
+    /// pinned to a fixed "amd64" set here, matching what the fixture's
+    /// real profile chain also happens to resolve to (see
+    /// PORTING/fixtures/repo/profiles and test_emerge_pretend_contract.py
+    /// for the end-to-end version of this).
+    fn test_accept_keywords() -> HashSet<String> {
+        HashSet::from(["amd64".to_string()])
+    }
+
     fn resolve(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
         let repo = find_main_repo(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repo.location, &root, &atom_str)
+        resolve_pretend(&repo.location, &root, &atom_str, &test_accept_keywords())
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -538,11 +559,17 @@ mod tests {
 
     fn graph(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        resolve_pretend_graph(&root, &root, atom_str)
-            .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-            .into_iter()
-            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-            .collect()
+        resolve_pretend_graph(
+            &root,
+            &root,
+            atom_str,
+            &HashSet::new(),
+            &test_accept_keywords(),
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
     }
 
     #[test]
@@ -639,5 +666,33 @@ mod tests {
         let entries = graph("dev-libs/dualdep");
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(names, vec!["dev-libs/dualdep", "dev-libs/newpkg"]);
+    }
+
+    /// End-to-end wiring check: uses the *real* profile-resolved config
+    /// (via portage-profile, a dev-dependency only) instead of the fixed
+    /// test_accept_keywords()/empty-USE sets every other test in this file
+    /// uses, proving real USE flags -- not just a hardcoded empty set --
+    /// actually reach use_reduce and change dependency resolution.
+    /// PORTING/fixtures/repo/profiles resolves "foo" enabled and
+    /// "missingflag" disabled (see portage-profile's own fixture test),
+    /// so useflagpkg's `foo? ( dev-libs/newpkg )` must be pulled in and
+    /// its `missingflag? ( dev-libs/hiddendep )` must not be.
+    #[test]
+    fn real_resolved_use_flags_drive_dependency_recursion() {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
+        let entries = resolve_pretend_graph(
+            &root,
+            &root,
+            "dev-libs/useflagpkg",
+            &config.use_flags,
+            &config.accept_keywords,
+        )
+        .expect("resolve_pretend_graph must succeed");
+        let full_names: Vec<String> = entries
+            .iter()
+            .map(|e| format!("{}/{}", e.category, e.package))
+            .collect();
+        assert_eq!(full_names, vec!["dev-libs/useflagpkg", "dev-libs/newpkg"]);
     }
 }

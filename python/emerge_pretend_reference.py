@@ -2,10 +2,18 @@
 """Python reference implementation for the `emerge --pretend` pilot slice
 (see PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the
 full scope writeup). Mirrors the exact same restricted v1 algorithm as the
-Rust side -- hardcoded ACCEPT_KEYWORDS=amd64, no profile/make.conf
-stacking, main repo only -- so the two can be contract-tested against each
-other, argv-for-argv and byte-for-byte on stdout, the same way every other
-pilot slice is.
+Rust side -- main repo only -- so the two can be contract-tested against
+each other, argv-for-argv and byte-for-byte on stdout, the same way every
+other pilot slice is.
+
+USE/ACCEPT_KEYWORDS (see resolve_config) come from a real profile chain +
+make.conf, not a hardcoded stand-in -- mirroring
+PORTING/rust/portage-profile/src/lib.rs exactly (own implementation, not a
+wrapper around real config.py; see that crate's doc comment for the full
+algorithm and its documented scope cuts: no cross-repo profile parents,
+no USE_EXPAND, no package.use/.mask/.accept_keywords, only the
+`defaults`/`conf` USE_ORDER layers, and the real config.py quirk where
+`${VAR}` substitution excludes USE across profile levels).
 
 Dependency recursion (see resolve_pretend_graph) walks DEPEND+RDEPEND via
 the real portage.dep.use_reduce(flat=True), with its own documented scope
@@ -36,6 +44,7 @@ variables, defaulting to "/" -- see lib/portage/const.py.
 
 import configparser
 import os
+import re
 import sys
 from collections import deque
 
@@ -44,8 +53,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "lib"))
 from portage.dep import Atom, match_from_list, use_reduce
 from portage.exception import InvalidAtom, InvalidDependString
 from portage.versions import vercmp
-
-ACCEPT_KEYWORDS = "amd64"
 
 
 class ResolutionError(Exception):
@@ -141,8 +148,8 @@ def list_candidates(repo_location, category, package):
     return candidates
 
 
-def is_visible(candidate):
-    return ACCEPT_KEYWORDS in candidate["keywords"]
+def is_visible(candidate, accept_keywords):
+    return bool(accept_keywords & set(candidate["keywords"]))
 
 
 def _max_version(versions):
@@ -167,7 +174,165 @@ def installed_versions(root, category, package):
     return versions
 
 
-def resolve_pretend(repo_location, root, atom_str):
+_VAR_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _substitute(value, scalars):
+    """Substitutes ${VARNAME} references against `scalars`, matching
+    bash's default (unset-as-empty) behavior for unknown variables."""
+    return _VAR_REF_RE.sub(lambda m: scalars.get(m.group(1), ""), value)
+
+
+def _parse_kv_line(line):
+    """Parses one KEY="value" / KEY='value' / KEY=value line. Returns
+    None for comments, blank lines, or anything that isn't a simple
+    assignment."""
+    line = line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        return None
+    key, _, value = line.partition("=")
+    key = key.strip()
+    if not _KEY_RE.match(key):
+        return None
+    value = value.strip()
+    if len(value) >= 2 and (
+        (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")
+    ):
+        value = value[1:-1]
+    return key, value
+
+
+def _apply_incremental(tokens, target_set):
+    """Applies real incremental-variable token semantics: "-*" clears
+    everything accumulated so far, "-flag" removes, "flag"/"+flag" adds."""
+    for tok in tokens.split():
+        if tok == "-*":
+            target_set.clear()
+        elif tok.startswith("-"):
+            target_set.discard(tok[1:])
+        elif tok.startswith("+"):
+            if tok[1:]:
+                target_set.add(tok[1:])
+        else:
+            target_set.add(tok)
+
+
+def _process_config_lines(text, scalars, use_flags, accept_keywords):
+    for line in text.splitlines():
+        parsed = _parse_kv_line(line)
+        if parsed is None:
+            continue
+        key, raw_value = parsed
+        value = _substitute(raw_value, scalars)
+        if key == "USE":
+            _apply_incremental(value, use_flags)
+        elif key == "ACCEPT_KEYWORDS":
+            _apply_incremental(value, accept_keywords)
+        scalars[key] = value
+
+
+def _read_parent_lines(profile_dir):
+    parent_path = os.path.join(profile_dir, "parent")
+    if not os.path.isfile(parent_path):
+        return []
+    with open(parent_path) as f:
+        return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
+
+
+def _visit_profile(directory, visited, chain):
+    canon = os.path.realpath(directory)
+    if not os.path.isdir(canon):
+        raise ResolutionError(f"resolving profile {directory}: not a directory")
+    if canon in visited:
+        return
+    visited.add(canon)
+    for parent in _read_parent_lines(canon):
+        if ":" in parent:
+            raise ResolutionError(
+                f'cross-repo profile parent "{parent}" (referenced from {canon}) '
+                "is out of v1 scope"
+            )
+        _visit_profile(os.path.join(canon, parent), visited, chain)
+    chain.append(canon)
+
+
+def _resolve_profile_chain(leaf):
+    visited = set()
+    chain = []
+    _visit_profile(leaf, visited, chain)
+    return chain
+
+
+def _process_make_conf_file(path, config_root, scalars, use_flags, accept_keywords, visited_sources):
+    """Resolves "source <path>" against config_root as if it were "/"
+    (chroot-style), matching PORTAGE_CONFIGROOT/ROOT semantics elsewhere
+    in this pilot. A missing sourced file is silently skipped."""
+    if not os.path.isfile(path):
+        return
+    canon = os.path.realpath(path)
+    if canon in visited_sources:
+        return
+    visited_sources.add(canon)
+    with open(canon) as f:
+        text = f.read()
+    for line in text.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("source "):
+            sourced = trimmed[len("source ") :].strip()
+            if os.path.isabs(sourced):
+                resolved = os.path.join(config_root, sourced.lstrip("/"))
+            else:
+                resolved = os.path.join(os.path.dirname(canon), sourced)
+            _process_make_conf_file(
+                resolved, config_root, scalars, use_flags, accept_keywords, visited_sources
+            )
+            continue
+        parsed = _parse_kv_line(trimmed)
+        if parsed is None:
+            continue
+        key, raw_value = parsed
+        value = _substitute(raw_value, scalars)
+        if key == "USE":
+            _apply_incremental(value, use_flags)
+        elif key == "ACCEPT_KEYWORDS":
+            _apply_incremental(value, accept_keywords)
+        scalars[key] = value
+
+
+def resolve_config(config_root):
+    """Computes real USE/ACCEPT_KEYWORDS: the profile chain rooted at
+    <config_root>/etc/portage/make.profile (if it exists), then
+    <config_root>/etc/portage/make.conf (if it exists) as the final,
+    highest-priority layer. Own implementation (not a wrapper around real
+    config.py), mirroring portage-profile/src/lib.rs's resolve_config
+    exactly -- see that crate's doc comment for the full algorithm and its
+    documented scope cuts."""
+    use_flags = set()
+    accept_keywords = set()
+    scalars = {}
+
+    make_profile = os.path.join(config_root, "etc", "portage", "make.profile")
+    if os.path.exists(make_profile):
+        for level in _resolve_profile_chain(make_profile):
+            make_defaults = os.path.join(level, "make.defaults")
+            if not os.path.isfile(make_defaults):
+                continue
+            # Real config.py quirk: USE is excluded from cross-level
+            # substitution -- see the module doc comment.
+            scalars.pop("USE", None)
+            with open(make_defaults) as f:
+                text = f.read()
+            _process_config_lines(text, scalars, use_flags, accept_keywords)
+
+    make_conf = os.path.join(config_root, "etc", "portage", "make.conf")
+    if os.path.isfile(make_conf):
+        _process_make_conf_file(make_conf, config_root, scalars, use_flags, accept_keywords, set())
+
+    return use_flags, accept_keywords
+
+
+def resolve_pretend(repo_location, root, atom_str, accept_keywords):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
     supports -- operator, slot, not just a bare category/package),
@@ -180,7 +345,7 @@ def resolve_pretend(repo_location, root, atom_str):
     category, package = atom.cp.split("/", 1)
 
     candidates = list_candidates(repo_location, category, package)
-    visible = [c for c in candidates if is_visible(c)]
+    visible = [c for c in candidates if is_visible(c, accept_keywords)]
     if not visible:
         return ("no_visible_candidate",)
 
@@ -204,7 +369,7 @@ def resolve_pretend(repo_location, root, atom_str):
     return ("new", best)
 
 
-def resolve_pretend_graph(config_root, root, atom_str):
+def resolve_pretend_graph(config_root, root, atom_str, use_flags, accept_keywords):
     """Recursively resolves `atom_str` and -- for packages that would
     newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
     Returns a list of (category, package, outcome) tuples, one per
@@ -229,7 +394,7 @@ def resolve_pretend_graph(config_root, root, atom_str):
             continue
         visited.add(key)
 
-        outcome = resolve_pretend(repo_location, root, current_atom_str)
+        outcome = resolve_pretend(repo_location, root, current_atom_str, accept_keywords)
         entries.append((category, package, outcome))
 
         if outcome[0] == "new":
@@ -246,7 +411,7 @@ def resolve_pretend_graph(config_root, root, atom_str):
             continue
         depstr = " ".join(metadata[k] for k in ("DEPEND", "RDEPEND") if metadata.get(k))
         try:
-            flat_deps = use_reduce(depstr, flat=True)
+            flat_deps = use_reduce(depstr, flat=True, uselist=use_flags)
         except InvalidDependString:
             continue
         for tok in flat_deps:
@@ -335,7 +500,10 @@ def run(args):
         )
         return 2
     try:
-        entries = resolve_pretend_graph(_config_root(), _root(), atom_arg)
+        use_flags, accept_keywords = resolve_config(_config_root())
+        entries = resolve_pretend_graph(
+            _config_root(), _root(), atom_arg, use_flags, accept_keywords
+        )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1

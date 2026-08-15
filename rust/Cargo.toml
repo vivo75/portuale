@@ -4,6 +4,7 @@ members = [
     "portage-versions",
     "portage-dep",
     "portage-use-reduce",
+    "portage-profile",
     "portage-repo",
     "versions-harness",
     "atom-harness",

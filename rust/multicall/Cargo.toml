@@ -6,3 +6,4 @@ edition.workspace = true
 [dependencies]
 portage-dep = { path = "../portage-dep" }
 portage-repo = { path = "../portage-repo" }
+portage-profile = { path = "../portage-profile" }

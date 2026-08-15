@@ -1,12 +1,14 @@
 """Black-box contract suite for the `emerge --pretend` pilot slice (see
 PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the full
 scope writeup, including the dependency-recursion follow-up in
-resolve_pretend_graph). Drives the real compiled `emerge` binary
+resolve_pretend_graph and the profile/make.conf -> real USE/ACCEPT_KEYWORDS
+follow-up in portage-profile). Drives the real compiled `emerge` binary
 (multicall, dispatched via a real symlink -- not a neutral harness, since
 emerge is an actual product surface per PROMPT.md's testing decision) and
 the Python reference implementation identically, against the synthetic
-fixture tree at PORTING/fixtures, and asserts their stdout, stderr, and
-exit codes all match exactly.
+fixture tree at PORTING/fixtures (whose repos.conf/make.profile/make.conf
+now drive real config resolution, not hardcoded values), and asserts their
+stdout, stderr, and exit codes all match exactly.
 """
 
 import subprocess
@@ -37,6 +39,7 @@ CASES = [
     ("recursion: any-of group resolves every alternative", ["--pretend", "dev-libs/anyof"], 0),
     ("recursion: unresolvable dep doesn't fail the graph", ["--pretend", "dev-libs/missingdep"], 0),
     ("recursion: dedup across DEPEND and RDEPEND", ["--pretend", "dev-libs/dualdep"], 0),
+    ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
 ]
 
 
@@ -124,3 +127,20 @@ def test_unresolvable_dependency_is_reported_not_silently_dropped(
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"'
     )
+
+
+def test_real_use_flags_from_profile_gate_a_dependency(emerge_binary, fixture_env):
+    """Pins the profile/make.conf -> real USE follow-up end to end: the
+    fixture's profile chain + make.conf (see PORTING/fixtures/repo/profiles
+    and portage-profile's own contract test) resolves "foo" enabled and
+    "missingflag" disabled, so useflagpkg's `foo? ( dev-libs/newpkg )`
+    dependency must be pulled in and its
+    `missingflag? ( dev-libs/hiddendep )` must not be -- proving real
+    profile-derived USE, not a hardcoded empty set, reaches use_reduce."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/useflagpkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+    assert "hiddendep" not in result.stdout

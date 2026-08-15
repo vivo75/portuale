@@ -1,0 +1,7 @@
+# fixture make.local, sourced from make.conf. Real portage machines often
+# use this pattern (see /etc/make.local on the machine this pilot was
+# developed on). Exercises "source" resolving an absolute path relative to
+# PORTAGE_CONFIGROOT (chroot-style), and ${USE} substitution seeing the
+# profile chain's accumulated value even though it's sourced from a
+# different file than where USE was last set.
+USE="${USE} localflag"

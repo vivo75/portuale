@@ -7,3 +7,6 @@ edition.workspace = true
 portage-versions = { path = "../portage-versions" }
 portage-dep = { path = "../portage-dep" }
 portage-use-reduce = { path = "../portage-use-reduce" }
+
+[dev-dependencies]
+portage-profile = { path = "../portage-profile" }

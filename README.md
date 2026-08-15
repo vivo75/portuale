@@ -8,10 +8,12 @@ further into depgraph/config-resolution territory: atom matching (the
 foundational building block both subsystems are built on), USE-conditional
 dependency-string flattening (`use_reduce`, a real, heavily-used config.py/
 resolver primitive in its own right), a real, working
-`emerge --pretend category/package`, and -- on top of that -- recursive
-DEPEND/RDEPEND resolution, so `--pretend` on a package with real
-dependencies reports the whole (deduped, cycle-safe) set of packages that
-would newly merge, not just the one you named.
+`emerge --pretend category/package`, recursive DEPEND/RDEPEND resolution
+(so `--pretend` on a package with real dependencies reports the whole
+deduped, cycle-safe set of packages that would newly merge, not just the
+one you named), and -- replacing the last major hardcoded assumption --
+real USE/ACCEPT_KEYWORDS computed from an actual profile inheritance chain
+and make.conf, not a fixed stand-in.
 
 ## Layout
 
@@ -24,6 +26,8 @@ PORTING/
                                  (extracted from atom-harness; see lib.rs's doc comment)
     portage-use-reduce/          shared lib: use_reduce(flat=True) (extracted from
                                  use-reduce-harness; see lib.rs's doc comment)
+    portage-profile/             shared lib: real USE/ACCEPT_KEYWORDS from a
+                                 profile chain + make.conf (see lib.rs's doc comment)
     portage-repo/                repo/metadata/vdb access + resolution + recursive
                                  dependency-graph walk for `emerge --pretend`
                                  (see lib.rs's doc comment on resolve_pretend_graph)
@@ -31,9 +35,10 @@ PORTING/
     atom-harness/               CLI harness over portage-dep
     use-reduce-harness/         CLI harness over portage-use-reduce
     multicall/                 the real emerge/ebuild dispatch binary; `emerge`
-                                 implements --pretend + dependency recursion
-                                 (pretend.rs), everything else (including all of
-                                 `ebuild`) is still a dry-run stub
+                                 implements --pretend + dependency recursion +
+                                 real profile/make.conf config (pretend.rs),
+                                 everything else (including all of `ebuild`) is
+                                 still a dry-run stub
   python/
     versions_harness.py        thin CLI wrapper around the real portage.versions
     atom_harness.py             thin CLI wrapper around the real portage.dep
@@ -41,10 +46,12 @@ PORTING/
     use_reduce_harness.py       thin CLI wrapper around the real
                                  portage.dep.use_reduce(flat=True)
     emerge_pretend_reference.py  Python reference implementation of the same
-                                 emerge --pretend v1 algorithm, for contract testing
-  fixtures/                    synthetic repo+vdb tree emerge --pretend is
+                                 emerge --pretend v1 algorithm (including profile/
+                                 make.conf resolution), for contract testing
+  fixtures/                    synthetic repo+vdb+profile tree emerge --pretend is
                                  contract-tested against (repos.conf, ebuilds,
-                                 md5-cache, a fake vdb -- see below)
+                                 md5-cache, a fake vdb, a profile chain +
+                                 make.conf -- see below)
   bench/                       benchmark-mode timing comparison (the CI perf gate)
     gentoo_snapshot.json         vendored real Gentoo tree snapshot (19442 packages,
                                  32862 version strings; see extract_snapshot.py)
@@ -111,17 +118,17 @@ PORTING/
   `useflag_re`), which is easy to assume is invalid and get wrong.
 - **`emerge --pretend category/package`** (the answer to "what's missing
   for this to succeed?"): a real, working slice, built on `portage-dep`,
-  `portage-versions`, and `portage-use-reduce`. `portage-repo` finds the
-  main repo via `repos.conf` (INI, `[DEFAULT] main-repo` / `[name]
-  location`), lists candidate versions from ebuild filenames in the repo,
-  reads `metadata/md5-cache/<cat>/<pf>` (plain `KEY=value` text --
-  confirmed against a real vendored tree) for KEYWORDS/SLOT/DEPEND/RDEPEND
-  *without executing any bash*, and checks the vdb (`<ROOT>/var/db/pkg`)
-  for what's installed. Visibility is hardcoded to `ACCEPT_KEYWORDS=amd64`;
-  there's no make.conf/profile stacking, no package.mask/.use/.accept_keywords,
-  no slot conflicts, no blockers, no overlays, no backtracking -- all
-  explicitly confirmed scope cuts before implementing, not silent
-  omissions (see the doc comment at the top of `rust/portage-repo/src/lib.rs`).
+  `portage-versions`, `portage-use-reduce`, and `portage-profile`.
+  `portage-repo` finds the main repo via `repos.conf` (INI, `[DEFAULT]
+  main-repo` / `[name] location`), lists candidate versions from ebuild
+  filenames in the repo, reads `metadata/md5-cache/<cat>/<pf>` (plain
+  `KEY=value` text -- confirmed against a real vendored tree) for
+  KEYWORDS/SLOT/DEPEND/RDEPEND *without executing any bash*, and checks
+  the vdb (`<ROOT>/var/db/pkg`) for what's installed. There's still no
+  package.mask/.use/.accept_keywords, no slot conflicts, no blockers, no
+  overlays, no backtracking -- all explicitly confirmed scope cuts before
+  implementing, not silent omissions (see the doc comment at the top of
+  `rust/portage-repo/src/lib.rs`).
   Config/target roots come from the real `PORTAGE_CONFIGROOT`/`ROOT`
   environment variables (portage's own mechanism, not a pilot invention --
   see `lib/portage/const.py`), which is what lets `PORTING/fixtures` be
@@ -156,6 +163,31 @@ PORTING/
   caught that the code didn't match what the comment claimed, which is
   what led to fixing the comment (the code's behavior -- report, don't
   drop -- was the better one).
+
+  **Real USE/ACCEPT_KEYWORDS** (`portage-profile`): replaces the
+  `ACCEPT_KEYWORDS="amd64"`/`USE=""` hardcoding with an actual profile
+  inheritance chain (`make.profile` -> recursive `parent` files, same-repo
+  only, multi-parent levels processed in listed order, cycle/diamond-safe)
+  plus `/etc/portage/make.conf` (including its own `source <path>`
+  directive, resolved against `PORTAGE_CONFIGROOT` chroot-style). Each
+  level's `make.defaults` contributes real incremental-variable semantics
+  (`-*` clears, `-flag` removes, `flag`/`+flag` adds), including
+  `${VAR}` shell-style substitution -- necessary because virtually every
+  real profile level in the vendored tree does e.g. `USE="${USE} xattr"`
+  to self-append rather than overwrite. One genuine, easy-to-miss quirk
+  ported faithfully from `config.py` (found by reading the real code's own
+  comment on it, not by guessing): `USE` specifically is excluded from
+  cross-level `${VAR}` substitution, so a parent profile's accumulated USE
+  can't leak into a child's own `USE="${USE} flag"` self-append -- every
+  other variable (e.g. `ARCH`, which real profiles use to set
+  `ACCEPT_KEYWORDS="${ARCH}"`) persists normally across levels. Explicitly
+  out of scope: cross-repo profile parents (`reponame:path` syntax, which
+  the real dev machine's own profile actually uses -- so testing this
+  mechanism needed a new synthetic same-repo, multi-parent fixture chain
+  rather than the real system profile), `USE_EXPAND`, wildcard `_*`
+  expansion, `package.use`/`.mask`/`.accept_keywords`, and every
+  `USE_ORDER` layer except `defaults` (profile) and `conf` (make.conf) --
+  see the doc comment at the top of `rust/portage-profile/src/lib.rs`.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -189,9 +221,12 @@ PORTING/
   runtime stage is `FROM scratch`: no libc, no shell, no busybox, nothing
   but the binaries and the fixture tree. `smoke_test.sh` builds that image
   and exercises `versions-harness`, `atom-harness`, `use-reduce-harness`,
-  a real `emerge --pretend` resolution (both a single package and a
-  multi-package dependency graph) against the fixture, `ebuild`-dispatch,
-  and batch mode inside it, exiting nonzero on any failure.
+  a real `emerge --pretend` resolution (a single package, a multi-package
+  dependency graph, and a real-profile-derived USE flag gating a
+  dependency) against the fixture, `ebuild`-dispatch, and batch mode
+  inside it, exiting nonzero on any failure -- including proving the
+  fixture's `make.profile` symlink and multi-parent chain survive the
+  image `COPY` and still resolve correctly.
 
 Known simplification: `versions-harness`/`portage-versions` compare
 version components as `i128` rather than Python's arbitrary-precision
@@ -209,15 +244,21 @@ exists yet in this pilot), which mirrors a fallback path the real
 
 `PORTING/fixtures` is a small synthetic repo (not the vendored real tree
 used for benchmarking): `repos.conf`, a handful of ebuilds + matching
-md5-cache entries, and a fake vdb, covering new-install, upgrade,
-already-installed, not-visible (`~amd64`-only), nonexistent-package, the
-sibling-package-prefix-ambiguity regression case, and (for recursion) a
-basic dependency chain, a diamond dependency, a dependency cycle, an
-any-of (`||`) group, an unresolvable dependency, and a dependency listed
-in both DEPEND and RDEPEND. Its `location` in `repos.conf` is relative
-(resolved against `PORTAGE_CONFIGROOT`) purely so the fixture is portable
-across checkouts -- real `repos.conf` files always use absolute paths; see
-the comment in `portage-repo/src/lib.rs`.
+md5-cache entries, a fake vdb, and now a full profile chain + make.conf,
+covering new-install, upgrade, already-installed, not-visible
+(`~amd64`-only), nonexistent-package, the sibling-package-prefix-ambiguity
+regression case, (for recursion) a basic dependency chain, a diamond
+dependency, a dependency cycle, an any-of (`||`) group, an unresolvable
+dependency, and a dependency listed in both DEPEND and RDEPEND, and (for
+profile resolution) a three-level same-repo profile chain
+(`profiles/base`, `profiles/arch/amd64`, `profiles/default` -- the latter
+inheriting from both of the former, in that order) plus `make.conf`
+sourcing `/etc/make.local`, and a package whose dependency is gated on a
+USE flag that only a correctly-resolved profile/make.conf stack would
+actually enable. `repos.conf`'s `location` is relative (resolved against
+`PORTAGE_CONFIGROOT`) purely so the fixture is portable across checkouts
+-- real `repos.conf` files always use absolute paths; see the comment in
+`portage-repo/src/lib.rs`.
 
 `gentoo_snapshot.json` was extracted from a full local Gentoo tree
 checkout (`/.gentoo/repos/gentoo` on the machine this was vendored on) with
@@ -291,6 +332,12 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/diamond
 # [ebuild  N] dev-libs/shared-a-1.0
 # [ebuild  N] dev-libs/shared-b-1.0
 # [ebuild  N] dev-libs/common-1.0
+
+# real profile/make.conf resolution: "foo" is enabled by the fixture's
+# profile chain, so this package's foo?-gated dependency is pulled in
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useflagpkg
+# [ebuild  N] dev-libs/useflagpkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
 
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \

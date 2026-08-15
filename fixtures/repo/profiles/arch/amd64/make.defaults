@@ -1,0 +1,5 @@
+# fixture profile level: arch, no parents.
+# Exercises a non-USE scalar (ARCH) feeding ACCEPT_KEYWORDS via ${ARCH}
+# substitution, mirroring the real tree's profiles/arch/amd64/make.defaults.
+ARCH="amd64"
+ACCEPT_KEYWORDS="${ARCH}"

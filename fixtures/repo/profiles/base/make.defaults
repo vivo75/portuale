@@ -1,0 +1,6 @@
+# fixture profile level: base of the chain, no parents.
+# Exercises USE self-append *within* a single file (two lines, second one
+# references ${USE} set by the first) -- this is the common real-world
+# pattern (see e.g. the real tree's profiles/base/make.defaults).
+USE="foo"
+USE="${USE} bar"

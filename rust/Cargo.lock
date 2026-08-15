@@ -29,6 +29,7 @@ name = "multicall"
 version = "0.1.0"
 dependencies = [
  "portage-dep",
+ "portage-profile",
  "portage-repo",
 ]
 
@@ -41,10 +42,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "portage-profile"
+version = "0.1.0"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "portage-repo"
 version = "0.1.0"
 dependencies = [
  "portage-dep",
+ "portage-profile",
  "portage-use-reduce",
  "portage-versions",
 ]

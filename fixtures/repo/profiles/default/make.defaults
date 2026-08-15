@@ -1,0 +1,6 @@
+# fixture profile level: leaf profile (multi-parent: ../base and
+# ../arch/amd64, in that order -- see ./parent).
+# Exercises incremental removal ("-bar") across profile levels: "bar" was
+# added by ../base and must be gone from the final set, while "foo" (also
+# from ../base) survives untouched.
+USE="-bar baz"

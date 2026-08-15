@@ -1,11 +1,14 @@
 // `emerge --pretend <category/package>`: the v1 slice (see
-// PORTING/rust/portage-repo/src/lib.rs for the full scope writeup --
-// hardcoded ACCEPT_KEYWORDS=amd64, no profile/make.conf stacking, main
-// repo only). Recursively resolves DEPEND+RDEPEND (see
-// resolve_pretend_graph's doc comment for the recursion's own scope
-// cuts: DEPEND+RDEPEND only, || resolves every alternative, blockers
-// skipped, cycle/dup-safe). Output format is a documented, simplified
-// subset of real emerge's --pretend output, not byte-identical to it.
+// PORTING/rust/portage-repo/src/lib.rs for the full scope writeup -- main
+// repo only, no package.mask/.use/.accept_keywords, no slot conflicts, no
+// blockers enforced). USE/ACCEPT_KEYWORDS come from the real profile
+// chain + make.conf (see portage-profile's doc comment for what that
+// does and doesn't implement), not a hardcoded stand-in. Recursively
+// resolves DEPEND+RDEPEND (see resolve_pretend_graph's doc comment for
+// the recursion's own scope cuts: DEPEND+RDEPEND only, || resolves every
+// alternative, blockers skipped, cycle/dup-safe). Output format is a
+// documented, simplified subset of real emerge's --pretend output, not
+// byte-identical to it.
 //
 // Anything outside the top-level atom's narrow slice (no --pretend, more
 // than one atom, a versioned/slotted/blocker top-level atom, an
@@ -69,7 +72,21 @@ pub fn run(args: &[String]) -> ExitCode {
     let config_root = config_root_from_env();
     let root = root_from_env();
 
-    let entries = match resolve_pretend_graph(&config_root, &root, atom_str) {
+    let config = match portage_profile::resolve_config(&config_root) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let entries = match resolve_pretend_graph(
+        &config_root,
+        &root,
+        atom_str,
+        &config.use_flags,
+        &config.accept_keywords,
+    ) {
         Ok(entries) => entries,
         Err(e) => {
             eprintln!("emerge: {e}");
