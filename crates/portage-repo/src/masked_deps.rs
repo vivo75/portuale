@@ -2,6 +2,128 @@
 
 use crate::*;
 
+/// The IUSE-missing-conditional mask: every `flag? ( … )` group and every conditional
+/// use-dep in the five dep keys must reference a flag valid for the atom-owning package's
+/// own effective IUSE (see [`implicit_iuse_set`]), or the candidate is masked `invalid`.
+/// Validated with `matchall=True` semantics; first failure per key wins, every key still runs.
+/// Only ever called for repo/binary candidates, never vdb ones.
+// Portage: Package._validate_deps, use_reduce with matchall=True
+pub(crate) fn invalid_use_conditional_reasons(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Vec<String> {
+    let ebuild_map;
+    let deps: &HashMap<String, String> = match candidate.source {
+        CandidateSource::Ebuild => {
+            let stem = format!("{package}-{}", candidate.version);
+            let Ok(map) = repo_aux_metadata(&candidate.repo_location, category, &stem) else {
+                return Vec::new();
+            };
+            ebuild_map = map;
+            &ebuild_map
+        }
+        // A `Packages` index carries the binpkg's own dep keys; no fixture oracle
+        // pins the message text for this arm.
+        CandidateSource::Binary => &candidate.binary_deps,
+    };
+    let valid = implicit_iuse_set(&candidate.iuse, config);
+    let mut out = Vec::new();
+    for key in ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"] {
+        let Some(dep) = deps.get(key) else { continue };
+        if dep.trim().is_empty() {
+            continue;
+        }
+        if let Some(msg) = first_invalid_conditional(dep, &valid) {
+            out.push(format!("invalid: {key}: {msg}"));
+        }
+    }
+    out
+}
+
+/// First IUSE-missing conditional in one dep string, in encounter order -- see
+/// [`invalid_use_conditional_reasons`].
+pub(crate) fn first_invalid_conditional(dep: &str, valid: &HashSet<String>) -> Option<String> {
+    /// The current level's last token; only a `?`-suffixed token can open a group.
+    enum Last {
+        None,
+        Cond(String),
+        Other,
+    }
+    let mut stack: Vec<Last> = vec![Last::None];
+    for tok in dep.split_whitespace() {
+        match tok {
+            "(" => stack.push(Last::None),
+            ")" => {
+                let _closed = stack.pop();
+                let Some(top) = stack.last_mut() else {
+                    continue;
+                };
+                let raw = match top {
+                    Last::Cond(raw) => std::mem::take(raw),
+                    _ => continue,
+                };
+                *top = Last::Other;
+                let inner = raw.strip_suffix('?').unwrap_or(raw.as_str());
+                let flag = inner.strip_prefix('!').unwrap_or(inner);
+                if !valid.contains(flag) {
+                    return Some(format!(
+                        "USE flag '{flag}' referenced in conditional '{raw}' is not in IUSE"
+                    ));
+                }
+            }
+            "||" => {
+                if let Some(top) = stack.last_mut() {
+                    *top = Last::Other;
+                }
+            }
+            t if t.ends_with('?') => {
+                if let Some(top) = stack.last_mut() {
+                    *top = Last::Cond(t.to_string());
+                }
+            }
+            t => {
+                if let Some(top) = stack.last_mut() {
+                    *top = Last::Other;
+                }
+                let Some(atom) = portage_dep::parse_atom(t) else {
+                    continue;
+                };
+                let Some(use_deps) = atom.use_deps else {
+                    continue;
+                };
+                // `_conditionals_class` slot order: disabled, enabled, equal, not_equal.
+                for op in [
+                    portage_dep::UseDepOp::IfParentDisabled,
+                    portage_dep::UseDepOp::IfParentEnabled,
+                    portage_dep::UseDepOp::EqualParent,
+                    portage_dep::UseDepOp::OppositeParent,
+                ] {
+                    let (prefix, suffix) = match op {
+                        portage_dep::UseDepOp::IfParentDisabled => ("!", "?"),
+                        portage_dep::UseDepOp::IfParentEnabled => ("", "?"),
+                        portage_dep::UseDepOp::EqualParent => ("", "="),
+                        portage_dep::UseDepOp::OppositeParent => ("!", "="),
+                        portage_dep::UseDepOp::Enabled | portage_dep::UseDepOp::Disabled => {
+                            continue;
+                        }
+                    };
+                    for ud in &use_deps {
+                        if ud.op == op && !valid.contains(&ud.flag) {
+                            return Some(format!(
+                                "USE flag '{f}' referenced in conditional '{prefix}{f}{suffix}' in atom '{t}' is not in IUSE",
+                                f = ud.flag
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// One dependency atom's masked-only disclosure: the "All ebuilds that could
 /// satisfy … have been masked" block for a *dependency*. Rendered in place of
 /// the bare `!!! no visible ebuild for dependency` line, with the

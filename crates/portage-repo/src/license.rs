@@ -207,6 +207,28 @@ pub(crate) fn has_masked_license(
     Ok(tree_has_masked_license(&tree, acceptable))
 }
 
+/// This candidate's effective symbolic accept list: `global_accept` layered with
+/// every matching `package_accept` entry's tokens, in atom-specificity order.
+/// Accept lists only ever extend, so unlike `package.use.mask`/`.force` no
+/// profile-chain ordering is needed.
+// Portage: _getPkgAcceptLicense, _getMissingProperties, _getMissingRestrict
+pub(crate) fn resolve_accept_tokens(
+    global_accept: &[String],
+    package_accept: &[(String, Vec<String>)],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+) -> Vec<String> {
+    let mut matching = config_entries_matching(package_accept, candidate_str, category, package);
+    matching.sort_by_key(|(atom, _)| atom_specificity(atom));
+
+    let mut accept_tokens = global_accept.to_vec();
+    for (_, tokens) in matching {
+        accept_tokens.extend(tokens.iter().cloned());
+    }
+    accept_tokens
+}
+
 /// Every token `value_str` could mention, USE-conditionals included (every
 /// conditional forced active). Needed to resolve a `"*"` accept-list token into
 /// something concrete. Group boundaries don't matter for this flat question.

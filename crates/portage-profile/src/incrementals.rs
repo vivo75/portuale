@@ -134,6 +134,15 @@ pub fn apply_use_incremental(tokens: &str, set: &mut HashSet<String>) {
     }
 }
 
+/// Like [`apply_use_incremental`], but over an already-split token slice.
+pub fn apply_use_incremental_iter<S: AsRef<str>>(tokens: &[S], set: &mut HashSet<String>) {
+    for tok in tokens {
+        for t in tok.as_ref().split_whitespace() {
+            apply_use_incremental_token(t, set);
+        }
+    }
+}
+
 pub(crate) fn apply_use_incremental_token(tok: &str, set: &mut HashSet<String>) {
     // `-<prefix>_*`: Portage checks `x[-2:] == "_*"` with the trailing
     // underscore part of the prefix.

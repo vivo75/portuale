@@ -1,5 +1,6 @@
 mod backtrack_params;
 mod blockers;
+mod conflict_use_display;
 mod cycles;
 mod entry;
 mod feedback;
@@ -16,6 +17,7 @@ mod skipped;
 mod slot_conflict;
 pub use backtrack_params::*;
 pub use blockers::*;
+pub use conflict_use_display::*;
 pub use cycles::*;
 pub use entry::*;
 pub(crate) use feedback::*;

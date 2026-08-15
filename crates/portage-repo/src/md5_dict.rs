@@ -41,6 +41,19 @@ pub fn eapi_is_supported(eapi: &str) -> bool {
     )
 }
 
+/// Whether `IUSE_EFFECTIVE` exists in this EAPI (EAPI 5+) and therefore governs
+/// the `PORTAGE_USE` masking and the valid-flag domain. Same numeric-prefix
+/// reading as `eapi_has_slot_operator`.
+// Portage: _get_eapi_attrs(eapi).iuse_effective
+pub fn eapi_has_iuse_effective(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u32>().is_ok_and(|n| n >= 5)
+}
+
 /// The path-independent half of [`cache_entry_is_valid`]: one entry's bytes in
 /// `flat_hash` format, accepted or not against the current ebuild. Shared by
 /// `--regen`, the depcachedir rung and `repo_aux_metadata`'s read-path validation.

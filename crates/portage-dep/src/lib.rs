@@ -230,6 +230,18 @@ fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
     Some(deps)
 }
 
+/// Strips the trailing `[use...]` block, leaving `cat/pkg[:slot[::repo]]`;
+/// input without one is returned unchanged.
+///
+/// Mirrors Portage's `Atom.without_use`. Cuts at the first `[`, since the
+/// USE block is always trailing (PMS 8.3.5).
+pub fn without_use(atom_str: &str) -> &str {
+    match atom_str.find('[') {
+        Some(start) => &atom_str[..start],
+        None => atom_str,
+    }
+}
+
 pub fn parse_atom(s: &str) -> Option<Atom> {
     if let Some(hit) = ATOM_CACHE.with(|c| c.borrow().get(s).cloned()) {
         return hit;

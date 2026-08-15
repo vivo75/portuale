@@ -76,6 +76,12 @@ impl ConfigAtomEntry for (String, Vec<String>) {
     }
 }
 
+impl ConfigAtomEntry for String {
+    fn config_atom(&self) -> &str {
+        self.as_str()
+    }
+}
+
 /// One memoised [`CpBucketIndex`] plus its first/last-atom fingerprint (see
 /// [`cp_bucket_index`]).
 pub(crate) struct CachedBucketIndex {
