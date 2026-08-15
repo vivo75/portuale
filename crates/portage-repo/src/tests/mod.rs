@@ -61,6 +61,100 @@ fn candidate(version: &str, keywords: &[&str]) -> Candidate {
     }
 }
 
+/// Direct unit legs for the masking/visibility stack: each leg observes its
+/// predicate's own result, no end-to-end contract reproduction.
+mod tests_164 {
+    use super::*;
+
+    /// Arguments of [`entry_164`].
+    struct Entry164Args<'a> {
+        category: &'a str,
+        package: &'a str,
+        outcome: PretendOutcome,
+        required_by: Vec<(String, String)>,
+        repo: Option<&'a str>,
+        source: CandidateSource,
+    }
+
+    /// Minimal `GraphEntry` for the dep-chain legs (merge-bound unless stated
+    /// otherwise).
+    fn entry_164(args: Entry164Args<'_>) -> GraphEntry {
+        let Entry164Args {
+            category,
+            package,
+            outcome,
+            required_by,
+            repo,
+            source,
+        } = args;
+        GraphEntry {
+            discovery: 0,
+            category: category.to_string(),
+            package: package.to_string(),
+            outcome,
+            blockers: Vec::new(),
+            slot: Some("0".to_string()),
+            sub_slot: Some("0".to_string()),
+            repo_name: repo.map(str::to_string),
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by,
+            source,
+            provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+}
+
+fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {
+    GraphEntry {
+        discovery: 0,
+        category: category.to_string(),
+        package: package.to_string(),
+        outcome: PretendOutcome::New {
+            version: version.to_string(),
+        },
+        blockers: Vec::new(),
+        slot: Some("0".to_string()),
+        sub_slot: Some("0".to_string()),
+        repo_name: Some("testrepo".to_string()),
+        oldbest: Vec::new(),
+        use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: Vec::new(),
+        source: CandidateSource::Ebuild,
+        provenance: VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    }
+}
+
 mod tests_162;
 
 mod tests_163;

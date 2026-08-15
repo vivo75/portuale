@@ -79,3 +79,7 @@ pub const ENV_BLACKLIST: &[&str] = &[
     "SRC_URI",
     "_",
 ];
+
+fn iuse_bare(flag: &str) -> &str {
+    flag.trim_start_matches(['+', '-'])
+}
