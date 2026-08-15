@@ -1288,6 +1288,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mrg-director"
+version = "0.1.0"
+dependencies = [
+ "portage-fetch",
+ "portage-profile",
+ "portage-repo",
+ "portage-versions",
+]
+
+[[package]]
 name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1664,6 +1674,7 @@ dependencies = [
  "fuser",
  "libc",
  "md-5",
+ "mrg-director",
  "portage-dep",
  "portage-fetch",
  "portage-profile",

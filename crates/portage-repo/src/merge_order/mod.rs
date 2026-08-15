@@ -20,3 +20,5 @@ pub(crate) use prelude::*;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use std::path::Path;
+
+use crate::CandidateSource;

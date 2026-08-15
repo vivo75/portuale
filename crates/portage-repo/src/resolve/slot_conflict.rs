@@ -49,3 +49,11 @@ pub struct SlotConflictParent {
     /// An installed parent whose recorded atom the merge breaks.
     pub installed: bool,
 }
+
+/// Which conflict party is installed rather than merge-bound: `Existing` is
+/// instance A (already in the graph), `Current` instance B.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstalledSide {
+    Existing,
+    Current,
+}

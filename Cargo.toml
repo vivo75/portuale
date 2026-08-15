@@ -9,6 +9,7 @@ members = [
     "crates/portage-required-use",
     "crates/portage-fetch",
     "crates/harness-common",
+    "crates/mrg-director",
     "crates/versions-harness",
     "crates/portuale",
 ]

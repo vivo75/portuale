@@ -22,6 +22,16 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchMode {
+    /// Conditionals are active iff the flag is in `uselist` (negated for `!flag?`).
+    Normal,
+    /// Every conditional is active, regardless of `uselist` (Portage's `matchall=True`).
+    All,
+    /// Every conditional is inactive, regardless of `uselist` (Portage's `matchnone=True`).
+    None,
+}
+
 /// Parse/reduce error from a USE dependency string. `Display` reproduces
 /// Portage's messages byte-for-byte (the contract suite pins these).
 #[derive(Debug)]
@@ -102,6 +112,116 @@ fn useflag_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+_@-]*$").unwrap())
 }
 
+/// Whether a `flag?`/`!flag?` token is active under `uselist`/`mode`.
+/// Shared with portage-repo's LICENSE-grammar parser.
+pub fn is_active(
+    conditional: &str,
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+) -> Result<bool, Error> {
+    let (flag, negated) = match conditional.strip_prefix('!') {
+        Some(rest) => (&rest[..rest.len() - 1], true),
+        None => (&conditional[..conditional.len() - 1], false),
+    };
+    if !useflag_re().is_match(flag) {
+        return Err(Error::InvalidUseFlag {
+            flag: flag.to_string(),
+            conditional: conditional.to_string(),
+        });
+    }
+    Ok(match mode {
+        MatchMode::All => true,
+        MatchMode::None => false,
+        MatchMode::Normal => {
+            (uselist.contains(flag) && !negated) || (!uselist.contains(flag) && negated)
+        }
+    })
+}
+
+/// `tokens` is the dep string pre-split on whitespace; returns the
+/// flattened token list, or an `InvalidDependString`-mirroring error.
+pub fn use_reduce_flat(
+    tokens: &[String],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+) -> Result<Vec<String>, Error> {
+    let mut stack: Vec<Vec<String>> = vec![Vec::new()];
+    let mut need_bracket = false;
+
+    for (pos, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => {
+                if tokens.get(pos + 1).map(String::as_str) == Some(")") {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "dependency string",
+                        token: pos + 2,
+                    });
+                }
+                // "(" satisfies any pending "||"/"flag?" requirement.
+                need_bracket = false;
+                stack.push(Vec::new());
+            }
+            ")" => {
+                if need_bracket {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "'('",
+                        token: pos + 1,
+                    });
+                }
+                if stack.len() <= 1 {
+                    return Err(Error::NoMatchingOpen { token: pos + 1 });
+                }
+                let l = stack.pop().unwrap();
+                let top = stack.last_mut().unwrap();
+                let conditional = match top.last() {
+                    Some(last) if last.ends_with('?') => Some(top.pop().unwrap()),
+                    _ => None,
+                };
+                match conditional {
+                    Some(cond) => {
+                        if is_active(&cond, uselist, mode)? {
+                            stack.last_mut().unwrap().extend(l);
+                        }
+                    }
+                    None => stack.last_mut().unwrap().extend(l),
+                }
+            }
+            "||" => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotOr { token: pos + 1 });
+                }
+                need_bracket = true;
+                stack.last_mut().unwrap().push("||".to_string());
+            }
+            "->" => {
+                // `is_src_uri` is always false here, so arrows always fail.
+                return Err(Error::SrcUriArrow { token: pos + 1 });
+            }
+            _ => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotToken {
+                        token: token.to_string(),
+                        at: pos + 1,
+                    });
+                }
+                if token.ends_with('?') {
+                    need_bracket = true;
+                }
+                stack.last_mut().unwrap().push(token.clone());
+            }
+        }
+    }
+
+    if stack.len() != 1 {
+        return Err(Error::MissingCloseParen);
+    }
+    if need_bracket {
+        return Err(Error::MissingOpenParen);
+    }
+
+    Ok(stack.pop().unwrap())
+}
+
 /// A node of the nested-list shape Portage's `paren_reduce` builds: a
 /// flag/`"||"` marker stays a sibling string before its own group. This
 /// builder skips the redundant-bracket-collapsing optimizations.
@@ -109,6 +229,85 @@ fn useflag_re() -> &'static Regex {
 enum DepNode {
     Str(String),
     Group(Vec<DepNode>),
+}
+
+/// Builds the nested `DepNode` tree from `tokens`: same validation as
+/// `use_reduce_flat` (same error messages), but building a tree instead
+/// of eagerly flattening, so `select_subset` has actual group boundaries.
+fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, Error> {
+    let mut stack: Vec<Vec<DepNode>> = vec![Vec::new()];
+    let mut need_bracket = false;
+
+    for (pos, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => {
+                if tokens.get(pos + 1).map(String::as_str) == Some(")") {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "dependency string",
+                        token: pos + 2,
+                    });
+                }
+                need_bracket = false;
+                stack.push(Vec::new());
+            }
+            ")" => {
+                if need_bracket {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "'('",
+                        token: pos + 1,
+                    });
+                }
+                if stack.len() <= 1 {
+                    return Err(Error::NoMatchingOpen { token: pos + 1 });
+                }
+                let l = stack.pop().unwrap();
+                stack.last_mut().unwrap().push(DepNode::Group(l));
+            }
+            "||" => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotOr { token: pos + 1 });
+                }
+                need_bracket = true;
+                stack
+                    .last_mut()
+                    .unwrap()
+                    .push(DepNode::Str("||".to_string()));
+            }
+            "->" => {
+                return Err(Error::SrcUriArrow { token: pos + 1 });
+            }
+            _ => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotToken {
+                        token: token.to_string(),
+                        at: pos + 1,
+                    });
+                }
+                if token.ends_with('?') {
+                    need_bracket = true;
+                }
+                stack.last_mut().unwrap().push(DepNode::Str(token.clone()));
+            }
+        }
+    }
+
+    if stack.len() != 1 {
+        return Err(Error::MissingCloseParen);
+    }
+    if need_bracket {
+        return Err(Error::MissingOpenParen);
+    }
+
+    Ok(stack.pop().unwrap())
+}
+
+struct SelectSubsetArgs<'a> {
+    nodes: &'a [DepNode],
+    disjunction: bool,
+    selected: bool,
+    subset: &'a HashSet<String>,
+    uselist: &'a HashSet<String>,
+    mode: MatchMode,
 }
 
 /// Re-serializes a `DepNode` tree into a flat token stream for the final
