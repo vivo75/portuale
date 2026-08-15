@@ -156,3 +156,383 @@ pub(crate) fn owner_set_parent(
 ) -> bool {
     blocker_retry_closure.contains(owner_key)
 }
+/// Arguments of [`resolve_blockers_with_seeds`].
+pub(crate) struct ResolveBlockersWithSeedsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) pending: &'a [PendingBlocker],
+    pub(crate) entries: &'a [GraphEntry],
+    /// `ResolveCtx::blocker_retry_closure`: the required sets' forward-installed
+    /// closure. A blocked installed instance reachable from it is a graph node
+    /// with the set as parent; the owner-side test reads the same set.
+    pub(crate) blocker_retry_closure: &'a HashSet<(String, String)>,
+    /// Under `--buildpkgonly`, drops soft and runtime-keyed blockers silently
+    /// and keeps only strong-buildtime ones, resolved by uninstall.
+    pub(crate) buildpkgonly: bool,
+    /// The set seed atoms (`@world`/`@selected` members) Portage adds as
+    /// `SetArg` parents in its complete graph; see [`set_seed_holds_instance`].
+    pub(crate) set_seed_atoms: &'a [String],
+}
+
+pub(crate) fn resolve_blockers_with_seeds(
+    args: ResolveBlockersWithSeedsArgs<'_>,
+) -> Vec<FiledBlocker> {
+    let ResolveBlockersWithSeedsArgs {
+        root,
+        pending,
+        entries,
+        blocker_retry_closure,
+        buildpkgonly,
+        set_seed_atoms,
+    } = args;
+    let mut conflicts = Vec::new();
+    // cp -> merge-bound slots this run: a cp re-resolved into another slot
+    // leaves its old instance parentless (merging parents rebind live `:=`).
+    let merge_slots: HashMap<(String, String), HashSet<String>> = {
+        let mut m: HashMap<(String, String), HashSet<String>> = HashMap::new();
+        for e in entries {
+            if merge_bound_version(&e.outcome).is_some()
+                && let Some(slot) = e.slot.clone()
+            {
+                m.entry((e.category.clone(), e.package.clone()))
+                    .or_default()
+                    .insert(slot);
+            }
+        }
+        m
+    };
+    // Lazily built seed extension: the recorded atoms of required-set-reached
+    // installed packages the walk never visited (never from a cp this run
+    // merges). One vdb scan, only when a blocker reaches that test.
+    let hold_atoms: std::cell::OnceCell<Vec<String>> = std::cell::OnceCell::new();
+    let hold_seeds = || -> &Vec<String> {
+        hold_atoms.get_or_init(|| {
+            let merge_bound: HashSet<(String, String)> = entries
+                .iter()
+                .filter(|e| merge_bound_version(&e.outcome).is_some())
+                .map(|e| (e.category.clone(), e.package.clone()))
+                .collect();
+            let mut atoms: Vec<String> = set_seed_atoms.to_vec();
+            for pkg in all_installed_packages(root) {
+                let cp = (pkg.category.clone(), pkg.package.clone());
+                if !blocker_retry_closure.contains(&cp) || merge_bound.contains(&cp) {
+                    continue;
+                }
+                let use_flags =
+                    read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+                for key in ["RDEPEND", "PDEPEND", "IDEPEND"] {
+                    let dep = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+                    if let Some(found) = flat_dep_atoms(&dep, &use_flags) {
+                        atoms.extend(found);
+                    }
+                }
+            }
+            atoms
+        })
+    };
+    for pb in pending {
+        // Under `--buildpkgonly` a blocker that is not strong-buildtime never
+        // pairs an uninstall.
+        if buildpkgonly && !(pb.strong && pb.buildtime) {
+            continue;
+        }
+        let target_key = (pb.target_category.clone(), pb.target_package.clone());
+        let installed_matches = installed_candidates(root, &pb.target_category, &pb.target_package);
+        let mut candidates = installed_matches.clone();
+        for entry in entries {
+            if entry.category != pb.target_category || entry.package != pb.target_package {
+                continue;
+            }
+            let version = match &entry.outcome {
+                PretendOutcome::New { version } => Some(version.clone()),
+                PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+                PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
+                PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
+                _ => None,
+            };
+            let (Some(version), Some(slot)) = (version, entry.slot.clone()) else {
+                continue;
+            };
+            if !candidates
+                .iter()
+                .any(|(v, s, _ss)| *v == version && *s == slot)
+            {
+                candidates.push((version, slot.clone(), slot));
+            }
+        }
+        let candidate_strs: Vec<String> = candidates
+            .iter()
+            .map(|(v, s, ss)| format!("{}/{}-{v}:{s}/{ss}", pb.target_category, pb.target_package))
+            .collect();
+        let refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+        let Some(matched) = portage_dep::match_from_list(&pb.atom_str, &refs) else {
+            continue;
+        };
+        let by_str: HashMap<&str, &(String, String, String)> = candidate_strs
+            .iter()
+            .map(String::as_str)
+            .zip(candidates.iter())
+            .collect();
+        // The blocker atom's own `[use]` deps must match the blocked package:
+        // `match_from_list` sees only a cpv string, so a satisfied no-op
+        // blocker is dropped against recorded (installed) / effective USE.
+        let blocker_use_deps: Vec<portage_dep::UseDep> = portage_dep::parse_atom(&pb.atom_str)
+            .and_then(|a| a.use_deps)
+            .unwrap_or_default();
+        let use_deps_apply = |version: &str| -> bool {
+            if blocker_use_deps.is_empty() {
+                return true;
+            }
+            let (enabled, iuse) = entries
+                .iter()
+                .find(|e| {
+                    e.category == pb.target_category
+                        && e.package == pb.target_package
+                        && matches!(&e.outcome,
+                            PretendOutcome::New { version: v }
+                            | PretendOutcome::Reinstall { version: v, .. } if v == version)
+                        || (e.category == pb.target_category
+                            && e.package == pb.target_package
+                            && matches!(&e.outcome,
+                                PretendOutcome::Upgrade { to, .. }
+                                | PretendOutcome::Downgrade { to, .. } if to == version))
+                })
+                .map(|e| {
+                    let en: HashSet<String> = e
+                        .use_flags_display
+                        .iter()
+                        .filter(|(_, on)| *on)
+                        .map(|(f, _)| f.clone())
+                        .collect();
+                    let iu: HashSet<String> =
+                        e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
+                    (en, iu)
+                })
+                .unwrap_or_else(|| {
+                    (
+                        read_vdb_flag_set(
+                            root,
+                            &pb.target_category,
+                            &pb.target_package,
+                            version,
+                            "USE",
+                        ),
+                        read_vdb_flag_set(
+                            root,
+                            &pb.target_category,
+                            &pb.target_package,
+                            version,
+                            "IUSE",
+                        ),
+                    )
+                });
+            portage_dep::use_deps_satisfied(&blocker_use_deps, &iuse, &enabled)
+        };
+        // An installed instance replaced in its own slot by a merge-bound entry
+        // at another version resolves to a `Replacement` row, kept for the
+        // stuck-serialization display and hidden otherwise.
+        for m in matched {
+            let Some((version, slot, sub_slot)) = by_str.get(m).copied() else {
+                continue;
+            };
+            if !use_deps_apply(version) {
+                continue;
+            }
+            let installed_match = installed_matches
+                .iter()
+                .any(|(v, s, _ss)| v == version && s == slot);
+            let merge_bound_match = entries.iter().any(|e| {
+                e.category == pb.target_category
+                    && e.package == pb.target_package
+                    && e.slot.as_deref() == Some(slot.as_str())
+                    && merge_bound_version(&e.outcome).is_some_and(|v2| v2 == version)
+            });
+            let replaced_in_slot = installed_match
+                && entries.iter().any(|e| {
+                    e.category == pb.target_category
+                        && e.package == pb.target_package
+                        && e.slot.as_deref() == Some(slot.as_str())
+                        && merge_bound_version(&e.outcome).is_some_and(|v2| v2 != version)
+                });
+            if replaced_in_slot {
+                conflicts.push(FiledBlocker {
+                    owner: pb.owner_key.clone(),
+                    owner_version: pb.owner_version.clone(),
+                    conflict: BlockerConflict {
+                        atom_str: pb.atom_str.clone(),
+                        strong: pb.strong,
+                        matched_category: pb.target_category.clone(),
+                        matched_package: pb.target_package.clone(),
+                        matched_version: version.clone(),
+                        unsolvable: false,
+                        satisfied_by: Some(BlockerSatisfiedBy::Replacement {
+                            cp: (pb.target_category.clone(), pb.target_package.clone()),
+                            slot: slot.clone(),
+                        }),
+                        tree_scheduled_uninstall: false,
+                    },
+                });
+                continue;
+            }
+            // The owner entry decides `owner_merging`: a merge outcome merges, an
+            // installed node is `nomerge`; the producer bit is only a fallback
+            // for an off-graph owner. A scan-sourced owner is always `nomerge`.
+            // The owner entry is matched by merged version, not just cp: a
+            // merge-bound cp entry at another version means the declaring
+            // instance lost and its blockers are stale.
+            let owner_entry = entries.iter().find(|e| {
+                (e.category.as_str(), e.package.as_str())
+                    == (pb.owner_key.0.as_str(), pb.owner_key.1.as_str())
+                    && merge_bound_version(&e.outcome).is_some_and(|v| v == &pb.owner_version)
+            });
+            if !pb.owner_installed
+                && owner_entry.is_none()
+                && entries.iter().any(|e| {
+                    (e.category.as_str(), e.package.as_str())
+                        == (pb.owner_key.0.as_str(), pb.owner_key.1.as_str())
+                        && merge_bound_version(&e.outcome).is_some()
+                })
+            {
+                continue;
+            }
+            // Fallback for owners with no merge-bound entry: a walked
+            // non-merge node (same cp, no merge version), else the
+            // producer bit (the bridge path).
+            let owner_entry = owner_entry.or_else(|| {
+                entries.iter().find(|e| {
+                    (e.category.as_str(), e.package.as_str())
+                        == (pb.owner_key.0.as_str(), pb.owner_key.1.as_str())
+                        && merge_bound_version(&e.outcome).is_none()
+                })
+            });
+            let owner_merging = if pb.owner_installed {
+                false
+            } else {
+                owner_entry
+                    .map(|e| merge_bound_version(&e.outcome).is_some())
+                    .unwrap_or(pb.owner_merging)
+            };
+            // The owner instance's own slot, from its entry when walked,
+            // from the vdb when the scan produced it (the owner may have
+            // no entry at all).
+            let owner_slot = if pb.owner_installed {
+                Some(read_vdb_slot(root, &pb.owner_key.0, &pb.owner_key.1, &pb.owner_version).0)
+            } else {
+                owner_entry.and_then(|e| e.slot.clone())
+            };
+            // Soft same-slot skip: a soft blocker whose target slot is the
+            // owner's own slot; a strong `!!` blocker is exempt.
+            if !pb.strong
+                && target_key == pb.owner_key
+                && owner_slot.as_deref() == Some(slot.as_str())
+            {
+                continue;
+            }
+            // An installed parent's installed-only matches are ignored outright.
+            if !owner_merging && installed_match && !merge_bound_match {
+                continue;
+            }
+            // The tracker match is uninstall-ordered; it stays unresolved only
+            // when the instance to unmerge is a walked node with parents.
+            let unsolvable = if owner_merging {
+                // A merge-bound match with a merging parent is unresolved
+                // outright.
+                //
+                // The closure veto lifts when the run re-resolves this cp into
+                // another slot -- the old instance is parentless then; a cp
+                // that does not move keeps the veto.
+                let cp_moves_slot = merge_slots
+                    .get(&target_key)
+                    .is_some_and(|slots| slots.iter().any(|s| s != slot));
+                merge_bound_match
+                    || (installed_match
+                        && (graph_has_parent(GraphHasParentArgs {
+                            category: &pb.target_category,
+                            package: &pb.target_package,
+                            version,
+                            slot,
+                            sub_slot,
+                            exclude: &pb.owner_key,
+                            entries,
+                            merge_slots: &merge_slots,
+                        }) || (blocker_retry_closure.contains(&target_key) && !cp_moves_slot)
+                            || set_seed_holds_instance(SetSeedHoldsInstanceArgs {
+                                set_seed_atoms: hold_seeds(),
+                                entries,
+                                category: &pb.target_category,
+                                package: &pb.target_package,
+                                version,
+                                slot,
+                                sub_slot,
+                            })))
+            } else {
+                // A nomerge parent is uninstall-ordered; it is unresolved when
+                // the *owner* is a node with parents: a walked entry depends
+                // on it, or it is in the required sets' parent membership. A
+                // scan-sourced owner has no entry, so its slot comes from
+                // the vdb.
+                let owner_has_parent = if pb.owner_installed {
+                    let (slot, sub_slot) =
+                        read_vdb_slot(root, &pb.owner_key.0, &pb.owner_key.1, &pb.owner_version);
+                    graph_has_parent(GraphHasParentArgs {
+                        category: &pb.owner_key.0,
+                        package: &pb.owner_key.1,
+                        version: &pb.owner_version,
+                        slot: &slot,
+                        sub_slot: &sub_slot,
+                        exclude: &pb.owner_key,
+                        entries,
+                        merge_slots: &merge_slots,
+                    })
+                } else {
+                    owner_entry.is_some_and(|e| {
+                        graph_has_parent(GraphHasParentArgs {
+                            category: &pb.owner_key.0,
+                            package: &pb.owner_key.1,
+                            version: &pb.owner_version,
+                            slot: e.slot.as_deref().unwrap_or_default(),
+                            sub_slot: e.sub_slot.as_deref().unwrap_or_default(),
+                            exclude: &pb.owner_key,
+                            entries,
+                            merge_slots: &merge_slots,
+                        })
+                    })
+                };
+                merge_bound_match
+                    && (owner_has_parent || owner_set_parent(&pb.owner_key, blocker_retry_closure))
+            };
+            conflicts.push(FiledBlocker {
+                owner: pb.owner_key.clone(),
+                owner_version: pb.owner_version.clone(),
+                conflict: BlockerConflict {
+                    atom_str: pb.atom_str.clone(),
+                    strong: pb.strong,
+                    matched_category: pb.target_category.clone(),
+                    matched_package: pb.target_package.clone(),
+                    matched_version: version.clone(),
+                    // A satisfied merging-owner row removes the matched installed
+                    // instance; a satisfied nomerge-owner row removes the owner
+                    // itself, ordered after the merge-bound blocked instance.
+                    satisfied_by: if unsolvable {
+                        None
+                    } else if owner_merging {
+                        Some(BlockerSatisfiedBy::Uninstall {
+                            cpv: format!("{}/{}-{version}", pb.target_category, pb.target_package),
+                            anchor: pb.owner_key.clone(),
+                        })
+                    } else {
+                        Some(BlockerSatisfiedBy::Uninstall {
+                            cpv: format!(
+                                "{}/{}-{}",
+                                pb.owner_key.0, pb.owner_key.1, pb.owner_version
+                            ),
+                            anchor: (pb.target_category.clone(), pb.target_package.clone()),
+                        })
+                    },
+                    unsolvable,
+                    tree_scheduled_uninstall: false,
+                },
+            });
+        }
+    }
+    conflicts
+}
