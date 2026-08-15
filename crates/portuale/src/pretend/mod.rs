@@ -56,6 +56,30 @@ use std::path::Path;
 
 use std::process::ExitCode;
 
+/// Reports and returns the exit code for one option/action token that is not
+/// otherwise handled -- shared by standalone tokens and short-flag bundle
+/// characters, so both produce identical messages.
+fn report_option(token: &str) -> ExitCode {
+    if let Some(found) = emerge_options::lookup(token) {
+        // Reports and exits immediately, so this option's own value token needs
+        // no skipping: nothing after this point is ever looked at.
+        let kind = if found.category == emerge_options::Category::Action {
+            "action"
+        } else {
+            "option"
+        };
+        eprintln!(
+            "emerge: {kind} {:?} is a Portage emerge {kind}, but is not yet \
+             implemented in portuale -- run \"emerge --help\" for the options \
+             and actions that are.",
+            found.canonical
+        );
+    } else {
+        eprintln!("emerge: unrecognized option {token:?}");
+    }
+    ExitCode::from(2)
+}
+
 /// The `--backtrack` budget when the flag is absent: Portage's own default
 /// (`0` only under `--nodeps`). Single source for the initializer and `--help`.
 // Portage: _emerge/depgraph.py, _backtrack_depgraph
