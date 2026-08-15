@@ -145,6 +145,70 @@ impl mrg_director::NewsSelector for FilesystemNews<'_> {
     }
 }
 
+/// One repo's unread-news evaluation plus the state write-back, shared by
+/// `--check-news` and the GLEP 42 count notice: every repo maps to its
+/// `len(.unread)` count (0 with no `metadata/news` directory). The
+/// `.unread`/`.skip` files are rewritten only when their sets changed.
+/// Portage: portage/news.py, NewsManager
+pub(crate) fn unread_news_counts(
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    context: &NewsContext,
+) -> Vec<(String, usize)> {
+    // With no profile path at all, print two errors and count nothing:
+    // profile restrictions cannot be evaluated.
+    // Portage: portage/news.py, count_unread_news
+    if !context.has_profile {
+        eprintln!("!!! News items will not be displayed due to an invalid profile setting.");
+        eprintln!("!!! Use eselect profile to update your profile.");
+        return Vec::new();
+    }
+    let mut per_repo: Vec<(String, usize)> = Vec::new();
+    for repo in repos {
+        // The unread computation runs through the director's news slot;
+        // write-back of the state files stays the CLI layer's job.
+        let selector = FilesystemNews {
+            repo_location: &repo.location,
+            repo_name: &repo.name,
+            root,
+            context,
+        };
+        // The state directory is prepared first, even for a repo with no
+        // `metadata/news`; when the preparation fails, count the `.unread`
+        // file as it stands.
+        // Portage: portage/news.py, updateItems; getUnreadItems
+        let news_state_dir = root.join("var/lib/gentoo/news");
+        if !ensure_news_state_dir(&news_state_dir, context) {
+            let unread =
+                grab_news_state_file(&news_state_dir.join(format!("news-{}.unread", repo.name)));
+            per_repo.push((repo.name.clone(), unread.len()));
+            continue;
+        }
+        let Some(eval) = selector.evaluate() else {
+            per_repo.push((repo.name.clone(), 0));
+            continue;
+        };
+        write_news_state_if_changed(WriteNewsStateIfChangedArgs {
+            news_state_dir: &root.join("var/lib/gentoo/news"),
+            repo_name: &repo.name,
+            suffix: "unread",
+            orig: &eval.unread_orig,
+            updated: &eval.unread,
+            context,
+        });
+        write_news_state_if_changed(WriteNewsStateIfChangedArgs {
+            news_state_dir: &root.join("var/lib/gentoo/news"),
+            repo_name: &repo.name,
+            suffix: "skip",
+            orig: &eval.skip_orig,
+            updated: &eval.skip,
+            context,
+        });
+        per_repo.push((repo.name.clone(), eval.unread.len()));
+    }
+    per_repo
+}
+
 /// One ` * IMPORTANT: N news items need reading for repository '<repo>'.`
 /// line per repo with a nonzero count, then the `eselect news read` hint.
 /// An all-zero map prints nothing at all. Shared by `--check-news` and the
@@ -207,6 +271,36 @@ pub(crate) struct WriteNewsStateIfChangedArgs<'a> {
     pub(crate) orig: &'a std::collections::HashSet<String>,
     pub(crate) updated: &'a std::collections::HashSet<String>,
     pub(crate) context: &'a NewsContext,
+}
+
+/// Rewrite `news-<repo>.<suffix>` (one id per line, sorted) only when the
+/// set genuinely changed this run, then apply the secpass permissions.
+/// The state directory itself was already prepared by [`ensure_news_state_dir`].
+/// Portage: portage/news.py, NewsManager.updateItems
+pub(crate) fn write_news_state_if_changed(args: WriteNewsStateIfChangedArgs<'_>) {
+    let WriteNewsStateIfChangedArgs {
+        news_state_dir,
+        repo_name,
+        suffix,
+        orig,
+        updated,
+        context,
+    } = args;
+    if updated == orig {
+        return;
+    }
+    let mut ids: Vec<&String> = updated.iter().collect();
+    ids.sort();
+    let mut out = String::new();
+    for id in ids {
+        out.push_str(id);
+        out.push('\n');
+    }
+    let path = news_state_dir.join(format!("news-{repo_name}.{suffix}"));
+    let tmp = news_state_dir.join(format!(".news-{repo_name}.{suffix}.tmp"));
+    if std::fs::write(&tmp, &out).is_ok() && std::fs::rename(&tmp, &path).is_ok() {
+        apply_news_permissions(&path, context, 0o064);
+    }
 }
 
 /// Prepare the state directory first; a permission failure returns before
