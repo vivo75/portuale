@@ -24,6 +24,22 @@ use std::path::Path;
 
 use std::process::ExitCode;
 
+// --- Option validation -----------------------------------------------------
+
+/// Host-key policy (`--remote-strict-host-key-checking`). Default is
+/// trust-on-first-use: a plain `yes` would fail on every new machine,
+/// which is the common provisioning case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrictHostKeyChecking {
+    /// `accept-new`: add unknown keys (fingerprint printed), abort on
+    /// changed keys.
+    AcceptNew,
+    /// `yes`: reject unknown keys outright.
+    Yes,
+    /// `no`: no checking (throwaway labs only).
+    No,
+}
+
 /// How driver scripts and files reach the client (`--remote-transport`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteTransport {

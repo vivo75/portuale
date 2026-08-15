@@ -475,6 +475,145 @@ fn special_append(stack: &mut [Vec<DepNode>], level: usize, l: Vec<DepNode>, is_
     }
 }
 
+/// Portage's `use_reduce` in `flat=False`, `opconvert=False` mode: the
+/// nested stack reducer with every redundant-bracket optimization ported
+/// as-is. An inactive `flag? ( )` group is dropped, an emptied `|| ( )`
+/// becomes [`EMPTY_ANY_OF`]. Stays token/atom-agnostic; returns the reduced
+/// tree re-serialized to a flat token stream.
+// Portage: lib/portage/dep/__init__.py, use_reduce
+pub fn use_reduce_structured(
+    tokens: &[String],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+) -> Result<Vec<String>, Error> {
+    let mut stack: Vec<Vec<DepNode>> = vec![Vec::new()];
+    let mut need_bracket = false;
+
+    for (pos, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => {
+                if tokens.get(pos + 1).map(String::as_str) == Some(")") {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "dependency string",
+                        token: pos + 1,
+                    });
+                }
+                need_bracket = false;
+                stack.push(Vec::new());
+            }
+            ")" => {
+                if need_bracket {
+                    return Err(Error::ExpectedCloseParen {
+                        expected: "'('",
+                        token: pos + 1,
+                    });
+                }
+                if stack.len() <= 1 {
+                    return Err(Error::NoMatchingOpen { token: pos + 1 });
+                }
+                let mut l = stack.pop().unwrap();
+                let level = stack.len() - 1;
+
+                let is_single =
+                    l.len() == 1 || (l.len() == 2 && matches!(&l[0], DepNode::Str(s) if s == "||"));
+                let mut ignore = false;
+
+                if let Some(DepNode::Str(last)) = stack[level].last() {
+                    let last = last.clone();
+                    if last == "||" && l.is_empty() {
+                        l.push(DepNode::Str(EMPTY_ANY_OF.to_string()));
+                        stack[level].pop();
+                    } else if last.ends_with('?') {
+                        if !is_active(&last, uselist, mode)? {
+                            ignore = true;
+                        }
+                        stack[level].pop();
+                    }
+                }
+
+                if !l.is_empty() && !ignore {
+                    let ends_level = ends_in_any_of_dep(&stack, level as isize);
+                    let ends_above = ends_in_any_of_dep(&stack, level as isize - 1);
+                    if !ends_above && !ends_level {
+                        stack[level].extend(l);
+                    } else if stack[level].is_empty() {
+                        special_append(&mut stack, level, l, is_single);
+                    } else if is_single && ends_level {
+                        stack[level].pop();
+                        special_append(&mut stack, level, l, is_single);
+                    } else if ends_level && ends_above {
+                        stack[level].pop();
+                        stack[level].extend(l);
+                    } else {
+                        special_append(&mut stack, level, l, is_single);
+                    }
+                }
+            }
+            "||" => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotOr { token: pos + 1 });
+                }
+                need_bracket = true;
+                stack
+                    .last_mut()
+                    .unwrap()
+                    .push(DepNode::Str("||".to_string()));
+            }
+            "->" => {
+                return Err(Error::SrcUriArrow { token: pos + 1 });
+            }
+            _ => {
+                if need_bracket {
+                    return Err(Error::ExpectedOpenGotToken {
+                        token: token.to_string(),
+                        at: pos + 1,
+                    });
+                }
+                if token.ends_with('?') {
+                    need_bracket = true;
+                }
+                stack.last_mut().unwrap().push(DepNode::Str(token.clone()));
+            }
+        }
+    }
+
+    if stack.len() != 1 {
+        return Err(Error::MissingCloseParen);
+    }
+    if need_bracket {
+        return Err(Error::MissingOpenParen);
+    }
+
+    let mut out = Vec::new();
+    serialize_dep_tree(&stack.pop().unwrap(), &mut out);
+    Ok(out)
+}
+
+/// Portage's `subset` parameter as a two-pass operation: `select_subset`
+/// over the nested structure first, then the ordinary `use_reduce_flat`.
+/// Portage's `--with-test-deps` call extracts exactly the *additional*
+/// deps a `test?` conditional contributes once `"test"` is forced on.
+// Portage: lib/portage/dep/__init__.py, use_reduce; depgraph.py
+pub fn use_reduce_flat_subset(
+    tokens: &[String],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+    subset: &HashSet<String>,
+) -> Result<Vec<String>, Error> {
+    let tree = build_dep_tree(tokens)?;
+    let filtered = select_subset(SelectSubsetArgs {
+        nodes: &tree,
+        disjunction: false,
+        selected: false,
+        subset,
+        uselist,
+        mode,
+    })?;
+    let mut reserialized = Vec::new();
+    serialize_dep_tree(&filtered, &mut reserialized);
+    use_reduce_flat(&reserialized, uselist, mode)
+}
+
 /// Portage's `_add_pkg_dep_string` `"||"` resolution, simplified: of every
 /// alternative, picks the **first one with the highest [`AltPreference`]**
 /// the probe reports. An alternative an inactive conditional emptied is
@@ -489,3 +628,11 @@ fn special_append(stack: &mut [Vec<DepNode>], level: usize, l: Vec<DepNode>, is_
 /// index wins (`&mut |_| 0` keeps first-listed-in-bin-wins).
 // Portage: lib/portage/dep/dep_check.py, dep_zapdeps
 pub type TieBreak<'a> = dyn FnMut(&[Vec<String>]) -> usize + 'a;
+
+struct ResolveDisjunctionsArgs<'a> {
+    nodes: &'a [DepNode],
+    uselist: &'a HashSet<String>,
+    mode: MatchMode,
+    empty_groups_always_true: bool,
+    tie_break: &'a mut TieBreak<'a>,
+}

@@ -1,0 +1,12 @@
+[package]
+name = "use-reduce-harness"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+harness-common = { path = "../harness-common" }
+portage-use-reduce = { path = "../portage-use-reduce" }
+
+[lints]
+workspace = true

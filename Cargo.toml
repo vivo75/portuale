@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/portage-versions",
+    "crates/portage-vdb",
     "crates/portage-dep",
     "crates/portage-use-reduce",
     "crates/portage-profile",
@@ -11,6 +12,7 @@ members = [
     "crates/harness-common",
     "crates/mrg-director",
     "crates/versions-harness",
+    "crates/use-reduce-harness",
     "crates/portuale",
 ]
 # Vendored upstream checkouts carry their own Cargo.toml files; they are
