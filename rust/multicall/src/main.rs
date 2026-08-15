@@ -1,0 +1,75 @@
+// Minimal skeleton proving the emerge/ebuild multicall dispatch mechanism
+// described in PORTING/PROMPT.md ("emerge/ebuild binary shape"): a single
+// static binary that behaves differently depending on how it is invoked,
+// busybox-style. Real dispatch installs this binary once and creates
+// `emerge` / `ebuild` symlinks (or hardlinks) pointing at it; argv[0] tells
+// it which applet to run.
+//
+// Scope is deliberately a stub: dry-run/read-only behavior only, no real
+// dependency resolution or merges (see PROMPT.md, "Scope of the first
+// port"). It exists to exercise and test the dispatch mechanism itself.
+
+use std::process::ExitCode;
+
+enum Applet {
+    Emerge,
+    Ebuild,
+}
+
+impl Applet {
+    fn from_name(name: &str) -> Option<Applet> {
+        match name {
+            "emerge" => Some(Applet::Emerge),
+            "ebuild" => Some(Applet::Ebuild),
+            _ => None,
+        }
+    }
+}
+
+fn basename(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+fn run_emerge(args: &[String]) -> ExitCode {
+    println!("emerge (pilot stub): dry-run only, no real dependency resolution yet");
+    println!("args: {args:?}");
+    ExitCode::SUCCESS
+}
+
+fn run_ebuild(args: &[String]) -> ExitCode {
+    println!("ebuild (pilot stub): dry-run only, no phase execution yet");
+    println!("args: {args:?}");
+    ExitCode::SUCCESS
+}
+
+fn run(applet: Applet, args: &[String]) -> ExitCode {
+    match applet {
+        Applet::Emerge => run_emerge(args),
+        Applet::Ebuild => run_ebuild(args),
+    }
+}
+
+fn main() -> ExitCode {
+    let argv: Vec<String> = std::env::args().collect();
+    let invoked_as = basename(&argv[0]);
+
+    // Primary dispatch: argv[0] (how a real emerge/ebuild symlink invokes
+    // us). Fallback: an explicit first argument, e.g. `multicall emerge
+    // --pretend ...`, matching busybox's own dual invocation style so the
+    // binary is still exercisable without symlinks set up.
+    if let Some(applet) = Applet::from_name(invoked_as) {
+        return run(applet, &argv[1..]);
+    }
+
+    match argv.get(1).and_then(|a| Applet::from_name(a)) {
+        Some(applet) => run(applet, &argv[2..]),
+        None => {
+            eprintln!(
+                "multicall: unrecognized applet (invoked as {invoked_as:?}); \
+                 expected a symlink named 'emerge' or 'ebuild', or \
+                 `multicall <emerge|ebuild> ...`"
+            );
+            ExitCode::from(1)
+        }
+    }
+}
