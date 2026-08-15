@@ -485,6 +485,32 @@ PORTING/
   that any directly-requested atom resolving `AlreadyInstalled` gets its
   own such line, while one reached only as a dependency stays silent, as
   before.
+
+  **Versioned/slotted top-level atoms**: `emerge --pretend '>=cat/pkg-1.2'`
+  or `emerge --pretend cat/pkg:0` -- a target carrying an operator or slot,
+  not just a bare `category/package` -- was, until this slice, rejected
+  outright ("only a bare category/package atom is supported"), even though
+  `resolve_pretend`'s own atom-vs-candidate matching (`portage_dep::match_from_list`)
+  already handled operators and slots correctly for every dependency atom
+  extracted from DEPEND/RDEPEND. Lifting the CLI-level restriction was the
+  entire slice: zero resolution-logic changes were needed, since a
+  top-level atom and a dependency atom were always resolved through the
+  exact same code path. Grounding this in the grammar surfaced a real,
+  pre-existing gap worth fixing at the same time: the old check never
+  tested for a blocker (`!`/`!!`) at all, so `emerge --pretend '!!cat/pkg'`
+  was silently accepted by the CLI and then silently dropped by
+  `resolve_pretend_graph`'s own blocker skip -- exit 0, no output, no
+  error, instead of being rejected the way real portage rejects a bare
+  blocker as an emerge target -- confirmed with the user before folding
+  the fix into this same slice rather than deferring it. On the Python
+  reference side, `_parse_atom` uses the *real* `portage.dep.Atom` (richer
+  than Rust's own deliberately narrowed `portage-dep` crate), so an input
+  using a grammar feature Rust's `Atom` struct has no field for at all
+  (USE deps, repo constraints, wildcards, build-ids, slot operators like
+  `:=`/`:*`) needs an explicit `_has_unsupported_top_level_features` check
+  to still produce the same "invalid atom" outcome Rust's own `parse_atom`
+  would (returning `None` outright for that input) -- verified empirically
+  atom-by-atom against `atom-harness parse` rather than assumed.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -806,6 +832,19 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/shared-a dev-
 # dependency's own missing candidate is
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/does-not-exist dev-libs/newpkg
 # emerge: there are no ebuilds to satisfy "dev-libs/does-not-exist".  (exit 1)
+
+# a top-level atom can now carry an operator/slot, same as a dependency
+# atom always could -- resolve_pretend's own matching needed no changes
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend '>=dev-libs/newpkg-1.0'
+# [ebuild  N] dev-libs/newpkg-1.0
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg:0
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# a blocker is still rejected as a target -- fixed to be an explicit,
+# reported rejection instead of the pre-existing silent no-op (accepted
+# by the CLI, then dropped by resolve_pretend_graph's own blocker skip)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend '!!dev-libs/newpkg'
+# emerge (pilot v1): "!!dev-libs/newpkg" is a blocker, not a valid emerge target  (exit 2)
 
 # CLI surface recognition: a real emerge option this pilot doesn't
 # implement is named specifically, not lumped in with a typo

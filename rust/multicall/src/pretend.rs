@@ -16,12 +16,19 @@
 // simplified subset of real emerge's --pretend output, not
 // byte-identical to it.
 //
-// Anything outside the top-level atoms' narrow slice (no --pretend, a
-// versioned/slotted/blocker top-level atom) is rejected with a clear "not
-// supported in this pilot" message rather than silently doing the wrong
-// thing. Dependency atoms extracted from DEPEND/RDEPEND are NOT
-// restricted this way -- real dependency strings need the full atom
-// grammar (operators, slots).
+// A top-level atom may carry an operator/version/slot (e.g.
+// `>=cat/pkg-1.2`, `cat/pkg:0`) -- resolve_pretend's own atom-vs-candidate
+// matching (see portage-repo/src/lib.rs) already handles this correctly
+// with zero extra code, since it's the exact same match_from_list path
+// every dependency atom extracted from DEPEND/RDEPEND already uses. Only
+// a blocker (`!`/`!!`) top-level atom is rejected -- real portage doesn't
+// accept a bare blocker as an emerge target either, and prior to this
+// slice the CLI's own bare-atom check didn't test for it at all, so
+// `emerge --pretend '!!cat/pkg'` used to silently no-op (accepted by the
+// CLI, then dropped by resolve_pretend_graph's own blocker skip) instead
+// of being rejected -- fixed as part of tightening this same check.
+// Dependency atoms extracted from DEPEND/RDEPEND are never restricted
+// this way -- real dependency strings need the full atom grammar.
 //
 // Multiple top-level atoms (`emerge --pretend foo bar`) ARE supported --
 // they seed the same BFS/dedup/slot-conflict machinery together (see
@@ -45,7 +52,7 @@
 // scope cuts.
 
 use crate::emerge_options;
-use portage_dep::{parse_atom, Operator};
+use portage_dep::{parse_atom, Blocker};
 use portage_repo::{
     config_root_from_env, resolve_pretend_graph, root_from_env, GraphEntry, PretendOutcome,
 };
@@ -124,10 +131,8 @@ pub fn run(args: &[String]) -> ExitCode {
             eprintln!("emerge: invalid atom {atom_str:?}");
             return ExitCode::from(1);
         };
-        if atom.operator != Operator::None || atom.slot.is_some() || atom.version.is_some() {
-            eprintln!(
-                "emerge (pilot v1): only a bare category/package atom is supported, got {atom_str:?}"
-            );
+        if atom.blocker != Blocker::None {
+            eprintln!("emerge (pilot v1): {atom_str:?} is a blocker, not a valid emerge target");
             return ExitCode::from(2);
         }
     }

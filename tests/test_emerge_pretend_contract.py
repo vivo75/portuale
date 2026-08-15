@@ -39,8 +39,16 @@ CASES = [
     ("package does not exist", ["--pretend", "dev-libs/does-not-exist"], 1),
     ("sibling-prefix package: new", ["--pretend", "dev-libs/foo"], 0),
     ("sibling-prefix package: installed", ["--pretend", "dev-libs/foo-bar"], 0),
-    ("versioned atom: out of v1 scope", ["--pretend", ">=dev-libs/foo-1.0"], 2),
-    ("slotted atom: out of v1 scope", ["--pretend", "dev-libs/foo:0"], 2),
+    ("versioned top-level atom: resolves New", ["--pretend", ">=dev-libs/foo-1.0"], 0),
+    ("slotted top-level atom: resolves New", ["--pretend", "dev-libs/foo:0"], 0),
+    ("versioned top-level atom: no version satisfies it", ["--pretend", ">=dev-libs/newpkg-9.0"], 1),
+    ("slotted top-level atom: no such slot", ["--pretend", "dev-libs/newpkg:5"], 1),
+    ("exact-version top-level atom: already installed", ["--pretend", "=dev-libs/samepkg-1.0"], 0),
+    ("blocker top-level atom: not a valid target", ["--pretend", "!!dev-libs/newpkg"], 2),
+    ("weak-blocker top-level atom: not a valid target", ["--pretend", "!dev-libs/newpkg"], 2),
+    ("USE-dep top-level atom: outside v1 grammar entirely", ["--pretend", "dev-libs/foo[bar]"], 1),
+    ("repo-constrained top-level atom: outside v1 grammar entirely", ["--pretend", "dev-libs/foo::gentoo"], 1),
+    ("slot-operator top-level atom: outside v1 grammar entirely", ["--pretend", "dev-libs/foo:0="], 1),
     ("syntactically invalid atom", ["--pretend", "not an atom!"], 1),
     ("no atom given", ["--pretend"], 2),
     ("missing --pretend", ["dev-libs/newpkg"], 2),
@@ -480,6 +488,38 @@ def test_bad_top_level_atom_aborts_the_whole_run_in_argv_order(emerge_binary, fi
     assert result.returncode == 1
     assert result.stdout == ""
     assert result.stderr.strip() == 'emerge: there are no ebuilds to satisfy "dev-libs/does-not-exist".'
+
+
+def test_versioned_and_slotted_top_level_atoms_resolve_like_bare_ones(
+    emerge_binary, fixture_env
+):
+    """>=dev-libs/newpkg-1.0 and dev-libs/newpkg:0 are both real,
+    common invocation shapes (`emerge '>=foo-1.2'`, `emerge foo:0`) that
+    the CLI used to reject outright ("only a bare category/package atom
+    is supported") even though resolve_pretend's own atom-vs-candidate
+    matching already handled operators/slots correctly for every
+    dependency atom -- lifting the CLI-level restriction was the entire
+    slice, no resolution-logic changes needed."""
+    for atom in (">=dev-libs/newpkg-1.0", "dev-libs/newpkg:0"):
+        result = _run([str(emerge_binary)], ["--pretend", atom], fixture_env)
+        assert result.returncode == 0, atom
+        assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/newpkg-1.0"], atom
+
+
+def test_blocker_top_level_atom_is_rejected_not_silently_dropped(emerge_binary, fixture_env):
+    """Prior to this slice, the CLI's bare-atom check never tested for a
+    blocker at all: `emerge --pretend '!!foo'` was accepted (operator/
+    slot/version were all unset) and then silently dropped by
+    resolve_pretend_graph's own `atom.blocker != Blocker::None` BFS skip
+    -- exit 0, no output, no error. A blocker isn't a valid emerge target
+    in real portage either, so this must now be rejected explicitly."""
+    result = _run([str(emerge_binary)], ["--pretend", "!!dev-libs/newpkg"], fixture_env)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge (pilot v1): "!!dev-libs/newpkg" is a blocker, not a valid emerge target'
+    )
 
 
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):

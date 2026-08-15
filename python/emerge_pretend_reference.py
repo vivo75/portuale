@@ -865,8 +865,9 @@ def _parse_atom(atom_str):
     crate was verified against) so the accept/reject boundary matches
     exactly, not just the happy path. Returns an Atom, or None if it
     doesn't parse at all (distinct from parsing but using a feature v1
-    doesn't support -- see _is_bare_atom -- mirroring how the Rust side
-    separates "invalid atom" from "only a bare atom is supported")."""
+    doesn't support -- see _has_unsupported_top_level_features --
+    mirroring how the Rust side separates "invalid atom" from "not a
+    valid emerge target")."""
     try:
         return Atom(atom_str, allow_wildcard=True)
     except InvalidAtom:
@@ -1071,17 +1072,24 @@ def _lookup_option(token):
     return None
 
 
-def _is_bare_atom(a):
-    """v1 only supports a bare category/package atom -- no operator, no
-    slot, no version, no USE deps, no blocker, no repo/wildcard/build-id."""
-    return not (
-        a.operator is not None
-        or a.slot is not None
-        or a.use is not None
+def _has_unsupported_top_level_features(a):
+    """Real portage.dep.Atom (used by _parse_atom, unlike Rust's own
+    narrowed portage-dep crate) successfully parses grammar Rust's v1
+    subset doesn't at all -- USE deps, repo constraints, wildcards,
+    build-ids, slot operators (":=" / ":*", distinct from a plain slot).
+    portage-dep's Atom struct (see its own source) has no fields for any
+    of these, so a Rust-side parse_atom call on the same text returns
+    None outright -- the same "invalid atom" outcome as genuinely
+    malformed input, not the "blocker, not a valid target" outcome
+    _is_blocker_atom below covers. Operator and plain slot ARE
+    representable on the Rust side (the whole point of this slice), so
+    they're deliberately not checked here."""
+    return (
+        a.use is not None
         or a.repo is not None
         or a.extended_syntax
         or a.build_id is not None
-        or a.blocker
+        or a.slot_operator is not None
     )
 
 
@@ -1127,13 +1135,12 @@ def run(args):
 
     for atom_arg in atom_args:
         atom = _parse_atom(atom_arg)
-        if atom is None:
+        if atom is None or _has_unsupported_top_level_features(atom):
             print(f'emerge: invalid atom "{atom_arg}"', file=sys.stderr)
             return 1
-        if not _is_bare_atom(atom):
+        if atom.blocker:
             print(
-                "emerge (pilot v1): only a bare category/package atom is "
-                f'supported, got "{atom_arg}"',
+                f'emerge (pilot v1): "{atom_arg}" is a blocker, not a valid emerge target',
                 file=sys.stderr,
             )
             return 2
