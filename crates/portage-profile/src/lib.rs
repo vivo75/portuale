@@ -54,6 +54,9 @@ mod package_files;
 mod profile_chain;
 mod resolve;
 
+#[cfg(test)]
+mod tests;
+
 pub use binrepo::*;
 pub use config::*;
 pub use env_layer::*;

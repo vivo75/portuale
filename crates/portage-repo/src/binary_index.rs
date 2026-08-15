@@ -147,3 +147,46 @@ pub(crate) fn pick_binary_instance<'a>(
         }),
     }
 }
+
+/// Arguments of [`find_remote_binpkg_instance`]; the result borrows
+/// only `binrepos` (`'a`).
+pub struct FindRemoteBinpkgInstanceArgs<'a, 'b> {
+    pub binrepos: &'a [portage_profile::BinRepo],
+    pub root: &'b Path,
+    pub category: &'b str,
+    pub package: &'b str,
+    pub version: &'b str,
+    pub build_id: Option<&'b str>,
+}
+
+/// [`find_remote_binpkg`] for one specific build: `Some(build_id)`
+/// scans the binrepos in order for exactly that `BUILD_ID`, falling back to
+/// the newest build of the version.
+pub fn find_remote_binpkg_instance<'a>(
+    args: FindRemoteBinpkgInstanceArgs<'a, '_>,
+) -> Option<(&'a portage_profile::BinRepo, HashMap<String, String>)> {
+    let FindRemoteBinpkgInstanceArgs {
+        binrepos,
+        root,
+        category,
+        package,
+        version,
+        build_id,
+    } = args;
+    let want_cpv = format!("{category}/{package}-{version}");
+    if build_id.is_some() {
+        for binrepo in binrepos {
+            let index = cached_binary_index(&binrepo.packages_dir(root));
+            if let Some(entry) = pick_binary_instance(index.entries(), &want_cpv, build_id) {
+                return Some((binrepo, entry.clone()));
+            }
+        }
+    }
+    for binrepo in binrepos {
+        let index = cached_binary_index(&binrepo.packages_dir(root));
+        if let Some(entry) = pick_binary_instance(index.entries(), &want_cpv, None) {
+            return Some((binrepo, entry.clone()));
+        }
+    }
+    None
+}
