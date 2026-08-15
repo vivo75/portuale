@@ -58,3 +58,31 @@ pub enum Kind {
     Dir,
     File,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ViewError {
+    /// No such path (also: the path vanished in a later generation).
+    NoEnt,
+    NotDir,
+    IsDir,
+    /// A handle that was never issued or was already released.
+    BadHandle,
+    /// Every write operation.
+    Rofs,
+    /// A pinned file changed or went away under an open handle.
+    Stale,
+    /// A write the read-write layer (`vdb_rw`) does not map.
+    Perm,
+    /// `rmdir` of a directory that still has children.
+    NotEmpty,
+    /// The name exists already (`mkdir`, `O_EXCL`, `link`).
+    Exists,
+    /// The backend failed.
+    Io(String),
+}
+
+impl From<portage_vdb::Error> for ViewError {
+    fn from(e: portage_vdb::Error) -> Self {
+        ViewError::Io(e.to_string())
+    }
+}

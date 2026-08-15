@@ -30,6 +30,10 @@ pub(crate) fn note_incremental(config: &mut Config, key: &str, value: &str) {
     }
 }
 
+/// Brackets one file's processing so its assignments collapse to the
+/// file's final one (sourced files re-assign; the last wins).
+pub(crate) struct IncrementalSnapshot(pub(crate) Vec<(String, usize)>);
+
 /// Fold stacked token layers with Portage's incremental semantics
 /// (`-*` clears, `-tok` discards, bare/`+`-prefixed adds), then sort.
 /// Shared by [`Config::resolved_incremental`] and the `Packages`-index
