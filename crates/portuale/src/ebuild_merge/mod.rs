@@ -21,6 +21,7 @@ mod plib_registry;
 mod plib_unmerge;
 mod protect;
 mod tree;
+mod vdb_entry;
 
 #[cfg(test)]
 mod tests;
@@ -30,6 +31,7 @@ pub(crate) use plib_registry::*;
 pub(crate) use plib_unmerge::*;
 pub(crate) use protect::*;
 pub(crate) use tree::*;
+pub(crate) use vdb_entry::*;
 
 use md5::{Digest, Md5};
 

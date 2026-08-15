@@ -82,6 +82,19 @@ impl BinaryIndex {
     pub(crate) fn entries(&self) -> &[HashMap<String, String>] {
         &self.entries
     }
+
+    /// The index records for `category/package` -- O(matches), not a scan.
+    pub(crate) fn entries_for_cp(
+        &self,
+        category: &str,
+        package: &str,
+    ) -> impl Iterator<Item = &HashMap<String, String>> {
+        self.by_cp
+            .get(&(category.to_string(), package.to_string()))
+            .into_iter()
+            .flatten()
+            .map(move |&i| &self.entries[i])
+    }
 }
 
 /// `BinaryIndex::from_pkgdir`, memoised by directory: a ~20 MB index re-parsed
