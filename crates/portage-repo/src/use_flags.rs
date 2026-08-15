@@ -33,6 +33,14 @@ pub(crate) fn use_context_fingerprint(config: &portage_profile::Config) -> u64 {
     config.autounmask_use.hash(&mut h);
     h.finish()
 }
+pub(crate) struct EffectiveUseFlagsUncachedArgs<'a> {
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) iuse: &'a str,
+    pub(crate) keywords: &'a [String],
+    pub(crate) candidate_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+}
 
 /// Folds matching `entries` (raw `(atom, tokens)` pairs, already in
 /// profile-chain / source order) onto `seed` in source order, with
@@ -59,6 +67,23 @@ pub(crate) fn specificity_ordered_flags(
 pub(crate) enum MaskOrForce {
     Mask,
     Force,
+}
+
+pub(crate) struct ResolvedUseMaskOrForceArgs<'a> {
+    pub(crate) which: MaskOrForce,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) candidate_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) stable: bool,
+}
+pub(crate) struct ResolvedUseMaskOrForceUncachedArgs<'a> {
+    pub(crate) which: MaskOrForce,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) candidate_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) stable: bool,
 }
 
 pub struct ForcedOrMaskedFlagsArgs<'a> {

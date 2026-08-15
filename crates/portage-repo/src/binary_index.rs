@@ -220,6 +220,78 @@ pub(crate) fn quickpkg_direct_index_entries(source_root: &Path) -> Vec<HashMap<S
     out
 }
 
+/// Binary-package builds of `category/package` -- Portage's `bindbapi`, added
+/// to the ebuild pool only when `--usepkg`/`--usepkgonly` makes them eligible.
+/// Matched off `CPV` like an ebuild filename; repo fields stay pseudo values.
+/// Portage: depgraph.py `_dynamic_depgraph_config`
+pub fn list_binary_candidates(
+    index: &BinaryIndex,
+    category: &str,
+    package: &str,
+) -> Vec<Candidate> {
+    binary_candidates_from_index(index, category, package, false)
+}
+
+/// Shared body of `list_binary_candidates` and `list_remote_binary_candidates`.
+/// `repo_name` is the entry's `REPO`, else `"__unknown__"`.
+pub(crate) fn binary_candidates_from_index(
+    index: &BinaryIndex,
+    category: &str,
+    package: &str,
+    remote: bool,
+) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+    for entry in index.entries_for_cp(category, package) {
+        let Some(cpv) = entry.get("CPV") else {
+            continue;
+        };
+        let Some(pf) = cpv.strip_prefix(&format!("{category}/")) else {
+            continue;
+        };
+        let Some(version) = strip_version_prefix(pf, package) else {
+            continue;
+        };
+        let keywords = entry
+            .get("KEYWORDS")
+            .map(|s| s.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        let (slot, sub_slot) = split_slot(entry.get("SLOT").map(String::as_str).unwrap_or("0"));
+        let binary_use: HashSet<String> = entry
+            .get("USE")
+            .map(|s| s.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        candidates.push(Candidate {
+            version: version.to_string(),
+            keywords,
+            slot,
+            sub_slot,
+            repo_location: PathBuf::new(),
+            // Below any repo priority, so the `vercmp` -> `repo_priority`
+            // tie-break prefers an identical-version ebuild over a binary.
+            repo_priority: i32::MIN,
+            repo_name: entry
+                .get("REPO")
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .unwrap_or_else(|| "__unknown__".to_string()),
+            license: entry.get("LICENSE").cloned().unwrap_or_default(),
+            iuse: entry.get("IUSE").cloned().unwrap_or_default(),
+            properties: entry.get("PROPERTIES").cloned().unwrap_or_default(),
+            restrict: entry.get("RESTRICT").cloned().unwrap_or_default(),
+            source: CandidateSource::Binary,
+            binary_use: Some(binary_use),
+            remote,
+            build_id: entry.get("BUILD_ID").filter(|s| !s.is_empty()).cloned(),
+            build_time: entry.get("BUILD_TIME").and_then(|s| s.trim().parse().ok()),
+            binary_deps: ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+                .iter()
+                .filter_map(|k| entry.get(*k).map(|v| (k.to_string(), v.clone())))
+                .collect(),
+        });
+    }
+    candidates
+}
+
 /// Picks one `Packages` entry of `cat/pkg-version` (binpkg-multi-instance
 /// aware). `Some(id)` selects exactly that `BUILD_ID`;
 /// `None` the newest build -- highest `(BUILD_TIME, BUILD_ID)`, Portage

@@ -2,6 +2,33 @@
 
 use crate::*;
 
+/// Arguments of [`assemble_tree_pkg_use_display`].
+pub(crate) struct AssembleTreePkgUseDisplayArgs<'a> {
+    pub(crate) cand: &'a Candidate,
+    pub(crate) metadata: &'a std::sync::Arc<HashMap<String, String>>,
+    pub(crate) enabled: &'a HashSet<String>,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+}
+
+/// Installed-consumer twin of [`skipped_update_use_display_for`]: reads the
+/// vdb-recorded `IUSE`/`USE` with no masking. No force/mask `( )` wraps.
+// Portage: depgraph.py, pkg_use_display (installed parent)
+pub fn skipped_update_installed_use_display_for(
+    root: &Path,
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    let (iuse, use_flags) = installed_pkg_iuse_and_use(root, category, package, version);
+    let enabled: HashSet<String> = use_flags.iter().cloned().collect();
+    let explicit: HashSet<String> = iuse.iter().cloned().collect();
+    assemble_pkg_use_display(&enabled, &explicit, &HashSet::new(), config)
+}
+
 /// Keeps an effective-USE flag iff it is declared in `IUSE` or matches the
 /// implicit domain.
 // Portage: config.py, setcpv (PORTAGE_USE masking)
@@ -165,4 +192,17 @@ pub(crate) fn render_use_group(
         }))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Installed-package twin of [`pkg_use_display_for`], from vdb-recorded
+/// `IUSE`/`USE`. No force/mask wraps.
+// Portage: depgraph.py, pkg_use_display (installed node)
+pub fn installed_use_display_for(
+    root: &Path,
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    skipped_update_installed_use_display_for(root, config, category, package, version)
 }

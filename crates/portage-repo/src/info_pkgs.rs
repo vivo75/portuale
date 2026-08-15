@@ -23,6 +23,20 @@ pub struct InfoBinaryCandidate {
     pub pf: String,
 }
 
+/// Whether `atom_str`'s `cat/pkg` has *any* local binary build. Unlike
+/// `resolve_info_binary_candidate` this does not gate on `pkg_info()`: a
+/// binary-only package still isn't a "no ebuilds to satisfy" error.
+// Portage: action_info, bindb.match(x.cp)
+pub fn has_local_binary_candidate(
+    local_binpkg: &std::sync::Arc<BinaryIndex>,
+    atom_str: &str,
+) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    !list_binary_candidates(local_binpkg, &atom.category, &atom.package).is_empty()
+}
+
 /// One `emerge --info <atom>` result for an installed package -- see
 /// `resolve_installed_info`.
 #[derive(Debug, Clone, PartialEq, Eq)]
