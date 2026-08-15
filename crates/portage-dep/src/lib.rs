@@ -601,6 +601,87 @@ fn pkg_full_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(&format!("^{PKG}$")).unwrap())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WildcardAtom {
+    pub category: Option<String>,
+    pub package: Option<String>,
+}
+
+/// Parses `*/*`, `cat/*` or `*/pkg`; `None` for anything else, including a
+/// plain atom with no wildcard (use `parse_atom`).
+pub fn parse_wildcard_atom(s: &str) -> Option<WildcardAtom> {
+    let (cat, pkg) = s.split_once('/')?;
+    if pkg.contains('/') {
+        return None;
+    }
+
+    let category = if cat == "*" {
+        None
+    } else if cat_full_re().is_match(cat) {
+        Some(cat.to_string())
+    } else {
+        return None;
+    };
+    let package = if pkg == "*" {
+        None
+    } else if pkg_full_re().is_match(pkg) {
+        Some(pkg.to_string())
+    } else {
+        return None;
+    };
+
+    if category.is_some() && package.is_some() {
+        return None;
+    }
+    Some(WildcardAtom { category, package })
+}
+
+pub fn wildcard_atom_matches(atom: &WildcardAtom, category: &str, package: &str) -> bool {
+    atom.category.as_deref().is_none_or(|c| c == category)
+        && atom.package.as_deref().is_none_or(|p| p == package)
+}
+
+#[cfg(test)]
+mod wildcard_tests {
+    use super::*;
+
+    #[test]
+    fn any_any_matches_everything() {
+        let w = parse_wildcard_atom("*/*").unwrap();
+        assert!(wildcard_atom_matches(&w, "dev-libs", "foo"));
+        assert!(wildcard_atom_matches(&w, "app-misc", "bar"));
+    }
+
+    #[test]
+    fn category_wildcard_matches_only_that_category() {
+        let w = parse_wildcard_atom("dev-qt/*").unwrap();
+        assert!(wildcard_atom_matches(&w, "dev-qt", "qtcore"));
+        assert!(!wildcard_atom_matches(&w, "dev-libs", "qtcore"));
+    }
+
+    #[test]
+    fn package_wildcard_matches_only_that_package_name() {
+        let w = parse_wildcard_atom("*/foo").unwrap();
+        assert!(wildcard_atom_matches(&w, "dev-libs", "foo"));
+        assert!(wildcard_atom_matches(&w, "app-misc", "foo"));
+        assert!(!wildcard_atom_matches(&w, "dev-libs", "bar"));
+    }
+
+    #[test]
+    fn plain_atom_with_no_wildcard_is_rejected() {
+        // Not this grammar's job -- callers should try parse_atom first.
+        assert_eq!(parse_wildcard_atom("dev-libs/foo"), None);
+    }
+
+    #[test]
+    fn malformed_input_is_rejected() {
+        assert_eq!(parse_wildcard_atom("no-slash-at-all"), None);
+        assert_eq!(parse_wildcard_atom("dev-libs/"), None);
+        assert_eq!(parse_wildcard_atom("/foo"), None);
+        assert_eq!(parse_wildcard_atom("dev-libs/foo/bar"), None);
+    }
+}
+
 fn affecting_useflag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     // Modern-EAPI useflag charset; EAPI is not parametrized.

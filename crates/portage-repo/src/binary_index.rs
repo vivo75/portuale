@@ -132,6 +132,12 @@ pub(crate) fn remote_binary_index_override(
         .and_then(|table| table.read().unwrap().get(pkgdir).cloned())
 }
 
+/// `--quickpkg-direct-root` (Portage actions): the root whose
+/// installed packages `--quickpkg-direct` offers as binary candidates.
+/// `None` = not active. A process-global so it needn't thread through
+/// resolution signatures.
+pub(crate) static QUICKPKG_DIRECT_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
+
 /// Every package under `<source_root>/var/db/pkg` as a `Packages`-style record
 /// (Portage `bintree._populate_additional` reads the vdb the same way). Keys
 /// mirror what `binary_candidates_from_index` / `read_binary_metadata` read.
