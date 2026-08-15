@@ -1,6 +1,12 @@
+mod entry;
 mod feedback;
+mod result;
 mod rev_dep;
+mod skipped;
 mod slot_conflict;
+pub use entry::*;
 pub(crate) use feedback::*;
+pub use result::*;
 pub(crate) use rev_dep::*;
+pub use skipped::*;
 pub use slot_conflict::*;

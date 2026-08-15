@@ -26,6 +26,8 @@ use crate::ebuild_phases;
 
 use portage_dep::{Atom, Blocker, Operator, SlotOperator, match_from_list, parse_atom};
 
+use portage_repo::{ChangedDepsReportEntry, SlotConflict};
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use std::path::Path;

@@ -17,3 +17,19 @@ const ALREADY_EXISTS: &str = "already exists, for file `";
 /// The (harmless) no-DIR-header warning prefix: `install-info: warning:
 /// no info dir entry in ` (all 44 chars).
 const NO_DIR_ENTRY_PREFIX: &str = "install-info: warning: no info dir entry in ";
+
+/// How one install-info run's merged output classifies: silent, `already
+/// exists`, or the no-entry warning are all harmless (`None`); anything
+/// else is collected error text (`Some`).
+fn classify_output(myso: &str) -> Option<&str> {
+    if myso.is_empty() {
+        return None;
+    }
+    if myso.contains(ALREADY_EXISTS) {
+        return None;
+    }
+    if myso.starts_with(NO_DIR_ENTRY_PREFIX) {
+        return None;
+    }
+    Some(myso)
+}

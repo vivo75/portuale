@@ -13,6 +13,7 @@ mod depclean;
 mod info_pkgs;
 mod installed;
 mod masked_deps;
+mod merge_order;
 mod resolve;
 pub use depclean::*;
 pub use info_pkgs::*;

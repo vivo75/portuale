@@ -23,6 +23,21 @@ pub struct NewsContext {
     pub portage_gid: u32,
 }
 
+/// Prepare the state directory first; a permission failure returns before
+/// anything is read or written. `false` means "no write-back this run":
+/// the caller then counts the `.unread` file as found.
+/// Portage: portage/news.py, NewsManager.updateItems
+pub(crate) fn ensure_news_state_dir(dir: &Path, context: &NewsContext) -> bool {
+    if std::fs::create_dir_all(dir).is_err() || !apply_news_permissions(dir, context, 0o074) {
+        return false;
+    }
+    let Ok(c_dir) = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()) else {
+        return false;
+    };
+    // SAFETY: `c_dir` is a valid NUL-terminated path for the call.
+    unsafe { libc::access(c_dir.as_ptr(), libc::W_OK) == 0 }
+}
+
 /// Chown to `PORTAGE_INST_UID:portage_gid` when either differs (root caller
 /// only), then OR the `mode` bits into the existing mode when any is
 /// missing. `false` on a failed chown/chmod.

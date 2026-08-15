@@ -25,3 +25,13 @@ pub(crate) enum MaskReason {
     /// unsatisfied probe arms steer a parent the graph already replaces or fails on.
     SlotOperatorBuilt,
 }
+
+/// One `!=cat/pkg-ver` negative with its reason. `neg` renders exactly as the string
+/// used to live in `slot_constraints`, so every reader matching on it behaves
+/// identically. The masked version is recoverable without parsing: strip the
+/// `!=cat/pkg-` prefix formed from the bucket key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MaskEntry {
+    pub(crate) neg: String,
+    pub(crate) reason: MaskReason,
+}

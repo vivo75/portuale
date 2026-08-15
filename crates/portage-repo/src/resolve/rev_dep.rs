@@ -32,3 +32,18 @@ pub(crate) fn relax_built_slot_operator_atom(atom_str: &str) -> String {
         None => atom_str.to_string(),
     }
 }
+
+/// Whether an installed-settling edge's atom is a slot-operator rebuild trigger
+/// (a built atom accepting the resolved merge once relaxed) rather than a slot
+/// conflict. A version veto still records normally; unparseable never triggers.
+// Portage: depgraph.py, _minimize_children (update probe)
+pub(crate) fn built_slot_operator_rebuild_trigger(atom_str: &str, existing_str: &str) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if !is_built_slot_op(&atom) {
+        return false;
+    }
+    let relaxed = relax_built_slot_operator_atom(atom_str);
+    portage_dep::match_from_list(&relaxed, &[existing_str]).is_some_and(|m| !m.is_empty())
+}

@@ -2,6 +2,29 @@
 
 use crate::ebuild_merge::*;
 
+/// `true` unless the destination already exists as a regular file with the
+/// same full mode and byte-identical content. When `false`, the destination's
+/// inode, ownership and xattrs survive the rebuild and only its mtime is
+/// refreshed. Under `FEATURES=xattr` xattrs are compared too
+/// (`PORTAGE_XATTR_EXCLUDE`-aware); content is compared in fixed chunks.
+// Portage: vartree.py, dblink._needs_move
+pub(crate) fn needs_move(src: &Path, dest: &Path, xattrs: &XattrPolicy) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(src_meta) = std::fs::symlink_metadata(src) else {
+        return true;
+    };
+    let Ok(dest_meta) = std::fs::symlink_metadata(dest) else {
+        return true;
+    };
+    if !dest_meta.is_file() || src_meta.permissions().mode() != dest_meta.permissions().mode() {
+        return true;
+    }
+    if xattrs.enabled && !xattrs_equal(src, dest, &xattrs.exclude) {
+        return true;
+    }
+    !files_equal(src, dest).unwrap_or(false)
+}
+
 /// Byte-for-byte comparison for [`needs_move`], short-circuiting on a size
 /// mismatch first. Chunked so a large object never materializes in memory twice.
 pub(crate) fn files_equal(a: &Path, b: &Path) -> std::io::Result<bool> {

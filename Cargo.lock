@@ -1604,11 +1604,16 @@ dependencies = [
  "portage-atom-resolvo",
  "portage-dep",
  "portage-profile",
+ "portage-required-use",
  "portage-solver",
  "portage-use-reduce",
  "portage-versions",
  "resolvo",
 ]
+
+[[package]]
+name = "portage-required-use"
+version = "0.1.0"
 
 [[package]]
 name = "portage-solver"

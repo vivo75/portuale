@@ -10,9 +10,36 @@ mod ebuild_merge;
 mod ebuild_phases;
 mod helpers;
 mod info_files;
+mod mrg;
 mod pretend;
+mod remote;
 
 use std::process::ExitCode;
+
+enum Applet {
+    Emerge,
+    Ebuild,
+    Mrg,
+    Vdb,
+    Portageq,
+}
+
+impl Applet {
+    fn from_name(name: &str) -> Option<Applet> {
+        match name {
+            "emerge" => Some(Applet::Emerge),
+            "ebuild" => Some(Applet::Ebuild),
+            "mrg" => Some(Applet::Mrg),
+            "vdb" => Some(Applet::Vdb),
+            "portageq" => Some(Applet::Portageq),
+            _ => None,
+        }
+    }
+}
+
+fn basename(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
 
 fn main() -> ExitCode {
     // Applets are wired in here as they become usable.
