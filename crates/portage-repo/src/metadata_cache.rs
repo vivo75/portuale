@@ -2,6 +2,62 @@
 
 use crate::*;
 
+/// Reads `metadata/md5-cache/<category>/<pf>` (`pf` = "package-version",
+/// e.g. "foo-1.2.3-r1") as a plain `KEY=value` map.
+///
+/// Memoised per file path and returned as a shared `Arc`: the resolver
+/// reads the same entry many times per run. The tree's md5-cache is
+/// immutable for the process lifetime; `--regen` is a separate process.
+/// No caller mutates the map.
+pub(crate) fn read_md5_cache(
+    repo_location: &Path,
+    category: &str,
+    pf: &str,
+) -> Result<std::sync::Arc<HashMap<String, String>>, Error> {
+    type Md5CacheMap = HashMap<PathBuf, std::sync::Arc<HashMap<String, String>>>;
+    static CACHE: OnceLock<RwLock<Md5CacheMap>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+
+    let path = repo_location
+        .join("metadata")
+        .join("md5-cache")
+        .join(category)
+        .join(pf);
+
+    if let Ok(guard) = cache.read()
+        && let Some(map) = guard.get(&path)
+    {
+        return Ok(std::sync::Arc::clone(map));
+    }
+
+    let text = fs::read_to_string(&path).map_err(|e| Error::ReadFile {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    let mut map = HashMap::new();
+    for line in text.lines() {
+        if let Some(eq) = line.find('=') {
+            map.insert(line[..eq].to_string(), line[eq + 1..].to_string());
+        }
+    }
+    // `profiles/updates/` moves apply here on read: a sync bakes them
+    // into the cache, but portuale reads a static cache.
+    // Portage: update_dbentry over each `*DEPEND` string.
+    for key in ["DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND"] {
+        if let Some(dep) = map.get(key)
+            && let Some(updated) = apply_updates_to_dep_string(dep)
+        {
+            map.insert(key.to_string(), updated);
+        }
+    }
+
+    let map = std::sync::Arc::new(map);
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(path, std::sync::Arc::clone(&map));
+    }
+    Ok(map)
+}
+
 /// The hook `repo_aux_metadata` asks on a cache miss: the aux dict a
 /// `depend` phase produced. A plain `fn` pointer, because the phase
 /// runner lives in the binary crate, which cannot be referenced from here.
