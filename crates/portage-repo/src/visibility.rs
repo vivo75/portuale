@@ -184,6 +184,62 @@ pub(crate) fn is_visible_fingerprint(config: &portage_profile::Config) -> u64 {
     h.finish()
 }
 
+/// A candidate is visible if it isn't `package.mask`ed (without
+/// `package.unmask`), its KEYWORDS are accepted (global plus matching
+/// `package.accept_keywords` entries; `"**"` accepts unconditionally),
+/// and its `LICENSE`/`PROPERTIES`/`RESTRICT` are all fully accepted.
+///
+/// Memoised per (visibility fingerprint, candidate identity and full
+/// metadata); thread-local, lock-free. The metadata joins the key
+/// because a binary and the ebuild for the same string can differ.
+/// Portage: Package.py, _masks
+pub fn is_visible(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    type IvCache = HashMap<(u64, u64, String), bool>;
+    thread_local! {
+        static IV_CACHE: RefCell<IvCache> = RefCell::new(HashMap::new());
+    }
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let config_fp = is_visible_fingerprint(config);
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        config_fp.hash(&mut h);
+        category.hash(&mut h);
+        package.hash(&mut h);
+        candidate.version.hash(&mut h);
+        candidate.slot.hash(&mut h);
+        candidate.sub_slot.hash(&mut h);
+        candidate.repo_name.hash(&mut h);
+        candidate.license.hash(&mut h);
+        candidate.properties.hash(&mut h);
+        candidate.restrict.hash(&mut h);
+        candidate.iuse.hash(&mut h);
+        candidate.keywords.hash(&mut h);
+        // The `invalid` verdict depends on the instance's own dep keys,
+        // so same-version binary instances (distinct `BUILD_ID`s) must
+        // not share a memo entry.
+        candidate.build_id.hash(&mut h);
+        candidate.build_time.hash(&mut h);
+        (config_fp, h.finish(), candidate_str.clone())
+    };
+    if let Some(hit) = IV_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let result = is_visible_uncached(candidate, category, package, config);
+    IV_CACHE.with(|c| {
+        c.borrow_mut().insert(key, result);
+    });
+    result
+}
+
 #[cfg(test)]
 thread_local! {
     pub(crate) static IV_UNCACHED_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
