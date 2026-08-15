@@ -77,6 +77,56 @@ pub(crate) struct ResolvedUseMaskOrForceArgs<'a> {
     pub(crate) package: &'a str,
     pub(crate) stable: bool,
 }
+
+/// The four (two when not stable) mask/force sources stacked
+/// interleaved per profile level -- so a later level's global `-flag`
+/// cancels an earlier level's `package.use.mask` entry. Per level:
+/// global, global-stable (stable only), package, package-stable.
+/// Portage: UseManager.getUseMask/getUseForce
+pub(crate) fn resolved_use_mask_or_force(
+    args: ResolvedUseMaskOrForceArgs<'_>,
+) -> Rc<HashSet<String>> {
+    let ResolvedUseMaskOrForceArgs {
+        which,
+        config,
+        candidate_str,
+        category,
+        package,
+        stable,
+    } = args;
+    // Memoised per (which, stable, USE context, candidate); the levels
+    // are fixed at config resolution, so the walk result is stable.
+    // Thread-local, lock-free.
+    type RumfCache = HashMap<(MaskOrForce, bool, u64, String, String, String), Rc<HashSet<String>>>;
+    thread_local! {
+        static RUMF_CACHE: RefCell<RumfCache> = RefCell::new(HashMap::new());
+    }
+    let key = (
+        which,
+        stable,
+        use_context_fingerprint(config),
+        candidate_str.to_string(),
+        category.to_string(),
+        package.to_string(),
+    );
+    if let Some(hit) = RUMF_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let result = Rc::new(resolved_use_mask_or_force_uncached(
+        ResolvedUseMaskOrForceUncachedArgs {
+            which,
+            config,
+            candidate_str,
+            category,
+            package,
+            stable,
+        },
+    ));
+    RUMF_CACHE.with(|c| {
+        c.borrow_mut().insert(key, Rc::clone(&result));
+    });
+    result
+}
 pub(crate) struct ResolvedUseMaskOrForceUncachedArgs<'a> {
     pub(crate) which: MaskOrForce,
     pub(crate) config: &'a portage_profile::Config,
@@ -84,6 +134,45 @@ pub(crate) struct ResolvedUseMaskOrForceUncachedArgs<'a> {
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) stable: bool,
+}
+
+pub(crate) fn resolved_use_mask_or_force_uncached(
+    args: ResolvedUseMaskOrForceUncachedArgs<'_>,
+) -> HashSet<String> {
+    let ResolvedUseMaskOrForceUncachedArgs {
+        which,
+        config,
+        candidate_str,
+        category,
+        package,
+        stable,
+    } = args;
+    let mut acc: HashSet<String> = HashSet::new();
+    for level in &config.use_mask_force_levels {
+        let (global, global_stable, pkg, pkg_stable) = match which {
+            MaskOrForce::Mask => (
+                &level.use_mask,
+                &level.use_stable_mask,
+                &level.package_use_mask,
+                &level.package_use_stable_mask,
+            ),
+            MaskOrForce::Force => (
+                &level.use_force,
+                &level.use_stable_force,
+                &level.package_use_force,
+                &level.package_use_stable_force,
+            ),
+        };
+        portage_profile::apply_incremental_iter(global, &mut acc);
+        if stable {
+            portage_profile::apply_incremental_iter(global_stable, &mut acc);
+        }
+        acc = specificity_ordered_flags(pkg, candidate_str, category, package, acc);
+        if stable {
+            acc = specificity_ordered_flags(pkg_stable, candidate_str, category, package, acc);
+        }
+    }
+    acc
 }
 
 pub struct ForcedOrMaskedFlagsArgs<'a> {
