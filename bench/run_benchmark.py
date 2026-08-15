@@ -4,9 +4,13 @@
 Drives each harness's `batch` subcommand -- a single process handling many
 operations read from stdin -- specifically to avoid fork/exec overhead
 dominating the measurement (see PORTING/PROMPT.md, "Test/benchmark harness
-architecture"). This is the "regression gate" tool: it exits nonzero if
-Rust isn't measurably faster than Python (PROMPT.md hard goal 2), or if
-given --check-baseline, if speedup has regressed vs. a recorded baseline.
+architecture"). By default the workload is drawn from a real, vendored
+Gentoo tree snapshot (dataset.py / gentoo_snapshot.json, produced by
+extract_snapshot.py), per PROMPT.md's benchmark-data decision; pass
+`--dataset synthetic` to fall back to seeded-random version strings. This
+is the "regression gate" tool: it exits nonzero if Rust isn't measurably
+faster than Python (PROMPT.md hard goal 2), or if given --check-baseline,
+if speedup has regressed vs. a recorded baseline.
 
 Example:
     python3 PORTING/bench/run_benchmark.py --ops 200000
@@ -31,7 +35,11 @@ PYTHON_HARNESS = [
 BASELINE_PATH = Path(__file__).resolve().parent / "baseline.json"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from dataset import generate_batch_lines
+from dataset import (
+    DEFAULT_SNAPSHOT_PATH,
+    generate_snapshot_lines,
+    generate_synthetic_lines,
+)
 
 
 def build_rust_binary() -> None:
@@ -73,6 +81,14 @@ def main() -> int:
         help="timed repetitions per implementation; the minimum is reported",
     )
     parser.add_argument("--seed", type=int, default=0, help="dataset seed")
+    parser.add_argument(
+        "--dataset",
+        choices=["snapshot", "synthetic"],
+        default="snapshot",
+        help="'snapshot' (default) draws from the vendored real Gentoo tree "
+        "snapshot (gentoo_snapshot.json); 'synthetic' uses seeded-random "
+        "version strings instead (fallback if the snapshot is unavailable)",
+    )
     parser.add_argument("--json", type=Path, help="write results as JSON to this path")
     parser.add_argument(
         "--min-speedup",
@@ -105,7 +121,17 @@ def main() -> int:
         print(f"error: rust binary not found at {RUST_BIN}", file=sys.stderr)
         return 1
 
-    lines = generate_batch_lines(args.ops, seed=args.seed)
+    if args.dataset == "snapshot":
+        if not DEFAULT_SNAPSHOT_PATH.exists():
+            print(
+                f"error: {DEFAULT_SNAPSHOT_PATH} not found; re-vendor it with "
+                "extract_snapshot.py, or pass --dataset synthetic",
+                file=sys.stderr,
+            )
+            return 1
+        lines = generate_snapshot_lines(args.ops, seed=args.seed)
+    else:
+        lines = generate_synthetic_lines(args.ops, seed=args.seed)
     stdin_data = "\n".join(lines) + "\n"
 
     python_time, python_output = time_batch(PYTHON_HARNESS, stdin_data, args.repeat)
@@ -122,6 +148,7 @@ def main() -> int:
 
     speedup = python_time / rust_time
     result = {
+        "dataset": args.dataset,
         "ops": args.ops,
         "seed": args.seed,
         "repeat": args.repeat,
@@ -161,7 +188,15 @@ def main() -> int:
             )
             exit_code = 1
         else:
-            baseline_speedup = json.loads(BASELINE_PATH.read_text())["speedup"]
+            baseline = json.loads(BASELINE_PATH.read_text())
+            baseline_speedup = baseline["speedup"]
+            if baseline.get("dataset", "snapshot") != args.dataset:
+                print(
+                    f"warning: baseline was recorded with --dataset "
+                    f"{baseline.get('dataset', 'snapshot')!r}, comparing against "
+                    f"--dataset {args.dataset!r} now -- numbers may not be comparable",
+                    file=sys.stderr,
+                )
             regression_floor = baseline_speedup * 0.9
             if speedup < regression_floor:
                 print(

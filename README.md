@@ -17,8 +17,11 @@ PORTING/
   python/
     versions_harness.py        thin CLI wrapper around the real portage.versions
   bench/                       benchmark-mode timing comparison (the CI perf gate)
-    dataset.py                  synthetic version-pair generator (stand-in for a
-                                 real vendored Gentoo tree snapshot, see below)
+    gentoo_snapshot.json         vendored real Gentoo tree snapshot (19442 packages,
+                                 32862 version strings; see extract_snapshot.py)
+    extract_snapshot.py          (re-)generates gentoo_snapshot.json from a live tree
+    dataset.py                  turns the snapshot (default) or seeded-random
+                                 synthetic versions (fallback) into batch input lines
     run_benchmark.py            times both harnesses' `batch` mode, reports
                                  speedup, checks/updates baseline.json
     baseline.json                recorded speedup from the last --update-baseline run
@@ -57,8 +60,13 @@ PORTING/
   at all if the two implementations' outputs disagree. It exits nonzero if
   Rust isn't at least `--min-speedup` times faster than Python, and
   (`--check-baseline`) if speedup regresses more than 10% below the
-  recorded `baseline.json`. As of the last `--update-baseline` run, Rust is
-  **~6x faster** than Python on this synthetic dataset.
+  recorded `baseline.json`. Workload defaults to `gentoo_snapshot.json` --
+  real package/version pairs from a real Gentoo tree, mostly comparing two
+  versions of the *same* package (the realistic vercmp usage pattern) --
+  per PROMPT.md's "real, vendored Gentoo tree snapshot" decision; pass
+  `--dataset synthetic` to use seeded-random version strings instead. As of
+  the last `--update-baseline` run, Rust is **~6x faster** than Python on
+  the real snapshot.
 - **`PORTING/musl`**: the minimal-Linux gate from `PROMPT.md` hard goal 3
   and "Test/benchmark harness architecture" ("Rust CI also gates on a musl
   static build smoke-tested inside a minimal (scratch/busybox-level)
@@ -77,11 +85,15 @@ Known simplification: `versions-harness` compares version components as
 `i128` rather than Python's arbitrary-precision integers. See the comment
 at the top of `rust/versions-harness/src/versions.rs`.
 
-Also a known simplification: `bench/dataset.py` generates synthetic,
-seeded-random version pairs, not the "real, vendored Gentoo tree snapshot"
-`PROMPT.md` calls for -- no such snapshot is vendored into this repo yet.
-Swapping the generator for a real tree walk is a drop-in follow-up (same
-`generate_batch_lines`-shaped interface).
+`gentoo_snapshot.json` was extracted from a full local Gentoo tree
+checkout (`/.gentoo/repos/gentoo` on the machine this was vendored on) with
+`extract_snapshot.py`, using the real `portage.versions.pkgsplit` as the
+authority for parsing "pn-pv" ebuild filenames into package/version pairs
+-- not a hand-rolled parser. To refresh it against a newer tree:
+
+```sh
+python3 PORTING/bench/extract_snapshot.py /path/to/a/gentoo/tree
+```
 
 ## Running it
 
@@ -121,8 +133,11 @@ python3 -m pytest PORTING/tests -v
 Run the benchmark / regression gate:
 
 ```sh
-# report speedup, no gating
+# report speedup, no gating (uses the vendored real Gentoo tree snapshot)
 python3 PORTING/bench/run_benchmark.py --ops 200000
+
+# fall back to synthetic seeded-random version strings instead
+python3 PORTING/bench/run_benchmark.py --ops 200000 --dataset synthetic
 
 # CI-style: fail if speedup regressed vs. the recorded baseline
 python3 PORTING/bench/run_benchmark.py --check-baseline

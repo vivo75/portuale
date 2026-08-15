@@ -1,10 +1,11 @@
 {
+  "dataset": "snapshot",
   "ops": 200000,
   "seed": 0,
   "repeat": 5,
-  "python_seconds": 1.157365080085583,
-  "rust_seconds": 0.18498189700767398,
-  "python_ops_per_sec": 172806.3196664018,
-  "rust_ops_per_sec": 1081186.879555587,
-  "speedup": 6.256639697221668
+  "python_seconds": 1.061202178010717,
+  "rust_seconds": 0.1733002089895308,
+  "python_ops_per_sec": 188465.50086705553,
+  "rust_ops_per_sec": 1154066.698281259,
+  "speedup": 6.123490468928546
 }
