@@ -77,6 +77,13 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/atom-harness "${IMAGE}" \
 check "atom-harness match via explicit entrypoint" \
     test "${actual}" = "dev-libs/foo-2.0"
 
+# use-reduce-harness: correctness spot check for the USE-conditional
+# dependency flattening pilot slice.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/use-reduce-harness "${IMAGE}" \
+    reduce normal bar dev-libs/foo bar? "(" dev-libs/baz ")")
+check "use-reduce-harness reduce via explicit entrypoint" \
+    test "${actual}" = "dev-libs/foo,dev-libs/baz"
+
 echo
 if [ "${fail}" -eq 0 ]; then
     echo "musl smoke test: PASS (image ${IMAGE})"

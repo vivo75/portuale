@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUST_DIR = REPO_ROOT / "PORTING" / "rust"
 VERSIONS_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "versions_harness.py"
 ATOM_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "atom_harness.py"
+USE_REDUCE_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "use_reduce_harness.py"
 
 
 def _cargo_build(package: str) -> Path:
@@ -42,6 +43,18 @@ def atom_harness_rust() -> Path:
 @pytest.fixture(scope="session")
 def atom_harness_python() -> list[str]:
     return [sys.executable, str(ATOM_PYTHON_HARNESS)]
+
+
+@pytest.fixture(scope="session")
+def use_reduce_harness_rust() -> Path:
+    if shutil.which("cargo") is None:
+        pytest.skip("cargo not available")
+    return _cargo_build("use-reduce-harness")
+
+
+@pytest.fixture(scope="session")
+def use_reduce_harness_python() -> list[str]:
+    return [sys.executable, str(USE_REDUCE_PYTHON_HARNESS)]
 
 
 @pytest.fixture(scope="session")

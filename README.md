@@ -3,9 +3,11 @@
 This started as the "Suggested first execution step" pilot from
 [`PROMPT.md`](PROMPT.md): a small, complete run of the whole pipeline (Rust
 port, Python harness, shared black-box contract suite, multicall dispatch
-skeleton) on the smallest meaningful slice. It has since grown one slice
-further into depgraph/config-resolution territory: atom matching, the
-foundational building block both of those subsystems are built on.
+skeleton) on the smallest meaningful slice. It has since grown two slices
+further into depgraph/config-resolution territory: atom matching (the
+foundational building block both subsystems are built on) and USE-conditional
+dependency-string flattening (`use_reduce`, a real, heavily-used config.py/
+resolver primitive in its own right).
 
 ## Layout
 
@@ -17,11 +19,15 @@ PORTING/
     versions-harness/          CLI harness over portage-versions
     atom-harness/               port of a v1 subset of lib/portage/dep.py's
                                  Atom + match_from_list (see atom.rs's doc comment)
+    use-reduce-harness/         port of lib/portage/dep.py's use_reduce(flat=True)
+                                 (see use_reduce.rs's doc comment)
     multicall/                 emerge/ebuild dispatch skeleton (dry-run stub only)
   python/
     versions_harness.py        thin CLI wrapper around the real portage.versions
     atom_harness.py             thin CLI wrapper around the real portage.dep
                                  Atom/match_from_list, restricted to the v1 subset
+    use_reduce_harness.py       thin CLI wrapper around the real
+                                 portage.dep.use_reduce(flat=True)
   bench/                       benchmark-mode timing comparison (the CI perf gate)
     gentoo_snapshot.json         vendored real Gentoo tree snapshot (19442 packages,
                                  32862 version strings; see extract_snapshot.py)
@@ -38,6 +44,7 @@ PORTING/
     conftest.py                 builds the Rust binaries, exposes both harnesses
     test_versions_contract.py   asserts identical output, Python vs. Rust
     test_atom_contract.py       asserts identical output, Python vs. Rust
+    test_use_reduce_contract.py asserts identical output, Python vs. Rust
     test_multicall.py           tests the compiled dispatch binary via symlinks
     test_benchmark_gate.py      opt-in wrapper around run_benchmark.py for CI
     test_musl_smoke.py          opt-in wrapper around musl/smoke_test.sh for CI
@@ -66,6 +73,23 @@ PORTING/
   faithful port of an easy-to-miss PMS rule: a bare atom whose package name
   is followed by something version-shaped (`foo-bar-2`) is rejected as
   ambiguous, not silently accepted.
+- **`use-reduce-harness`**: ports `use_reduce(flat=True)` -- USE-conditional
+  (`flag? ( ... )`) and any-of (`|| ( ... )`) dependency-string flattening.
+  Unlike `atom-harness`, this is *not* a narrowed grammar: flat mode's
+  tokenizer/bracket/conditional handling is fully self-contained in the
+  real implementation and is ported as-is, error behavior included (bad
+  brackets, dangling `flag?`/`||`, literal empty parens, invalid USE flag
+  names in a conditional all fail the same way in both). What's out of
+  scope is a set of optional parameters the harness doesn't exercise
+  (`masklist`, `excludeall`, SRC_URI's `->` arrow token, `opconvert`,
+  non-flat structured output, `subset`, atom validation via `token_class`)
+  -- see the doc comment at the top of `rust/use-reduce-harness/src/use_reduce.rs`.
+  `flat=True` itself is a real, heavily-used mode, not a convenience
+  fiction: `config.py`, the resolver, and `_emirrordist` all call it this
+  way for RESTRICT/PROPERTIES/IUSE-shaped values. Building this caught a
+  genuinely surprising real rule worth a regression test: a USE flag name
+  is allowed to *start* with a digit (`1notaflag` is valid per the real
+  `useflag_re`), which is easy to assume is invalid and get wrong.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -95,10 +119,11 @@ PORTING/
   `rust/.cargo/config.toml` -- the resulting binaries have no dynamic
   section at all, not even a reference to musl's own dynamic loader
   (verified with `ldd`/`readelf`). The runtime stage is `FROM scratch`:
-  no libc, no shell, no busybox, nothing but the three binaries.
+  no libc, no shell, no busybox, nothing but the four binaries.
   `smoke_test.sh` builds that image and exercises `versions-harness`,
-  `atom-harness`, `emerge`-dispatch, `ebuild`-dispatch, and batch mode
-  inside it, exiting nonzero on any failure.
+  `atom-harness`, `use-reduce-harness`, `emerge`-dispatch,
+  `ebuild`-dispatch, and batch mode inside it, exiting nonzero on any
+  failure.
 
 Known simplification: `versions-harness`/`portage-versions` compare
 version components as `i128` rather than Python's arbitrary-precision
@@ -157,6 +182,18 @@ PORTING/rust/target/release/atom-harness parse ">=dev-libs/foo-1.2.3-r1:2"
 # match_from_list-equivalent: prints the matching candidates, comma-joined
 PORTING/rust/target/release/atom-harness match ">=dev-libs/foo-1.2.3" \
     dev-libs/foo-1.0 dev-libs/foo-2.0
+```
+
+Try the use_reduce harness:
+
+```sh
+# Python
+python3 PORTING/python/use_reduce_harness.py reduce normal bar \
+    dev-libs/foo bar? "(" dev-libs/baz ")" "!bar?" "(" dev-libs/qux ")"
+
+# Rust
+PORTING/rust/target/release/use-reduce-harness reduce normal bar \
+    dev-libs/foo bar? "(" dev-libs/baz ")" "!bar?" "(" dev-libs/qux ")"
 ```
 
 Try the multicall skeleton:
