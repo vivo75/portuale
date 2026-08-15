@@ -46,3 +46,33 @@ pub(crate) fn read_entry_text(root: &Path, category: &str, pf: &str, name: &str)
         .flatten()
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
+
+/// An `obj` entry's content MD5, or a `sym` entry's target string --
+/// the values `protect_decision` compares for `protect_if_modified`.
+/// `None` for other node types or unowned paths.
+// Portage: vartree.py, dblink._protect
+pub(crate) fn owned_node_value_pf(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    abs_path: &str,
+) -> Option<(String, String)> {
+    let text = read_contents_pf(root, category, pf)?;
+    text.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let node_type = parts.next()?;
+        if parts.next() != Some(abs_path) {
+            return None;
+        }
+        match node_type {
+            "obj" => Some((node_type.to_string(), parts.next()?.to_string())),
+            "sym" => {
+                if parts.next() != Some("->") {
+                    return None;
+                }
+                Some((node_type.to_string(), parts.next()?.to_string()))
+            }
+            _ => None,
+        }
+    })
+}

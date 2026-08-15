@@ -132,11 +132,45 @@ pub(crate) fn remote_binary_index_override(
         .and_then(|table| table.read().unwrap().get(pkgdir).cloned())
 }
 
+/// The local `$PKGDIR` binary index for this run: the CLI layer's directory
+/// scan when `<pkgdir>/Packages` was absent, else the parsed `Packages` file.
+///
+/// Built, not memoised (the old per-inputs memo keyed on the
+/// scanned `Vec`'s raw pointer, never re-read once `None` was cached, and
+/// ignored the quickpkg-direct vdb). Built once per resolution and threaded
+/// to every consumer as an `Arc`.
+pub fn build_local_binpkg_index(config: &portage_profile::Config) -> std::sync::Arc<BinaryIndex> {
+    let mut entries = match &config.scanned_binpkgs {
+        Some(entries) => entries.clone(),
+        None => read_packages_index(Path::new(&config.pkgdir)),
+    };
+    // `--quickpkg-direct` (Portage actions + `bintree.
+    // _populate_additional`): installed packages of the quickpkg source root
+    // join the binary pool as `Packages`-style records. A CPV the local
+    // `$PKGDIR` already carries wins. Set once by the CLI layer.
+    if let Some(source_root) = quickpkg_direct_root() {
+        let have: HashSet<String> = entries
+            .iter()
+            .filter_map(|e| e.get("CPV").cloned())
+            .collect();
+        for e in quickpkg_direct_index_entries(&source_root) {
+            if !e.get("CPV").is_some_and(|cpv| have.contains(cpv)) {
+                entries.push(e);
+            }
+        }
+    }
+    std::sync::Arc::new(BinaryIndex::from_entries(entries))
+}
+
 /// `--quickpkg-direct-root` (Portage actions): the root whose
 /// installed packages `--quickpkg-direct` offers as binary candidates.
 /// `None` = not active. A process-global so it needn't thread through
 /// resolution signatures.
 pub(crate) static QUICKPKG_DIRECT_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+pub(crate) fn quickpkg_direct_root() -> Option<PathBuf> {
+    QUICKPKG_DIRECT_ROOT.read().unwrap().clone()
+}
 
 /// Every package under `<source_root>/var/db/pkg` as a `Packages`-style record
 /// (Portage `bintree._populate_additional` reads the vdb the same way). Keys

@@ -199,6 +199,16 @@ pub(crate) fn grab_news_state_file(path: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Arguments of [`write_news_state_if_changed`].
+pub(crate) struct WriteNewsStateIfChangedArgs<'a> {
+    pub(crate) news_state_dir: &'a Path,
+    pub(crate) repo_name: &'a str,
+    pub(crate) suffix: &'a str,
+    pub(crate) orig: &'a std::collections::HashSet<String>,
+    pub(crate) updated: &'a std::collections::HashSet<String>,
+    pub(crate) context: &'a NewsContext,
+}
+
 /// Prepare the state directory first; a permission failure returns before
 /// anything is read or written. `false` means "no write-back this run":
 /// the caller then counts the `.unread` file as found.

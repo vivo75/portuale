@@ -7,6 +7,17 @@ fn fixtures_root() -> PathBuf {
         .expect("fixtures/ does not resolve: it is a symlink to ../pmtest/fixtures, so the sibling pmtest repo has to be checked out next to this one")
 }
 
+/// These unit tests exercise portage-repo's own resolution logic in isolation
+/// from profile/make.conf/package.* parsing (portage-profile's job, tested
+/// separately): visibility is pinned to a fixed "amd64"-only, no-overrides
+/// config, constructed directly (not via `portage_profile::resolve_config`).
+fn test_config() -> portage_profile::Config {
+    portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        ..Default::default()
+    }
+}
+
 fn candidate(version: &str, keywords: &[&str]) -> Candidate {
     Candidate {
         version: version.to_string(),
@@ -28,3 +39,13 @@ fn candidate(version: &str, keywords: &[&str]) -> Candidate {
         binary_deps: HashMap::new(),
     }
 }
+
+mod tests_162;
+
+mod tests_163;
+
+mod tests_165;
+
+mod tests_166;
+
+mod tests_184;

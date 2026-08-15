@@ -286,6 +286,60 @@ pub(crate) fn indexed_reverse_dependents(
     Some(out.into_iter().collect())
 }
 
+/// Whether `atom_str` is satisfied by anything installed under `running_root`'s vdb --
+/// `--root-deps`'s `ESYSROOT`-vs-`ROOT` distinction, narrowed to an "is it already there"
+/// existence check. Generic over `running_root`: only the CLI boundary points it at `/`.
+/// A version match alone is not enough: the matched instance's recorded `USE` must also
+/// satisfy the atom's use-deps (the version-only match is USE-blind). Conditional forms
+/// (`=`/`?`) stay vacuous here as in `match_from_list` -- the caller evaluates those first.
+// Portage: dep_zapdeps matching installed alternatives with USE
+pub(crate) fn running_root_satisfies_atom(
+    atom_str: &str,
+    running_root: &Path,
+    config: &portage_profile::Config,
+) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    let candidates = installed_candidates(running_root, &atom.category, &atom.package);
+    let candidate_strs: Vec<String> = candidates
+        .iter()
+        .map(|(version, slot, sub_slot)| {
+            format!(
+                "{}/{}-{version}:{slot}/{sub_slot}",
+                atom.category, atom.package
+            )
+        })
+        .collect();
+    let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(atom_str, &candidate_str_refs) else {
+        return false;
+    };
+    if matched.is_empty() {
+        return false;
+    }
+    let Some(use_deps) = atom.use_deps.as_ref().filter(|d| !d.is_empty()) else {
+        return true;
+    };
+    let by_str: HashMap<&str, &(String, String, String)> = candidate_str_refs
+        .iter()
+        .copied()
+        .zip(candidates.iter())
+        .collect();
+    matched.into_iter().any(|m| {
+        let Some((version, _, _)) = by_str.get(m) else {
+            return false;
+        };
+        let vdb_iuse =
+            read_vdb_flag_set(running_root, &atom.category, &atom.package, version, "IUSE");
+        let vdb_use =
+            read_vdb_flag_set(running_root, &atom.category, &atom.package, version, "USE");
+        let mut valid = valid_iuse(&vdb_iuse, config);
+        valid.extend(vdb_use.iter().cloned());
+        portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
+    })
+}
+
 /// One field of one installed entry, served by [`portage_vdb`]'s `FilesDb::aux_get`. What
 /// stays here is the package-move fallback (every `installed_cp_sources` name tried in order,
 /// first existing directory wins), plus: a missing entry reads as `""`, and a key outside the
