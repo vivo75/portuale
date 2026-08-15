@@ -4,8 +4,10 @@ members = [
     "crates/portage-versions",
     "crates/portage-dep",
     "crates/portage-use-reduce",
+    "crates/portage-repo",
     "crates/harness-common",
     "crates/versions-harness",
+    "crates/portuale",
 ]
 # Vendored upstream checkouts carry their own Cargo.toml files; they are
 # not workspace members.

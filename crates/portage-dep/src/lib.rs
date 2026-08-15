@@ -33,6 +33,35 @@ const REPO: &str = r"[A-Za-z0-9_][A-Za-z0-9_-]*";
 // portage-use-reduce to avoid a cross-crate dependency).
 const USEFLAG: &str = r"[A-Za-z0-9][A-Za-z0-9+_@-]*";
 
+/// A USE dependency's operator (PMS 8.3.4): one of the six prefix+suffix forms.
+/// Only `Enabled`/`Disabled` constrain a candidate's USE state when matching;
+/// the four parent-conditional forms are resolved by
+/// `evaluate_use_dep_conditionals`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UseDepOp {
+    Enabled,          // "flag"
+    Disabled,         // "-flag"
+    IfParentEnabled,  // "flag?"
+    IfParentDisabled, // "!flag?"
+    EqualParent,      // "flag="
+    OppositeParent,   // "!flag="
+}
+
+/// A 4-style `(+)`/`(-)` default (PMS 8.3.4): the value assumed when the
+/// candidate's IUSE lacks the flag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UseDepDefault {
+    Enabled,  // "(+)"
+    Disabled, // "(-)"
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UseDep {
+    pub flag: String,
+    pub op: UseDepOp,
+    pub default: Option<UseDepDefault>,
+}
+
 fn atom_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -60,6 +89,55 @@ fn use_dep_token_regex() -> &'static Regex {
     })
 }
 
+/// Validates the raw `[...]` text (brackets included) into `UseDep`s.
+///
+/// Returns `None` for what Portage's `Atom` rejects: a bad token,
+/// `-flag=`/`-flag?`, or a flag whose `(+)`/`(-)` default differs between
+/// tokens of the same atom.
+fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
+    let inner = raw.strip_prefix('[')?.strip_suffix(']')?;
+    if inner.is_empty() {
+        return None;
+    }
+    let mut deps = Vec::new();
+    // Default seen so far per flag; a later token with a different default state is invalid.
+    let mut seen_defaults: std::collections::HashMap<String, Option<UseDepDefault>> =
+        std::collections::HashMap::new();
+    for token in inner.split(',') {
+        let caps = use_dep_token_regex().captures(token)?;
+        let flag = caps.name("flag").unwrap().as_str().to_string();
+        let prefix = caps.name("prefix").map(|m| m.as_str()).unwrap_or("");
+        let suffix = caps.name("suffix").map(|m| m.as_str()).unwrap_or("");
+        let op = match (prefix, suffix) {
+            ("", "") => UseDepOp::Enabled,
+            ("-", "") => UseDepOp::Disabled,
+            ("", "?") => UseDepOp::IfParentEnabled,
+            ("!", "?") => UseDepOp::IfParentDisabled,
+            ("", "=") => UseDepOp::EqualParent,
+            ("!", "=") => UseDepOp::OppositeParent,
+            _ => return None, // "-flag=" / "-flag?": syntactically matched, not a real operator
+        };
+        let default = match caps.name("default").map(|m| m.as_str()) {
+            None => None,
+            Some("(+)") => Some(UseDepDefault::Enabled),
+            Some("(-)") => Some(UseDepDefault::Disabled),
+            Some(_) => unreachable!(),
+        };
+        match seen_defaults.entry(flag.clone()) {
+            std::collections::hash_map::Entry::Occupied(e) => {
+                if *e.get() != default {
+                    return None;
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(default.clone());
+            }
+        }
+        deps.push(UseDep { flag, op, default });
+    }
+    Some(deps)
+}
+
 fn candidate_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -68,6 +146,31 @@ fn candidate_regex() -> &'static Regex {
         ))
         .unwrap()
     })
+}
+
+/// Collapses leading zeros of a plain version (never the `-rN` revision) as
+/// Portage does before an `=*` comparison.
+///
+/// `=*` is a literal prefix match, so `"01"` must equal `"1"`: `"00"` ->
+/// `"0"`, `"01"` -> `"1"`, `"0.5"` unchanged, `"00.5"` -> `"0.5"`.
+/// Portage: lib/portage/dep/__init__.py, match_from_list (`=*` branch)
+fn normalize_leading_zeros(version: &str) -> String {
+    let stripped = version.trim_start_matches('0');
+    let starts_with_digit = stripped.starts_with(|c: char| c.is_ascii_digit());
+    if starts_with_digit {
+        stripped.to_string()
+    } else {
+        format!("0{stripped}")
+    }
+}
+
+/// The string `=*` prefix-compares for one side: normalized version plus `-rN` if present.
+fn glob_compare_string(version: &str, revision: &Option<String>) -> String {
+    let normalized = normalize_leading_zeros(version);
+    match revision {
+        Some(r) => format!("{normalized}-r{r}"),
+        None => normalized,
+    }
 }
 
 // --- Bounded wildcard atoms (package.mask/.unmask/.accept_keywords) ---
