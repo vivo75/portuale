@@ -22,11 +22,15 @@ PORTING/
     run_benchmark.py            times both harnesses' `batch` mode, reports
                                  speedup, checks/updates baseline.json
     baseline.json                recorded speedup from the last --update-baseline run
+  musl/                         musl static-build smoke test (the minimal-Linux CI gate)
+    Containerfile                 alpine/musl builder stage -> FROM scratch runtime stage
+    smoke_test.sh                 builds the image, runs it, checked as a CI gate
   tests/                       shared, black-box pytest contract suite
     conftest.py                 builds the Rust binaries, exposes both harnesses
     test_versions_contract.py   asserts identical output, Python vs. Rust
     test_multicall.py           tests the compiled dispatch binary via symlinks
     test_benchmark_gate.py      opt-in wrapper around run_benchmark.py for CI
+    test_musl_smoke.py          opt-in wrapper around musl/smoke_test.sh for CI
 ```
 
 ## What this proves
@@ -55,6 +59,19 @@ PORTING/
   (`--check-baseline`) if speedup regresses more than 10% below the
   recorded `baseline.json`. As of the last `--update-baseline` run, Rust is
   **~6x faster** than Python on this synthetic dataset.
+- **`PORTING/musl`**: the minimal-Linux gate from `PROMPT.md` hard goal 3
+  and "Test/benchmark harness architecture" ("Rust CI also gates on a musl
+  static build smoke-tested inside a minimal (scratch/busybox-level)
+  container"). `Containerfile` cross-builds both binaries against musl
+  (Alpine's own `rust`/`cargo` packages target musl natively, so no
+  rustup/target-add is needed) with `relocation-model=static` forced via
+  `rust/.cargo/config.toml` -- the resulting binaries have no dynamic
+  section at all, not even a reference to musl's own dynamic loader
+  (verified with `ldd`/`readelf`). The runtime stage is `FROM scratch`:
+  no libc, no shell, no busybox, nothing but the two binaries. `smoke_test.sh`
+  builds that image and exercises `versions-harness`, `emerge`-dispatch,
+  `ebuild`-dispatch, and batch mode inside it, exiting nonzero on any
+  failure.
 
 Known simplification: `versions-harness` compares version components as
 `i128` rather than Python's arbitrary-precision integers. See the comment
@@ -65,8 +82,6 @@ seeded-random version pairs, not the "real, vendored Gentoo tree snapshot"
 `PROMPT.md` calls for -- no such snapshot is vendored into this repo yet.
 Swapping the generator for a real tree walk is a drop-in follow-up (same
 `generate_batch_lines`-shaped interface).
-
-Not yet built: the musl static-build smoke test described in `PROMPT.md`.
 
 ## Running it
 
@@ -118,4 +133,16 @@ python3 PORTING/bench/run_benchmark.py --update-baseline
 # same gate, wrapped as a pytest for CI (skipped by default -- see
 # PORTING/tests/test_benchmark_gate.py)
 PORTING_RUN_BENCHMARK=1 python3 -m pytest PORTING/tests/test_benchmark_gate.py -v
+```
+
+Run the musl static-build smoke test (requires `podman` or `docker`; builds
+a container image, so it needs network access for the Alpine base layer
+and `apk add rust cargo` the first time):
+
+```sh
+bash PORTING/musl/smoke_test.sh
+
+# same gate, wrapped as a pytest for CI (skipped by default -- see
+# PORTING/tests/test_musl_smoke.py)
+PORTING_RUN_MUSL_SMOKE=1 python3 -m pytest PORTING/tests/test_musl_smoke.py -v -s
 ```
