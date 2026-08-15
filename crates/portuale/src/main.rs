@@ -19,6 +19,7 @@ mod info_files;
 mod mrg;
 mod mtimedb;
 mod pretend;
+mod regen;
 mod remote;
 mod remote_bundle;
 mod vdb_ipc;

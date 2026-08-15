@@ -17,8 +17,16 @@
 //! JSON line. `--verbose` (`-v`, optional value) and short-flag bundling (`-pv`)
 //! follow Portage's value-taking rules; `--help` wins wherever it appears.
 
+mod args;
 mod news;
+mod world;
+
+#[cfg(test)]
+mod tests;
+
+pub(crate) use args::*;
 pub use news::*;
+pub(crate) use world::*;
 
 use crate::ebuild_merge;
 
