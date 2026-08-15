@@ -100,6 +100,16 @@ pub fn apply_incremental(tokens: &str, set: &mut HashSet<String>) {
     }
 }
 
+/// Like [`apply_incremental`], but over an already-split token slice
+/// (avoids a join + re-split round-trip on the hot path).
+pub fn apply_incremental_iter<S: AsRef<str>>(tokens: &[S], set: &mut HashSet<String>) {
+    for tok in tokens {
+        for t in tok.as_ref().split_whitespace() {
+            apply_incremental_token(t, set);
+        }
+    }
+}
+
 pub(crate) fn apply_incremental_token(tok: &str, set: &mut HashSet<String>) {
     if tok == "-*" {
         set.clear();

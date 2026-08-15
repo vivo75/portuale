@@ -18,6 +18,27 @@ fn test_config() -> portage_profile::Config {
     }
 }
 
+/// Arguments of [`euf_flat`].
+struct EufFlatArgs<'a> {
+    iuse: &'a str,
+    use_tokens: &'a [String],
+    package_use: &'a [(String, Vec<String>)],
+    package_use_force: &'a [(String, Vec<String>)],
+    package_use_mask: &'a [(String, Vec<String>)],
+    use_force: &'a HashSet<String>,
+    use_mask: &'a HashSet<String>,
+    use_stable_force: &'a HashSet<String>,
+    use_stable_mask: &'a HashSet<String>,
+    package_use_stable_force: &'a [(String, Vec<String>)],
+    package_use_stable_mask: &'a [(String, Vec<String>)],
+    keywords: &'a [String],
+    accept_keywords: &'a HashSet<String>,
+    package_accept_keywords: &'a [(String, Vec<String>)],
+    candidate_str: &'a str,
+    category: &'a str,
+    package: &'a str,
+}
+
 fn candidate(version: &str, keywords: &[&str]) -> Candidate {
     Candidate {
         version: version.to_string(),
