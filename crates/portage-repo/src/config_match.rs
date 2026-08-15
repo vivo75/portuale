@@ -119,3 +119,47 @@ pub(crate) fn cp_bucket_index<T: ConfigAtomEntry>(entries: &[T]) -> Rc<CpBucketI
         index
     })
 }
+
+/// Every entry in `entries` matching this candidate, in original file order.
+/// Callers sorting by [`atom_specificity`] get the old flat scan's result
+/// (the sort is stable and file order is preserved here).
+pub(crate) fn config_entries_matching<'a, T: ConfigAtomEntry>(
+    entries: &'a [T],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+) -> Vec<&'a T> {
+    let idx = cp_bucket_index(entries);
+    idx.candidate_positions(category, package)
+        .into_iter()
+        .filter(|&i| {
+            matches_config_entry(
+                entries[i as usize].config_atom(),
+                candidate_str,
+                category,
+                package,
+            )
+        })
+        .map(|i| &entries[i as usize])
+        .collect()
+}
+
+/// Whether any entry in `entries` matches this candidate.
+pub(crate) fn any_config_entry_matches<T: ConfigAtomEntry>(
+    entries: &[T],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+) -> bool {
+    let idx = cp_bucket_index(entries);
+    idx.candidate_positions(category, package)
+        .into_iter()
+        .any(|i| {
+            matches_config_entry(
+                entries[i as usize].config_atom(),
+                candidate_str,
+                category,
+                package,
+            )
+        })
+}
