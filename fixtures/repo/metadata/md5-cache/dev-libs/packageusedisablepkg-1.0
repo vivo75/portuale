@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: package.use disables 'foo' (globally enabled by the fixture profile chain) for this package only, so its foo?-gated dependency is not pulled in
+EAPI=8
+IUSE=foo
+KEYWORDS=amd64
+RDEPEND=foo? ( dev-libs/newpkg )
+SLOT=0
+_md5_=0000000000000000000000000000000

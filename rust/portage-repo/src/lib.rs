@@ -12,13 +12,20 @@
 //     `--pretend` work without the bash dependency that real phase
 //     execution will eventually require (see PROMPT.md's "Deferred:
 //     ebuild phase execution").
-//   - No package.use, no slot conflicts, no virtuals, no backtracking.
+//   - No slot conflicts, no virtuals, no backtracking.
 //
-// USE/ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords are no longer
-// hardcoded: they're computed by `portage_profile::resolve_config` (real
-// profile chain + make.conf + package.*, with its own documented scope
-// cuts -- see that crate's doc comment) and threaded through
+// USE/ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use are no
+// longer hardcoded: they're computed by `portage_profile::resolve_config`
+// (real profile chain + make.conf + package.*, with its own documented
+// scope cuts -- see that crate's doc comment) and threaded through
 // `resolve_pretend`/`resolve_pretend_graph` as a `&portage_profile::Config`.
+// `package.use` in particular is applied per package, not globally: see
+// `effective_use_flags` and its use in `resolve_pretend_graph` below --
+// this is the one place `Config`'s fields aren't just handed to
+// `use_reduce_flat`/`is_visible` unchanged, since matching a `package.use`
+// entry against a specific candidate (to support slotted/versioned
+// entries, not just bare atoms) needs that candidate's resolved SLOT,
+// which only exists at this repo-aware layer.
 //
 // Dependency recursion (see `resolve_pretend_graph` below) walks DEPEND
 // and RDEPEND only, with its own documented scope cuts -- see that
@@ -247,6 +254,30 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
     }
 }
 
+/// The USE flags in effect for one specific package: `base` (the global,
+/// profile/make.conf-derived set) with every matching `package.use` entry's
+/// tokens layered on top, in file order, via the same incremental
+/// `-flag`/`flag`/`+flag` semantics `USE` itself uses (see
+/// `portage_profile::apply_incremental`). Unlike `is_visible`'s mask/
+/// keywords checks (which only ever add to an accepted set), this can both
+/// add and remove flags relative to `base`, and does so per package -- a
+/// `package.use` entry never affects any other package's own resolution.
+fn effective_use_flags(
+    base: &HashSet<String>,
+    package_use: &[(String, Vec<String>)],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+) -> HashSet<String> {
+    let mut use_flags = base.clone();
+    for (entry, tokens) in package_use {
+        if matches_config_entry(entry, candidate_str, category, package) {
+            portage_profile::apply_incremental(&tokens.join(" "), &mut use_flags);
+        }
+    }
+    use_flags
+}
+
 /// A candidate is visible if it isn't masked (matches a `package.mask`
 /// entry and no `package.unmask` entry) and its KEYWORDS intersect the
 /// accepted set -- the global `config.accept_keywords`, plus any extra
@@ -412,6 +443,11 @@ pub struct GraphEntry {
 /// one `GraphEntry` per distinct category/package visited, in discovery
 /// order (not topologically sorted).
 ///
+/// Each package's own `package.use` overrides (see `effective_use_flags`)
+/// only affect how *that* package's own DEPEND/RDEPEND are flattened --
+/// they never leak into a sibling or dependency's resolution, matching
+/// real portage's per-package USE.
+///
 /// KNOWN, DOCUMENTED SCOPE CUTS (all confirmed with the user before
 /// implementing):
 ///   - Only DEPEND and RDEPEND are walked, not BDEPEND/IDEPEND/PDEPEND;
@@ -497,10 +533,22 @@ pub fn resolve_pretend_graph(
                 depstr.push(' ');
             }
         }
+        let slot = metadata
+            .get("SLOT")
+            .map(|s| s.split('/').next().unwrap_or("0").to_string())
+            .unwrap_or_else(|| "0".to_string());
+        let candidate_str = format!("{}/{}-{version}:{slot}", key.0, key.1);
+        let use_flags = effective_use_flags(
+            &config.use_flags,
+            &config.package_use,
+            &candidate_str,
+            &key.0,
+            &key.1,
+        );
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat(
             &tokens,
-            &config.use_flags,
+            &use_flags,
             portage_use_reduce::MatchMode::Normal,
         ) else {
             continue;
@@ -823,6 +871,48 @@ mod tests {
         assert_eq!(full_names, vec!["dev-libs/useflagpkg", "dev-libs/newpkg"]);
     }
 
+    fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
+        resolve_pretend_graph(&root, &root, atom_str, &config)
+            .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            .into_iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+            .collect()
+    }
+
+    #[test]
+    fn fixture_package_use_enables_a_flag_not_on_globally() {
+        // Neither the profile nor make.conf enables "pkguseflag", but
+        // fixtures/etc/portage/package.use has a "*/packageuseenablepkg
+        // pkguseflag" wildcard entry, so newpkg's foo?-unrelated,
+        // pkguseflag?-gated dependency must be pulled in.
+        let full_names: Vec<String> = graph_real("dev-libs/packageuseenablepkg")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            full_names,
+            vec!["dev-libs/packageuseenablepkg", "dev-libs/newpkg"]
+        );
+    }
+
+    #[test]
+    fn fixture_package_use_disables_a_flag_that_is_on_globally() {
+        // The fixture profile chain enables "foo" globally (see
+        // resolves_fixture_profile_chain_and_make_conf in portage-profile,
+        // and dev-libs/useflagpkg's own test above, which -- unlike this
+        // package -- DOES pull in its foo?-gated dependency), but
+        // fixtures/etc/portage/package.use has a "dev-libs/packageusedisablepkg
+        // -foo" entry scoped to just this package, so its own foo?-gated
+        // dependency must NOT be pulled in.
+        let full_names: Vec<String> = graph_real("dev-libs/packageusedisablepkg")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(full_names, vec!["dev-libs/packageusedisablepkg"]);
+    }
+
     fn candidate(version: &str, keywords: &[&str]) -> Candidate {
         Candidate {
             version: version.to_string(),
@@ -921,5 +1011,40 @@ mod tests {
             "live",
             &config
         ));
+    }
+
+    #[test]
+    fn effective_use_flags_layers_a_matching_package_use_entry_on_top_of_base() {
+        let base = HashSet::from(["foo".to_string()]);
+        let package_use = vec![(
+            "dev-libs/bar".to_string(),
+            vec!["baz".to_string(), "-foo".to_string()],
+        )];
+        let use_flags =
+            effective_use_flags(&base, &package_use, "dev-libs/bar-1.0:0", "dev-libs", "bar");
+        assert_eq!(use_flags, HashSet::from(["baz".to_string()]));
+    }
+
+    #[test]
+    fn effective_use_flags_does_not_affect_a_non_matching_package() {
+        let base = HashSet::from(["foo".to_string()]);
+        let package_use = vec![("dev-libs/bar".to_string(), vec!["baz".to_string()])];
+        let use_flags = effective_use_flags(
+            &base,
+            &package_use,
+            "dev-libs/unrelated-1.0:0",
+            "dev-libs",
+            "unrelated",
+        );
+        assert_eq!(use_flags, base);
+    }
+
+    #[test]
+    fn effective_use_flags_matches_a_wildcard_package_use_entry() {
+        let base = HashSet::new();
+        let package_use = vec![("*/bar".to_string(), vec!["baz".to_string()])];
+        let use_flags =
+            effective_use_flags(&base, &package_use, "dev-libs/bar-1.0:0", "dev-libs", "bar");
+        assert_eq!(use_flags, HashSet::from(["baz".to_string()]));
     }
 }

@@ -1,9 +1,10 @@
 // `emerge --pretend <category/package>`: the v1 slice (see
 // PORTING/rust/portage-repo/src/lib.rs for the full scope writeup -- main
-// repo only, no package.mask/.use/.accept_keywords, no slot conflicts, no
-// blockers enforced). USE/ACCEPT_KEYWORDS come from the real profile
-// chain + make.conf (see portage-profile's doc comment for what that
-// does and doesn't implement), not a hardcoded stand-in. Recursively
+// repo only, no slot conflicts, no blockers enforced). USE/
+// ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use come from
+// the real profile chain + make.conf + package.* (see portage-profile's
+// doc comment for what that does and doesn't implement), not a hardcoded
+// stand-in. Recursively
 // resolves DEPEND+RDEPEND (see resolve_pretend_graph's doc comment for
 // the recursion's own scope cuts: DEPEND+RDEPEND only, || resolves every
 // alternative, blockers skipped, cycle/dup-safe). Output format is a

@@ -12,10 +12,12 @@ resolver primitive in its own right), a real, working
 (so `--pretend` on a package with real dependencies reports the whole
 deduped, cycle-safe set of packages that would newly merge, not just the
 one you named), real USE/ACCEPT_KEYWORDS computed from an actual profile
-inheritance chain and make.conf (not a fixed stand-in), and -- the last
-remaining piece of "which packages are even visible" -- per-package
+inheritance chain and make.conf (not a fixed stand-in), per-package
 overrides from `package.mask`, `package.unmask`, and
-`package.accept_keywords`.
+`package.accept_keywords` -- what's visible at all -- and, on top of that,
+per-package USE overrides from `package.use`, so a single package's own
+`DEPEND`/`RDEPEND` can be flattened against a USE set that differs from
+every other package's, the same way real portage does it.
 
 ## Layout
 
@@ -32,7 +34,7 @@ PORTING/
                                  use-reduce-harness; see lib.rs's doc comment)
     portage-profile/             shared lib: real USE/ACCEPT_KEYWORDS from a
                                  profile chain + make.conf, plus package.mask/
-                                 .unmask/.accept_keywords (see lib.rs's doc comment)
+                                 .unmask/.accept_keywords/.use (see lib.rs's doc comment)
     portage-repo/                repo/metadata/vdb access + resolution + recursive
                                  dependency-graph walk for `emerge --pretend`
                                  (see lib.rs's doc comment on resolve_pretend_graph)
@@ -133,9 +135,9 @@ PORTING/
   `KEY=value` text -- confirmed against a real vendored tree) for
   KEYWORDS/SLOT/DEPEND/RDEPEND *without executing any bash*, and checks
   the vdb (`<ROOT>/var/db/pkg`) for what's installed. There's still no
-  package.use, no slot conflicts, no blockers, no overlays, no
-  backtracking -- all explicitly confirmed scope cuts before implementing,
-  not silent omissions (see the doc comment at the top of
+  slot conflicts, no blockers, no overlays, no backtracking -- all
+  explicitly confirmed scope cuts before implementing, not silent
+  omissions (see the doc comment at the top of
   `rust/portage-repo/src/lib.rs`).
   Config/target roots come from the real `PORTAGE_CONFIGROOT`/`ROOT`
   environment variables (portage's own mechanism, not a pilot invention --
@@ -193,8 +195,8 @@ PORTING/
   the real dev machine's own profile actually uses -- so testing this
   mechanism needed a new synthetic same-repo, multi-parent fixture chain
   rather than the real system profile), `USE_EXPAND`, wildcard `_*`
-  expansion, `package.use`, and every `USE_ORDER` layer except `defaults`
-  (profile) and `conf` (make.conf) -- see the doc comment at the top of
+  expansion, and every `USE_ORDER` layer except `defaults` (profile) and
+  `conf` (make.conf) -- see the doc comment at the top of
   `rust/portage-profile/src/lib.rs`.
 
   **`package.mask`/`.unmask`/`.accept_keywords`**: the last piece of
@@ -226,6 +228,27 @@ PORTING/
   side's bounded matcher for them, before relying on it). See the doc
   comments in `rust/portage-profile/src/lib.rs` and
   `rust/portage-dep/src/lib.rs` for the full scope writeup.
+
+  **`package.use`**: per-package USE overrides, layered on top of
+  `package.mask`/`.unmask`/`.accept_keywords`'s "which packages are even
+  visible" with "which USE flags does *this specific package* see". Unlike
+  every other `Config` field, which is a fixed value for the whole
+  resolution, `package.use` is applied once per graph node in
+  `resolve_pretend_graph` (see `effective_use_flags`): each package's own
+  `DEPEND`/`RDEPEND` are flattened against a clone of the base USE set with
+  any matching `package.use` entry's tokens layered on top via the same
+  incremental `-flag`/`flag`/`+flag` semantics real `USE` itself uses (a
+  deliberate, non-trivial reuse of `portage-profile`'s
+  `apply_incremental`, now made `pub` for exactly this) -- never leaking
+  into a sibling or dependency's own resolution. Matching an entry against
+  a candidate reuses the same two-tier atom/wildcard matcher as
+  `package.mask`/`.unmask`/`.accept_keywords`, which is why it needs the
+  candidate's resolved `SLOT` (only available at `portage-repo`'s
+  repo-aware layer, unlike `USE`/`ACCEPT_KEYWORDS`/`package.mask`, which
+  `portage-profile` can compute on its own). Out of scope: the
+  `USE_EXPAND`-prefix shorthand real `package.use` supports (`VIDEO_CARDS:
+  nvidia` lines applying a `video_cards_` prefix to subsequent flags until
+  a blank line resets it) -- only plain tokens are read.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -261,8 +284,9 @@ PORTING/
   and exercises `versions-harness`, `atom-harness`, `use-reduce-harness`,
   a real `emerge --pretend` resolution (a single package, a multi-package
   dependency graph, a real-profile-derived USE flag gating a dependency,
-  a `package.mask`-hidden package staying hidden, and a masked-then-
-  `package.unmask`-ed package becoming visible again) against the
+  a `package.mask`-hidden package staying hidden, a masked-then-
+  `package.unmask`-ed package becoming visible again, and a `package.use`
+  entry both enabling and disabling a per-package flag) against the
   fixture, `ebuild`-dispatch, and batch mode inside it, exiting nonzero
   on any failure -- including proving the fixture's `make.profile`
   symlink and multi-parent chain survive the image `COPY` and still
@@ -309,6 +333,16 @@ line within `package.mask` itself, proving `-atom` removal works, not just
 `package.unmask`), `wildcardkeywordpkg` (only `~amd64`, made visible by a
 `*/wildcardkeywordpkg ~amd64` wildcard entry), and `livekeywordpkg` (no
 `KEYWORDS` at all, like a live/9999 ebuild, made visible by a `**` entry).
+
+`PORTING/fixtures/etc/portage/package.use` exercises the per-package USE
+slice: `packageuseenablepkg` (its `pkguseflag?`-gated dependency is only
+pulled in because a `*/packageuseenablepkg pkguseflag` wildcard entry
+enables a flag that's off everywhere else) and `packageusedisablepkg`
+(its `foo?`-gated dependency is *not* pulled in, even though `foo` is
+enabled globally by the fixture profile chain -- same as
+`useflagpkg`'s own `foo?`-gated dependency, which *is* pulled in -- because
+a `dev-libs/packageusedisablepkg -foo` entry disables it for this one
+package only).
 
 `gentoo_snapshot.json` was extracted from a full local Gentoo tree
 checkout (`/.gentoo/repos/gentoo` on the machine this was vendored on) with
@@ -405,6 +439,18 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/wildcardkeywo
 # package.accept_keywords "**" accepts a package with no KEYWORDS at all
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/livekeywordpkg
 # [ebuild  N] dev-libs/livekeywordpkg-9999
+
+# package.use ("*/packageuseenablepkg pkguseflag") enables a flag that's
+# off everywhere else, pulling in its pkguseflag?-gated dependency
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packageuseenablepkg
+# [ebuild  N] dev-libs/packageuseenablepkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# package.use ("dev-libs/packageusedisablepkg -foo") disables a flag for
+# just this package, even though "foo" is on globally (contrast with
+# dev-libs/useflagpkg above, whose own foo?-gated dependency IS pulled in)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packageusedisablepkg
+# [ebuild  N] dev-libs/packageusedisablepkg-1.0
 
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \

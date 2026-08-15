@@ -2,15 +2,15 @@
 PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the full
 scope writeup, including the dependency-recursion follow-up in
 resolve_pretend_graph, the profile/make.conf -> real USE/ACCEPT_KEYWORDS
-follow-up in portage-profile, and the package.mask/.unmask/.accept_keywords
-follow-up on top of that). Drives the real compiled `emerge` binary
+follow-up in portage-profile, and the package.mask/.unmask/.accept_keywords/
+.use follow-up on top of that). Drives the real compiled `emerge` binary
 (multicall, dispatched via a real symlink -- not a neutral harness, since
 emerge is an actual product surface per PROMPT.md's testing decision) and
 the Python reference implementation identically, against the synthetic
 fixture tree at PORTING/fixtures (whose repos.conf/make.profile/make.conf/
-package.mask/package.unmask/package.accept_keywords now drive real config
-resolution, not hardcoded values), and asserts their stdout, stderr, and
-exit codes all match exactly.
+package.mask/package.unmask/package.accept_keywords/package.use now drive
+real config resolution, not hardcoded values), and asserts their stdout,
+stderr, and exit codes all match exactly.
 """
 
 import subprocess
@@ -47,6 +47,8 @@ CASES = [
     ("package.mask: -atom removal leaves candidate unaffected", ["--pretend", "dev-libs/samepkg"], 0),
     ("package.accept_keywords: wildcard extends visibility", ["--pretend", "dev-libs/wildcardkeywordpkg"], 0),
     ("package.accept_keywords: ** accepts no-keywords package", ["--pretend", "dev-libs/livekeywordpkg"], 0),
+    ("package.use: wildcard entry enables a flag not on globally", ["--pretend", "dev-libs/packageuseenablepkg"], 0),
+    ("package.use: entry disables a flag that is on globally", ["--pretend", "dev-libs/packageusedisablepkg"], 0),
 ]
 
 
@@ -212,3 +214,37 @@ def test_unrelated_masked_by_keywords_package_is_still_hidden(emerge_binary, fix
     must not accidentally make dev-libs/maskedpkg visible too."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/maskedpkg"], fixture_env)
     assert result.returncode == 1
+
+
+def test_package_use_wildcard_entry_enables_a_flag_and_pulls_in_a_dependency(
+    emerge_binary, fixture_env
+):
+    """PORTING/fixtures/etc/portage/package.use has a
+    "*/packageuseenablepkg pkguseflag" entry: "pkguseflag" isn't enabled by
+    the profile chain or make.conf, so this proves package.use (not just
+    the global USE set) reaches use_reduce."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/packageuseenablepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/packageuseenablepkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_package_use_entry_disables_a_globally_enabled_flag_for_one_package(
+    emerge_binary, fixture_env
+):
+    """PORTING/fixtures/etc/portage/package.use has a
+    "dev-libs/packageusedisablepkg -foo" entry: "foo" IS enabled globally
+    by the fixture profile chain (dev-libs/useflagpkg's own foo?-gated
+    dependency IS pulled in, per test_real_use_flags_from_profile_gate_a_dependency),
+    but package.use disables it for this one package only, so its own
+    foo?-gated dependency must not be pulled in -- proving package.use is
+    applied per package, not globally."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/packageusedisablepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/packageusedisablepkg-1.0"]

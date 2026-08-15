@@ -100,6 +100,21 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend respects package.unmask inside the scratch container" \
     test "${actual}" = "[ebuild  N] dev-libs/maskedandunmaskedpkg-1.0"
 
+# emerge --pretend against package.use (see PORTING/fixtures/etc/portage/):
+# per-package USE overrides, not just the global profile-derived set, must
+# survive the COPY into the scratch image.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/packageuseenablepkg)
+check "emerge --pretend applies a package.use-enabled flag inside the scratch container" \
+    test "${actual}" = "$(printf '[ebuild  N] dev-libs/packageuseenablepkg-1.0\n[ebuild  N] dev-libs/newpkg-1.0')"
+
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/packageusedisablepkg)
+check "emerge --pretend applies a package.use-disabled flag inside the scratch container" \
+    test "${actual}" = "[ebuild  N] dev-libs/packageusedisablepkg-1.0"
+
 actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
 check "ebuild dispatch prints the ebuild stub" \
     grep -q "ebuild (pilot stub)" <<<"${actual}"

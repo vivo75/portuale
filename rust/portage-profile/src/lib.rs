@@ -19,8 +19,13 @@
 //     under v1; testing this mechanism needs a same-repo synthetic
 //     fixture chain instead (see PORTING/fixtures/repo/profiles).
 //   - USE_EXPAND (LINGUAS, VIDEO_CARDS, ...), wildcard `_*` IUSE-aware
-//     expansion, `package.use`, `use.mask`/`.force`, the `packages` file,
-//     and ARCH-based KEYWORDS-format validation are all out of scope.
+//     expansion, `use.mask`/`.force`, the `packages` file, and ARCH-based
+//     KEYWORDS-format validation are all out of scope. `package.use`'s
+//     USE_EXPAND-prefix shorthand (`VIDEO_CARDS: nvidia` lines applying a
+//     `video_cards_` prefix to subsequent flags until a blank line resets
+//     it -- see real `UseManager._parse_user_files_to_extatomdict`) is
+//     also out of scope; only plain `-flag`/`flag`/`+flag` tokens are
+//     read.
 //   - Only the `defaults` (profile) and `conf` (make.conf) layers of real
 //     config.py's `USE_ORDER` are implemented -- no `env`, `pkginternal`,
 //     `features`, `repo`, `env.d`, or per-package (`pkg`) layers.
@@ -32,7 +37,7 @@
 //     plain scalar for `${VAR}` substitution purposes (last-value-wins,
 //     no incremental merge), matching how it's actually used in real
 //     profiles (e.g. ARCH feeding `ACCEPT_KEYWORDS="${ARCH}"`).
-//   - `package.mask`/`.unmask`/`.accept_keywords` are read from
+//   - `package.mask`/`.unmask`/`.accept_keywords`/`.use` are read from
 //     `/etc/portage/` (user-level) ONLY -- real portage also stacks
 //     repo-level `profiles/package.mask` and a `package.mask`/
 //     `package.unmask` pair at every profile level, each combinable via
@@ -43,7 +48,15 @@
 //     it's a directory), not against a repo/profile-level mask that
 //     doesn't exist here. `package.unmask` is a separate, simpler
 //     per-candidate override check (masked-unless-also-unmasked), not
-//     real portage's own incremental stacking.
+//     real portage's own incremental stacking. `package.use` entries are
+//     applied per package (not globally): a matching entry's tokens are
+//     layered on top of the base `use_flags` set with the same
+//     incremental semantics as `USE` itself (see `apply_incremental`),
+//     scoped to only the one package being resolved/recursed into --
+//     see `portage-repo`'s `resolve_pretend_graph` for where that
+//     per-package application happens (it needs the candidate's SLOT to
+//     match slotted `package.use` entries, which only exists at that
+//     later, repo-aware layer).
 //
 // One real, deliberately-preserved quirk from lib/portage/package/ebuild/
 // config.py (see the comment above its `expand_map.pop("USE", None)`):
@@ -77,6 +90,10 @@ pub struct Config {
     /// from `package.accept_keywords`. A `"**"` keyword token means
     /// "accept any keyword" for matching packages.
     pub package_accept_keywords: Vec<(String, Vec<String>)>,
+    /// (atom-or-wildcard string, raw USE tokens) pairs from `package.use`.
+    /// Tokens use the same `-flag`/`flag`/`+flag` incremental syntax as
+    /// `USE` itself -- see `apply_incremental`.
+    pub package_use: Vec<(String, Vec<String>)>,
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -126,8 +143,10 @@ fn parse_kv_line(line: &str) -> Option<(&str, &str)> {
 /// Applies real incremental-variable token semantics: `-*` clears
 /// everything accumulated so far, `-flag` removes, `flag`/`+flag` adds
 /// (a leading `+` is invalid per PMS but real config.py tolerates it by
-/// stripping it, which this mirrors).
-fn apply_incremental(tokens: &str, set: &mut HashSet<String>) {
+/// stripping it, which this mirrors). Public so `portage-repo` can reuse
+/// it to apply `package.use` tokens on top of a per-package clone of the
+/// base USE set -- see the module doc comment.
+pub fn apply_incremental(tokens: &str, set: &mut HashSet<String>) {
     for tok in tokens.split_whitespace() {
         if tok == "-*" {
             set.clear();
@@ -345,6 +364,27 @@ fn load_package_accept_keywords(config_root: &Path) -> Result<Vec<(String, Vec<S
     Ok(result)
 }
 
+/// `package.use`: each line is `<atom-or-wildcard> <use-token...>`. A line
+/// with no tokens after the atom is a documented no-op, matching
+/// `load_package_accept_keywords`. The USE_EXPAND-prefix shorthand
+/// (`VIDEO_CARDS: nvidia`) is out of scope -- see the module doc comment.
+fn load_package_use(config_root: &Path) -> Result<Vec<(String, Vec<String>)>, String> {
+    let path = config_root.join("etc/portage/package.use");
+    let mut result = Vec::new();
+    for line in read_config_lines(&path)? {
+        let mut parts = line.split_whitespace();
+        let Some(atom) = parts.next() else {
+            continue;
+        };
+        let tokens: Vec<String> = parts.map(String::from).collect();
+        if tokens.is_empty() {
+            continue;
+        }
+        result.push((atom.to_string(), tokens));
+    }
+    Ok(result)
+}
+
 /// Computes the real USE/ACCEPT_KEYWORDS/visibility `Config` for
 /// `config_root`: the profile chain rooted at
 /// `<config_root>/etc/portage/make.profile` (if it exists -- a missing
@@ -387,6 +427,7 @@ pub fn resolve_config(config_root: &Path) -> Result<Config, String> {
     config.package_mask = load_package_mask(config_root)?;
     config.package_unmask = load_package_unmask(config_root)?;
     config.package_accept_keywords = load_package_accept_keywords(config_root)?;
+    config.package_use = load_package_use(config_root)?;
 
     Ok(config)
 }
@@ -518,6 +559,40 @@ mod tests {
                 ("dev-qt/*".to_string(), vec!["~amd64".to_string()]),
                 ("sci-misc/live-thing".to_string(), vec!["**".to_string()]),
             ]
+        );
+    }
+
+    #[test]
+    fn package_use_loads_tokens_and_skips_bare_atom_lines() {
+        let root = std::env::temp_dir().join("portage-profile-test-package-use");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::write(
+            portage_dir.join("package.use"),
+            "dev-libs/foo flag1 -flag2\n*/bar +flag3\ndev-libs/bare-no-op\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(&root).expect("config with package.use must resolve");
+        assert_eq!(
+            config.package_use,
+            vec![
+                (
+                    "dev-libs/foo".to_string(),
+                    vec!["flag1".to_string(), "-flag2".to_string()]
+                ),
+                ("*/bar".to_string(), vec!["+flag3".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_incremental_is_reusable_for_per_package_use_overrides() {
+        let mut set = HashSet::from(["foo".to_string()]);
+        apply_incremental("flag1 -foo +flag2", &mut set);
+        assert_eq!(
+            set,
+            HashSet::from(["flag1".to_string(), "flag2".to_string()])
         );
     }
 }
