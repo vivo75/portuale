@@ -6,19 +6,33 @@ not by importing anything from the binary.
 
 import os
 import subprocess
+from pathlib import Path
+
+FIXTURES_ROOT = str(Path(__file__).resolve().parents[1] / "fixtures")
+
+
+def _fixture_env():
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = FIXTURES_ROOT
+    return env
 
 
 def test_dispatch_via_symlink_emerge(multicall_binary, tmp_path):
+    """Exercises real `emerge --pretend` resolution (see
+    test_emerge_pretend_contract.py for full coverage of the outcomes);
+    here the point is that the symlink-dispatched binary reaches it at
+    all."""
     emerge_link = tmp_path / "emerge"
     emerge_link.symlink_to(multicall_binary)
     result = subprocess.run(
-        [str(emerge_link), "--pretend", "sys-apps/foo"],
+        [str(emerge_link), "--pretend", "dev-libs/newpkg"],
         capture_output=True,
         text=True,
         check=True,
+        env=_fixture_env(),
     )
-    assert "emerge (pilot stub)" in result.stdout
-    assert "--pretend" in result.stdout
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/newpkg-1.0"
 
 
 def test_dispatch_via_symlink_ebuild(multicall_binary, tmp_path):
@@ -39,17 +53,17 @@ def test_dispatch_via_path_lookup_by_bare_name(multicall_binary, tmp_path):
     a drop-in for tooling that calls `emerge`/`ebuild` directly."""
     (tmp_path / "emerge").symlink_to(multicall_binary)
     (tmp_path / "ebuild").symlink_to(multicall_binary)
-    env = dict(os.environ)
+    env = _fixture_env()
     env["PATH"] = f"{tmp_path}{os.pathsep}{env.get('PATH', '')}"
 
     result = subprocess.run(
-        ["emerge", "--pretend", "sys-apps/foo"],
+        ["emerge", "--pretend", "dev-libs/newpkg"],
         capture_output=True,
         text=True,
         check=True,
         env=env,
     )
-    assert "emerge (pilot stub)" in result.stdout
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/newpkg-1.0"
 
 
 def test_explicit_arg_fallback_dispatch(multicall_binary):

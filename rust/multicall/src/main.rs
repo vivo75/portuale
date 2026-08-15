@@ -1,13 +1,16 @@
-// Minimal skeleton proving the emerge/ebuild multicall dispatch mechanism
-// described in PORTING/PROMPT.md ("emerge/ebuild binary shape"): a single
-// static binary that behaves differently depending on how it is invoked,
+// Multicall binary proving the emerge/ebuild dispatch mechanism described
+// in PORTING/PROMPT.md ("emerge/ebuild binary shape"): a single static
+// binary that behaves differently depending on how it is invoked,
 // busybox-style. Real dispatch installs this binary once and creates
 // `emerge` / `ebuild` symlinks (or hardlinks) pointing at it; argv[0] tells
 // it which applet to run.
 //
-// Scope is deliberately a stub: dry-run/read-only behavior only, no real
-// dependency resolution or merges (see PROMPT.md, "Scope of the first
-// port"). It exists to exercise and test the dispatch mechanism itself.
+// `emerge` implements one real slice: `--pretend <category/package>` (see
+// pretend.rs). Everything else -- real merges, phase execution via
+// `ebuild`, and anything about `emerge` beyond that one slice -- is still
+// a dry-run/read-only stub (see PROMPT.md, "Scope of the first port").
+
+mod pretend;
 
 use std::process::ExitCode;
 
@@ -31,9 +34,7 @@ fn basename(path: &str) -> &str {
 }
 
 fn run_emerge(args: &[String]) -> ExitCode {
-    println!("emerge (pilot stub): dry-run only, no real dependency resolution yet");
-    println!("args: {args:?}");
-    ExitCode::SUCCESS
+    pretend::run(args)
 }
 
 fn run_ebuild(args: &[String]) -> ExitCode {

@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,10 @@ RUST_DIR = REPO_ROOT / "PORTING" / "rust"
 VERSIONS_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "versions_harness.py"
 ATOM_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "atom_harness.py"
 USE_REDUCE_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "use_reduce_harness.py"
+EMERGE_PRETEND_PYTHON_REFERENCE = (
+    REPO_ROOT / "PORTING" / "python" / "emerge_pretend_reference.py"
+)
+FIXTURES_ROOT = REPO_ROOT / "PORTING" / "fixtures"
 
 
 def _cargo_build(package: str) -> Path:
@@ -62,3 +67,28 @@ def multicall_binary() -> Path:
     if shutil.which("cargo") is None:
         pytest.skip("cargo not available")
     return _cargo_build("multicall")
+
+
+@pytest.fixture(scope="session")
+def emerge_binary(multicall_binary: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A real `emerge` symlink to the multicall binary, so tests exercise
+    the same argv[0]-dispatch path a real installation would use."""
+    link_dir = tmp_path_factory.mktemp("emerge-symlink")
+    link = link_dir / "emerge"
+    link.symlink_to(multicall_binary)
+    return link
+
+
+@pytest.fixture(scope="session")
+def emerge_pretend_python() -> list[str]:
+    return [sys.executable, str(EMERGE_PRETEND_PYTHON_REFERENCE)]
+
+
+@pytest.fixture
+def fixture_env() -> dict[str, str]:
+    """PORTAGE_CONFIGROOT/ROOT pointed at PORTING/fixtures, the synthetic
+    repo+vdb tree the emerge --pretend pilot slice is tested against."""
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = str(FIXTURES_ROOT)
+    env["ROOT"] = str(FIXTURES_ROOT)
+    return env

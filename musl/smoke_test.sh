@@ -16,7 +16,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUST_DIR="$(cd "${SCRIPT_DIR}/../rust" && pwd)"
+PORTING_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONTAINERFILE="${SCRIPT_DIR}/Containerfile"
 TAG="${MUSL_SMOKE_TAG:-portage-rust-musl-smoke:pilot}"
 
@@ -45,20 +45,23 @@ check() {
     fi
 }
 
-echo "Building ${IMAGE} with ${ENGINE} (context: ${RUST_DIR})"
-"${ENGINE}" build --no-cache -f "${CONTAINERFILE}" -t "${TAG}" "${RUST_DIR}"
+echo "Building ${IMAGE} with ${ENGINE} (context: ${PORTING_DIR})"
+"${ENGINE}" build --no-cache -f "${CONTAINERFILE}" -t "${TAG}" "${PORTING_DIR}"
 
 # versions-harness (default ENTRYPOINT): correctness spot check.
 actual=$("${ENGINE}" run --rm "${IMAGE}" vercmp 1.0-r1 1.0)
 check "versions-harness vercmp via default entrypoint" \
     test "${actual}" = "1"
 
-# emerge/ebuild dispatch via argv[0]: the same binary, invoked under two
-# different names copied into the image (see Containerfile comment on why
-# these are copies rather than symlinks in the scratch stage).
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge "${IMAGE}" --pretend sys-apps/foo)
-check "emerge dispatch prints the emerge stub" \
-    grep -q "emerge (pilot stub)" <<<"${actual}"
+# emerge --pretend against the fixture tree copied into the image at
+# /fixtures (see PORTING/fixtures and PORTING/rust/portage-repo): proves
+# the real emerge --pretend pilot slice, not just dispatch, works in a
+# statically-linked, nothing-but-the-binaries container.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/newpkg)
+check "emerge --pretend resolves a new install inside the scratch container" \
+    test "${actual}" = "[ebuild  N] dev-libs/newpkg-1.0"
 
 actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
 check "ebuild dispatch prints the ebuild stub" \

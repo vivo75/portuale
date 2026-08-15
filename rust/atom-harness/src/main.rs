@@ -1,5 +1,5 @@
 // Neutral CLI test-harness binary for the atom-matching pilot (see
-// PORTING/PROMPT.md and PORTING/rust/atom-harness/src/atom.rs for the v1
+// PORTING/PROMPT.md and PORTING/rust/portage-dep/src/lib.rs for the v1
 // grammar this implements). Same argv/output contract as
 // PORTING/python/atom_harness.py.
 //
@@ -11,9 +11,7 @@
 //                                              "match <atom> <cand...>" lines
 //                                              from stdin, one result per line
 
-mod atom;
-
-use atom::{parse_atom, Blocker};
+use portage_dep::{parse_atom, Blocker};
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
@@ -40,7 +38,7 @@ fn format_parse(s: &str) -> String {
 }
 
 fn format_match(atom_str: &str, candidates: &[&str]) -> String {
-    match atom::match_from_list(atom_str, candidates) {
+    match portage_dep::match_from_list(atom_str, candidates) {
         None => "INVALID".to_string(),
         Some(matches) => matches.join(","),
     }

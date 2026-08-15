@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["portage-versions", "versions-harness", "atom-harness", "use-reduce-harness", "multicall"]
+members = [
+    "portage-versions",
+    "portage-dep",
+    "portage-repo",
+    "versions-harness",
+    "atom-harness",
+    "use-reduce-harness",
+    "multicall",
+]
 
 [workspace.package]
 edition = "2021"

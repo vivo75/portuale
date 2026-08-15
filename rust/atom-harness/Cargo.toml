@@ -4,5 +4,4 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
-portage-versions = { path = "../portage-versions" }
-regex = "1"
+portage-dep = { path = "../portage-dep" }
