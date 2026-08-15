@@ -21,6 +21,9 @@ mod runtime_paths;
 mod sandbox;
 mod scheduler_registry;
 
+#[cfg(test)]
+mod tests;
+
 pub use commands::*;
 pub(crate) use depend_phase::*;
 pub(crate) use environment::*;
@@ -50,4 +53,23 @@ pub(crate) struct PackageSplit {
     /// Portage's `PVR`: `PV` alone for `r0`, else `PV-PR`.
     pub(crate) pvr: String,
     pub(crate) pf: String,
+}
+
+/// Portage's `actionmap_deps` (`doebuild.py`): the prerequisite chain for `mydo`,
+/// in order. Only the phase subset; an unrecognized `mydo` returns just itself.
+fn phase_prerequisites(mydo: &str) -> Vec<&'static str> {
+    const CHAIN: &[&str] = &[
+        "pretend",
+        "setup",
+        "unpack",
+        "prepare",
+        "configure",
+        "compile",
+        "test",
+        "install",
+    ];
+    match CHAIN.iter().position(|&p| p == mydo) {
+        Some(idx) => CHAIN[..=idx].to_vec(),
+        None => Vec::new(),
+    }
 }
