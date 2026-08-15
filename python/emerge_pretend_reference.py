@@ -45,14 +45,22 @@ cuts mirrored exactly from portage-repo/src/lib.rs's resolve_pretend_graph
 doc comment: || (any-of) groups resolve every alternative rather than
 picking one (flat mode discards group boundaries, so there's no reliable
 way to identify "the first" alternative from its output), cycles/
-duplicates are deduped via a visited set, and a dependency's own deps are
-only walked if it would newly merge or upgrade. Blocker atoms (!/!!) are
-matched (see resolve_blockers) against installed packages and this same
-graph's own New/Upgrade set -- reusing the real match_from_list directly,
-since it ignores an atom's blocker marker entirely (verified empirically)
--- purely for reporting: no attempt is made to resolve or enforce a
-conflict, strong or weak, matching real --pretend's own "calculate and
-show, don't touch anything" behavior.
+duplicates (by exact atom text) are deduped via a visited set, and a
+dependency's own deps are only walked if it would newly merge or upgrade.
+Two different SLOTs of the same package are genuinely separate,
+independent entries -- real portage allows multiple slots to coexist in
+one merge list (e.g. dev-lang/python:3.11 and :3.12 side by side), so
+this is normal, not a conflict. A slot conflict only exists when two
+atoms land on the IDENTICAL slot but need incompatible versions -- the
+second atom's own constraint doesn't accept the version the first one
+already resolved for that slot (see resolve_pretend_graph's
+resolved_slots dict and its returned "slot_conflicts" list). Blocker
+atoms (!/!!) are matched (see resolve_blockers) against installed
+packages and this same graph's own New/Upgrade set -- reusing the real
+match_from_list directly, since it ignores an atom's blocker marker
+entirely (verified empirically) -- purely for reporting: no attempt is
+made to resolve or enforce a blocker or slot conflict, matching real
+--pretend's own "calculate and show, don't touch anything" behavior.
 
 This is NOT a wrapper around the real `emerge` binary (unlike the
 Python-side harnesses for versions/atom/use_reduce, which wrap real
@@ -604,35 +612,37 @@ def resolve_pretend(repos, root, atom_str, config):
     return ("new", best)
 
 
-def resolve_blockers(root, pending, entries, graph_slots):
+def resolve_blockers(root, pending, entries):
     """Matches each `pending` blocker's target category/package against
     both currently-installed candidates (installed_candidates) and this
-    graph's own resolved New/Upgrade set (entries/graph_slots), reusing
-    the real match_from_list exactly as every other atom-vs-candidate
-    check in this module does (it ignores an atom's blocker marker
-    entirely -- verified empirically -- so a "!"/"!!"-prefixed atom
-    string matches candidates by category/package/version/slot exactly
-    like a normal one). A match against the owner package's own resolved
-    version is dropped defensively (a package blocking itself is
-    nonsensical, but cheap to guard against). Returns (owner_key,
-    conflict_dict) pairs. Mirrors portage-repo/src/lib.rs's
-    resolve_blockers exactly."""
-    graph_versions = {}
-    for category, package, outcome, _blockers in entries:
-        if outcome[0] == "new":
-            graph_versions[(category, package)] = outcome[1]
-        elif outcome[0] == "upgrade":
-            graph_versions[(category, package)] = outcome[2]
-
+    graph's own resolved New/Upgrade set (entries, which may now hold
+    more than one slot for the same category/package -- every one of
+    them is a real candidate, not just the first), reusing the real
+    match_from_list exactly as every other atom-vs-candidate check in
+    this module does (it ignores an atom's blocker marker entirely --
+    verified empirically -- so a "!"/"!!"-prefixed atom string matches
+    candidates by category/package/version/slot exactly like a normal
+    one). A match against the owner package's own resolved version is
+    dropped defensively (a package blocking itself is nonsensical, but
+    cheap to guard against). Returns (owner_key, conflict_dict) pairs.
+    Mirrors portage-repo/src/lib.rs's resolve_blockers exactly."""
     conflicts = []
     for pb in pending:
         target_key = (pb["target_category"], pb["target_package"])
         candidates = list(
             installed_candidates(root, pb["target_category"], pb["target_package"])
         )
-        version = graph_versions.get(target_key)
-        if version is not None:
-            slot = graph_slots.get(target_key, "0")
+        for category, package, outcome, _blockers, slot in entries:
+            if (category, package) != target_key:
+                continue
+            if outcome[0] == "new":
+                version = outcome[1]
+            elif outcome[0] == "upgrade":
+                version = outcome[2]
+            else:
+                continue
+            if slot is None:
+                continue
             if (version, slot) not in candidates:
                 candidates.append((version, slot))
         candidate_strs = [
@@ -662,17 +672,51 @@ def resolve_blockers(root, pending, entries, graph_slots):
 def resolve_pretend_graph(config_root, root, atom_str, config):
     """Recursively resolves `atom_str` and -- for packages that would
     newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
-    Returns a list of (category, package, outcome, blockers) tuples, one
-    per distinct category/package visited, in discovery order; `blockers`
-    is a list of conflict dicts (see resolve_blockers), only ever
-    non-empty for New/Upgrade entries. See the module doc comment for the
-    recursion's documented scope cuts."""
+    Returns a dict with keys "entries" (a list of (category, package,
+    outcome, blockers, slot) tuples, one per distinct category/package/
+    slot combination visited, in discovery order -- unlike a package name
+    alone, two DIFFERENT slots of the same package are both real,
+    independent entries, mirroring how real portage genuinely allows
+    multiple slots of the same package to coexist in one merge list) and
+    "slot_conflicts" (a list of conflict dicts -- see below). `blockers`
+    is a list of conflict dicts (see resolve_blockers), `slot` is the
+    resolved SLOT string; both are only ever non-empty/non-None for
+    New/Upgrade entries. See the module doc comment for the recursion's
+    documented scope cuts.
+
+    A slot conflict is when two different atoms land on the identical
+    category/package/slot but need incompatible versions -- the second
+    atom's own constraint doesn't accept the version the first one
+    already caused to be resolved (and recursed into). This is distinct
+    from two atoms simply requesting different slots (not a conflict at
+    all -- see above). Purely informational, same "report, don't enforce"
+    spirit as blockers: real portage's own depgraph treats an unresolved
+    slot conflict as fatal; this pilot instead reports it and keeps
+    going, using whichever version was resolved first. Mirrors
+    portage-repo/src/lib.rs's resolve_pretend_graph exactly."""
     repos = find_repos(config_root)
 
-    visited = set()
+    # Guards against infinite requeuing (e.g. a dependency cycle): the
+    # exact same atom text is only ever resolved once -- deliberately
+    # coarser than the (category, package, slot) dedup below, which
+    # exists to decide whether a given slot has already been fully
+    # resolved, not just to guarantee termination.
+    visited_atoms = set()
+    # (category, package, slot) -> index into entries, for New/Upgrade
+    # outcomes only. The first atom to resolve a given slot "wins" (its
+    # version is what gets recursed into); every later atom landing on
+    # the same slot is checked against that already-resolved version
+    # (see slot_conflicts) instead of triggering a second, independent
+    # resolution.
+    resolved_slots = {}
+    # (category, package) -> already added an AlreadyInstalled/
+    # NoVisibleCandidate entry for it -- neither outcome carries a slot
+    # to usefully key repeats by.
+    other_outcomes = set()
+
     entries = []
+    slot_conflicts = []
     queue = deque([atom_str])
-    graph_slots = {}
     pending_blockers = []
 
     while queue:
@@ -682,20 +726,26 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
             continue
         if atom.blocker:
             continue
+        if current_atom_str in visited_atoms:
+            continue
+        visited_atoms.add(current_atom_str)
         category, package = atom.cp.split("/", 1)
         key = (category, package)
-        if key in visited:
-            continue
-        visited.add(key)
 
         outcome = resolve_pretend(repos, root, current_atom_str, config)
-        entries.append((category, package, outcome, []))
 
         if outcome[0] == "new":
             version = outcome[1]
         elif outcome[0] == "upgrade":
             version = outcome[2]
         else:
+            # AlreadyInstalled / NoVisibleCandidate: no slot to key a
+            # repeat by, so dedup on category/package alone, same as v1
+            # always did before slot-aware resolution existed.
+            if key in other_outcomes:
+                continue
+            other_outcomes.add(key)
+            entries.append((category, package, outcome, [], None))
             continue
 
         # The resolved version may have come from any of `repos` (not
@@ -710,7 +760,34 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
         resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
         slot = resolved["slot"]
         repo_location = resolved["repo_location"]
-        graph_slots[key] = slot
+
+        slot_key = (category, package, slot)
+        if slot_key in resolved_slots:
+            # This exact category/package/slot was already resolved by
+            # an earlier atom. If the current atom's own constraint
+            # doesn't accept that already-resolved version, it's a real
+            # slot conflict -- report it and move on, without a second,
+            # independent resolution or any attempt to reconcile the two.
+            existing_idx = resolved_slots[slot_key]
+            existing_outcome = entries[existing_idx][2]
+            existing_version = (
+                existing_outcome[1] if existing_outcome[0] == "new" else existing_outcome[2]
+            )
+            existing_str = f"{category}/{package}-{existing_version}:{slot}"
+            satisfied = bool(match_from_list(current_atom_str, [existing_str]))
+            if not satisfied:
+                slot_conflicts.append(
+                    {
+                        "category": category,
+                        "package": package,
+                        "slot": slot,
+                        "resolved_version": existing_version,
+                        "conflicting_atom": current_atom_str,
+                    }
+                )
+            continue
+        resolved_slots[slot_key] = len(entries)
+        entries.append((category, package, outcome, [], slot))
 
         pf = f"{package}-{version}"
         try:
@@ -748,11 +825,18 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
                 continue
             queue.append(tok)
 
-    blockers_by_owner = {(category, package): blockers for category, package, _o, blockers in entries}
-    for owner_key, conflict in resolve_blockers(root, pending_blockers, entries, graph_slots):
+    # setdefault (not a dict comprehension) so the *first* entry for a
+    # given owner wins when the same category/package appears more than
+    # once (multiple slots) -- mirrors portage-repo/src/lib.rs's
+    # `entries.iter_mut().find(...)`, which also attaches to the first
+    # match.
+    blockers_by_owner = {}
+    for category, package, _o, blockers, _slot in entries:
+        blockers_by_owner.setdefault((category, package), blockers)
+    for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
         blockers_by_owner[owner_key].append(conflict)
 
-    return entries
+    return {"entries": entries, "slot_conflicts": slot_conflicts}
 
 
 def _parse_atom(atom_str):
@@ -834,15 +918,16 @@ def run(args):
         return 2
     try:
         config = resolve_config(_config_root())
-        entries = resolve_pretend_graph(_config_root(), _root(), atom_arg, config)
+        result = resolve_pretend_graph(_config_root(), _root(), atom_arg, config)
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
+    entries = result["entries"]
 
     # resolve_pretend_graph's BFS always visits the requested atom first,
     # so entries[0] is the top-level package; its outcome keeps the exact
     # messages/exit codes the single-atom (no-deps) case always had.
-    top_category, top_package, top_outcome, _top_blockers = entries[0]
+    top_category, top_package, top_outcome, _top_blockers, _top_slot = entries[0]
     if top_outcome[0] == "no_visible_candidate":
         print(f'!!! no visible ebuild for "{top_category}/{top_package}"', file=sys.stderr)
         return 1
@@ -865,7 +950,7 @@ def run(args):
                 f'("{b["atom_str"]}")'
             )
 
-    for category, package, outcome, blockers in entries:
+    for category, package, outcome, blockers, _slot in entries:
         tag = outcome[0]
         if tag == "new":
             print(f"[ebuild  N] {category}/{package}-{outcome[1]}")
@@ -883,6 +968,16 @@ def run(args):
                 f'!!! no visible ebuild for dependency "{category}/{package}"',
                 file=sys.stderr,
             )
+
+    # Purely informational, same as blockers -- see resolve_pretend_graph's
+    # doc comment: v1 neither refuses nor changes the exit code for a slot
+    # conflict.
+    for c in result["slot_conflicts"]:
+        print(
+            f"[slot conflict] {c['category']}/{c['package']}:{c['slot']} resolved to "
+            f"{c['category']}/{c['package']}-{c['resolved_version']}, which does not "
+            f'satisfy "{c["conflicting_atom"]}"'
+        )
     return 0
 
 

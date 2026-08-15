@@ -547,6 +547,11 @@ pub struct GraphEntry {
     /// DEPEND/RDEPEND (and therefore its blockers) are only read when it
     /// would newly merge or upgrade, same as dependency recursion itself.
     pub blockers: Vec<BlockerConflict>,
+    /// `Some(slot)` only for `New`/`Upgrade` entries (the ones a slot can
+    /// meaningfully be tracked for -- see `resolve_pretend_graph`'s doc
+    /// comment on multi-slot support), `None` for `AlreadyInstalled`/
+    /// `NoVisibleCandidate`.
+    pub slot: Option<String>,
 }
 
 /// A blocker atom found while flattening one package's own DEPEND/RDEPEND,
@@ -566,45 +571,41 @@ struct PendingBlocker {
 
 /// Matches each `pending` blocker's target `category/package` against
 /// both currently-installed candidates (`installed_candidates`) and this
-/// graph's own resolved New/Upgrade set (`entries`/`graph_slots`),
-/// reusing `portage_dep::match_from_list` exactly as every other
-/// atom-vs-candidate check in this crate does (it ignores an atom's
-/// `blocker` field entirely, so a `!`/`!!`-prefixed atom string matches
-/// candidates by category/package/version/slot exactly like a normal
-/// one). A match against the owner package's own resolved version is
-/// dropped defensively (a package blocking itself is nonsensical, but
-/// cheap to guard against). Returns `(owner_key, conflict)` pairs rather
-/// than mutating `entries` directly, since `entries` is still needed
-/// immutably to build `graph_versions` here.
+/// graph's own resolved New/Upgrade set (`entries`, which may now hold
+/// more than one slot for the same category/package -- every one of them
+/// is a real candidate, not just the first), reusing
+/// `portage_dep::match_from_list` exactly as every other atom-vs-candidate
+/// check in this crate does (it ignores an atom's `blocker` field
+/// entirely, so a `!`/`!!`-prefixed atom string matches candidates by
+/// category/package/version/slot exactly like a normal one). A match
+/// against the owner package's own resolved version is dropped
+/// defensively (a package blocking itself is nonsensical, but cheap to
+/// guard against). Returns `(owner_key, conflict)` pairs rather than
+/// mutating `entries` directly, since `entries` is still needed
+/// immutably to build the graph-resolved candidate list here.
 fn resolve_blockers(
     root: &Path,
     pending: &[PendingBlocker],
     entries: &[GraphEntry],
-    graph_slots: &HashMap<(String, String), String>,
 ) -> Vec<((String, String), BlockerConflict)> {
-    let mut graph_versions: HashMap<(String, String), String> = HashMap::new();
-    for entry in entries {
-        let version = match &entry.outcome {
-            PretendOutcome::New { version } => Some(version.clone()),
-            PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
-            _ => None,
-        };
-        if let Some(version) = version {
-            graph_versions.insert((entry.category.clone(), entry.package.clone()), version);
-        }
-    }
-
     let mut conflicts = Vec::new();
     for pb in pending {
         let target_key = (pb.target_category.clone(), pb.target_package.clone());
         let mut candidates = installed_candidates(root, &pb.target_category, &pb.target_package);
-        if let Some(version) = graph_versions.get(&target_key) {
-            let slot = graph_slots
-                .get(&target_key)
-                .cloned()
-                .unwrap_or_else(|| "0".to_string());
-            if !candidates.iter().any(|(v, s)| v == version && s == &slot) {
-                candidates.push((version.clone(), slot));
+        for entry in entries {
+            if entry.category != pb.target_category || entry.package != pb.target_package {
+                continue;
+            }
+            let version = match &entry.outcome {
+                PretendOutcome::New { version } => Some(version.clone()),
+                PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+                _ => None,
+            };
+            let (Some(version), Some(slot)) = (version, entry.slot.clone()) else {
+                continue;
+            };
+            if !candidates.iter().any(|(v, s)| *v == version && *s == slot) {
+                candidates.push((version, slot));
             }
         }
         let candidate_strs: Vec<String> = candidates
@@ -642,10 +643,53 @@ fn resolve_blockers(
     conflicts
 }
 
+/// A genuine slot conflict: two different dependency atoms, both landing
+/// on the same category/package/slot, whose independently-resolved
+/// "best" versions are incompatible -- the atom that reached this slot
+/// *second* doesn't actually accept the version the *first* one already
+/// caused to be resolved (and recursed into). This is distinct from two
+/// atoms simply requesting *different* slots of the same package (e.g.
+/// `dev-lang/python:3.11` and `dev-lang/python:3.12`), which real portage
+/// -- and this pilot, see `resolve_pretend_graph`'s doc comment -- treats
+/// as normal, valid coexistence, not a conflict at all.
+///
+/// Purely informational, the same "report, don't enforce" spirit as
+/// `BlockerConflict`: real portage's own depgraph treats an unresolved
+/// slot conflict as fatal and refuses to proceed; this pilot instead
+/// reports it and keeps going (using whichever version was resolved
+/// first), consistent with the rest of this follow-up series --
+/// `--pretend` itself never touches anything real, so nothing here is
+/// truly "fatal" to calculate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotConflict {
+    pub category: String,
+    pub package: String,
+    pub slot: String,
+    /// The version already resolved (and recursed into) for this slot,
+    /// by whichever atom reached it first.
+    pub resolved_version: String,
+    /// The atom text that does NOT accept `resolved_version`.
+    pub conflicting_atom: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphResult {
+    pub entries: Vec<GraphEntry>,
+    pub slot_conflicts: Vec<SlotConflict>,
+}
+
 /// Recursively resolves `atom_str` and -- for packages that would newly
 /// merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first. Returns
-/// one `GraphEntry` per distinct category/package visited, in discovery
-/// order (not topologically sorted).
+/// one `GraphEntry` per distinct category/package/slot combination
+/// visited, in discovery order (not topologically sorted): unlike a
+/// package name alone, two *different* slots of the same package are
+/// both real, independent entries (each gets its own recursion into its
+/// own DEPEND/RDEPEND) -- mirroring how real portage genuinely allows
+/// multiple slots of the same package to coexist in one merge list (the
+/// entire point of `SLOT`, e.g. `dev-lang/python:3.11` and
+/// `dev-lang/python:3.12` side by side). A *conflict* only exists when
+/// two atoms need the identical slot at incompatible versions -- see
+/// `SlotConflict`.
 ///
 /// Each package's own `package.use` overrides (see `effective_use_flags`)
 /// only affect how *that* package's own DEPEND/RDEPEND are flattened --
@@ -655,8 +699,10 @@ fn resolve_blockers(
 /// KNOWN, DOCUMENTED SCOPE CUTS (all confirmed with the user before
 /// implementing):
 ///   - Only DEPEND and RDEPEND are walked, not BDEPEND/IDEPEND/PDEPEND;
-///     atoms are deduped across both fields (and across packages) via the
-///     shared visited set.
+///     atoms whose *exact text* repeats (e.g. a shared dependency, or a
+///     cycle) are deduped via a visited-atom-text set purely to guarantee
+///     termination -- see below for how repeat visits to the same
+///     resolved category/package/slot are actually handled.
 ///   - `config` (USE, ACCEPT_KEYWORDS, package.mask/.unmask/.accept_keywords)
 ///     is supplied by the caller (computed via `portage_profile::resolve_config`
 ///     -- see that crate's doc comment for what real profile/make.conf/
@@ -677,7 +723,10 @@ fn resolve_blockers(
 ///     `PretendOutcome::NoVisibleCandidate` (so it's visible in the
 ///     output, not silently dropped), it's just not recursed into
 ///     further, matching the "best effort" spirit of the rest of this
-///     pilot slice.
+///     pilot slice. Repeat atoms resolving to `NoVisibleCandidate` (or
+///     `AlreadyInstalled`) for the same category/package are still
+///     deduped to a single entry -- these two outcomes carry no slot to
+///     usefully distinguish repeats by, unlike New/Upgrade.
 ///   - Blockers (`!foo/bar`/`!!foo/bar` tokens) are recognized and matched
 ///     against installed packages and other New/Upgrade entries in this
 ///     same graph (see `BlockerConflict`), but purely for reporting: v1
@@ -687,28 +736,49 @@ fn resolve_blockers(
 ///     differently than a weak (`!`) one. This matches real `--pretend`
 ///     itself (which only *calculates and shows* what would happen,
 ///     without touching anything), and stays consistent with the
-///     "unresolvable dependency doesn't fail the graph" rule below.
+///     "unresolvable dependency doesn't fail the graph" rule above, and
+///     with `SlotConflict` being reported rather than enforced too.
 ///   - A package's dependencies are only walked if resolving it produced
 ///     New or Upgrade; an already-installed package's own dependencies
 ///     are presumed already satisfied (v1 has no --newuse/--changed-use
-///     equivalent). This also means blockers are only read from
-///     New/Upgrade packages' own DEPEND/RDEPEND -- an already-installed
-///     package's blockers are never inspected, same as the rest of its
-///     dependencies.
+///     equivalent). This also means blockers -- and slot conflicts -- are
+///     only ever detected from New/Upgrade packages' own DEPEND/RDEPEND;
+///     an already-installed package's blockers are never inspected, same
+///     as the rest of its dependencies.
 pub fn resolve_pretend_graph(
     config_root: &Path,
     root: &Path,
     atom_str: &str,
     config: &portage_profile::Config,
-) -> Result<Vec<GraphEntry>, String> {
+) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
-    let mut visited: HashSet<(String, String)> = HashSet::new();
-    let mut entries = Vec::new();
+    // Guards against infinite requeuing (e.g. a dependency cycle): the
+    // exact same atom *text* is only ever resolved once. This is
+    // deliberately coarser than the (category, package, slot) dedup
+    // below -- it exists purely for termination, not to decide whether a
+    // given slot has already been fully resolved (two different atom
+    // texts, e.g. a bare "dev-libs/foo" and a slotted "dev-libs/foo:1",
+    // can both need to be resolved even though they'd share a visited-atom
+    // check keyed any coarser than exact text).
+    let mut visited_atoms: HashSet<String> = HashSet::new();
+    // (category, package, slot) -> index into `entries`, for New/Upgrade
+    // outcomes only. The first atom to resolve a given slot "wins" (its
+    // version is what gets recursed into); every later atom landing on
+    // the same slot is checked against that already-resolved version
+    // (see `SlotConflict`) instead of triggering a second, independent
+    // resolution.
+    let mut resolved_slots: HashMap<(String, String, String), usize> = HashMap::new();
+    // (category, package) -> already added an AlreadyInstalled/
+    // NoVisibleCandidate entry for it. Separate from `resolved_slots`
+    // since neither outcome carries a slot to usefully key repeats by.
+    let mut other_outcomes: HashSet<(String, String)> = HashSet::new();
+
+    let mut entries: Vec<GraphEntry> = Vec::new();
+    let mut slot_conflicts: Vec<SlotConflict> = Vec::new();
     let mut queue: VecDeque<String> = VecDeque::new();
     queue.push_back(atom_str.to_string());
 
-    let mut graph_slots: HashMap<(String, String), String> = HashMap::new();
     let mut pending_blockers: Vec<PendingBlocker> = Vec::new();
 
     while let Some(current_atom) = queue.pop_front() {
@@ -718,10 +788,10 @@ pub fn resolve_pretend_graph(
         if atom.blocker != portage_dep::Blocker::None {
             continue;
         }
-        let key = (atom.category.clone(), atom.package.clone());
-        if !visited.insert(key.clone()) {
+        if !visited_atoms.insert(current_atom.clone()) {
             continue;
         }
+        let key = (atom.category.clone(), atom.package.clone());
 
         let outcome = resolve_pretend(&repos, root, &current_atom, config)?;
         let resolved_version = match &outcome {
@@ -730,14 +800,20 @@ pub fn resolve_pretend_graph(
             _ => None,
         };
 
-        entries.push(GraphEntry {
-            category: key.0.clone(),
-            package: key.1.clone(),
-            outcome,
-            blockers: Vec::new(),
-        });
-
         let Some(version) = resolved_version else {
+            // AlreadyInstalled / NoVisibleCandidate: no slot to key a
+            // repeat by, so dedup on category/package alone, same as v1
+            // always did before slot-aware resolution existed.
+            if !other_outcomes.insert(key.clone()) {
+                continue;
+            }
+            entries.push(GraphEntry {
+                category: key.0,
+                package: key.1,
+                outcome,
+                blockers: Vec::new(),
+                slot: None,
+            });
             continue;
         };
 
@@ -759,7 +835,41 @@ pub fn resolve_pretend_graph(
         };
         let slot = resolved.slot.clone();
         let repo_location = resolved.repo_location.clone();
-        graph_slots.insert(key.clone(), slot.clone());
+
+        let slot_key = (key.0.clone(), key.1.clone(), slot.clone());
+        if let Some(&existing_idx) = resolved_slots.get(&slot_key) {
+            // This exact category/package/slot was already resolved by
+            // an earlier atom. If the current atom's own constraint
+            // doesn't accept that already-resolved version, it's a real
+            // slot conflict -- report it and move on, without a second,
+            // independent resolution or any attempt to reconcile the two.
+            let existing_version = match &entries[existing_idx].outcome {
+                PretendOutcome::New { version } => version.clone(),
+                PretendOutcome::Upgrade { to, .. } => to.clone(),
+                _ => unreachable!("resolved_slots only ever indexes New/Upgrade entries"),
+            };
+            let existing_str = format!("{}/{}-{existing_version}:{slot}", key.0, key.1);
+            let satisfied = portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
+                .is_some_and(|m| !m.is_empty());
+            if !satisfied {
+                slot_conflicts.push(SlotConflict {
+                    category: key.0,
+                    package: key.1,
+                    slot,
+                    resolved_version: existing_version,
+                    conflicting_atom: current_atom,
+                });
+            }
+            continue;
+        }
+        resolved_slots.insert(slot_key, entries.len());
+        entries.push(GraphEntry {
+            category: key.0.clone(),
+            package: key.1.clone(),
+            outcome,
+            blockers: Vec::new(),
+            slot: Some(slot.clone()),
+        });
 
         let pf = format!("{}-{version}", key.1);
         let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {
@@ -809,7 +919,7 @@ pub fn resolve_pretend_graph(
         }
     }
 
-    resolve_blockers(root, &pending_blockers, &entries, &graph_slots)
+    resolve_blockers(root, &pending_blockers, &entries)
         .into_iter()
         .for_each(|(owner_key, conflict)| {
             if let Some(entry) = entries
@@ -820,7 +930,10 @@ pub fn resolve_pretend_graph(
             }
         });
 
-    Ok(entries)
+    Ok(GraphResult {
+        entries,
+        slot_conflicts,
+    })
 }
 
 #[cfg(test)]
@@ -962,6 +1075,71 @@ mod tests {
     }
 
     #[test]
+    fn fixture_slot_conflict_is_reported_between_two_incompatible_version_constraints() {
+        // dev-libs/slotconflictparent pulls in slotconflictnewconsumer
+        // (bare RDEPEND on slotconflicttarget, resolves the best version,
+        // 2.0, first) and slotconflictoldconsumer (RDEPEND
+        // "<dev-libs/slotconflicttarget-2.0", which 2.0 itself does NOT
+        // satisfy) -- both want slot 0 of the same package, at versions
+        // that can't both be right, so this must surface as a
+        // SlotConflict, not a second, silently-overwriting entry.
+        let result = graph_result_real("dev-libs/slotconflictparent");
+        let full_names: Vec<String> = result
+            .entries
+            .iter()
+            .map(|e| format!("{}/{}", e.category, e.package))
+            .collect();
+        assert_eq!(
+            full_names,
+            vec![
+                "dev-libs/slotconflictparent",
+                "dev-libs/slotconflictnewconsumer",
+                "dev-libs/slotconflictoldconsumer",
+                "dev-libs/slotconflicttarget",
+            ]
+        );
+        assert_eq!(
+            result.slot_conflicts,
+            vec![SlotConflict {
+                category: "dev-libs".to_string(),
+                package: "slotconflicttarget".to_string(),
+                slot: "0".to_string(),
+                resolved_version: "2.0".to_string(),
+                conflicting_atom: "<dev-libs/slotconflicttarget-2.0".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn fixture_different_slots_of_the_same_package_coexist_without_conflict() {
+        // dev-libs/multislotparent RDEPENDs on both
+        // dev-libs/multislotpkg:0 and dev-libs/multislotpkg:1 -- real,
+        // different slots of the same package are normal coexistence
+        // (like dev-lang/python:3.11 and :3.12), not a conflict: both
+        // must appear as independent entries, and neither is silently
+        // dropped by the visited-set the way v1 always did before slot
+        // tracking existed.
+        let result = graph_result_real("dev-libs/multislotparent");
+        let full_names: Vec<String> = result
+            .entries
+            .iter()
+            .map(|e| format!("{}/{}", e.category, e.package))
+            .collect();
+        assert_eq!(
+            full_names,
+            vec![
+                "dev-libs/multislotparent",
+                "dev-libs/multislotpkg",
+                "dev-libs/multislotpkg",
+            ]
+        );
+        let slots: Vec<Option<String>> =
+            result.entries[1..].iter().map(|e| e.slot.clone()).collect();
+        assert_eq!(slots, vec![Some("0".to_string()), Some("1".to_string())]);
+        assert!(result.slot_conflicts.is_empty());
+    }
+
+    #[test]
     fn fixture_package_mask_hides_with_no_unmask() {
         assert_eq!(
             resolve_real("dev-libs", "hardmaskedpkg"),
@@ -1051,6 +1229,7 @@ mod tests {
         let root = fixtures_root();
         resolve_pretend_graph(&root, &root, atom_str, &test_config())
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            .entries
             .into_iter()
             .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
             .collect()
@@ -1166,7 +1345,8 @@ mod tests {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
         let entries = resolve_pretend_graph(&root, &root, "dev-libs/useflagpkg", &config)
-            .expect("resolve_pretend_graph must succeed");
+            .expect("resolve_pretend_graph must succeed")
+            .entries;
         let full_names: Vec<String> = entries
             .iter()
             .map(|e| format!("{}/{}", e.category, e.package))
@@ -1179,6 +1359,7 @@ mod tests {
         let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
         resolve_pretend_graph(&root, &root, atom_str, &config)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            .entries
             .into_iter()
             .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
             .collect()
@@ -1216,11 +1397,15 @@ mod tests {
         assert_eq!(full_names, vec!["dev-libs/packageusedisablepkg"]);
     }
 
-    fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
+    fn graph_result_real(atom_str: &str) -> GraphResult {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
         resolve_pretend_graph(&root, &root, atom_str, &config)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+    }
+
+    fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
+        graph_result_real(atom_str).entries
     }
 
     #[test]
@@ -1428,6 +1613,7 @@ mod tests {
                 version: version.to_string(),
             },
             blockers: Vec::new(),
+            slot: Some("0".to_string()),
         }
     }
 
@@ -1437,10 +1623,6 @@ mod tests {
             graph_entry("dev-libs", "owner", "1.0"),
             graph_entry("dev-libs", "target", "2.0"),
         ];
-        let graph_slots = HashMap::from([(
-            ("dev-libs".to_string(), "target".to_string()),
-            "0".to_string(),
-        )]);
         let pending = vec![PendingBlocker {
             atom_str: "!!dev-libs/target".to_string(),
             strong: true,
@@ -1453,7 +1635,6 @@ mod tests {
             Path::new("/nonexistent-root-for-this-test"),
             &pending,
             &entries,
-            &graph_slots,
         );
         assert_eq!(
             conflicts,
@@ -1473,10 +1654,6 @@ mod tests {
     #[test]
     fn resolve_blockers_skips_a_blocker_matching_its_own_owner() {
         let entries = vec![graph_entry("dev-libs", "owner", "1.0")];
-        let graph_slots = HashMap::from([(
-            ("dev-libs".to_string(), "owner".to_string()),
-            "0".to_string(),
-        )]);
         let pending = vec![PendingBlocker {
             atom_str: "!dev-libs/owner".to_string(),
             strong: false,
@@ -1489,7 +1666,6 @@ mod tests {
             Path::new("/nonexistent-root-for-this-test"),
             &pending,
             &entries,
-            &graph_slots,
         );
         assert!(conflicts.is_empty());
     }
@@ -1509,7 +1685,6 @@ mod tests {
             Path::new("/nonexistent-root-for-this-test"),
             &pending,
             &entries,
-            &HashMap::new(),
         );
         assert!(conflicts.is_empty());
     }

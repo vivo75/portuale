@@ -1,17 +1,20 @@
 // `emerge --pretend <category/package>`: the v1 slice (see
 // PORTING/rust/portage-repo/src/lib.rs for the full scope writeup --
-// candidates come from every repos.conf repo, main + overlays, no slot
-// conflicts). USE/ACCEPT_KEYWORDS/package.mask/
-// .unmask/.accept_keywords/.use come from the real profile chain +
-// make.conf + package.* (see portage-profile's doc comment for what that
-// does and doesn't implement), not a hardcoded stand-in. Recursively
-// resolves DEPEND+RDEPEND (see resolve_pretend_graph's doc comment for
-// the recursion's own scope cuts: DEPEND+RDEPEND only, || resolves every
-// alternative, cycle/dup-safe) and reports (not enforces) blocker
-// conflicts against installed packages and the rest of the graph -- see
-// print_blockers below and resolve_pretend_graph's doc comment. Output
-// format is a documented, simplified subset of real emerge's --pretend
-// output, not byte-identical to it.
+// candidates come from every repos.conf repo, main + overlays). USE/
+// ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use come from
+// the real profile chain + make.conf + package.* (see portage-profile's
+// doc comment for what that does and doesn't implement), not a
+// hardcoded stand-in. Recursively resolves DEPEND+RDEPEND (see
+// resolve_pretend_graph's doc comment for the recursion's own scope
+// cuts: DEPEND+RDEPEND only, || resolves every alternative, cycle/
+// dup-safe, multiple slots of the same package correctly coexist as
+// separate entries) and reports (not enforces) both blocker conflicts
+// against installed packages/the rest of the graph, and slot conflicts
+// (two atoms needing the identical slot at incompatible versions) --
+// see print_blockers/the slot_conflicts loop below and
+// resolve_pretend_graph's doc comment. Output format is a documented,
+// simplified subset of real emerge's --pretend output, not
+// byte-identical to it.
 //
 // Anything outside the top-level atom's narrow slice (no --pretend, more
 // than one atom, a versioned/slotted/blocker top-level atom, an
@@ -106,13 +109,14 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let entries = match resolve_pretend_graph(&config_root, &root, atom_str, &config) {
-        Ok(entries) => entries,
+    let result = match resolve_pretend_graph(&config_root, &root, atom_str, &config) {
+        Ok(result) => result,
         Err(e) => {
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
         }
     };
+    let entries = &result.entries;
 
     // The BFS in resolve_pretend_graph always visits the requested atom
     // first, so entries[0] is the top-level package; its outcome keeps
@@ -137,7 +141,7 @@ pub fn run(args: &[String]) -> ExitCode {
         _ => {}
     }
 
-    for entry in &entries {
+    for entry in entries {
         match &entry.outcome {
             PretendOutcome::New { version } => {
                 println!("[ebuild  N] {}/{}-{version}", entry.category, entry.package);
@@ -162,6 +166,22 @@ pub fn run(args: &[String]) -> ExitCode {
                 );
             }
         }
+    }
+
+    // Purely informational, same as blockers -- see resolve_pretend_graph's
+    // doc comment: v1 neither refuses nor changes the exit code for a slot
+    // conflict.
+    for c in &result.slot_conflicts {
+        println!(
+            "[slot conflict] {}/{}:{} resolved to {}/{}-{}, which does not satisfy \"{}\"",
+            c.category,
+            c.package,
+            c.slot,
+            c.category,
+            c.package,
+            c.resolved_version,
+            c.conflicting_atom
+        );
     }
     ExitCode::SUCCESS
 }

@@ -4,16 +4,17 @@ scope writeup, including the dependency-recursion follow-up in
 resolve_pretend_graph, the profile/make.conf -> real USE/ACCEPT_KEYWORDS
 follow-up in portage-profile, the package.mask/.unmask/.accept_keywords/
 .use follow-up on top of that, the blocker-reporting follow-up on top of
-that, and the overlays (multiple repos.conf repos) follow-up on top of
-that). Drives the real compiled `emerge` binary (multicall, dispatched
-via a real symlink -- not a neutral harness, since emerge is an actual
-product surface per PROMPT.md's testing decision) and the Python
-reference implementation identically, against the synthetic fixture tree
-at PORTING/fixtures (whose repos.conf/make.profile/make.conf/
-package.mask/package.unmask/package.accept_keywords/package.use now drive
-real config resolution, not hardcoded values, and whose repos.conf now
-defines a second, higher-priority overlay repo alongside the main one),
-and asserts their stdout, stderr, and exit codes all match exactly.
+that, the overlays (multiple repos.conf repos) follow-up on top of that,
+and the slot-conflict-reporting follow-up on top of that). Drives the
+real compiled `emerge` binary (multicall, dispatched via a real symlink
+-- not a neutral harness, since emerge is an actual product surface per
+PROMPT.md's testing decision) and the Python reference implementation
+identically, against the synthetic fixture tree at PORTING/fixtures
+(whose repos.conf/make.profile/make.conf/package.mask/package.unmask/
+package.accept_keywords/package.use now drive real config resolution,
+not hardcoded values, and whose repos.conf now defines a second,
+higher-priority overlay repo alongside the main one), and asserts their
+stdout, stderr, and exit codes all match exactly.
 """
 
 import subprocess
@@ -57,6 +58,8 @@ CASES = [
     ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
     ("overlay: best version wins across repos", ["--pretend", "dev-libs/overlaynewerpkg"], 0),
     ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
+    ("slot conflict: two incompatible version constraints on one slot", ["--pretend", "dev-libs/slotconflictparent"], 0),
+    ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
 ]
 
 
@@ -330,3 +333,40 @@ def test_same_version_tie_across_repos_is_broken_toward_higher_priority(
         "[ebuild  N] dev-libs/overlaytiepkg-1.0",
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
+
+
+def test_slot_conflict_is_reported_between_two_incompatible_version_constraints(
+    emerge_binary, fixture_env
+):
+    """dev-libs/slotconflictparent pulls in slotconflictnewconsumer (bare
+    RDEPEND on slotconflicttarget, resolves the best version, 2.0, first)
+    and slotconflictoldconsumer (RDEPEND "<dev-libs/slotconflicttarget-2.0",
+    which 2.0 itself does NOT satisfy) -- both want slot 0 of the same
+    package at versions that can't both be right, so this must surface as
+    a [slot conflict] line, not a second, silently-overwriting entry, and
+    must not change the exit code (purely informational, like blockers)."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/slotconflictparent"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/slotconflictparent-1.0",
+        "[ebuild  N] dev-libs/slotconflictnewconsumer-1.0",
+        "[ebuild  N] dev-libs/slotconflictoldconsumer-1.0",
+        "[ebuild  N] dev-libs/slotconflicttarget-2.0",
+        '[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"',
+    ]
+
+
+def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_binary, fixture_env):
+    """dev-libs/multislotparent RDEPENDs on both dev-libs/multislotpkg:0
+    and dev-libs/multislotpkg:1 -- real, different slots of the same
+    package are normal coexistence (like dev-lang/python:3.11 and
+    :3.12), not a conflict: both must appear as independent [ebuild N]
+    lines, with no [slot conflict] line at all."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/multislotparent"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/multislotparent-1.0",
+        "[ebuild  N] dev-libs/multislotpkg-1.0",
+        "[ebuild  N] dev-libs/multislotpkg-2.0",
+    ]
+    assert "[slot conflict]" not in result.stdout

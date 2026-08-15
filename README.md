@@ -21,10 +21,16 @@ other package's, the same way real portage does it, blocker
 (`!atom`/`!!atom`) reporting: a package's blocker atoms are matched
 against both currently-installed packages and the rest of the same
 resolution's New/Upgrade set, and shown -- not resolved or enforced,
-since `--pretend` itself never touches anything real -- and, on top of
-all of that, overlays: candidates for a package now come from every
-repo `repos.conf` defines, main plus any number of overlays, not just
-the one main repo.
+since `--pretend` itself never touches anything real -- overlays:
+candidates for a package now come from every repo `repos.conf` defines,
+main plus any number of overlays, not just the one main repo -- and, on
+top of all of that, slot conflicts: two atoms landing on the identical
+slot at incompatible versions are reported the same "show, don't
+enforce" way blockers are, while two atoms simply requesting
+*different* slots of the same package now correctly resolve as two
+independent, coexisting entries instead of one silently overwriting the
+other, matching how real portage genuinely allows multiple slots of the
+same package side by side.
 
 ## Layout
 
@@ -43,9 +49,10 @@ PORTING/
                                  profile chain + make.conf, plus package.mask/
                                  .unmask/.accept_keywords/.use (see lib.rs's doc comment)
     portage-repo/                multi-repo (main + overlays)/metadata/vdb access +
-                                 resolution + recursive dependency-graph walk +
-                                 blocker reporting for `emerge --pretend` (see
-                                 lib.rs's doc comment on resolve_pretend_graph)
+                                 resolution + recursive, slot-aware dependency-graph
+                                 walk + blocker/slot-conflict reporting for
+                                 `emerge --pretend` (see lib.rs's doc comment on
+                                 resolve_pretend_graph)
     versions-harness/          CLI harness over portage-versions
     atom-harness/               CLI harness over portage-dep
     use-reduce-harness/         CLI harness over portage-use-reduce
@@ -144,9 +151,9 @@ PORTING/
   (plain `KEY=value` text -- confirmed against a real vendored tree) for
   KEYWORDS/SLOT/DEPEND/RDEPEND *without executing any bash*, and checks
   the vdb (`<ROOT>/var/db/pkg`) for what's installed. There's still no
-  slot conflicts, no backtracking -- all explicitly confirmed scope cuts
-  before implementing, not silent omissions (see the doc comment at the
-  top of `rust/portage-repo/src/lib.rs`).
+  backtracking -- an explicitly confirmed scope cut before implementing,
+  not a silent omission (see the doc comment at the top of
+  `rust/portage-repo/src/lib.rs`).
   Config/target roots come from the real `PORTAGE_CONFIGROOT`/`ROOT`
   environment variables (portage's own mechanism, not a pilot invention --
   see `lib/portage/const.py`), which is what lets `PORTING/fixtures` be
@@ -309,6 +316,38 @@ PORTING/
   `::repo`-constrained atoms (already excluded by `portage-dep`'s v1
   grammar) -- overlays only widen *which ebuilds are candidates*, nothing
   about how they're evaluated once found.
+
+  **Slot conflicts**: `resolve_pretend_graph` now dedupes and recurses by
+  `(category, package, slot)` instead of `category/package` alone --
+  which fixes a real, latent gap the visited-set had ever since
+  recursion existed: two atoms requesting *different* slots of the same
+  package (`dev-lang/python:3.11` and `:3.12`, say) used to have the
+  second one silently swallowed by the package-only visited check,
+  exactly as if it had never been a dependency at all. Now they're two
+  genuinely independent `GraphEntry` values, each recursed into on its
+  own -- matching how real portage actually treats multiple slots of one
+  package (normal, valid coexistence, the entire point of `SLOT`). A
+  *conflict* (`SlotConflict`) only exists when a **second** atom lands on
+  a slot some earlier atom already resolved, and that earlier resolution
+  doesn't satisfy the second atom's own constraint (checked with the same
+  `match_from_list` every other atom-vs-candidate comparison in this
+  crate uses) -- e.g. one dependency wants any version of `foo:0` and
+  gets `2.0`, while another wants `<foo-2.0`, also slot `0`. Same "report,
+  don't enforce" spirit as blockers: real portage's own depgraph treats
+  an unresolved slot conflict as fatal and refuses to proceed; v1 instead
+  keeps whichever version was resolved first, reports the conflict, and
+  moves on -- `--pretend` itself never touches anything real, so nothing
+  here is truly "fatal" to calculate. Two smaller pieces of bookkeeping
+  changed to make this correct: cycle/duplicate termination now dedupes
+  on exact *atom text* (a `visited_atoms` set) rather than on
+  category/package, since the slot a bare atom resolves to isn't known
+  until after resolution; and `SLOT` moved from a side-table
+  (`portage-repo`'s former `graph_slots`) onto `GraphEntry` itself
+  (`slot: Option<String>`, `None` for `AlreadyInstalled`/
+  `NoVisibleCandidate`, which don't carry one), which also let
+  `resolve_blockers` be fixed to check *every* graph-resolved slot of a
+  blocker's target package, not just whichever one happened to be
+  recorded last.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -348,12 +387,14 @@ PORTING/
   `package.unmask`-ed package becoming visible again, a `package.use`
   entry both enabling and disabling a per-package flag, a strong and a
   weak blocker match each being reported, an overlay-only package being
-  found, and a same-version tie across the main repo and the overlay
-  being broken toward the higher-priority one) against the fixture,
-  `ebuild`-dispatch, and batch mode inside it, exiting nonzero on any
-  failure -- including proving the fixture's `make.profile` symlink,
-  multi-parent chain, and second `repos.conf` repo all survive the image
-  `COPY` and still resolve correctly.
+  found, a same-version tie across the main repo and the overlay being
+  broken toward the higher-priority one, a genuine slot conflict being
+  reported, and two different slots of the same package correctly
+  coexisting instead of one silently overwriting the other) against the
+  fixture, `ebuild`-dispatch, and batch mode inside it, exiting nonzero
+  on any failure -- including proving the fixture's `make.profile`
+  symlink, multi-parent chain, and second `repos.conf` repo all survive
+  the image `COPY` and still resolve correctly.
 
 Known simplification: `versions-harness`/`portage-versions` compare
 version components as `i128` rather than Python's arbitrary-precision
@@ -429,6 +470,18 @@ repos, but only the overlay's copy `RDEPEND`s on `dev-libs/newpkg` --
 resolving it pulls `newpkg` in, proving the higher-priority overlay's
 copy, not the main repo's, is the one whose own metadata actually got
 read).
+
+Six more fixture packages exercise slot conflicts: `slotconflicttarget`
+(two versions, `1.0` and `2.0`, both `SLOT="0"`), `slotconflictnewconsumer`
+(a bare RDEPEND on `slotconflicttarget`, reached first, resolves the best
+version -- `2.0`), `slotconflictoldconsumer` (RDEPEND
+`"<dev-libs/slotconflicttarget-2.0"`, which the already-resolved `2.0`
+does *not* satisfy), and `slotconflictparent` (RDEPENDs on both
+consumers, so the conflict between them surfaces); and, for the
+non-conflict case, `multislotpkg` (two versions in *different* slots --
+`1.0`/`SLOT="0"` and `2.0`/`SLOT="1"`) and `multislotparent` (RDEPENDs on
+`multislotpkg:0` and `multislotpkg:1` explicitly, so both must resolve
+as independent entries, not a conflict).
 
 `gentoo_snapshot.json` was extracted from a full local Gentoo tree
 checkout (`/.gentoo/repos/gentoo` on the machine this was vendored on) with
@@ -563,6 +616,24 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayonlypk
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaytiepkg
 # [ebuild  N] dev-libs/overlaytiepkg-1.0
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# slot conflict: slotconflictnewconsumer resolves slotconflicttarget to
+# 2.0 first; slotconflictoldconsumer's own "<...-2.0" constraint rejects
+# that -- reported, not enforced (exit code and the rest of the graph are
+# unaffected)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/slotconflictparent
+# [ebuild  N] dev-libs/slotconflictparent-1.0
+# [ebuild  N] dev-libs/slotconflictnewconsumer-1.0
+# [ebuild  N] dev-libs/slotconflictoldconsumer-1.0
+# [ebuild  N] dev-libs/slotconflicttarget-2.0
+# [slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"
+
+# NOT a conflict: two different slots of the same package coexist as
+# independent entries, same as real portage allows
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/multislotparent
+# [ebuild  N] dev-libs/multislotparent-1.0
+# [ebuild  N] dev-libs/multislotpkg-1.0
+# [ebuild  N] dev-libs/multislotpkg-2.0
 
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \

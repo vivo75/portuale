@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: bare RDEPEND on dev-libs/slotconflicttarget resolves the best version (2.0), reached first
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/slotconflicttarget
+SLOT=0
+_md5_=0000000000000000000000000000000

@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: SLOT 1, coexists with -1.0 (SLOT 0) as two genuinely separate graph entries, not a conflict
+EAPI=8
+KEYWORDS=amd64
+SLOT=1
+_md5_=0000000000000000000000000000000

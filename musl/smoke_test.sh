@@ -148,6 +148,23 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend breaks a same-version repo tie toward the higher-priority overlay inside the scratch container" \
     test "${actual}" = "$(printf '[ebuild  N] dev-libs/overlaytiepkg-1.0\n[ebuild  N] dev-libs/newpkg-1.0')"
 
+# emerge --pretend against slot conflicts (see the dev-libs/slotconflict*/
+# multislot* fixture packages): a genuine conflict (two atoms needing the
+# same slot at incompatible versions) is reported, while two atoms
+# needing genuinely different slots of the same package correctly
+# coexist as separate entries, not a conflict.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/slotconflictparent)
+check "emerge --pretend reports a slot conflict inside the scratch container" \
+    test "${actual}" = "$(printf '[ebuild  N] dev-libs/slotconflictparent-1.0\n[ebuild  N] dev-libs/slotconflictnewconsumer-1.0\n[ebuild  N] dev-libs/slotconflictoldconsumer-1.0\n[ebuild  N] dev-libs/slotconflicttarget-2.0\n[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"')"
+
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/multislotparent)
+check "emerge --pretend lets different slots of the same package coexist inside the scratch container" \
+    test "${actual}" = "$(printf '[ebuild  N] dev-libs/multislotparent-1.0\n[ebuild  N] dev-libs/multislotpkg-1.0\n[ebuild  N] dev-libs/multislotpkg-2.0')"
+
 actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
 check "ebuild dispatch prints the ebuild stub" \
     grep -q "ebuild (pilot stub)" <<<"${actual}"
