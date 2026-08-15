@@ -26,3 +26,18 @@ pub(crate) fn delete_vdb_dir(root: &Path, category: &str, pf: &str) -> Result<()
         .map_err(|e| e.to_string())?;
     txn.commit().map_err(|e| e.to_string())
 }
+
+/// The last step of a standalone unmerge: with `retire` one transaction
+/// holds the row deletion with the collected writes; without it the entry
+/// directory is removed directly (see [`delete_vdb_dir`]).
+pub(crate) fn retire_entry(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    retire: Option<ebuild_merge::RetireWrites>,
+) -> Result<(), String> {
+    match retire {
+        Some(writes) => writes.commit(root, &portage_vdb::EntryKey::new(category, pf)),
+        None => delete_vdb_dir(root, category, pf),
+    }
+}

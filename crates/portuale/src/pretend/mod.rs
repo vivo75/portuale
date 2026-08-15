@@ -19,6 +19,7 @@
 
 mod args;
 mod news;
+mod removal;
 mod world;
 
 #[cfg(test)]
@@ -26,6 +27,7 @@ mod tests;
 
 pub(crate) use args::*;
 pub use news::*;
+pub(crate) use removal::*;
 pub(crate) use world::*;
 
 use crate::ebuild_merge;

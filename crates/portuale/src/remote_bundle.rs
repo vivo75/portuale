@@ -17,6 +17,20 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Which of the client phases (`pretend`/`setup`/`preinst`) a
+/// binpkg's `DEFINED_PHASES` actually defines -- and only when the ebuild
+/// file plus the hook environment are present to run them from.
+pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bool) -> Vec<String> {
+    if !(has_ebuild && has_environment) {
+        return Vec::new();
+    }
+    ["pretend", "setup", "preinst"]
+        .into_iter()
+        .filter(|phase| defined_phases.split_whitespace().any(|word| word == *phase))
+        .map(String::from)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,9 +17,11 @@
 //! `mrg` path; `emerge`/`ebuild` keep their own local xpak support).
 
 use clap::ArgMatches;
+mod ledger;
 
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) use ledger::*;
 
 use std::collections::HashMap;
 

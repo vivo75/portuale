@@ -1,5 +1,18 @@
 use super::*;
 
+/// An unowned ROOT for the privilege tests; `None` for a root caller, whose test
+/// returns early.
+#[cfg(unix)]
+fn ask_pretend_unowned_root() -> Option<std::path::PathBuf> {
+    // SAFETY: `geteuid` has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        return None;
+    }
+    Some(std::path::PathBuf::from(
+        "/usr/portuale-ask-pretend-test-does-not-exist",
+    ))
+}
+
 /// Bound every wait on a pty-driven child (default 60 s, overridable); on expiry
 /// kill the child and panic with a `watchdog:` prefix carrying its output so far.
 fn pty_watchdog_bound() -> std::time::Duration {
@@ -8,6 +21,13 @@ fn pty_watchdog_bound() -> std::time::Duration {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(60);
     std::time::Duration::from_secs(secs.max(1))
+}
+
+/// Bounded wait collecting the child's piped stdout/stderr; on timeout the child
+/// is killed and the panic carries whatever it had printed.
+#[cfg(unix)]
+fn wait_pty_output(child: std::process::Child) -> std::process::Output {
+    wait_pty_output_bound(child, pty_watchdog_bound())
 }
 
 /// [`wait_pty_output`] with an explicit bound, so tests never mutate the
