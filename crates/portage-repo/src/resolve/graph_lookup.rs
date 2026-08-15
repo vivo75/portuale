@@ -108,3 +108,54 @@ pub fn best_installed_match(
         })
         .max_by(|a, b| vercmp_ordering(a, b))
 }
+
+/// The visible tree candidates matching `atom_str` (USE deps ignored) after the
+/// backtrack loop's `runtime_pkg_mask` constraints, as `(version, slot)` -- the listing
+/// half of `atom_currently_satisfiable`, returned rather than collapsed to a bool so
+/// the downgrade guards can compare versions.
+pub(crate) fn visible_tree_matches(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+    extra_constraints: &[String],
+) -> Vec<(String, String)> {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return Vec::new();
+    };
+    let Ok(candidates) = list_candidates(repos, &atom.category, &atom.package) else {
+        return Vec::new();
+    };
+    let visible: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| is_visible(c, &atom.category, &atom.package, config))
+        .collect();
+    let strs: Vec<String> = visible
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    let stripped = portage_dep::without_use(atom_str);
+    let Some(matched) = portage_dep::match_from_list(stripped, &refs) else {
+        return Vec::new();
+    };
+    let passes_constraints = |m: &str| {
+        extra_constraints.iter().all(|c| match c.strip_prefix('!') {
+            // A per-instance negative hides no tree candidate (see
+            // [`is_instance_only_mask`]).
+            Some(_) if is_instance_only_mask(c) => true,
+            Some(neg) => !portage_dep::match_from_list(neg, &[m]).is_some_and(|r| !r.is_empty()),
+            None => portage_dep::match_from_list(c, &[m]).is_some_and(|r| !r.is_empty()),
+        })
+    };
+    visible
+        .iter()
+        .zip(strs.iter())
+        .filter(|(_, s)| matched.contains(&s.as_str()) && passes_constraints(s))
+        .map(|(c, _)| (c.version.clone(), c.slot.clone()))
+        .collect()
+}

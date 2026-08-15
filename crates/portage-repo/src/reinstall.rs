@@ -96,6 +96,25 @@ pub(crate) fn new_repo_changed(
     vdb_repo != current_repo_name
 }
 
+/// Whether a *visible* ebuild still exists in the tree at `version`
+/// (no slot comparison). Queried from the tree independently of the
+/// resolver's candidate pool, so it stays meaningful under `--usepkgonly`.
+/// Portage: depgraph.py, _equiv_ebuild_visible.
+pub fn ebuild_visible_at(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    version: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    list_candidates(repos, category, package)
+        .map(|tree| {
+            tree.iter()
+                .any(|c| c.version == version && is_visible(c, category, package, config))
+        })
+        .unwrap_or(false)
+}
+
 /// A candidate's own `is_valid_flag` domain: its declared `IUSE` unioned
 /// with the profile's EAPI 5+ `IUSE_EFFECTIVE` (`config.iuse_effective`).
 /// Used only for a USE-dep's `.required`/`(+)`/`(-)` check -- deliberately

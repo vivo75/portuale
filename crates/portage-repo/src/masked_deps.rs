@@ -2,6 +2,103 @@
 
 use crate::*;
 
+// NOTE: the long `resolve_pretend` design notes that lived here (the single-atom
+// decision, `update`/`selective`/`is_top_level`/`excluded` semantics) now live in
+// the notes file; `resolve_pretend` itself lives in `resolve/`.
+/// Whether every atom in `atoms` currently has a satisfying candidate -- one input to the
+/// `AltPreference` rank for picking a `"||"` group's alternative (the `Available` half).
+/// A blocker atom is always satisfiable here, vacuously.
+/// Deliberately the *early* half of `resolve_pretend`'s logic only: the `--update`/`--newuse`/
+/// `--exclude`/reinstall refinements only matter once an alternative is chosen.
+// Portage: dep_check.py, dep_zapdeps all_available
+pub(crate) fn atom_currently_satisfiable(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+    // The `'backtrack` loop's accumulated per-`cat/pkg` constraints for this atom's
+    // package (a `!`-prefixed entry is a negative, a bare entry positive).
+    // Empty `&[]` at every non-disjunctive call site -- a strict no-op.
+    // Portage: backtracking's runtime_pkg_mask seen by dep_zapdeps.
+    extra_constraints: &[String],
+) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if atom.blocker != portage_dep::Blocker::None {
+        return true;
+    }
+    let Ok(candidates) = list_candidates(repos, &atom.category, &atom.package) else {
+        return false;
+    };
+    let visible: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| is_visible(c, &atom.category, &atom.package, config))
+        .collect();
+    if visible.is_empty() {
+        return false;
+    }
+
+    let candidate_strs: Vec<String> = visible
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(atom_str, &candidate_str_refs) else {
+        return false;
+    };
+    // Apply the accumulated `runtime_pkg_mask` negatives/positives the
+    // same way `resolve_pretend` filters its own `matched` list
+    // (lib.rs ~7437) -- an alternative whose every satisfying candidate is
+    // masked out counts as unsatisfiable, so the next `||` alternative
+    // wins on the retry.
+    let matched: Vec<&str> = if extra_constraints.is_empty() {
+        matched
+    } else {
+        matched
+            .into_iter()
+            .filter(|m| {
+                extra_constraints.iter().all(|c| {
+                    // Per-instance negatives hide no tree candidate.
+                    if is_instance_only_mask(c) {
+                        return true;
+                    }
+                    if let Some(neg) = c.strip_prefix('!') {
+                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    } else {
+                        portage_dep::match_from_list(c, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    }
+                })
+            })
+            .collect()
+    };
+
+    let Some(use_deps) = atom.use_deps.as_ref().filter(|d| !d.is_empty()) else {
+        return !matched.is_empty();
+    };
+    let mut by_str: HashMap<&str, &Candidate> = HashMap::new();
+    for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
+        by_str.insert(*s, *c);
+    }
+    matched.into_iter().any(|m| {
+        let Some(candidate) = by_str.get(m) else {
+            return false;
+        };
+        let Some((iuse, use_flags)) =
+            candidate_iuse_and_use(candidate, &atom.category, &atom.package, config)
+        else {
+            return false;
+        };
+        portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
+    })
+}
+
 /// The IUSE-missing-conditional mask: every `flag? ( … )` group and every conditional
 /// use-dep in the five dep keys must reference a flag valid for the atom-owning package's
 /// own effective IUSE (see [`implicit_iuse_set`]), or the candidate is masked `invalid`.

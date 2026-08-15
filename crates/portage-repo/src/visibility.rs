@@ -329,6 +329,28 @@ pub(crate) fn suggested_keyword(candidate: &Candidate) -> Option<&str> {
         .map(String::as_str)
 }
 
+/// True iff `candidate` is visible but the atom's use-deps don't match
+/// its IUSE/effective-USE. A candidate also masked by KEYWORDS gets no
+/// suggestion here (only a change that would actually fix it is
+/// suggested).
+/// Portage: --autounmask-use (candidate-side mechanism)
+pub(crate) fn use_masked_only(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    use_deps: &[portage_dep::UseDep],
+    config: &portage_profile::Config,
+) -> bool {
+    if !is_visible(candidate, category, package, config) {
+        return false;
+    }
+    let Some((iuse, use_flags)) = candidate_iuse_and_use(candidate, category, package, config)
+    else {
+        return false;
+    };
+    !portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
+}
+
 pub(crate) struct KeywordsAcceptedArgs<'a> {
     pub(crate) keywords: &'a [String],
     pub(crate) candidate_str: &'a str,
