@@ -111,3 +111,51 @@ pub(crate) fn valid_iuse(
     }
     declared.union(&config.iuse_effective).cloned().collect()
 }
+
+/// `candidate`'s current IUSE (fresh from its md5-cache entry) and its
+/// effective (computed) USE set. Shared by `reinstall_flags_for_use_change`
+/// and `resolve_pretend`'s USE-dep filtering. Returns `None` if the
+/// candidate's metadata can't be read at all.
+pub(crate) fn candidate_iuse_and_use(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Option<(HashSet<String>, Rc<HashSet<String>>)> {
+    // A binary candidate carries the flags it was *actually built with*
+    // over its own recorded `IUSE`, not a profile-recomputed set.
+    if candidate.source == CandidateSource::Binary {
+        let iuse: HashSet<String> = candidate
+            .iuse
+            .split_whitespace()
+            .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+            .collect();
+        // Fresh `Rc`: no shared source exists for the baked set.
+        let use_flags = Rc::new(candidate.binary_use.clone().unwrap_or_default());
+        return Some((iuse, use_flags));
+    }
+    let pf = format!("{package}-{}", candidate.version);
+    let metadata = repo_aux_metadata(&candidate.repo_location, category, &pf).ok()?;
+    // A missing IUSE key means "declares no USE flags at all", not
+    // "unreadable" -- unlike a missing md5-cache entry (the `?` above).
+    let iuse: HashSet<String> = metadata
+        .get("IUSE")
+        .map(|s| s.as_str())
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
+        config,
+        iuse: metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
+        category,
+        package,
+    });
+    Some((iuse, use_flags))
+}

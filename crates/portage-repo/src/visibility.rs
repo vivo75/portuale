@@ -14,6 +14,68 @@ pub(crate) struct MetadataKeyAcceptedArgs<'a> {
     pub(crate) package_accept: &'a [(String, Vec<String>)],
 }
 
+/// Whether every token in `value_str` (a candidate's `PROPERTIES` /
+/// `RESTRICT` metadata) is accepted. Unlike `LICENSE` there is no
+/// any-of semantics: every flattened token individually needs accepting.
+/// Portage: config.py _getMissingProperties/_getMissingRestrict
+pub(crate) fn metadata_key_accepted(args: MetadataKeyAcceptedArgs<'_>) -> bool {
+    let MetadataKeyAcceptedArgs {
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        which,
+        global_accept,
+        package_accept,
+    } = args;
+    if value_str.trim().is_empty() {
+        return true;
+    }
+    // Memoised per (which, USE context + candidate IUSE/KEYWORDS,
+    // candidate, value, accept lists); thread-local, lock-free. The
+    // empty-value early return stays before the lookup (cheaper than
+    // hashing). `iuse`/`keywords` join the key because `candidate_str`
+    // doesn't encode them (a binary shares it with its ebuild).
+    type MkaCache = HashMap<(MetadataKey, u64, String, String, u64), bool>;
+    thread_local! {
+        static MKA_CACHE: RefCell<MkaCache> = RefCell::new(HashMap::new());
+    }
+    let use_context = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        use_context_fingerprint(config).hash(&mut h);
+        candidate.iuse.hash(&mut h);
+        candidate.keywords.hash(&mut h);
+        h.finish()
+    };
+    let key = (
+        which,
+        use_context,
+        candidate_str.to_string(),
+        value_str.to_string(),
+        accept_lists_fingerprint(global_accept, package_accept),
+    );
+    if let Some(hit) = MKA_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let result = metadata_key_accepted_uncached(MetadataKeyAcceptedUncachedArgs {
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        global_accept,
+        package_accept,
+    });
+    MKA_CACHE.with(|c| {
+        c.borrow_mut().insert(key, result);
+    });
+    result
+}
+
 /// Which accept-list pair a [`metadata_key_accepted`] call resolves
 /// (and the memo's identity for them).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,6 +116,50 @@ pub(crate) struct MetadataKeyAcceptedUncachedArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) global_accept: &'a [String],
     pub(crate) package_accept: &'a [(String, Vec<String>)],
+}
+
+pub(crate) fn metadata_key_accepted_uncached(args: MetadataKeyAcceptedUncachedArgs<'_>) -> bool {
+    let MetadataKeyAcceptedUncachedArgs {
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        global_accept,
+        package_accept,
+    } = args;
+    #[cfg(test)]
+    MKA_UNCACHED_CALLS.with(|c| c.set(c.get() + 1));
+    let use_flags = use_flags_if_conditional(UseFlagsIfConditionalArgs {
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+    });
+    let accept_tokens = resolve_accept_tokens(
+        global_accept,
+        package_accept,
+        candidate_str,
+        category,
+        package,
+    );
+    let Ok(all_mentioned) = all_mentioned_tokens(value_str) else {
+        return false;
+    };
+    let acceptable = resolve_acceptable_tokens(&accept_tokens, &all_mentioned);
+
+    let tokens: Vec<String> = value_str.split_whitespace().map(String::from).collect();
+    match portage_use_reduce::use_reduce_flat(
+        &tokens,
+        &use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    ) {
+        Ok(flat) => flat.iter().all(|t| acceptable.contains(t)),
+        Err(_) => false,
+    }
 }
 
 /// The config side of the `is_visible` memo key: the frozen visibility
@@ -173,6 +279,41 @@ pub(crate) struct IsStableArgs<'a> {
     pub(crate) package: &'a str,
     pub(crate) accept_keywords: &'a HashSet<String>,
     pub(crate) package_accept_keywords: &'a [(String, Vec<String>)],
+}
+
+/// Whether a candidate's KEYWORDS count as "stable" for the
+/// `use.stable.mask`/`.force` purposes: stable iff replacing every
+/// keyword with its `~`-unstable form would make it invisible (so
+/// force/mask settings don't change on stabilization). Reuses
+/// `keywords_accepted` against that unstabilized list.
+/// Portage: KeywordsManager.isStable
+pub(crate) fn is_stable(args: IsStableArgs<'_>) -> bool {
+    let IsStableArgs {
+        keywords,
+        candidate_str,
+        category,
+        package,
+        accept_keywords,
+        package_accept_keywords,
+    } = args;
+    let unstable: Vec<String> = keywords
+        .iter()
+        .map(|k| {
+            if k.starts_with('~') {
+                k.clone()
+            } else {
+                format!("~{k}")
+            }
+        })
+        .collect();
+    !keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &unstable,
+        candidate_str,
+        category,
+        package,
+        accept_keywords,
+        package_accept_keywords,
+    })
 }
 
 pub(crate) fn vercmp_ordering(a: &str, b: &str) -> Ordering {
