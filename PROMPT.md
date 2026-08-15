@@ -13,6 +13,14 @@ The goal is to create a Rust implementation as a **friendly fork**: a
 separate, cooperating codebase, not a hostile competitor and not (yet)
 committed to being a full replacement.
 
+**EAPI floor**: EAPI 0, 1, 2, 3, 4, and 6 are deprecated and removed in
+this repo/fork — no ebuild uses them, and all profiles are EAPI 5 or
+higher (5, 7, 8 are the live versions). Any EAPI-conditional logic being
+read or ported (e.g. `bin/ebuild.sh`'s `__check_bash_version`, EAPI-gated
+behavior in eclasses or `lib/portage`) only needs to account for EAPI 5+
+as the real, live baseline — branches that only apply to EAPI 0/1/2/3/4/6
+are dead code and can be ignored rather than faithfully ported.
+
 ## Team structure
 
 - A Python team continues to own and evolve the existing Python codebase.
@@ -88,8 +96,11 @@ When it is tackled later:
   `__check_bash_version` (as of this writing: absolute minimum bash 4.4,
   rising to 5.0 or 5.3 depending on the ebuild's declared EAPI via
   `BASH_COMPAT`). The practical baseline going forward is bash >= 5.3.0.
-  Re-read that function before implementing — don't rely on this
-  description as the source of truth, it will drift.
+  Per the EAPI floor above, only the branches covering EAPI 5+ are
+  actually reachable in this repo — the function's own EAPI 0–4/6
+  branches (e.g. `___eapi_bash_3_2`/`___eapi_bash_4_2`) are dead code
+  here and don't need porting. Re-read that function before implementing
+  — don't rely on this description as the source of truth, it will drift.
 
 ## Test/benchmark harness architecture
 
