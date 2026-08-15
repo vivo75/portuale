@@ -1,0 +1,189 @@
+//! make.conf-style parsing: logical lines, shell tokens, variable substitution.
+
+use crate::*;
+
+/// Split `text` into logical lines, joining continuations (trailing `\`)
+/// and lines inside an unclosed quote. Quote characters are kept for
+/// `parse_kv_line` to strip.
+pub(crate) fn logical_lines(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    for raw in text.lines() {
+        // A full-line `#` comment outside any continuation is skipped whole;
+        // without this a `#` in prose (e.g. `Don't`) would open a bogus
+        // quote swallowing the rest of the file.
+        if quote.is_none() && cur.is_empty() && raw.trim_start().starts_with('#') {
+            continue;
+        }
+        let mut line = raw;
+        let mut cont = false;
+        if quote.is_none() && line.ends_with('\\') && !line.ends_with("\\\\") {
+            line = &line[..line.len() - 1];
+            cont = true;
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        let mut prev = ' ';
+        let mut escaped = false;
+        for (idx, c) in line.char_indices() {
+            match quote {
+                Some('"') if !escaped && c == '\\' => {
+                    escaped = true;
+                    prev = c;
+                    continue;
+                }
+                Some('"') if escaped => {
+                    escaped = false;
+                    prev = c;
+                    continue;
+                }
+                Some(q) => {
+                    if c == q {
+                        quote = None;
+                    }
+                }
+                None => {
+                    if c == '"' || c == '\'' {
+                        quote = Some(c);
+                    } else if c == '#' && prev.is_whitespace() {
+                        // Inline comment: drop from here to end of line.
+                        cur.push_str(line[..idx].trim_end());
+                        line = "";
+                        break;
+                    }
+                }
+            }
+            prev = c;
+        }
+        cur.push_str(line);
+        if quote.is_none() && !cont {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Tokenize a `KEY=VALUE` right-hand side with POSIX-shlex semantics
+/// (quote removal, backslash handling); the value token is processed
+/// *before* [`substitute`] ever sees it.
+// Portage: portage.util.getconfig (shlex lexer)
+pub(crate) fn shlex_token(raw: &str) -> String {
+    const WHITESPACE: [char; 4] = [' ', '\t', '\r', '\n'];
+    let chars: Vec<char> = raw.chars().collect();
+    let mut out = String::new();
+    let mut pos = 0;
+    while pos < chars.len() && WHITESPACE.contains(&chars[pos]) {
+        pos += 1;
+    }
+    let mut quote: Option<char> = None;
+    while pos < chars.len() {
+        let current = chars[pos];
+        match quote {
+            Some(q) => {
+                if current == q {
+                    quote = None;
+                    pos += 1;
+                } else if q == '"' && current == '\\' && pos + 1 < chars.len() {
+                    // Inside `"`, only the quote and the escape character
+                    // itself consume the backslash.
+                    let next = chars[pos + 1];
+                    if next == '\\' || next == '"' {
+                        out.push(next);
+                    } else {
+                        out.push('\\');
+                        out.push(next);
+                    }
+                    pos += 2;
+                } else {
+                    out.push(current);
+                    pos += 1;
+                }
+            }
+            None => {
+                if WHITESPACE.contains(&current) || current == '#' {
+                    break;
+                }
+                if current == '"' || current == '\'' {
+                    quote = Some(current);
+                    pos += 1;
+                } else if current == '\\' {
+                    if pos + 1 < chars.len() {
+                        out.push(chars[pos + 1]);
+                        pos += 2;
+                    } else {
+                        out.push('\\');
+                        pos += 1;
+                    }
+                } else {
+                    out.push(current);
+                    pos += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Parse one `KEY=value` line, returning the shlex-tokenized value.
+/// `None` for comments, blanks, or non-assignments (conditionals,
+/// function defs, …).
+pub(crate) fn parse_kv_line(line: &str) -> Option<(&str, String)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let eq = line.find('=')?;
+    let key = line[..eq].trim();
+    if key.is_empty()
+        || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        || key.chars().next().unwrap().is_ascii_digit()
+    {
+        return None;
+    }
+    Some((key, shlex_token(&line[eq + 1..])))
+}
+
+/// Read one `/etc/portage/env/<name>` file as ordered `(KEY, value)`
+/// pairs, expanding `source` lines in place. `${VAR}` stays literal for
+/// the caller to substitute. A missing file yields an empty list.
+pub(crate) fn read_env_file_kv(
+    path: &Path,
+    config_root: &Path,
+    visited: &mut HashSet<PathBuf>,
+) -> Vec<(String, String)> {
+    let Ok(canon) = path.canonicalize() else {
+        return Vec::new();
+    };
+    if !visited.insert(canon.clone()) {
+        return Vec::new();
+    }
+    let Ok(text) = fs::read_to_string(&canon) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("source ") {
+            let sourced = Path::new(rest.trim());
+            let resolved = if sourced.is_absolute() {
+                config_root.join(sourced.strip_prefix("/").unwrap_or(sourced))
+            } else {
+                canon
+                    .parent()
+                    .map(|p| p.join(sourced))
+                    .unwrap_or_else(|| sourced.to_path_buf())
+            };
+            out.extend(read_env_file_kv(&resolved, config_root, visited));
+            continue;
+        }
+        if let Some((key, raw_value)) = parse_kv_line(trimmed) {
+            out.push((key.to_string(), raw_value));
+        }
+    }
+    out
+}

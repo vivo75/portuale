@@ -41,17 +41,31 @@ use std::fs;
 
 use std::path::{Path, PathBuf};
 
+mod phase_environ;
+
 mod binrepo;
 mod config;
 mod env_layer;
+mod envd;
 mod fingerprints;
 mod incrementals;
+mod make_conf;
+mod package_files;
+mod profile_chain;
+mod resolve;
 
 pub use binrepo::*;
 pub use config::*;
 pub use env_layer::*;
+pub(crate) use envd::*;
 pub use fingerprints::*;
 pub use incrementals::*;
+pub(crate) use make_conf::*;
+pub(crate) use package_files::*;
+pub(crate) use profile_chain::*;
+pub use resolve::*;
+
+pub use phase_environ::ENV_BLACKLIST;
 
 /// Error resolving profile/config files. Distinct variants mirror the
 /// Portage message shapes so `Display` reproduces them byte-for-byte.
