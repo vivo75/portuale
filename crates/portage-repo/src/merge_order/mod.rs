@@ -16,6 +16,9 @@
 use std::cmp::Reverse;
 mod prelude;
 mod priority;
+
+#[cfg(test)]
+mod tests;
 pub(crate) use prelude::*;
 pub use priority::*;
 

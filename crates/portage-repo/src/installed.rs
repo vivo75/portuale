@@ -94,6 +94,20 @@ pub fn installed_pkg_repo(root: &Path, category: &str, package: &str, version: &
     }
 }
 
+/// Every installed version of `category/package` as an `InstalledRef`
+/// (version + slot/sub_slot + repo).
+pub fn installed_refs(root: &Path, category: &str, package: &str) -> Vec<InstalledRef> {
+    installed_candidates(root, category, package)
+        .into_iter()
+        .map(|(version, slot, sub_slot)| InstalledRef {
+            repo: installed_pkg_repo(root, category, package, &version),
+            version,
+            slot,
+            sub_slot,
+        })
+        .collect()
+}
+
 /// The `SLOT` of the vdb entry named by its directory name `pf`, through the shared
 /// [`vdb_aux_get`] seam: normalised `"slot/sub_slot"`, present-but-invalid reads as `"0"`,
 /// `""` with no `SLOT` file or an unsplittable `pf`. Callers keep their own defaulting.
@@ -284,6 +298,35 @@ pub(crate) fn indexed_reverse_dependents(
         }
     }
     Some(out.into_iter().collect())
+}
+
+/// The installed version a complete-mode withhold keeps: the highest installed
+/// version satisfying the requesting atom and every positive pin, or `None`
+/// when no installed instance satisfies everything (a genuine absence).
+// Portage: depgraph.py, _complete_graph via _select_pkg_from_graph
+pub(crate) fn complete_mode_withheld_version(
+    root: &Path,
+    category: &str,
+    package: &str,
+    atom_str: &str,
+    positives: &[String],
+) -> Option<String> {
+    installed_candidates(root, category, package)
+        .iter()
+        .map(|(v, s, ss)| {
+            (
+                v.clone(),
+                format!("{category}/{package}-{v}:{s}/{ss}::__installed__"),
+            )
+        })
+        .filter(|(_, s)| {
+            portage_dep::match_from_list(atom_str, &[s.as_str()]).is_some_and(|m| !m.is_empty())
+                && positives.iter().all(|p| {
+                    portage_dep::match_from_list(p, &[s.as_str()]).is_some_and(|m| !m.is_empty())
+                })
+        })
+        .map(|(v, _)| v)
+        .max_by(|a, b| vercmp_ordering(a, b))
 }
 
 /// Whether `atom_str` is satisfied by anything installed under `running_root`'s vdb --

@@ -80,6 +80,34 @@ pub const ENV_BLACKLIST: &[&str] = &[
     "_",
 ];
 
+/// `PORTAGE_USE`: `enabled ∩ (IUSE ∪ IUSE_EFFECTIVE)`, sorted. Exported
+/// as `USE` and written to a binpkg's `metadata/USE` / `Packages` index.
+// Portage: config.py, PORTAGE_USE / environ
+pub fn portage_use(config: &Config, iuse: &[String], enabled: &[String]) -> Vec<String> {
+    let valid: BTreeSet<&str> = iuse
+        .iter()
+        .map(|f| iuse_bare(f))
+        .chain(config.iuse_effective.iter().map(String::as_str))
+        .collect();
+    enabled
+        .iter()
+        .map(String::as_str)
+        .filter(|f| valid.contains(f))
+        .collect::<BTreeSet<&str>>()
+        .into_iter()
+        .map(String::from)
+        .collect()
+}
+
 fn iuse_bare(flag: &str) -> &str {
     flag.trim_start_matches(['+', '-'])
+}
+
+fn sorted_joined<'a>(set: impl IntoIterator<Item = &'a String>) -> String {
+    set.into_iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<&str>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(" ")
 }

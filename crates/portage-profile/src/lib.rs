@@ -68,7 +68,7 @@ pub(crate) use package_files::*;
 pub(crate) use profile_chain::*;
 pub use resolve::*;
 
-pub use phase_environ::ENV_BLACKLIST;
+pub use phase_environ::{ENV_BLACKLIST, portage_use};
 
 /// Error resolving profile/config files. Distinct variants mirror the
 /// Portage message shapes so `Display` reproduces them byte-for-byte.
