@@ -478,6 +478,90 @@ fn matches_repo(atom: &Atom, candidate: &Candidate) -> bool {
     }
 }
 
+/// Whether a candidate's `iuse` (declared flags, `+`/`-` markers stripped)
+/// and `enabled` (effective USE) satisfy `use_deps`.
+///
+/// Not called by `match_from_list` (plain-string candidates carry no USE
+/// state); callers with IUSE/USE in hand apply it afterwards.
+///
+/// - A flag without a `(+)`/`(-)` default must be in `iuse`, for every form.
+/// - Only `Enabled`/`Disabled` constrain USE state; the four conditional
+///   forms impose none here, as in Portage. A default applies only to a flag
+///   missing from `iuse`.
+///
+/// Portage: lib/portage/dep/__init__.py, match_from_list (`unevaluated_atom.use` block)
+pub fn use_deps_satisfied(
+    use_deps: &[UseDep],
+    iuse: &HashSet<String>,
+    enabled: &HashSet<String>,
+) -> bool {
+    if use_deps
+        .iter()
+        .any(|ud| ud.default.is_none() && !iuse.contains(&ud.flag))
+    {
+        return false;
+    }
+
+    let missing_enabled: HashSet<&str> = use_deps
+        .iter()
+        .filter(|ud| ud.default == Some(UseDepDefault::Enabled) && !iuse.contains(&ud.flag))
+        .map(|ud| ud.flag.as_str())
+        .collect();
+    let missing_disabled: HashSet<&str> = use_deps
+        .iter()
+        .filter(|ud| ud.default == Some(UseDepDefault::Disabled) && !iuse.contains(&ud.flag))
+        .map(|ud| ud.flag.as_str())
+        .collect();
+
+    let required_enabled: HashSet<&str> = use_deps
+        .iter()
+        .filter(|ud| ud.op == UseDepOp::Enabled)
+        .map(|ud| ud.flag.as_str())
+        .collect();
+    let required_disabled: HashSet<&str> = use_deps
+        .iter()
+        .filter(|ud| ud.op == UseDepOp::Disabled)
+        .map(|ud| ud.flag.as_str())
+        .collect();
+
+    if !required_enabled.is_empty() {
+        if required_enabled
+            .iter()
+            .any(|f| missing_disabled.contains(f))
+        {
+            return false;
+        }
+        let need_enabled: Vec<&str> = required_enabled
+            .iter()
+            .filter(|f| !enabled.contains(**f))
+            .copied()
+            .collect();
+        if !need_enabled.is_empty() && need_enabled.iter().any(|f| !missing_enabled.contains(f)) {
+            return false;
+        }
+    }
+
+    if !required_disabled.is_empty() {
+        if required_disabled
+            .iter()
+            .any(|f| missing_enabled.contains(f))
+        {
+            return false;
+        }
+        let need_disabled: Vec<&str> = required_disabled
+            .iter()
+            .filter(|f| enabled.contains(**f))
+            .copied()
+            .collect();
+        if !need_disabled.is_empty() && need_disabled.iter().any(|f| !missing_disabled.contains(f))
+        {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Returns the candidates (input order) matching `atom_str`; `None` if the
 /// atom doesn't parse. Unparseable candidates are skipped.
 /// Portage: lib/portage/dep/__init__.py, match_from_list

@@ -82,6 +82,18 @@ pub(crate) fn installed_candidates_uncached(
     out
 }
 
+/// The repo an installed `category/package-version` was merged from: its vdb
+/// `repository` file's first line, or `"__unknown__"` when absent or empty.
+// Portage: portage.versions._unknown_repo
+pub fn installed_pkg_repo(root: &Path, category: &str, package: &str, version: &str) -> String {
+    let repo = read_vdb_string(root, category, package, version, "repository");
+    if repo.is_empty() {
+        "__unknown__".to_string()
+    } else {
+        repo
+    }
+}
+
 /// Every installed version of `category/package` under `root`.
 pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<String> {
     installed_candidates(root, category, package)

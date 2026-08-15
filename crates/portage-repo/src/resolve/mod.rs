@@ -1,6 +1,7 @@
 mod cycles;
 mod entry;
 mod feedback;
+mod graph_lookup;
 mod or_preference;
 mod pretend;
 mod result;
@@ -10,6 +11,7 @@ mod slot_conflict;
 pub use cycles::*;
 pub use entry::*;
 pub(crate) use feedback::*;
+pub use graph_lookup::*;
 pub(crate) use or_preference::*;
 pub use pretend::*;
 pub use result::*;
