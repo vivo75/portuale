@@ -42,6 +42,11 @@ pub(crate) fn listed(table: &str, name: &str) -> bool {
     table.lines().any(|line| line == name)
 }
 
+/// Whether `key` survives Portage's `config.environ()` calling-env filter.
+pub(crate) fn environ_whitelisted(key: &str) -> bool {
+    listed(ENVIRON_WHITELIST, key) || key.starts_with("CCACHE_") || key.starts_with("DISTCC_")
+}
+
 /// A `FEATURES` token check over `features_string`'s output. CLI fallbacks elsewhere
 /// keep their own process-env reads.
 pub(crate) fn feature_token_present(features: &str, token: &str) -> bool {

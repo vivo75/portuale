@@ -136,3 +136,46 @@ pub(crate) struct SpawnBashScriptArgs<'a> {
     /// `spawning real bash for phase setup failed: …`).
     pub(crate) context: &'a str,
 }
+
+/// Run a vendored bash helper script under the sandbox with a curated
+/// environment and optional log capture: only whitelisted calling-env
+/// vars pass through (`LC_ALL` and the IPC daemon never do), and the
+/// log pump guard outlives the command so the gzip thread joins after
+/// every write end closes. Shared by the phase and misc-functions
+/// spawns so their setup cannot drift apart.
+pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, String> {
+    let SpawnBashScriptArgs {
+        script,
+        argv_word,
+        vars,
+        iso,
+        log_file,
+        context,
+    } = args;
+    // The pump guard must outlive `cmd` (see `open_log_file`): declared first so
+    // drop order destroys it after `cmd`, on every path.
+    let mut pump_guard: Option<LogPump> = None;
+    let mut cmd = sandbox_wrapped_command(script, argv_word, iso);
+    // Curated env only, like Portage: only whitelisted calling-env vars pass through;
+    // the caller-computed `vars` set the rest on top.
+    cmd.env_clear();
+    // `LC_ALL` never reaches a phase (see `phase_env_vars`); no IPC daemon either.
+    cmd.envs(
+        std::env::vars()
+            .filter(|(k, _)| environ_whitelisted(k) && k != "LC_ALL" && k != "PORTAGE_IPC_DAEMON"),
+    );
+    cmd.envs(vars);
+    if let Some(path) = log_file {
+        // Only the write ends move into `cmd`; the guard escapes outward so it drops
+        // after `cmd`. `drop(cmd)` below closes the copies deterministically.
+        let sink = open_log_file(path)?;
+        cmd.stdout(sink.out).stderr(sink.err);
+        pump_guard = sink.pump;
+    }
+    let status = spawn_trackable(&mut cmd)
+        .map_err(|e| format!("spawning real bash for {context} failed: {e}"))?;
+    drop(cmd);
+    // Explicit: joins the gzip thread now that every write end is closed.
+    drop(pump_guard);
+    Ok(status.code().unwrap_or(1))
+}
