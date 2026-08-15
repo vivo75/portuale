@@ -34,6 +34,37 @@
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
+// PkgDatabase
+// ---------------------------------------------------------------------------
+
+/// An **installed-packages database**: what the director needs from
+/// `/var/db/pkg` to decide ownership, reverse deps, and slot occupancy.
+/// Portage: `portage/dbapi/vartree.py` (`vartree` read side; see notes
+/// for the v1 subset and the future-implementation rule).
+pub trait PackagesDb {
+    /// The CPVs installed under `root` for one `category/package`,
+    /// highest version first (Portage `dbapi.cp_list` order).
+    fn installed_versions(&self, category: &str, package: &str) -> Vec<String>;
+
+    /// The paths one installed CPV owns: its vdb `CONTENTS` entries' path
+    /// fields, with one leading `/` stripped.
+    fn contents_files(&self, category: &str, package: &str, version: &str) -> Vec<String>;
+
+    /// The installed CPVs directly depending on `consumer_cpv` (via
+    /// `portage_dep::match_from_list` over their dep strings).
+    fn reverse_dependents(
+        &self,
+        consumer_category: &str,
+        consumer_package: &str,
+        consumer_version: &str,
+    ) -> Vec<String>;
+
+    /// The single current `root` this database reads, so a database
+    /// value is portable as one unit across roots.
+    fn root(&self) -> &Path;
+}
+
+// ---------------------------------------------------------------------------
 // MergeEngine
 // ---------------------------------------------------------------------------
 

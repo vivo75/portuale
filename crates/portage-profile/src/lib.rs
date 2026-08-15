@@ -41,6 +41,18 @@ use std::fs;
 
 use std::path::{Path, PathBuf};
 
+mod binrepo;
+mod config;
+mod env_layer;
+mod fingerprints;
+mod incrementals;
+
+pub use binrepo::*;
+pub use config::*;
+pub use env_layer::*;
+pub use fingerprints::*;
+pub use incrementals::*;
+
 /// Error resolving profile/config files. Distinct variants mirror the
 /// Portage message shapes so `Display` reproduces them byte-for-byte.
 #[derive(Debug)]

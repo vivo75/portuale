@@ -24,6 +24,8 @@ pub(crate) use tree::*;
 
 use md5::{Digest, Md5};
 
+use mrg_director::PackagesDb as _;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
