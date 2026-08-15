@@ -13,6 +13,50 @@ pub(crate) struct AssembleTreePkgUseDisplayArgs<'a> {
     pub(crate) version: &'a str,
 }
 
+/// Shared assembly tail of the tree display and the replayed conflict
+/// displays: grouping over an explicit enabled set.
+// Portage: _emerge/UseFlagDisplay.py, pkg_use_display
+pub(crate) fn assemble_tree_pkg_use_display(
+    args: AssembleTreePkgUseDisplayArgs<'_>,
+) -> Vec<(String, String)> {
+    let AssembleTreePkgUseDisplayArgs {
+        cand,
+        metadata,
+        enabled,
+        config,
+        category,
+        package,
+        version,
+    } = args;
+    let iuse_str = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
+    let explicit: HashSet<String> = iuse_str
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let eapi = metadata.get("EAPI").map(String::as_str).unwrap_or("");
+    let candidate_str = format!(
+        "{category}/{package}-{version}:{}/{}::{}",
+        cand.slot, cand.sub_slot, cand.repo_name
+    );
+    // Portage `pkg.use.force ∪ pkg.use.mask` after `setcpv`: unfiltered, since
+    // the `( )` wraps apply to implicit-domain flags too.
+    let force_mask = forced_or_masked_flags_unfiltered(
+        &cand.keywords,
+        &candidate_str,
+        category,
+        package,
+        config,
+    );
+    let kept = mask_use_to_valid_domain(
+        &explicit,
+        enabled,
+        md5_dict::eapi_has_iuse_effective(eapi),
+        config,
+        &force_mask,
+    );
+    assemble_pkg_use_display(&kept, &explicit, &force_mask, config)
+}
+
 /// Installed-consumer twin of [`skipped_update_use_display_for`]: reads the
 /// vdb-recorded `IUSE`/`USE` with no masking. No force/mask `( )` wraps.
 // Portage: depgraph.py, pkg_use_display (installed parent)
