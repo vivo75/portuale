@@ -852,6 +852,204 @@ def _parse_atom(atom_str):
         return None
 
 
+# Enumerates the real `emerge` CLI's full option surface (see
+# lib/_emerge/main.py: the `options` list, `shortmapping` dict,
+# `argument_options` dict, and `actions` frozenset), so that using any
+# real emerge flag this pilot doesn't implement yet produces a clear
+# "recognized, but not implemented" message -- distinct from a
+# genuinely unknown/misspelled flag. Only --pretend/-p is actually
+# implemented (see run() below); every table here exists purely for
+# recognition, not behavior. Mirrors
+# PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
+# three tables exactly, so both sides report identical text for
+# identical input (verified by the shared contract suite).
+#
+# KNOWN, DOCUMENTED SCOPE CUTS (see emerge_options.rs for the full
+# writeup): no short-flag bundling ("-pv" isn't recognized as "-p" +
+# "-v"); "category" (boolean/value/action) is tracked for accurate
+# enumeration only -- run() reports and exits immediately on any
+# recognized-but-unimplemented option, so it never needs to parse or
+# skip over that option's own argument; --help/-h is recognized as a
+# real (unimplemented) action, not given its own pilot help text.
+
+_BOOLEAN_OPTIONS = [
+    ("--alphabetical", None),
+    ("--ask-enter-invalid", None),
+    ("--buildpkgonly", "-B"),
+    ("--changed-use", "-U"),
+    ("--columns", None),
+    ("--debug", "-d"),
+    ("--digest", None),
+    ("--emptytree", "-e"),
+    ("--verbose-conflicts", None),
+    ("--fetchonly", "-f"),
+    ("--fetch-all-uri", "-F"),
+    ("--ignore-default-opts", None),
+    ("--noconfmem", None),
+    ("--newrepo", None),
+    ("--newuse", "-N"),
+    ("--nobindeps", None),
+    ("--nodeps", "-O"),
+    ("--noreplace", "-n"),
+    ("--nospinner", None),
+    ("--oneshot", "-1"),
+    ("--onlydeps", "-o"),
+    ("--quiet-repo-display", None),
+    ("--quiet-unmerge-warn", None),
+    ("--resume", "-r"),
+    ("--searchdesc", "-S"),
+    ("--skipfirst", None),
+    ("--tree", "-t"),
+    ("--unordered-display", None),
+    ("--update", "-u"),
+    ("--update-if-installed", None),
+    ("--cols", None),
+    ("--skip-first", None),
+]
+
+_VALUE_OPTIONS = [
+    ("--alert", "-A"),
+    ("--ask", "-a"),
+    ("--autounmask", None),
+    ("--autounmask-backtrack", None),
+    ("--autounmask-continue", None),
+    ("--autounmask-only", None),
+    ("--autounmask-license", None),
+    ("--autounmask-unrestricted-atoms", None),
+    ("--autounmask-use", None),
+    ("--autounmask-keep-keywords", None),
+    ("--autounmask-keep-masks", None),
+    ("--autounmask-write", None),
+    ("--accept-properties", None),
+    ("--accept-restrict", None),
+    ("--backtrack", None),
+    ("--binpkg-changed-deps", None),
+    ("--buildpkg", "-b"),
+    ("--buildpkg-exclude", None),
+    ("--changed-deps", None),
+    ("--changed-deps-report", None),
+    ("--changed-slot", None),
+    ("--config-root", None),
+    ("--color", None),
+    ("--complete-graph", None),
+    ("--complete-graph-if-new-use", None),
+    ("--complete-graph-if-new-ver", None),
+    ("--deep", "-D"),
+    ("--depclean-lib-check", None),
+    ("--deselect", "-W"),
+    ("--dynamic-deps", None),
+    ("--exclude", "-X"),
+    ("--fail-clean", None),
+    ("--fuzzy-search", None),
+    ("--ignore-built-slot-operator-deps", None),
+    ("--ignore-soname-deps", None),
+    ("--ignore-world", None),
+    ("--implicit-system-deps", None),
+    ("--jobs", "-j"),
+    ("--jobs-tmpdir-require-free-gb", None),
+    ("--keep-going", None),
+    ("--load-average", "-l"),
+    ("--misspell-suggestions", None),
+    ("--with-bdeps", None),
+    ("--with-bdeps-auto", None),
+    ("--reinstall", None),
+    ("--reinstall-atoms", None),
+    ("--binpkg-respect-use", None),
+    ("--getbinpkg", "-g"),
+    ("--getbinpkgonly", "-G"),
+    ("--getbinpkg-exclude", None),
+    ("--getbinpkg-include", None),
+    ("--usepkg-exclude", None),
+    ("--usepkg-include", None),
+    ("--onlydeps-with-ideps", None),
+    ("--onlydeps-with-rdeps", None),
+    ("--rebuild-exclude", None),
+    ("--rebuild-ignore", None),
+    ("--package-moves", None),
+    ("--prefix", None),
+    ("--pkg-format", None),
+    ("--quickpkg-direct", None),
+    ("--quickpkg-direct-root", None),
+    ("--quiet", "-q"),
+    ("--quiet-build", None),
+    ("--quiet-fail", None),
+    ("--read-news", None),
+    ("--rebuild-if-new-slot", None),
+    ("--rebuild-if-new-rev", None),
+    ("--rebuild-if-new-ver", None),
+    ("--rebuild-if-unbuilt", None),
+    ("--rebuilt-binaries", None),
+    ("--rebuilt-binaries-timestamp", None),
+    ("--regex-search-auto", None),
+    ("--root", None),
+    ("--root-deps", None),
+    ("--search-index", None),
+    ("--search-similarity", None),
+    ("--select", "-w"),
+    ("--selective", None),
+    ("--sync-submodule", None),
+    ("--sysroot", None),
+    ("--use-ebuild-visibility", None),
+    ("--useoldpkg-atoms", None),
+    ("--usepkg", "-k"),
+    ("--usepkgonly", "-K"),
+    ("--usepkg-exclude-live", None),
+    ("--verbose", "-v"),
+    ("--verbose-missing-ebuilds", None),
+    ("--verbose-slot-rebuilds", None),
+    ("--with-test-deps", None),
+]
+
+_ACTIONS = [
+    ("--clean", None),
+    ("--check-news", None),
+    ("--config", None),
+    ("--depclean", "-c"),
+    ("--help", "-h"),
+    ("--info", None),
+    ("--list-sets", None),
+    ("--metadata", None),
+    ("--moo", None),
+    ("--prune", "-P"),
+    ("--rage-clean", None),
+    ("--regen", None),
+    ("--search", "-s"),
+    ("--status", None),
+    ("--sync", None),
+    ("--unmerge", "-C"),
+    ("--version", "-V"),
+]
+
+
+def _find_option(table, name):
+    for long, short in table:
+        if name == long or (short is not None and name == short):
+            return long
+    return None
+
+
+def _lookup_option(token):
+    """Looks `token` (a single argv entry, e.g. "--deep", "-D", or
+    "--deep=1") up across all three tables. Returns a (category,
+    canonical_long_name) tuple, or None if it isn't any real emerge
+    option/action this table knows about at all. Mirrors
+    emerge_options.rs's lookup() exactly."""
+    if token.startswith("--") and "=" in token:
+        name = token.split("=", 1)[0]
+    else:
+        name = token
+    canonical = _find_option(_BOOLEAN_OPTIONS, name)
+    if canonical is not None:
+        return ("boolean", canonical)
+    canonical = _find_option(_VALUE_OPTIONS, name)
+    if canonical is not None:
+        return ("value", canonical)
+    canonical = _find_option(_ACTIONS, name)
+    if canonical is not None:
+        return ("action", canonical)
+    return None
+
+
 def _is_bare_atom(a):
     """v1 only supports a bare category/package atom -- no operator, no
     slot, no version, no USE deps, no blocker, no repo/wildcard/build-id."""
@@ -882,11 +1080,18 @@ def run(args):
                 return 2
             atom_arg = arg
         else:
-            print(
-                f'emerge (pilot v1): unsupported option "{arg}" '
-                "(only --pretend/-p is implemented)",
-                file=sys.stderr,
-            )
+            found = _lookup_option(arg)
+            if found is not None:
+                category, canonical = found
+                kind = "action" if category == "action" else "option"
+                print(
+                    f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
+                    "but is not implemented in this pilot (only --pretend/-p is "
+                    "implemented so far; see PROMPT.md)",
+                    file=sys.stderr,
+                )
+            else:
+                print(f'emerge: unrecognized option "{arg}"', file=sys.stderr)
             return 2
 
     if not pretend:

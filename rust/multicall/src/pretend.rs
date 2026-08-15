@@ -17,12 +17,24 @@
 // byte-identical to it.
 //
 // Anything outside the top-level atom's narrow slice (no --pretend, more
-// than one atom, a versioned/slotted/blocker top-level atom, an
-// unrecognized option) is rejected with a clear "not supported in this
-// pilot" message rather than silently doing the wrong thing. Dependency
-// atoms extracted from DEPEND/RDEPEND are NOT restricted this way --
-// real dependency strings need the full atom grammar (operators, slots).
+// than one atom, a versioned/slotted/blocker top-level atom) is rejected
+// with a clear "not supported in this pilot" message rather than
+// silently doing the wrong thing. Dependency atoms extracted from
+// DEPEND/RDEPEND are NOT restricted this way -- real dependency strings
+// need the full atom grammar (operators, slots).
+//
+// CLI surface: every real emerge option/action from lib/_emerge/main.py
+// (see emerge_options.rs) is recognized by name -- using one that isn't
+// --pretend/-p produces a specific "real emerge option/action, not
+// implemented in this pilot" message, distinct from a genuinely unknown
+// flag ("unrecognized option"). This lets real-world invocations that
+// happen to include options this pilot doesn't implement (e.g. from
+// EMERGE_DEFAULT_OPTS or a script) fail with an accurate, actionable
+// message instead of a generic one. See emerge_options.rs's doc comment
+// for the (deliberately unfaithful) value-consumption and no-bundling
+// scope cuts.
 
+use crate::emerge_options;
 use portage_dep::{parse_atom, Operator};
 use portage_repo::{
     config_root_from_env, resolve_pretend_graph, root_from_env, GraphEntry, PretendOutcome,
@@ -55,22 +67,36 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut pretend = false;
 
     for arg in args {
-        match arg.as_str() {
-            "--pretend" | "-p" => pretend = true,
-            other if !other.starts_with('-') => {
-                if atom_arg.is_some() {
-                    eprintln!("emerge (pilot v1): only a single package atom is supported");
-                    return ExitCode::from(2);
-                }
-                atom_arg = Some(other);
-            }
-            other => {
-                eprintln!(
-                    "emerge (pilot v1): unsupported option {other:?} \
-                     (only --pretend/-p is implemented)"
-                );
+        let arg = arg.as_str();
+        if arg == "--pretend" || arg == "-p" {
+            pretend = true;
+        } else if !arg.starts_with('-') {
+            if atom_arg.is_some() {
+                eprintln!("emerge (pilot v1): only a single package atom is supported");
                 return ExitCode::from(2);
             }
+            atom_arg = Some(arg);
+        } else if let Some(found) = emerge_options::lookup(arg) {
+            // Reports and exits immediately, matching every other
+            // out-of-scope-input case in this pilot -- so there's no
+            // need to correctly skip over this option's own value token
+            // (see emerge_options.rs's doc comment): nothing after this
+            // point is ever looked at.
+            let kind = if found.category == emerge_options::Category::Action {
+                "action"
+            } else {
+                "option"
+            };
+            eprintln!(
+                "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
+                 implemented in this pilot (only --pretend/-p is implemented so far; \
+                 see PROMPT.md)",
+                found.canonical
+            );
+            return ExitCode::from(2);
+        } else {
+            eprintln!("emerge: unrecognized option {arg:?}");
+            return ExitCode::from(2);
         }
     }
 

@@ -10,6 +10,7 @@
 // `ebuild`, and anything about `emerge` beyond that one slice -- is still
 // a dry-run/read-only stub (see PROMPT.md, "Scope of the first port").
 
+mod emerge_options;
 mod pretend;
 
 use std::process::ExitCode;

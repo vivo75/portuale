@@ -9,8 +9,11 @@ and the slot-conflict-reporting follow-up on top of that -- plus a
 virtuals check confirming, against a fixture shaped exactly like the
 real virtual/pager, that virtual/* atoms need no dedicated code at all:
 they're ordinary packages with an any-of RDEPEND, already covered by
-existing machinery). Drives the real compiled `emerge` binary
-(multicall, dispatched via a real symlink
+existing machinery -- and the CLI-surface-recognition follow-up, which
+enumerates every real emerge option/action from lib/_emerge/main.py so
+each one gets a specific "recognized, not implemented" message instead
+of a generic "unsupported option" one). Drives the real compiled
+`emerge` binary (multicall, dispatched via a real symlink
 -- not a neutral harness, since emerge is an actual product surface per
 PROMPT.md's testing decision) and the Python reference implementation
 identically, against the synthetic fixture tree at PORTING/fixtures
@@ -42,7 +45,12 @@ CASES = [
     ("no atom given", ["--pretend"], 2),
     ("more than one atom", ["--pretend", "dev-libs/foo", "dev-libs/bar"], 2),
     ("missing --pretend", ["dev-libs/newpkg"], 2),
-    ("unrecognized option", ["--deep", "dev-libs/newpkg"], 2),
+    ("real emerge option, value-taking, not implemented", ["--deep", "dev-libs/newpkg"], 2),
+    ("real emerge option, boolean, not implemented", ["--debug", "--pretend", "dev-libs/newpkg"], 2),
+    ("real emerge option, inline =value form, not implemented", ["--jobs=4", "--pretend", "dev-libs/newpkg"], 2),
+    ("real emerge action, not implemented", ["--depclean"], 2),
+    ("real emerge action, short alias, not implemented", ["-c"], 2),
+    ("genuinely unrecognized option", ["--totally-fake-option", "dev-libs/newpkg"], 2),
     ("recursion: basic dependency chain", ["--pretend", "dev-libs/withdeps"], 0),
     ("recursion: diamond dependency dedup", ["--pretend", "dev-libs/diamond"], 0),
     ("recursion: dependency cycle terminates", ["--pretend", "dev-libs/cycle-a"], 0),
@@ -410,3 +418,63 @@ def test_virtual_is_resolved_as_a_dependency(emerge_binary, fixture_env):
         "[ebuild  N] virtual/texteditor-0",
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
+
+
+def test_real_option_not_implemented_message_names_the_option(emerge_binary, fixture_env):
+    """--deep is a real emerge option (see lib/_emerge/main.py's
+    argument_options) this pilot doesn't implement -- the error must
+    name it specifically and say "option", distinct from both a
+    genuinely unrecognized flag and an unimplemented action."""
+    result = _run([str(emerge_binary)], ["--deep", "dev-libs/newpkg"], fixture_env)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge (pilot v1): option "--deep" is a real emerge option, but is not '
+        "implemented in this pilot (only --pretend/-p is implemented so far; see "
+        "PROMPT.md)"
+    )
+
+
+def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixture_env):
+    """--jobs=4 (the "--opt=value" form argparse also accepts) must
+    resolve to the same canonical "--jobs" option as "--jobs 4" would,
+    not be treated as one unrecognized token."""
+    result = _run([str(emerge_binary)], ["--jobs=4", "--pretend", "dev-libs/newpkg"], fixture_env)
+    assert result.returncode == 2
+    assert (
+        result.stderr.strip()
+        == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
+        "implemented in this pilot (only --pretend/-p is implemented so far; see "
+        "PROMPT.md)"
+    )
+
+
+def test_real_action_not_implemented_message_says_action_not_option(emerge_binary, fixture_env):
+    """--depclean is a real emerge action (see main.py's actions
+    frozenset), not an option -- the error must say "action", and its
+    short alias -c (see shortmapping) must report the same canonical
+    "--depclean" name."""
+    result = _run([str(emerge_binary)], ["--depclean"], fixture_env)
+    assert result.returncode == 2
+    expected = (
+        'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
+        "implemented in this pilot (only --pretend/-p is implemented so far; see "
+        "PROMPT.md)"
+    )
+    assert result.stderr.strip() == expected
+
+    short_result = _run([str(emerge_binary)], ["-c"], fixture_env)
+    assert short_result.returncode == 2
+    assert short_result.stderr.strip() == expected
+
+
+def test_genuinely_unrecognized_option_gets_a_distinct_message(emerge_binary, fixture_env):
+    """A flag that isn't in real emerge's own option surface at all must
+    be reported differently from a real-but-unimplemented one, so users
+    can tell a typo apart from a pilot scope gap."""
+    result = _run(
+        [str(emerge_binary)], ["--totally-fake-option", "dev-libs/newpkg"], fixture_env
+    )
+    assert result.returncode == 2
+    assert result.stderr.strip() == 'emerge: unrecognized option "--totally-fake-option"'

@@ -30,12 +30,18 @@ enforce" way blockers are, while two atoms simply requesting
 *different* slots of the same package now correctly resolve as two
 independent, coexisting entries instead of one silently overwriting the
 other, matching how real portage genuinely allows multiple slots of the
-same package side by side. The most recent addition needed no new code
-at all: `virtual/*` atoms, verified (against a fixture shaped exactly
-like the real Gentoo tree's `virtual/pager`) to already resolve
-correctly through the existing category-listing and any-of-group
-machinery, since a virtual is just an ordinary ebuild with an any-of
-`RDEPEND` -- no separate PROVIDE mechanism exists in modern portage.
+same package side by side. `virtual/*` atoms needed no new code at all:
+verified (against a fixture shaped exactly like the real Gentoo tree's
+`virtual/pager`) to already resolve correctly through the existing
+category-listing and any-of-group machinery, since a virtual is just an
+ordinary ebuild with an any-of `RDEPEND` -- no separate PROVIDE
+mechanism exists in modern portage. Most recently, the `emerge` CLI
+itself grew a full option surface: every real emerge option and action
+from `lib/_emerge/main.py` is now recognized by name, so using one this
+pilot doesn't implement (of which there are, by design, still many --
+only `--pretend`/`-p` is actually implemented) gets a specific "that's a
+real emerge option, just not implemented here" message instead of a
+generic "unsupported option" one indistinguishable from a typo.
 
 ## Layout
 
@@ -64,8 +70,11 @@ PORTING/
     multicall/                 the real emerge/ebuild dispatch binary; `emerge`
                                  implements --pretend + dependency recursion +
                                  real profile/make.conf config (pretend.rs),
-                                 everything else (including all of `ebuild`) is
-                                 still a dry-run stub
+                                 recognizes every real emerge option/action by
+                                 name (emerge_options.rs) even though only
+                                 --pretend/-p is implemented, and everything
+                                 else (including all of `ebuild`) is still a
+                                 dry-run stub
   python/
     versions_harness.py        thin CLI wrapper around the real portage.versions
     atom_harness.py             thin CLI wrapper around the real portage.dep
@@ -371,6 +380,32 @@ PORTING/
   (`virtual/texteditor`, deliberately shaped like `virtual/pager`: an
   any-of `RDEPEND` over two real fixture packages) and contract tests
   that pin this down, so it stays proven rather than merely assumed.
+
+  **CLI surface recognition**: `multicall/src/emerge_options.rs`
+  transcribes real emerge's entire option surface from
+  `lib/_emerge/main.py` into three tables -- boolean flags (the
+  `options` list), value-taking options (the `argument_options` dict,
+  each with its `"shortopt"` if any), and actions (the `actions`
+  frozenset, e.g. `--depclean`/`--sync`/`--search`, with short aliases
+  from `shortmapping`) -- around 130 entries in total. `pretend.rs`'s
+  arg loop now looks every `-`-prefixed token up against these tables:
+  a real option/action other than `--pretend`/`-p` gets a message
+  naming it specifically and saying whether it's an "option" or an
+  "action" and that it's real-but-unimplemented, while a token that
+  isn't in any of the three tables at all gets a different message
+  ("unrecognized option") -- so a user hitting a genuine pilot gap
+  (say, from `EMERGE_DEFAULT_OPTS` or a script) can tell that apart
+  from a typo. Unlike every other change in this series, this one adds
+  *zero* new behavior for any of those ~130 flags -- it only makes the
+  CLI's *refusal* to handle them more specific. Deliberately out of
+  scope: short-flag bundling (`-pv` isn't decomposed into `-p` + `-v`,
+  real emerge's own `insert_optional_args` parsing for this is
+  nontrivial), and any actual argument-value semantics (a
+  recognized-but-unimplemented option's value, if it takes one, is
+  never inspected -- the CLI reports and exits immediately, before ever
+  needing to skip over it). `--help`/`-h` is recognized as an
+  unimplemented action like any other; a real, pilot-specific `--help`
+  would be its own separate slice.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -413,11 +448,13 @@ PORTING/
   found, a same-version tie across the main repo and the overlay being
   broken toward the higher-priority one, a genuine slot conflict being
   reported, two different slots of the same package correctly
-  coexisting instead of one silently overwriting the other, and a
+  coexisting instead of one silently overwriting the other, a
   `virtual/*` atom resolving as a dependency with no dedicated code
-  involved) against the fixture, `ebuild`-dispatch, and batch mode
-  inside it, exiting nonzero on any failure -- including proving the
-  fixture's `make.profile` symlink, multi-parent chain, and second
+  involved, and a real-but-unimplemented option like `--deep` being
+  named specifically in the CLI's refusal message) against the fixture,
+  `ebuild`-dispatch, and batch mode inside it, exiting nonzero on any
+  failure -- including proving the fixture's `make.profile` symlink,
+  multi-parent chain, and second
   `repos.conf` repo all survive the image `COPY` and still resolve
   correctly.
 
@@ -674,6 +711,18 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/virtualconsum
 # [ebuild  N] dev-libs/virtualconsumerpkg-1.0
 # [ebuild  N] virtual/texteditor-0
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# CLI surface recognition: a real emerge option this pilot doesn't
+# implement is named specifically, not lumped in with a typo
+/tmp/emerge --deep dev-libs/newpkg
+# emerge (pilot v1): option "--deep" is a real emerge option, but is not
+# implemented in this pilot (only --pretend/-p is implemented so far;
+# see PROMPT.md)
+
+# a token that isn't a real emerge option/action at all gets a
+# different message
+/tmp/emerge --totally-fake-option dev-libs/newpkg
+# emerge: unrecognized option "--totally-fake-option"
 
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \

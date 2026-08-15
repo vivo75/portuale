@@ -174,6 +174,13 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend resolves a virtual as a dependency inside the scratch container" \
     test "${actual}" = "$(printf '[ebuild  N] dev-libs/virtualconsumerpkg-1.0\n[ebuild  N] virtual/texteditor-0\n[ebuild  N] dev-libs/newpkg-1.0')"
 
+# CLI surface recognition (see multicall/src/emerge_options.rs): a real
+# emerge option this pilot doesn't implement gets a specific message,
+# not a generic one, even with nothing else in the image to fall back on.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge "${IMAGE}" --deep dev-libs/newpkg 2>&1 || true)
+check "emerge reports a real, unimplemented option by name inside the scratch container" \
+    grep -q 'option "--deep" is a real emerge option' <<<"${actual}"
+
 actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
 check "ebuild dispatch prints the ebuild stub" \
     grep -q "ebuild (pilot stub)" <<<"${actual}"
