@@ -75,6 +75,20 @@ impl fmt::Display for EntryKey {
     }
 }
 
+/// Size, mode and mtime of one stored file of an entry
+/// (not a `CONTENTS` line).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileMeta {
+    /// File name inside the entry (`CONTENTS`, `environment.bz2`, ...).
+    pub name: String,
+    pub len: u64,
+    /// `st_mode` permission and type bits as stored.
+    pub mode: u32,
+    /// `st_mtime` in nanoseconds since the epoch (signed, like
+    /// `st_mtime_ns`).
+    pub mtime_ns: i128,
+}
+
 /// State of the `#dir_mtime=` stamp of an entry's consolidated
 /// `metadata` file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

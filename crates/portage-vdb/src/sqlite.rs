@@ -20,8 +20,8 @@ mod write;
 use crate::files::owner_wanted;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryKey, Error,
-    METADATA_FILE_FIELDS, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result, Snapshot,
-    World, WorldSets, in_metadata_file,
+    FileMeta, METADATA_FILE_FIELDS, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result,
+    Snapshot, World, WorldSets, in_metadata_file,
 };
 
 fn db_err(path: &Path, e: rusqlite::Error) -> Error {

@@ -51,7 +51,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use portage_vdb::{EntryKey, MetadataStamp};
+use portage_vdb::{EntryKey, FileMeta, MetadataStamp};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

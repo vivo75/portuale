@@ -104,8 +104,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::files::owner_wanted;
 use crate::{
     BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryFields, EntryKey, Error,
-    METADATA_FILE_FIELDS, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result, Snapshot,
-    World, WorldSets, in_metadata_file,
+    FileMeta, METADATA_FILE_FIELDS, MetadataStamp, PreservedLibs, PreservedLibsEntry, Result,
+    Snapshot, World, WorldSets, in_metadata_file,
 };
 use redb::{
     Database, MultimapTableDefinition, ReadOnlyDatabase, ReadOnlyTable, ReadTransaction,

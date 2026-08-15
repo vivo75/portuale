@@ -29,6 +29,7 @@ mod repo_config;
 mod resolve;
 mod slot_operator;
 mod updates;
+mod visibility;
 
 #[cfg(test)]
 mod tests;
@@ -50,6 +51,7 @@ pub use repo_config::*;
 pub use resolve::*;
 pub use slot_operator::*;
 pub use updates::*;
+pub use visibility::*;
 
 use portage_versions::vercmp;
 

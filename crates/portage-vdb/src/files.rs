@@ -7,9 +7,9 @@
 
 use crate::types::DIR_MODE_MASK;
 use crate::{
-    BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryKey, Error, METADATA_FILE_FIELDS,
-    METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, Result, Snapshot, World, WorldSets,
-    in_metadata_file,
+    BackendKind, ConfigMemory, Counter, DepClass, DepRecord, EntryKey, Error, FileMeta,
+    METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, MetadataStamp, PreservedLibs, Result,
+    Snapshot, World, WorldSets, in_metadata_file,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
