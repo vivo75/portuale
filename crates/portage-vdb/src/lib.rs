@@ -27,12 +27,14 @@ mod files;
 mod files_write;
 #[cfg(feature = "vdb-redb")]
 mod redb_db;
+mod registry;
 #[cfg(feature = "vdb-sqlite")]
 mod sqlite;
 mod types;
 pub use error::{Error, Result};
 pub use files::FilesDb;
 pub use files_write::{format_preserved_libs, parse_preserved_libs};
+pub use registry::for_root;
 pub use types::*;
 
 use std::path::{Path, PathBuf};

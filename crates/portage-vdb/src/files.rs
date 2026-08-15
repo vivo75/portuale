@@ -35,6 +35,15 @@ pub struct FilesDb {
 }
 
 impl FilesDb {
+    /// The `files` backend of `root`: entries under `<root>/var/db/pkg`,
+    /// D4 stores under `<root>/var/lib/portage` and `<root>/var/cache/edb`.
+    pub fn new(root: &Path) -> Self {
+        FilesDb {
+            root: Some(root.to_path_buf()),
+            vdb: root.join(VDB_PATH),
+        }
+    }
+
     /// The root given to [`FilesDb::new`]; `None` for a bare VDB directory.
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()

@@ -2,6 +2,130 @@
 
 use crate::*;
 
+/// Every installed `(version, slot, sub_slot)` triple for `category/package` in the vdb
+/// under `root` (`SLOT` via `split_slot`, `("0", "0")` when missing). `pub` so `pretend.rs`'s
+/// `--deselect` implementation reuses it directly. Only `version`/`slot` feed deselect.
+// Portage: lib/_emerge/actions.py, action_deselect; Atom(f"{pkg.cp}:{pkg.slot}")
+pub fn installed_candidates(
+    root: &Path,
+    category: &str,
+    package: &str,
+) -> Vec<(String, String, String)> {
+    // Memoized per `(root, cat, pkg)`, validated by category-dir mtime (negative
+    // results cached too). Thread-local to stay lock-free.
+    type CandidatesCache =
+        HashMap<(PathBuf, String, String), (Vec<(String, u64)>, Vec<(String, String, String)>)>;
+    thread_local! {
+        static CANDIDATES_CACHE: RefCell<CandidatesCache> = RefCell::new(HashMap::new());
+    }
+    let sources = installed_cp_sources(category, package);
+    // Validity signal: the category directory's generation (0 when missing), read
+    // through the registered backend.
+    let db = portage_vdb::for_root(root);
+    let mut fps: Vec<(String, u64)> = Vec::with_capacity(sources.len());
+    for (src_cat, _) in &sources {
+        if !fps.iter().any(|(d, _)| d == src_cat) {
+            let mtime = db.category_generation(src_cat).unwrap_or(0);
+            fps.push((src_cat.clone(), mtime));
+        }
+    }
+    let key = (
+        root.to_path_buf(),
+        category.to_string(),
+        package.to_string(),
+    );
+    // Compare inside the borrow; clone only on a hit.
+    if let Some(out) = CANDIDATES_CACHE.with(|c| {
+        c.borrow()
+            .get(&key)
+            .filter(|(old, _)| *old == fps)
+            .map(|(_, out)| out.clone())
+    }) {
+        return out;
+    }
+    let out = installed_candidates_uncached(root, sources, category, package);
+    CANDIDATES_CACHE.with(|c| {
+        c.borrow_mut().insert(key, (fps, out.clone()));
+    });
+    out
+}
+
+pub(crate) fn installed_candidates_uncached(
+    root: &Path,
+    sources: Vec<(String, String)>,
+    category: &str,
+    package: &str,
+) -> Vec<(String, String, String)> {
+    // `<category>/<package>` may be the post-`move` name while the vdb still holds
+    // the pre-`move` dir: scan every source name mapping onto this one, then apply
+    // `slotmove` to each hit's `(slot, sub_slot)`.
+    let db = portage_vdb::for_root(root);
+    let mut out = Vec::new();
+    for (src_cat, src_pkg) in sources {
+        // Live entries only (directories, no in-progress `-MERGING-<pf>` entries).
+        let Ok(names) = db.category_entries(&src_cat) else {
+            continue;
+        };
+        for name in names {
+            let Some(version) = strip_version_prefix(&name, &src_pkg) else {
+                continue;
+            };
+            let version = version.to_string();
+            // Through the shared `vdb_aux_get` seam, so a validated snapshot serves
+            // `SLOT` too.
+            let (slot, sub_slot) =
+                split_slot(&vdb_aux_get(root, &src_cat, &src_pkg, &version, "SLOT"));
+            let (slot, sub_slot) = apply_updates_to_slot(category, package, &slot, &sub_slot);
+            out.push((version, slot, sub_slot));
+        }
+    }
+    out
+}
+
+/// Every installed version of `category/package` under `root`.
+pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<String> {
+    installed_candidates(root, category, package)
+        .into_iter()
+        .map(|(version, _slot, _sub_slot)| version)
+        .collect()
+}
+
+/// The `${ROOT}`-relative paths one installed `category/package-version` owns, from its
+/// vdb `CONTENTS` file. Only the path field is returned; other line kinds are skipped, a
+/// missing/unreadable `CONTENTS` reads as empty, and file order is preserved (merge order).
+// Portage: vartree, dblink CONTENTS shape
+pub fn installed_contents_files(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<String> {
+    let key = resolve_vdb_entry(root, category, package, version);
+    // Invalid UTF-8 reads as empty, like a missing file.
+    let text = portage_vdb::for_root(root)
+        .read_file(&key, "CONTENTS")
+        .ok()
+        .flatten()
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default();
+    text.lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            match (words.next(), words.next()) {
+                (Some("obj"), Some(path))
+                | (Some("sym"), Some(path))
+                | (Some("dir"), Some(path))
+                | (Some("dev"), Some(path))
+                | (Some("fif"), Some(path))
+                | (Some("bin"), Some(path)) => {
+                    Some(path.strip_prefix('/').unwrap_or(path).to_string())
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
 /// Whether `depstr`, flattened against `use_flags`, has a non-blocker atom that
 /// `candidate` (`cat/pkg-ver:slot/subslot`) satisfies. Shared by both halves of
 /// [`installed_reverse_dependents`].
@@ -85,6 +209,82 @@ pub(crate) fn indexed_reverse_dependents(
     Some(out.into_iter().collect())
 }
 
+/// One field of one installed entry, served by [`portage_vdb`]'s `FilesDb::aux_get`. What
+/// stays here is the package-move fallback (every `installed_cp_sources` name tried in order,
+/// first existing directory wins), plus: a missing entry reads as `""`, and a key outside the
+/// 23-set bypasses snapshot/cache/normalisation (raw read, lossy UTF-8).
+// Portage: global-updates renaming the vdb dir; bug 395463
+pub(crate) fn vdb_aux_get(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    key: &str,
+) -> String {
+    let db = portage_vdb::for_root(root);
+    let pf = format!("{package}-{version}");
+    if !in_metadata_file(key) {
+        // Resolve like `resolve_vdb_entry`, then one `open` of the raw file.
+        let direct = portage_vdb::EntryKey::new(category, pf.as_str());
+        let mut found: Option<portage_vdb::EntryKey> = None;
+        if db.has_entry(&direct).unwrap_or(false) {
+            found = Some(direct.clone());
+        } else if !global_package_updates().is_empty() {
+            for (c, p) in installed_cp_sources(category, package) {
+                let cand = portage_vdb::EntryKey::new(c, format!("{p}-{version}"));
+                if db.has_entry(&cand).unwrap_or(false) {
+                    found = Some(cand);
+                    break;
+                }
+            }
+        }
+        let key_to_read = found.unwrap_or(direct);
+        return match db.read_file(&key_to_read, key) {
+            Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+            _ => String::new(),
+        };
+    }
+    let direct = portage_vdb::EntryKey::new(category, pf);
+    match db.aux_get(&direct, key) {
+        Ok(Some(v)) => return v,
+        Ok(None) => {}
+        Err(_) => return String::new(),
+    }
+    if !global_package_updates().is_empty() {
+        for (c, p) in installed_cp_sources(category, package) {
+            let cand = portage_vdb::EntryKey::new(c, format!("{p}-{version}"));
+            if let Ok(Some(v)) = db.aux_get(&cand, key) {
+                return v;
+            }
+        }
+    }
+    String::new()
+}
+
+/// The vdb entry for `<category>/<package>-<version>`. Portuale never writes, so when the
+/// direct entry is absent (a package move renamed it) every `installed_cp_sources` name is
+/// tried, first existing directory wins. A missing entry returns the direct key (reads absent).
+// Portage: global-updates renaming the vdb dir
+pub(crate) fn resolve_vdb_entry(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> portage_vdb::EntryKey {
+    let db = portage_vdb::for_root(root);
+    let direct = portage_vdb::EntryKey::new(category, format!("{package}-{version}"));
+    if db.has_entry(&direct).unwrap_or(false) || global_package_updates().is_empty() {
+        return direct;
+    }
+    for (c, p) in installed_cp_sources(category, package) {
+        let cand = portage_vdb::EntryKey::new(c, format!("{p}-{version}"));
+        if db.has_entry(&cand).unwrap_or(false) {
+            return cand;
+        }
+    }
+    direct
+}
+
 /// Flattens `depstr` against `use_flags` into dependency-atom tokens (`||`
 /// dropped) for order-independent comparison. `None` if `depstr` doesn't parse.
 pub(crate) fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Option<HashSet<String>> {
@@ -107,4 +307,62 @@ pub struct InstalledPackage {
     pub package: String,
     pub version: String,
     pub slot: String,
+}
+
+/// Every package recorded under `<root>/var/db/pkg`, each with its main slot. Directory names
+/// split into `package`/`version` at the last `-` boundary whose right half verifies as a version.
+/// Memoised per `root`, keyed by the vdb generation so a same-process merge/unmerge is picked up.
+// Portage: vartree.dbapi.cpv_all
+pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
+    // root -> (vdb fingerprint at scan time, scanned set)
+    type InstalledCache = HashMap<PathBuf, (u64, std::sync::Arc<Vec<InstalledPackage>>)>;
+    static CACHE: OnceLock<RwLock<InstalledCache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    // ~30 `stat`s vs the ~2000 `SLOT` file reads a full scan does.
+    let fingerprint = portage_vdb::for_root(root).generation().unwrap_or(0);
+    if let Ok(guard) = cache.read()
+        && let Some((fp, packages)) = guard.get(root)
+        && *fp == fingerprint
+    {
+        return packages.as_ref().clone();
+    }
+    let packages = std::sync::Arc::new(all_installed_packages_uncached(root));
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(
+            root.to_path_buf(),
+            (fingerprint, std::sync::Arc::clone(&packages)),
+        );
+    }
+    packages.as_ref().clone()
+}
+
+pub(crate) fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPackage> {
+    let mut out = Vec::new();
+    // `-MERGING-` entries already skipped.
+    let Ok(keys) = portage_vdb::for_root(root).entries() else {
+        return out;
+    };
+    for key in keys {
+        let category = key.category;
+        let dirname = key.pf;
+        {
+            let Some((name, version)) = split_pf(&dirname) else {
+                continue;
+            };
+            // Through the shared `vdb_aux_get` seam, so a validated snapshot serves
+            // `SLOT` without per-entry opens.
+            let (slot, sub) = split_slot(&vdb_aux_get(root, &category, &name, &version, "SLOT"));
+            // Present each vdb entry under its post-`move`/`slotmove` identity, the
+            // way global-updates rewrites the vdb on sync.
+            let (category, name) = apply_updates_to_cp(&category, &name);
+            let (slot, _sub) = apply_updates_to_slot(&category, &name, &slot, &sub);
+            out.push(InstalledPackage {
+                category: category.clone(),
+                package: name,
+                version,
+                slot,
+            });
+        }
+    }
+    out
 }
