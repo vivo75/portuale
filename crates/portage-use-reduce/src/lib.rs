@@ -101,3 +101,101 @@ fn useflag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+_@-]*$").unwrap())
 }
+
+/// A node of the nested-list shape Portage's `paren_reduce` builds: a
+/// flag/`"||"` marker stays a sibling string before its own group. This
+/// builder skips the redundant-bracket-collapsing optimizations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DepNode {
+    Str(String),
+    Group(Vec<DepNode>),
+}
+
+/// Re-serializes a `DepNode` tree into a flat token stream for the final
+/// `use_reduce_flat` flattening.
+fn serialize_dep_tree(nodes: &[DepNode], out: &mut Vec<String>) {
+    for node in nodes {
+        match node {
+            DepNode::Str(s) => out.push(s.clone()),
+            DepNode::Group(children) => {
+                out.push("(".to_string());
+                serialize_dep_tree(children, out);
+                out.push(")".to_string());
+            }
+        }
+    }
+}
+
+/// The placeholder atom Portage substitutes for a `|| ( )` group that
+/// reduced to nothing (EAPI 7+, `empty_groups_always_true` false).
+const EMPTY_ANY_OF: &str = "__const__/empty-any-of";
+
+fn ends_in_any_of_dep(stack: &[Vec<DepNode>], k: isize) -> bool {
+    if k < 0 {
+        return false;
+    }
+    matches!(
+        stack.get(k as usize).and_then(|l| l.last()),
+        Some(DepNode::Str(s)) if s == "||"
+    )
+}
+
+/// Portage's `last_any_of_operator_level`: the level of the last `||`
+/// operator still in effect for the current level, or `-1`.
+fn last_any_of_operator_level(stack: &[Vec<DepNode>], mut k: isize) -> isize {
+    while k >= 0 {
+        if let Some(DepNode::Str(s)) = stack[k as usize].last() {
+            if s == "||" {
+                return k;
+            }
+            if !s.ends_with('?') {
+                return -1;
+            }
+        }
+        k -= 1;
+    }
+    -1
+}
+
+/// Portage's `special_append` (non-`opconvert` path): "use extend instead
+/// of append if possible -- this kills all redundant brackets."
+fn special_append(stack: &mut [Vec<DepNode>], level: usize, l: Vec<DepNode>, is_single: bool) {
+    if !is_single {
+        stack[level].push(DepNode::Group(l));
+        return;
+    }
+    let l0_is_or = matches!(l.first(), Some(DepNode::Str(s)) if s == "||");
+    if l0_is_or && ends_in_any_of_dep(stack, level as isize - 1) {
+        // `l == ["||", Group]` -> splice the group's own contents.
+        if let Some(DepNode::Group(inner)) = l.into_iter().nth(1) {
+            stack[level].extend(inner);
+        }
+    } else if l.len() == 1 && matches!(l[0], DepNode::Group(_)) {
+        let last = last_any_of_operator_level(stack, level as isize - 1);
+        let DepNode::Group(inner) = l.into_iter().next().unwrap() else {
+            unreachable!()
+        };
+        if last == -1 {
+            stack[level].extend(inner);
+        } else {
+            stack[level].push(DepNode::Group(inner));
+        }
+    } else {
+        stack[level].extend(l);
+    }
+}
+
+/// Portage's `_add_pkg_dep_string` `"||"` resolution, simplified: of every
+/// alternative, picks the **first one with the highest [`AltPreference`]**
+/// the probe reports. An alternative an inactive conditional emptied is
+/// dropped before ranking. When every alternative empties, the group is
+/// dropped if `empty_groups_always_true`, else it becomes the
+/// [`EMPTY_ANY_OF`] placeholder. With *no* satisfiable alternative, the
+/// whole group is kept as `use_reduce_flat` flattened it, so a dependency
+/// portuale can't resolve is never silently dropped.
+///
+/// `tie_break` runs only on a tie at the best selectable rank: it gets the
+/// tied alternatives' flattened atom lists, in order, and returns which
+/// index wins (`&mut |_| 0` keeps first-listed-in-bin-wins).
+// Portage: lib/portage/dep/dep_check.py, dep_zapdeps
+pub type TieBreak<'a> = dyn FnMut(&[Vec<String>]) -> usize + 'a;

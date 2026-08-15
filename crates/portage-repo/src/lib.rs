@@ -13,6 +13,7 @@ mod depclean;
 mod error;
 mod info_pkgs;
 mod installed;
+mod license;
 mod masked_deps;
 mod merge_order;
 mod resolve;
@@ -20,6 +21,7 @@ pub use depclean::*;
 pub use error::*;
 pub use info_pkgs::*;
 pub use installed::*;
+pub(crate) use license::*;
 pub use masked_deps::*;
 pub use resolve::*;
 
