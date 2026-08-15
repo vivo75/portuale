@@ -8,6 +8,7 @@
 
 mod ebuild_merge;
 mod ebuild_phases;
+mod error;
 mod helpers;
 mod info_files;
 mod mrg;

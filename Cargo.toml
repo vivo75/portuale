@@ -7,6 +7,7 @@ members = [
     "crates/portage-profile",
     "crates/portage-repo",
     "crates/portage-required-use",
+    "crates/portage-fetch",
     "crates/harness-common",
     "crates/versions-harness",
     "crates/portuale",

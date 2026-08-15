@@ -10,12 +10,14 @@
 // Portage: lib/portage/const.py, lib/portage/repository/config.py, portdbapi.cp_list
 
 mod depclean;
+mod error;
 mod info_pkgs;
 mod installed;
 mod masked_deps;
 mod merge_order;
 mod resolve;
 pub use depclean::*;
+pub use error::*;
 pub use info_pkgs::*;
 pub use installed::*;
 pub use masked_deps::*;
