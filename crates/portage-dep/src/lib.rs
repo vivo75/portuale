@@ -21,6 +21,15 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+// Memoizes parse results: parsing is a pure function of the string, and the
+// resolver re-parses the same few atoms/candidates millions of times.
+// Thread-local to stay lock-free; never invalidated.
+thread_local! {
+    static ATOM_CACHE: RefCell<HashMap<String, Option<Atom>>> = RefCell::new(HashMap::new());
+    static CANDIDATE_CACHE: RefCell<HashMap<String, Option<Candidate>>> =
+        RefCell::new(HashMap::new());
+}
+
 const CAT: &str = r"[A-Za-z0-9_][A-Za-z0-9+_.-]*";
 // Non-greedy, like `_pkg` in lib/portage/versions.py: the following
 // `-<version>` decides where the package name ends.
@@ -219,6 +228,17 @@ fn parse_use_deps(raw: &str) -> Option<Vec<UseDep>> {
         deps.push(UseDep { flag, op, default });
     }
     Some(deps)
+}
+
+pub fn parse_atom(s: &str) -> Option<Atom> {
+    if let Some(hit) = ATOM_CACHE.with(|c| c.borrow().get(s).cloned()) {
+        return hit;
+    }
+    let parsed = parse_atom_uncached(s);
+    ATOM_CACHE.with(|c| {
+        c.borrow_mut().insert(s.to_string(), parsed.clone());
+    });
+    parsed
 }
 
 fn parse_atom_uncached(s: &str) -> Option<Atom> {
