@@ -9,6 +9,8 @@
 mod ebuild_merge;
 mod ebuild_phases;
 mod helpers;
+mod info_files;
+mod pretend;
 
 use std::process::ExitCode;
 

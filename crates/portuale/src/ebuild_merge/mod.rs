@@ -16,8 +16,10 @@
 
 use crate::ebuild_phases;
 mod options;
+mod protect;
 mod tree;
 pub use options::*;
+pub(crate) use protect::*;
 pub(crate) use tree::*;
 
 use md5::{Digest, Md5};
