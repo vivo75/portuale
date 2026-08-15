@@ -115,6 +115,22 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend applies a package.use-disabled flag inside the scratch container" \
     test "${actual}" = "[ebuild  N] dev-libs/packageusedisablepkg-1.0"
 
+# emerge --pretend against blockers (see PORTING/fixtures/etc/portage/ and
+# the dev-libs/blockerpkg*/weakblockerpkg/graphblockerparent fixture
+# packages): a strong blocker matching an installed package, and a weak
+# blocker matching another package this same run would also newly merge.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/blockerpkg)
+check "emerge --pretend reports a strong blocker against an installed package inside the scratch container" \
+    test "${actual}" = "$(printf '[ebuild  N] dev-libs/blockerpkg-1.0\n[blocks] dev-libs/blockerpkg-1.0 hard blocks dev-libs/samepkg-1.0 ("!!dev-libs/samepkg")')"
+
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/graphblockerparent)
+check "emerge --pretend reports a weak blocker against an in-graph package inside the scratch container" \
+    test "${actual}" = "$(printf '[ebuild  N] dev-libs/graphblockerparent-1.0\n[ebuild  N] dev-libs/blockerpartnerpkg-1.0\n[ebuild  N] dev-libs/weakblockerpkg-1.0\n[blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")')"
+
 actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
 check "ebuild dispatch prints the ebuild stub" \
     grep -q "ebuild (pilot stub)" <<<"${actual}"

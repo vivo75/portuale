@@ -33,9 +33,15 @@ the real portage.dep.use_reduce(flat=True), with its own documented scope
 cuts mirrored exactly from portage-repo/src/lib.rs's resolve_pretend_graph
 doc comment: || (any-of) groups resolve every alternative rather than
 picking one (flat mode discards group boundaries, so there's no reliable
-way to identify "the first" alternative from its output), blockers are
-skipped, cycles/duplicates are deduped via a visited set, and a
-dependency's own deps are only walked if it would newly merge or upgrade.
+way to identify "the first" alternative from its output), cycles/
+duplicates are deduped via a visited set, and a dependency's own deps are
+only walked if it would newly merge or upgrade. Blocker atoms (!/!!) are
+matched (see resolve_blockers) against installed packages and this same
+graph's own New/Upgrade set -- reusing the real match_from_list directly,
+since it ignores an atom's blocker marker entirely (verified empirically)
+-- purely for reporting: no attempt is made to resolve or enforce a
+conflict, strong or weak, matching real --pretend's own "calculate and
+show, don't touch anything" behavior.
 
 This is NOT a wrapper around the real `emerge` binary (unlike the
 Python-side harnesses for versions/atom/use_reduce, which wrap real
@@ -292,18 +298,35 @@ def _max_version(versions):
     return best
 
 
-def installed_versions(root, category, package):
+def installed_candidates(root, category, package):
+    """Lists every installed (version, slot) pair for category/package,
+    reading each entry's SLOT file (defaulting to "0" if missing, same
+    fallback as list_candidates). Used for blocker matching, which needs
+    slots to support slotted blocker atoms -- installed_versions below
+    doesn't need this and stays a plain version list for its existing
+    callers. Mirrors portage-repo/src/lib.rs's installed_candidates."""
     cat_dir = os.path.join(root, "var", "db", "pkg", category)
     if not os.path.isdir(cat_dir):
         return []
-    versions = []
+    candidates = []
     for name in os.listdir(cat_dir):
-        if not os.path.isdir(os.path.join(cat_dir, name)):
+        entry_dir = os.path.join(cat_dir, name)
+        if not os.path.isdir(entry_dir):
             continue
-        v = _strip_version_prefix(name, package)
-        if v is not None:
-            versions.append(v)
-    return versions
+        version = _strip_version_prefix(name, package)
+        if version is None:
+            continue
+        try:
+            with open(os.path.join(entry_dir, "SLOT")) as f:
+                slot = f.read().strip().split("/")[0] or "0"
+        except OSError:
+            slot = "0"
+        candidates.append((version, slot))
+    return candidates
+
+
+def installed_versions(root, category, package):
+    return [version for version, _slot in installed_candidates(root, category, package)]
 
 
 _VAR_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -511,17 +534,76 @@ def resolve_pretend(repo_location, root, atom_str, config):
     return ("new", best)
 
 
+def resolve_blockers(root, pending, entries, graph_slots):
+    """Matches each `pending` blocker's target category/package against
+    both currently-installed candidates (installed_candidates) and this
+    graph's own resolved New/Upgrade set (entries/graph_slots), reusing
+    the real match_from_list exactly as every other atom-vs-candidate
+    check in this module does (it ignores an atom's blocker marker
+    entirely -- verified empirically -- so a "!"/"!!"-prefixed atom
+    string matches candidates by category/package/version/slot exactly
+    like a normal one). A match against the owner package's own resolved
+    version is dropped defensively (a package blocking itself is
+    nonsensical, but cheap to guard against). Returns (owner_key,
+    conflict_dict) pairs. Mirrors portage-repo/src/lib.rs's
+    resolve_blockers exactly."""
+    graph_versions = {}
+    for category, package, outcome, _blockers in entries:
+        if outcome[0] == "new":
+            graph_versions[(category, package)] = outcome[1]
+        elif outcome[0] == "upgrade":
+            graph_versions[(category, package)] = outcome[2]
+
+    conflicts = []
+    for pb in pending:
+        target_key = (pb["target_category"], pb["target_package"])
+        candidates = list(
+            installed_candidates(root, pb["target_category"], pb["target_package"])
+        )
+        version = graph_versions.get(target_key)
+        if version is not None:
+            slot = graph_slots.get(target_key, "0")
+            if (version, slot) not in candidates:
+                candidates.append((version, slot))
+        candidate_strs = [
+            f"{pb['target_category']}/{pb['target_package']}-{v}:{s}" for v, s in candidates
+        ]
+        matched = match_from_list(pb["atom_str"], candidate_strs)
+        by_str = dict(zip(candidate_strs, candidates))
+        for m in matched:
+            matched_version, _matched_slot = by_str[m]
+            if target_key == pb["owner_key"] and matched_version == pb["owner_version"]:
+                continue
+            conflicts.append(
+                (
+                    pb["owner_key"],
+                    {
+                        "atom_str": pb["atom_str"],
+                        "strong": pb["strong"],
+                        "matched_category": pb["target_category"],
+                        "matched_package": pb["target_package"],
+                        "matched_version": matched_version,
+                    },
+                )
+            )
+    return conflicts
+
+
 def resolve_pretend_graph(config_root, root, atom_str, config):
     """Recursively resolves `atom_str` and -- for packages that would
     newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
-    Returns a list of (category, package, outcome) tuples, one per
-    distinct category/package visited, in discovery order. See the module
-    doc comment for the recursion's documented scope cuts."""
+    Returns a list of (category, package, outcome, blockers) tuples, one
+    per distinct category/package visited, in discovery order; `blockers`
+    is a list of conflict dicts (see resolve_blockers), only ever
+    non-empty for New/Upgrade entries. See the module doc comment for the
+    recursion's documented scope cuts."""
     _, repo_location = find_main_repo(config_root)
 
     visited = set()
     entries = []
     queue = deque([atom_str])
+    graph_slots = {}
+    pending_blockers = []
 
     while queue:
         current_atom_str = queue.popleft()
@@ -537,7 +619,7 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
         visited.add(key)
 
         outcome = resolve_pretend(repo_location, root, current_atom_str, config)
-        entries.append((category, package, outcome))
+        entries.append((category, package, outcome, []))
 
         if outcome[0] == "new":
             version = outcome[1]
@@ -553,6 +635,7 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
             continue
         depstr = " ".join(metadata[k] for k in ("DEPEND", "RDEPEND") if metadata.get(k))
         slot = metadata.get("SLOT", "0").split("/")[0]
+        graph_slots[key] = slot
         candidate_str = f"{category}/{package}-{version}:{slot}"
         use_flags = effective_use_flags(
             config["use_flags"], config["package_use"], candidate_str, category, package
@@ -564,7 +647,28 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
         for tok in flat_deps:
             if tok == "||":
                 continue
+            dep_atom = _parse_atom(tok)
+            if dep_atom is not None and dep_atom.blocker:
+                pending_blockers.append(
+                    {
+                        "atom_str": tok,
+                        # blocker.overlap.forbid is real portage's own
+                        # strong-vs-weak signal (see
+                        # lib/_emerge/resolver/output.py's "hard blocking"
+                        # vs "soft blocking"), not the "!!" prefix text.
+                        "strong": bool(dep_atom.blocker.overlap.forbid),
+                        "target_category": dep_atom.cp.split("/", 1)[0],
+                        "target_package": dep_atom.cp.split("/", 1)[1],
+                        "owner_key": key,
+                        "owner_version": version,
+                    }
+                )
+                continue
             queue.append(tok)
+
+    blockers_by_owner = {(category, package): blockers for category, package, _o, blockers in entries}
+    for owner_key, conflict in resolve_blockers(root, pending_blockers, entries, graph_slots):
+        blockers_by_owner[owner_key].append(conflict)
 
     return entries
 
@@ -656,7 +760,7 @@ def run(args):
     # resolve_pretend_graph's BFS always visits the requested atom first,
     # so entries[0] is the top-level package; its outcome keeps the exact
     # messages/exit codes the single-atom (no-deps) case always had.
-    top_category, top_package, top_outcome = entries[0]
+    top_category, top_package, top_outcome, _top_blockers = entries[0]
     if top_outcome[0] == "no_visible_candidate":
         print(f'!!! no visible ebuild for "{top_category}/{top_package}"', file=sys.stderr)
         return 1
@@ -667,12 +771,26 @@ def run(args):
         )
         return 0
 
-    for category, package, outcome in entries:
+    def print_blockers(category, package, owner_version, blockers):
+        # Purely informational (see resolve_pretend_graph's doc comment):
+        # v1 neither refuses nor changes the exit code for a blocker
+        # match, strong or weak.
+        for b in blockers:
+            strength = "hard" if b["strong"] else "soft"
+            print(
+                f"[blocks] {category}/{package}-{owner_version} {strength} blocks "
+                f"{b['matched_category']}/{b['matched_package']}-{b['matched_version']} "
+                f'("{b["atom_str"]}")'
+            )
+
+    for category, package, outcome, blockers in entries:
         tag = outcome[0]
         if tag == "new":
             print(f"[ebuild  N] {category}/{package}-{outcome[1]}")
+            print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
             print(f"[ebuild  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})")
+            print_blockers(category, package, outcome[2], blockers)
         elif tag == "already_installed":
             # Already-satisfied dependencies aren't shown, matching real
             # emerge's usual "don't clutter the list" behavior -- the

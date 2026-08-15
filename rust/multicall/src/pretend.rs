@@ -1,15 +1,16 @@
 // `emerge --pretend <category/package>`: the v1 slice (see
 // PORTING/rust/portage-repo/src/lib.rs for the full scope writeup -- main
-// repo only, no slot conflicts, no blockers enforced). USE/
-// ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use come from
-// the real profile chain + make.conf + package.* (see portage-profile's
-// doc comment for what that does and doesn't implement), not a hardcoded
-// stand-in. Recursively
+// repo only, no slot conflicts). USE/ACCEPT_KEYWORDS/package.mask/
+// .unmask/.accept_keywords/.use come from the real profile chain +
+// make.conf + package.* (see portage-profile's doc comment for what that
+// does and doesn't implement), not a hardcoded stand-in. Recursively
 // resolves DEPEND+RDEPEND (see resolve_pretend_graph's doc comment for
 // the recursion's own scope cuts: DEPEND+RDEPEND only, || resolves every
-// alternative, blockers skipped, cycle/dup-safe). Output format is a
-// documented, simplified subset of real emerge's --pretend output, not
-// byte-identical to it.
+// alternative, cycle/dup-safe) and reports (not enforces) blocker
+// conflicts against installed packages and the rest of the graph -- see
+// print_blockers below and resolve_pretend_graph's doc comment. Output
+// format is a documented, simplified subset of real emerge's --pretend
+// output, not byte-identical to it.
 //
 // Anything outside the top-level atom's narrow slice (no --pretend, more
 // than one atom, a versioned/slotted/blocker top-level atom, an
@@ -19,8 +20,31 @@
 // real dependency strings need the full atom grammar (operators, slots).
 
 use portage_dep::{parse_atom, Operator};
-use portage_repo::{config_root_from_env, resolve_pretend_graph, root_from_env, PretendOutcome};
+use portage_repo::{
+    config_root_from_env, resolve_pretend_graph, root_from_env, GraphEntry, PretendOutcome,
+};
 use std::process::ExitCode;
+
+/// Prints one `[blocks]` line per conflict recorded on `entry` (see
+/// `portage_repo::BlockerConflict`), right after its own `[ebuild ...]`
+/// line -- purely informational, matching real `--pretend`'s "show what
+/// would happen" spirit: v1 neither refuses nor changes the exit code for
+/// a blocker match, strong or weak (see resolve_pretend_graph's doc
+/// comment).
+fn print_blockers(entry: &GraphEntry, owner_version: &str) {
+    for b in &entry.blockers {
+        let strength = if b.strong { "hard" } else { "soft" };
+        println!(
+            "[blocks] {}/{}-{owner_version} {strength} blocks {}/{}-{} (\"{}\")",
+            entry.category,
+            entry.package,
+            b.matched_category,
+            b.matched_package,
+            b.matched_version,
+            b.atom_str
+        );
+    }
+}
 
 pub fn run(args: &[String]) -> ExitCode {
     let mut atom_arg: Option<&str> = None;
@@ -116,12 +140,14 @@ pub fn run(args: &[String]) -> ExitCode {
         match &entry.outcome {
             PretendOutcome::New { version } => {
                 println!("[ebuild  N] {}/{}-{version}", entry.category, entry.package);
+                print_blockers(entry, version);
             }
             PretendOutcome::Upgrade { from, to } => {
                 println!(
                     "[ebuild  U] {}/{}-{to} (upgrade from {from})",
                     entry.category, entry.package
                 );
+                print_blockers(entry, to);
             }
             // Already-satisfied dependencies aren't shown, matching real
             // emerge's usual "don't clutter the list with what's already

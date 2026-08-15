@@ -335,9 +335,14 @@ fn vercmp_ordering(a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Lists every installed version of `category/package` found in the vdb
-/// under `root` (`<root>/var/db/pkg/<category>/<package>-<version>/`).
-pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<String> {
+/// Lists every installed `(version, slot)` pair for `category/package`
+/// found in the vdb under `root`
+/// (`<root>/var/db/pkg/<category>/<package>-<version>/`), reading each
+/// entry's `SLOT` file (defaulting to `"0"` if missing, same fallback as
+/// `list_candidates`). Used for blocker matching, which needs slots to
+/// support slotted blocker atoms -- `installed_versions` below doesn't
+/// need this and stays a plain version list for its existing callers.
+fn installed_candidates(root: &Path, category: &str, package: &str) -> Vec<(String, String)> {
     let cat_dir = root.join("var/db/pkg").join(category);
     let Ok(entries) = fs::read_dir(&cat_dir) else {
         return Vec::new();
@@ -347,8 +352,22 @@ pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<Str
         .filter(|e| e.path().is_dir())
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
-            strip_version_prefix(&name, package).map(|v| v.to_string())
+            let version = strip_version_prefix(&name, package)?.to_string();
+            let slot = fs::read_to_string(e.path().join("SLOT"))
+                .ok()
+                .map(|s| s.trim().split('/').next().unwrap_or("0").to_string())
+                .unwrap_or_else(|| "0".to_string());
+            Some((version, slot))
         })
+        .collect()
+}
+
+/// Lists every installed version of `category/package` found in the vdb
+/// under `root` (`<root>/var/db/pkg/<category>/<package>-<version>/`).
+pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<String> {
+    installed_candidates(root, category, package)
+        .into_iter()
+        .map(|(version, _slot)| version)
         .collect()
 }
 
@@ -431,11 +450,126 @@ pub fn resolve_pretend(
     }
 }
 
+/// A blocker atom (from a package's own DEPEND/RDEPEND) that matches
+/// either a currently-installed package or another package this same
+/// `resolve_pretend_graph` run would also newly merge/upgrade. Purely
+/// informational (see `resolve_pretend_graph`'s doc comment): v1 makes no
+/// attempt to resolve or refuse anything on account of a blocker, the
+/// same "report, don't enforce" spirit as `PretendOutcome::NoVisibleCandidate`
+/// for an unresolvable dependency.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockerConflict {
+    /// The raw blocker atom text, e.g. `"!!dev-libs/foo"`.
+    pub atom_str: String,
+    /// `true` for a strong (`!!`) blocker, `false` for a weak (`!`) one.
+    pub strong: bool,
+    pub matched_category: String,
+    pub matched_package: String,
+    pub matched_version: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphEntry {
     pub category: String,
     pub package: String,
     pub outcome: PretendOutcome,
+    /// Only ever non-empty for `New`/`Upgrade` entries -- an entry's own
+    /// DEPEND/RDEPEND (and therefore its blockers) are only read when it
+    /// would newly merge or upgrade, same as dependency recursion itself.
+    pub blockers: Vec<BlockerConflict>,
+}
+
+/// A blocker atom found while flattening one package's own DEPEND/RDEPEND,
+/// not yet matched against anything -- collected during the BFS in
+/// `resolve_pretend_graph` and resolved in a single post-pass (see
+/// `resolve_blockers`) once the whole graph's New/Upgrade set is known, so
+/// a match doesn't depend on BFS discovery order (two packages can block
+/// each other regardless of which one the queue reaches first).
+struct PendingBlocker {
+    atom_str: String,
+    strong: bool,
+    target_category: String,
+    target_package: String,
+    owner_key: (String, String),
+    owner_version: String,
+}
+
+/// Matches each `pending` blocker's target `category/package` against
+/// both currently-installed candidates (`installed_candidates`) and this
+/// graph's own resolved New/Upgrade set (`entries`/`graph_slots`),
+/// reusing `portage_dep::match_from_list` exactly as every other
+/// atom-vs-candidate check in this crate does (it ignores an atom's
+/// `blocker` field entirely, so a `!`/`!!`-prefixed atom string matches
+/// candidates by category/package/version/slot exactly like a normal
+/// one). A match against the owner package's own resolved version is
+/// dropped defensively (a package blocking itself is nonsensical, but
+/// cheap to guard against). Returns `(owner_key, conflict)` pairs rather
+/// than mutating `entries` directly, since `entries` is still needed
+/// immutably to build `graph_versions` here.
+fn resolve_blockers(
+    root: &Path,
+    pending: &[PendingBlocker],
+    entries: &[GraphEntry],
+    graph_slots: &HashMap<(String, String), String>,
+) -> Vec<((String, String), BlockerConflict)> {
+    let mut graph_versions: HashMap<(String, String), String> = HashMap::new();
+    for entry in entries {
+        let version = match &entry.outcome {
+            PretendOutcome::New { version } => Some(version.clone()),
+            PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+            _ => None,
+        };
+        if let Some(version) = version {
+            graph_versions.insert((entry.category.clone(), entry.package.clone()), version);
+        }
+    }
+
+    let mut conflicts = Vec::new();
+    for pb in pending {
+        let target_key = (pb.target_category.clone(), pb.target_package.clone());
+        let mut candidates = installed_candidates(root, &pb.target_category, &pb.target_package);
+        if let Some(version) = graph_versions.get(&target_key) {
+            let slot = graph_slots
+                .get(&target_key)
+                .cloned()
+                .unwrap_or_else(|| "0".to_string());
+            if !candidates.iter().any(|(v, s)| v == version && s == &slot) {
+                candidates.push((version.clone(), slot));
+            }
+        }
+        let candidate_strs: Vec<String> = candidates
+            .iter()
+            .map(|(v, s)| format!("{}/{}-{v}:{s}", pb.target_category, pb.target_package))
+            .collect();
+        let refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+        let Some(matched) = portage_dep::match_from_list(&pb.atom_str, &refs) else {
+            continue;
+        };
+        let by_str: HashMap<&str, &(String, String)> = candidate_strs
+            .iter()
+            .map(String::as_str)
+            .zip(candidates.iter())
+            .collect();
+        for m in matched {
+            let Some((version, _slot)) = by_str.get(m).copied() else {
+                continue;
+            };
+            if target_key == pb.owner_key && *version == pb.owner_version {
+                continue;
+            }
+            conflicts.push((
+                pb.owner_key.clone(),
+                BlockerConflict {
+                    atom_str: pb.atom_str.clone(),
+                    strong: pb.strong,
+                    matched_category: pb.target_category.clone(),
+                    matched_package: pb.target_package.clone(),
+                    matched_version: version.clone(),
+                },
+            ));
+        }
+    }
+    conflicts
 }
 
 /// Recursively resolves `atom_str` and -- for packages that would newly
@@ -474,12 +608,23 @@ pub struct GraphEntry {
 ///     output, not silently dropped), it's just not recursed into
 ///     further, matching the "best effort" spirit of the rest of this
 ///     pilot slice.
-///   - Blockers (`!foo/bar` tokens) are recognized and skipped, not
-///     resolved or enforced.
+///   - Blockers (`!foo/bar`/`!!foo/bar` tokens) are recognized and matched
+///     against installed packages and other New/Upgrade entries in this
+///     same graph (see `BlockerConflict`), but purely for reporting: v1
+///     makes no attempt to resolve a conflict (no merge reordering, no
+///     refusing to proceed) or to enforce anything -- a strong (`!!`)
+///     match doesn't change the graph's outcome or exit code any
+///     differently than a weak (`!`) one. This matches real `--pretend`
+///     itself (which only *calculates and shows* what would happen,
+///     without touching anything), and stays consistent with the
+///     "unresolvable dependency doesn't fail the graph" rule below.
 ///   - A package's dependencies are only walked if resolving it produced
 ///     New or Upgrade; an already-installed package's own dependencies
 ///     are presumed already satisfied (v1 has no --newuse/--changed-use
-///     equivalent).
+///     equivalent). This also means blockers are only read from
+///     New/Upgrade packages' own DEPEND/RDEPEND -- an already-installed
+///     package's blockers are never inspected, same as the rest of its
+///     dependencies.
 pub fn resolve_pretend_graph(
     config_root: &Path,
     root: &Path,
@@ -492,6 +637,9 @@ pub fn resolve_pretend_graph(
     let mut entries = Vec::new();
     let mut queue: VecDeque<String> = VecDeque::new();
     queue.push_back(atom_str.to_string());
+
+    let mut graph_slots: HashMap<(String, String), String> = HashMap::new();
+    let mut pending_blockers: Vec<PendingBlocker> = Vec::new();
 
     while let Some(current_atom) = queue.pop_front() {
         let Some(atom) = portage_dep::parse_atom(&current_atom) else {
@@ -516,6 +664,7 @@ pub fn resolve_pretend_graph(
             category: key.0.clone(),
             package: key.1.clone(),
             outcome,
+            blockers: Vec::new(),
         });
 
         let Some(version) = resolved_version else {
@@ -537,6 +686,7 @@ pub fn resolve_pretend_graph(
             .get("SLOT")
             .map(|s| s.split('/').next().unwrap_or("0").to_string())
             .unwrap_or_else(|| "0".to_string());
+        graph_slots.insert(key.clone(), slot.clone());
         let candidate_str = format!("{}/{}-{version}:{slot}", key.0, key.1);
         let use_flags = effective_use_flags(
             &config.use_flags,
@@ -557,9 +707,33 @@ pub fn resolve_pretend_graph(
             if tok == "||" {
                 continue;
             }
+            if let Some(dep_atom) = portage_dep::parse_atom(&tok) {
+                if dep_atom.blocker != portage_dep::Blocker::None {
+                    pending_blockers.push(PendingBlocker {
+                        atom_str: tok,
+                        strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                        target_category: dep_atom.category,
+                        target_package: dep_atom.package,
+                        owner_key: key.clone(),
+                        owner_version: version.clone(),
+                    });
+                    continue;
+                }
+            }
             queue.push_back(tok);
         }
     }
+
+    resolve_blockers(root, &pending_blockers, &entries, &graph_slots)
+        .into_iter()
+        .for_each(|(owner_key, conflict)| {
+            if let Some(entry) = entries
+                .iter_mut()
+                .find(|e| (e.category.clone(), e.package.clone()) == owner_key)
+            {
+                entry.blockers.push(conflict);
+            }
+        });
 
     Ok(entries)
 }
@@ -913,6 +1087,73 @@ mod tests {
         assert_eq!(full_names, vec!["dev-libs/packageusedisablepkg"]);
     }
 
+    fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
+        resolve_pretend_graph(&root, &root, atom_str, &config)
+            .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn fixture_strong_blocker_matches_an_installed_package() {
+        // dev-libs/blockerpkg's RDEPEND is "!!dev-libs/samepkg", and
+        // dev-libs/samepkg-1.0 is already installed per the fixture vdb.
+        let entries = graph_entries_real("dev-libs/blockerpkg");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].blockers,
+            vec![BlockerConflict {
+                atom_str: "!!dev-libs/samepkg".to_string(),
+                strong: true,
+                matched_category: "dev-libs".to_string(),
+                matched_package: "samepkg".to_string(),
+                matched_version: "1.0".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn fixture_weak_blocker_matches_another_new_package_in_the_same_graph() {
+        // dev-libs/graphblockerparent pulls in both dev-libs/blockerpartnerpkg
+        // and dev-libs/weakblockerpkg (whose RDEPEND is
+        // "!dev-libs/blockerpartnerpkg") as New in the same run, so the
+        // weak blocker must be reported against blockerpartnerpkg's
+        // graph-resolved version, not just against the (empty) vdb.
+        let entries = graph_entries_real("dev-libs/graphblockerparent");
+        let full_names: Vec<String> = entries
+            .iter()
+            .map(|e| format!("{}/{}", e.category, e.package))
+            .collect();
+        assert_eq!(
+            full_names,
+            vec![
+                "dev-libs/graphblockerparent",
+                "dev-libs/blockerpartnerpkg",
+                "dev-libs/weakblockerpkg",
+            ]
+        );
+        assert!(entries[0].blockers.is_empty());
+        assert!(entries[1].blockers.is_empty());
+        assert_eq!(
+            entries[2].blockers,
+            vec![BlockerConflict {
+                atom_str: "!dev-libs/blockerpartnerpkg".to_string(),
+                strong: false,
+                matched_category: "dev-libs".to_string(),
+                matched_package: "blockerpartnerpkg".to_string(),
+                matched_version: "1.0".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn fixture_unrelated_packages_report_no_blockers() {
+        // Regression guard: the diamond fixture has no blockers at all, so
+        // none of its entries should gain a spurious one.
+        let entries = graph_entries_real("dev-libs/diamond");
+        assert!(entries.iter().all(|e| e.blockers.is_empty()));
+    }
+
     fn candidate(version: &str, keywords: &[&str]) -> Candidate {
         Candidate {
             version: version.to_string(),
@@ -1046,5 +1287,99 @@ mod tests {
         let use_flags =
             effective_use_flags(&base, &package_use, "dev-libs/bar-1.0:0", "dev-libs", "bar");
         assert_eq!(use_flags, HashSet::from(["baz".to_string()]));
+    }
+
+    fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {
+        GraphEntry {
+            category: category.to_string(),
+            package: package.to_string(),
+            outcome: PretendOutcome::New {
+                version: version.to_string(),
+            },
+            blockers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_blockers_matches_a_graph_resolved_package_with_no_installed_candidates() {
+        let entries = vec![
+            graph_entry("dev-libs", "owner", "1.0"),
+            graph_entry("dev-libs", "target", "2.0"),
+        ];
+        let graph_slots = HashMap::from([(
+            ("dev-libs".to_string(), "target".to_string()),
+            "0".to_string(),
+        )]);
+        let pending = vec![PendingBlocker {
+            atom_str: "!!dev-libs/target".to_string(),
+            strong: true,
+            target_category: "dev-libs".to_string(),
+            target_package: "target".to_string(),
+            owner_key: ("dev-libs".to_string(), "owner".to_string()),
+            owner_version: "1.0".to_string(),
+        }];
+        let conflicts = resolve_blockers(
+            Path::new("/nonexistent-root-for-this-test"),
+            &pending,
+            &entries,
+            &graph_slots,
+        );
+        assert_eq!(
+            conflicts,
+            vec![(
+                ("dev-libs".to_string(), "owner".to_string()),
+                BlockerConflict {
+                    atom_str: "!!dev-libs/target".to_string(),
+                    strong: true,
+                    matched_category: "dev-libs".to_string(),
+                    matched_package: "target".to_string(),
+                    matched_version: "2.0".to_string(),
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn resolve_blockers_skips_a_blocker_matching_its_own_owner() {
+        let entries = vec![graph_entry("dev-libs", "owner", "1.0")];
+        let graph_slots = HashMap::from([(
+            ("dev-libs".to_string(), "owner".to_string()),
+            "0".to_string(),
+        )]);
+        let pending = vec![PendingBlocker {
+            atom_str: "!dev-libs/owner".to_string(),
+            strong: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "owner".to_string(),
+            owner_key: ("dev-libs".to_string(), "owner".to_string()),
+            owner_version: "1.0".to_string(),
+        }];
+        let conflicts = resolve_blockers(
+            Path::new("/nonexistent-root-for-this-test"),
+            &pending,
+            &entries,
+            &graph_slots,
+        );
+        assert!(conflicts.is_empty());
+    }
+
+    #[test]
+    fn resolve_blockers_returns_nothing_when_the_target_matches_nothing() {
+        let entries = vec![graph_entry("dev-libs", "owner", "1.0")];
+        let pending = vec![PendingBlocker {
+            atom_str: "!dev-libs/nonexistent".to_string(),
+            strong: false,
+            target_category: "dev-libs".to_string(),
+            target_package: "nonexistent".to_string(),
+            owner_key: ("dev-libs".to_string(), "owner".to_string()),
+            owner_version: "1.0".to_string(),
+        }];
+        let conflicts = resolve_blockers(
+            Path::new("/nonexistent-root-for-this-test"),
+            &pending,
+            &entries,
+            &HashMap::new(),
+        );
+        assert!(conflicts.is_empty());
     }
 }

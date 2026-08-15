@@ -2,12 +2,13 @@
 PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the full
 scope writeup, including the dependency-recursion follow-up in
 resolve_pretend_graph, the profile/make.conf -> real USE/ACCEPT_KEYWORDS
-follow-up in portage-profile, and the package.mask/.unmask/.accept_keywords/
-.use follow-up on top of that). Drives the real compiled `emerge` binary
-(multicall, dispatched via a real symlink -- not a neutral harness, since
-emerge is an actual product surface per PROMPT.md's testing decision) and
-the Python reference implementation identically, against the synthetic
-fixture tree at PORTING/fixtures (whose repos.conf/make.profile/make.conf/
+follow-up in portage-profile, the package.mask/.unmask/.accept_keywords/
+.use follow-up on top of that, and the blocker-reporting follow-up on top
+of that). Drives the real compiled `emerge` binary (multicall, dispatched
+via a real symlink -- not a neutral harness, since emerge is an actual
+product surface per PROMPT.md's testing decision) and the Python
+reference implementation identically, against the synthetic fixture tree
+at PORTING/fixtures (whose repos.conf/make.profile/make.conf/
 package.mask/package.unmask/package.accept_keywords/package.use now drive
 real config resolution, not hardcoded values), and asserts their stdout,
 stderr, and exit codes all match exactly.
@@ -49,6 +50,8 @@ CASES = [
     ("package.accept_keywords: ** accepts no-keywords package", ["--pretend", "dev-libs/livekeywordpkg"], 0),
     ("package.use: wildcard entry enables a flag not on globally", ["--pretend", "dev-libs/packageuseenablepkg"], 0),
     ("package.use: entry disables a flag that is on globally", ["--pretend", "dev-libs/packageusedisablepkg"], 0),
+    ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
+    ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
 ]
 
 
@@ -248,3 +251,42 @@ def test_package_use_entry_disables_a_globally_enabled_flag_for_one_package(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/packageusedisablepkg-1.0"]
+
+
+def test_strong_blocker_matches_an_installed_package(emerge_binary, fixture_env):
+    """dev-libs/blockerpkg's RDEPEND is "!!dev-libs/samepkg", and
+    dev-libs/samepkg-1.0 is already installed per the fixture vdb -- a
+    strong blocker match is reported (not enforced: exit code stays 0)."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/blockerpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/blockerpkg-1.0",
+        '[blocks] dev-libs/blockerpkg-1.0 hard blocks dev-libs/samepkg-1.0 ("!!dev-libs/samepkg")',
+    ]
+
+
+def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binary, fixture_env):
+    """dev-libs/graphblockerparent pulls in both dev-libs/blockerpartnerpkg
+    and dev-libs/weakblockerpkg (whose RDEPEND is
+    "!dev-libs/blockerpartnerpkg") as New in the same run, so the weak
+    blocker is matched against blockerpartnerpkg's graph-resolved version,
+    not just the (empty, for this package) vdb -- printed right after its
+    owner's own [ebuild ...] line."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/graphblockerparent"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/graphblockerparent-1.0",
+        "[ebuild  N] dev-libs/blockerpartnerpkg-1.0",
+        "[ebuild  N] dev-libs/weakblockerpkg-1.0",
+        '[blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")',
+    ]
+
+
+def test_unrelated_package_reports_no_blockers(emerge_binary, fixture_env):
+    """Regression guard: the diamond fixture has no blockers at all, so
+    resolving it must not gain a spurious [blocks] line."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/diamond"], fixture_env)
+    assert result.returncode == 0
+    assert "[blocks]" not in result.stdout

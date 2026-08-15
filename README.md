@@ -14,10 +14,14 @@ deduped, cycle-safe set of packages that would newly merge, not just the
 one you named), real USE/ACCEPT_KEYWORDS computed from an actual profile
 inheritance chain and make.conf (not a fixed stand-in), per-package
 overrides from `package.mask`, `package.unmask`, and
-`package.accept_keywords` -- what's visible at all -- and, on top of that,
-per-package USE overrides from `package.use`, so a single package's own
-`DEPEND`/`RDEPEND` can be flattened against a USE set that differs from
-every other package's, the same way real portage does it.
+`package.accept_keywords` -- what's visible at all -- per-package USE
+overrides from `package.use`, so a single package's own `DEPEND`/
+`RDEPEND` can be flattened against a USE set that differs from every
+other package's, the same way real portage does it, and, on top of all
+of that, blocker (`!atom`/`!!atom`) reporting: a package's blocker atoms
+are matched against both currently-installed packages and the rest of
+the same resolution's New/Upgrade set, and shown -- not resolved or
+enforced, since `--pretend` itself never touches anything real.
 
 ## Layout
 
@@ -36,8 +40,9 @@ PORTING/
                                  profile chain + make.conf, plus package.mask/
                                  .unmask/.accept_keywords/.use (see lib.rs's doc comment)
     portage-repo/                repo/metadata/vdb access + resolution + recursive
-                                 dependency-graph walk for `emerge --pretend`
-                                 (see lib.rs's doc comment on resolve_pretend_graph)
+                                 dependency-graph walk + blocker reporting for
+                                 `emerge --pretend` (see lib.rs's doc comment on
+                                 resolve_pretend_graph)
     versions-harness/          CLI harness over portage-versions
     atom-harness/               CLI harness over portage-dep
     use-reduce-harness/         CLI harness over portage-use-reduce
@@ -135,10 +140,9 @@ PORTING/
   `KEY=value` text -- confirmed against a real vendored tree) for
   KEYWORDS/SLOT/DEPEND/RDEPEND *without executing any bash*, and checks
   the vdb (`<ROOT>/var/db/pkg`) for what's installed. There's still no
-  slot conflicts, no blockers, no overlays, no backtracking -- all
-  explicitly confirmed scope cuts before implementing, not silent
-  omissions (see the doc comment at the top of
-  `rust/portage-repo/src/lib.rs`).
+  slot conflicts, no overlays, no backtracking -- all explicitly
+  confirmed scope cuts before implementing, not silent omissions (see the
+  doc comment at the top of `rust/portage-repo/src/lib.rs`).
   Config/target roots come from the real `PORTAGE_CONFIGROOT`/`ROOT`
   environment variables (portage's own mechanism, not a pilot invention --
   see `lib/portage/const.py`), which is what lets `PORTING/fixtures` be
@@ -249,6 +253,34 @@ PORTING/
   `USE_EXPAND`-prefix shorthand real `package.use` supports (`VIDEO_CARDS:
   nvidia` lines applying a `video_cards_` prefix to subsequent flags until
   a blank line resets it) -- only plain tokens are read.
+
+  **Blockers**: `!atom`/`!!atom` tokens found while flattening a New/
+  Upgrade package's own DEPEND/RDEPEND (see `BlockerConflict`,
+  `PendingBlocker`, and `resolve_blockers`) are matched -- via the same
+  `match_from_list` every other atom-vs-candidate check in this crate
+  uses, which turns out to ignore an atom's blocker marker entirely, so a
+  `!`/`!!`-prefixed atom string matches candidates by
+  category/package/version/slot exactly like a normal one (verified
+  empirically before relying on it, same as everywhere else this pilot
+  reaches for real portage code to settle a question rather than
+  guessing) -- against both currently-installed packages
+  (`installed_candidates`, a small SLOT-aware sibling of
+  `installed_versions`) and the rest of the same graph's own New/Upgrade
+  set, resolved in a single post-pass once the whole graph is known (so a
+  match doesn't depend on BFS discovery order: two packages can block
+  each other regardless of which one the queue reaches first). This is
+  reporting only, matching real `--pretend`'s own "calculate and show,
+  don't touch anything" behavior: v1 makes no attempt to resolve a
+  conflict (no merge reordering, no refusing to proceed), and a strong
+  (`!!`) match doesn't change the exit code any differently than a weak
+  (`!`) one -- printed as `[blocks] cat/pkg-version hard|soft blocks
+  cat2/pkg2-version2 ("!!cat2/pkg2")` right after the blocking package's
+  own `[ebuild ...]` line. "Strong" is determined the same way real
+  portage's own `--pretend` output does (`blocker.atom.blocker.overlap.forbid`,
+  the real "hard blocking" vs "soft blocking" signal -- not the `!!`
+  prefix text, which was checked and confirmed empirically to agree with
+  it for exactly the weak/strong split portage-dep's `Blocker` enum
+  already carries).
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -285,12 +317,13 @@ PORTING/
   a real `emerge --pretend` resolution (a single package, a multi-package
   dependency graph, a real-profile-derived USE flag gating a dependency,
   a `package.mask`-hidden package staying hidden, a masked-then-
-  `package.unmask`-ed package becoming visible again, and a `package.use`
-  entry both enabling and disabling a per-package flag) against the
-  fixture, `ebuild`-dispatch, and batch mode inside it, exiting nonzero
-  on any failure -- including proving the fixture's `make.profile`
-  symlink and multi-parent chain survive the image `COPY` and still
-  resolve correctly.
+  `package.unmask`-ed package becoming visible again, a `package.use`
+  entry both enabling and disabling a per-package flag, and a strong and
+  a weak blocker match each being reported) against the fixture,
+  `ebuild`-dispatch, and batch mode inside it, exiting nonzero on any
+  failure -- including proving the fixture's `make.profile` symlink and
+  multi-parent chain survive the image `COPY` and still resolve
+  correctly.
 
 Known simplification: `versions-harness`/`portage-versions` compare
 version components as `i128` rather than Python's arbitrary-precision
@@ -343,6 +376,15 @@ enabled globally by the fixture profile chain -- same as
 `useflagpkg`'s own `foo?`-gated dependency, which *is* pulled in -- because
 a `dev-libs/packageusedisablepkg -foo` entry disables it for this one
 package only).
+
+Four more fixture packages exercise blocker reporting: `blockerpkg`
+(RDEPEND `"!!dev-libs/samepkg"`, a strong blocker matching
+`dev-libs/samepkg-1.0`, which the fixture vdb already has installed), and
+`graphblockerparent`/`blockerpartnerpkg`/`weakblockerpkg` together (the
+parent RDEPENDs on both of the other two so they resolve New in the same
+graph; `weakblockerpkg`'s own RDEPEND is `"!dev-libs/blockerpartnerpkg"`,
+a weak blocker that can only be matched against the graph's own
+New/Upgrade set, since `blockerpartnerpkg` isn't installed anywhere).
 
 `gentoo_snapshot.json` was extracted from a full local Gentoo tree
 checkout (`/.gentoo/repos/gentoo` on the machine this was vendored on) with
@@ -451,6 +493,20 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packageuseena
 # dev-libs/useflagpkg above, whose own foo?-gated dependency IS pulled in)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packageusedisablepkg
 # [ebuild  N] dev-libs/packageusedisablepkg-1.0
+
+# a strong (!!) blocker matching an already-installed package is reported
+# (not enforced -- exit code is still 0, same as real --pretend)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/blockerpkg
+# [ebuild  N] dev-libs/blockerpkg-1.0
+# [blocks] dev-libs/blockerpkg-1.0 hard blocks dev-libs/samepkg-1.0 ("!!dev-libs/samepkg")
+
+# a weak (!) blocker matching another package this same run would also
+# newly merge (not just an installed one)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/graphblockerparent
+# [ebuild  N] dev-libs/graphblockerparent-1.0
+# [ebuild  N] dev-libs/blockerpartnerpkg-1.0
+# [ebuild  N] dev-libs/weakblockerpkg-1.0
+# [blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")
 
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \

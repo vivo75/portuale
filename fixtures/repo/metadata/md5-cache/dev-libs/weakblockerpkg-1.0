@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: a weak (!) blocker against dev-libs/blockerpartnerpkg, resolved as New in the same graph via dev-libs/graphblockerparent
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=!dev-libs/blockerpartnerpkg
+SLOT=0
+_md5_=0000000000000000000000000000000
