@@ -1,8 +1,11 @@
 # fixture package.mask: two atoms stay masked, one is added then removed
-# again via "-atom" to exercise removal within this same source (see
-# portage-profile's doc comment on why real repo/profile-level masking
-# isn't implemented -- this only tests removal within the user-level file).
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
 dev-libs/hardmaskedpkg
 dev-libs/maskedandunmaskedpkg
 dev-libs/samepkg
 -dev-libs/samepkg
+-dev-libs/repomaskedthenuserremovedpkg

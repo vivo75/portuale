@@ -1,0 +1,7 @@
+# repo-level package.mask (the real Gentoo tree's own security/arch-mask
+# mechanism) -- stacked ahead of the profile chain's own package.mask
+# files and the user-level /etc/portage/package.mask, with -atom removal
+# applying across all three sources, not just within one file.
+dev-libs/repomaskedpkg
+dev-libs/repomaskedthenprofileunmaskedpkg
+dev-libs/repomaskedthenuserremovedpkg

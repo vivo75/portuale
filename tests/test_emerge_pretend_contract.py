@@ -71,6 +71,10 @@ CASES = [
     ("package.mask: hidden, no unmask", ["--pretend", "dev-libs/hardmaskedpkg"], 1),
     ("package.mask + package.unmask: masked then unmasked", ["--pretend", "dev-libs/maskedandunmaskedpkg"], 0),
     ("package.mask: -atom removal leaves candidate unaffected", ["--pretend", "dev-libs/samepkg"], 0),
+    ("package.mask: repo-level profiles/package.mask hides a package", ["--pretend", "dev-libs/repomaskedpkg"], 1),
+    ("package.mask: profile-level package.mask hides a package", ["--pretend", "dev-libs/profilemaskedpkg"], 1),
+    ("package.mask: profile-level package.unmask cancels a repo-level mask", ["--pretend", "dev-libs/repomaskedthenprofileunmaskedpkg"], 0),
+    ("package.mask: user-level -atom removes a repo-level mask entry", ["--pretend", "dev-libs/repomaskedthenuserremovedpkg"], 0),
     ("package.accept_keywords: wildcard extends visibility", ["--pretend", "dev-libs/wildcardkeywordpkg"], 0),
     ("package.accept_keywords: ** accepts no-keywords package", ["--pretend", "dev-libs/livekeywordpkg"], 0),
     ("package.use: wildcard entry enables a flag not on globally", ["--pretend", "dev-libs/packageuseenablepkg"], 0),
@@ -252,6 +256,72 @@ def test_package_mask_minus_atom_removal_leaves_candidate_unaffected(
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/samepkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.strip() == "dev-libs/samepkg-1.0 is already installed; nothing to do"
+
+
+def test_repo_level_package_mask_hides_a_package(emerge_binary, fixture_env):
+    """PORTING/fixtures/repo/profiles/package.mask (the main repo's own
+    repo-level mask -- real portage's most common real-world masking
+    source, e.g. security/arch masks) hides dev-libs/repomaskedpkg with
+    no matching unmask anywhere, same "no ebuilds to satisfy" outcome a
+    user-level mask produces."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/repomaskedpkg"], fixture_env)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/repomaskedpkg".'
+    )
+
+
+def test_profile_level_package_mask_hides_a_package(emerge_binary, fixture_env):
+    """PORTING/fixtures/repo/profiles/base/package.mask (a package.mask
+    file at one level of the profile inheritance chain, not the repo
+    root or /etc/portage) hides dev-libs/profilemaskedpkg -- proving
+    per-profile-level package.mask is actually read, not just the
+    repo-level and user-level sources."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/profilemaskedpkg"], fixture_env)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/profilemaskedpkg".'
+    )
+
+
+def test_profile_level_package_unmask_cancels_a_repo_level_mask(emerge_binary, fixture_env):
+    """dev-libs/repomaskedthenprofileunmaskedpkg is masked by the
+    repo-level profiles/package.mask, then unmasked by
+    PORTING/fixtures/repo/profiles/default/package.unmask -- a
+    profile-level package.unmask entry cancelling a mask from an
+    earlier-stacked source (the repo level), proving the three sources
+    are genuinely stacked together, not checked independently."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/repomaskedthenprofileunmaskedpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert (
+        result.stdout.strip() == "[ebuild  N] dev-libs/repomaskedthenprofileunmaskedpkg-1.0"
+    )
+
+
+def test_user_level_minus_atom_removes_a_repo_level_mask_entry(emerge_binary, fixture_env):
+    """dev-libs/repomaskedthenuserremovedpkg is masked by the repo-level
+    profiles/package.mask; PORTING/fixtures/etc/portage/package.mask's
+    own "-dev-libs/repomaskedthenuserremovedpkg" line removes that entry
+    even though it didn't add it -- proving -atom removal now applies
+    across the whole combined [repo, profile chain, user] stack (real
+    MaskManager.py's stack_lists(incremental=1) semantics), not just
+    within the single file that contains the "-atom" line, which is all
+    the pilot supported before this slice."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/repomaskedthenuserremovedpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/repomaskedthenuserremovedpkg-1.0"
 
 
 def test_package_accept_keywords_wildcard_extends_visibility(emerge_binary, fixture_env):

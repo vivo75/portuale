@@ -37,26 +37,32 @@
 //     plain scalar for `${VAR}` substitution purposes (last-value-wins,
 //     no incremental merge), matching how it's actually used in real
 //     profiles (e.g. ARCH feeding `ACCEPT_KEYWORDS="${ARCH}"`).
-//   - `package.mask`/`.unmask`/`.accept_keywords`/`.use` are read from
-//     `/etc/portage/` (user-level) ONLY -- real portage also stacks
-//     repo-level `profiles/package.mask` and a `package.mask`/
-//     `package.unmask` pair at every profile level, each combinable via
-//     `-atom` removal across all three sources. Replicating that fully
-//     would be close to the size of the whole profile-chain mechanism
-//     again; this pilot only supports `-atom` removal *within* the
-//     user-level `package.mask` itself (e.g. across multiple files if
-//     it's a directory), not against a repo/profile-level mask that
-//     doesn't exist here. `package.unmask` is a separate, simpler
-//     per-candidate override check (masked-unless-also-unmasked), not
-//     real portage's own incremental stacking. `package.use` entries are
-//     applied per package (not globally): a matching entry's tokens are
-//     layered on top of the base `use_flags` set with the same
-//     incremental semantics as `USE` itself (see `apply_incremental`),
-//     scoped to only the one package being resolved/recursed into --
-//     see `portage-repo`'s `resolve_pretend_graph` for where that
-//     per-package application happens (it needs the candidate's SLOT to
-//     match slotted `package.use` entries, which only exists at that
-//     later, repo-aware layer).
+//   - `package.mask`/`.unmask` are stacked from all three real sources --
+//     the main repo's own repo-level `profiles/package.mask`/`.unmask`,
+//     every profile level's own pair (in chain order), and the
+//     user-level `/etc/portage` files -- with `-atom` removal applying
+//     across the whole combined stream, exactly matching real
+//     `MaskManager.py`'s `stack_lists(incremental=1)` (see
+//     `stack_mask_lines`). Still out of scope: an *overlay* repo's own
+//     repo-level `package.mask`/`.unmask` (only the main repo's is read;
+//     matches the overlays follow-up's own already-confirmed "per-repo
+//     package.mask/.unmask/profiles/ out of scope" cut), and `masters`
+//     (eclass/mask inheritance across repos via a repo's own `masters`
+//     setting). `package.accept_keywords`/`.use` remain user-level only
+//     for now -- real portage has repo- and profile-level equivalents for
+//     both too (`KeywordsManager`'s per-profile `package.accept_keywords`,
+//     `UseManager`'s repo- and profile-level `package.use`), but stacking
+//     those wasn't part of this follow-up's confirmed scope, so it's a
+//     separate, still-open cut, not something this slice claims to close.
+//     `package.use` entries are applied per package (not globally): a
+//     matching entry's tokens are layered on top of the base `use_flags`
+//     set with the same incremental semantics as `USE` itself (see
+//     `apply_incremental`), scoped to only the one package being
+//     resolved/recursed into -- see `portage-repo`'s
+//     `resolve_pretend_graph` for where that per-package application
+//     happens (it needs the candidate's SLOT to match slotted
+//     `package.use` entries, which only exists at that later,
+//     repo-aware layer).
 //
 // One real, deliberately-preserved quirk from lib/portage/package/ebuild/
 // config.py (see the comment above its `expand_map.pop("USE", None)`):
@@ -315,32 +321,28 @@ fn read_config_lines(path: &Path) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
-/// `package.mask`: each line is an atom/wildcard-atom to mask, or (with a
-/// leading `-`) a removal of an exact previously-added entry -- see the
-/// module doc comment for how this differs from real portage's full
-/// repo+profile+user stacking.
-fn load_package_mask(config_root: &Path) -> Result<Vec<String>, String> {
-    let path = config_root.join("etc/portage/package.mask");
+/// Stacks ordered `package.mask`/`.unmask` lines from multiple sources
+/// (earlier sources first) with real portage's own `-atom` removal
+/// semantics -- see `MaskManager.py`'s `stack_lists(incremental=1)`: a
+/// `-atom` line removes the exact matching atom text added by ANY
+/// earlier source in this same stack, not just within its own source
+/// (e.g. a user-level `-atom` in `package.mask` can remove an atom the
+/// repo or a profile level added). Shared between `package.mask` and
+/// `package.unmask`, which real portage stacks identically -- unlike
+/// this pilot's previous, user-level-only `package.unmask` handling,
+/// which treated a leading `-` there as meaningless; it's meaningful
+/// once more than one source can contribute an unmask entry.
+fn stack_mask_lines(sources: &[Vec<String>]) -> Vec<String> {
     let mut list: Vec<String> = Vec::new();
-    for line in read_config_lines(&path)? {
-        match line.strip_prefix('-') {
-            Some(removed) => list.retain(|x| x != removed),
-            None => list.push(line),
+    for lines in sources {
+        for line in lines {
+            match line.strip_prefix('-') {
+                Some(removed) => list.retain(|x| x != removed),
+                None => list.push(line.clone()),
+            }
         }
     }
-    Ok(list)
-}
-
-/// `package.unmask`: each line is an atom/wildcard-atom that cancels a
-/// matching `package.mask` entry for that specific candidate. A leading
-/// `-` isn't meaningful here (real portage doesn't use it in
-/// package.unmask); such a line is skipped defensively.
-fn load_package_unmask(config_root: &Path) -> Result<Vec<String>, String> {
-    let path = config_root.join("etc/portage/package.unmask");
-    Ok(read_config_lines(&path)?
-        .into_iter()
-        .filter(|l| !l.starts_with('-'))
-        .collect())
+    list
 }
 
 /// `package.accept_keywords`: each line is `<atom-or-wildcard>
@@ -392,24 +394,41 @@ fn load_package_use(config_root: &Path) -> Result<Vec<(String, Vec<String>)>, St
 /// `<config_root>/etc/portage/make.conf` (if it exists) as the final,
 /// highest-priority USE/ACCEPT_KEYWORDS layer, then
 /// `package.mask`/`.unmask`/`.accept_keywords`.
-pub fn resolve_config(config_root: &Path) -> Result<Config, String> {
+///
+/// `main_repo_location` (the main repo's own tree root, e.g. what
+/// `portage_repo::find_repos` marks `is_main` -- see that crate) is
+/// needed for `package.mask`/`.unmask`'s repo-level source,
+/// `<main_repo_location>/profiles/package.mask` -- real portage's most
+/// common real-world masking source (security/arch masks, etc.), stacked
+/// together with every profile level's own `package.mask`/`.unmask` (in
+/// chain order) and the user-level `/etc/portage` files, exactly
+/// matching real `MaskManager.py`'s three-source stack (see
+/// `stack_mask_lines`'s doc comment for the `-atom`-removal semantics).
+/// An overlay repo's own repo-level `package.mask`/`.unmask` stays
+/// deliberately out of scope, same as the rest of overlays' per-repo
+/// config (see `resolve_pretend_graph`'s doc comment on that follow-up)
+/// -- only the one main repo's is read here.
+pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<Config, String> {
     let mut config = Config::default();
     let mut scalars: HashMap<String, String> = HashMap::new();
 
     let make_profile = config_root.join("etc/portage/make.profile");
-    if make_profile.exists() {
-        for level in resolve_profile_chain(&make_profile)? {
-            let make_defaults = level.join("make.defaults");
-            if !make_defaults.is_file() {
-                continue;
-            }
-            // Real config.py quirk: USE is excluded from cross-level
-            // substitution -- see the module doc comment.
-            scalars.remove("USE");
-            let text = fs::read_to_string(&make_defaults)
-                .map_err(|e| format!("reading {}: {e}", make_defaults.display()))?;
-            process_lines(&text, &mut scalars, &mut config);
+    let chain: Vec<PathBuf> = if make_profile.exists() {
+        resolve_profile_chain(&make_profile)?
+    } else {
+        Vec::new()
+    };
+    for level in &chain {
+        let make_defaults = level.join("make.defaults");
+        if !make_defaults.is_file() {
+            continue;
         }
+        // Real config.py quirk: USE is excluded from cross-level
+        // substitution -- see the module doc comment.
+        scalars.remove("USE");
+        let text = fs::read_to_string(&make_defaults)
+            .map_err(|e| format!("reading {}: {e}", make_defaults.display()))?;
+        process_lines(&text, &mut scalars, &mut config);
     }
 
     let make_conf = config_root.join("etc/portage/make.conf");
@@ -424,8 +443,25 @@ pub fn resolve_config(config_root: &Path) -> Result<Config, String> {
         )?;
     }
 
-    config.package_mask = load_package_mask(config_root)?;
-    config.package_unmask = load_package_unmask(config_root)?;
+    let mut mask_sources: Vec<Vec<String>> = vec![read_config_lines(
+        &main_repo_location.join("profiles/package.mask"),
+    )?];
+    let mut unmask_sources: Vec<Vec<String>> = vec![read_config_lines(
+        &main_repo_location.join("profiles/package.unmask"),
+    )?];
+    for level in &chain {
+        mask_sources.push(read_config_lines(&level.join("package.mask"))?);
+        unmask_sources.push(read_config_lines(&level.join("package.unmask"))?);
+    }
+    mask_sources.push(read_config_lines(
+        &config_root.join("etc/portage/package.mask"),
+    )?);
+    unmask_sources.push(read_config_lines(
+        &config_root.join("etc/portage/package.unmask"),
+    )?);
+
+    config.package_mask = stack_mask_lines(&mask_sources);
+    config.package_unmask = stack_mask_lines(&unmask_sources);
     config.package_accept_keywords = load_package_accept_keywords(config_root)?;
     config.package_use = load_package_use(config_root)?;
 
@@ -454,7 +490,9 @@ mod tests {
     ///   make.conf:       USE="confflag"                    -> {foo, baz, localflag, confflag}
     #[test]
     fn resolves_fixture_profile_chain_and_make_conf() {
-        let config = resolve_config(&fixtures_root()).expect("fixture config must resolve");
+        let root = fixtures_root();
+        let config =
+            resolve_config(&root, &root.join("repo")).expect("fixture config must resolve");
         assert_eq!(
             config.use_flags,
             HashSet::from([
@@ -471,8 +509,8 @@ mod tests {
     fn missing_profile_and_make_conf_yield_empty_config() {
         let empty_root = std::env::temp_dir().join("portage-profile-test-empty-root");
         let _ = fs::create_dir_all(&empty_root);
-        let config =
-            resolve_config(&empty_root).expect("missing profile/make.conf is not an error");
+        let config = resolve_config(&empty_root, &empty_root.join("repo"))
+            .expect("missing profile/make.conf is not an error");
         assert_eq!(config.use_flags, HashSet::new());
         assert_eq!(config.accept_keywords, HashSet::new());
     }
@@ -490,7 +528,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let err = resolve_config(&root).expect_err("cross-repo parent must be rejected");
+        let err = resolve_config(&root, &root.join("repo"))
+            .expect_err("cross-repo parent must be rejected");
         assert!(err.contains("out of v1 scope"), "unexpected error: {err}");
     }
 
@@ -519,7 +558,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("top"), &make_profile).unwrap();
 
-        let config = resolve_config(&root).expect("diamond inheritance must resolve");
+        let config =
+            resolve_config(&root, &root.join("repo")).expect("diamond inheritance must resolve");
         assert_eq!(
             config.use_flags,
             HashSet::from(["sharedflag".to_string(), "topflag".to_string()])
@@ -550,7 +590,8 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root).expect("config with package.* files must resolve");
+        let config = resolve_config(&root, &root.join("repo"))
+            .expect("config with package.* files must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/foo".to_string()]);
         assert_eq!(config.package_unmask, vec!["dev-libs/baz".to_string()]);
         assert_eq!(
@@ -559,6 +600,49 @@ mod tests {
                 ("dev-qt/*".to_string(), vec!["~amd64".to_string()]),
                 ("sci-misc/live-thing".to_string(), vec!["**".to_string()]),
             ]
+        );
+    }
+
+    #[test]
+    fn package_mask_atom_removal_applies_across_repo_profile_and_user_sources() {
+        // repo-level: masks a and b.
+        // profile-level (the one chain level): "-a" removes the
+        // repo-level entry, adds c.
+        // user-level: "-c" removes the profile-level entry, adds d.
+        // Final: b (repo, survives) + d (user) -- a and c were each
+        // removed by a LATER source than the one that added them, which
+        // only works if -atom removal spans all three sources, not just
+        // within each file on its own.
+        let root = std::env::temp_dir().join("portage-profile-test-cross-source-mask");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let portage_dir = root.join("etc/portage");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&repo_profiles).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(
+            repo_profiles.join("package.mask"),
+            "dev-libs/a\ndev-libs/b\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("package.mask"), "-dev-libs/a\ndev-libs/c\n").unwrap();
+        fs::write(
+            portage_dir.join("package.mask"),
+            "-dev-libs/c\ndev-libs/d\n",
+        )
+        .unwrap();
+
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.package_mask,
+            vec!["dev-libs/b".to_string(), "dev-libs/d".to_string()]
         );
     }
 
@@ -573,7 +657,8 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root).expect("config with package.use must resolve");
+        let config = resolve_config(&root, &root.join("repo"))
+            .expect("config with package.use must resolve");
         assert_eq!(
             config.package_use,
             vec![

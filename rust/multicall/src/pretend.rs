@@ -169,7 +169,25 @@ pub fn run(args: &[String]) -> ExitCode {
     let config_root = config_root_from_env();
     let root = root_from_env();
 
-    let config = match portage_profile::resolve_config(&config_root) {
+    // resolve_config needs the main repo's own location for
+    // package.mask/.unmask's repo-level source (see its doc comment) --
+    // found via the same find_repos repos.conf parsing
+    // resolve_pretend_graph uses internally a few lines down; called
+    // again here since portage-profile can't depend back on portage-repo
+    // (portage-repo already depends on portage-profile).
+    let repos = match portage_repo::find_repos(&config_root) {
+        Ok(repos) => repos,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let Some(main_repo) = repos.iter().find(|r| r.is_main) else {
+        eprintln!("emerge: no main repo found in repos.conf");
+        return ExitCode::from(1);
+    };
+
+    let config = match portage_profile::resolve_config(&config_root, &main_repo.location) {
         Ok(config) => config,
         Err(e) => {
             eprintln!("emerge: {e}");

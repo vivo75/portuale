@@ -1,0 +1,4 @@
+# profile-level package.mask: masks a candidate for anyone inheriting
+# this profile level, stacked in chain order alongside the repo-level
+# and user-level sources.
+dev-libs/profilemaskedpkg

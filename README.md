@@ -562,6 +562,40 @@ PORTING/
   each side (the list of metadata keys concatenated into the flattened
   dependency string), reusing every other piece of recursion machinery
   (dedup, `||` handling, blocker extraction) unmodified.
+
+  **Full `package.mask`/`.unmask` 3-source stacking**: replaces the
+  previous user-level-only check with real portage's actual mechanism,
+  grounded directly against `MaskManager.py`: three sources -- the main
+  repo's own repo-level `<repo>/profiles/package.mask`/`.unmask` (real
+  portage's most common real-world masking source, e.g. security/arch
+  masks), every profile level's own `package.mask`/`.unmask` pair (in
+  chain order, same order `make.defaults` is processed in), and the
+  user-level `/etc/portage` files -- concatenated in exactly that order
+  and stacked with `-atom` removal applying across the *whole combined
+  stream*, not just within one file, matching real
+  `stack_lists(incremental=1)` exactly (`stack_mask_lines`, shared
+  between mask and unmask, both of which real portage stacks
+  identically). This is a genuine correctness improvement beyond just
+  adding sources: the pilot's own `package.unmask` previously treated a
+  leading `-` as meaningless, since with only one source there was
+  nothing for it to meaningfully remove -- reading real `MaskManager.py`
+  showed `-atom` removal is just as real for `package.unmask` as for
+  `package.mask` once more than one source exists, so it's honored now
+  too. Threading in the repo-level source required one real,
+  user-confirmed architecture change: `portage-profile::resolve_config`
+  previously had zero knowledge of repos (repo discovery lives entirely
+  in `portage-repo`, which already depends on `portage-profile`, so the
+  dependency can't run the other way) -- it now takes the main repo's
+  own location as a parameter, discovered by the CLI layer via
+  `find_repos` (which gained an `is_main` field for exactly this) before
+  `resolve_config` is even called. Deliberately still out of scope,
+  matching the overlays follow-up's own already-confirmed cut: an
+  *overlay* repo's own repo-level `package.mask`/`.unmask` (only the one
+  main repo's is read), and `masters` (eclass/mask inheritance across
+  repos). `package.accept_keywords`/`.use` remain user-level only for
+  now -- real portage has repo/profile-level equivalents for both too,
+  but stacking those is a separate, still-open cut this slice doesn't
+  claim to close.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -659,6 +693,24 @@ line within `package.mask` itself, proving `-atom` removal works, not just
 `package.unmask`), `wildcardkeywordpkg` (only `~amd64`, made visible by a
 `*/wildcardkeywordpkg ~amd64` wildcard entry), and `livekeywordpkg` (no
 `KEYWORDS` at all, like a live/9999 ebuild, made visible by a `**` entry).
+
+`PORTING/fixtures/repo/profiles/package.mask` (repo-level),
+`PORTING/fixtures/repo/profiles/base/package.mask` (one profile level's
+own mask), and `PORTING/fixtures/repo/profiles/default/package.unmask`
+(the leaf profile's own unmask) exercise full 3-source stacking:
+`repomaskedpkg` (masked only by the repo-level file, stays hidden),
+`profilemaskedpkg` (masked only by the `base` profile level's own file,
+stays hidden -- proving a *non-leaf* profile level's own mask is read),
+`repomaskedthenprofileunmaskedpkg` (masked by the repo-level file,
+unmasked again by the leaf profile's own `package.unmask` -- a
+profile-level unmask cancelling a repo-level mask, proving the three
+sources are genuinely stacked together), and
+`repomaskedthenuserremovedpkg` (masked by the repo-level file, then
+un-masked by a `-dev-libs/repomaskedthenuserremovedpkg` line added to
+the existing user-level `package.mask` fixture -- `-atom` removal
+reaching all the way from the user's own file back to an entry a
+different, earlier source added, the specific thing that wasn't
+possible before this slice).
 
 `PORTING/fixtures/etc/portage/package.use` exercises the per-package USE
 slice: `packageuseenablepkg` (its `pkguseflag?`-gated dependency is only
@@ -800,11 +852,29 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useflagpkg
 
 # package.mask: hidden, no matching package.unmask entry
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/hardmaskedpkg
-# !!! no visible ebuild for "dev-libs/hardmaskedpkg"  (exit 1)
+# emerge: there are no ebuilds to satisfy "dev-libs/hardmaskedpkg".  (exit 1)
 
 # package.mask + package.unmask: masked, then unmasked again -> visible
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/maskedandunmaskedpkg
 # [ebuild  N] dev-libs/maskedandunmaskedpkg-1.0
+
+# repo-level profiles/package.mask (real portage's most common real-world
+# masking source, e.g. security/arch masks) hides a package the same way
+# a user-level package.mask entry does
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/repomaskedpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/repomaskedpkg".  (exit 1)
+
+# a repo-level mask, cancelled by a profile-level package.unmask entry --
+# proving the three sources (repo, profile chain, user) are genuinely
+# stacked together, not checked independently
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/repomaskedthenprofileunmaskedpkg
+# [ebuild  N] dev-libs/repomaskedthenprofileunmaskedpkg-1.0
+
+# a repo-level mask, cancelled by a "-atom" line in the user-level
+# package.mask -- -atom removal now spans all three sources, not just
+# within the one file that contains the "-atom" line
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/repomaskedthenuserremovedpkg
+# [ebuild  N] dev-libs/repomaskedthenuserremovedpkg-1.0
 
 # package.accept_keywords wildcard ("*/wildcardkeywordpkg ~amd64") makes an
 # otherwise ~amd64-only, not-globally-accepted package visible

@@ -114,12 +114,14 @@ def _root():
 def find_repos(config_root):
     """Parses repos.conf and returns every [reponame] section that has a
     location (the main repo plus any overlays) as a list of dicts with
-    "name"/"location"/"priority", sorted ascending by (priority, name) --
-    matching real portage's own prepos_order (see
+    "name"/"location"/"priority"/"is_main", sorted ascending by
+    (priority, name) -- matching real portage's own prepos_order (see
     lib/portage/repository/config.py), which is also the order
     list_candidates below iterates them in, so a tie between two repos
     providing the identical version is broken toward the higher-priority
-    one. Mirrors portage-repo/src/lib.rs's find_repos exactly."""
+    one. "is_main" (whether this is repos.conf's [DEFAULT] main-repo) is
+    needed by resolve_config's own repo-level package.mask/.unmask
+    source. Mirrors portage-repo/src/lib.rs's find_repos exactly."""
     repos_conf = os.path.join(config_root, "etc", "portage", "repos.conf")
     if os.path.isdir(repos_conf):
         files = sorted(
@@ -159,7 +161,14 @@ def find_repos(config_root):
             priority = None
         if priority is None:
             priority = -1000 if name == main_repo else 0
-        repos.append({"name": name, "location": location, "priority": priority})
+        repos.append(
+            {
+                "name": name,
+                "location": location,
+                "priority": priority,
+                "is_main": name == main_repo,
+            }
+        )
 
     if not any(r["name"] == main_repo for r in repos):
         raise ResolutionError(f'no location for repo "{main_repo}" in repos.conf')
@@ -192,21 +201,28 @@ def _read_config_lines(path):
     return lines
 
 
-def _load_package_mask(config_root):
-    path = os.path.join(config_root, "etc", "portage", "package.mask")
+def _stack_mask_lines(sources):
+    """Stacks ordered package.mask/.unmask lines from multiple sources
+    (earlier sources first) with real portage's own -atom removal
+    semantics -- see MaskManager.py's stack_lists(incremental=1): a
+    -atom line removes the exact matching atom text added by ANY earlier
+    source in this same stack, not just within its own source (e.g. a
+    user-level -atom in package.mask can remove an atom the repo or a
+    profile level added). Shared between package.mask and
+    package.unmask, which real portage stacks identically -- unlike this
+    pilot's previous, user-level-only package.unmask handling, which
+    treated a leading "-" there as meaningless; it's meaningful once
+    more than one source can contribute an unmask entry. Mirrors
+    portage-profile/src/lib.rs's stack_mask_lines exactly."""
     result = []
-    for line in _read_config_lines(path):
-        if line.startswith("-"):
-            removed = line[1:]
-            result = [x for x in result if x != removed]
-        else:
-            result.append(line)
+    for lines in sources:
+        for line in lines:
+            if line.startswith("-"):
+                removed = line[1:]
+                result = [x for x in result if x != removed]
+            else:
+                result.append(line)
     return result
-
-
-def _load_package_unmask(config_root):
-    path = os.path.join(config_root, "etc", "portage", "package.unmask")
-    return [line for line in _read_config_lines(path) if not line.startswith("-")]
 
 
 def _load_package_accept_keywords(config_root):
@@ -524,7 +540,7 @@ def _process_make_conf_file(path, config_root, scalars, use_flags, accept_keywor
         scalars[key] = value
 
 
-def resolve_config(config_root):
+def resolve_config(config_root, main_repo_location):
     """Computes real USE/ACCEPT_KEYWORDS/package.mask/.unmask/
     .accept_keywords: the profile chain rooted at
     <config_root>/etc/portage/make.profile (if it exists), then
@@ -534,33 +550,60 @@ def resolve_config(config_root):
     portage-profile/src/lib.rs's resolve_config exactly -- see that
     crate's doc comment for the full algorithm and its documented scope
     cuts. Returns a dict with keys "use_flags", "accept_keywords",
-    "package_mask", "package_unmask", "package_accept_keywords"."""
+    "package_mask", "package_unmask", "package_accept_keywords".
+
+    main_repo_location (the main repo's own tree root -- see
+    find_repos/is_main) is needed for package.mask/.unmask's repo-level
+    source, <main_repo_location>/profiles/package.mask -- real portage's
+    most common real-world masking source. It's stacked together with
+    every profile level's own package.mask/.unmask (in chain order) and
+    the user-level /etc/portage files, exactly matching real
+    MaskManager.py's three-source stack (see _stack_mask_lines). An
+    overlay repo's own repo-level package.mask/.unmask stays deliberately
+    out of scope, same as the rest of overlays' per-repo config -- only
+    the one main repo's is read here."""
     use_flags = set()
     accept_keywords = set()
     scalars = {}
 
     make_profile = os.path.join(config_root, "etc", "portage", "make.profile")
-    if os.path.exists(make_profile):
-        for level in _resolve_profile_chain(make_profile):
-            make_defaults = os.path.join(level, "make.defaults")
-            if not os.path.isfile(make_defaults):
-                continue
-            # Real config.py quirk: USE is excluded from cross-level
-            # substitution -- see the module doc comment.
-            scalars.pop("USE", None)
-            with open(make_defaults) as f:
-                text = f.read()
-            _process_config_lines(text, scalars, use_flags, accept_keywords)
+    chain = _resolve_profile_chain(make_profile) if os.path.exists(make_profile) else []
+    for level in chain:
+        make_defaults = os.path.join(level, "make.defaults")
+        if not os.path.isfile(make_defaults):
+            continue
+        # Real config.py quirk: USE is excluded from cross-level
+        # substitution -- see the module doc comment.
+        scalars.pop("USE", None)
+        with open(make_defaults) as f:
+            text = f.read()
+        _process_config_lines(text, scalars, use_flags, accept_keywords)
 
     make_conf = os.path.join(config_root, "etc", "portage", "make.conf")
     if os.path.isfile(make_conf):
         _process_make_conf_file(make_conf, config_root, scalars, use_flags, accept_keywords, set())
 
+    mask_sources = [
+        _read_config_lines(os.path.join(main_repo_location, "profiles", "package.mask"))
+    ]
+    unmask_sources = [
+        _read_config_lines(os.path.join(main_repo_location, "profiles", "package.unmask"))
+    ]
+    for level in chain:
+        mask_sources.append(_read_config_lines(os.path.join(level, "package.mask")))
+        unmask_sources.append(_read_config_lines(os.path.join(level, "package.unmask")))
+    mask_sources.append(
+        _read_config_lines(os.path.join(config_root, "etc", "portage", "package.mask"))
+    )
+    unmask_sources.append(
+        _read_config_lines(os.path.join(config_root, "etc", "portage", "package.unmask"))
+    )
+
     return {
         "use_flags": use_flags,
         "accept_keywords": accept_keywords,
-        "package_mask": _load_package_mask(config_root),
-        "package_unmask": _load_package_unmask(config_root),
+        "package_mask": _stack_mask_lines(mask_sources),
+        "package_unmask": _stack_mask_lines(unmask_sources),
         "package_accept_keywords": _load_package_accept_keywords(config_root),
         "package_use": _load_package_use(config_root),
     }
@@ -1176,7 +1219,14 @@ def run(args):
     top_level_pkgs = {tuple(_parse_atom(a).cp.split("/", 1)) for a in atom_args}
 
     try:
-        config = resolve_config(_config_root())
+        # resolve_config needs the main repo's own location for
+        # package.mask/.unmask's repo-level source (see its own
+        # docstring) -- found via the same find_repos repos.conf parsing
+        # resolve_pretend_graph uses internally a few lines down; called
+        # again here since it's cheap and keeps this mirroring the Rust
+        # side's own pretend.rs exactly.
+        main_repo = next(r for r in find_repos(_config_root()) if r["is_main"])
+        config = resolve_config(_config_root(), main_repo["location"])
         result = resolve_pretend_graph(_config_root(), _root(), atom_args, config)
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

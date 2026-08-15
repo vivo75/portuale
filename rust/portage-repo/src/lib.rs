@@ -77,6 +77,13 @@ pub struct RepoConfig {
     pub name: String,
     pub location: PathBuf,
     pub priority: i32,
+    /// Whether this is `repos.conf`'s `[DEFAULT] main-repo` -- needed by
+    /// callers that read repo-level config from the main repo specifically
+    /// (e.g. `portage_profile::resolve_config`'s repo-level
+    /// `profiles/package.mask`), since an overlay's own repo-level config
+    /// is deliberately out of scope (see `resolve_pretend_graph`'s doc
+    /// comment on the overlays follow-up).
+    pub is_main: bool,
 }
 
 fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>) {
@@ -176,6 +183,7 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, String> {
             name: name.clone(),
             location,
             priority,
+            is_main: *name == main_repo,
         });
     }
 
@@ -1108,7 +1116,8 @@ mod tests {
     fn resolve_real(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-        let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(&repos, &root, &atom_str, &config)
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
@@ -1481,7 +1490,8 @@ mod tests {
     #[test]
     fn real_resolved_use_flags_drive_dependency_recursion() {
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
         let entries =
             resolve_pretend_graph(&root, &root, &["dev-libs/useflagpkg".to_string()], &config)
                 .expect("resolve_pretend_graph must succeed")
@@ -1495,7 +1505,8 @@ mod tests {
 
     fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
         resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
             .entries
@@ -1538,7 +1549,8 @@ mod tests {
 
     fn graph_result_real(atom_str: &str) -> GraphResult {
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
         resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

@@ -1,0 +1,4 @@
+# profile-level package.unmask: cancels a matching package.mask entry
+# from an earlier-stacked source (here, the repo-level mask) for anyone
+# inheriting this leaf profile.
+dev-libs/repomaskedthenprofileunmaskedpkg
