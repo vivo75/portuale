@@ -405,3 +405,49 @@ pub(crate) fn installed_cp_sources_with(
 }
 
 pub(crate) type SlotMoveMap = HashMap<(String, String), Vec<(String, String)>>;
+
+/// Every `slotmove` grouped by its `cat/pkg`, in command order, so
+/// `apply_updates_to_slot` walks only that package's own moves.
+pub(crate) fn slot_move_map() -> &'static SlotMoveMap {
+    static MAP: OnceLock<SlotMoveMap> = OnceLock::new();
+    MAP.get_or_init(|| {
+        let mut map: SlotMoveMap = HashMap::new();
+        for cmd in global_package_updates() {
+            if let UpdateCmd::SlotMove {
+                cp,
+                old_slot,
+                new_slot,
+            } = cmd
+            {
+                map.entry(cp.clone())
+                    .or_default()
+                    .push((old_slot.clone(), new_slot.clone()));
+            }
+        }
+        map
+    })
+}
+
+/// Apply `slotmove` to an installed package's `(slot, sub_slot)` given its
+/// (already forward-moved) `cat/pkg`.
+pub fn apply_updates_to_slot(
+    category: &str,
+    package: &str,
+    slot: &str,
+    sub_slot: &str,
+) -> (String, String) {
+    let Some(moves) = slot_move_map().get(&(category.to_string(), package.to_string())) else {
+        return (slot.to_string(), sub_slot.to_string());
+    };
+    let mut s = slot.to_string();
+    let mut ss = sub_slot.to_string();
+    for (old_slot, new_slot) in moves {
+        if s == *old_slot {
+            if ss == *old_slot {
+                ss = new_slot.clone();
+            }
+            s = new_slot.clone();
+        }
+    }
+    (s, ss)
+}
