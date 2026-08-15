@@ -148,6 +148,29 @@ pub(crate) fn pick_binary_instance<'a>(
     }
 }
 
+/// The raw `Packages` record for `category/package-version` from the first
+/// binrepo (in order) listing that exact CPV: the repo (sync URI, signature
+/// policy) plus the record (`PATH`, `SIZE`, digests). `None` if no binrepo
+/// lists it. Newest build when several exist; use
+/// [`find_remote_binpkg_instance`] for a specific `BUILD_ID`.
+/// Portage: gpkg per-binrepo signature policy
+pub fn find_remote_binpkg<'a>(
+    binrepos: &'a [portage_profile::BinRepo],
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<(&'a portage_profile::BinRepo, HashMap<String, String>)> {
+    find_remote_binpkg_instance(FindRemoteBinpkgInstanceArgs {
+        binrepos,
+        root,
+        category,
+        package,
+        version,
+        build_id: None,
+    })
+}
+
 /// Arguments of [`find_remote_binpkg_instance`]; the result borrows
 /// only `binrepos` (`'a`).
 pub struct FindRemoteBinpkgInstanceArgs<'a, 'b> {

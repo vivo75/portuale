@@ -8,6 +8,8 @@ use crate::*;
 /// Portage: porttree.py's ebuild fallback.
 pub type AuxMetadataProvider = fn(&Path, &str, &str) -> Result<HashMap<String, String>, String>;
 
+pub(crate) static AUX_METADATA_PROVIDER: OnceLock<AuxMetadataProvider> = OnceLock::new();
+
 /// Whether Portage would read this repo's pregenerated aux metadata from
 /// `metadata/md5-cache`: the **first known** entry of
 /// [`RepoConfig::cache_formats`] is `md5-dict`.

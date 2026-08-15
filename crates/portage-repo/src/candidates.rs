@@ -52,6 +52,17 @@ pub struct Candidate {
     pub binary_deps: HashMap<String, String>,
 }
 
+/// Accepts `<package>-<version>` only when the rest starts with a digit, so
+/// "foo" never absorbs a sibling "foo-bar-2.0" directory.
+pub(crate) fn strip_version_prefix<'a>(dir_name: &'a str, package: &str) -> Option<&'a str> {
+    let rest = dir_name.strip_prefix(package)?.strip_prefix('-')?;
+    if rest.starts_with(|c: char| c.is_ascii_digit()) {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
 /// Splits `package-version` into `(PN, PVR)` like Portage `_pkgsplit`: longest
 /// trailing `-`-suffix that `ververify` accepts. Inverse of
 /// [`strip_version_prefix`]; the single copy.

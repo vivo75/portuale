@@ -13,9 +13,12 @@ pub mod md5_dict;
 mod merge_order;
 
 mod binary_index;
+mod binpkg_use;
 mod candidates;
 mod depclean;
+mod env_roots;
 mod error;
+mod globals;
 mod info_pkgs;
 mod installed;
 mod license;
@@ -27,9 +30,12 @@ mod resolve;
 mod updates;
 
 pub use binary_index::*;
+pub use binpkg_use::*;
 pub use candidates::*;
 pub use depclean::*;
+pub use env_roots::*;
 pub use error::*;
+pub use globals::*;
 pub use info_pkgs::*;
 pub use installed::*;
 pub(crate) use license::*;

@@ -28,7 +28,9 @@ use crate::emerge_options;
 
 use portage_dep::{Atom, Blocker, Operator, SlotOperator, match_from_list, parse_atom};
 
-use portage_repo::{ChangedDepsReportEntry, SlotConflict, split_pf};
+use portage_repo::{
+    ChangedDepsReportEntry, SlotConflict, config_root_from_env, root_from_env, split_pf,
+};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
