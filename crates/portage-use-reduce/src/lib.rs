@@ -310,6 +310,97 @@ struct SelectSubsetArgs<'a> {
     mode: MatchMode,
 }
 
+/// Portage's `select_subset`: walks the parsed tree keeping only atoms
+/// reachable through a conditional whose flag is in `subset`.
+/// `disjunction` holds directly inside a `"||"` member list; `selected`
+/// holds once inside a subset-matching conditional. Other conditionals
+/// are still evaluated via `is_active`.
+fn select_subset(args: SelectSubsetArgs<'_>) -> Result<Vec<DepNode>, Error> {
+    let SelectSubsetArgs {
+        nodes,
+        disjunction,
+        selected,
+        subset,
+        uselist,
+        mode,
+    } = args;
+    let mut result: Vec<DepNode> = Vec::new();
+    let mut iter = nodes.iter();
+    while let Some(node) = iter.next() {
+        match node {
+            DepNode::Group(children) => {
+                // A bare grouping: selection state passes through unchanged.
+                let sub = select_subset(SelectSubsetArgs {
+                    nodes: children,
+                    disjunction: false,
+                    selected,
+                    subset,
+                    uselist,
+                    mode,
+                })?;
+                if disjunction {
+                    if !sub.is_empty() {
+                        result.push(DepNode::Group(sub));
+                    }
+                } else {
+                    result.extend(sub);
+                }
+            }
+            DepNode::Str(s) if s.ends_with('?') => {
+                let Some(DepNode::Group(children)) = iter.next() else {
+                    return Err(Error::ConditionalNotFollowedByGroup { s: s.to_string() });
+                };
+                if is_active(s, uselist, mode)? {
+                    let flag = &s[..s.len() - 1];
+                    let now_selected = selected || subset.contains(flag);
+                    let sub = select_subset(SelectSubsetArgs {
+                        nodes: children,
+                        disjunction: false,
+                        selected: now_selected,
+                        subset,
+                        uselist,
+                        mode,
+                    })?;
+                    if disjunction {
+                        if !sub.is_empty() {
+                            result.push(DepNode::Group(sub));
+                        }
+                    } else {
+                        result.extend(sub);
+                    }
+                }
+            }
+            DepNode::Str(s) if s == "||" => {
+                let Some(DepNode::Group(children)) = iter.next() else {
+                    return Err(Error::OrNotFollowedByGroup);
+                };
+                let sub = select_subset(SelectSubsetArgs {
+                    nodes: children,
+                    disjunction: true,
+                    selected,
+                    subset,
+                    uselist,
+                    mode,
+                })?;
+                if !sub.is_empty() {
+                    if disjunction {
+                        result.extend(sub);
+                    } else {
+                        result.push(DepNode::Str("||".to_string()));
+                        result.push(DepNode::Group(sub));
+                    }
+                }
+            }
+            DepNode::Str(s) => {
+                if selected {
+                    result.push(DepNode::Str(s.clone()));
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Re-serializes a `DepNode` tree into a flat token stream for the final
 /// `use_reduce_flat` flattening.
 fn serialize_dep_tree(nodes: &[DepNode], out: &mut Vec<String>) {
