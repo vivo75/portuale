@@ -245,6 +245,25 @@ pub(crate) fn news_notice_enabled(config: &portage_profile::Config) -> bool {
     config_features_list(config).iter().any(|t| t == "news")
 }
 
+/// Print the GLEP 42 count notice when `news` is in the resolved `FEATURES`
+/// and at least one repo has a nonzero unread count. No `--quiet` gate.
+/// Returns whether the notice printed: the `--ask` + `--read-news` prompt
+/// only fires when it did.
+/// Portage: post_emerge.py, display_news_notification
+pub(crate) fn display_news_notice_if_any(
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    color: &Colorizer,
+) -> bool {
+    if !news_notice_enabled(config) {
+        return false;
+    }
+    let context = news_context(repos, &config_root_from_env(), config);
+    let per_repo = unread_news_counts(repos, root, &context);
+    print_news_notifications(&per_repo, color)
+}
+
 /// Read one news state file: each line split on whitespace, cut at the
 /// first `#`-led token, re-joined; empty results dropped. A missing file
 /// reads as empty.
