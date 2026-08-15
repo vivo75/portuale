@@ -1,0 +1,5 @@
+#!/bin/bash
+# portuale (#326 D1/D2): phase-helpers.sh runs ${PORTAGE_BIN_PATH}/chmod-lite
+# at the end of every unpack. Native mode execs the ported helper; with
+# PORTUALE_PYTHON_HELPERS=real it execs the checkout's upstream script.
+exec "${PORTUALE_BIN:?portuale: PORTUALE_BIN unset}" __helper chmod-lite "$@"

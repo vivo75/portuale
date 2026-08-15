@@ -1,0 +1,4 @@
+#!/bin/bash
+# portuale (#326 D6): there is no IPC daemon, so this always exits 127;
+# an exit code of 1 would make has_version silently answer "not installed".
+exec "${PORTUALE_BIN:?portuale: PORTUALE_BIN unset}" __helper ebuild-ipc "$@"
