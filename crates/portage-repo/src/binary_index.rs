@@ -1,0 +1,149 @@
+//! The binary package index (`Packages`) and binary candidates.
+
+use crate::*;
+
+/// Parses `<pkgdir>/Packages` into one `HashMap` per package entry, skipping
+/// the first (global header) block. Trusts the index outright (Portage's
+/// default `FEATURES="pkgdir-index-trusted"`); revalidation lives one layer
+/// up. A missing file is an empty list.
+pub fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
+    let path = pkgdir.join("Packages");
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    parse_packages_index(&text).1
+}
+
+/// Splits index text into its global header block and one `HashMap` per
+/// package entry. [`read_packages_index`] drops the header.
+pub fn parse_packages_index(text: &str) -> (HashMap<String, String>, Vec<HashMap<String, String>>) {
+    let mut blocks: Vec<HashMap<String, String>> = Vec::new();
+    let mut current: HashMap<String, String> = HashMap::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                blocks.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        if let Some((key, value)) = line.split_once(": ") {
+            current.insert(key.to_string(), value.to_string());
+        }
+    }
+    if !current.is_empty() {
+        blocks.push(current);
+    }
+    // The first block is the global header, never a package entry.
+    if blocks.is_empty() {
+        (HashMap::new(), Vec::new())
+    } else {
+        let header = blocks.remove(0);
+        (header, blocks)
+    }
+}
+
+/// A parsed binary-package index: `Packages` blocks, or scan-synthesized
+/// entries when there is no `Packages`. The read-vs-scan decision is made
+/// once, at the CLI boundary.
+#[derive(Debug, Clone, Default)]
+pub struct BinaryIndex {
+    pub(crate) entries: Vec<HashMap<String, String>>,
+    /// `(category, package)` -> indices into `entries`, built once: a remote
+    /// index has ~18 000 entries, so a linear scan per lookup was quadratic.
+    pub(crate) by_cp: HashMap<(String, String), Vec<usize>>,
+}
+
+impl PartialEq for BinaryIndex {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
+}
+
+impl Eq for BinaryIndex {}
+
+impl BinaryIndex {
+    /// Parses `<pkgdir>/Packages`; a missing file is an empty index.
+    pub fn from_pkgdir(pkgdir: &Path) -> Self {
+        Self::from_entries(read_packages_index(pkgdir))
+    }
+
+    /// Builds from caller-assembled entries (a `$PKGDIR` scan of each
+    /// `.tbz2`/`.gpkg.tar`'s embedded metadata as `Packages`-style records).
+    pub fn from_entries(entries: Vec<HashMap<String, String>>) -> Self {
+        let mut by_cp: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        for (i, e) in entries.iter().enumerate() {
+            if let Some((cat, pkg, _)) = e.get("CPV").and_then(|cpv| split_cpv(cpv)) {
+                by_cp.entry((cat, pkg)).or_default().push(i);
+            }
+        }
+        Self { entries, by_cp }
+    }
+
+    pub(crate) fn entries(&self) -> &[HashMap<String, String>] {
+        &self.entries
+    }
+}
+
+/// `BinaryIndex::from_pkgdir`, memoised by directory: a ~20 MB index re-parsed
+/// per atom made big `--getbinpkg` graphs take minutes. A live refresh installs
+/// a per-directory override here *before* resolution (`Some` = use it, `None`
+/// = the binrepo contributes nothing); the override wins over memo and disk.
+pub(crate) fn cached_binary_index(pkgdir: &Path) -> std::sync::Arc<BinaryIndex> {
+    if let Some(overridden) = remote_binary_index_override(pkgdir) {
+        return overridden.unwrap_or_default();
+    }
+    static CACHE: OnceLock<RwLock<HashMap<PathBuf, std::sync::Arc<BinaryIndex>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    if let Some(hit) = cache.read().unwrap().get(pkgdir) {
+        return hit.clone();
+    }
+    let idx = std::sync::Arc::new(BinaryIndex::from_pkgdir(pkgdir));
+    cache
+        .write()
+        .unwrap()
+        .insert(pkgdir.to_path_buf(), idx.clone());
+    idx
+}
+
+/// The live-refresh override table for [`cached_binary_index`]. Cleared where a
+/// run starts; unit-test temp dirs never collide.
+pub(crate) static REMOTE_INDEX_OVERRIDE: OnceLock<
+    RwLock<HashMap<PathBuf, Option<std::sync::Arc<BinaryIndex>>>>,
+> = OnceLock::new();
+
+pub(crate) fn remote_binary_index_override(
+    pkgdir: &Path,
+) -> Option<Option<std::sync::Arc<BinaryIndex>>> {
+    REMOTE_INDEX_OVERRIDE
+        .get()
+        .and_then(|table| table.read().unwrap().get(pkgdir).cloned())
+}
+
+/// Picks one `Packages` entry of `cat/pkg-version` (binpkg-multi-instance
+/// aware). `Some(id)` selects exactly that `BUILD_ID`;
+/// `None` the newest build -- highest `(BUILD_TIME, BUILD_ID)`, Portage
+/// `dbapi._cmp_cpv` order.
+pub(crate) fn pick_binary_instance<'a>(
+    entries: &'a [HashMap<String, String>],
+    want_cpv: &str,
+    build_id: Option<&str>,
+) -> Option<&'a HashMap<String, String>> {
+    let matching = entries
+        .iter()
+        .filter(|e| e.get("CPV").map(String::as_str) == Some(want_cpv));
+    match build_id {
+        Some(id) => matching
+            .into_iter()
+            .find(|e| e.get("BUILD_ID").map(String::as_str) == Some(id)),
+        None => matching.max_by_key(|e| {
+            (
+                e.get("BUILD_TIME")
+                    .and_then(|t| t.trim().parse::<i64>().ok())
+                    .unwrap_or(i64::MIN),
+                e.get("BUILD_ID")
+                    .and_then(|t| t.trim().parse::<i64>().ok())
+                    .unwrap_or(i64::MIN),
+            )
+        }),
+    }
+}

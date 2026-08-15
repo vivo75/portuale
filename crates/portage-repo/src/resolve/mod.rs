@@ -1,9 +1,11 @@
+mod cycles;
 mod entry;
 mod feedback;
 mod result;
 mod rev_dep;
 mod skipped;
 mod slot_conflict;
+pub use cycles::*;
 pub use entry::*;
 pub(crate) use feedback::*;
 pub use result::*;
