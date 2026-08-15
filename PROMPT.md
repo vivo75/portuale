@@ -134,30 +134,39 @@ When it is tackled later:
   shared submodule) — neither team may unilaterally narrow it to make
   their side pass.
 
-## Suggested first execution step
+## First execution step — DONE, see PORTING/README.md for current state
 
-Pilot the whole pipeline end-to-end on the smallest meaningful slice before
-committing further:
+The original plan here was to pilot the whole pipeline end-to-end on the
+smallest meaningful slice (`portage.versions`, a minimal `emerge`/`ebuild`
+multicall skeleton, musl build + scratch-container smoke test) before
+committing further, and only tackle depgraph/config resolution and
+broader `emerge`/`ebuild` behavior once that pilot proved out the
+mechanism (harness contract format, CI gating, benchmark methodology,
+musl packaging).
 
-1. `portage.versions` (version comparison) — pure, no I/O, small surface,
-   genuinely tricky edge cases (`_alpha`/`_beta`/`_pre`/`_rc`, revisions,
-   letter suffixes). Build the correctness harness, the pytest contract
-   suite, and the benchmark harness against it.
-2. A minimal `emerge`/`ebuild` skeleton that proves the multicall/argv[0]
-   dispatch mechanism and gets a black-box pytest test running against
-   both real CLIs (even with trivial/stubbed behavior behind them).
-3. Rust musl build + scratch-container smoke test wired into CI from day
-   one, not bolted on later.
-
-Only after this pilot proves out the mechanism (harness contract format,
-CI gating, benchmark methodology, musl packaging) should the depgraph,
-config resolution, and broader `emerge`/`ebuild` behavior be tackled.
+That step is long since complete, and the pilot has since gone well
+beyond it — real atom matching, `use_reduce`, a working
+`emerge --pretend` with recursive DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND
+resolution, real profile/make.conf-derived USE/ACCEPT_KEYWORDS,
+package.mask/.unmask/.accept_keywords/.use, blockers, overlays, slot
+conflicts, multiple/versioned/slotted top-level atoms, `-v`'s USE display,
+and full CLI-surface recognition for both `emerge` and `ebuild`, among
+other slices. **`PORTING/README.md`'s "What this proves" section is the
+living, incrementally-updated record of everything actually shipped** —
+read that, not this section, for current state. This section is kept for
+historical context (why the pilot started where it did), not as a
+to-do list.
 
 ## How to use this prompt
 
-Treat the sections above as settled decisions, not a menu — proceed
-directly to scoping/scaffolding the suggested first execution step unless
-something here conflicts with current reality (e.g. the bash version
-floor logic has since changed, or repository structure has moved). If you
-find such a conflict, or find a genuinely open decision not covered above,
-ask before proceeding rather than assuming.
+Treat the "Context" through "Ownership" sections above as settled
+decisions, not a menu — they're the goals and hard constraints, and
+should still hold regardless of how much has been built since. For
+what to actually *do* next, don't scaffold the (already-completed) first
+execution step above — read `PORTING/README.md` for what exists and
+`git log` for how work has been landing (one small, fully-shipped,
+documented-and-tested "slice" at a time), and scope the next slice from
+there. If something in this document conflicts with current reality (e.g.
+the bash version floor logic has since changed, or repository structure
+has moved), or you find a genuinely open decision not covered above, ask
+before proceeding rather than assuming.
