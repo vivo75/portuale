@@ -678,9 +678,9 @@ pub struct GraphResult {
     pub slot_conflicts: Vec<SlotConflict>,
 }
 
-/// Recursively resolves `atom_str` and -- for packages that would newly
-/// merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first. Returns
-/// one `GraphEntry` per distinct category/package/slot combination
+/// Recursively resolves every atom in `atoms` and -- for packages that
+/// would newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
+/// Returns one `GraphEntry` per distinct category/package/slot combination
 /// visited, in discovery order (not topologically sorted): unlike a
 /// package name alone, two *different* slots of the same package are
 /// both real, independent entries (each gets its own recursion into its
@@ -690,6 +690,23 @@ pub struct GraphResult {
 /// `dev-lang/python:3.12` side by side). A *conflict* only exists when
 /// two atoms need the identical slot at incompatible versions -- see
 /// `SlotConflict`.
+///
+/// `atoms` seeds the BFS queue together, in the order given, before any
+/// dependency is ever pushed -- so all of them are dequeued and resolved
+/// first (level-order guarantee), and the existing visited-atom/
+/// resolved-slot/blocker bookkeeping below, already keyed by atom text or
+/// `(category, package, slot)` rather than by "the one root", handles
+/// sharing between them for free: a dependency common to two requested
+/// atoms dedupes exactly like a diamond dependency does, and a slot
+/// conflict between two top-level atoms (not just between two deps) is
+/// now detected too. A top-level atom with no visible candidate is fatal
+/// to the whole call (see the `NoVisibleCandidate` check below, matching
+/// real portage's own `depgraph.py` "there are no ebuilds to satisfy"
+/// behavior) rather than reported-and-continued the way a *dependency's*
+/// `NoVisibleCandidate` is -- confirmed with the user before implementing
+/// -- and since top-level atoms are always dequeued in argv order before
+/// any dependency, the first bad one aborts before any later atom
+/// (top-level or not) is even attempted.
 ///
 /// Each package's own `package.use` overrides (see `effective_use_flags`)
 /// only affect how *that* package's own DEPEND/RDEPEND are flattened --
@@ -748,10 +765,15 @@ pub struct GraphResult {
 pub fn resolve_pretend_graph(
     config_root: &Path,
     root: &Path,
-    atom_str: &str,
+    atoms: &[String],
     config: &portage_profile::Config,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
+
+    // Only used to tell a top-level atom's own NoVisibleCandidate (fatal
+    // to the whole call) apart from a dependency's (reported, not fatal)
+    // -- see the doc comment above.
+    let top_level: HashSet<&str> = atoms.iter().map(|s| s.as_str()).collect();
 
     // Guards against infinite requeuing (e.g. a dependency cycle): the
     // exact same atom *text* is only ever resolved once. This is
@@ -777,7 +799,9 @@ pub fn resolve_pretend_graph(
     let mut entries: Vec<GraphEntry> = Vec::new();
     let mut slot_conflicts: Vec<SlotConflict> = Vec::new();
     let mut queue: VecDeque<String> = VecDeque::new();
-    queue.push_back(atom_str.to_string());
+    for a in atoms {
+        queue.push_back(a.clone());
+    }
 
     let mut pending_blockers: Vec<PendingBlocker> = Vec::new();
 
@@ -794,6 +818,21 @@ pub fn resolve_pretend_graph(
         let key = (atom.category.clone(), atom.package.clone());
 
         let outcome = resolve_pretend(&repos, root, &current_atom, config)?;
+
+        // A top-level atom (as opposed to a dependency reached while
+        // recursing) with no visible candidate aborts the whole call --
+        // matching real portage's own depgraph.py behavior for an
+        // unsatisfiable target, not the "report and keep going" treatment
+        // a dependency's own NoVisibleCandidate gets a few lines down.
+        // Top-level atoms are always dequeued (and so reach this point)
+        // in argv order, before any dependency, so this also guarantees
+        // the *first* bad top-level atom is the one that aborts.
+        if top_level.contains(current_atom.as_str())
+            && matches!(outcome, PretendOutcome::NoVisibleCandidate)
+        {
+            return Err(format!("there are no ebuilds to satisfy {current_atom:?}."));
+        }
+
         let resolved_version = match &outcome {
             PretendOutcome::New { version } => Some(version.clone()),
             PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
@@ -1256,7 +1295,7 @@ mod tests {
 
     fn graph(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        resolve_pretend_graph(&root, &root, atom_str, &test_config())
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &test_config())
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
             .entries
             .into_iter()
@@ -1373,9 +1412,10 @@ mod tests {
     fn real_resolved_use_flags_drive_dependency_recursion() {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
-        let entries = resolve_pretend_graph(&root, &root, "dev-libs/useflagpkg", &config)
-            .expect("resolve_pretend_graph must succeed")
-            .entries;
+        let entries =
+            resolve_pretend_graph(&root, &root, &["dev-libs/useflagpkg".to_string()], &config)
+                .expect("resolve_pretend_graph must succeed")
+                .entries;
         let full_names: Vec<String> = entries
             .iter()
             .map(|e| format!("{}/{}", e.category, e.package))
@@ -1386,7 +1426,7 @@ mod tests {
     fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
-        resolve_pretend_graph(&root, &root, atom_str, &config)
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
             .entries
             .into_iter()
@@ -1429,7 +1469,7 @@ mod tests {
     fn graph_result_real(atom_str: &str) -> GraphResult {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root).expect("fixture config resolves");
-        resolve_pretend_graph(&root, &root, atom_str, &config)
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
 

@@ -16,12 +16,22 @@
 // simplified subset of real emerge's --pretend output, not
 // byte-identical to it.
 //
-// Anything outside the top-level atom's narrow slice (no --pretend, more
-// than one atom, a versioned/slotted/blocker top-level atom) is rejected
-// with a clear "not supported in this pilot" message rather than
-// silently doing the wrong thing. Dependency atoms extracted from
-// DEPEND/RDEPEND are NOT restricted this way -- real dependency strings
-// need the full atom grammar (operators, slots).
+// Anything outside the top-level atoms' narrow slice (no --pretend, a
+// versioned/slotted/blocker top-level atom) is rejected with a clear "not
+// supported in this pilot" message rather than silently doing the wrong
+// thing. Dependency atoms extracted from DEPEND/RDEPEND are NOT
+// restricted this way -- real dependency strings need the full atom
+// grammar (operators, slots).
+//
+// Multiple top-level atoms (`emerge --pretend foo bar`) ARE supported --
+// they seed the same BFS/dedup/slot-conflict machinery together (see
+// resolve_pretend_graph's doc comment), so a dependency shared between
+// two requested atoms dedupes like a diamond dependency, and a slot
+// conflict between two *targets* is detected too. A top-level atom with
+// no visible candidate aborts the whole run immediately (matching real
+// portage's own depgraph.py "there are no ebuilds to satisfy" behavior),
+// in argv order -- confirmed with the user before implementing, over the
+// alternative of reporting it and still resolving the rest.
 //
 // CLI surface: every real emerge option/action from lib/_emerge/main.py
 // (see emerge_options.rs) is recognized by name -- using one that isn't
@@ -63,7 +73,7 @@ fn print_blockers(entry: &GraphEntry, owner_version: &str) {
 }
 
 pub fn run(args: &[String]) -> ExitCode {
-    let mut atom_arg: Option<&str> = None;
+    let mut atom_args: Vec<&str> = Vec::new();
     let mut pretend = false;
 
     for arg in args {
@@ -71,11 +81,7 @@ pub fn run(args: &[String]) -> ExitCode {
         if arg == "--pretend" || arg == "-p" {
             pretend = true;
         } else if !arg.starts_with('-') {
-            if atom_arg.is_some() {
-                eprintln!("emerge (pilot v1): only a single package atom is supported");
-                return ExitCode::from(2);
-            }
-            atom_arg = Some(arg);
+            atom_args.push(arg);
         } else if let Some(found) = emerge_options::lookup(arg) {
             // Reports and exits immediately, matching every other
             // out-of-scope-input case in this pilot -- so there's no
@@ -108,20 +114,22 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    let Some(atom_str) = atom_arg else {
+    if atom_args.is_empty() {
         eprintln!("emerge (pilot v1): expected a package atom, e.g. `emerge --pretend cat/pkg`");
         return ExitCode::from(2);
-    };
+    }
 
-    let Some(atom) = parse_atom(atom_str) else {
-        eprintln!("emerge: invalid atom {atom_str:?}");
-        return ExitCode::from(1);
-    };
-    if atom.operator != Operator::None || atom.slot.is_some() || atom.version.is_some() {
-        eprintln!(
-            "emerge (pilot v1): only a bare category/package atom is supported, got {atom_str:?}"
-        );
-        return ExitCode::from(2);
+    for atom_str in &atom_args {
+        let Some(atom) = parse_atom(atom_str) else {
+            eprintln!("emerge: invalid atom {atom_str:?}");
+            return ExitCode::from(1);
+        };
+        if atom.operator != Operator::None || atom.slot.is_some() || atom.version.is_some() {
+            eprintln!(
+                "emerge (pilot v1): only a bare category/package atom is supported, got {atom_str:?}"
+            );
+            return ExitCode::from(2);
+        }
     }
 
     let config_root = config_root_from_env();
@@ -135,7 +143,8 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let result = match resolve_pretend_graph(&config_root, &root, atom_str, &config) {
+    let atoms: Vec<String> = atom_args.iter().map(|s| s.to_string()).collect();
+    let result = match resolve_pretend_graph(&config_root, &root, &atoms, &config) {
         Ok(result) => result,
         Err(e) => {
             eprintln!("emerge: {e}");
@@ -144,28 +153,17 @@ pub fn run(args: &[String]) -> ExitCode {
     };
     let entries = &result.entries;
 
-    // The BFS in resolve_pretend_graph always visits the requested atom
-    // first, so entries[0] is the top-level package; its outcome keeps
-    // the exact messages/exit codes the single-atom (no-deps) case always
-    // had, for backward compatibility with that simpler behavior.
-    let top = &entries[0];
-    match &top.outcome {
-        PretendOutcome::NoVisibleCandidate => {
-            eprintln!(
-                "!!! no visible ebuild for \"{}/{}\"",
-                top.category, top.package
-            );
-            return ExitCode::from(1);
-        }
-        PretendOutcome::AlreadyInstalled { version } if entries.len() == 1 => {
-            println!(
-                "{}/{}-{version} is already installed; nothing to do",
-                top.category, top.package
-            );
-            return ExitCode::SUCCESS;
-        }
-        _ => {}
-    }
+    // Which (category, package) pairs were directly requested (as opposed
+    // to reached only as a dependency) -- a top-level atom that's
+    // AlreadyInstalled gets its own "nothing to do" line, unlike a
+    // dependency-level one, which stays silent below. A top-level atom's
+    // own NoVisibleCandidate never reaches here at all: resolve_pretend_graph
+    // already aborted the whole call for that case (see its doc comment).
+    let top_level_pkgs: std::collections::HashSet<(String, String)> = atom_args
+        .iter()
+        .filter_map(|a| parse_atom(a))
+        .map(|a| (a.category, a.package))
+        .collect();
 
     for entry in entries {
         match &entry.outcome {
@@ -180,11 +178,18 @@ pub fn run(args: &[String]) -> ExitCode {
                 );
                 print_blockers(entry, to);
             }
-            // Already-satisfied dependencies aren't shown, matching real
-            // emerge's usual "don't clutter the list with what's already
-            // there" behavior -- the top-level already-installed,
-            // nothing-to-recurse-into case is handled above instead.
-            PretendOutcome::AlreadyInstalled { .. } => {}
+            PretendOutcome::AlreadyInstalled { version } => {
+                // Already-satisfied dependencies aren't shown, matching
+                // real emerge's usual "don't clutter the list with what's
+                // already there" behavior -- only a directly-requested
+                // (top-level) atom gets its own "nothing to do" line.
+                if top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone())) {
+                    println!(
+                        "{}/{}-{version} is already installed; nothing to do",
+                        entry.category, entry.package
+                    );
+                }
+            }
             PretendOutcome::NoVisibleCandidate => {
                 eprintln!(
                     "!!! no visible ebuild for dependency \"{}/{}\"",

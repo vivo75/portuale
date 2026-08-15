@@ -454,6 +454,37 @@ PORTING/
   no real behavior to keep in sync between two implementations, so
   `test_multicall.py`'s black-box tests against the real compiled binary
   are the only test surface, same as before this slice.
+
+  **Multiple top-level atoms**: `emerge --pretend foo bar` -- real
+  emerge's most common invocation shape -- was, until this slice,
+  explicitly rejected ("only a single package atom is supported"). Now
+  `resolve_pretend_graph` takes a slice of atoms instead of one, and
+  seeds all of them into the same BFS queue together, in argv order,
+  before any dependency is ever pushed: every piece of dedup/slot-
+  conflict/blocker bookkeeping the recursion follow-up already built is
+  keyed by atom text or `(category, package, slot)`, not by "the one
+  root", so it needed zero new code to handle sharing between two
+  *targets* the same way it already handled sharing between two
+  *dependencies* -- a dependency common to two requested packages dedupes
+  like a diamond dependency always did, and a slot conflict between two
+  targets (not just between two deps of one target) is now detected too.
+  A top-level atom with no visible candidate is fatal to the whole call,
+  not reported-and-continued the way a dependency's own
+  `NoVisibleCandidate` is -- confirmed with the user before implementing,
+  over the alternative of resolving the good atoms and reporting the bad
+  one alongside them. Since top-level atoms are always dequeued in argv
+  order before any dependency, the *first* bad one aborts the run before
+  any later atom, top-level or not, is even attempted, and before
+  anything is printed -- matching real portage's own actual behavior:
+  grounded against `lib/_emerge/depgraph.py`'s real "there are no ebuilds
+  to satisfy" message (not a guess), which the pilot's own top-level
+  "not found" message now uses verbatim instead of its previous
+  placeholder wording. The old single-atom "already installed; nothing
+  to do" shortcut (a `len(entries) == 1` special case) generalizes
+  cleanly: it's no longer a special case at all, just the ordinary rule
+  that any directly-requested atom resolving `AlreadyInstalled` gets its
+  own such line, while one reached only as a dependency stays silent, as
+  before.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -760,6 +791,21 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/virtualconsum
 # [ebuild  N] dev-libs/virtualconsumerpkg-1.0
 # [ebuild  N] virtual/texteditor-0
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# multiple top-level atoms: a dependency shared between two REQUESTED
+# packages (not just two deps of one package) dedupes the same way a
+# diamond dependency always did
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/shared-a dev-libs/shared-b
+# [ebuild  N] dev-libs/shared-a-1.0
+# [ebuild  N] dev-libs/shared-b-1.0
+# [ebuild  N] dev-libs/common-1.0
+
+# a bad top-level atom aborts the whole run immediately, in argv order --
+# real portage's own "there are no ebuilds to satisfy" wording (from
+# lib/_emerge/depgraph.py), not enforced/reported-and-continued the way a
+# dependency's own missing candidate is
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/does-not-exist dev-libs/newpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/does-not-exist".  (exit 1)
 
 # CLI surface recognition: a real emerge option this pilot doesn't
 # implement is named specifically, not lumped in with a typo

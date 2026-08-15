@@ -669,9 +669,9 @@ def resolve_blockers(root, pending, entries):
     return conflicts
 
 
-def resolve_pretend_graph(config_root, root, atom_str, config):
-    """Recursively resolves `atom_str` and -- for packages that would
-    newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
+def resolve_pretend_graph(config_root, root, atoms, config):
+    """Recursively resolves every atom in `atoms` and -- for packages that
+    would newly merge or upgrade -- its DEPEND+RDEPEND atoms, breadth-first.
     Returns a dict with keys "entries" (a list of (category, package,
     outcome, blockers, slot) tuples, one per distinct category/package/
     slot combination visited, in discovery order -- unlike a package name
@@ -684,6 +684,18 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
     New/Upgrade entries. See the module doc comment for the recursion's
     documented scope cuts.
 
+    `atoms` seeds the BFS queue together, in the order given, before any
+    dependency is ever pushed -- so all of them are dequeued and resolved
+    first (level-order guarantee), and the existing visited-atom/
+    resolved-slot/blocker bookkeeping below handles sharing between them
+    for free, same as a diamond dependency. A top-level atom with no
+    visible candidate raises ResolutionError (fatal to the whole call,
+    matching real portage's own depgraph.py "there are no ebuilds to
+    satisfy" behavior) rather than being reported-and-continued the way a
+    *dependency's* NoVisibleCandidate is; since top-level atoms are always
+    dequeued in argv order before any dependency, the first bad one aborts
+    before any later atom is even attempted.
+
     A slot conflict is when two different atoms land on the identical
     category/package/slot but need incompatible versions -- the second
     atom's own constraint doesn't accept the version the first one
@@ -695,6 +707,7 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
     going, using whichever version was resolved first. Mirrors
     portage-repo/src/lib.rs's resolve_pretend_graph exactly."""
     repos = find_repos(config_root)
+    top_level = set(atoms)
 
     # Guards against infinite requeuing (e.g. a dependency cycle): the
     # exact same atom text is only ever resolved once -- deliberately
@@ -716,7 +729,7 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
 
     entries = []
     slot_conflicts = []
-    queue = deque([atom_str])
+    queue = deque(atoms)
     pending_blockers = []
 
     while queue:
@@ -733,6 +746,14 @@ def resolve_pretend_graph(config_root, root, atom_str, config):
         key = (category, package)
 
         outcome = resolve_pretend(repos, root, current_atom_str, config)
+
+        # A top-level atom (as opposed to a dependency reached while
+        # recursing) with no visible candidate aborts the whole call --
+        # matching real portage's own depgraph.py behavior for an
+        # unsatisfiable target, not the "report and keep going" treatment
+        # a dependency's own NoVisibleCandidate gets a few lines down.
+        if current_atom_str in top_level and outcome[0] == "no_visible_candidate":
+            raise ResolutionError(f'there are no ebuilds to satisfy "{current_atom_str}".')
 
         if outcome[0] == "new":
             version = outcome[1]
@@ -1065,20 +1086,14 @@ def _is_bare_atom(a):
 
 
 def run(args):
-    atom_arg = None
+    atom_args = []
     pretend = False
 
     for arg in args:
         if arg in ("--pretend", "-p"):
             pretend = True
         elif not arg.startswith("-"):
-            if atom_arg is not None:
-                print(
-                    "emerge (pilot v1): only a single package atom is supported",
-                    file=sys.stderr,
-                )
-                return 2
-            atom_arg = arg
+            atom_args.append(arg)
         else:
             found = _lookup_option(arg)
             if found is not None:
@@ -1102,7 +1117,7 @@ def run(args):
         )
         return 2
 
-    if atom_arg is None:
+    if not atom_args:
         print(
             "emerge (pilot v1): expected a package atom, e.g. "
             "`emerge --pretend cat/pkg`",
@@ -1110,38 +1125,28 @@ def run(args):
         )
         return 2
 
-    atom = _parse_atom(atom_arg)
-    if atom is None:
-        print(f'emerge: invalid atom "{atom_arg}"', file=sys.stderr)
-        return 1
-    if not _is_bare_atom(atom):
-        print(
-            "emerge (pilot v1): only a bare category/package atom is "
-            f'supported, got "{atom_arg}"',
-            file=sys.stderr,
-        )
-        return 2
+    for atom_arg in atom_args:
+        atom = _parse_atom(atom_arg)
+        if atom is None:
+            print(f'emerge: invalid atom "{atom_arg}"', file=sys.stderr)
+            return 1
+        if not _is_bare_atom(atom):
+            print(
+                "emerge (pilot v1): only a bare category/package atom is "
+                f'supported, got "{atom_arg}"',
+                file=sys.stderr,
+            )
+            return 2
+
+    top_level_pkgs = {tuple(_parse_atom(a).cp.split("/", 1)) for a in atom_args}
+
     try:
         config = resolve_config(_config_root())
-        result = resolve_pretend_graph(_config_root(), _root(), atom_arg, config)
+        result = resolve_pretend_graph(_config_root(), _root(), atom_args, config)
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
     entries = result["entries"]
-
-    # resolve_pretend_graph's BFS always visits the requested atom first,
-    # so entries[0] is the top-level package; its outcome keeps the exact
-    # messages/exit codes the single-atom (no-deps) case always had.
-    top_category, top_package, top_outcome, _top_blockers, _top_slot = entries[0]
-    if top_outcome[0] == "no_visible_candidate":
-        print(f'!!! no visible ebuild for "{top_category}/{top_package}"', file=sys.stderr)
-        return 1
-    if top_outcome[0] == "already_installed" and len(entries) == 1:
-        print(
-            f"{top_category}/{top_package}-{top_outcome[1]} is already installed; "
-            "nothing to do"
-        )
-        return 0
 
     def print_blockers(category, package, owner_version, blockers):
         # Purely informational (see resolve_pretend_graph's doc comment):
@@ -1165,9 +1170,11 @@ def run(args):
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "already_installed":
             # Already-satisfied dependencies aren't shown, matching real
-            # emerge's usual "don't clutter the list" behavior -- the
-            # top-level already-installed case is handled above instead.
-            pass
+            # emerge's usual "don't clutter the list" behavior -- only a
+            # directly-requested (top-level) atom gets its own
+            # "is already installed; nothing to do" line.
+            if (category, package) in top_level_pkgs:
+                print(f"{category}/{package}-{outcome[1]} is already installed; nothing to do")
         else:
             print(
                 f'!!! no visible ebuild for dependency "{category}/{package}"',

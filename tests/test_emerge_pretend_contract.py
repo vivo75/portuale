@@ -43,7 +43,6 @@ CASES = [
     ("slotted atom: out of v1 scope", ["--pretend", "dev-libs/foo:0"], 2),
     ("syntactically invalid atom", ["--pretend", "not an atom!"], 1),
     ("no atom given", ["--pretend"], 2),
-    ("more than one atom", ["--pretend", "dev-libs/foo", "dev-libs/bar"], 2),
     ("missing --pretend", ["dev-libs/newpkg"], 2),
     ("real emerge option, value-taking, not implemented", ["--deep", "dev-libs/newpkg"], 2),
     ("real emerge option, boolean, not implemented", ["--debug", "--pretend", "dev-libs/newpkg"], 2),
@@ -74,6 +73,13 @@ CASES = [
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
     ("virtual: resolved as a dependency", ["--pretend", "dev-libs/virtualconsumerpkg"], 0),
+    ("multi-atom: two independent new packages", ["--pretend", "dev-libs/newpkg", "dev-libs/withdeps"], 0),
+    ("multi-atom: literal duplicate atom dedupes silently", ["--pretend", "dev-libs/newpkg", "dev-libs/newpkg"], 0),
+    ("multi-atom: dependency shared between two targets dedupes", ["--pretend", "dev-libs/shared-a", "dev-libs/shared-b"], 0),
+    ("multi-atom: slot conflict between two targets (not just two deps)", ["--pretend", "dev-libs/slotconflictnewconsumer", "dev-libs/slotconflictoldconsumer"], 0),
+    ("multi-atom: all requested atoms already installed", ["--pretend", "dev-libs/samepkg", "dev-libs/samepkg"], 0),
+    ("multi-atom: a nonexistent atom aborts the whole run, first-bad-wins", ["--pretend", "dev-libs/does-not-exist", "dev-libs/newpkg"], 1),
+    ("multi-atom: a later nonexistent atom still aborts the whole run", ["--pretend", "dev-libs/newpkg", "dev-libs/does-not-exist"], 1),
 ]
 
 
@@ -186,7 +192,7 @@ def test_package_mask_hides_with_no_matching_unmask(emerge_binary, fixture_env):
     assert result.stdout == ""
     assert (
         result.stderr.strip()
-        == '!!! no visible ebuild for "dev-libs/hardmaskedpkg"'
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/hardmaskedpkg".'
     )
 
 
@@ -384,6 +390,96 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
         "[ebuild  N] dev-libs/multislotpkg-2.0",
     ]
     assert "[slot conflict]" not in result.stdout
+
+
+def test_multiple_top_level_atoms_share_dedup_and_slot_conflict_machinery(
+    emerge_binary, fixture_env
+):
+    """Two top-level atoms passed in one invocation seed the same BFS as a
+    single atom's own dependencies would: dev-libs/shared-a and
+    dev-libs/shared-b (both used by the diamond-dependency fixture) share
+    dev-libs/common, which must appear exactly once, not twice -- proving
+    the multi-atom slice reuses the existing visited-atoms dedup rather
+    than resolving each requested atom in isolation."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/shared-a", "dev-libs/shared-b"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/shared-a-1.0",
+        "[ebuild  N] dev-libs/shared-b-1.0",
+        "[ebuild  N] dev-libs/common-1.0",
+    ]
+
+
+def test_multiple_top_level_atoms_detect_a_slot_conflict_between_targets(
+    emerge_binary, fixture_env
+):
+    """Same slot-conflict fixture pair as
+    test_slot_conflict_is_reported_between_two_incompatible_version_constraints,
+    but requested directly as two top-level atoms instead of reached
+    through a shared parent -- proving a slot conflict between two
+    *targets* (not just between two dependencies of one target) is
+    detected too, since resolve_pretend_graph now seeds all top-level
+    atoms into the same BFS/resolved_slots bookkeeping."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/slotconflictnewconsumer", "dev-libs/slotconflictoldconsumer"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/slotconflictnewconsumer-1.0",
+        "[ebuild  N] dev-libs/slotconflictoldconsumer-1.0",
+        "[ebuild  N] dev-libs/slotconflicttarget-2.0",
+        '[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"',
+    ]
+
+
+def test_multiple_top_level_atoms_dedupe_a_literal_duplicate(emerge_binary, fixture_env):
+    """emerge --pretend foo foo: the second occurrence dedupes silently
+    via the existing visited-atoms set, same as a dependency cycle does
+    -- exactly one [ebuild N] line, not two."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/newpkg", "dev-libs/newpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/newpkg-1.0"]
+
+
+def test_multiple_top_level_atoms_all_already_installed(emerge_binary, fixture_env):
+    """Generalizes the old single-atom "already installed; nothing to do"
+    shortcut: every requested top-level atom that resolves
+    AlreadyInstalled gets its own such line (there's no longer a
+    len(entries) == 1 special case)."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/samepkg", "dev-libs/samepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["dev-libs/samepkg-1.0 is already installed; nothing to do"]
+
+
+def test_bad_top_level_atom_aborts_the_whole_run_in_argv_order(emerge_binary, fixture_env):
+    """A top-level atom with no visible candidate is fatal to the whole
+    call (matching real portage's own depgraph.py "there are no ebuilds
+    to satisfy" behavior), not reported-and-continued the way a
+    dependency's own NoVisibleCandidate is -- confirmed with the user
+    before implementing. Since top-level atoms are always dequeued in
+    argv order before any dependency, the *first* bad one wins: a good
+    atom placed after a bad one is never even attempted, and a good atom
+    placed before a bad one doesn't get its own output printed either,
+    since the whole call aborts before any printing happens at the CLI
+    layer."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/newpkg", "dev-libs/does-not-exist"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == 'emerge: there are no ebuilds to satisfy "dev-libs/does-not-exist".'
 
 
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
