@@ -60,6 +60,13 @@ pub enum Kind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirEnt {
+    pub ino: u64,
+    pub kind: Kind,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewError {
     /// No such path (also: the path vanished in a later generation).
     NoEnt,

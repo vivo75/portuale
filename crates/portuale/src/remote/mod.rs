@@ -18,6 +18,9 @@
 
 use clap::ArgMatches;
 
+#[cfg(test)]
+pub(crate) mod tests;
+
 use std::collections::HashMap;
 
 use std::path::Path;

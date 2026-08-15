@@ -18,11 +18,16 @@ use crate::ebuild_phases;
 mod installed_instance;
 mod options;
 mod plib_registry;
+mod plib_unmerge;
 mod protect;
 mod tree;
+
+#[cfg(test)]
+mod tests;
 pub(crate) use installed_instance::*;
 pub use options::*;
 pub(crate) use plib_registry::*;
+pub(crate) use plib_unmerge::*;
 pub(crate) use protect::*;
 pub(crate) use tree::*;
 

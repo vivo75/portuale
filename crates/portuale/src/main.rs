@@ -10,6 +10,7 @@ mod binpkg;
 mod ebuild_merge;
 mod ebuild_options;
 mod ebuild_phases;
+mod emerge_build;
 mod emerge_options;
 mod error;
 mod helpers;
@@ -18,6 +19,8 @@ mod mrg;
 mod mtimedb;
 mod pretend;
 mod remote;
+mod remote_bundle;
+mod vdb_ipc;
 #[cfg(feature = "vdb-fuse")]
 mod vdb_view;
 
