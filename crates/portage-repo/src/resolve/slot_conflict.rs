@@ -50,6 +50,27 @@ pub struct SlotConflictParent {
     pub installed: bool,
 }
 
+/// `(sub_slot, repo_name, slot)` for `cat/pkg`'s `version`: the highest-priority
+/// candidate with that version; all-empty when versionless.
+pub(crate) fn slot_conflict_meta(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    version: &str,
+) -> (String, String, String) {
+    match list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| {
+            cs.iter()
+                .filter(|c| c.version == version)
+                .max_by_key(|c| c.repo_priority)
+                .cloned()
+        }) {
+        Some(c) => (c.sub_slot, c.repo_name, c.slot),
+        None => (String::new(), String::new(), String::new()),
+    }
+}
+
 /// Which conflict party is installed rather than merge-bound: `Existing` is
 /// instance A (already in the graph), `Current` instance B.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

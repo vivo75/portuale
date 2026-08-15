@@ -79,6 +79,41 @@ pub fn split_pf(pf: &str) -> Option<(String, String)> {
     None
 }
 
+/// Every version of `category/package` with an ebuild in any of `repos`
+/// (Portage `portdbapi.cp_list`), with md5-cache metadata. A missing or
+/// unreadable cache entry is silently skipped; a repo without the directory
+/// contributes nothing. Memoised per `(repo set, cp)` as a shared `Arc`
+/// (ebuild trees are immutable for the life of a run).
+pub fn list_candidates(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+) -> Result<std::sync::Arc<Vec<Candidate>>, Error> {
+    use std::hash::{Hash, Hasher};
+    type Cache = HashMap<(u64, String, String), std::sync::Arc<Vec<Candidate>>>;
+    static CACHE: OnceLock<RwLock<Cache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+
+    let mut fp = std::collections::hash_map::DefaultHasher::new();
+    for repo in repos {
+        repo.location.hash(&mut fp);
+        repo.priority.hash(&mut fp);
+    }
+    let key = (fp.finish(), category.to_string(), package.to_string());
+
+    if let Ok(guard) = cache.read()
+        && let Some(v) = guard.get(&key)
+    {
+        return Ok(std::sync::Arc::clone(v));
+    }
+
+    let result = std::sync::Arc::new(list_candidates_uncached(repos, category, package)?);
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(key, std::sync::Arc::clone(&result));
+    }
+    Ok(result)
+}
+
 pub(crate) fn list_candidates_uncached(
     repos: &[RepoConfig],
     category: &str,
