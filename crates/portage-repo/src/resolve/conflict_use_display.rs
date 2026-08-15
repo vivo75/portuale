@@ -2,6 +2,61 @@
 
 use crate::*;
 
+/// Full per-package display for a scheduled-for-merge package.
+// Portage: _emerge/UseFlagDisplay.py, pkg_use_display
+pub(crate) fn pkg_use_display_for(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    skipped_update_use_display_for(repos, config, category, package, version)
+}
+
+/// Full per-package display for the skipped-update block; the
+/// slot-collision notice shares this implementation.
+// Portage: _emerge/UseFlagDisplay.py, pkg_use_display
+pub fn skipped_update_use_display_for(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Vec<(String, String)> {
+    let candidates = match list_candidates(repos, category, package) {
+        Ok(cs) => cs,
+        Err(_) => return Vec::new(),
+    };
+    let Some(cand) = candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)
+        .cloned()
+    else {
+        return Vec::new();
+    };
+    let pf = format!("{package}-{version}");
+    let metadata = match repo_aux_metadata(&cand.repo_location, category, &pf) {
+        Ok(md) => md,
+        Err(_) => return Vec::new(),
+    };
+    // A missing IUSE key declares no flags; an unreadable md5-cache entry yields no display.
+    let use_flags = match candidate_iuse_and_use(&cand, category, package, config) {
+        Some((_, uf)) => uf,
+        None => return Vec::new(),
+    };
+    assemble_tree_pkg_use_display(AssembleTreePkgUseDisplayArgs {
+        cand: &cand,
+        metadata: &metadata,
+        enabled: &use_flags,
+        config,
+        category,
+        package,
+        version,
+    })
+}
+
 /// Arguments of [`assemble_tree_pkg_use_display`].
 pub(crate) struct AssembleTreePkgUseDisplayArgs<'a> {
     pub(crate) cand: &'a Candidate,
@@ -71,6 +126,26 @@ pub fn skipped_update_installed_use_display_for(
     let enabled: HashSet<String> = use_flags.iter().cloned().collect();
     let explicit: HashSet<String> = iuse.iter().cloned().collect();
     assemble_pkg_use_display(&enabled, &explicit, &HashSet::new(), config)
+}
+
+/// One consumer's full display for a `SkippedUpdate` row. An empty
+/// `parent_cpv` (a top-level argument) renders bare.
+pub(crate) fn skipped_consumer_use_display(
+    repos: &[RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    parent_cpv: &str,
+    installed: bool,
+) -> Vec<(String, String)> {
+    let cpv = parent_cpv.split(':').next().unwrap_or("");
+    let Some((cc, cp2, cv)) = split_cpv(cpv) else {
+        return Vec::new();
+    };
+    if installed {
+        skipped_update_installed_use_display_for(root, config, &cc, &cp2, &cv)
+    } else {
+        skipped_update_use_display_for(repos, config, &cc, &cp2, &cv)
+    }
 }
 
 /// Keeps an effective-USE flag iff it is declared in `IUSE` or matches the

@@ -194,6 +194,74 @@ pub(crate) fn is_visible_uncached_calls() -> u64 {
     IV_UNCACHED_CALLS.with(std::cell::Cell::get)
 }
 
+pub(crate) fn is_visible_uncached(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    #[cfg(test)]
+    IV_UNCACHED_CALLS.with(|c| c.set(c.get() + 1));
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+
+    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
+    if masked {
+        return false;
+    }
+
+    if !license_accepted(candidate, category, package, &candidate_str, config) {
+        return false;
+    }
+
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
+        return false;
+    }
+
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
+        return false;
+    }
+
+    if !keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
+        category,
+        package,
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    }) {
+        return false;
+    }
+
+    // A candidate whose own dep conditionals reference flags outside
+    // its effective IUSE is masked (`invalid`); checked last, never
+    // relaxed (see `visible_with_relax`).
+    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
+}
+
 /// The keyword `--autounmask` would suggest for `candidate`: the first
 /// non-`-`-prefixed `KEYWORDS` token (`None` if empty or all `-`). A
 /// `-`-prefixed token means "explicitly unsupported", never a suggestion.
