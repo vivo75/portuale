@@ -10,6 +10,68 @@ pub type AuxMetadataProvider = fn(&Path, &str, &str) -> Result<HashMap<String, S
 
 pub(crate) static AUX_METADATA_PROVIDER: OnceLock<AuxMetadataProvider> = OnceLock::new();
 
+/// The fallback shared by a missing entry and an entry the validator
+/// rejects: fallback memo, recursion guard, provider. A provider failure
+/// always surfaces as the original `failure` (never stale data), which
+/// reads as an unusable entry for the caller.
+pub(crate) fn provide_aux_metadata(
+    repo_location: &Path,
+    category: &str,
+    pf: &str,
+    failure: Error,
+) -> Result<std::sync::Arc<HashMap<String, String>>, Error> {
+    {
+        {
+            let Some(provider) = AUX_METADATA_PROVIDER.get() else {
+                return Err(failure);
+            };
+            type FallbackCache =
+                HashMap<(PathBuf, String, String), std::sync::Arc<HashMap<String, String>>>;
+            static FALLBACK: OnceLock<RwLock<FallbackCache>> = OnceLock::new();
+            let cache = FALLBACK.get_or_init(|| RwLock::new(HashMap::new()));
+            let key = (
+                repo_location.to_path_buf(),
+                category.to_string(),
+                pf.to_string(),
+            );
+            // The provider itself runs the depend phase, whose env assembly
+            // reads through this same entry point -- a nested miss must not
+            // recurse into the provider again (it would never terminate).
+            thread_local! {
+                static IN_PROVIDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+            }
+            if IN_PROVIDER.with(|flag| flag.get()) {
+                return Err(failure);
+            }
+            if let Ok(guard) = cache.read()
+                && let Some(map) = guard.get(&key)
+            {
+                return Ok(std::sync::Arc::clone(map));
+            }
+            struct InProviderGuard;
+            impl Drop for InProviderGuard {
+                fn drop(&mut self) {
+                    IN_PROVIDER.with(|flag| flag.set(false));
+                }
+            }
+            IN_PROVIDER.with(|flag| flag.set(true));
+            let _guard = InProviderGuard;
+            match provider(repo_location, category, pf) {
+                Ok(map) => {
+                    let map = std::sync::Arc::new(map);
+                    if let Ok(mut guard) = cache.write() {
+                        guard.insert(key, std::sync::Arc::clone(&map));
+                    }
+                    Ok(map)
+                }
+                // The provider already reported its own failure; the caller's
+                // contract (an unusable entry) is `failure`.
+                Err(_) => Err(failure),
+            }
+        }
+    }
+}
+
 /// Whether Portage would read this repo's pregenerated aux metadata from
 /// `metadata/md5-cache`: the **first known** entry of
 /// [`RepoConfig::cache_formats`] is `md5-dict`.
