@@ -6,9 +6,11 @@ members = [
     "portage-use-reduce",
     "portage-profile",
     "portage-repo",
+    "portage-required-use",
     "versions-harness",
     "atom-harness",
     "use-reduce-harness",
+    "required-use-harness",
     "multicall",
 ]
 

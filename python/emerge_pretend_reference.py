@@ -94,7 +94,7 @@ from collections import deque
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "lib"))
 
-from portage.dep import Atom, match_from_list, use_reduce
+from portage.dep import Atom, check_required_use, match_from_list, use_reduce
 from portage.exception import InvalidAtom, InvalidDependString
 from portage.versions import vercmp
 
@@ -1302,6 +1302,40 @@ def resolve_pretend_graph(
             category,
             package,
         )
+        # REQUIRED_USE (PMS 7.3.4/8.2): checked once, here, right after a
+        # candidate is newly resolved -- real depgraph.py's own "NOTE:
+        # REQUIRED_USE checks are delayed until after package selection"
+        # (a genuine *post*-selection check, no part of matching/
+        # visibility at all). A violation is FATAL to the whole run
+        # regardless of whether this candidate was reached as a
+        # top-level atom or a dependency deep in the graph -- real
+        # portage's own severity for this -- unlike a dependency's own
+        # NoVisibleCandidate (report, don't fail). Calls the real
+        # portage.dep.check_required_use directly (pinned to eapi="8",
+        # same reasoning as required_use_harness.py's own docstring) --
+        # mirrors portage-repo/src/lib.rs's own ported algorithm
+        # (portage_required_use::check_required_use) exactly, verified
+        # to agree via the shared required-use-harness contract suite.
+        required_use = metadata.get("REQUIRED_USE", "").strip()
+        if required_use:
+            iuse_set = {tok.lstrip("+-") for tok in metadata.get("IUSE", "").split()}
+            try:
+                satisfied = bool(
+                    check_required_use(
+                        required_use, use_flags, lambda flag: flag in iuse_set, eapi="8"
+                    )
+                )
+            except InvalidDependString as e:
+                raise ResolutionError(
+                    f"REQUIRED_USE for {category}/{package}-{version} is invalid: {e}"
+                ) from e
+            if not satisfied:
+                normalized = " ".join(required_use.split())
+                raise ResolutionError(
+                    f'REQUIRED_USE not satisfied for {category}/{package}-{version}: '
+                    f'"{normalized}"'
+                )
+
         # IUSE's own "+flag"/"-flag" default markers only matter for
         # resolving a flag's default when nothing else decides it --
         # already handled upstream, wherever use_flags itself came from --

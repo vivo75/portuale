@@ -1,2 +1,3 @@
 */packageuseenablepkg pkguseflag
 dev-libs/packageusedisablepkg -foo
+dev-libs/requireduseokpkg bar

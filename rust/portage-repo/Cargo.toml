@@ -8,3 +8,4 @@ portage-versions = { path = "../portage-versions" }
 portage-dep = { path = "../portage-dep" }
 portage-use-reduce = { path = "../portage-use-reduce" }
 portage-profile = { path = "../portage-profile" }
+portage-required-use = { path = "../portage-required-use" }

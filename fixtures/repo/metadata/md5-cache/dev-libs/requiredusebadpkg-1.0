@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: REQUIRED_USE 'foo? ( bar )' genuinely violated -- foo enabled globally, bar left off (no package.use entry for this package)
+EAPI=8
+IUSE=foo bar
+KEYWORDS=amd64
+REQUIRED_USE=foo? ( bar )
+SLOT=0
+_md5_=0000000000000000000000000000000

@@ -123,6 +123,21 @@ CASES = [
         ["--pretend", "dev-libs/useflagpkg[nonexistentflag(+)]"],
         0,
     ),
+    (
+        "REQUIRED_USE: genuinely satisfied, resolves normally",
+        ["--pretend", "dev-libs/requireduseokpkg"],
+        0,
+    ),
+    (
+        "REQUIRED_USE: genuinely violated, top-level atom, aborts the whole run",
+        ["--pretend", "dev-libs/requiredusebadpkg"],
+        1,
+    ),
+    (
+        "REQUIRED_USE: violated on a dependency, still aborts the whole run",
+        ["--pretend", "dev-libs/requiredusebadparentpkg"],
+        1,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     ("package.mask: hidden, no unmask", ["--pretend", "dev-libs/hardmaskedpkg"], 1),
     ("package.mask + package.unmask: masked then unmasked", ["--pretend", "dev-libs/maskedandunmaskedpkg"], 0),
@@ -523,6 +538,64 @@ def test_use_dep_enforcement_plus_default_rescues_an_undeclared_flag(
         "[ebuild  N] dev-libs/useflagpkg-1.0",
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
+
+
+def test_required_use_satisfied_resolves_normally(emerge_binary, fixture_env):
+    """dev-libs/requireduseokpkg's own REQUIRED_USE is "foo? ( bar )" --
+    "foo" is enabled globally by the fixture profile chain, and "bar" is
+    forced on by this package's own package.use entry, so the
+    use-conditional group is genuinely satisfied (its own real
+    check_required_use, PMS 7.3.4/8.2) -- resolves exactly like any
+    other New package, no different treatment at all."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/requireduseokpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  N] dev-libs/requireduseokpkg-1.0\n"
+
+
+def test_required_use_violated_top_level_aborts_the_whole_run(emerge_binary, fixture_env):
+    """dev-libs/requiredusebadpkg's own REQUIRED_USE is "foo? ( bar )" --
+    "foo" is enabled globally, but "bar" is never forced on for this
+    package, so the use-conditional group is genuinely violated. Real
+    depgraph.py's own REQUIRED_USE check happens right after package
+    selection and, on failure, aborts the whole run (NOTE comment in
+    depgraph.py: "REQUIRED_USE checks are delayed until after package
+    selection") -- a materially different severity than a merely
+    unresolvable dependency (report, don't fail): here nothing is
+    printed to stdout at all, and the run exits nonzero."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/requiredusebadpkg"], fixture_env
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: '
+        '"foo? ( bar )"'
+    )
+
+
+def test_required_use_violated_dependency_still_aborts_the_whole_run(
+    emerge_binary, fixture_env
+):
+    """dev-libs/requiredusebadparentpkg RDEPENDs on dev-libs/requiredusebadpkg
+    (see the top-level REQUIRED_USE violation test above) -- proving the
+    same fatal-abort severity applies regardless of whether the
+    violating package was reached as a top-level atom or a dependency
+    deep in the graph, unlike a dependency's own NoVisibleCandidate."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/requiredusebadparentpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: '
+        '"foo? ( bar )"'
+    )
 
 
 def test_unresolvable_dependency_is_reported_not_silently_dropped(

@@ -11,6 +11,7 @@ RUST_DIR = REPO_ROOT / "PORTING" / "rust"
 VERSIONS_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "versions_harness.py"
 ATOM_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "atom_harness.py"
 USE_REDUCE_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "use_reduce_harness.py"
+REQUIRED_USE_PYTHON_HARNESS = REPO_ROOT / "PORTING" / "python" / "required_use_harness.py"
 EMERGE_PRETEND_PYTHON_REFERENCE = (
     REPO_ROOT / "PORTING" / "python" / "emerge_pretend_reference.py"
 )
@@ -60,6 +61,18 @@ def use_reduce_harness_rust() -> Path:
 @pytest.fixture(scope="session")
 def use_reduce_harness_python() -> list[str]:
     return [sys.executable, str(USE_REDUCE_PYTHON_HARNESS)]
+
+
+@pytest.fixture(scope="session")
+def required_use_harness_rust() -> Path:
+    if shutil.which("cargo") is None:
+        pytest.skip("cargo not available")
+    return _cargo_build("required-use-harness")
+
+
+@pytest.fixture(scope="session")
+def required_use_harness_python() -> list[str]:
+    return [sys.executable, str(REQUIRED_USE_PYTHON_HARNESS)]
 
 
 @pytest.fixture(scope="session")

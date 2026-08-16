@@ -1361,6 +1361,49 @@ pub fn resolve_pretend_graph(
         // (and shown by `--pretend -v`) regardless of `nodeps` below --
         // real portage's own USE display is about the package's own
         // metadata, unrelated to whether its dependencies get walked.
+        // REQUIRED_USE (PMS 7.3.4/8.2): checked once, here, right after a
+        // candidate is newly resolved -- real depgraph.py's own "NOTE:
+        // REQUIRED_USE checks are delayed until after package selection"
+        // (it's a genuine *post*-selection check, no part of matching/
+        // visibility at all, unlike package.use/package.mask). A
+        // violation is FATAL to the whole run regardless of whether this
+        // candidate was reached as a top-level atom or a dependency deep
+        // in the graph -- real portage's own severity for this (see
+        // portage-required-use's own module doc comment for the ported
+        // algorithm and where this is grounded), unlike a dependency's
+        // own NoVisibleCandidate (report, don't fail the whole call).
+        if let Some(required_use) = metadata.get("REQUIRED_USE") {
+            if !required_use.trim().is_empty() {
+                let iuse_set: HashSet<String> = metadata
+                    .get("IUSE")
+                    .map(String::as_str)
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+                    .collect();
+                match portage_required_use::check_required_use(required_use, &use_flags, &iuse_set)
+                {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        let normalized = required_use
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        return Err(format!(
+                            "REQUIRED_USE not satisfied for {}/{}-{version}: \"{normalized}\"",
+                            key.0, key.1
+                        ));
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "REQUIRED_USE for {}/{}-{version} is invalid: {e}",
+                            key.0, key.1
+                        ));
+                    }
+                }
+            }
+        }
+
         if let Some(iuse) = metadata.get("IUSE") {
             let mut display: Vec<(String, bool)> = iuse
                 .split_whitespace()
@@ -2312,6 +2355,27 @@ mod tests {
         .collect()
     }
 
+    /// Like `graph_real`, but for a call expected to fail outright --
+    /// returns the error message instead of panicking on one.
+    fn graph_real_err(atom_str: &str) -> String {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect_err(&format!(
+            "resolve_pretend_graph({atom_str}) should have failed"
+        ))
+    }
+
     /// Like `graph_real`, but with `--newuse` enabled.
     fn graph_real_newuse(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
@@ -2531,6 +2595,50 @@ mod tests {
                     PretendOutcome::NoVisibleCandidate
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn required_use_satisfied_resolves_normally() {
+        // dev-libs/requireduseokpkg's own REQUIRED_USE is "foo? ( bar )"
+        // -- foo enabled globally, bar forced on by this package's own
+        // package.use entry, so genuinely satisfied.
+        assert_eq!(
+            graph_real("dev-libs/requireduseokpkg"),
+            vec![(
+                "dev-libs/requireduseokpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn required_use_violated_top_level_fails_the_whole_call() {
+        // dev-libs/requiredusebadpkg's own REQUIRED_USE is "foo? ( bar )"
+        // -- foo enabled globally, bar never forced on, genuinely
+        // violated. Real depgraph.py's own REQUIRED_USE check happens
+        // right after package selection and aborts the whole run on
+        // failure -- a materially different severity than a merely
+        // unresolvable dependency (report, don't fail).
+        let err = graph_real_err("dev-libs/requiredusebadpkg");
+        assert_eq!(
+            err,
+            "REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: \"foo? ( bar )\""
+        );
+    }
+
+    #[test]
+    fn required_use_violated_dependency_still_fails_the_whole_call() {
+        // dev-libs/requiredusebadparentpkg RDEPENDs on
+        // dev-libs/requiredusebadpkg -- proving the same fatal severity
+        // applies regardless of whether the violating package was
+        // reached as a top-level atom or a dependency.
+        let err = graph_real_err("dev-libs/requiredusebadparentpkg");
+        assert_eq!(
+            err,
+            "REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: \"foo? ( bar )\""
         );
     }
 

@@ -288,6 +288,34 @@ PORTING/
   genuinely surprising real rule worth a regression test: a USE flag name
   is allowed to *start* with a digit (`1notaflag` is valid per the real
   `useflag_re`), which is easy to assume is invalid and get wrong.
+- **`required-use-harness`**: ports real `check_required_use` (PMS
+  7.3.4/8.2 -- `|| ( )`/any-of, `^^ ( )`/exactly-one-of, `?? ( )`/
+  at-most-one-of, `flag? ( )`/use-conditional, negation, and a bare
+  `( )` all-of group, PMS 8.2's own "all-of" production, permitted at
+  REQUIRED_USE's own top level with no wrapping parens needed) as
+  `portage_required_use::check_required_use`. Unlike real
+  `check_required_use`, which builds and returns a full navigable tree
+  purely so a caller can later pretty-print exactly which sub-expression
+  failed, this is a much simpler direct recursive-descent boolean
+  evaluator with no tree bookkeeping -- this pilot only ever needs the
+  final yes/no verdict (see the `emerge --pretend` paragraph below for
+  how a violation gets reported). Verified against real
+  `check_required_use` directly via 37 cases (28 satisfied/unsatisfied
+  plus 9 malformed-syntax/undeclared-flag error cases, plus batch mode)
+  in the shared contract suite, the same wraps-the-real-thing
+  verification pattern `use-reduce-harness` already established -- not
+  just my own reasoning about equivalence. One EAPI-conditional
+  real behavior is deliberately not replicated: real `eapi <= Eapi("6")`
+  treats an empty group (`( )`, `|| ( )`) as vacuously satisfied; this
+  pilot always uses the newer (EAPI 7+) behavior of evaluating an empty
+  group with the ordinary per-operator rule instead (unsatisfied for
+  `||`/`^^`, satisfied for `??`/a use-conditional) -- consistent with
+  this pilot's established "no EAPI parametrization" precedent elsewhere
+  (`portage-dep`'s own grammar, `use.mask`/`.force`'s atom-specificity
+  ordering), and pinned on the Python reference side by passing
+  `eapi="8"` explicitly to the real function rather than leaving it
+  EAPI-agnostic (`eapi=None`), so both sides agree on exactly the same
+  attribute values.
 - **`emerge --pretend category/package`** (the answer to "what's missing
   for this to succeed?"): a real, working slice, built on `portage-dep`,
   `portage-versions`, `portage-use-reduce`, and `portage-profile`.
@@ -1146,6 +1174,53 @@ PORTING/
   rejected *dependency-level* USE-dep atom reports `NoVisibleCandidate`
   for that one entry without failing the whole graph, the same
   "report, don't fail" precedent an unresolvable dependency already had.
+
+  **REQUIRED_USE violation reporting** (PMS 7.3.4/8.2). Grounded against
+  real `depgraph.py`'s own integration point, not just `check_required_use`
+  in isolation: its own `_add_pkg` has a comment reading "NOTE:
+  REQUIRED_USE checks are delayed until after package selection, since
+  we want to prompt the user for USE adjustment rather than have
+  REQUIRED_USE affect package selection and `||` dep choices" -- a
+  genuine *post*-selection check, no part of matching/visibility at all
+  (unlike `package.mask`/`package.use`/USE-dep enforcement, all of which
+  narrow which *candidate* even resolves). Ported into
+  `resolve_pretend_graph` at exactly that point: right after a
+  candidate is newly resolved to New/Upgrade/Reinstall (never
+  AlreadyInstalled -- matching real `not pkg.built`, trivially always
+  true here since this pilot has no binary-package concept at all to
+  make that check meaningful), its own `REQUIRED_USE` (if declared and
+  non-empty) is checked via `check_required_use` against its own
+  already-computed IUSE/effective-USE. On violation (or a malformed/
+  undeclared-flag error), this is FATAL to the **whole** `--pretend`
+  run -- real portage's own severity for this, verified against
+  `depgraph.py` itself: the failure flag it sets
+  (`_required_use_unsatisfied`/`_skip_restart`) is a single, global
+  piece of state, with no distinction anywhere for whether the
+  violating package was reached as a top-level target or a dependency
+  deep in the graph -- a materially different, *harsher* severity than
+  a dependency's own `NoVisibleCandidate` (report, don't fail the whole
+  call) that this pilot already had. Ported as a `Result::Err` returned
+  straight out of the BFS loop, reusing the exact same fatal-error
+  plumbing a top-level atom's own unsatisfiable `NoVisibleCandidate`
+  already needed -- no new plumbing required in `pretend.rs` at all.
+  The error message itself is a short, honest, pilot-specific one
+  (`REQUIRED_USE not satisfied for cat/pkg-version: "<normalized
+  REQUIRED_USE string>"`) showing the package's own full, as-declared
+  constraint -- not real portage's own elaborate, colorized report with
+  the "reduced," violation-only sub-expression extracted via the tree
+  `check_required_use` itself doesn't build here (see
+  `required-use-harness`'s own bullet above), matching the same
+  "pilot-specific summary, not a port of real formatting" precedent
+  `--help` already set. `dev-libs/requireduseokpkg` (`REQUIRED_USE="foo?
+  ( bar )"`, `foo` enabled globally by the fixture profile chain, `bar`
+  forced on by this package's own `package.use` entry -- genuinely
+  satisfied) and `dev-libs/requiredusebadpkg` (identical REQUIRED_USE,
+  but no `package.use` entry forcing `bar` on -- genuinely violated)
+  needed no new USE-flag machinery at all, just two small ebuilds
+  proving both the satisfied and violated paths; `dev-libs/
+  requiredusebadparentpkg` (RDEPENDs on the violated package) proves the
+  fatal-abort severity really does apply regardless of graph position,
+  not just to a top-level atom's own REQUIRED_USE.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1319,6 +1394,17 @@ default) all report no visible candidate; `[nonexistentflag(+)]`
 is enabled globally) proves the same rejection at the *dependency* level:
 the parent still resolves, `useflagpkg` gets its own `NoVisibleCandidate`
 entry, reported on stderr, not silently dropped or accepted.
+
+`dev-libs/requireduseokpkg` and `dev-libs/requiredusebadpkg` (identical
+`IUSE="foo bar"`/`REQUIRED_USE="foo? ( bar )"`, `foo` enabled globally by
+the fixture profile chain either way) exercise REQUIRED_USE: a
+`dev-libs/requireduseokpkg bar` entry in
+`PORTING/fixtures/etc/portage/package.use` forces `bar` on for the first
+package only, genuinely satisfying its own conditional group, while the
+second has nothing forcing `bar` on at all, genuinely violating it.
+`dev-libs/requiredusebadparentpkg` (RDEPEND
+`dev-libs/requiredusebadpkg`) proves the resulting fatal abort applies
+the same way when the violation is reached only as a dependency.
 
 `PORTING/fixtures/var/lib/portage/world` (real portage's own `WORLD_FILE`
 location, `ROOT`-relative) exercises `@world` expansion: it lists
@@ -1510,6 +1596,12 @@ python3 PORTING/python/use_reduce_harness.py reduce normal bar \
 # Rust
 PORTING/rust/target/release/use-reduce-harness reduce normal bar \
     dev-libs/foo bar? "(" dev-libs/baz ")" "!bar?" "(" dev-libs/qux ")"
+
+# REQUIRED_USE ("^^ ( a b )", exactly-one-of, with only "a" enabled --
+# satisfied): Python then Rust, same output either way
+python3 PORTING/python/required_use_harness.py check a a,b "^^" "(" a b ")"
+PORTING/rust/target/release/required-use-harness check a a,b "^^" "(" a b ")"
+# true
 ```
 
 Try `emerge --pretend` against the fixture tree:
@@ -1577,6 +1669,21 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[n
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeprejectedpkg
 # [ebuild  N] dev-libs/usedeprejectedpkg-1.0
 # !!! no visible ebuild for dependency "dev-libs/useflagpkg"  (stderr)
+
+# REQUIRED_USE is real and implemented: requireduseokpkg's own
+# "foo? ( bar )" is genuinely satisfied (foo enabled globally, bar
+# forced on by this package's own package.use entry)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requireduseokpkg
+# [ebuild  N] dev-libs/requireduseokpkg-1.0
+# requiredusebadpkg has the identical constraint but nothing forcing
+# "bar" on -- genuinely violated, which aborts the WHOLE run (exit 1),
+# a harsher severity than a merely unresolvable dependency
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requiredusebadpkg
+# emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: "foo? ( bar )"  (exit 1)
+# ...and still aborts the whole run even when only reached as a
+# dependency, not just as a top-level atom
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requiredusebadparentpkg
+# emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: "foo? ( bar )"  (exit 1)
 
 # real profile/make.conf resolution: "foo" is enabled by the fixture's
 # profile chain, so this package's foo?-gated dependency is pulled in

@@ -174,6 +174,15 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend resolves a virtual as a dependency inside the scratch container" \
     test "${actual}" = "$(printf '[ebuild  N] dev-libs/virtualconsumerpkg-1.0\n[ebuild  N] virtual/texteditor-0\n[ebuild  N] dev-libs/newpkg-1.0')"
 
+# emerge --pretend against REQUIRED_USE (see dev-libs/requiredusebadpkg):
+# a genuinely violated REQUIRED_USE constraint aborts the whole run, not
+# just the one package -- real depgraph.py's own severity for this.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
+    -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
+    "${IMAGE}" --pretend dev-libs/requiredusebadpkg 2>&1 || true)
+check "emerge --pretend reports a REQUIRED_USE violation inside the scratch container" \
+    grep -q 'REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0' <<<"${actual}"
+
 # CLI surface recognition (see multicall/src/emerge_options.rs): a real
 # emerge option this pilot doesn't implement gets a specific message,
 # not a generic one, even with nothing else in the image to fall back on.
@@ -213,6 +222,13 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/use-reduce-harness "${IMAGE}" \
     reduce normal bar dev-libs/foo bar? "(" dev-libs/baz ")")
 check "use-reduce-harness reduce via explicit entrypoint" \
     test "${actual}" = "dev-libs/foo,dev-libs/baz"
+
+# required-use-harness: correctness spot check for the REQUIRED_USE
+# pilot slice.
+actual=$("${ENGINE}" run --rm --entrypoint /bin/required-use-harness "${IMAGE}" \
+    check foo foo,bar "foo?" "(" bar ")")
+check "required-use-harness check via explicit entrypoint" \
+    test "${actual}" = "false"
 
 echo
 if [ "${fail}" -eq 0 ]; then

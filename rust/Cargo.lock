@@ -54,9 +54,14 @@ version = "0.1.0"
 dependencies = [
  "portage-dep",
  "portage-profile",
+ "portage-required-use",
  "portage-use-reduce",
  "portage-versions",
 ]
+
+[[package]]
+name = "portage-required-use"
+version = "0.1.0"
 
 [[package]]
 name = "portage-use-reduce"
@@ -100,6 +105,13 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "required-use-harness"
+version = "0.1.0"
+dependencies = [
+ "portage-required-use",
+]
 
 [[package]]
 name = "use-reduce-harness"
