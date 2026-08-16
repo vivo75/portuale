@@ -995,6 +995,48 @@ PORTING/
   now that didn't before), `--changed-use` does not (its own enablement
   never actually changed) -- while `dev-libs/reinstallpkg`'s own `foo`
   flag (shared, enablement-only change) still triggers *both*.
+
+  **`package.use.mask`/`package.use.force`: per-package USE forcing**.
+  Grounded against `UseManager.__init__`'s own file/variable comment
+  table: unlike `package.use`, there is no user-level source for either
+  file at all (the "user config" section lists only `package.use ->
+  _pusedict`) -- confirmed real behavior, not a pilot simplification.
+  Read from repo-level (main repo only, no `masters` -- the same cut
+  `package.mask`'s own repo-level source already makes) plus every
+  profile level's own file, in chain order. Unlike real per-instance
+  `getUseMask(pkg)`/`getUseForce(pkg)`, which interleave global and
+  per-package entries level-by-level in one `stack_lists` pass, this
+  pilot applies `package.use.mask`/`.force` as a separate layer on top
+  of the already-shipped global `use.mask`/`use.force` and `package.use`
+  -- a deliberate, confirmed simplification of the real application
+  order, kept separate so the already-tested global implementation
+  didn't need reworking. When more than one entry matches the same
+  candidate, real `ordered_by_atom_specificity`/`best_match_to_list`
+  decides which one wins a conflict; this pilot ports a simplified
+  version of that ranking table (`=cpv` highest, then `~cpv`, then
+  `=cpv*`, then `cp:slot`, then any comparison-operator atom, then a
+  bare `cp`, then this pilot's own bounded wildcard atoms lowest) and
+  applies each specificity-ordered entry's tokens via the same
+  incremental semantics `package.use` itself uses, so a more-specific
+  entry's own `-flag` can cancel a less-specific entry's own mask/force.
+  Two deliberate scope cuts beyond that: no stable-vs-`~arch` KEYWORDS
+  distinction at all (real portage's own separate `use.stable.mask`/
+  `.force`/`package.use.stable.mask`/`.force` files and `_isStable`
+  check are out of scope entirely -- this pilot never determines
+  stability anywhere), and comparison-operator atoms (`>`/`<`/`>=`/
+  `<=`) share one specificity tier without real `best_match_to_list`'s
+  "closest version wins a tie" refinement, since real-world
+  `package.use.mask`/`.force` files essentially never use these
+  operators. `dev-libs/pkgusemaskforcepkg` (`IUSE="forceflag maskflag
+  specflag"`) exercises both the forcing and the specificity ordering
+  in one fixture: a repo-level `package.use.force` wildcard entry force-
+  enables `forceflag`; the base profile's own `package.use.mask` masks
+  both `maskflag` and `specflag` via a bare atom; the leaf profile's own
+  `package.use.mask` has a *more specific* exact-version atom that
+  un-masks `specflag` again -- proving atom-specificity, not just
+  profile-chain order, decides the winner, and that a more-specific
+  entry from a *later* profile level can still override a less-specific
+  one from an earlier level. Final USE: `forceflag -maskflag -specflag`.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1197,6 +1239,19 @@ declares `IUSE="brandnewflag"` -- real, unmasked, not globally enabled.
 `--changed-use` doesn't (that flag's own enablement never changed) --
 while `dev-libs/reinstallpkg`'s own `foo` (a flag that exists in `IUSE`
 on both sides, only its enablement differs) still triggers both.
+
+`dev-libs/pkgusemaskforcepkg` (`IUSE="forceflag maskflag specflag"`)
+exercises `package.use.mask`/`package.use.force` plus atom-specificity
+ordering, across three config files: `PORTING/fixtures/repo/profiles/
+package.use.force` (repo-level, a bare wildcard entry force-enabling
+`forceflag`), `PORTING/fixtures/repo/profiles/base/package.use.mask`
+(profile-level, a bare atom masking both `maskflag` and `specflag`),
+and `PORTING/fixtures/repo/profiles/default/package.use.mask` (the leaf
+profile's own, a more specific exact-version atom that un-masks
+`specflag` again) -- see the `package.use.mask`/`package.use.force`
+paragraph above for why the leaf profile's more-specific entry wins
+over the base profile's less-specific one despite coming from a later
+chain level.
 
 Four more fixture packages exercise blocker reporting: `blockerpkg`
 (RDEPEND `"!!dev-libs/samepkg"`, a strong blocker matching
@@ -1620,6 +1675,17 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs/reinstallpkg
 # [ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# package.use.mask/package.use.force are real and implemented, atom
+# specificity included: a repo-level package.use.force wildcard entry
+# force-enables "forceflag"; the base profile's own package.use.mask
+# masks "maskflag" and "specflag" via a bare atom; the leaf profile's
+# own package.use.mask has a more specific exact-version atom that
+# un-masks "specflag" again -- the more specific entry wins regardless
+# of chain order, so specflag stays off (un-masked but never enabled)
+# while maskflag stays masked (nothing un-masks it)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/pkgusemaskforcepkg
+# [ebuild  N] dev-libs/pkgusemaskforcepkg-1.0  USE="forceflag -maskflag -specflag"
 
 # --nodeps/-O is real and implemented: withdeps' own RDEPEND (which
 # would otherwise pull in newpkg and upgradepkg -- see the plain

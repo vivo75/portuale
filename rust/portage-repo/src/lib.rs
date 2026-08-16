@@ -346,6 +346,8 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 fn effective_use_flags(
     base: &HashSet<String>,
     package_use: &[(String, Vec<String>)],
+    package_use_force: &[(String, Vec<String>)],
+    package_use_mask: &[(String, Vec<String>)],
     candidate_str: &str,
     category: &str,
     package: &str,
@@ -356,7 +358,79 @@ fn effective_use_flags(
             portage_profile::apply_incremental(&tokens.join(" "), &mut use_flags);
         }
     }
+    // package.use.mask/.force, layered on top of package.use, force
+    // winning first then mask -- see specificity_ordered_flags's own doc
+    // comment for how a conflict between multiple matching entries is
+    // resolved, and the module doc comment's own `package.use.mask`/
+    // `.force` bullet for the full scope writeup.
+    for flag in specificity_ordered_flags(package_use_force, candidate_str, category, package) {
+        use_flags.insert(flag);
+    }
+    for flag in specificity_ordered_flags(package_use_mask, candidate_str, category, package) {
+        use_flags.remove(&flag);
+    }
     use_flags
+}
+
+/// Computes the final per-candidate flag set from `entries` (raw
+/// `package.use.mask`/`.force` `(atom, tokens)` pairs): filters to
+/// entries whose atom actually matches `candidate_str`, orders the
+/// matches from least to most specific (see `atom_specificity`, a
+/// simplified port of real `best_match_to_list`'s own ranking table,
+/// used by `ordered_by_atom_specificity`), then applies each one's own
+/// tokens via the same incremental `-flag`/`flag`/`+flag` semantics
+/// `package.use` itself uses (`apply_incremental`), onto an initially
+/// empty set -- so a more-specific atom's own `-flag` can cancel a
+/// less-specific atom's own mask/force, exactly mirroring real
+/// portage's own `stack_lists(incremental=True)` applied to the
+/// specificity-ordered entry list.
+fn specificity_ordered_flags(
+    entries: &[(String, Vec<String>)],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+) -> HashSet<String> {
+    let mut matching: Vec<&(String, Vec<String>)> = entries
+        .iter()
+        .filter(|(entry, _)| matches_config_entry(entry, candidate_str, category, package))
+        .collect();
+    // Stable sort: ties (including every comparison-operator atom, which
+    // this pilot deliberately doesn't further distinguish -- see the
+    // module doc comment) keep their original file/stacking order.
+    matching.sort_by_key(|(entry, _)| atom_specificity(entry));
+    let mut flags = HashSet::new();
+    for (_, tokens) in matching {
+        portage_profile::apply_incremental(&tokens.join(" "), &mut flags);
+    }
+    flags
+}
+
+/// Simplified port of real `best_match_to_list`'s own specificity
+/// ranking table: versioned/slotted bare atoms and this pilot's own
+/// bounded wildcard atoms only, matching `portage-dep`'s v1 grammar
+/// scope. A bounded wildcard atom (`*/*`, `category/*`, `*/package`)
+/// always ranks below every real atom, at `-2` -- real portage's own
+/// code has three separate extended-syntax tiers (`0` for a wildcard
+/// combined with `=*`, `-1` for one combined with a slot, `-2` for a
+/// bare one with neither), and this pilot's own wildcard grammar has no
+/// slot or glob concept at all, so every wildcard entry always falls
+/// into that third, lowest tier.
+fn atom_specificity(entry: &str) -> i32 {
+    let Some(atom) = portage_dep::parse_atom(entry) else {
+        return -2;
+    };
+    let op_val = match atom.operator {
+        portage_dep::Operator::Eq => 6,
+        portage_dep::Operator::Tilde => 5,
+        portage_dep::Operator::EqGlob => 4,
+        portage_dep::Operator::Gt
+        | portage_dep::Operator::Ge
+        | portage_dep::Operator::Lt
+        | portage_dep::Operator::Le => 2,
+        portage_dep::Operator::None => 1,
+    };
+    let slot_val = if atom.slot.is_some() { 3 } else { i32::MIN };
+    op_val.max(slot_val)
 }
 
 /// A candidate is visible if it isn't masked (matches a `package.mask`
@@ -557,6 +631,8 @@ fn reinstall_flags_for_use_change(
     let cur_use = effective_use_flags(
         &config.use_flags,
         &config.package_use,
+        &config.package_use_force,
+        &config.package_use_mask,
         &candidate_str,
         category,
         package,
@@ -1132,6 +1208,8 @@ pub fn resolve_pretend_graph(
         let use_flags = effective_use_flags(
             &config.use_flags,
             &config.package_use,
+            &config.package_use_force,
+            &config.package_use_mask,
             &candidate_str,
             &key.0,
             &key.1,
@@ -2313,8 +2391,15 @@ mod tests {
             "dev-libs/bar".to_string(),
             vec!["baz".to_string(), "-foo".to_string()],
         )];
-        let use_flags =
-            effective_use_flags(&base, &package_use, "dev-libs/bar-1.0:0", "dev-libs", "bar");
+        let use_flags = effective_use_flags(
+            &base,
+            &package_use,
+            &[],
+            &[],
+            "dev-libs/bar-1.0:0",
+            "dev-libs",
+            "bar",
+        );
         assert_eq!(use_flags, HashSet::from(["baz".to_string()]));
     }
 
@@ -2325,6 +2410,8 @@ mod tests {
         let use_flags = effective_use_flags(
             &base,
             &package_use,
+            &[],
+            &[],
             "dev-libs/unrelated-1.0:0",
             "dev-libs",
             "unrelated",
@@ -2336,9 +2423,76 @@ mod tests {
     fn effective_use_flags_matches_a_wildcard_package_use_entry() {
         let base = HashSet::new();
         let package_use = vec![("*/bar".to_string(), vec!["baz".to_string()])];
-        let use_flags =
-            effective_use_flags(&base, &package_use, "dev-libs/bar-1.0:0", "dev-libs", "bar");
+        let use_flags = effective_use_flags(
+            &base,
+            &package_use,
+            &[],
+            &[],
+            "dev-libs/bar-1.0:0",
+            "dev-libs",
+            "bar",
+        );
         assert_eq!(use_flags, HashSet::from(["baz".to_string()]));
+    }
+
+    #[test]
+    fn effective_use_flags_applies_package_use_force_and_mask() {
+        let base = HashSet::new();
+        let package_use_force = vec![("dev-libs/bar".to_string(), vec!["forceflag".to_string()])];
+        let package_use_mask = vec![("dev-libs/bar".to_string(), vec!["maskflag".to_string()])];
+        let use_flags = effective_use_flags(
+            &base,
+            &[],
+            &package_use_force,
+            &package_use_mask,
+            "dev-libs/bar-1.0:0",
+            "dev-libs",
+            "bar",
+        );
+        assert_eq!(use_flags, HashSet::from(["forceflag".to_string()]));
+    }
+
+    #[test]
+    fn effective_use_flags_package_use_mask_wins_over_force_on_conflict() {
+        // Same flag both forced and masked by two entries at the SAME
+        // specificity tier -- mask must win, matching real portage's own
+        // force-then-mask application order (see effective_use_flags's
+        // own doc comment).
+        let base = HashSet::new();
+        let package_use_force = vec![("dev-libs/bar".to_string(), vec!["bothflag".to_string()])];
+        let package_use_mask = vec![("dev-libs/bar".to_string(), vec!["bothflag".to_string()])];
+        let use_flags = effective_use_flags(
+            &base,
+            &[],
+            &package_use_force,
+            &package_use_mask,
+            "dev-libs/bar-1.0:0",
+            "dev-libs",
+            "bar",
+        );
+        assert!(!use_flags.contains("bothflag"));
+    }
+
+    #[test]
+    fn specificity_ordered_flags_lets_a_more_specific_entry_override_a_less_specific_one() {
+        // A bare atom masks "flag", a more specific exact-version atom
+        // un-masks it again ("-flag") -- the more specific entry must
+        // win regardless of which order the two entries appear in the
+        // input list, proving this is genuine specificity-based
+        // reordering, not just "last entry wins".
+        let entries = vec![
+            ("=dev-libs/bar-1.0".to_string(), vec!["-flag".to_string()]),
+            ("dev-libs/bar".to_string(), vec!["flag".to_string()]),
+        ];
+        let flags = specificity_ordered_flags(&entries, "dev-libs/bar-1.0:0", "dev-libs", "bar");
+        assert!(!flags.contains("flag"));
+    }
+
+    #[test]
+    fn atom_specificity_ranks_exact_version_above_bare_above_wildcard() {
+        assert!(atom_specificity("=dev-libs/bar-1.0") > atom_specificity("dev-libs/bar:0"));
+        assert!(atom_specificity("dev-libs/bar:0") > atom_specificity("dev-libs/bar"));
+        assert!(atom_specificity("dev-libs/bar") > atom_specificity("*/*"));
     }
 
     fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {

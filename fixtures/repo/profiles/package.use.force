@@ -1,0 +1,5 @@
+# repo-level package.use.force: force-enables "forceflag" for
+# dev-libs/pkgusemaskforcepkg via a bare wildcard entry (deliberately
+# less specific than any real atom, to help exercise atom-specificity
+# ordering alongside the package.use.mask fixture files).
+*/pkgusemaskforcepkg forceflag

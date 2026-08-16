@@ -1,0 +1,7 @@
+# profile-level (base) package.use.mask: masks both "maskflag" and
+# "specflag" for dev-libs/pkgusemaskforcepkg via a bare (unversioned)
+# atom -- the leaf profile's own package.use.mask entry below is a more
+# specific, exact-version atom that partially un-masks "specflag",
+# proving atom-specificity ordering (not just profile-chain order)
+# decides which entry wins when more than one matches.
+dev-libs/pkgusemaskforcepkg maskflag specflag

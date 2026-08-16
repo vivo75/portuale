@@ -377,18 +377,74 @@ def is_visible(candidate, category, package, config):
     return bool((config["accept_keywords"] | extra_keywords) & set(candidate["keywords"]))
 
 
-def effective_use_flags(base, package_use, candidate_str, category, package):
+def effective_use_flags(
+    base, package_use, package_use_force, package_use_mask, candidate_str, category, package
+):
     """The USE flags in effect for one specific package: `base` with every
     matching package.use entry's tokens layered on top, in file order, via
     the same incremental -flag/flag/+flag semantics USE itself uses (see
-    _apply_incremental). Applied per package, mirroring
-    portage-repo/src/lib.rs's effective_use_flags exactly -- a package.use
-    entry never affects any other package's own resolution."""
+    _apply_incremental), THEN package.use.force/package.use.mask layered
+    on top of that (force winning first, then mask -- see
+    _specificity_ordered_flags for how a conflict between multiple
+    matching mask/force entries is resolved). Applied per package,
+    mirroring portage-repo/src/lib.rs's effective_use_flags exactly -- a
+    package.use entry never affects any other package's own
+    resolution."""
     use_flags = set(base)
     for entry, tokens in package_use:
         if _matches_config_entry(entry, candidate_str, category, package):
             _apply_incremental(" ".join(tokens), use_flags)
+    use_flags |= _specificity_ordered_flags(
+        package_use_force, candidate_str, category, package
+    )
+    use_flags -= _specificity_ordered_flags(
+        package_use_mask, candidate_str, category, package
+    )
     return use_flags
+
+
+def _atom_specificity(entry):
+    """Simplified port of real best_match_to_list's own specificity
+    ranking table (used by ordered_by_atom_specificity). Mirrors
+    portage-repo/src/lib.rs's atom_specificity exactly, including its
+    own documented simplifications: comparison operators (>,<,>=,<=)
+    all share one tier without real portage's own "closest version wins
+    a tie" refinement, and every wildcard entry this pilot's own grammar
+    can produce falls into real portage's lowest extended-syntax tier,
+    since it never has a slot or "=*" glob of its own."""
+    try:
+        atom = Atom(entry, allow_wildcard=True)
+    except InvalidAtom:
+        return -2
+    if atom.extended_syntax:
+        return -2
+    op_values = {"=": 6, "~": 5, "=*": 4, ">": 2, "<": 2, ">=": 2, "<=": 2, None: 1}
+    op_val = op_values.get(atom.operator, 1)
+    slot_val = 3 if atom.slot is not None else -(10**9)
+    return max(op_val, slot_val)
+
+
+def _specificity_ordered_flags(entries, candidate_str, category, package):
+    """Computes the final per-candidate flag set from `entries` (raw
+    package.use.mask/.force (atom, tokens) pairs): filters to entries
+    whose atom actually matches `candidate_str`, orders the matches from
+    least to most specific (_atom_specificity), then applies each one's
+    own tokens via the same incremental semantics package.use itself
+    uses, onto an initially empty set -- so a more-specific atom's own
+    "-flag" can cancel a less-specific atom's own mask/force. Mirrors
+    portage-repo/src/lib.rs's specificity_ordered_flags exactly
+    (Python's own list.sort() is stable, matching Rust's sort_by_key, so
+    ties keep their original file/stacking order)."""
+    matching = [
+        (entry, tokens)
+        for entry, tokens in entries
+        if _matches_config_entry(entry, candidate_str, category, package)
+    ]
+    matching.sort(key=lambda et: _atom_specificity(et[0]))
+    flags = set()
+    for _entry, tokens in matching:
+        _apply_incremental(" ".join(tokens), flags)
+    return flags
 
 
 def _read_vdb_flag_set(root, category, package, version, filename):
@@ -432,7 +488,13 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
     cur_iuse = {tok.lstrip("+-") for tok in metadata["IUSE"].split()}
     candidate_str = f"{category}/{package}-{version}:{candidate['slot']}::{candidate['repo_name']}"
     cur_use = effective_use_flags(
-        config["use_flags"], config["package_use"], candidate_str, category, package
+        config["use_flags"],
+        config["package_use"],
+        config["package_use_force"],
+        config["package_use_mask"],
+        candidate_str,
+        category,
+        package,
     )
 
     # Shared term (the *entire* --changed-use formula on its own):
@@ -627,7 +689,8 @@ def resolve_config(config_root, main_repo_location):
     crate's doc comment for the full algorithm and its documented scope
     cuts. Returns a dict with keys "use_flags", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
-    "package_use", "system_packages", "use_force", "use_mask".
+    "package_use", "system_packages", "use_force", "use_mask",
+    "package_use_force", "package_use_mask".
 
     main_repo_location (the main repo's own tree root -- see
     find_repos/is_main) is needed for package.mask/.unmask's repo-level
@@ -727,6 +790,26 @@ def resolve_config(config_root, main_repo_location):
         _read_config_lines(os.path.join(config_root, "etc", "portage", "package.use"))
     )
 
+    # package.use.mask/package.use.force: repo-level (main repo only, no
+    # masters) plus every profile level's own file (in chain order) -- NO
+    # user-level source at all, unlike package.use: confirmed by reading
+    # UseManager.__init__'s own file/variable table (the "user config"
+    # section lists only "package.use -> _pusedict", nothing for
+    # mask/force). Flat-concatenated the same way use_lines already is;
+    # which entry actually wins when more than one matches the same
+    # candidate is decided later, at application time -- see
+    # effective_use_flags's own docstring (atom-specificity ordering).
+    # Mirrors portage-profile/src/lib.rs's resolve_config exactly.
+    use_force_lines = _read_config_lines(
+        os.path.join(main_repo_location, "profiles", "package.use.force")
+    )
+    use_mask_lines = _read_config_lines(
+        os.path.join(main_repo_location, "profiles", "package.use.mask")
+    )
+    for level in chain:
+        use_force_lines.extend(_read_config_lines(os.path.join(level, "package.use.force")))
+        use_mask_lines.extend(_read_config_lines(os.path.join(level, "package.use.mask")))
+
     # packages (@system): every profile level's own file, in chain order,
     # stacked with the same "-atom" removal semantics package.mask uses
     # (see _stack_mask_lines) -- mirrors portage-profile/src/lib.rs's
@@ -753,6 +836,8 @@ def resolve_config(config_root, main_repo_location):
         "system_packages": system_packages,
         "use_force": use_force,
         "use_mask": use_mask,
+        "package_use_force": _parse_package_use_lines(use_force_lines),
+        "package_use_mask": _parse_package_use_lines(use_mask_lines),
     }
 
 
@@ -1053,7 +1138,13 @@ def resolve_pretend_graph(
             continue
         candidate_str = f"{category}/{package}-{version}:{slot}::{repo_name}"
         use_flags = effective_use_flags(
-            config["use_flags"], config["package_use"], candidate_str, category, package
+            config["use_flags"],
+            config["package_use"],
+            config["package_use_force"],
+            config["package_use_mask"],
+            candidate_str,
+            category,
+            package,
         )
         # IUSE's own "+flag"/"-flag" default markers only matter for
         # resolving a flag's default when nothing else decides it --

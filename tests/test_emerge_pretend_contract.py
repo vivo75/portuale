@@ -49,6 +49,11 @@ CASES = [
     ("USE-dep top-level atom: now in v1 grammar, resolves New", ["--pretend", "dev-libs/foo[bar]"], 0),
     ("repo-constrained top-level atom: resolves New from the named repo", ["--pretend", "dev-libs/foo::testrepo"], 0),
     ("repo-constrained top-level atom: wrong repo, no ebuilds satisfy it", ["--pretend", "dev-libs/foo::overlay"], 1),
+    (
+        "package.use.mask/package.use.force with atom-specificity ordering",
+        ["--pretend", "-v", "dev-libs/pkgusemaskforcepkg"],
+        0,
+    ),
     ("slot-operator top-level atom: now in v1 grammar, resolves New", ["--pretend", "dev-libs/foo:0="], 0),
     ("slot-operator top-level atom, no explicit slot: resolves New", ["--pretend", "dev-libs/foo:="], 0),
     ("bare trailing colon top-level atom: still invalid", ["--pretend", "dev-libs/foo:"], 1),
@@ -593,6 +598,29 @@ def test_profile_level_package_use_enables_a_flag_and_pulls_in_a_dependency(
         "[ebuild  N] dev-libs/profileuseenablepkg-1.0",
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
+
+
+def test_package_use_mask_and_force_with_atom_specificity_ordering(emerge_binary, fixture_env):
+    """dev-libs/pkgusemaskforcepkg's own IUSE="forceflag maskflag specflag":
+    repo-level package.use.force force-enables "forceflag" via a bare
+    wildcard entry; the base profile level's own package.use.mask masks
+    both "maskflag" and "specflag" via a bare atom; the leaf profile's
+    own package.use.mask has a MORE SPECIFIC exact-version atom
+    ("=dev-libs/pkgusemaskforcepkg-1.0 -specflag") that un-masks
+    "specflag" again -- proving atom-specificity ordering (not just
+    profile-chain order) decides which entry wins, and that a
+    less-specific entry from an EARLIER profile level can still be
+    overridden by a more-specific one from a LATER level. Final USE:
+    forceflag on (forced), maskflag off (masked, nothing un-masks it),
+    specflag off (un-masked but not enabled by anything else, so stays
+    at its off-by-default)."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/pkgusemaskforcepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == (
+        '[ebuild  N] dev-libs/pkgusemaskforcepkg-1.0  USE="forceflag -maskflag -specflag"\n'
+    )
 
 
 def test_strong_blocker_matches_an_installed_package(emerge_binary, fixture_env):

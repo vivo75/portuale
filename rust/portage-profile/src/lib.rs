@@ -125,13 +125,12 @@
 //     `USE` value this pilot's flat model corresponds to: it returns
 //     `stack_lists(self._usemask_list/self._useforce_list,
 //     incremental=True)` directly, never touching a repo-level or
-//     per-package source at all -- those only exist on the *per-package*
-//     path (`pkg` not `None`), out of scope here the same way
-//     `package.use`'s own repo/profile/user-only sourcing already
-//     doesn't reach a per-package USE_ORDER layer either. Applied last,
-//     after every other real accumulation source (profile chain,
-//     make.conf): every `use.force` flag is force-added, THEN every
-//     `use.mask` flag is force-removed, exactly matching real
+//     per-package source at all here -- those only exist on the
+//     *per-package* path (`pkg` not `None`), see the
+//     `package.use.mask`/`.force` bullet further below for that follow-up.
+//     Applied last, after every other real accumulation source (profile
+//     chain, make.conf): every `use.force` flag is force-added, THEN
+//     every `use.mask` flag is force-removed, exactly matching real
 //     `regenerate()`'s own `myflags.update(useforce)` followed by
 //     `myflags.difference_update(usemask)` -- so a flag listed in both
 //     ends up masked, not forced. `use_force`/`use_mask` are also
@@ -140,6 +139,25 @@
 //     `--newuse`'s `reinstall_flags_for_newuse` in `portage-repo`,
 //     previously always empty -- see that function's own doc comment)
 //     is `use.force ∪ use.mask`, not either alone.
+//   - `package.use.mask`/`package.use.force` (per-package USE forcing) ARE
+//     now read too: repo-level (main repo only, no `masters` -- same cut
+//     `package.mask`'s own repo-level source already makes) plus every
+//     profile level's own file, in chain order -- confirmed by reading
+//     `UseManager.__init__`'s own file/variable table that there's no
+//     user-level source for either file at all (unlike `package.use`
+//     itself), so this pilot doesn't invent one. Stored flat, same as
+//     `package_use`; `portage-repo`'s own `effective_use_flags` decides
+//     which entries actually apply to a given candidate and in what
+//     order -- see that crate's doc comment for the atom-specificity
+//     algorithm this needed (real `ordered_by_atom_specificity`, ported)
+//     and the deliberate simplifications made along the way (no
+//     stable-vs-`~arch` KEYWORDS distinction at all -- real portage's own
+//     *separate* `use.stable.mask`/`.force`/`package.use.stable.mask`/
+//     `.force` files and `_isStable` check are out of scope entirely; and
+//     comparison-operator atoms lose real `best_match_to_list`'s
+//     "closest version wins a tie" refinement, since real-world
+//     `package.use.mask`/`.force` files essentially never use `>`/`<`/
+//     `>=`/`<=` atoms in practice).
 //
 // One real, deliberately-preserved quirk from lib/portage/package/ebuild/
 // config.py (see the comment above its `expand_map.pop("USE", None)`):
@@ -193,6 +211,18 @@ pub struct Config {
     /// already folded out of `use_flags`. See `use_force`'s own doc
     /// comment.
     pub use_mask: HashSet<String>,
+    /// (atom-or-wildcard string, flag tokens) pairs from `package.use.force`
+    /// -- repo-level (main repo only) and every profile level's own file,
+    /// flat-concatenated same as `package_use`. Real portage has no
+    /// user-level source for this file at all (confirmed by reading
+    /// `UseManager.__init__`'s own file/variable table) -- see the module
+    /// doc comment's `package.use.mask`/`.force` bullet for the full
+    /// scope writeup, including the deliberate simplifications this pilot
+    /// makes applying these per package.
+    pub package_use_force: Vec<(String, Vec<String>)>,
+    /// (atom-or-wildcard string, flag tokens) pairs from `package.use.mask`.
+    /// See `package_use_force`'s own doc comment.
+    pub package_use_mask: Vec<(String, Vec<String>)>,
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -644,6 +674,28 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
     )?);
     config.package_use = parse_package_use_lines(&use_lines);
 
+    // package.use.mask/package.use.force: repo-level (main repo only, no
+    // masters -- same cut package.mask's own repo-level source already
+    // makes) plus every profile level's own file (in chain order) -- NO
+    // user-level source at all, unlike package.use: confirmed by reading
+    // UseManager.__init__'s own file/variable table (the "user config"
+    // section lists only "package.use -> _pusedict", nothing for
+    // mask/force). Flat-concatenated the same way package_use already
+    // is; which entry actually wins when more than one matches the same
+    // candidate is decided later, at application time -- see
+    // `portage-repo`'s own doc comment on why (atom-specificity
+    // ordering).
+    let mut use_force_lines: Vec<String> =
+        read_config_lines(&main_repo_location.join("profiles/package.use.force"))?;
+    let mut use_mask_lines: Vec<String> =
+        read_config_lines(&main_repo_location.join("profiles/package.use.mask"))?;
+    for level in &chain {
+        use_force_lines.extend(read_config_lines(&level.join("package.use.force"))?);
+        use_mask_lines.extend(read_config_lines(&level.join("package.use.mask"))?);
+    }
+    config.package_use_force = parse_package_use_lines(&use_force_lines);
+    config.package_use_mask = parse_package_use_lines(&use_mask_lines);
+
     // packages (@system): every profile level's own file, in chain
     // order, stacked with the same -atom removal semantics package.mask
     // uses (see stack_mask_lines) -- confirmed by reading
@@ -991,6 +1043,56 @@ mod tests {
                 ("dev-libs/a".to_string(), vec!["flaga".to_string()]),
                 ("dev-libs/b".to_string(), vec!["flagb".to_string()]),
                 ("dev-libs/c".to_string(), vec!["flagc".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn package_use_mask_and_force_stack_repo_then_profile_only_no_user_source() {
+        // Repo-level entry for "a", profile-level entry for "b" -- both
+        // must appear, in that order; a user-level package.use.mask/
+        // .force file is deliberately written too, and must be
+        // completely ignored -- real portage has no such source at all
+        // (confirmed by reading UseManager.__init__'s own file/variable
+        // table), unlike package.use itself.
+        let root = std::env::temp_dir().join("portage-profile-test-package-use-mask-force");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let portage_dir = root.join("etc/portage");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&repo_profiles).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(repo_profiles.join("package.use.mask"), "dev-libs/a maska\n").unwrap();
+        fs::write(leaf.join("package.use.mask"), "dev-libs/b maskb\n").unwrap();
+        fs::write(portage_dir.join("package.use.mask"), "dev-libs/c maskc\n").unwrap();
+        fs::write(
+            repo_profiles.join("package.use.force"),
+            "dev-libs/a forcea\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("package.use.force"), "dev-libs/b forceb\n").unwrap();
+        fs::write(portage_dir.join("package.use.force"), "dev-libs/c forcec\n").unwrap();
+
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.package_use_mask,
+            vec![
+                ("dev-libs/a".to_string(), vec!["maska".to_string()]),
+                ("dev-libs/b".to_string(), vec!["maskb".to_string()]),
+            ]
+        );
+        assert_eq!(
+            config.package_use_force,
+            vec![
+                ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
+                ("dev-libs/b".to_string(), vec!["forceb".to_string()]),
             ]
         );
     }

@@ -1,0 +1,6 @@
+# leaf-profile package.use.mask: a more specific exact-version atom
+# than base/package.use.mask's own bare atom (see that file's own
+# comment) -- "-specflag" un-masks "specflag" again, proving the more
+# specific entry wins regardless of which profile level it comes from.
+# "maskflag" stays masked, since nothing here mentions it.
+=dev-libs/pkgusemaskforcepkg-1.0 -specflag
