@@ -12,12 +12,16 @@
 // (verified by the shared contract suite).
 //
 // KNOWN, DOCUMENTED SCOPE CUTS:
-//   - No short-flag bundling (`-pv`): real emerge's own
-//     `insert_optional_args` supports this via nontrivial custom
-//     parsing (see main.py); this pilot only recognizes single,
-//     unbundled short flags. A bundled form like `-pv` doesn't match
-//     any entry below and is reported as unrecognized, not as a
-//     combination of two known flags.
+//   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own
+//     doc comment for the algorithm. It's real `argparse`-native
+//     behavior for plain boolean short options, not (as an earlier
+//     version of this comment claimed) something `insert_optional_args`
+//     alone provides; verified empirically against real `argparse`
+//     before relying on it. `insert_optional_args` is real and separate:
+//     it's what lets a handful of specific short options (`-v` among
+//     them) take an *optional* value, which argparse's own bundling
+//     can't express on its own -- see pretend.rs for the `-v`-specific
+//     port of that piece.
 //   - `Category::Value` marks which real options take an argument
 //     (real emerge's own `argument_options` dict), for accurate
 //     enumeration, but the caller (`pretend.rs`) never needs to parse

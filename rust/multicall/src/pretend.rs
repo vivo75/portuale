@@ -48,8 +48,41 @@
 // happen to include options this pilot doesn't implement (e.g. from
 // EMERGE_DEFAULT_OPTS or a script) fail with an accurate, actionable
 // message instead of a generic one. See emerge_options.rs's doc comment
-// for the (deliberately unfaithful) value-consumption and no-bundling
-// scope cuts.
+// for the (deliberately unfaithful) value-consumption scope cut for
+// every option other than --verbose/-v.
+//
+// --verbose/-v is NOT a plain boolean in real emerge -- it's registered
+// in main.py's `argument_options` with `choices=("True", "y", "n")`, and
+// `insert_optional_args` (main.py) inserts "True" when it's given with
+// no explicit value. So a standalone `--verbose`/`-v` peeks at the next
+// argv token: exactly "y" or "n" is consumed as an explicit value,
+// anything else (including nothing at all) leaves verbose enabled
+// without consuming it -- matching real emerge exactly (verified by
+// tracing insert_optional_args by hand). `--verbose=y`/`--verbose=n`
+// (argparse's own native `=`-form, a separate mechanism) are handled the
+// same way. A *bundled* -v (e.g. `-pv`) never consumes anything at all,
+// always defaulting to enabled -- real emerge's own
+// `short_arg_opts_n`/"Don't make things like '-kn' expand to '-k n'"
+// comment explains why: allowing an inline or next-token value for a
+// bundled single-letter flag would be ambiguous with "another bundled
+// flag character". See `consume_verbose_value` and the bundle-handling
+// comment below.
+//
+// Short-flag bundling (`-pv`, `-pd`, ...): a single-dash token longer
+// than one character decomposes into its individual short options, one
+// per character, left to right -- unlike real emerge's own
+// insert_optional_args (which scans for a value-taking short option
+// *anywhere* in the bundle and extracts it first via an internal
+// recycling stack, regardless of position), this pilot processes
+// strictly left to right and reports on the first character that's
+// either unimplemented-but-recognized or genuinely unrecognized, exiting
+// immediately -- exactly the same two outcomes (and same messages) a
+// standalone occurrence of that character would produce. This is an
+// intentional simplification of the *processing order*, not the
+// *outcome*: since this pilot exits at the first out-of-scope input
+// either way, which internal algorithm finds it first is unobservable
+// except in the rare case of two DIFFERENT unimplemented flags bundled
+// together, where this pilot always reports the leftmost one.
 
 use crate::emerge_options;
 use portage_dep::{parse_atom, Blocker};
@@ -105,40 +138,90 @@ fn print_blockers(entry: &GraphEntry, owner_version: &str) {
     }
 }
 
+/// Reports and returns the exit code for a single option/action token
+/// ("-x" or "--long", never a positional atom) that isn't --pretend/-p
+/// or --verbose/-v -- shared between a standalone token and one
+/// character of a decomposed short-flag bundle, so both produce
+/// identical messages for the same underlying flag.
+fn report_option(token: &str) -> ExitCode {
+    if let Some(found) = emerge_options::lookup(token) {
+        // Reports and exits immediately, matching every other
+        // out-of-scope-input case in this pilot -- so there's no need to
+        // correctly skip over this option's own value token (see
+        // emerge_options.rs's doc comment): nothing after this point is
+        // ever looked at.
+        let kind = if found.category == emerge_options::Category::Action {
+            "action"
+        } else {
+            "option"
+        };
+        eprintln!(
+            "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
+             implemented in this pilot (only --pretend/-p and --verbose/-v are \
+             implemented so far; see PROMPT.md)",
+            found.canonical
+        );
+    } else {
+        eprintln!("emerge: unrecognized option {token:?}");
+    }
+    ExitCode::from(2)
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     let mut atom_args: Vec<&str> = Vec::new();
     let mut pretend = false;
     let mut verbose = false;
 
-    for arg in args {
-        let arg = arg.as_str();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
         if arg == "--pretend" || arg == "-p" {
             pretend = true;
+            i += 1;
         } else if arg == "--verbose" || arg == "-v" {
+            // Peeks at the next token, consuming it only if it's exactly
+            // "y"/"n" -- see the module doc comment on why (real
+            // insert_optional_args behavior for a standalone, non-bundled
+            // occurrence).
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    verbose = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    verbose = false;
+                    i += 2;
+                }
+                _ => {
+                    verbose = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--verbose=y" {
             verbose = true;
+            i += 1;
+        } else if arg == "--verbose=n" {
+            verbose = false;
+            i += 1;
         } else if !arg.starts_with('-') {
             atom_args.push(arg);
-        } else if let Some(found) = emerge_options::lookup(arg) {
-            // Reports and exits immediately, matching every other
-            // out-of-scope-input case in this pilot -- so there's no
-            // need to correctly skip over this option's own value token
-            // (see emerge_options.rs's doc comment): nothing after this
-            // point is ever looked at.
-            let kind = if found.category == emerge_options::Category::Action {
-                "action"
-            } else {
-                "option"
-            };
-            eprintln!(
-                "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
-                 implemented in this pilot (only --pretend/-p and --verbose/-v are \
-                 implemented so far; see PROMPT.md)",
-                found.canonical
-            );
-            return ExitCode::from(2);
+            i += 1;
+        } else if !arg.starts_with("--") && arg.len() > 2 {
+            // Short-flag bundle (e.g. "-pv") -- decomposed one character
+            // at a time, left to right; see the module doc comment for
+            // how this differs from real emerge's own recycling-based
+            // algorithm (same outcomes, different internal order) and
+            // why a bundled -v never consumes a value.
+            for c in arg[1..].chars() {
+                match c {
+                    'p' => pretend = true,
+                    'v' => verbose = true,
+                    _ => return report_option(&format!("-{c}")),
+                }
+            }
+            i += 1;
         } else {
-            eprintln!("emerge: unrecognized option {arg:?}");
-            return ExitCode::from(2);
+            return report_option(arg);
         }
     }
 

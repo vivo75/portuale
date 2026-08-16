@@ -462,12 +462,11 @@ PORTING/
   from a typo. Unlike every other change in this series, this one adds
   *zero* new behavior for any of those ~130 flags -- it only makes the
   CLI's *refusal* to handle them more specific. Deliberately out of
-  scope: short-flag bundling (`-pv` isn't decomposed into `-p` + `-v`,
-  real emerge's own `insert_optional_args` parsing for this is
-  nontrivial), and any actual argument-value semantics (a
-  recognized-but-unimplemented option's value, if it takes one, is
-  never inspected -- the CLI reports and exits immediately, before ever
-  needing to skip over it). `--help`/`-h` is recognized as an
+  scope: any actual argument-value semantics for an unimplemented option
+  (its value, if it takes one, is never inspected -- the CLI reports and
+  exits immediately, before ever needing to skip over it; short-flag
+  bundling was *also* out of scope at this point, but got its own,
+  later follow-up -- see below). `--help`/`-h` is recognized as an
   unimplemented action like any other; a real, pilot-specific `--help`
   would be its own separate slice.
 
@@ -684,6 +683,44 @@ PORTING/
   bare entry as a no-op at both levels, same simplification the
   pre-existing user-level-only handling already made, kept deliberately
   symmetric rather than adding a profile-only special case.
+
+  **Real `-v` value semantics + short-flag bundling**: closes two related
+  CLI gaps at once, both grounded in `lib/_emerge/main.py`'s
+  `insert_optional_args` (traced by hand, then verified against real
+  `argparse` directly before relying on either finding). First, a
+  correction to the earlier USE-flags-in-`-v`-output slice:
+  `--verbose`/`-v` is **not** a plain boolean in real emerge -- it's
+  registered with `choices=("True", "y", "n")`, and
+  `insert_optional_args` inserts `"True"` only when no explicit value
+  follows. A standalone (non-bundled) `-v`/`--verbose` now peeks at the
+  next token, consuming it if it's exactly `"y"`/`"n"` (explicit
+  enable/disable) and otherwise defaulting to enabled without consuming
+  anything; `--verbose=y`/`--verbose=n` (`argparse`'s own native `=`
+  syntax, a separate mechanism) work the same way. Before this fix,
+  `emerge --pretend -v n cat/pkg` silently misparsed `"n"` as a second
+  target atom instead of an explicit disable. Second, short-flag
+  bundling itself (`-pv`, `-pd`, ...): confirmed empirically that real
+  bundling is native `argparse` behavior for plain boolean short
+  options, not (as the CLI-surface-recognition slice's own doc comment
+  had claimed) something `insert_optional_args` provides -- that
+  function is real, but it's what lets specific options like `-v` take
+  an *optional* value, a separate concern from bundling itself. A
+  single-dash token longer than one character now decomposes character
+  by character, left to right, reporting on the first
+  unimplemented-but-recognized or genuinely unrecognized character
+  exactly as a standalone occurrence of it would (same messages, same
+  exit code) -- a deliberate simplification of *processing order* versus
+  real emerge's own value-scanning recycling algorithm, not of
+  *outcome*, since this pilot exits at the first out-of-scope input
+  either way. A bundled `-v` (e.g. `-pv`) never consumes a value at all,
+  even if followed by a bare `"y"`/`"n"` token -- matching real emerge's
+  own `short_arg_opts_n` handling, whose comment explains why: an inline
+  or next-token value for a *bundled* single-letter flag would be
+  ambiguous with another bundled flag character. Before this slice, a
+  bundled token like `-pv` matched no table entry at all and was
+  reported as a generic "unrecognized option" -- a worse outcome than
+  even a "recognized, not implemented" report, since `-p` and `-v`
+  genuinely are both implemented.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1136,6 +1173,26 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/useflagpkg
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useflagpkg
 # [ebuild  N] dev-libs/useflagpkg-1.0   (no -v: no USE= at all)
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# -v/--verbose isn't a plain boolean in real emerge -- an explicit
+# following "n" disables it again, same as real insert_optional_args
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v n dev-libs/useflagpkg
+# [ebuild  N] dev-libs/useflagpkg-1.0   (explicit "n": no USE= shown)
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# short-flag bundling: "-pv" decomposes into -p + -v, both real,
+# implemented flags -- native argparse behavior for boolean short
+# options, not something requiring emerge-specific parsing
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
+# [ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# a bundled flag reports on the first out-of-scope character, left to
+# right, exactly like a standalone occurrence of it would
+/tmp/emerge -pd dev-libs/newpkg
+# emerge (pilot v1): option "--debug" is a real emerge option, but is not
+# implemented in this pilot (only --pretend/-p and --verbose/-v are
+# implemented so far; see PROMPT.md)  (exit 2)
 
 # CLI surface recognition: a real emerge option this pilot doesn't
 # implement is named specifically, not lumped in with a typo

@@ -1179,32 +1179,80 @@ def _has_unsupported_top_level_features(a):
     return a.repo is not None or a.extended_syntax or a.build_id is not None
 
 
+def _report_option(token):
+    """Reports and returns the exit code for a single option/action token
+    ("-x" or "--long", never a positional atom) that isn't --pretend/-p
+    or --verbose/-v -- shared between a standalone token and one
+    character of a decomposed short-flag bundle, so both produce
+    identical messages for the same underlying flag. Mirrors
+    pretend.rs's report_option exactly."""
+    found = _lookup_option(token)
+    if found is not None:
+        category, canonical = found
+        kind = "action" if category == "action" else "option"
+        print(
+            f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
+            "but is not implemented in this pilot (only --pretend/-p and "
+            "--verbose/-v are implemented so far; see PROMPT.md)",
+            file=sys.stderr,
+        )
+    else:
+        print(f'emerge: unrecognized option "{token}"', file=sys.stderr)
+    return 2
+
+
 def run(args):
     atom_args = []
     pretend = False
     verbose = False
 
-    for arg in args:
+    i = 0
+    while i < len(args):
+        arg = args[i]
         if arg in ("--pretend", "-p"):
             pretend = True
+            i += 1
         elif arg in ("--verbose", "-v"):
+            # Peeks at the next token, consuming it only if it's exactly
+            # "y"/"n" -- see pretend.rs's module doc comment on why (real
+            # insert_optional_args behavior for a standalone, non-bundled
+            # occurrence).
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                verbose = True
+                i += 2
+            elif nxt == "n":
+                verbose = False
+                i += 2
+            else:
+                verbose = True
+                i += 1
+        elif arg == "--verbose=y":
             verbose = True
+            i += 1
+        elif arg == "--verbose=n":
+            verbose = False
+            i += 1
         elif not arg.startswith("-"):
             atom_args.append(arg)
+            i += 1
+        elif not arg.startswith("--") and len(arg) > 2:
+            # Short-flag bundle (e.g. "-pv") -- decomposed one character
+            # at a time, left to right; see pretend.rs's module doc
+            # comment for how this differs from real emerge's own
+            # recycling-based algorithm (same outcomes, different
+            # internal order) and why a bundled -v never consumes a
+            # value.
+            for c in arg[1:]:
+                if c == "p":
+                    pretend = True
+                elif c == "v":
+                    verbose = True
+                else:
+                    return _report_option(f"-{c}")
+            i += 1
         else:
-            found = _lookup_option(arg)
-            if found is not None:
-                category, canonical = found
-                kind = "action" if category == "action" else "option"
-                print(
-                    f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
-                    "but is not implemented in this pilot (only --pretend/-p and "
-                    "--verbose/-v are implemented so far; see PROMPT.md)",
-                    file=sys.stderr,
-                )
-            else:
-                print(f'emerge: unrecognized option "{arg}"', file=sys.stderr)
-            return 2
+            return _report_option(arg)
 
     if not pretend:
         print(

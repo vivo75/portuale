@@ -106,6 +106,15 @@ CASES = [
     ("without --verbose, USE= is never shown even for a package with IUSE", ["--pretend", "dev-libs/useflagpkg"], 0),
     ("-v on a package with no IUSE at all: no USE= line", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("-v combined with a real-but-unimplemented option: still rejected", ["--pretend", "-v", "--deep", "dev-libs/newpkg"], 2),
+    ("-v explicit disable via a following \"n\" token", ["--pretend", "-v", "n", "dev-libs/useflagpkg"], 0),
+    ("-v explicit enable via a following \"y\" token", ["--pretend", "-v", "y", "dev-libs/useflagpkg"], 0),
+    ("--verbose=n inline form disables", ["--pretend", "--verbose=n", "dev-libs/useflagpkg"], 0),
+    ("--verbose=y inline form enables", ["--pretend", "--verbose=y", "dev-libs/useflagpkg"], 0),
+    ("short-flag bundle -pv: both implemented flags", ["-pv", "dev-libs/useflagpkg"], 0),
+    ("short-flag bundle -vp: order doesn't matter", ["-vp", "dev-libs/useflagpkg"], 0),
+    ("short-flag bundle -pd: pretend + unimplemented option", ["-pd", "dev-libs/useflagpkg"], 2),
+    ("short-flag bundle -pz: pretend + genuinely unrecognized", ["-pz", "dev-libs/useflagpkg"], 2),
+    ("bundled -v never consumes a following token as its value", ["-pv", "n"], 1),
 ]
 
 
@@ -744,6 +753,103 @@ def test_verbose_on_a_package_with_no_iuse_shows_no_use_line(emerge_binary, fixt
     result = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/newpkg-1.0"]
+
+
+def test_verbose_consumes_an_explicit_y_or_n_value(emerge_binary, fixture_env):
+    """-v/--verbose is not a plain boolean in real emerge -- it's
+    registered with choices=("True", "y", "n"), and insert_optional_args
+    inserts "True" only when no explicit value follows. A standalone -v
+    (not bundled) must consume an immediately-following "n" as an
+    explicit disable, or "y" as an explicit enable -- verified by tracing
+    real insert_optional_args by hand, not guessed."""
+    disabled = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "n", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert disabled.returncode == 0
+    assert disabled.stdout.splitlines()[0] == "[ebuild  N] dev-libs/useflagpkg-1.0"
+    assert "USE=" not in disabled.stdout
+
+    enabled = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "y", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert enabled.returncode == 0
+    assert enabled.stdout.splitlines()[0] == '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+
+
+def test_verbose_inline_equals_form_consumes_y_or_n(emerge_binary, fixture_env):
+    """--verbose=y / --verbose=n (argparse's own native "=" syntax, a
+    separate mechanism from insert_optional_args's next-token lookahead)
+    must be honored the same way."""
+    disabled = _run(
+        [str(emerge_binary)], ["--pretend", "--verbose=n", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert disabled.returncode == 0
+    assert "USE=" not in disabled.stdout
+
+    enabled = _run(
+        [str(emerge_binary)], ["--pretend", "--verbose=y", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert enabled.returncode == 0
+    assert 'USE="foo -missingflag"' in enabled.stdout
+
+
+def test_short_flag_bundle_pv_enables_both_pretend_and_verbose(emerge_binary, fixture_env):
+    """-pv (and -vp, order shouldn't matter) decomposes into -p + -v,
+    both real, implemented flags -- real argparse's own native bundling
+    for plain boolean short options, verified directly against real
+    argparse before relying on it. Prior to this slice, a bundled token
+    like this matched no table entry at all and was reported as
+    "unrecognized option", a worse outcome than even a "recognized, not
+    implemented" report would have been, since -p and -v genuinely are
+    both implemented."""
+    for bundle in ("-pv", "-vp"):
+        result = _run([str(emerge_binary)], [bundle, "dev-libs/useflagpkg"], fixture_env)
+        assert result.returncode == 0, bundle
+        assert (
+            result.stdout.splitlines()[0]
+            == '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+        ), bundle
+
+
+def test_short_flag_bundle_reports_the_first_out_of_scope_character(
+    emerge_binary, fixture_env
+):
+    """-pd (pretend + real-but-unimplemented -d/--debug) and -pz
+    (pretend + a genuinely unrecognized "-z") each decompose left to
+    right, processing "-p" silently and then reporting on the next
+    character exactly as a standalone occurrence of it would -- same
+    messages, same exit code."""
+    unimplemented = _run(
+        [str(emerge_binary)], ["-pd", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert unimplemented.returncode == 2
+    assert (
+        unimplemented.stderr.strip()
+        == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
+        "implemented in this pilot (only --pretend/-p and --verbose/-v are implemented "
+        "so far; see PROMPT.md)"
+    )
+
+    unrecognized = _run(
+        [str(emerge_binary)], ["-pz", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert unrecognized.returncode == 2
+    assert unrecognized.stderr.strip() == 'emerge: unrecognized option "-z"'
+
+
+def test_bundled_verbose_never_consumes_the_next_token_as_its_value(
+    emerge_binary, fixture_env
+):
+    """Real emerge's own insert_optional_args never lets a *bundled*
+    short option (one sharing a token with another flag) pick up an
+    inline or next-token value -- only a standalone, unbundled -v does
+    (see test_verbose_consumes_an_explicit_y_or_n_value). "-pv n" must
+    treat "n" as a positional atom, not as -v's value -- proven here by
+    it failing as an invalid atom, not by "n" silently disabling
+    verbose."""
+    result = _run([str(emerge_binary)], ["-pv", "n"], fixture_env)
+    assert result.returncode == 1
+    assert result.stderr.strip() == 'emerge: invalid atom "n"'
 
 
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
