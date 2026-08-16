@@ -163,9 +163,9 @@ fn print_blockers(entry: &GraphEntry, owner_version: &str) {
 
 /// Reports and returns the exit code for a single option/action token
 /// ("-x" or "--long", never a positional atom) that isn't --pretend/-p,
-/// --verbose/-v, or --newuse/-N -- shared between a standalone token and
-/// one character of a decomposed short-flag bundle, so both produce
-/// identical messages for the same underlying flag.
+/// --verbose/-v, --newuse/-N, or --nodeps/-O -- shared between a
+/// standalone token and one character of a decomposed short-flag bundle,
+/// so both produce identical messages for the same underlying flag.
 fn report_option(token: &str) -> ExitCode {
     if let Some(found) = emerge_options::lookup(token) {
         // Reports and exits immediately, matching every other
@@ -181,7 +181,8 @@ fn report_option(token: &str) -> ExitCode {
         eprintln!(
             "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
-             --newuse/-N, and --help/-h are implemented so far; see PROMPT.md)",
+             --newuse/-N, --nodeps/-O, and --help/-h are implemented so far; \
+             see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -214,6 +215,7 @@ fn print_help() {
     println!("   -p, --pretend   required: the only real merge calculation this pilot implements");
     println!("   -v, --verbose   show USE=\"...\" on each [ebuild ...] line (optionally: -v y|n)");
     println!("   -N, --newuse    reinstall an already-installed package if its USE has changed");
+    println!("   -O, --nodeps    do not resolve or show any dependency, only the given atoms");
     println!("   -h, --help      show this message and exit");
     println!();
     println!(
@@ -271,6 +273,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut pretend = false;
     let mut verbose = false;
     let mut newuse = false;
+    let mut nodeps = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -280,6 +283,9 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--newuse" || arg == "-N" {
             newuse = true;
+            i += 1;
+        } else if arg == "--nodeps" || arg == "-O" {
+            nodeps = true;
             i += 1;
         } else if arg == "--verbose" || arg == "-v" {
             // Peeks at the next token, consuming it only if it's exactly
@@ -320,6 +326,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'p' => pretend = true,
                     'v' => verbose = true,
                     'N' => newuse = true,
+                    'O' => nodeps = true,
                     _ => return report_option(&format!("-{c}")),
                 }
             }
@@ -410,8 +417,14 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let result = match resolve_pretend_graph(&config_root, &root, &expanded_atoms, &config, newuse)
-    {
+    let result = match resolve_pretend_graph(
+        &config_root,
+        &root,
+        &expanded_atoms,
+        &config,
+        newuse,
+        nodeps,
+    ) {
         Ok(result) => result,
         Err(e) => {
             eprintln!("emerge: {e}");

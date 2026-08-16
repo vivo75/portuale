@@ -916,12 +916,25 @@ pub struct GraphResult {
 ///     inspected, same as the rest of its dependencies. `--changed-use`
 ///     (a real, narrower alternative to `--newuse`) stays unimplemented --
 ///     see `reinstall_flags_for_newuse`'s own doc comment.
+///   - `nodeps` (`--nodeps`/`-O`) disables the dependency walk entirely,
+///     for every entry, not just top-level atoms: only `atoms` themselves
+///     are ever resolved, ported from real `create_depgraph_params.py`
+///     popping `"recurse"` out of `myparams` (which depgraph.py's own
+///     dependency-walk checks for and returns early without). Each
+///     resolved entry's own USE display is still computed (real
+///     portage's `-v` output shows a package's own USE regardless of
+///     whether its dependencies get walked), but no DEPEND/RDEPEND/etc
+///     is ever read, so no dependency atom is ever queued and no blocker
+///     is ever collected -- blockers only ever come from a dependency
+///     string in this pilot, so this falls out for free rather than
+///     needing its own special case.
 pub fn resolve_pretend_graph(
     config_root: &Path,
     root: &Path,
     atoms: &[String],
     config: &portage_profile::Config,
     newuse: bool,
+    nodeps: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -1074,13 +1087,6 @@ pub fn resolve_pretend_graph(
         let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {
             continue;
         };
-        let mut depstr = String::new();
-        for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
-            if let Some(d) = metadata.get(dep_key) {
-                depstr.push_str(d);
-                depstr.push(' ');
-            }
-        }
         let candidate_str = format!("{}/{}-{version}:{slot}", key.0, key.1);
         let use_flags = effective_use_flags(
             &config.use_flags,
@@ -1094,7 +1100,10 @@ pub fn resolve_pretend_graph(
         // resolving a flag's default when nothing else decides it --
         // already handled upstream, wherever `use_flags` itself came
         // from -- so display only needs the bare flag name, paired with
-        // whatever `use_flags` (the real resolved set) says.
+        // whatever `use_flags` (the real resolved set) says. Computed
+        // (and shown by `--pretend -v`) regardless of `nodeps` below --
+        // real portage's own USE display is about the package's own
+        // metadata, unrelated to whether its dependencies get walked.
         if let Some(iuse) = metadata.get("IUSE") {
             let mut display: Vec<(String, bool)> = iuse
                 .split_whitespace()
@@ -1106,6 +1115,26 @@ pub fn resolve_pretend_graph(
                 .collect();
             display.sort_by(|a, b| a.0.cmp(&b.0));
             entries[entry_idx].use_flags_display = display;
+        }
+
+        // `--nodeps`: real create_depgraph_params.py pops "recurse" from
+        // myparams, and depgraph.py's own dependency-walk returns early
+        // when "recurse" isn't in myparams -- ported here as skipping
+        // this package's own DEPEND/RDEPEND/etc entirely, so nothing of
+        // its is ever parsed, flattened, or queued. This also means no
+        // blockers are ever collected from a `--nodeps` run (blockers
+        // only ever come from a dependency string, which is never read),
+        // matching real portage exactly.
+        if nodeps {
+            continue;
+        }
+
+        let mut depstr = String::new();
+        for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
+            if let Some(d) = metadata.get(dep_key) {
+                depstr.push_str(d);
+                depstr.push(' ');
+            }
         }
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat(
@@ -1527,12 +1556,37 @@ mod tests {
 
     fn graph(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &test_config(), false)
-            .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
-            .entries
-            .into_iter()
-            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
-            .collect()
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+    }
+
+    /// Like `graph`, but with `--nodeps` enabled.
+    fn graph_nodeps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
     }
 
     #[test]
@@ -1560,6 +1614,55 @@ mod tests {
                         to: "2.0".to_string(),
                     }
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn nodeps_resolves_the_top_level_atom_but_never_recurses() {
+        // Same dev-libs/withdeps fixture as recursion_basic_chain above --
+        // with --nodeps, only the top-level atom itself is ever resolved;
+        // its own DEPEND/RDEPEND (which would otherwise pull in newpkg
+        // and upgradepkg) is never even read.
+        let entries = graph_nodeps("dev-libs/withdeps");
+        assert_eq!(
+            entries,
+            vec![(
+                "dev-libs/withdeps".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn nodeps_still_computes_use_flags_display_for_the_top_level_atom() {
+        // Real portage's own -v USE display is about a package's own
+        // metadata, unrelated to whether its dependencies get walked --
+        // --nodeps must not blank it out. dev-libs/useflagpkg's own
+        // foo?-gated RDEPEND on dev-libs/newpkg proves the *dependency*
+        // walk really is skipped (no second entry), while its own
+        // IUSE="foo missingflag" still shows up correctly.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
+        let entries = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/useflagpkg".to_string()],
+            &config,
+            false,
+            true,
+        )
+        .expect("resolve_pretend_graph must succeed")
+        .entries;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].use_flags_display,
+            vec![
+                ("foo".to_string(), true),
+                ("missingflag".to_string(), false),
             ]
         );
     }
@@ -1676,6 +1779,7 @@ mod tests {
             &["dev-libs/useflagpkg".to_string()],
             &config,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -1690,7 +1794,7 @@ mod tests {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
-        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config, false)
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config, false, false)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
             .entries
             .into_iter()
@@ -1703,7 +1807,20 @@ mod tests {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
-        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config, true)
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config, true, false)
+            .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            .entries
+            .into_iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+            .collect()
+    }
+
+    /// Like `graph_real`, but with `--nodeps` enabled.
+    fn graph_real_nodeps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config, false, true)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
             .entries
             .into_iter()
@@ -1754,6 +1871,20 @@ mod tests {
     }
 
     #[test]
+    fn nodeps_skips_recursion_even_when_package_use_would_otherwise_pull_something_in() {
+        // Same fixture as fixture_package_use_enables_a_flag_not_on_globally
+        // above, but with --nodeps: the real profile-resolved config still
+        // decides packageuseenablepkg's own visibility/USE normally, it's
+        // only the *recursion* into its now-enabled pkguseflag?-gated
+        // RDEPEND that --nodeps skips -- dev-libs/newpkg must NOT appear.
+        let full_names: Vec<String> = graph_real_nodeps("dev-libs/packageuseenablepkg")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(full_names, vec!["dev-libs/packageuseenablepkg"]);
+    }
+
+    #[test]
     fn fixture_package_use_disables_a_flag_that_is_on_globally() {
         // The fixture profile chain enables "foo" globally (see
         // resolves_fixture_profile_chain_and_make_conf in portage-profile,
@@ -1773,7 +1904,7 @@ mod tests {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
-        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config, false)
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config, false, false)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
 

@@ -145,6 +145,21 @@ CASES = [
         ["--pretend", "--newuse", "dev-libs/samepkg"],
         0,
     ),
+    (
+        "--nodeps disables recursion into DEPEND/RDEPEND entirely",
+        ["--pretend", "--nodeps", "dev-libs/withdeps"],
+        0,
+    ),
+    (
+        "--nodeps short alias -O, bundled with -p",
+        ["-pO", "dev-libs/withdeps"],
+        0,
+    ),
+    (
+        "--nodeps still shows the top-level atom's own USE display with -v",
+        ["--pretend", "-O", "-v", "dev-libs/useflagpkg"],
+        0,
+    ),
 ]
 
 
@@ -892,8 +907,8 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
     assert (
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, and --help/-h are "
-        "implemented so far; see PROMPT.md)"
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --nodeps/-O, and "
+        "--help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -941,6 +956,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -p, --pretend   required: the only real merge calculation this pilot implements\n"
         '   -v, --verbose   show USE="..." on each [ebuild ...] line (optionally: -v y|n)\n'
         "   -N, --newuse    reinstall an already-installed package if its USE has changed\n"
+        "   -O, --nodeps    do not resolve or show any dependency, only the given atoms\n"
         "   -h, --help      show this message and exit\n"
         "\n"
         "Every other real emerge option/action is recognized by name (see "
@@ -1095,6 +1111,42 @@ def test_newuse_is_a_noop_when_use_has_not_changed(emerge_binary, fixture_env):
     assert result.stdout == "dev-libs/samepkg-1.0 is already installed; nothing to do\n"
 
 
+def test_nodeps_disables_recursion_entirely(emerge_binary, fixture_env):
+    """dev-libs/withdeps RDEPENDs on dev-libs/newpkg (New) and
+    dev-libs/upgradepkg (Upgrade) -- see the plain recursion contract
+    test above. With --nodeps, real create_depgraph_params.py pops
+    "recurse" out of myparams, so depgraph.py's own dependency walk
+    returns early -- ported here as never even reading withdeps' own
+    DEPEND/RDEPEND, so neither dependency appears at all."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--nodeps", "dev-libs/withdeps"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  N] dev-libs/withdeps-1.0\n"
+
+
+def test_nodeps_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
+    """-O is --nodeps's real short alias (see lib/_emerge/main.py's
+    shortmapping); bundled with -p ("-pO") it must behave identically to
+    the long-flag invocation above."""
+    result = _run([str(emerge_binary)], ["-pO", "dev-libs/withdeps"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  N] dev-libs/withdeps-1.0\n"
+
+
+def test_nodeps_still_shows_the_top_level_atoms_own_use_display(emerge_binary, fixture_env):
+    """Real portage's own -v USE display is about a package's own
+    metadata, unrelated to whether its dependencies get walked --
+    --nodeps must not blank it out, even though it suppresses the
+    foo?-gated dev-libs/newpkg dependency this same package's -v output
+    (see the plain --verbose contract test) normally pulls in."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-O", "-v", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"\n'
+
+
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
     """virtual/texteditor is shaped exactly like a real virtual (e.g.
     virtual/pager in the real Gentoo tree, confirmed by inspection): an
@@ -1140,8 +1192,8 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--deep" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, and --help/-h are implemented so far; "
-        "see PROMPT.md)"
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --nodeps/-O, and "
+        "--help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -1154,8 +1206,8 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, and --help/-h are implemented so far; "
-        "see PROMPT.md)"
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --nodeps/-O, and "
+        "--help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -1168,8 +1220,8 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     assert result.returncode == 2
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, and --help/-h are implemented so far; "
-        "see PROMPT.md)"
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --nodeps/-O, and "
+        "--help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 

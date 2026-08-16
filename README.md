@@ -814,6 +814,24 @@ PORTING/
   yet, so it's a no-op" precedent every other absent profile mechanism
   here follows); and `--changed-use`/`-U`, a real, narrower alternative
   to `--newuse`, stays recognized-but-unimplemented.
+
+  **`--nodeps`/`-O`: disable the dependency walk entirely**. Grounded in
+  `create_depgraph_params.py`, which pops `"recurse"` out of `myparams`
+  when `--nodeps` is given, and `depgraph.py`'s own dependency-walk code,
+  which checks for `"recurse"` in `myparams` and returns early without it
+  -- ported here as skipping a resolved package's own DEPEND/RDEPEND/etc
+  entirely, for every entry (not just top-level atoms), so no dependency
+  atom is ever queued and no blocker is ever collected (blockers only
+  ever come from a dependency string in this pilot, so this falls out
+  for free). A resolved package's own USE display is still computed and
+  shown by `-v` regardless -- real portage's USE display is about a
+  package's own metadata, unrelated to whether its dependencies get
+  walked, confirmed by testing `-O -v` together against a fixture package
+  whose own foo?-gated dependency `-O` suppresses. `--onlydeps`/`-o`,
+  `--nodeps`'s real complement (man page: "Only merge (or pretend to
+  merge) the dependencies of the packages specified, not the packages
+  themselves" -- the opposite exclusion), stays recognized-but-
+  unimplemented.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1360,6 +1378,18 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/reinstallpkg
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/samepkg
 # dev-libs/samepkg-1.0 is already installed; nothing to do
 
+# --nodeps/-O is real and implemented: withdeps' own RDEPEND (which
+# would otherwise pull in newpkg and upgradepkg -- see the plain
+# recursion example above) is never even read
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --nodeps dev-libs/withdeps
+# [ebuild  N] dev-libs/withdeps-1.0
+
+# --nodeps still shows a resolved package's own USE display with -v --
+# it's -N's own foo?-gated dependency recursion that's suppressed, not
+# the package's own metadata
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -O -v dev-libs/useflagpkg
+# [ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
+
 # short-flag bundling: "-pv" decomposes into -p + -v, both real,
 # implemented flags -- native argparse behavior for boolean short
 # options, not something requiring emerge-specific parsing
@@ -1372,7 +1402,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 /tmp/emerge -pd dev-libs/newpkg
 # emerge (pilot v1): option "--debug" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
-# and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+# --nodeps/-O, and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
 
 # --help/-h is real and implemented: a short, honest, pilot-specific
 # summary, not a port of real emerge's own (157-line, colorized,
@@ -1390,7 +1420,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 /tmp/emerge --deep dev-libs/newpkg
 # emerge (pilot v1): option "--deep" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
-# and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+# --nodeps/-O, and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message

@@ -4,9 +4,9 @@
 // real emerge flag this pilot doesn't implement yet produces a clear
 // "recognized, but not implemented" message -- distinct from a
 // genuinely unknown/misspelled flag. Only `--pretend`/`-p`,
-// `--verbose`/`-v`, `--help`/`-h`, and `--newuse`/`-N` are actually
-// implemented (see pretend.rs); every table here exists purely for
-// recognition, not behavior. Mirrored exactly in
+// `--verbose`/`-v`, `--help`/`-h`, `--newuse`/`-N`, and
+// `--nodeps`/`-O` are actually implemented (see pretend.rs); every table
+// here exists purely for recognition, not behavior. Mirrored exactly in
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
 // (verified by the shared contract suite).
@@ -40,6 +40,12 @@
 //     the reinstall-detection logic it enables. `--changed-use`/`-U`, a
 //     real, narrower alternative, stays in `BOOLEAN_OPTIONS` below,
 //     unimplemented.
+//   - `--nodeps`/`-O` IS implemented now too, deliberately excluded from
+//     `BOOLEAN_OPTIONS` for the same reason -- see
+//     `resolve_pretend_graph`'s own doc comment (portage-repo) for how it
+//     disables the dependency walk entirely. `--onlydeps`/`-o`, its real
+//     complement (dependencies only, not the atom itself), stays in
+//     `BOOLEAN_OPTIONS` below, unimplemented.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -56,12 +62,15 @@ pub struct Lookup {
 
 /// Real boolean (no-argument) options, from `main.py`'s `options` list
 /// plus its two `longopt_aliases` entries (`--cols`, `--skip-first`) --
-/// `--pretend`/`-p`, `--verbose`/`-v`, and `--newuse`/`-N` are all
-/// deliberately excluded, since they're implemented and handled directly
-/// by the caller, not through this "not implemented" table.
-/// `--changed-use`/`-U` is a real, narrower alternative to `--newuse`
-/// that stays unimplemented -- see
+/// `--pretend`/`-p`, `--verbose`/`-v`, `--newuse`/`-N`, and
+/// `--nodeps`/`-O` are all deliberately excluded, since they're
+/// implemented and handled directly by the caller, not through this "not
+/// implemented" table. `--changed-use`/`-U` is a real, narrower
+/// alternative to `--newuse` that stays unimplemented -- see
 /// `portage-repo`'s `reinstall_flags_for_newuse` doc comment.
+/// `--onlydeps`/`-o`, `--nodeps`'s real complement (dependencies only,
+/// not the atom itself -- the opposite of `--nodeps`'s "no dependencies
+/// at all"), stays unimplemented too.
 pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--alphabetical", None),
     ("--ask-enter-invalid", None),
@@ -78,7 +87,6 @@ pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--noconfmem", None),
     ("--newrepo", None),
     ("--nobindeps", None),
-    ("--nodeps", Some("-O")),
     ("--noreplace", Some("-n")),
     ("--nospinner", None),
     ("--oneshot", Some("-1")),
@@ -316,6 +324,18 @@ mod tests {
         assert!(lookup("-N").is_none());
         assert!(lookup("--changed-use").is_some());
         assert!(lookup("-U").is_some());
+    }
+
+    #[test]
+    fn does_not_recognize_nodeps_itself() {
+        // --nodeps/-O is handled directly by the caller (it's
+        // implemented), not through this "not implemented" table --
+        // --onlydeps/-o, its real, separate, still-unimplemented
+        // complement, stays recognized.
+        assert!(lookup("--nodeps").is_none());
+        assert!(lookup("-O").is_none());
+        assert!(lookup("--onlydeps").is_some());
+        assert!(lookup("-o").is_some());
     }
 
     #[test]

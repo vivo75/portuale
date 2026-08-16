@@ -823,7 +823,7 @@ def resolve_blockers(root, pending, entries):
     return conflicts
 
 
-def resolve_pretend_graph(config_root, root, atoms, config, newuse=False):
+def resolve_pretend_graph(config_root, root, atoms, config, newuse=False, nodeps=False):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
     IDEPEND atoms, breadth-first. Returns a dict with keys "entries" (a
@@ -843,7 +843,17 @@ def resolve_pretend_graph(config_root, root, atoms, config, newuse=False):
     `newuse` enables the --newuse reinstall check (see resolve_pretend)
     for an already-installed package, walking its dependencies too when
     it triggers -- False reproduces this function's behavior from before
-    --newuse existed exactly.
+    --newuse existed exactly. `nodeps` (--nodeps/-O) disables the
+    dependency walk entirely, for every entry, not just top-level atoms:
+    only `atoms` themselves are ever resolved, ported from real
+    create_depgraph_params.py popping "recurse" out of myparams (which
+    depgraph.py's own dependency-walk checks for and returns early
+    without). Each resolved entry's own USE display is still computed
+    (real portage's -v output shows a package's own USE regardless of
+    whether its dependencies get walked), but no DEPEND/RDEPEND/etc is
+    ever read, so no dependency atom is ever queued and no blocker is
+    ever collected. Mirrors portage-repo/src/lib.rs's resolve_pretend_graph
+    exactly.
 
     `atoms` seeds the BFS queue together, in the order given, before any
     dependency is ever pushed -- so all of them are dequeued and resolved
@@ -981,11 +991,6 @@ def resolve_pretend_graph(config_root, root, atoms, config, newuse=False):
             metadata = read_md5_cache(repo_location, category, pf)
         except OSError:
             continue
-        depstr = " ".join(
-            metadata[k]
-            for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
-            if metadata.get(k)
-        )
         candidate_str = f"{category}/{package}-{version}:{slot}"
         use_flags = effective_use_flags(
             config["use_flags"], config["package_use"], candidate_str, category, package
@@ -994,7 +999,10 @@ def resolve_pretend_graph(config_root, root, atoms, config, newuse=False):
         # resolving a flag's default when nothing else decides it --
         # already handled upstream, wherever use_flags itself came from --
         # so display only needs the bare flag name, paired with whatever
-        # use_flags (the real resolved set) says. Mirrors
+        # use_flags (the real resolved set) says. Computed (and shown by
+        # --pretend -v) regardless of nodeps below -- real portage's own
+        # USE display is about the package's own metadata, unrelated to
+        # whether its dependencies get walked. Mirrors
         # portage-repo/src/lib.rs's resolve_pretend_graph exactly.
         if metadata.get("IUSE"):
             display = sorted(
@@ -1002,6 +1010,17 @@ def resolve_pretend_graph(config_root, root, atoms, config, newuse=False):
                 for flag in metadata["IUSE"].split()
             )
             entries[entry_idx] = (category, package, outcome, [], slot, display)
+
+        # --nodeps: skip this package's own DEPEND/RDEPEND/etc entirely --
+        # see this function's own docstring.
+        if nodeps:
+            continue
+
+        depstr = " ".join(
+            metadata[k]
+            for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
+            if metadata.get(k)
+        )
         try:
             flat_deps = use_reduce(depstr, flat=True, uselist=use_flags)
         except InvalidDependString:
@@ -1062,11 +1081,12 @@ def _parse_atom(atom_str):
 # real emerge flag this pilot doesn't implement yet produces a clear
 # "recognized, but not implemented" message -- distinct from a
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
-# --newuse/-N, and --help/-h are actually implemented (see run() below);
-# every table here exists purely for recognition, not behavior. Mirrors
-# PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
-# three tables exactly, so both sides report identical text for
-# identical input (verified by the shared contract suite).
+# --newuse/-N, --nodeps/-O, and --help/-h are actually implemented (see
+# run() below); every table here exists purely for recognition, not
+# behavior. Mirrors PORTING/rust/multicall/src/emerge_options.rs's own
+# copy of these same three tables exactly, so both sides report
+# identical text for identical input (verified by the shared contract
+# suite).
 #
 # KNOWN, DOCUMENTED SCOPE CUTS (see emerge_options.rs for the full
 # writeup): no short-flag bundling ("-pv" isn't recognized as "-p" +
@@ -1076,6 +1096,8 @@ def _parse_atom(atom_str):
 # skip over that option's own argument. --changed-use/-U, a real,
 # narrower alternative to --newuse, stays in _BOOLEAN_OPTIONS below,
 # unimplemented -- see _reinstall_flags_for_newuse's own doc comment.
+# --onlydeps/-o, --nodeps's real complement (dependencies only, not the
+# atom itself), stays in _BOOLEAN_OPTIONS below, unimplemented too.
 
 _BOOLEAN_OPTIONS = [
     ("--alphabetical", None),
@@ -1093,7 +1115,6 @@ _BOOLEAN_OPTIONS = [
     ("--noconfmem", None),
     ("--newrepo", None),
     ("--nobindeps", None),
-    ("--nodeps", "-O"),
     ("--noreplace", "-n"),
     ("--nospinner", None),
     ("--oneshot", "-1"),
@@ -1271,10 +1292,10 @@ def _has_unsupported_top_level_features(a):
 def _report_option(token):
     """Reports and returns the exit code for a single option/action token
     ("-x" or "--long", never a positional atom) that isn't --pretend/-p,
-    --verbose/-v, or --newuse/-N -- shared between a standalone token and
-    one character of a decomposed short-flag bundle, so both produce
-    identical messages for the same underlying flag. Mirrors
-    pretend.rs's report_option exactly."""
+    --verbose/-v, --newuse/-N, or --nodeps/-O -- shared between a
+    standalone token and one character of a decomposed short-flag bundle,
+    so both produce identical messages for the same underlying flag.
+    Mirrors pretend.rs's report_option exactly."""
     found = _lookup_option(token)
     if found is not None:
         category, canonical = found
@@ -1282,8 +1303,8 @@ def _report_option(token):
         print(
             f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
             "but is not implemented in this pilot (only --pretend/-p, "
-            "--verbose/-v, --newuse/-N, and --help/-h are implemented so far; "
-            "see PROMPT.md)",
+            "--verbose/-v, --newuse/-N, --nodeps/-O, and --help/-h are "
+            "implemented so far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -1319,6 +1340,7 @@ def _print_help():
     print("   -p, --pretend   required: the only real merge calculation this pilot implements")
     print('   -v, --verbose   show USE="..." on each [ebuild ...] line (optionally: -v y|n)')
     print("   -N, --newuse    reinstall an already-installed package if its USE has changed")
+    print("   -O, --nodeps    do not resolve or show any dependency, only the given atoms")
     print("   -h, --help      show this message and exit")
     print()
     print(
@@ -1369,6 +1391,7 @@ def run(args):
     pretend = False
     verbose = False
     newuse = False
+    nodeps = False
 
     i = 0
     while i < len(args):
@@ -1378,6 +1401,9 @@ def run(args):
             i += 1
         elif arg in ("--newuse", "-N"):
             newuse = True
+            i += 1
+        elif arg in ("--nodeps", "-O"):
+            nodeps = True
             i += 1
         elif arg in ("--verbose", "-v"):
             # Peeks at the next token, consuming it only if it's exactly
@@ -1417,6 +1443,8 @@ def run(args):
                     verbose = True
                 elif c == "N":
                     newuse = True
+                elif c == "O":
+                    nodeps = True
                 else:
                     return _report_option(f"-{c}")
             i += 1
@@ -1482,7 +1510,9 @@ def run(args):
         # side's own pretend.rs exactly.
         main_repo = next(r for r in find_repos(_config_root()) if r["is_main"])
         config = resolve_config(_config_root(), main_repo["location"])
-        result = resolve_pretend_graph(_config_root(), _root(), atom_args, config, newuse)
+        result = resolve_pretend_graph(
+            _config_root(), _root(), atom_args, config, newuse, nodeps
+        )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
