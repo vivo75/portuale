@@ -24,3 +24,34 @@ fn cfg_163() -> portage_profile::Config {
         ..Default::default()
     }
 }
+// ---- shared resolve_pretend harness ----
+
+/// Option bundle for `resolve_163`, mirroring `resolve_pretend`'s
+/// trailing flags; defaults are the plain top-level selective resolve.
+#[derive(Default)]
+struct RpOpts163 {
+    newuse: bool,
+    changed_use: bool,
+    update: bool,
+    excluded: Vec<String>,
+    changed_deps: bool,
+    with_bdeps: bool,
+    changed_slot: bool,
+    selective: bool,
+    is_top_level: bool,
+    usepkg: bool,
+    usepkgonly: bool,
+    binpkg_respect_use: bool,
+    usepkg_exclude: Vec<String>,
+    usepkg_include: Vec<String>,
+    rebuilt_binaries: bool,
+    rebuilt_binaries_timestamp: Option<u64>,
+    newrepo: bool,
+    empty: bool,
+    getbinpkg: bool,
+    autounmask_keywords: bool,
+    autounmask_use: bool,
+    autounmask_license: bool,
+    autounmask_masks: bool,
+    extra_constraints: Vec<String>,
+}

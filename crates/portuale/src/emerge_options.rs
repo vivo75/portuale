@@ -266,6 +266,12 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_exclude_itself() {
+        assert!(lookup("--exclude").is_none());
+        assert!(lookup("-X").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }
