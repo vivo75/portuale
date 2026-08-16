@@ -2,6 +2,29 @@
 
 use crate::*;
 
+/// One withheld upgrade for Portage's skipped-update block: same shape for the
+/// direct solve's removal rows and the reverse-pin withholds. Rendered by
+/// `pretend.rs`; the rc stays 0 either way.
+// Portage: depgraph.py, _conflict_missed_update
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedUpdate {
+    pub category: String,
+    pub package: String,
+    pub slot: String,
+    pub skipped_version: String,
+    pub skipped_sub_slot: String,
+    pub skipped_repo: String,
+    pub skipped_use: Vec<(String, String)>,
+    pub atom: String,
+    pub consumer_cpv: String,
+    pub consumer_installed: bool,
+    pub consumer_use: Vec<(String, String)>,
+    /// Whether the missed instance resolves in the running root.
+    pub missed_targets_running_root: bool,
+    /// Whether a merge consumer resolves in the running root.
+    pub consumer_targets_running_root: bool,
+}
+
 /// One slot for the abbreviated skipped-update tail: a masked version higher
 /// than the chosen one whose missing-dependency mask still bites at settle
 /// time. Only the slot renders.

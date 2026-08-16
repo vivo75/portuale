@@ -75,3 +75,20 @@ pub(crate) fn max_priority(prios: &[DepPriority]) -> DepPriority {
         .max_by_key(dep_priority_rank)
         .unwrap_or_default()
 }
+
+/// One `Parent Dep:` narration row, collected during the walk where the child
+/// instance an atom actually resolved to is known.
+// Portage: _emerge/depgraph.py, _add_parent_atom
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParentAtom {
+    pub child_category: String,
+    pub child_package: String,
+    pub child_version: String,
+    pub child_installed: bool,
+    /// `None` for a top-level argument / internal set seed.
+    pub parent: Option<(String, String)>,
+    pub atom: String,
+    /// Present only when evaluating the parent's conditional use-deps rewrote
+    /// the atom.
+    pub unevaluated: Option<String>,
+}
