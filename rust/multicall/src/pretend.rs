@@ -163,10 +163,10 @@ fn print_blockers(entry: &GraphEntry, owner_version: &str) {
 
 /// Reports and returns the exit code for a single option/action token
 /// ("-x" or "--long", never a positional atom) that isn't --pretend/-p,
-/// --verbose/-v, --newuse/-N, --nodeps/-O, or --onlydeps/-o -- shared
-/// between a standalone token and one character of a decomposed
-/// short-flag bundle, so both produce identical messages for the same
-/// underlying flag.
+/// --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, or
+/// --onlydeps/-o -- shared between a standalone token and one character
+/// of a decomposed short-flag bundle, so both produce identical
+/// messages for the same underlying flag.
 fn report_option(token: &str) -> ExitCode {
     if let Some(found) = emerge_options::lookup(token) {
         // Reports and exits immediately, matching every other
@@ -182,8 +182,8 @@ fn report_option(token: &str) -> ExitCode {
         eprintln!(
             "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
-             --newuse/-N, --nodeps/-O, --onlydeps/-o, and --help/-h are \
-             implemented so far; see PROMPT.md)",
+             --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, and \
+             --help/-h are implemented so far; see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -216,6 +216,7 @@ fn print_help() {
     println!("   -p, --pretend   required: the only real merge calculation this pilot implements");
     println!("   -v, --verbose   show USE=\"...\" on each [ebuild ...] line (optionally: -v y|n)");
     println!("   -N, --newuse    reinstall an already-installed package if its USE has changed");
+    println!("   -U, --changed-use  like -N, but ignores newly added/removed IUSE flags entirely");
     println!("   -O, --nodeps    do not resolve or show any dependency, only the given atoms");
     println!(
         "   -o, --onlydeps  show only the given atoms' dependencies, not the atoms themselves"
@@ -277,6 +278,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut pretend = false;
     let mut verbose = false;
     let mut newuse = false;
+    let mut changed_use = false;
     let mut nodeps = false;
     let mut onlydeps = false;
 
@@ -288,6 +290,9 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--newuse" || arg == "-N" {
             newuse = true;
+            i += 1;
+        } else if arg == "--changed-use" || arg == "-U" {
+            changed_use = true;
             i += 1;
         } else if arg == "--nodeps" || arg == "-O" {
             nodeps = true;
@@ -334,6 +339,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'p' => pretend = true,
                     'v' => verbose = true,
                     'N' => newuse = true,
+                    'U' => changed_use = true,
                     'O' => nodeps = true,
                     'o' => onlydeps = true,
                     _ => return report_option(&format!("-{c}")),
@@ -440,6 +446,7 @@ pub fn run(args: &[String]) -> ExitCode {
         &expanded_atoms,
         &config,
         newuse,
+        changed_use,
         nodeps,
     ) {
         Ok(result) => result,

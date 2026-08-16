@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: --changed-use ignores a newly-added, not-forced, not-enabled IUSE flag that --newuse would still flag
+EAPI=8
+IUSE=brandnewflag
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

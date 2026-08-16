@@ -4,10 +4,10 @@
 // real emerge flag this pilot doesn't implement yet produces a clear
 // "recognized, but not implemented" message -- distinct from a
 // genuinely unknown/misspelled flag. Only `--pretend`/`-p`,
-// `--verbose`/`-v`, `--help`/`-h`, `--newuse`/`-N`, `--nodeps`/`-O`, and
-// `--onlydeps`/`-o` are actually implemented (see pretend.rs); every
-// table here exists purely for recognition, not behavior. Mirrored
-// exactly in
+// `--verbose`/`-v`, `--help`/`-h`, `--newuse`/`-N`, `--changed-use`/`-U`,
+// `--nodeps`/`-O`, and `--onlydeps`/`-o` are actually implemented (see
+// pretend.rs); every table here exists purely for recognition, not
+// behavior. Mirrored exactly in
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
 // (verified by the shared contract suite).
@@ -35,12 +35,12 @@
 //     pretend.rs for the pilot-specific (not a port of real emerge's own
 //     `_emerge/help.py`) help text, and why it's checked before anything
 //     else, unconditionally, regardless of position in argv.
-//   - `--newuse`/`-N` IS implemented now too, deliberately excluded from
-//     `BOOLEAN_OPTIONS` for the same reason -- see pretend.rs for the
-//     flag parsing and portage-repo's `reinstall_flags_for_newuse` for
-//     the reinstall-detection logic it enables. `--changed-use`/`-U`, a
-//     real, narrower alternative, stays in `BOOLEAN_OPTIONS` below,
-//     unimplemented.
+//   - `--newuse`/`-N` and `--changed-use`/`-U` (a real, narrower
+//     alternative) ARE both implemented now too, deliberately excluded
+//     from `BOOLEAN_OPTIONS` for the same reason -- see pretend.rs for
+//     the flag parsing and portage-repo's
+//     `reinstall_flags_for_use_change` for the reinstall-detection
+//     logic (and how the two flags combine when both are given).
 //   - `--nodeps`/`-O` IS implemented now too, deliberately excluded from
 //     `BOOLEAN_OPTIONS` for the same reason -- see
 //     `resolve_pretend_graph`'s own doc comment (portage-repo) for how it
@@ -69,17 +69,14 @@ pub struct Lookup {
 
 /// Real boolean (no-argument) options, from `main.py`'s `options` list
 /// plus its two `longopt_aliases` entries (`--cols`, `--skip-first`) --
-/// `--pretend`/`-p`, `--verbose`/`-v`, `--newuse`/`-N`, `--nodeps`/`-O`,
-/// and `--onlydeps`/`-o` are all deliberately excluded, since they're
-/// implemented and handled directly by the caller, not through this "not
-/// implemented" table. `--changed-use`/`-U` is a real, narrower
-/// alternative to `--newuse` that stays unimplemented -- see
-/// `portage-repo`'s `reinstall_flags_for_newuse` doc comment.
+/// `--pretend`/`-p`, `--verbose`/`-v`, `--newuse`/`-N`,
+/// `--changed-use`/`-U`, `--nodeps`/`-O`, and `--onlydeps`/`-o` are all
+/// deliberately excluded, since they're implemented and handled
+/// directly by the caller, not through this "not implemented" table.
 pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--alphabetical", None),
     ("--ask-enter-invalid", None),
     ("--buildpkgonly", Some("-B")),
-    ("--changed-use", Some("-U")),
     ("--columns", None),
     ("--debug", Some("-d")),
     ("--digest", None),
@@ -320,13 +317,18 @@ mod tests {
     #[test]
     fn does_not_recognize_newuse_itself() {
         // --newuse/-N is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table --
-        // --changed-use/-U, a real, separate, still-unimplemented flag,
-        // stays recognized.
+        // implemented), not through this "not implemented" table.
         assert!(lookup("--newuse").is_none());
         assert!(lookup("-N").is_none());
-        assert!(lookup("--changed-use").is_some());
-        assert!(lookup("-U").is_some());
+    }
+
+    #[test]
+    fn does_not_recognize_changed_use_itself() {
+        // --changed-use/-U, --newuse's real, narrower alternative, is
+        // now implemented and handled directly by the caller too, not
+        // through this "not implemented" table.
+        assert!(lookup("--changed-use").is_none());
+        assert!(lookup("-U").is_none());
     }
 
     #[test]

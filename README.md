@@ -844,7 +844,9 @@ PORTING/
   modeled at all yet), a deliberate, confirmed-with-the-user
   simplification at the time; see the `use.mask`/`use.force` paragraph
   below for the follow-up that closed it. `--changed-use`/`-U`, a real,
-  narrower alternative to `--newuse`, stays recognized-but-unimplemented.
+  narrower alternative to `--newuse`, was recognized-but-unimplemented
+  at this point too -- see its own paragraph, further below, for the
+  follow-up that closed that gap as well.
 
   **`--nodeps`/`-O`: disable the dependency walk entirely**. Grounded in
   `create_depgraph_params.py`, which pops `"recurse"` out of `myparams`
@@ -931,6 +933,32 @@ PORTING/
   IUSE -- verified this wasn't already true by temporarily un-masking
   the flag and confirming the spurious reinstall *does* fire without the
   fix.
+
+  **`--changed-use`/`-U`: the narrower reinstall check**. Closes the
+  last item the `--newuse` paragraph above named. Ports the `elif
+  changed_use` branch of real `depgraph.py`'s `_reinstall_for_flags`,
+  which turns out to be *exactly* the term `--newuse`'s own formula
+  already computed and shares: `(orig_iuse∩orig_use) ^
+  (cur_iuse∩cur_use)` -- which flags were enabled, among those declared
+  in IUSE on *both* sides. `--newuse` adds a second term on top (whether
+  IUSE gained or lost a flag at all, forced flags aside); `--changed-use`
+  never adds it, so it reacts only to an actual enablement change of an
+  already-shared flag, never to IUSE simply gaining or losing one.
+  `reinstall_flags_for_newuse` (Rust)/`_reinstall_flags_for_newuse`
+  (Python) were renamed to `..._for_use_change` and now take a `newuse`
+  bool selecting which formula to use, since both flags share almost
+  all of their own logic; `resolve_pretend`/`resolve_pretend_graph` gain
+  a second, independent `changed_use` parameter alongside `newuse` --
+  giving both at once resolves the same way real emerge's own `if
+  newuse or (...): ... elif changed_use or (...): ...` does, `newuse`
+  winning. A dedicated fixture (`dev-libs/changedusepkg`, installed with
+  an empty vdb IUSE, its current ebuild now declaring a real, unmasked,
+  not-globally-enabled `brandnewflag`) proves the two flags are
+  genuinely different checks, not two names for the same one:
+  `--newuse` reports a Reinstall for it (a flag simply exists in IUSE
+  now that didn't before), `--changed-use` does not (its own enablement
+  never actually changed) -- while `dev-libs/reinstallpkg`'s own `foo`
+  flag (shared, enablement-only change) still triggers *both*.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1124,6 +1152,14 @@ a flag that's masked off, so never enabled either before or after.
 Without `forced_flags` support this would spuriously report a Reinstall
 just because the flag now exists in `IUSE` at all; with it, it correctly
 stays `AlreadyInstalled`.
+
+`dev-libs/changedusepkg` exercises the `--newuse`/`--changed-use`
+divergence: installed with an empty vdb `IUSE`, its current ebuild now
+declares `IUSE="brandnewflag"` -- real, unmasked, not globally enabled.
+`--newuse` reports a Reinstall for it (IUSE simply gained a flag);
+`--changed-use` doesn't (that flag's own enablement never changed) --
+while `dev-libs/reinstallpkg`'s own `foo` (a flag that exists in `IUSE`
+on both sides, only its enablement differs) still triggers both.
 
 Four more fixture packages exercise blocker reporting: `blockerpkg`
 (RDEPEND `"!!dev-libs/samepkg"`, a strong blocker matching
@@ -1520,6 +1556,22 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/same
 # report a Reinstall just because the flag now exists in IUSE at all
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/usemaskreinstallpkg
 # dev-libs/usemaskreinstallpkg-1.0 is already installed; nothing to do
+
+# --changed-use/-U is real and implemented too, a narrower sibling of
+# --newuse: changedusepkg's newly IUSE-declared "brandnewflag" is real
+# and unmasked (unlike usemaskreinstallpkg's own above), so --newuse
+# still reports a Reinstall for it (IUSE simply gained a flag)...
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/changedusepkg
+# [ebuild  r] dev-libs/changedusepkg-1.0 (reinstall for changed USE: brandnewflag)
+# ...but --changed-use never even looks at IUSE presence, only at
+# enablement -- and that flag's own enablement never changed
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs/changedusepkg
+# dev-libs/changedusepkg-1.0 is already installed; nothing to do
+# --changed-use still catches an ENABLEMENT change on a flag shared by
+# both IUSE sets, same as reinstallpkg's own --newuse example above
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs/reinstallpkg
+# [ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)
+# [ebuild  N] dev-libs/newpkg-1.0
 
 # --nodeps/-O is real and implemented: withdeps' own RDEPEND (which
 # would otherwise pull in newpkg and upgradepkg -- see the plain

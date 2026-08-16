@@ -153,6 +153,26 @@ CASES = [
         0,
     ),
     (
+        "--newuse reinstalls for a newly-added IUSE flag alone",
+        ["--pretend", "--newuse", "dev-libs/changedusepkg"],
+        0,
+    ),
+    (
+        "--changed-use ignores that same newly-added IUSE flag",
+        ["--pretend", "--changed-use", "dev-libs/changedusepkg"],
+        0,
+    ),
+    (
+        "--changed-use short alias -U, bundled with -p",
+        ["-pU", "dev-libs/changedusepkg"],
+        0,
+    ),
+    (
+        "--changed-use still catches an enablement change on a shared IUSE flag",
+        ["--pretend", "--changed-use", "dev-libs/reinstallpkg"],
+        0,
+    ),
+    (
         "--nodeps disables recursion into DEPEND/RDEPEND entirely",
         ["--pretend", "--nodeps", "dev-libs/withdeps"],
         0,
@@ -929,7 +949,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
     assert (
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --nodeps/-O, "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
@@ -978,6 +998,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -p, --pretend   required: the only real merge calculation this pilot implements\n"
         '   -v, --verbose   show USE="..." on each [ebuild ...] line (optionally: -v y|n)\n'
         "   -N, --newuse    reinstall an already-installed package if its USE has changed\n"
+        "   -U, --changed-use  like -N, but ignores newly added/removed IUSE flags entirely\n"
         "   -O, --nodeps    do not resolve or show any dependency, only the given atoms\n"
         "   -o, --onlydeps  show only the given atoms' dependencies, not the atoms themselves\n"
         "   -h, --help      show this message and exit\n"
@@ -1203,6 +1224,63 @@ def test_newuse_forced_flags_suppresses_a_spurious_reinstall(emerge_binary, fixt
     assert result.stdout == "dev-libs/usemaskreinstallpkg-1.0 is already installed; nothing to do\n"
 
 
+def test_newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag(emerge_binary, fixture_env):
+    """dev-libs/changedusepkg is installed with an empty vdb IUSE, and its
+    current ebuild now declares IUSE="brandnewflag" -- a real, unmasked,
+    not-globally-enabled flag (unlike usemaskreinstallpkg's own masked
+    one above). --newuse's own presence-diff term reacts to a flag
+    simply existing in IUSE now when it didn't before, regardless of
+    enablement, so it reports a Reinstall; --changed-use's own, narrower
+    formula never even looks at IUSE presence, only at enablement of
+    flags declared on both sides, so it correctly sees nothing changed
+    and stays AlreadyInstalled -- proving the two flags are genuinely
+    different checks, not two names for the same one."""
+    newuse_result = _run(
+        [str(emerge_binary)], ["--pretend", "--newuse", "dev-libs/changedusepkg"], fixture_env
+    )
+    assert newuse_result.returncode == 0
+    assert newuse_result.stdout == (
+        "[ebuild  r] dev-libs/changedusepkg-1.0 (reinstall for changed USE: brandnewflag)\n"
+    )
+
+    changed_use_result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--changed-use", "dev-libs/changedusepkg"],
+        fixture_env,
+    )
+    assert changed_use_result.returncode == 0
+    assert changed_use_result.stdout == (
+        "dev-libs/changedusepkg-1.0 is already installed; nothing to do\n"
+    )
+
+
+def test_changed_use_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
+    """-U is --changed-use's real short alias (see lib/_emerge/main.py's
+    shortmapping); bundled with -p ("-pU") it must behave identically to
+    the long-flag invocation above."""
+    result = _run([str(emerge_binary)], ["-pU", "dev-libs/changedusepkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/changedusepkg-1.0 is already installed; nothing to do\n"
+
+
+def test_changed_use_still_catches_an_enablement_change_on_a_shared_flag(
+    emerge_binary, fixture_env
+):
+    """dev-libs/reinstallpkg's own "foo" flag exists in IUSE on both
+    sides (installed and current) -- only its enablement changed. This
+    is exactly the shared term both --newuse and --changed-use compute
+    the same way, so --changed-use must catch it too, not just
+    --newuse."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--changed-use", "dev-libs/reinstallpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
 def test_nodeps_disables_recursion_entirely(emerge_binary, fixture_env):
     """dev-libs/withdeps RDEPENDs on dev-libs/newpkg (New) and
     dev-libs/upgradepkg (Upgrade) -- see the plain recursion contract
@@ -1329,7 +1407,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--deep" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --nodeps/-O, "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
@@ -1343,7 +1421,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --nodeps/-O, "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
@@ -1357,7 +1435,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     assert result.returncode == 2
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --nodeps/-O, "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
