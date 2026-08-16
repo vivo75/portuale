@@ -1465,7 +1465,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -1519,6 +1519,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -u, --update    upgrade to a newer visible version even if the installed one satisfies the atom\n"
         "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)\n"
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)\n"
+        "   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)\n"
         "   -h, --help      show this message and exit\n"
         "       --json      dump the whole resolved graph as one line of JSON instead "
         "of the lines above (pilot-specific, not a real emerge option)\n"
@@ -1612,6 +1613,220 @@ def test_world_missing_file_expands_to_nothing_not_an_error(
         == "emerge (pilot v1): no package atoms to resolve (the target list, "
         "after expanding any @world/@system, is empty)"
     )
+
+
+def _deselect_root(tmp_path):
+    """A minimal, self-contained ROOT with its own world file and vdb --
+    real action_deselect (lib/_emerge/actions.py) only ever touches the
+    world file and vardb, never repos/config at all, so --deselect's own
+    tests stay fully isolated from the shared PORTING/fixtures tree
+    (avoiding any ripple effect on its own @world-dependent tests, which
+    an added world-file entry there would otherwise cause) rather than
+    reusing it. "dev-libs/foo" (world, no slot) and "dev-libs/bar:1"
+    (world, slot-restricted) are both actually installed and thus
+    matchable; "dev-libs/baz:2" is installed at a *different* slot (1),
+    proving the slot check actually rejects a mismatch rather than
+    matching on category/package alone; "dev-libs/qux" is world-listed
+    but never installed; "dev-libs/notinworld" is installed but never
+    world-listed; "@some-nested-set-reference" proves a "@"-prefixed
+    world line is still silently skipped here too, same as @world
+    expansion already does."""
+    world = tmp_path / "var" / "lib" / "portage" / "world"
+    world.parent.mkdir(parents=True)
+    world.write_text(
+        "dev-libs/foo\n"
+        "dev-libs/bar:1\n"
+        "dev-libs/baz:2\n"
+        "dev-libs/qux\n"
+        "@some-nested-set-reference\n"
+    )
+
+    def install(category, package, version, slot="0"):
+        pkg_dir = tmp_path / "var" / "db" / "pkg" / category / f"{package}-{version}"
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "CATEGORY").write_text(f"{category}\n")
+        (pkg_dir / "SLOT").write_text(f"{slot}\n")
+
+    install("dev-libs", "foo", "1.0")
+    install("dev-libs", "bar", "1.0", slot="1")
+    install("dev-libs", "baz", "1.0", slot="1")
+    install("dev-libs", "notinworld", "1.0")
+    return tmp_path
+
+
+def _deselect_env(fixture_env, tmp_path):
+    env = dict(fixture_env)
+    env["ROOT"] = str(_deselect_root(tmp_path))
+    return env
+
+
+def test_deselect_matches_a_plain_world_atom(emerge_binary, fixture_env, tmp_path):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "dev-libs/foo"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> Would remove dev-libs/foo from "world" favorites file...\n'
+
+
+def test_deselect_matches_via_a_bare_package_name(emerge_binary, fixture_env, tmp_path):
+    """A bare package name (no category at all) is expanded via real
+    portage's own "null category" mechanism: scan the world file's own
+    atoms for one sharing that package name, substitute in its
+    category."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "foo"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> Would remove dev-libs/foo from "world" favorites file...\n'
+
+
+def test_deselect_respects_the_world_atoms_own_slot_restriction(
+    emerge_binary, fixture_env, tmp_path
+):
+    """dev-libs/baz is installed at slot 1, but the world file's own
+    entry restricts it to slot 2 -- no match, proving this pilot's own
+    documented simplification of real Atom.intersects() still checks
+    slot compatibility, not just category/package."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "dev-libs/baz"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> No matching atoms found in "world" favorites file...\n'
+
+
+def test_deselect_matches_a_slot_restricted_world_atom_at_the_right_slot(
+    emerge_binary, fixture_env, tmp_path
+):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "dev-libs/bar"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> Would remove dev-libs/bar:1 from "world" favorites file...\n'
+
+
+def test_deselect_reports_no_match_for_a_world_listed_but_not_installed_target(
+    emerge_binary, fixture_env, tmp_path
+):
+    """dev-libs/qux is listed in the world file but was never actually
+    installed -- real portage's own vardb.match() finds nothing, so it
+    never becomes an expanded atom at all; the world file's own text is
+    never enough by itself."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "dev-libs/qux"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> No matching atoms found in "world" favorites file...\n'
+
+
+def test_deselect_reports_no_match_for_an_installed_but_not_world_listed_target(
+    emerge_binary, fixture_env, tmp_path
+):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "dev-libs/notinworld"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> No matching atoms found in "world" favorites file...\n'
+
+
+def test_deselect_multiple_targets_discard_sorted_alphabetically(
+    emerge_binary, fixture_env, tmp_path
+):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "dev-libs/foo", "dev-libs/bar"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '>>> Would remove dev-libs/bar:1 from "world" favorites file...',
+        '>>> Would remove dev-libs/foo from "world" favorites file...',
+    ]
+
+
+def test_deselect_with_no_targets_at_all_reports_no_match(emerge_binary, fixture_env, tmp_path):
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--deselect"], _deselect_env(fixture_env, tmp_path)
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> No matching atoms found in "world" favorites file...\n'
+
+
+def test_deselect_requires_pretend(emerge_binary, fixture_env, tmp_path):
+    """This pilot's whole CLI is dry-run-only regardless of the flag --
+    --deselect is no exception, and hits the exact same "only --pretend
+    is implemented" error real action_deselect's own (unreachable here)
+    file-writing branch would otherwise need."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--deselect", "dev-libs/foo"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 2
+    assert (
+        result.stderr.strip()
+        == "emerge (pilot v1): only --pretend is implemented (no real merges "
+        "yet, see PROMPT.md)"
+    )
+
+
+def test_deselect_short_alias_and_bundling(emerge_binary, fixture_env, tmp_path):
+    env = _deselect_env(fixture_env, tmp_path)
+    short = _run([str(emerge_binary)], ["--pretend", "-W", "dev-libs/foo"], env)
+    assert short.returncode == 0
+    assert short.stdout == '>>> Would remove dev-libs/foo from "world" favorites file...\n'
+
+    bundled = _run([str(emerge_binary)], ["-pW", "dev-libs/foo"], env)
+    assert bundled.returncode == 0
+    assert bundled.stdout == '>>> Would remove dev-libs/foo from "world" favorites file...\n'
+
+
+def test_deselect_n_does_not_trigger_deselect_mode(emerge_binary, fixture_env, tmp_path):
+    """Real "--deselect": y_or_n -- an explicit "n" leaves this
+    invocation as an ordinary --pretend resolution instead (real
+    main.py's own "if myaction is None and myoptions.deselect is True"
+    check), so "dev-libs/foo" here is treated as a normal target atom,
+    not a deselect argument -- and resolves the ordinary way: it's
+    already installed (in this throwaway ROOT's own vdb) and satisfies
+    the atom, so it's reported as "nothing to do" rather than as a
+    deselect-mode "Would remove" line."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "n", "dev-libs/foo"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/foo-1.0 is already installed; nothing to do\n"
+
+
+def test_deselect_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    env = _deselect_env(fixture_env, tmp_path)
+    for args in (
+        ["--pretend", "--deselect", "dev-libs/foo"],
+        ["--pretend", "--deselect", "foo"],
+        ["--pretend", "--deselect", "dev-libs/baz"],
+        ["--pretend", "--deselect", "dev-libs/foo", "dev-libs/bar"],
+        ["--pretend", "--deselect"],
+        ["--deselect", "dev-libs/foo"],
+    ):
+        rust_result = _run([str(emerge_binary)], args, env)
+        python_result = _run(emerge_pretend_python, args, env)
+        assert rust_result.returncode == python_result.returncode, args
+        assert rust_result.stdout == python_result.stdout, args
+        assert rust_result.stderr == python_result.stderr, args
 
 
 def test_system_expands_to_the_fixture_profile_chains_own_packages_files(
@@ -2393,7 +2608,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -2407,7 +2622,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -2421,7 +2636,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 

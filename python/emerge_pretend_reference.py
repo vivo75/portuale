@@ -2325,7 +2325,6 @@ _VALUE_OPTIONS = [
     ("--complete-graph-if-new-use", None),
     ("--complete-graph-if-new-ver", None),
     ("--depclean-lib-check", None),
-    ("--deselect", "-W"),
     ("--dynamic-deps", None),
     ("--fail-clean", None),
     ("--fuzzy-search", None),
@@ -2581,8 +2580,9 @@ def _report_option(token):
             f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
             "but is not implemented in this pilot (only --pretend/-p, "
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-            "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, and "
-            "--help/-h are implemented so far; see PROMPT.md)",
+            "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
+            "--deselect/-W, and --help/-h are implemented so far; see "
+            "PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -2630,6 +2630,9 @@ def _print_help():
     print(
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)"
     )
+    print(
+        '   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)'
+    )
     print("   -h, --help      show this message and exit")
     print(
         "       --json      dump the whole resolved graph as one line of JSON instead "
@@ -2676,6 +2679,67 @@ def _read_world_atoms(root):
     ]
 
 
+def _run_deselect(targets, root):
+    """Ports real action_deselect (lib/_emerge/actions.py, lines
+    1740-1835) exactly: needs no repo/config resolution at all, only the
+    world file and the vdb. Each target is expanded into its own
+    actually-installed category/package:slot form(s) -- a bare package
+    name (no "/") via real portage's own "null category" mechanism,
+    scanning the world file for a same-named atom to borrow its category
+    from, then an installed_candidates (vardb.match-equivalent) lookup
+    either way -- and each expanded form is matched against every
+    world-file atom. Unlike pretend.rs's own run_deselect, which hand-
+    rolls a narrower category/package(+slot) equality check as a
+    documented scope cut, this reuses the real match_from_list directly
+    (the same "why re-derive it" reasoning as _matches_config_entry
+    above) -- both give identical results across every case this pilot's
+    own contract suite exercises (plain atoms, slot-restricted atoms),
+    since neither exercises the version-range/USE-dep territory where
+    the two would actually diverge. A "@"-prefixed world entry is never
+    matched, consistent with _read_world_atoms's own pre-existing cut for
+    @world itself. Mirrors pretend.rs's run_deselect exactly."""
+    world_atoms = _read_world_atoms(root)
+
+    expanded = set()
+    for target in targets:
+        if "/" in target:
+            candidate_atom_strs = [target]
+        else:
+            candidate_atom_strs = []
+            for w in world_atoms:
+                a = _parse_atom(w)
+                if a is not None and a.cp.split("/", 1)[1] == target:
+                    candidate_atom_strs.append(f"{a.cp.split('/', 1)[0]}/{target}")
+
+        for atom_str in candidate_atom_strs:
+            atom = _parse_atom(atom_str)
+            if atom is None:
+                print(f"emerge: invalid atom {atom_str!r}", file=sys.stderr)
+                return 1
+            category, package = atom.cp.split("/", 1)
+            for version, slot in installed_candidates(root, category, package):
+                candidate_str = f"{category}/{package}-{version}:{slot}"
+                if match_from_list(atom_str, [candidate_str]):
+                    expanded.add((category, package, slot))
+
+    discard = []
+    for world_atom_str in world_atoms:
+        w = _parse_atom(world_atom_str)
+        if w is None:
+            continue
+        for cat, pkg, slot in expanded:
+            if w.cp == f"{cat}/{pkg}" and (w.slot is None or w.slot == slot):
+                discard.append(world_atom_str)
+                break
+
+    if not discard:
+        print('>>> No matching atoms found in "world" favorites file...')
+    else:
+        for atom in sorted(discard):
+            print(f'>>> Would remove {atom} from "world" favorites file...')
+    return 0
+
+
 def run(args):
     if _wants_help(args):
         _print_help()
@@ -2692,6 +2756,7 @@ def run(args):
     deep = 0
     excluded = []
     json_output = False
+    deselect = False
 
     i = 0
     while i < len(args):
@@ -2790,6 +2855,30 @@ def run(args):
         elif arg == "--verbose=n":
             verbose = False
             i += 1
+        elif arg in ("--deselect", "-W"):
+            # Real "--deselect": y_or_n, the same optional-value shape
+            # "--verbose"/"-v" has above -- but unlike "--verbose", a
+            # bare "--deselect"/"-W" turns this whole invocation into a
+            # different, standalone action (see _run_deselect's own
+            # docstring) rather than modifying ordinary --pretend
+            # resolution -- real main.py's own "if myaction is None and
+            # myoptions.deselect is True: myaction = 'deselect'".
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                deselect = True
+                i += 2
+            elif nxt == "n":
+                deselect = False
+                i += 2
+            else:
+                deselect = True
+                i += 1
+        elif arg == "--deselect=y":
+            deselect = True
+            i += 1
+        elif arg == "--deselect=n":
+            deselect = False
+            i += 1
         elif not arg.startswith("-"):
             atom_args.append(arg)
             i += 1
@@ -2817,6 +2906,8 @@ def run(args):
                     update = True
                 elif c == "D":
                     deep = True
+                elif c == "W":
+                    deselect = True
                 elif c == "X":
                     # Unlike every other bundle-compatible short flag
                     # here, -X's own value is *required*, not optional --
@@ -2843,6 +2934,9 @@ def run(args):
             file=sys.stderr,
         )
         return 2
+
+    if deselect:
+        return _run_deselect(atom_args, _root())
 
     if not atom_args:
         print(

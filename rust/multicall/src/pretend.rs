@@ -63,6 +63,38 @@
 // instead of being silently misparsed or falling through to a
 // misleading generic error.
 //
+// --deselect/-W is real and implemented too, but unlike every flag
+// above, it isn't a modifier on ordinary --pretend resolution at all --
+// real `main.py` turns a bare `--deselect`/`-W` into its own standalone
+// ACTION (`if myaction is None and myoptions.deselect is True: myaction
+// = "deselect"`, the same shape as `--depclean`/`--sync`), dispatched
+// here to `run_deselect` before any of the ordinary target-atom/resolve
+// machinery even runs. It reports (never writes, requires --pretend,
+// same "never merges" invariant as everything else in this pilot) which
+// world-file atoms each given target would cause real `action_deselect`
+// (lib/_emerge/actions.py) to discard: every target is expanded against
+// the vdb (a bare package name -- no `/` -- via real portage's own
+// "null category" mechanism, scanning the world file for a same-named
+// atom to borrow its category from, then `vardb.match`-equivalent
+// lookup either way -- see `portage_repo::installed_candidates`), and
+// each expanded, actually-installed `category/package:slot` is matched
+// against every world-file atom. A documented scope cut versus real
+// `Atom.intersects()`: only a narrower category/package(+slot) equality
+// check is done, not the full version-range/USE-dep algebra -- sufficient
+// for the dominant plain-atom case. A `@set`-prefixed world entry is
+// never matched, consistent with the pre-existing `read_world_atoms` cut
+// for `@world` itself (not a new one). Real `--deselect` is
+// `argument_options` with an optional y/n value, the same shape
+// `--verbose`/`-v` already has: a bare `--deselect`/`-W` or `--deselect
+// y` enables it, `--deselect n` explicitly disables it (falling through
+// to ordinary resolution instead); a bundled `-W` (e.g. `-pW`) never
+// consumes a value, always enabling, the same "no ambiguity with another
+// bundled flag character" reasoning as bundled `-v`/`-D`. `--ask`
+// interactive confirmation and `--json` output are both out of scope for
+// deselect mode -- the former needs no special-casing (it already falls
+// through to the CLI's existing "not yet implemented" rejection), the
+// latter simply isn't offered.
+//
 // --json is NOT a real emerge option at all -- real portage has no
 // structured-output mode for --pretend, so unlike every other flag in
 // this file, there's no real behavior to port. Built as a pilot-specific
@@ -175,7 +207,7 @@
 // PORTING/README.md and PORTING/PROMPT.md for the rest.
 
 use crate::emerge_options;
-use portage_dep::{parse_atom, Blocker};
+use portage_dep::{match_from_list, parse_atom, Blocker};
 use portage_repo::{
     config_root_from_env, resolve_pretend_graph, root_from_env, GraphEntry, PretendOutcome,
     SlotConflict,
@@ -414,8 +446,8 @@ fn report_option(token: &str) -> ExitCode {
             "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
              --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
-             --update/-u, --deep/-D, --exclude/-X, and --help/-h are \
-             implemented so far; see PROMPT.md)",
+             --update/-u, --deep/-D, --exclude/-X, --deselect/-W, and \
+             --help/-h are implemented so far; see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -461,6 +493,9 @@ fn print_help() {
     );
     println!(
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)"
+    );
+    println!(
+        "   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)"
     );
     println!("   -h, --help      show this message and exit");
     println!(
@@ -513,6 +548,114 @@ fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// `emerge --deselect <atom-or-bare-name> [...]`: real `action_deselect`
+/// (`lib/_emerge/actions.py`), ported for `--pretend` mode only -- this
+/// pilot's whole CLI requires `--pretend` (see the "only --pretend is
+/// implemented" check in `run`, checked *before* this is ever reached),
+/// so real `action_deselect`'s own non-pretend branch (which actually
+/// writes `var/lib/portage/world`) is never reachable here; only its
+/// "Would remove ..." reporting path is ported. Needs no repo/config
+/// resolution at all -- only the world file and the vdb -- so this
+/// doesn't call `find_repos`/`resolve_config` either, unlike every
+/// other real feature in this pilot.
+///
+/// For each target in `targets`: a bare package name (no `/` at all) is
+/// expanded via real portage's own "null category" mechanism -- scan
+/// the world file's own atoms for one sharing that package name, and
+/// substitute in its category (real `Atom(..., category="null")`
+/// handling; this pilot's own atom parser has no equivalent, so this is
+/// a dedicated lookup instead). Every resulting atom (bare-name-expanded
+/// or given with an explicit category already) is then matched against
+/// every installed version of that category/package
+/// (`portage_repo::installed_candidates`, this pilot's own vdb scan) via
+/// `match_from_list`, mirroring real `vardb.match(atom)` -- only a
+/// target that's *actually installed* can ever match anything in the
+/// world file at all, matching real portage's own behavior exactly (the
+/// world file's own text alone is never enough; an unresolvable bare
+/// name simply contributes nothing, not an error, same as real
+/// portage's own empty `vardb.match()` result).
+///
+/// A world-file entry is discarded once it shares category/package with
+/// one of these installed matches, and (if the world entry itself
+/// carries an explicit slot) that slot matches too -- a deliberate,
+/// documented simplification of real `Atom.intersects()`'s own full
+/// version/slot/USE-dep compatibility algebra: this pilot's own atom
+/// grammar has no `intersects()` equivalent, and the dominant real-world
+/// `--deselect` usage (a plain, unversioned target against a plain,
+/// unversioned or slot-qualified world entry) is fully captured by this
+/// narrower category/package(+slot) check. `@set`-prefixed world
+/// entries are never matched at all -- `read_world_atoms` above already
+/// only ever returns plain atoms (see its own doc comment), the same
+/// pre-existing "@set references stay unimplemented" cut `@world`
+/// expansion already has.
+///
+/// Real `action_deselect` always returns `os.EX_OK` on every reachable
+/// path here (found matches, no matches, even no targets at all) --
+/// ported the same way, unconditionally `ExitCode::SUCCESS`.
+fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
+    let world_atoms = match read_world_atoms(root) {
+        Ok(atoms) => atoms,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let mut expanded: HashSet<(String, String, String)> = HashSet::new();
+    for target in targets {
+        let candidate_atom_strs: Vec<String> = if target.contains('/') {
+            vec![(*target).to_string()]
+        } else {
+            world_atoms
+                .iter()
+                .filter_map(|w| parse_atom(w))
+                .filter(|a| a.package == *target)
+                .map(|a| format!("{}/{}", a.category, target))
+                .collect()
+        };
+        for atom_str in candidate_atom_strs {
+            let Some(atom) = parse_atom(&atom_str) else {
+                eprintln!("emerge: invalid atom {atom_str:?}");
+                return ExitCode::from(1);
+            };
+            for (version, slot) in
+                portage_repo::installed_candidates(root, &atom.category, &atom.package)
+            {
+                let candidate_str = format!("{}/{}-{version}:{slot}", atom.category, atom.package);
+                if match_from_list(&atom_str, &[candidate_str.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+                {
+                    expanded.insert((atom.category.clone(), atom.package.clone(), slot));
+                }
+            }
+        }
+    }
+
+    let mut discard: Vec<&String> = world_atoms
+        .iter()
+        .filter(|world_atom_str| {
+            let Some(w) = parse_atom(world_atom_str) else {
+                return false;
+            };
+            expanded.iter().any(|(cat, pkg, slot)| {
+                w.category == *cat
+                    && w.package == *pkg
+                    && w.slot.as_deref().is_none_or(|ws| ws == slot)
+            })
+        })
+        .collect();
+
+    if discard.is_empty() {
+        println!(">>> No matching atoms found in \"world\" favorites file...");
+    } else {
+        discard.sort();
+        for atom in discard {
+            println!(">>> Would remove {atom} from \"world\" favorites file...");
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     if wants_help(args) {
         print_help();
@@ -530,6 +673,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut deep = portage_repo::Deep::NotRequested;
     let mut excluded: Vec<String> = Vec::new();
     let mut json = false;
+    let mut deselect = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -647,6 +791,35 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--verbose=n" {
             verbose = false;
             i += 1;
+        } else if arg == "--deselect" || arg == "-W" {
+            // Real "--deselect": y_or_n (argument_options), the same
+            // optional-value shape "--verbose"/"-v" already has -- see
+            // that branch's own comment. Unlike "--verbose", a bare
+            // "--deselect"/"-W" turns this whole invocation into a
+            // different, standalone action (see run_deselect's own doc
+            // comment) rather than modifying the ordinary --pretend
+            // resolution -- real main.py's own "if myaction is None and
+            // myoptions.deselect is True: myaction = 'deselect'".
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    deselect = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    deselect = false;
+                    i += 2;
+                }
+                _ => {
+                    deselect = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--deselect=y" {
+            deselect = true;
+            i += 1;
+        } else if arg == "--deselect=n" {
+            deselect = false;
+            i += 1;
         } else if !arg.starts_with('-') {
             atom_args.push(arg);
             i += 1;
@@ -666,6 +839,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'o' => onlydeps = true,
                     'u' => update = true,
                     'D' => deep = portage_repo::Deep::Unlimited,
+                    'W' => deselect = true,
                     'X' => {
                         // Unlike every other bundle-compatible short flag
                         // here, -X's own value is *required*, not
@@ -695,6 +869,10 @@ pub fn run(args: &[String]) -> ExitCode {
              (no real merges yet, see PROMPT.md)"
         );
         return ExitCode::from(2);
+    }
+
+    if deselect {
+        return run_deselect(&atom_args, &root_from_env());
     }
 
     if atom_args.is_empty() {

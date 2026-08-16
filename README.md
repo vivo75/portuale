@@ -639,6 +639,51 @@ PORTING/
   --version`/`-V`'s own (differently-sourced) real value, so `--version`
   stays an ordinary recognized-but-unimplemented option here too.
 
+  **`--deselect`/`-W`: the first real emerge *action*, not an option.**
+  Every flag implemented so far modifies ordinary `--pretend` resolution;
+  `--deselect` is different in kind -- real `lib/_emerge/main.py` turns a
+  bare `--deselect`/`-W` into its own standalone action (`if myaction is
+  None and myoptions.deselect is True: myaction = "deselect"`, the same
+  shape as `--depclean`/`--sync`), dispatched here to a new `run_deselect`
+  before any of the ordinary target-atom/resolve machinery even runs.
+  Grounded directly against real `action_deselect`
+  (`lib/_emerge/actions.py`, lines 1740-1835): a genuinely smaller port
+  than every masking slice before it, since real `action_deselect`
+  touches only the world file and the vdb, never any repo/config
+  resolution at all -- so, unlike every other implemented flag,
+  `portage-repo`'s own repo/profile-resolution machinery is never called
+  here. Each given target is expanded into its own actually-installed
+  `category/package:slot` form(s) -- a bare package name (no `/`) via
+  real portage's own "null category" mechanism (scanning the world file
+  for a same-named atom to borrow its category from), then an
+  `installed_candidates` (`vardb.match`-equivalent) lookup either way --
+  and each expanded form is matched against every world-file atom,
+  printing `>>> Would remove <atom> from "world" favorites file...` for
+  each one discarded (pretend mode; real portage only writes the world
+  file outside of `--pretend`, so this pilot's own "never merges"
+  invariant holds here unchanged), or `>>> No matching atoms found in
+  "world" favorites file...` if none matched at all. A documented scope
+  cut versus real `Atom.intersects()`: `pretend.rs`'s own `run_deselect`
+  uses a narrower category/package(+slot) equality check rather than the
+  full version-range/USE-dep algebra, sufficient for the dominant plain-
+  atom case; the Python reference, by contrast, reuses the real
+  `match_from_list` directly (the same "why re-derive it" reasoning
+  `_matches_config_entry` already established), and both are verified to
+  agree on every case this pilot's own contract suite exercises. A
+  `@`-prefixed world entry is never matched, consistent with
+  `read_world_atoms`'s own pre-existing cut for `@world` itself, not a
+  new gap. CLI-wise, real `--deselect` is `argument_options` with an
+  *optional* `y`/`n` value, the identical shape `--verbose`/`-v` already
+  has: a bare `--deselect`/`-W` or `--deselect y` enables it, `--deselect
+  n` explicitly disables it (falling through to ordinary resolution
+  instead, chosen by real `main.py`'s own `is True` check rather than
+  truthiness); a bundled `-W` (e.g. `-pW`) never consumes a value, always
+  enabling, the same reasoning already established for a bundled `-v`/
+  `-D`. Deliberately out of scope: `--ask` interactive confirmation
+  (needs no special-casing at all -- it already falls through to this
+  pilot's existing "not yet implemented" rejection) and `--json` output
+  (simply not offered for deselect mode).
+
   **Multiple top-level atoms**: `emerge --pretend foo bar` -- real
   emerge's most common invocation shape -- was, until this slice,
   explicitly rejected ("only a single package atom is supported"). Now
@@ -2516,7 +2561,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): option "--debug" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
 # --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+# --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see
+# PROMPT.md)  (exit 2)
 
 # --help/-h is real and implemented: a short, honest, pilot-specific
 # summary, not a port of real emerge's own (157-line, colorized,
@@ -2535,7 +2581,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): option "--jobs" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
 # --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+# --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see
+# PROMPT.md)  (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message
@@ -2545,6 +2592,21 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
     python3 PORTING/python/emerge_pretend_reference.py --pretend dev-libs/newpkg
+
+# --deselect/-W is a standalone action, not a --pretend modifier -- it
+# needs no repos.conf/profile at all, only ROOT's own world file and
+# vdb, so this uses a small throwaway ROOT instead of $FX
+mkdir -p /tmp/deselect-demo-root/var/lib/portage /tmp/deselect-demo-root/var/db/pkg/dev-libs/foo-1.0
+echo "dev-libs/foo" > /tmp/deselect-demo-root/var/lib/portage/world
+echo "dev-libs" > /tmp/deselect-demo-root/var/db/pkg/dev-libs/foo-1.0/CATEGORY
+echo "0" > /tmp/deselect-demo-root/var/db/pkg/dev-libs/foo-1.0/SLOT
+ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/foo
+# >>> Would remove dev-libs/foo from "world" favorites file...
+
+# a target that isn't actually installed (or isn't in the world file at
+# all) never becomes an expanded atom, so nothing is reported for it
+ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/bar
+# >>> No matching atoms found in "world" favorites file...
 ```
 
 Try the `ebuild` stub (still a dry-run placeholder -- no real phase

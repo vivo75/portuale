@@ -1108,7 +1108,13 @@ fn vercmp_ordering(a: &str, b: &str) -> Ordering {
 /// `list_candidates`). Used for blocker matching, which needs slots to
 /// support slotted blocker atoms -- `installed_versions` below doesn't
 /// need this and stays a plain version list for its existing callers.
-fn installed_candidates(root: &Path, category: &str, package: &str) -> Vec<(String, String)> {
+/// `pub` (unlike most of this crate's own internal helpers) so
+/// `multicall/src/pretend.rs`'s own `--deselect`/`-W` implementation can
+/// reuse it directly -- real `action_deselect` (`lib/_emerge/actions.py`)
+/// only ever consults `vardb`/the world file, never repos/config at
+/// all, so this is the one real feature in this pilot with no need for
+/// `portage-repo`'s own repo/config-resolution machinery.
+pub fn installed_candidates(root: &Path, category: &str, package: &str) -> Vec<(String, String)> {
     let cat_dir = root.join("var/db/pkg").join(category);
     let Ok(entries) = fs::read_dir(&cat_dir) else {
         return Vec::new();

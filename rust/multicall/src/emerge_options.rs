@@ -11,9 +11,10 @@
 // behavior. Mirrored exactly in
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
-// (verified by the shared contract suite). `--deep`/`-D` and
-// `--exclude`/`-X` are ALSO implemented now (see below) -- both excluded
-// from `VALUE_OPTIONS` too, not just `BOOLEAN_OPTIONS`.
+// (verified by the shared contract suite). `--deep`/`-D`,
+// `--exclude`/`-X`, and `--deselect`/`-W` are ALSO implemented now (see
+// below) -- all excluded from `VALUE_OPTIONS` too, not just
+// `BOOLEAN_OPTIONS`.
 //
 // KNOWN, DOCUMENTED SCOPE CUTS:
 //   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own
@@ -83,6 +84,18 @@
 //     comment (portage-repo) for the real `excluded_pkgs`/
 //     `WildcardPackageSet` behavior it ports, and its own documented
 //     scope cut relative to real depgraph.py's ~18 call sites.
+//   - `--deselect`/`-W` IS implemented now too, deliberately excluded
+//     from `VALUE_OPTIONS` for the same reason -- like `--verbose`/`-v`,
+//     it's real `argument_options` with a `y_or_n`-choices *optional*
+//     value, ported with the exact same "peek the next token, consume
+//     only if it's exactly y/n" pattern. Unlike every other implemented
+//     flag here, though, a bare `--deselect`/`-W` turns the whole
+//     invocation into a different, standalone action (real `main.py`'s
+//     own "if myaction is None and myoptions.deselect is True: myaction
+//     = 'deselect'") rather than modifying the ordinary `--pretend`
+//     resolution -- see `pretend.rs`'s own `run_deselect` for the real
+//     `action_deselect` behavior it ports, and its own documented
+//     `Atom.intersects()` scope cut.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -164,7 +177,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--complete-graph-if-new-use", None),
     ("--complete-graph-if-new-ver", None),
     ("--depclean-lib-check", None),
-    ("--deselect", Some("-W")),
     ("--dynamic-deps", None),
     ("--fail-clean", None),
     ("--fuzzy-search", None),
@@ -390,6 +402,14 @@ mod tests {
         // implemented), not through this "not implemented" table.
         assert!(lookup("--exclude").is_none());
         assert!(lookup("-X").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_deselect_itself() {
+        // --deselect/-W is handled directly by the caller (it's
+        // implemented), not through this "not implemented" table.
+        assert!(lookup("--deselect").is_none());
+        assert!(lookup("-W").is_none());
     }
 
     #[test]
