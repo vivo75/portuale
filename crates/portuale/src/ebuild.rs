@@ -31,6 +31,43 @@ fn wants_help(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--help" || arg == "-h")
 }
 
+/// A short, portuale-specific summary (not a port of the argparse
+/// usage block; see the module doc).
+fn print_help() {
+    println!("ebuild: command-line interface to the Portuale package manager");
+    println!();
+    println!("Usage:");
+    println!("   ebuild <ebuild file> <command> [command ...]");
+    println!("   ebuild --help");
+    println!();
+    println!("Commands run for real: the actionmap phase chain (unpack, prepare,");
+    println!("configure, compile, test, install), the standalone phases (pretend,");
+    println!("setup, ...), and merge / qmerge / unmerge / package / config / info /");
+    println!("prerm / postrm. Any other Portage command (clean, digest, manifest, ...)");
+    println!("is recognized and accepted but not yet implemented -- a no-op dry run.");
+    println!();
+    println!("Options:");
+    println!("   --force              regenerate digests (with the digest/manifest commands)");
+    println!("   --color y|n          enable or disable color output");
+    println!(
+        "   --debug              show debug output (as Portage: sets PORTAGE_DEBUG, so bin/ebuild.sh runs set -x)"
+    );
+    println!("   --ignore-default-opts  do not use the EBUILD_DEFAULT_OPTS environment variable");
+    println!("   --skip-manifest      skip all manifest checks");
+    println!(
+        "   --shell bash|brush   real shell backend for phase/hook execution (default: bash; portuale extension)"
+    );
+    println!("   -h, --help           show this message and exit");
+    println!();
+    println!(
+        "Every other Portage ebuild option is recognized by name (see bin/ebuild) but \
+         not yet implemented -- using one reports which option it is, instead of a \
+         generic error. --shell is a portuale extension, not a Portage bin/ebuild \
+         option."
+    );
+    println!("See README.md and ebuild(1) for the full picture.");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
