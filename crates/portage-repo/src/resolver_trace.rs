@@ -44,3 +44,24 @@ pub(crate) fn dep_priority_str(p: &DepPriority) -> &'static str {
         "soft"
     }
 }
+
+/// The hardness measure a per-edge priority list is ordered by, so the label
+/// is the max. `buildtime_slot_op` 0 down to `optional` -5, none -6.
+// Portage: _emerge/DepPriority.py, DepPriority.__int__
+pub(crate) fn dep_priority_rank(p: &DepPriority) -> i8 {
+    if p.optional {
+        -5
+    } else if p.buildtime_slot_op {
+        0
+    } else if p.buildtime {
+        -1
+    } else if p.runtime_slot_op {
+        -2
+    } else if p.runtime {
+        -3
+    } else if p.runtime_post {
+        -4
+    } else {
+        -6
+    }
+}

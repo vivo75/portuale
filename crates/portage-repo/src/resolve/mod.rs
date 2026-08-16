@@ -1,5 +1,6 @@
 mod backtrack_params;
 mod blockers;
+mod complete_graph;
 mod conflict_use_display;
 mod cycles;
 mod entry;
@@ -19,6 +20,7 @@ mod skipped;
 mod slot_conflict;
 pub use backtrack_params::*;
 pub use blockers::*;
+pub use complete_graph::*;
 pub use conflict_use_display::*;
 pub use cycles::*;
 pub use entry::*;

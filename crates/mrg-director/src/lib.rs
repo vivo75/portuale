@@ -80,6 +80,58 @@ pub enum MergeKind {
 }
 
 // ---------------------------------------------------------------------------
+// BinpkgIndex
+// ---------------------------------------------------------------------------
+
+/// A source of **binary-package candidates** for a `cat/pkg`, from
+/// whatever store backs them. Both backends funnel through
+/// `portage_repo::BinaryIndex`; the trait keeps them swappable.
+/// Portage: `portage/dbapi/bintree.py` (local `$PKGDIR` + remote
+/// `PORTAGE_BINHOST`; see notes).
+pub trait BinpkgIndex {
+    /// The binary candidates for `category/package`, highest version
+    /// first (Portage `bintree.cp_list` order).
+    fn candidates(&self, category: &str, package: &str) -> Vec<portage_repo::Candidate>;
+
+    /// One candidate's raw `Packages` aux record -- the Portage
+    /// `bintree.aux_get` surface. `None` for an unknown exact CPV.
+    fn metadata(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<std::collections::HashMap<String, String>>;
+
+    /// One candidate's aux record **plus the identity of the store that
+    /// held it** -- the download-side counterpart of [`Self::metadata`]
+    /// (see notes for the per-backend identity and lookup rules).
+    fn metadata_with_source(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<(String, std::collections::HashMap<String, String>)>;
+
+    /// [`Self::metadata_with_source`] for the build the resolver planned
+    /// (binpkg-multi-instance; see notes). The default ignores
+    /// `build_id`, so single-instance backends need no change.
+    fn metadata_with_source_instance(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+        build_id: Option<&str>,
+    ) -> Option<(String, std::collections::HashMap<String, String>)> {
+        let _ = build_id;
+        self.metadata_with_source(category, package, version)
+    }
+
+    /// Where this index's candidates come from for the `g` bracket / `-pv`
+    /// `::repo` provenance decoration.
+    fn source_name(&self) -> String;
+}
+
+// ---------------------------------------------------------------------------
 // NewsSet
 // ---------------------------------------------------------------------------
 
