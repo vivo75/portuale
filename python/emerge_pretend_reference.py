@@ -410,8 +410,13 @@ def _reinstall_flags_for_newuse(root, category, package, candidate, config):
     differs from what the vdb recorded at merge time. Returns the sorted
     list of flags that triggered it, or None if nothing did. Mirrors
     portage-repo/src/lib.rs's reinstall_flags_for_newuse exactly,
-    including its documented forced_flags/--changed-use scope cuts (see
-    that function's own doc comment)."""
+    including its documented --changed-use scope cut (see that
+    function's own doc comment). forced_flags (config's own "use_force"
+    union "use_mask" -- real _reinstall_for_flags takes it as
+    set(chain(pkg.use.force, pkg.use.mask))) is subtracted from the
+    symmetric-difference part of the comparison only, matching real
+    portage's own "flags -= forced_flags" line, which sits between the
+    "^=" and the final "|="."""
     version = candidate["version"]
     orig_use = _read_vdb_flag_set(root, category, package, version, "USE")
     orig_iuse = _read_vdb_flag_set(root, category, package, version, "IUSE")
@@ -428,8 +433,9 @@ def _reinstall_flags_for_newuse(root, category, package, candidate, config):
         config["use_flags"], config["package_use"], candidate_str, category, package
     )
 
-    # flags = (orig_iuse ^ cur_iuse) | (orig_iuse∩orig_use ^ cur_iuse∩cur_use)
-    flags = orig_iuse ^ cur_iuse
+    # flags = ((orig_iuse ^ cur_iuse) - forced_flags) | (orig_iuse∩orig_use ^ cur_iuse∩cur_use)
+    forced_flags = config["use_force"] | config["use_mask"]
+    flags = (orig_iuse ^ cur_iuse) - forced_flags
     flags |= (orig_iuse & orig_use) ^ (cur_iuse & cur_use)
 
     return sorted(flags) if flags else None
@@ -611,7 +617,7 @@ def resolve_config(config_root, main_repo_location):
     crate's doc comment for the full algorithm and its documented scope
     cuts. Returns a dict with keys "use_flags", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
-    "package_use", "system_packages".
+    "package_use", "system_packages", "use_force", "use_mask".
 
     main_repo_location (the main repo's own tree root -- see
     find_repos/is_main) is needed for package.mask/.unmask's repo-level
@@ -643,6 +649,21 @@ def resolve_config(config_root, main_repo_location):
     make_conf = os.path.join(config_root, "etc", "portage", "make.conf")
     if os.path.isfile(make_conf):
         _process_make_conf_file(make_conf, config_root, scalars, use_flags, accept_keywords, set())
+
+    # use.mask/use.force: every profile level's own file (in chain
+    # order), stacked with the same "-atom" removal semantics
+    # package.mask uses (see _stack_mask_lines) -- mirrors
+    # portage-profile/src/lib.rs's resolve_config exactly, including its
+    # own "use.mask"/"use.force" doc comment: applied last, after every
+    # other real accumulation source above -- force-add every use.force
+    # flag, THEN force-remove every use.mask flag, so a flag in both
+    # ends up masked, not forced.
+    usemask_sources = [_read_config_lines(os.path.join(level, "use.mask")) for level in chain]
+    useforce_sources = [_read_config_lines(os.path.join(level, "use.force")) for level in chain]
+    use_force = set(_stack_mask_lines(useforce_sources))
+    use_mask = set(_stack_mask_lines(usemask_sources))
+    use_flags |= use_force
+    use_flags -= use_mask
 
     mask_sources = [
         _read_config_lines(os.path.join(main_repo_location, "profiles", "package.mask"))
@@ -720,6 +741,8 @@ def resolve_config(config_root, main_repo_location):
         "package_accept_keywords": _parse_package_accept_keywords_lines(accept_keywords_lines),
         "package_use": _parse_package_use_lines(use_lines),
         "system_packages": system_packages,
+        "use_force": use_force,
+        "use_mask": use_mask,
     }
 
 

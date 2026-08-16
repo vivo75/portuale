@@ -19,8 +19,8 @@
 //     under v1; testing this mechanism needs a same-repo synthetic
 //     fixture chain instead (see PORTING/fixtures/repo/profiles).
 //   - USE_EXPAND (LINGUAS, VIDEO_CARDS, ...), wildcard `_*` IUSE-aware
-//     expansion, `use.mask`/`.force`, and ARCH-based KEYWORDS-format
-//     validation are all out of scope. `package.use`'s
+//     expansion, and ARCH-based KEYWORDS-format validation are all out
+//     of scope. `package.use`'s
 //     USE_EXPAND-prefix shorthand (`VIDEO_CARDS: nvidia` lines applying a
 //     `video_cards_` prefix to subsequent flags until a blank line resets
 //     it -- see real `UseManager._parse_user_files_to_extatomdict`) is
@@ -115,6 +115,31 @@
 //     `PackagesSystemSet.__init__`'s `profiles` list, never
 //     `config_root`), unlike `package.mask`'s repo-level
 //     `profiles/package.mask`.
+//   - `use.mask`/`use.force` (global USE forcing) ARE now read: every
+//     profile level's own `<level>/use.mask`/`use.force` file, in chain
+//     order, stacked with the identical `stack_lists(incremental=True)`
+//     semantics `package.mask`/`packages` already port (see
+//     `stack_mask_lines`) -- confirmed by reading `UseManager.
+//     getUseMask`/`getUseForce`'s own `pkg=None` case, the one real
+//     `config.py`'s `regenerate()` actually calls to build the *global*
+//     `USE` value this pilot's flat model corresponds to: it returns
+//     `stack_lists(self._usemask_list/self._useforce_list,
+//     incremental=True)` directly, never touching a repo-level or
+//     per-package source at all -- those only exist on the *per-package*
+//     path (`pkg` not `None`), out of scope here the same way
+//     `package.use`'s own repo/profile/user-only sourcing already
+//     doesn't reach a per-package USE_ORDER layer either. Applied last,
+//     after every other real accumulation source (profile chain,
+//     make.conf): every `use.force` flag is force-added, THEN every
+//     `use.mask` flag is force-removed, exactly matching real
+//     `regenerate()`'s own `myflags.update(useforce)` followed by
+//     `myflags.difference_update(usemask)` -- so a flag listed in both
+//     ends up masked, not forced. `use_force`/`use_mask` are also
+//     exposed on `Config` directly (not just folded into `use_flags`),
+//     since real portage's own `forced_flags` (consumed by
+//     `--newuse`'s `reinstall_flags_for_newuse` in `portage-repo`,
+//     previously always empty -- see that function's own doc comment)
+//     is `use.force ∪ use.mask`, not either alone.
 //
 // One real, deliberately-preserved quirk from lib/portage/package/ebuild/
 // config.py (see the comment above its `expand_map.pop("USE", None)`):
@@ -157,6 +182,17 @@ pub struct Config {
     /// (the `*` stripped) -- see the module doc comment's `packages`
     /// bullet and `PackagesSystemSet.load`.
     pub system_packages: Vec<String>,
+    /// Flags forced on by every profile level's own `use.force` file,
+    /// already folded into `use_flags` -- exposed separately too since
+    /// real portage's own `forced_flags` (e.g. `--newuse`'s
+    /// `reinstall_flags_for_newuse`) is `use.force ∪ use.mask`, not
+    /// either one alone. See the module doc comment's `use.mask`/
+    /// `use.force` bullet.
+    pub use_force: HashSet<String>,
+    /// Flags forced off by every profile level's own `use.mask` file,
+    /// already folded out of `use_flags`. See `use_force`'s own doc
+    /// comment.
+    pub use_mask: HashSet<String>,
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -512,6 +548,34 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
         )?;
     }
 
+    // use.mask/use.force: every profile level's own file (in chain
+    // order), stacked with the same -atom removal semantics
+    // package.mask uses (see stack_mask_lines) -- confirmed by reading
+    // UseManager.getUseMask/getUseForce's own pkg=None (global) case,
+    // which returns stack_lists(self._usemask_list/self._useforce_list,
+    // incremental=True) directly, never consulting a repo-level or
+    // per-package source at all (those only exist on the *per-package*
+    // path, out of scope for this pilot's flat/global USE model, same
+    // as package.use's own repo/profile/user-only sourcing already is).
+    // Applied last, after every other real accumulation source above,
+    // matching config.py's own regenerate(): force-add every useforce
+    // flag, THEN force-remove every usemask flag -- so a flag in both
+    // ends up masked, not forced, exactly like real portage.
+    let mut usemask_sources: Vec<Vec<String>> = Vec::new();
+    let mut useforce_sources: Vec<Vec<String>> = Vec::new();
+    for level in &chain {
+        usemask_sources.push(read_config_lines(&level.join("use.mask"))?);
+        useforce_sources.push(read_config_lines(&level.join("use.force"))?);
+    }
+    config.use_force = stack_mask_lines(&useforce_sources).into_iter().collect();
+    config.use_mask = stack_mask_lines(&usemask_sources).into_iter().collect();
+    for flag in &config.use_force {
+        config.use_flags.insert(flag.clone());
+    }
+    for flag in &config.use_mask {
+        config.use_flags.remove(flag);
+    }
+
     let mut mask_sources: Vec<Vec<String>> = vec![read_config_lines(
         &main_repo_location.join("profiles/package.mask"),
     )?];
@@ -810,6 +874,52 @@ mod tests {
 
         let config = resolve_config(&root, &repo).expect("config must resolve");
         assert_eq!(config.system_packages, vec!["dev-libs/b".to_string()]);
+    }
+
+    #[test]
+    fn use_mask_and_use_force_stack_across_levels_and_mask_wins_over_force() {
+        // base: make.defaults enables "normalflag" and "maskflag"
+        // normally; use.force forces on "forceflag" and "bothflag".
+        // leaf (its own parent -> base): use.mask masks "maskflag" (an
+        // otherwise-normal USE flag -- proving use.mask overrides plain
+        // USE accumulation, not just use.force) and "bothflag" (proving
+        // mask wins when a flag is both forced AND masked, matching real
+        // regenerate()'s update-then-difference_update order).
+        // Final use_flags: {normalflag, forceflag} -- maskflag and
+        // bothflag are both gone despite being enabled/forced upstream.
+        let root = std::env::temp_dir().join("portage-profile-test-use-mask-force");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let base = repo_profiles.join("base");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(base.join("make.defaults"), "USE=\"normalflag maskflag\"\n").unwrap();
+        fs::write(base.join("use.force"), "forceflag\nbothflag\n").unwrap();
+        fs::write(leaf.join("parent"), "../repo/profiles/base\n").unwrap();
+        fs::write(leaf.join("use.mask"), "maskflag\nbothflag\n").unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.use_flags,
+            HashSet::from(["normalflag".to_string(), "forceflag".to_string()])
+        );
+        assert_eq!(
+            config.use_force,
+            HashSet::from(["forceflag".to_string(), "bothflag".to_string()])
+        );
+        assert_eq!(
+            config.use_mask,
+            HashSet::from(["maskflag".to_string(), "bothflag".to_string()])
+        );
     }
 
     #[test]

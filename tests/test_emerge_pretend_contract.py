@@ -148,6 +148,11 @@ CASES = [
         0,
     ),
     (
+        "--newuse forced_flags suppresses a spurious reinstall (use.mask)",
+        ["--pretend", "--newuse", "dev-libs/usemaskreinstallpkg"],
+        0,
+    ),
+    (
         "--nodeps disables recursion into DEPEND/RDEPEND entirely",
         ["--pretend", "--nodeps", "dev-libs/withdeps"],
         0,
@@ -1178,6 +1183,24 @@ def test_newuse_is_a_noop_when_use_has_not_changed(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout == "dev-libs/samepkg-1.0 is already installed; nothing to do\n"
+
+
+def test_newuse_forced_flags_suppresses_a_spurious_reinstall(emerge_binary, fixture_env):
+    """dev-libs/usemaskreinstallpkg is installed with an empty vdb IUSE,
+    but its own ebuild now declares IUSE="masked_newly_added_flag" -- a
+    flag PORTING/fixtures/repo/profiles/base/use.mask masks off, so it
+    was never enabled either before or after. Real depgraph.py's own
+    "flags -= forced_flags" line exists exactly to stop a newly-declared,
+    permanently-masked (or forced) IUSE flag from spuriously triggering a
+    reinstall just because it now exists -- without it, this would
+    incorrectly report a Reinstall for "masked_newly_added_flag"."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--newuse", "dev-libs/usemaskreinstallpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/usemaskreinstallpkg-1.0 is already installed; nothing to do\n"
 
 
 def test_nodeps_disables_recursion_entirely(emerge_binary, fixture_env):

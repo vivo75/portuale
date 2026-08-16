@@ -838,14 +838,13 @@ PORTING/
   (`(reinstall for changed USE: foo)`) for a deterministic, testable
   report -- real emerge instead color-hints changed flags within its
   `-v` USE display, a UI feature out of scope for this pilot's plain-text
-  output. This is a **deliberate, confirmed-with-the-user
-  simplification**: real `_reinstall_for_flags` also subtracts a
-  `forced_flags` set (from `use.force`/`use.mask`) before deciding, which
-  this pilot always treats as empty (`use.force`/`use.mask` aren't
-  modeled anywhere in `portage_profile::Config`, the same "not modeled
-  yet, so it's a no-op" precedent every other absent profile mechanism
-  here follows); and `--changed-use`/`-U`, a real, narrower alternative
-  to `--newuse`, stays recognized-but-unimplemented.
+  output. Real `_reinstall_for_flags` also subtracts a `forced_flags`
+  set (from `use.force`/`use.mask`) before deciding -- this pilot
+  initially always treated it as empty (`use.force`/`use.mask` weren't
+  modeled at all yet), a deliberate, confirmed-with-the-user
+  simplification at the time; see the `use.mask`/`use.force` paragraph
+  below for the follow-up that closed it. `--changed-use`/`-U`, a real,
+  narrower alternative to `--newuse`, stays recognized-but-unimplemented.
 
   **`--nodeps`/`-O`: disable the dependency walk entirely**. Grounded in
   `create_depgraph_params.py`, which pops `"recurse"` out of `myparams`
@@ -903,6 +902,35 @@ PORTING/
   portage at all (confirmed by reading `PackagesSystemSet.__init__`,
   which only ever consults the profile chain), unlike `package.mask`'s
   repo-level `profiles/package.mask`.
+
+  **`use.mask`/`use.force`: profile-level global USE forcing**. Closes
+  the `forced_flags`-is-always-empty simplification the `--newuse`
+  paragraph above named. Grounded against `UseManager.
+  getUseMask`/`getUseForce`'s own `pkg=None` case -- the one real
+  `config.py`'s `regenerate()` actually calls to build the *global* `USE`
+  value this pilot's flat model corresponds to -- which returns
+  `stack_lists(self._usemask_list/self._useforce_list, incremental=True)`
+  directly: every profile level's own file, stacked with the identical
+  machinery `package.mask`/`packages` (`@system`, above) already port, no
+  repo-level or per-package source at all for this global case. Applied
+  last, after every other real accumulation source: every `use.force`
+  flag is force-added, then every `use.mask` flag is force-removed,
+  exactly matching real `regenerate()`'s own `update`-then-
+  `difference_update` order -- a flag listed in both ends up masked, not
+  forced. `use_force`/`use_mask` are also exposed on `Config` directly,
+  which let this slice close a second, previously-documented gap for
+  free: `--newuse`'s own `forced_flags` (real `_reinstall_for_flags`'s
+  `set(chain(pkg.use.force, pkg.use.mask))`, subtracted from the
+  IUSE-presence half of its comparison only -- real portage's own `flags
+  -= forced_flags` line sits between the `^=` and the final `|=`) was
+  always the empty set before this slice; a dedicated fixture
+  (`dev-libs/usemaskreinstallpkg`, installed with an empty vdb IUSE, its
+  current ebuild now declaring a `use.mask`-masked flag) proves it now
+  correctly suppresses a reinstall that would otherwise spuriously
+  trigger just because a permanently-masked flag was newly added to
+  IUSE -- verified this wasn't already true by temporarily un-masking
+  the flag and confirming the spurious reinstall *does* fire without the
+  fix.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1086,6 +1114,16 @@ AlreadyInstalled is. `dev-libs/samepkg` (already used elsewhere, no
 `IUSE` at all) doubles as the negative case: `--newuse` must leave it
 AlreadyInstalled, proving it doesn't force a reinstall of every
 already-installed package, just ones with an actual USE mismatch.
+
+`PORTING/fixtures/repo/profiles/base/use.mask` (`masked_newly_added_flag`,
+a name no other fixture package's `IUSE` declares, so it has zero effect
+elsewhere) exercises `--newuse`'s `forced_flags` subtraction:
+`dev-libs/usemaskreinstallpkg` is installed with an empty vdb `IUSE`,
+but its current ebuild now declares `IUSE="masked_newly_added_flag"` --
+a flag that's masked off, so never enabled either before or after.
+Without `forced_flags` support this would spuriously report a Reinstall
+just because the flag now exists in `IUSE` at all; with it, it correctly
+stays `AlreadyInstalled`.
 
 Four more fixture packages exercise blocker reporting: `blockerpkg`
 (RDEPEND `"!!dev-libs/samepkg"`, a strong blocker matching
@@ -1475,6 +1513,13 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/reinstallpkg
 # all (declared or in the vdb), so there's nothing to detect a change in
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/samepkg
 # dev-libs/samepkg-1.0 is already installed; nothing to do
+
+# --newuse's forced_flags subtraction: usemaskreinstallpkg's newly
+# IUSE-declared flag is masked off by use.mask, so it never actually
+# changed enablement -- without forced_flags this would spuriously
+# report a Reinstall just because the flag now exists in IUSE at all
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/usemaskreinstallpkg
+# dev-libs/usemaskreinstallpkg-1.0 is already installed; nothing to do
 
 # --nodeps/-O is real and implemented: withdeps' own RDEPEND (which
 # would otherwise pull in newpkg and upgradepkg -- see the plain

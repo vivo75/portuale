@@ -502,18 +502,18 @@ fn read_vdb_flag_set(
 /// differs from what the vdb recorded at merge time. Returns the sorted
 /// list of flags that triggered it, or `None` if nothing did.
 ///
-/// KNOWN, DOCUMENTED SCOPE CUT: real `_reinstall_for_flags` also takes a
-/// `forced_flags` set (from `use.force`/`use.mask`, via `pkg.use.force`/
-/// `pkg.use.mask`) and subtracts it from the symmetric-difference result,
-/// so a flag forced on/off by the profile never triggers a reinstall on
-/// its own -- this pilot has no `use.force`/`use.mask` support at all
-/// (not modeled anywhere in `portage_profile::Config`), so `forced_flags`
-/// is always the empty set here, same "not modeled yet, so it's a no-op"
-/// precedent every other absent profile mechanism in this pilot follows.
-/// `--changed-use`'s own, narrower comparison (the `elif changed_use`
-/// branch of the real function) stays unimplemented -- a real, separate
-/// flag (`--changed-use`/`-U`) this pilot still reports as
-/// recognized-but-not-implemented.
+/// `forced_flags` (`config.use_force ∪ config.use_mask` -- real
+/// `_reinstall_for_flags` takes it as `set(chain(pkg.use.force,
+/// pkg.use.mask))`, unioning both rather than distinguishing which) is
+/// subtracted from the symmetric-difference part of the comparison only
+/// -- real portage's own `flags -= forced_flags` line sits between the
+/// `^=` and the final `|=`, so a flag forced on/off by the profile never
+/// *by itself* triggers a reinstall, but can still contribute via the
+/// second (orig-enabled vs. cur-enabled) term, exactly like real
+/// portage. `--changed-use`'s own, narrower comparison (the `elif
+/// changed_use` branch of the real function) stays unimplemented -- a
+/// real, separate flag (`--changed-use`/`-U`) this pilot still reports
+/// as recognized-but-not-implemented.
 fn reinstall_flags_for_newuse(
     root: &Path,
     category: &str,
@@ -541,8 +541,11 @@ fn reinstall_flags_for_newuse(
         package,
     );
 
-    // flags = (orig_iuse ^ cur_iuse) | (orig_iuse∩orig_use ^ cur_iuse∩cur_use)
+    // flags = ((orig_iuse ^ cur_iuse) - forced_flags) | (orig_iuse∩orig_use ^ cur_iuse∩cur_use)
     let mut flags: HashSet<String> = orig_iuse.symmetric_difference(&cur_iuse).cloned().collect();
+    for forced in config.use_force.union(&config.use_mask) {
+        flags.remove(forced);
+    }
     let orig_enabled: HashSet<String> = orig_iuse.intersection(&orig_use).cloned().collect();
     let cur_enabled: HashSet<String> = cur_iuse.intersection(&cur_use).cloned().collect();
     flags.extend(orig_enabled.symmetric_difference(&cur_enabled).cloned());
@@ -1324,6 +1327,25 @@ mod tests {
         // stay AlreadyInstalled even with --newuse enabled.
         assert_eq!(
             resolve_real_newuse("dev-libs", "samepkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn newuse_forced_flags_suppresses_a_spurious_reinstall() {
+        // dev-libs/usemaskreinstallpkg is installed with an empty vdb
+        // IUSE, but its own ebuild now declares
+        // IUSE="masked_newly_added_flag" -- a flag
+        // PORTING/fixtures/repo/profiles/base/use.mask masks off, so
+        // it's never enabled either before or after. Without
+        // reinstall_flags_for_newuse's own "flags -= forced_flags" step
+        // (real depgraph.py's own line, ported exactly), this would
+        // incorrectly report a Reinstall just because the flag now
+        // exists in IUSE at all.
+        assert_eq!(
+            resolve_real_newuse("dev-libs", "usemaskreinstallpkg"),
             PretendOutcome::AlreadyInstalled {
                 version: "1.0".to_string()
             }

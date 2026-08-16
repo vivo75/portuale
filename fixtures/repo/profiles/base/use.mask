@@ -1,0 +1,6 @@
+# fixture use.mask: masks a flag no other fixture package's IUSE
+# declares, so this has zero effect on any other test -- exercises
+# forced_flags in --newuse's reinstall detection (see
+# dev-libs/usemaskreinstallpkg and reinstall_flags_for_newuse's own doc
+# comment).
+masked_newly_added_flag
