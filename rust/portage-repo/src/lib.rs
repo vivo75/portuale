@@ -1205,15 +1205,24 @@ pub enum PretendOutcome {
     AlreadyInstalled {
         version: String,
     },
-    /// `--newuse`: already installed at this exact version, but this
-    /// package's currently-effective USE differs from what the vdb
-    /// recorded at merge time -- see `reinstall_flags_for_newuse`.
-    /// `changed_flags` is the sorted set of flag names that triggered it
-    /// (real depgraph's own `_reinstall_for_flags` return value, kept here
-    /// purely for display, matching `Upgrade`'s own `from`/`to` pattern).
+    /// `--newuse`/`--changed-use` and/or `--changed-deps`: already
+    /// installed at this exact version, but either this package's
+    /// currently-effective USE differs from what the vdb recorded at
+    /// merge time (see `reinstall_flags_for_use_change`), or its own
+    /// vdb-recorded dependency strings differ from the repo's current
+    /// ebuild (see `deps_changed`), or both -- real portage treats these
+    /// as independent, freely-combinable reinstall reasons, not
+    /// mutually exclusive ones. `changed_flags` is the sorted set of
+    /// flag names that triggered the USE-based reason (real depgraph's
+    /// own `_reinstall_for_flags` return value, kept here purely for
+    /// display, matching `Upgrade`'s own `from`/`to` pattern) -- empty
+    /// when only `deps_changed` triggered this outcome. At least one of
+    /// `changed_flags`/`deps_changed` is always non-empty/`true`; a
+    /// `Reinstall` with neither is never constructed.
     Reinstall {
         version: String,
         changed_flags: Vec<String>,
+        deps_changed: bool,
     },
 }
 
@@ -1244,6 +1253,141 @@ fn read_vdb_flag_set(
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect()
+}
+
+/// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
+/// as a raw string (e.g. `DEPEND`/`RDEPEND`), unlike `read_vdb_flag_set`
+/// which splits into a flag-name set -- a dependency string needs to
+/// stay intact for `portage_use_reduce::use_reduce_flat` to parse
+/// (`||`/USE-conditional groups, not just bare tokens). A missing file
+/// is an empty string, not an error -- same "absence is a real, valid
+/// state" precedent `read_vdb_flag_set` already established (a vdb
+/// entry with nothing recorded for this key, e.g. `DEPEND=""` at merge
+/// time, is indistinguishable from -- and handled the same as -- one
+/// that's simply missing the file).
+fn read_vdb_string(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    filename: &str,
+) -> String {
+    let path = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{package}-{version}"))
+        .join(filename);
+    fs::read_to_string(path).unwrap_or_default()
+}
+
+/// Flattens `depstr` (one or more concatenated dependency-string keys)
+/// against `use_flags`, into a `HashSet` of dependency-atom tokens
+/// (`||` markers dropped) suitable for order-independent equality
+/// comparison. `None` if `depstr` doesn't parse at all.
+fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Option<HashSet<String>> {
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    let flat = portage_use_reduce::use_reduce_flat(
+        &tokens,
+        use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    )
+    .ok()?;
+    Some(flat.into_iter().filter(|t| t != "||").collect())
+}
+
+/// `--changed-deps`: whether `version`'s own vdb-recorded dependency
+/// strings differ from the repo's own *current* ebuild for that exact
+/// version, once both are flattened against the *same* input -- the
+/// installed package's own recorded `USE` (real `depgraph.py`'s own
+/// `_changed_deps`: `uselist=pkg.use.enabled`, used for *both* sides of
+/// the comparison), so a difference driven purely by a USE change is
+/// never what this detects -- that's `--newuse`/`--changed-use`'s own
+/// job, and can fire independently of (or alongside) this one. Which
+/// keys are compared respects `with_bdeps` exactly like
+/// `enqueue_dependencies`'s own dep-key list does (real `depgraph.py`'s
+/// own `if self._dynamic_config.myparams.get("bdeps") in ("y", "auto"):
+/// depvars = Package._dep_keys ... else: depvars = Package._runtime_keys`).
+///
+/// KNOWN, DOCUMENTED SCOPE CUT: real `_changed_deps` compares real
+/// *structured* `use_reduce` output (`||`-group boundaries preserved,
+/// via `token_class=Atom`) key by key, so a dependency moved between
+/// two of the five keys with the same net atom set, or a pure
+/// `||`-group restructuring with the same underlying atoms, would count
+/// as "changed" there but not here. This pilot has no structured
+/// (non-flat) `use_reduce` at all -- `portage_use_reduce::use_reduce_flat`
+/// is a deliberate, already-established simplification used by *every*
+/// dependency-recursion path in this pilot (see this module's own doc
+/// comment on `resolve_pretend_graph`), so this reuses that same flat
+/// comparison rather than building bespoke structured-tree machinery
+/// just for this one feature -- consistent with, not a new exception to,
+/// the rest of this pilot's own dependency handling. Also unaddressed:
+/// real `strip_libc_deps` (a libc-specific special case needing its own
+/// "what package provides libc" lookup this pilot has nowhere else) --
+/// no fixture in this pilot's own tree represents a libc package, so
+/// this has no observable effect here.
+///
+/// A vdb-side dependency string that fails to parse counts as
+/// "changed" unconditionally, matching real portage's own `except
+/// InvalidDependString: changed = True`; a repo-side one that fails to
+/// parse instead reports "unchanged" (`false`), the same tolerant
+/// "can't tell, don't crash" fallback `enqueue_dependencies` already
+/// uses for its own unreadable-metadata cases, since real portage has
+/// no equivalent fallback to mirror there (the repo side is assumed
+/// always well-formed).
+fn deps_changed(
+    root: &Path,
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    version: &str,
+    with_bdeps: bool,
+) -> bool {
+    let dep_keys: &[&str] = if with_bdeps {
+        &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    };
+
+    let installed_use = read_vdb_flag_set(root, category, package, version, "USE");
+
+    let mut vdb_depstr = String::new();
+    for key in dep_keys {
+        let s = read_vdb_string(root, category, package, version, key);
+        if !s.is_empty() {
+            vdb_depstr.push_str(&s);
+            vdb_depstr.push(' ');
+        }
+    }
+
+    let Ok(repo_candidates) = list_candidates(repos, category, package) else {
+        return false;
+    };
+    let Some(resolved) = repo_candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)
+    else {
+        return false;
+    };
+    let pf = format!("{package}-{version}");
+    let Ok(metadata) = read_md5_cache(&resolved.repo_location, category, &pf) else {
+        return false;
+    };
+    let mut repo_depstr = String::new();
+    for key in dep_keys {
+        if let Some(d) = metadata.get(*key) {
+            repo_depstr.push_str(d);
+            repo_depstr.push(' ');
+        }
+    }
+
+    let Some(repo_atoms) = flat_dep_atoms(&repo_depstr, &installed_use) else {
+        return false;
+    };
+    match flat_dep_atoms(&vdb_depstr, &installed_use) {
+        Some(vdb_atoms) => vdb_atoms != repo_atoms,
+        None => true,
+    }
 }
 
 /// `candidate`'s own current IUSE (read fresh from its own md5-cache
@@ -1427,10 +1571,10 @@ fn reinstall_flags_for_use_change(
 /// dominant real-world use ("pin an installed package so `--update`/
 /// `--deep` never touch it") and the New/Upgrade selection case, not
 /// every real edge case.
-// 8 args trips clippy::too_many_arguments; a bundled options struct
+// 10 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
-// alongside three already threaded the same way -- not worth it, same
+// alongside five already threaded the same way -- not worth it, same
 // reasoning as resolve_pretend_graph's own identical allow below.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_pretend(
@@ -1442,6 +1586,8 @@ pub fn resolve_pretend(
     changed_use: bool,
     update: bool,
     excluded: &[String],
+    changed_deps: bool,
+    with_bdeps: bool,
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
@@ -1548,20 +1694,34 @@ pub fn resolve_pretend(
                 vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
             })
         {
-            if newuse || changed_use {
-                if let Some(changed_flags) = reinstall_flags_for_use_change(
+            let changed_flags = if newuse || changed_use {
+                reinstall_flags_for_use_change(
                     root,
                     &atom.category,
                     &atom.package,
                     installed_best,
                     config,
                     newuse,
-                ) {
-                    return Ok(PretendOutcome::Reinstall {
-                        version: installed_best.version.clone(),
-                        changed_flags,
-                    });
-                }
+                )
+                .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let deps_changed_flag = changed_deps
+                && deps_changed(
+                    root,
+                    repos,
+                    &atom.category,
+                    &atom.package,
+                    &installed_best.version,
+                    with_bdeps,
+                );
+            if !changed_flags.is_empty() || deps_changed_flag {
+                return Ok(PretendOutcome::Reinstall {
+                    version: installed_best.version.clone(),
+                    changed_flags,
+                    deps_changed: deps_changed_flag,
+                });
             }
             return Ok(PretendOutcome::AlreadyInstalled {
                 version: installed_best.version.clone(),
@@ -1599,20 +1759,34 @@ pub fn resolve_pretend(
     };
 
     if installed.iter().any(|v| v == &best.version) {
-        if newuse || changed_use {
-            if let Some(changed_flags) = reinstall_flags_for_use_change(
+        let changed_flags = if newuse || changed_use {
+            reinstall_flags_for_use_change(
                 root,
                 &atom.category,
                 &atom.package,
                 best,
                 config,
                 newuse,
-            ) {
-                return Ok(PretendOutcome::Reinstall {
-                    version: best.version.clone(),
-                    changed_flags,
-                });
-            }
+            )
+            .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let deps_changed_flag = changed_deps
+            && deps_changed(
+                root,
+                repos,
+                &atom.category,
+                &atom.package,
+                &best.version,
+                with_bdeps,
+            );
+        if !changed_flags.is_empty() || deps_changed_flag {
+            return Ok(PretendOutcome::Reinstall {
+                version: best.version.clone(),
+                changed_flags,
+                deps_changed: deps_changed_flag,
+            });
         }
         return Ok(PretendOutcome::AlreadyInstalled {
             version: best.version.clone(),
@@ -2060,6 +2234,7 @@ pub fn resolve_pretend_graph(
     deep: Deep,
     excluded: &[String],
     with_bdeps: bool,
+    changed_deps: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -2143,6 +2318,8 @@ pub fn resolve_pretend_graph(
             changed_use,
             update,
             excluded,
+            changed_deps,
+            with_bdeps,
         )?;
 
         // A top-level atom (as opposed to a dependency reached while
@@ -2595,6 +2772,8 @@ mod tests {
             false,
             false,
             &[],
+            false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -2616,6 +2795,8 @@ mod tests {
             false,
             true,
             &[],
+            false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -2640,6 +2821,8 @@ mod tests {
             false,
             true,
             excluded,
+            false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -2711,6 +2894,8 @@ mod tests {
                 false,
                 false,
                 &["dev-libs/newpkg".to_string()],
+                false,
+                true,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -2792,8 +2977,19 @@ mod tests {
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &config, false, false, false, &[])
-            .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &config,
+            false,
+            false,
+            false,
+            &[],
+            false,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
     /// Like `resolve_real`, but with `--newuse` enabled -- for the
@@ -2804,8 +3000,19 @@ mod tests {
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &config, true, false, false, &[])
-            .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &config,
+            true,
+            false,
+            false,
+            &[],
+            false,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
     /// Like `resolve_real`, but with `--changed-use` enabled.
@@ -2815,8 +3022,19 @@ mod tests {
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &config, false, true, false, &[])
-            .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &config,
+            false,
+            true,
+            false,
+            &[],
+            false,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
     #[test]
@@ -2830,6 +3048,7 @@ mod tests {
             PretendOutcome::Reinstall {
                 version: "1.0".to_string(),
                 changed_flags: vec!["foo".to_string()],
+                deps_changed: false,
             }
         );
     }
@@ -2879,6 +3098,85 @@ mod tests {
         );
     }
 
+    fn resolve_real_changed_deps(
+        category: &str,
+        package: &str,
+        with_bdeps: bool,
+    ) -> PretendOutcome {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &config,
+            false,
+            false,
+            false,
+            &[],
+            true,
+            with_bdeps,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn changed_deps_reinstalls_when_vdb_rdepend_differs_from_the_current_ebuild() {
+        // dev-libs/changeddepspkg is installed with a vdb-recorded
+        // RDEPEND="dev-libs/samepkg", but its current ebuild's own
+        // RDEPEND is "dev-libs/newpkg" instead.
+        assert_eq!(
+            resolve_real_changed_deps("dev-libs", "changeddepspkg", true),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: true,
+            }
+        );
+    }
+
+    #[test]
+    fn without_changed_deps_the_same_package_stays_already_installed() {
+        assert_eq!(
+            resolve_real("dev-libs", "changeddepspkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn changed_deps_still_fires_when_with_bdeps_is_false() {
+        // The changed dependency here is RDEPEND, which --with-bdeps=n
+        // never excludes (only DEPEND/BDEPEND are ever dropped) -- so
+        // this must still detect the change.
+        assert_eq!(
+            resolve_real_changed_deps("dev-libs", "changeddepspkg", false),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: true,
+            }
+        );
+    }
+
+    #[test]
+    fn changed_deps_does_not_fire_for_a_package_with_no_recorded_difference() {
+        // dev-libs/samepkg's own vdb has no RDEPEND file at all, and its
+        // current ebuild declares none either -- both sides flatten to
+        // an empty set, so no reinstall is reported even with
+        // --changed-deps enabled.
+        assert_eq!(
+            resolve_real_changed_deps("dev-libs", "samepkg", true),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
     #[test]
     fn newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag() {
         // dev-libs/changedusepkg is installed with an empty vdb IUSE,
@@ -2894,6 +3192,7 @@ mod tests {
             PretendOutcome::Reinstall {
                 version: "1.0".to_string(),
                 changed_flags: vec!["brandnewflag".to_string()],
+                deps_changed: false,
             }
         );
         assert_eq!(
@@ -2914,6 +3213,7 @@ mod tests {
             PretendOutcome::Reinstall {
                 version: "1.0".to_string(),
                 changed_flags: vec!["foo".to_string()],
+                deps_changed: false,
             }
         );
     }
@@ -2930,6 +3230,7 @@ mod tests {
                     PretendOutcome::Reinstall {
                         version: "1.0".to_string(),
                         changed_flags: vec!["foo".to_string()],
+                        deps_changed: false,
                     }
                 ),
                 (
@@ -2978,6 +3279,8 @@ mod tests {
                 false,
                 false,
                 &[],
+                false,
+                true,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -2994,6 +3297,8 @@ mod tests {
                 false,
                 false,
                 &[],
+                false,
+                true,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -3316,6 +3621,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3339,6 +3645,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3364,6 +3671,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3393,6 +3701,7 @@ mod tests {
             Deep::NotRequested,
             &["dev-libs/upgradepkg".to_string()],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -3439,6 +3748,7 @@ mod tests {
             deep,
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3533,6 +3843,7 @@ mod tests {
             Deep::Unlimited,
             &[],
             with_bdeps,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3629,6 +3940,7 @@ mod tests {
             Deep::Unlimited,
             &[],
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -3756,6 +4068,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -3826,6 +4139,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3953,6 +4267,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -4031,6 +4346,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4057,6 +4373,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -4080,6 +4397,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4105,6 +4423,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4130,6 +4449,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4152,6 +4472,7 @@ mod tests {
                     PretendOutcome::Reinstall {
                         version: "1.0".to_string(),
                         changed_flags: vec!["foo".to_string()],
+                        deps_changed: false,
                     }
                 ),
                 (
@@ -4354,6 +4675,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

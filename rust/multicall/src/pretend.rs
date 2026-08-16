@@ -248,6 +248,29 @@ fn use_suffix(entry: &GraphEntry, verbose: bool) -> String {
     format!("  USE=\"{}\"", flags.join(" "))
 }
 
+/// The `(reinstall for ...)` note's own reason text, real portage
+/// treating `--newuse`/`--changed-use` and `--changed-deps` as
+/// independent, freely-combinable triggers (see `PretendOutcome::
+/// Reinstall`'s own doc comment, portage-repo) -- `changed_flags` is
+/// only ever empty when `deps_changed` alone triggered this outcome
+/// (`resolve_pretend`'s own construction guarantees at least one is
+/// non-trivial). Pilot-invented wording either way, same as the
+/// pre-existing "changed USE: ..." text -- real portage's own default
+/// `--pretend` output shows no such itemized reason at all.
+fn reinstall_reason(changed_flags: &[String], deps_changed: bool) -> String {
+    match (changed_flags.is_empty(), deps_changed) {
+        (false, false) => format!("changed USE: {}", changed_flags.join(", ")),
+        (true, true) => "changed dependencies".to_string(),
+        (false, true) => format!(
+            "changed USE: {}; changed dependencies",
+            changed_flags.join(", ")
+        ),
+        (true, false) => {
+            unreachable!("Reinstall is only ever constructed with a non-empty changed_flags or deps_changed=true")
+        }
+    }
+}
+
 fn print_blockers(entry: &GraphEntry, owner_version: &str) {
     for b in &entry.blockers {
         let strength = if b.strong { "hard" } else { "soft" };
@@ -335,10 +358,12 @@ fn entry_to_json(
         PretendOutcome::Reinstall {
             version,
             changed_flags,
+            deps_changed,
         } => {
             fields.push(format!("\"version\":{}", json_string(version)));
             let changed_use: Vec<String> = changed_flags.iter().map(|f| json_string(f)).collect();
             fields.push(format!("\"changed_use\":[{}]", changed_use.join(",")));
+            fields.push(format!("\"changed_deps\":{deps_changed}"));
         }
         PretendOutcome::NoVisibleCandidate => {}
     }
@@ -447,8 +472,8 @@ fn report_option(token: &str) -> ExitCode {
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
              --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
-             --with-bdeps, and --help/-h are implemented so far; see \
-             PROMPT.md)",
+             --with-bdeps, --changed-deps, and --help/-h are implemented \
+             so far; see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -500,6 +525,9 @@ fn print_help() {
     );
     println!(
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies"
+    );
+    println!(
+        "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's"
     );
     println!("   -h, --help      show this message and exit");
     println!(
@@ -679,6 +707,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut json = false;
     let mut deselect = false;
     let mut with_bdeps = true;
+    let mut changed_deps = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -868,6 +897,32 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 }
             }
+        } else if arg == "--changed-deps" {
+            // Real "--changed-deps": y_or_n (default_arg_opts), the same
+            // optional-value shape "--verbose"/"-v" and "--deselect"/"-W"
+            // already have -- no short alias, though (real main.py
+            // declares none). Unlike --deselect, this stays an ordinary
+            // --pretend modifier, not a standalone action.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    changed_deps = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    changed_deps = false;
+                    i += 2;
+                }
+                _ => {
+                    changed_deps = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--changed-deps=y" {
+            changed_deps = true;
+            i += 1;
+        } else if arg == "--changed-deps=n" {
+            changed_deps = false;
+            i += 1;
         } else if !arg.starts_with('-') {
             atom_args.push(arg);
             i += 1;
@@ -1016,6 +1071,7 @@ pub fn run(args: &[String]) -> ExitCode {
         deep,
         &excluded,
         with_bdeps,
+        changed_deps,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -1079,13 +1135,14 @@ pub fn run(args: &[String]) -> ExitCode {
             PretendOutcome::Reinstall {
                 version,
                 changed_flags,
+                deps_changed,
             } => {
                 if !onlydeps_suppressed {
+                    let reason = reinstall_reason(changed_flags, *deps_changed);
                     println!(
-                        "[ebuild  r] {}/{}-{version} (reinstall for changed USE: {}){}",
+                        "[ebuild  r] {}/{}-{version} (reinstall for {reason}){}",
                         entry.category,
                         entry.package,
-                        changed_flags.join(", "),
                         use_suffix(entry, verbose)
                     );
                 }

@@ -932,6 +932,99 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
     return sorted(flags) if flags else None
 
 
+def _read_vdb_string(root, category, package, version, filename):
+    """Reads <root>/var/db/pkg/<category>/<package>-<version>/<filename>
+    as a raw string (e.g. DEPEND/RDEPEND), unlike _read_vdb_flag_set
+    which splits into a flag-name set -- a dependency string needs to
+    stay intact for use_reduce to parse (||/USE-conditional groups, not
+    just bare tokens). A missing file is an empty string, not an error.
+    Mirrors portage-repo/src/lib.rs's read_vdb_string exactly."""
+    path = os.path.join(root, "var", "db", "pkg", category, f"{package}-{version}", filename)
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _flat_dep_atoms(depstr, use_flags):
+    """Flattens `depstr` (one or more concatenated dependency-string
+    keys) against `use_flags`, into a set of dependency-atom tokens
+    ("||" markers dropped) suitable for order-independent equality
+    comparison. None if `depstr` doesn't parse at all. Mirrors
+    portage-repo/src/lib.rs's flat_dep_atoms exactly."""
+    try:
+        flat = use_reduce(depstr, flat=True, uselist=use_flags)
+    except InvalidDependString:
+        return None
+    return {tok for tok in flat if tok != "||"}
+
+
+def _deps_changed(root, repos, category, package, version, with_bdeps):
+    """--changed-deps: whether `version`'s own vdb-recorded dependency
+    strings differ from the repo's own *current* ebuild for that exact
+    version, once both are flattened against the *same* input -- the
+    installed package's own recorded USE (real depgraph.py's own
+    _changed_deps: uselist=pkg.use.enabled, used for *both* sides of the
+    comparison, so a difference driven purely by a USE change is never
+    what this detects -- that's --newuse/--changed-use's own job, and
+    can fire independently of (or alongside) this one). Which keys are
+    compared respects with_bdeps exactly like _enqueue_dependencies's
+    own dep-key list does.
+
+    KNOWN, DOCUMENTED SCOPE CUT: real _changed_deps compares real
+    *structured* use_reduce output (||-group boundaries preserved) key
+    by key, so a dependency moved between two of the five keys with the
+    same net atom set, or a pure ||-group restructuring with the same
+    underlying atoms, would count as "changed" there but not here. This
+    pilot's own dependency-recursion machinery is flat-only everywhere
+    else too (use_reduce(..., flat=True)), so this reuses that same flat
+    comparison rather than building bespoke structured-tree machinery
+    just for this one feature. Also unaddressed: real strip_libc_deps (a
+    libc-specific special case this pilot has no fixture or machinery
+    for anywhere else) -- no observable effect in this pilot's own
+    fixture tree.
+
+    A vdb-side dependency string that fails to parse counts as "changed"
+    unconditionally, matching real portage's own "except
+    InvalidDependString: changed = True"; a repo-side one that fails to
+    parse instead reports "unchanged" (False), the same tolerant
+    "can't tell, don't crash" fallback _enqueue_dependencies already
+    uses for its own unreadable-metadata cases. Mirrors
+    portage-repo/src/lib.rs's deps_changed exactly."""
+    dep_keys = (
+        ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
+        if with_bdeps
+        else ("RDEPEND", "PDEPEND", "IDEPEND")
+    )
+
+    installed_use = _read_vdb_flag_set(root, category, package, version, "USE")
+
+    vdb_depstr = " ".join(
+        s
+        for s in (_read_vdb_string(root, category, package, version, k) for k in dep_keys)
+        if s
+    )
+
+    repo_candidates = [c for c in list_candidates(repos, category, package) if c["version"] == version]
+    if not repo_candidates:
+        return False
+    resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
+    try:
+        metadata = read_md5_cache(resolved["repo_location"], category, f"{package}-{version}")
+    except OSError:
+        return False
+    repo_depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
+
+    repo_atoms = _flat_dep_atoms(repo_depstr, installed_use)
+    if repo_atoms is None:
+        return False
+    vdb_atoms = _flat_dep_atoms(vdb_depstr, installed_use)
+    if vdb_atoms is None:
+        return True
+    return vdb_atoms != repo_atoms
+
+
 def _use_deps_satisfied(atom, iuse, enabled):
     """Ports real match_from_list's own USE-dep post-pass (its
     "if mydep.unevaluated_atom.use:" block, lib/portage/dep/__init__.py
@@ -1565,6 +1658,8 @@ def resolve_pretend(
     changed_use=False,
     update=False,
     excluded=(),
+    changed_deps=False,
+    with_bdeps=True,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -1617,6 +1712,13 @@ def resolve_pretend(
     implement at all -- these two checks cover the dominant real-world
     use ("pin an installed package so --update/--deep never touch it")
     and the new/upgrade selection case, not every real edge case.
+
+    `changed_deps` (--changed-deps) is an independent, freely-combinable
+    reinstall trigger alongside newuse/changed_use -- see _deps_changed's
+    own docstring for the real depgraph.py::_changed_deps behavior it
+    ports. `with_bdeps` (--with-bdeps) only affects which dependency keys
+    _deps_changed itself compares; see resolve_pretend_graph's own
+    docstring for the full with_bdeps grounding.
     Mirrors portage-repo/src/lib.rs's resolve_pretend exactly."""
     atom = _parse_atom(atom_str)
     if atom is None:
@@ -1675,12 +1777,23 @@ def resolve_pretend(
         installed_matched = [c for c in matched if c["version"] in installed]
         if installed_matched:
             installed_best = _best_candidate(installed_matched)
-            if newuse or changed_use:
-                changed_flags = _reinstall_flags_for_use_change(
+            changed_flags = (
+                _reinstall_flags_for_use_change(
                     root, category, package, installed_best, config, newuse
                 )
-                if changed_flags:
-                    return ("reinstall", installed_best["version"], changed_flags)
+                if newuse or changed_use
+                else None
+            ) or []
+            deps_changed_flag = changed_deps and _deps_changed(
+                root, repos, category, package, installed_best["version"], with_bdeps
+            )
+            if changed_flags or deps_changed_flag:
+                return (
+                    "reinstall",
+                    installed_best["version"],
+                    changed_flags,
+                    deps_changed_flag,
+                )
             return ("already_installed", installed_best["version"])
 
     # --exclude/-X: an excluded candidate is never eligible to become
@@ -1709,12 +1822,16 @@ def resolve_pretend(
     best = _best_candidate(matched)
 
     if best["version"] in installed:
-        if newuse or changed_use:
-            changed_flags = _reinstall_flags_for_use_change(
-                root, category, package, best, config, newuse
-            )
-            if changed_flags:
-                return ("reinstall", best["version"], changed_flags)
+        changed_flags = (
+            _reinstall_flags_for_use_change(root, category, package, best, config, newuse)
+            if newuse or changed_use
+            else None
+        ) or []
+        deps_changed_flag = changed_deps and _deps_changed(
+            root, repos, category, package, best["version"], with_bdeps
+        )
+        if changed_flags or deps_changed_flag:
+            return ("reinstall", best["version"], changed_flags, deps_changed_flag)
         return ("already_installed", best["version"])
     if installed:
         return ("upgrade", _max_version(installed), best["version"])
@@ -1792,6 +1909,7 @@ def resolve_pretend_graph(
     deep=0,
     excluded=(),
     with_bdeps=True,
+    changed_deps=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -1941,7 +2059,16 @@ def resolve_pretend_graph(
         visited_atoms.add(current_atom_str)
 
         outcome = resolve_pretend(
-            repos, root, current_atom_str, config, newuse, changed_use, update, excluded
+            repos,
+            root,
+            current_atom_str,
+            config,
+            newuse,
+            changed_use,
+            update,
+            excluded,
+            changed_deps,
+            with_bdeps,
         )
 
         # A top-level atom (as opposed to a dependency reached while
@@ -2304,9 +2431,10 @@ def _parse_atom(atom_str):
 # "recognized, but not implemented" message -- distinct from a
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
 # --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o,
-# --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, and
-# --help/-h are actually implemented (see run() below); every table here
-# exists purely for recognition, not behavior. Mirrors
+# --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps,
+# --changed-deps, and --help/-h are actually implemented (see run()
+# below); every table here exists purely for recognition, not behavior.
+# Mirrors
 # PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
 # three tables exactly, so both sides report identical text for
 # identical input (verified by the shared contract suite).
@@ -2367,7 +2495,6 @@ _VALUE_OPTIONS = [
     ("--binpkg-changed-deps", None),
     ("--buildpkg", "-b"),
     ("--buildpkg-exclude", None),
-    ("--changed-deps", None),
     ("--changed-deps-report", None),
     ("--changed-slot", None),
     ("--config-root", None),
@@ -2571,6 +2698,7 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
         fields.append(f'"version":{_json_string(outcome[1])}')
         changed_use = ",".join(_json_string(f) for f in outcome[2])
         fields.append(f'"changed_use":[{changed_use}]')
+        fields.append(f'"changed_deps":{_json_bool(outcome[3])}')
     fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
     if tag != "no_visible_candidate":
         fields.append('"source":"ebuild"')
@@ -2631,8 +2759,8 @@ def _report_option(token):
             "but is not implemented in this pilot (only --pretend/-p, "
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
-            "--deselect/-W, --with-bdeps, and --help/-h are implemented "
-            "so far; see PROMPT.md)",
+            "--deselect/-W, --with-bdeps, --changed-deps, and --help/-h "
+            "are implemented so far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -2685,6 +2813,9 @@ def _print_help():
     )
     print(
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies"
+    )
+    print(
+        "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's"
     )
     print("   -h, --help      show this message and exit")
     print(
@@ -2793,6 +2924,28 @@ def _run_deselect(targets, root):
     return 0
 
 
+def _reinstall_reason(changed_flags, deps_changed):
+    """The "(reinstall for ...)" note's own reason text, real portage
+    treating --newuse/--changed-use and --changed-deps as independent,
+    freely-combinable triggers. `changed_flags` is only ever empty when
+    `deps_changed` alone triggered this outcome (resolve_pretend's own
+    construction guarantees at least one is non-trivial). Pilot-invented
+    wording either way, same as the pre-existing "changed USE: ..." text
+    -- real portage's own default --pretend output shows no such
+    itemized reason at all. Mirrors pretend.rs's own reinstall_reason
+    exactly."""
+    if changed_flags and not deps_changed:
+        return f"changed USE: {', '.join(changed_flags)}"
+    if not changed_flags and deps_changed:
+        return "changed dependencies"
+    if changed_flags and deps_changed:
+        return f"changed USE: {', '.join(changed_flags)}; changed dependencies"
+    raise AssertionError(
+        "resolve_pretend only ever constructs a reinstall outcome with a "
+        "non-empty changed_flags or deps_changed=True"
+    )
+
+
 def run(args):
     if _wants_help(args):
         _print_help()
@@ -2811,6 +2964,7 @@ def run(args):
     json_output = False
     deselect = False
     with_bdeps = True
+    changed_deps = False
 
     i = 0
     while i < len(args):
@@ -2975,6 +3129,28 @@ def run(args):
                     file=sys.stderr,
                 )
                 return 2
+        elif arg == "--changed-deps":
+            # Real "--changed-deps": y_or_n (default_arg_opts), the same
+            # optional-value shape "--verbose"/"-v" and "--deselect"/"-W"
+            # already have -- no short alias, though (real main.py
+            # declares none). Unlike --deselect, this stays an ordinary
+            # --pretend modifier, not a standalone action.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                changed_deps = True
+                i += 2
+            elif nxt == "n":
+                changed_deps = False
+                i += 2
+            else:
+                changed_deps = True
+                i += 1
+        elif arg == "--changed-deps=y":
+            changed_deps = True
+            i += 1
+        elif arg == "--changed-deps=n":
+            changed_deps = False
+            i += 1
         elif not arg.startswith("-"):
             atom_args.append(arg)
             i += 1
@@ -3111,6 +3287,7 @@ def run(args):
             deep,
             excluded,
             with_bdeps,
+            changed_deps,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -3168,11 +3345,12 @@ def run(args):
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "reinstall":
             changed_flags = outcome[2]
+            deps_changed_flag = outcome[3]
             if not onlydeps_suppressed:
+                reason = _reinstall_reason(changed_flags, deps_changed_flag)
                 print(
                     f"[ebuild  r] {category}/{package}-{outcome[1]} "
-                    f"(reinstall for changed USE: {', '.join(changed_flags)})"
-                    f"{use_suffix(use_display)}"
+                    f"(reinstall for {reason}){use_suffix(use_display)}"
                 )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "already_installed":

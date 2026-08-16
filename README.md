@@ -723,6 +723,50 @@ PORTING/
   `--with-bdeps=n` walks only `newpkg` (`RDEPEND`), leaving the other two
   entirely unmentioned.
 
+  **`--changed-deps[=y|n]`: reinstall a package whose own recorded
+  dependencies changed.** Grounded against real `depgraph.py`'s own
+  `_changed_deps`: reinstalls an already-installed package once its own
+  vdb-recorded `DEPEND`/`RDEPEND`/etc strings differ from the repo's
+  *current* ebuild for that exact version -- catching the case where an
+  ebuild's own dependencies were edited upstream since this package was
+  last merged, something `--newuse`/`--changed-use` (USE-driven reasons
+  only) can never detect. Needed a genuinely new capability this pilot
+  didn't have before: reading an installed package's own recorded
+  `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND` from the vdb (`read_
+  vdb_string`, alongside the pre-existing `read_vdb_flag_set` for `USE`/
+  `IUSE`) -- every prior slice only ever needed vdb presence/`USE`/
+  `SLOT`, never a package's own recorded dependency strings. Both sides
+  of the comparison are flattened (`use_reduce_flat`) against the
+  *installed* package's own recorded `USE` (real `_changed_deps`'s own
+  `uselist=pkg.use.enabled`, used for both sides), so a difference
+  driven purely by a USE change is never what this detects -- confirmed
+  independent of, and freely combinable with, `--newuse`/`--changed-use`
+  (real portage treats them as separate triggers feeding one reinstall
+  decision, not mutually exclusive ones; `PretendOutcome::Reinstall`
+  gained a `deps_changed: bool` field alongside the pre-existing
+  `changed_flags`, and the `(reinstall for ...)` note's own text
+  combines both reasons when both fired). Which dependency keys get
+  compared respects `--with-bdeps` exactly the same way `--deep`'s own
+  `AlreadyInstalled` walk already does. **Deliberate, documented scope
+  cut, not an oversight**: real `_changed_deps` compares genuine
+  *structured* `use_reduce` output (`||`-group boundaries preserved) key
+  by key; this pilot has no structured, non-flat `use_reduce` anywhere
+  (the same limitation the `LICENSE` slice's own bespoke `LicenseNode`
+  parser exists specifically to work around, for that one different
+  mechanism) -- so this reuses the same flat comparison every other
+  dependency-recursion path in this pilot already uses, consistent with,
+  not a new exception to, the rest of this pilot's own dependency
+  handling. A narrower, real-but-out-of-scope sibling,
+  `--changed-deps-report` (a cosmetic-only "you might want
+  `--changed-deps`" notice, no reinstall of its own), stays
+  recognized-but-unimplemented. New fixture package `changeddepspkg`
+  (installed, vdb-recorded `RDEPEND="dev-libs/samepkg"`, but its current
+  ebuild's own `RDEPEND="dev-libs/newpkg"`) proves the whole path end to
+  end, including that the reinstalled package's own recursion walks the
+  *current* ebuild's dependency (`newpkg`), not the vdb's stale one --
+  the same "current tree wins" precedent `enqueue_dependencies` already
+  established for `--deep`'s own `AlreadyInstalled` walk.
+
   **Multiple top-level atoms**: `emerge --pretend foo bar` -- real
   emerge's most common invocation shape -- was, until this slice,
   explicitly rejected ("only a single package atom is supported"). Now
@@ -2647,8 +2691,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): option "--debug" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
 # --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented
-# so far; see PROMPT.md)  (exit 2)
+# --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h
+# are implemented so far; see PROMPT.md)  (exit 2)
 
 # --help/-h is real and implemented: a short, honest, pilot-specific
 # summary, not a port of real emerge's own (157-line, colorized,
@@ -2667,8 +2711,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): option "--jobs" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
 # --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented
-# so far; see PROMPT.md)  (exit 2)
+# --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h
+# are implemented so far; see PROMPT.md)  (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message
@@ -2706,6 +2750,13 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep dev-libs/withbd
 # --with-bdeps=n: DEPEND/BDEPEND are skipped, but RDEPEND is unaffected
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep --with-bdeps n dev-libs/withbdepspkg
 # dev-libs/withbdepspkg-1.0 is already installed; nothing to do
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# --changed-deps: changeddepspkg's own vdb-recorded RDEPEND (samepkg)
+# differs from its current ebuild's own RDEPEND (newpkg) -- reinstalls
+# and recurses into the CURRENT ebuild's own dependency, not the vdb's
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-libs/changeddepspkg
+# [ebuild  r] dev-libs/changeddepspkg-1.0 (reinstall for changed dependencies)
 # [ebuild  N] dev-libs/newpkg-1.0
 ```
 

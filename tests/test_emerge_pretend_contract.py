@@ -362,6 +362,36 @@ CASES = [
         ["--pretend", "--with-bdeps-auto", "n", "dev-libs/newpkg"],
         2,
     ),
+    (
+        "without --changed-deps, a dependency change is never detected",
+        ["--pretend", "dev-libs/changeddepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps: reinstalls a package whose vdb-recorded deps differ from the current ebuild",
+        ["--pretend", "--changed-deps", "dev-libs/changeddepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps=y inline form",
+        ["--pretend", "--changed-deps=y", "dev-libs/changeddepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps n explicitly disables it",
+        ["--pretend", "--changed-deps", "n", "dev-libs/changeddepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps: --json includes the changed_deps field",
+        ["--pretend", "--changed-deps", "--json", "dev-libs/changeddepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps-report is real but stays recognized-not-implemented",
+        ["--pretend", "--changed-deps-report", "n", "dev-libs/newpkg"],
+        2,
+    ),
 ]
 
 
@@ -1525,7 +1555,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -1581,6 +1611,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)\n"
         "   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)\n"
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies\n"
+        "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's\n"
         "   -h, --help      show this message and exit\n"
         "       --json      dump the whole resolved graph as one line of JSON instead "
         "of the lines above (pilot-specific, not a real emerge option)\n"
@@ -2088,6 +2119,55 @@ def test_changed_use_still_catches_an_enablement_change_on_a_shared_flag(
         "[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)",
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
+
+
+def test_changed_deps_reinstalls_and_recurses_into_the_current_ebuilds_own_dependency(
+    emerge_binary, fixture_env
+):
+    """dev-libs/changeddepspkg is installed with a vdb-recorded
+    RDEPEND="dev-libs/samepkg", but the repo's current ebuild for that
+    exact version now has RDEPEND="dev-libs/newpkg" instead -- real
+    depgraph.py's own _changed_deps compares these (flattened against
+    the installed package's own recorded USE, real portage's own
+    uselist=pkg.use.enabled) and, once --changed-deps is given, this
+    pilot reports a reinstall and recurses into the CURRENT ebuild's own
+    dependency (newpkg), not the vdb's stale one -- matching how
+    --deep's own AlreadyInstalled walk already reuses the repo's current
+    metadata rather than a vdb snapshot."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--changed-deps", "dev-libs/changeddepspkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '[ebuild  r] dev-libs/changeddepspkg-1.0 (reinstall for changed dependencies)',
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_changed_deps_json_includes_the_changed_deps_field(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--changed-deps", "--json", "dev-libs/changeddepspkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    changeddepspkg_entry = next(
+        e for e in parsed["entries"] if e["package"] == "changeddepspkg"
+    )
+    assert changeddepspkg_entry["outcome"] == "reinstall"
+    assert changeddepspkg_entry["changed_deps"] is True
+    assert changeddepspkg_entry["changed_use"] == []
+
+
+def test_without_changed_deps_a_dependency_change_is_never_detected(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/changeddepspkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "dev-libs/changeddepspkg-1.0 is already installed; nothing to do"
 
 
 def test_nodeps_disables_recursion_entirely(emerge_binary, fixture_env):
@@ -2669,7 +2749,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -2683,7 +2763,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -2697,7 +2777,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 

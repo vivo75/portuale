@@ -12,9 +12,9 @@
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
 // (verified by the shared contract suite). `--deep`/`-D`,
-// `--exclude`/`-X`, `--deselect`/`-W`, and `--with-bdeps` are ALSO
-// implemented now (see below) -- all excluded from `VALUE_OPTIONS` too,
-// not just `BOOLEAN_OPTIONS`.
+// `--exclude`/`-X`, `--deselect`/`-W`, `--with-bdeps`, and
+// `--changed-deps` are ALSO implemented now (see below) -- all excluded
+// from `VALUE_OPTIONS` too, not just `BOOLEAN_OPTIONS`.
 //
 // KNOWN, DOCUMENTED SCOPE CUTS:
 //   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own
@@ -116,6 +116,24 @@
 //     `bdeps` value, relevant only once `--usepkg`/binary-package support
 //     exists) is a deliberate, documented out-of-scope cut -- stays
 //     recognized-but-unimplemented via this same table.
+//   - `--changed-deps` IS implemented now too, deliberately excluded from
+//     `VALUE_OPTIONS` for the same reason -- real `default_arg_opts` with
+//     a `y_or_n` *optional* value, the identical shape `--verbose`/`-v`
+//     and `--deselect`/`-W` already have (no short alias for this one,
+//     though -- real `main.py` declares none). See `PretendOutcome::
+//     Reinstall`'s own doc comment (portage-repo) and `deps_changed`'s
+//     own doc comment for the real `depgraph.py::_changed_deps` behavior
+//     it ports (reinstalls an already-installed package whose own
+//     vdb-recorded dependency strings differ from the repo's current
+//     ebuild) and its own documented flat-comparison scope cut (this
+//     pilot has no structured, non-flat `use_reduce` anywhere, so a
+//     dependency moved between two dep-string keys with the same net
+//     atom set, or a pure `||`-restructuring, isn't detected as
+//     "changed" here the way real portage's own structured comparison
+//     would). `--changed-deps-report` (a separate, cosmetic-only "you
+//     might want --changed-deps" notice, real `changed_deps_report`
+//     param) is a deliberate, documented out-of-scope cut -- stays
+//     recognized-but-unimplemented via this same table.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -188,7 +206,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--binpkg-changed-deps", None),
     ("--buildpkg", Some("-b")),
     ("--buildpkg-exclude", None),
-    ("--changed-deps", None),
     ("--changed-deps-report", None),
     ("--changed-slot", None),
     ("--config-root", None),
@@ -439,6 +456,16 @@ mod tests {
         // unimplemented, so it must still be found.
         assert!(lookup("--with-bdeps").is_none());
         assert!(lookup("--with-bdeps-auto").is_some());
+    }
+
+    #[test]
+    fn does_not_recognize_changed_deps_itself_but_still_recognizes_changed_deps_report() {
+        // --changed-deps is handled directly by the caller (it's
+        // implemented), not through this "not implemented" table --
+        // --changed-deps-report is a real, separate option that stays
+        // unimplemented, so it must still be found.
+        assert!(lookup("--changed-deps").is_none());
+        assert!(lookup("--changed-deps-report").is_some());
     }
 
     #[test]

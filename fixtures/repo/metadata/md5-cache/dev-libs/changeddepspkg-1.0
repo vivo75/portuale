@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: --changed-deps -> vdb-recorded RDEPEND differs from this current ebuild's own
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/newpkg
+SLOT=0
+_md5_=0000000000000000000000000000000
