@@ -5,8 +5,9 @@
 // "recognized, but not implemented" message -- distinct from a
 // genuinely unknown/misspelled flag. Only `--pretend`/`-p`,
 // `--verbose`/`-v`, `--help`/`-h`, `--newuse`/`-N`, `--changed-use`/`-U`,
-// `--nodeps`/`-O`, and `--onlydeps`/`-o` are actually implemented (see
-// pretend.rs); every table here exists purely for recognition, not
+// `--nodeps`/`-O`, `--onlydeps`/`-o`, and `--update`/`-u` are actually
+// implemented (see pretend.rs); every table here exists purely for
+// recognition, not
 // behavior. Mirrored exactly in
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
@@ -53,6 +54,13 @@
 //     `resolve_pretend_graph` itself needs no changes at all, since
 //     dependency recursion already happens identically regardless of
 //     which top-level entries end up printed.
+//   - `--update`/`-u` IS implemented now too, deliberately excluded from
+//     `BOOLEAN_OPTIONS` for the same reason -- see `resolve_pretend`'s
+//     own doc comment (portage-repo) for the real `avoid_update`/
+//     `dont_miss_updates` behavior it ports: without it, an
+//     already-installed version that still satisfies the requested atom
+//     is kept as-is, never upgraded to a newer visible version just
+//     because one exists.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -70,9 +78,10 @@ pub struct Lookup {
 /// Real boolean (no-argument) options, from `main.py`'s `options` list
 /// plus its two `longopt_aliases` entries (`--cols`, `--skip-first`) --
 /// `--pretend`/`-p`, `--verbose`/`-v`, `--newuse`/`-N`,
-/// `--changed-use`/`-U`, `--nodeps`/`-O`, and `--onlydeps`/`-o` are all
-/// deliberately excluded, since they're implemented and handled
-/// directly by the caller, not through this "not implemented" table.
+/// `--changed-use`/`-U`, `--nodeps`/`-O`, `--onlydeps`/`-o`, and
+/// `--update`/`-u` are all deliberately excluded, since they're
+/// implemented and handled directly by the caller, not through this "not
+/// implemented" table.
 pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--alphabetical", None),
     ("--ask-enter-invalid", None),
@@ -98,7 +107,6 @@ pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--skipfirst", None),
     ("--tree", Some("-t")),
     ("--unordered-display", None),
-    ("--update", Some("-u")),
     ("--update-if-installed", None),
     ("--cols", None),
     ("--skip-first", None),

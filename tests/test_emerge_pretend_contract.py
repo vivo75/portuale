@@ -34,7 +34,13 @@ import pytest
 CASES = [
     ("new install", ["--pretend", "dev-libs/newpkg"], 0),
     ("already installed", ["--pretend", "dev-libs/samepkg"], 0),
-    ("upgrade available", ["--pretend", "dev-libs/upgradepkg"], 0),
+    (
+        "without --update, a newer visible version is not offered",
+        ["--pretend", "dev-libs/upgradepkg"],
+        0,
+    ),
+    ("--update: upgrade available", ["--pretend", "--update", "dev-libs/upgradepkg"], 0),
+    ("-u short alias for --update", ["--pretend", "-u", "dev-libs/upgradepkg"], 0),
     ("only ~keyword, not visible", ["--pretend", "dev-libs/maskedpkg"], 1),
     ("package does not exist", ["--pretend", "dev-libs/does-not-exist"], 1),
     ("sibling-prefix package: new", ["--pretend", "dev-libs/foo"], 0),
@@ -206,6 +212,11 @@ CASES = [
     (
         "--onlydeps on an already-installed top-level atom: no output at all",
         ["--pretend", "--onlydeps", "dev-libs/samepkg"],
+        0,
+    ),
+    (
+        "--update threads through dependency recursion, not just top-level",
+        ["--pretend", "--update", "dev-libs/withdeps"],
         0,
     ),
 ]
@@ -1030,6 +1041,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -U, --changed-use  like -N, but ignores newly added/removed IUSE flags entirely\n"
         "   -O, --nodeps    do not resolve or show any dependency, only the given atoms\n"
         "   -o, --onlydeps  show only the given atoms' dependencies, not the atoms themselves\n"
+        "   -u, --update    upgrade to a newer visible version even if the installed one satisfies the atom\n"
         "   -h, --help      show this message and exit\n"
         "\n"
         "Every other real emerge option/action is recognized by name (see "
@@ -1068,8 +1080,11 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
     -- and upgradepkg), plus a "@some-nested-set-reference" line that
     must be silently skipped, not mishandled -- proving @world expansion
     feeds the exact same multi-atom/recursion machinery every other
-    invocation already uses, not a separate code path."""
-    result = _run([str(emerge_binary)], ["--pretend", "@world"], fixture_env)
+    invocation already uses, not a separate code path. --update is added
+    purely so upgradepkg's own dependency-level entry actually upgrades
+    (see the --update contract tests) rather than staying silently
+    AlreadyInstalled -- unrelated to what this test itself is about."""
+    result = _run([str(emerge_binary)], ["--pretend", "--update", "@world"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         "[ebuild  N] dev-libs/newpkg-1.0",
@@ -1081,9 +1096,12 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
 def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     """@world can appear alongside an explicit atom in the same
     invocation, expanding in place at whatever position it's given --
-    real portage's own most common combined usage shape."""
+    real portage's own most common combined usage shape. --update is
+    added for the same reason as the plain @world test above."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "dev-libs/samepkg", "@world"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--update", "dev-libs/samepkg", "@world"],
+        fixture_env,
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
@@ -1128,8 +1146,12 @@ def test_system_expands_to_the_fixture_profile_chains_own_packages_files(
     real PackagesSystemSet's own behavior) and that its expanded atoms
     feed the exact same multi-atom/recursion machinery every other
     invocation already uses: withdeps' own RDEPEND recurses into newpkg
-    again (deduped against base's own @system entry) and upgradepkg."""
-    result = _run([str(emerge_binary)], ["--pretend", "@system"], fixture_env)
+    again (deduped against base's own @system entry) and upgradepkg.
+    --update is added purely so upgradepkg's own dependency-level entry
+    actually upgrades (see the --update contract tests) rather than
+    staying silently AlreadyInstalled -- unrelated to what this test
+    itself is about."""
+    result = _run([str(emerge_binary)], ["--pretend", "--update", "@system"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         "[ebuild  N] dev-libs/newpkg-1.0",
@@ -1141,9 +1163,12 @@ def test_system_expands_to_the_fixture_profile_chains_own_packages_files(
 def test_system_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     """@system can appear alongside an explicit atom in the same
     invocation, expanding in place at whatever position it's given, same
-    as @world."""
+    as @world. --update is added for the same reason as the plain
+    @system test above."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "dev-libs/samepkg", "@system"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--update", "dev-libs/samepkg", "@system"],
+        fixture_env,
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
@@ -1311,9 +1336,9 @@ def test_changed_use_still_catches_an_enablement_change_on_a_shared_flag(
 
 
 def test_nodeps_disables_recursion_entirely(emerge_binary, fixture_env):
-    """dev-libs/withdeps RDEPENDs on dev-libs/newpkg (New) and
-    dev-libs/upgradepkg (Upgrade) -- see the plain recursion contract
-    test above. With --nodeps, real create_depgraph_params.py pops
+    """dev-libs/withdeps RDEPENDs on dev-libs/newpkg and
+    dev-libs/upgradepkg -- see the plain recursion contract test above.
+    With --nodeps, real create_depgraph_params.py pops
     "recurse" out of myparams, so depgraph.py's own dependency walk
     returns early -- ported here as never even reading withdeps' own
     DEPEND/RDEPEND, so neither dependency appears at all."""
@@ -1352,11 +1377,14 @@ def test_onlydeps_suppresses_the_top_level_atom_but_shows_its_dependencies(
     """man/emerge.1: "Only merge (or pretend to merge) the dependencies
     of the packages specified, not the packages themselves." dev-libs/
     withdeps RDEPENDs on dev-libs/newpkg (New) and dev-libs/upgradepkg
-    (Upgrade) -- --onlydeps must print both dependency lines exactly as
-    always, but never withdeps' own [ebuild N] line -- the exact inverse
-    of what --nodeps (see above) suppresses."""
+    (Upgrade, with --update -- see the --update contract tests for why
+    it's needed here at all) -- --onlydeps must print both dependency
+    lines exactly as always, but never withdeps' own [ebuild N] line --
+    the exact inverse of what --nodeps (see above) suppresses."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "--onlydeps", "dev-libs/withdeps"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--onlydeps", "dev-libs/withdeps"],
+        fixture_env,
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
@@ -1368,8 +1396,9 @@ def test_onlydeps_suppresses_the_top_level_atom_but_shows_its_dependencies(
 def test_onlydeps_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
     """-o is --onlydeps's real short alias (see lib/_emerge/main.py's
     shortmapping); bundled with -p ("-po") it must behave identically to
-    the long-flag invocation above."""
-    result = _run([str(emerge_binary)], ["-po", "dev-libs/withdeps"], fixture_env)
+    the long-flag invocation above. -u (--update) is bundled in too, for
+    the same reason the long-flag invocation above needs --update."""
+    result = _run([str(emerge_binary)], ["-pou", "dev-libs/withdeps"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         "[ebuild  N] dev-libs/newpkg-1.0",
@@ -1389,6 +1418,63 @@ def test_onlydeps_on_an_already_installed_atom_prints_nothing(emerge_binary, fix
     )
     assert result.returncode == 0
     assert result.stdout == ""
+
+
+def test_without_update_an_installed_version_that_satisfies_the_atom_is_kept(
+    emerge_binary, fixture_env
+):
+    """dev-libs/upgradepkg is installed at 1.0; a newer 2.0 is visible in
+    the tree too. Real depgraph.py's own `avoid_update` (lines 7814 and
+    8448 of lib/_emerge/depgraph.py) means plain `emerge
+    dev-libs/upgradepkg`, with no --update, never even looks for a
+    better version -- real emerge does NOT offer an upgrade just because
+    a newer version exists. Before this slice, this pilot's own default
+    behavior always searched for and offered the best available version,
+    which -- while a real, working piece of dependency resolution -- was
+    not actually what real emerge does by default."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/upgradepkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+
+
+def test_update_upgrades_to_the_newer_visible_version(emerge_binary, fixture_env):
+    """Same fixture as above, but with --update: now a real Upgrade,
+    matching real depgraph.py's own `dont_miss_updates` branch."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--update", "dev-libs/upgradepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)\n"
+
+
+def test_update_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
+    """-u is --update's real short alias (see lib/_emerge/main.py's
+    shortmapping); bundled with -p ("-pu") it must behave identically to
+    the long-flag invocation above."""
+    result = _run([str(emerge_binary)], ["-pu", "dev-libs/upgradepkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)\n"
+
+
+def test_update_threads_through_dependency_recursion_not_just_top_level(
+    emerge_binary, fixture_env
+):
+    """dev-libs/upgradepkg is reached only as a *dependency* of
+    dev-libs/withdeps here, never a top-level atom -- --update must
+    still upgrade it, proving the flag threads uniformly through the
+    whole BFS (see resolve_pretend_graph's own doc comment), not just a
+    top-level atom. Without --update (see test_nodeps_disables_recursion_entirely's
+    sibling tests above), this same dependency stays silently
+    AlreadyInstalled instead."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--update", "dev-libs/withdeps"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/withdeps-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+    ]
 
 
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):

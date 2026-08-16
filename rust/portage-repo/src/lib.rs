@@ -674,6 +674,29 @@ fn reinstall_flags_for_use_change(
 /// already-installed match, `newuse` winning if both are set; `false`
 /// for both reproduces this function's pre-`--newuse`/`--changed-use`
 /// behavior exactly.
+///
+/// `update` (`--update`/`-u`) gates real `_wrapped_select_pkg_highest_available_imp`'s
+/// own `avoid_update`/`dont_miss_updates` behavior (`lib/_emerge/depgraph.py`,
+/// lines 7814 and 8448): `"--update" not in myopts` is real portage's
+/// *default*, and when it holds, an already-installed version that
+/// itself still satisfies the atom is returned immediately, without ever
+/// searching for a newer one -- real emerge does NOT offer an upgrade
+/// just because `emerge cat/pkg` was run with no other flags; that's
+/// what `--update`/`-u` is for. Ported below as an early return, checked
+/// before the "always resolve to the single best visible candidate"
+/// logic that already existed: if `!update` and some installed version
+/// both matches `atom_str` and still has a visible candidate in `visible`
+/// (mask/keyword-filtered above), the highest such version is used
+/// as-is, exactly like the pre-existing "installed version equals best"
+/// branch below, `newuse`/`changed_use` included. Requiring a *visible*
+/// candidate (not just checking the vdb directly) is deliberate, not an
+/// oversight: it's what lets an installed version that's since become
+/// masked fall through to the ordinary best-visible-candidate path
+/// below unchanged, matching real portage's own "enable upgrade or
+/// downgrade to a version with visible KEYWORDS when the installed
+/// version is masked" comment right above its own `avoid_update` check.
+/// When `update` is true, or no installed version qualifies this way,
+/// behavior is exactly as before this parameter existed.
 pub fn resolve_pretend(
     repos: &[RepoConfig],
     root: &Path,
@@ -681,6 +704,7 @@ pub fn resolve_pretend(
     config: &portage_profile::Config,
     newuse: bool,
     changed_use: bool,
+    update: bool,
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
@@ -714,6 +738,40 @@ pub fn resolve_pretend(
     for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
         by_str.insert(*s, *c);
     }
+
+    let installed = installed_versions(root, &atom.category, &atom.package);
+
+    // --update/-u: see this function's own doc comment.
+    if !update {
+        if let Some(installed_best) = matched
+            .iter()
+            .filter_map(|m| by_str.get(m).copied())
+            .filter(|c| installed.iter().any(|v| v == &c.version))
+            .max_by(|a, b| {
+                vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+            })
+        {
+            if newuse || changed_use {
+                if let Some(changed_flags) = reinstall_flags_for_use_change(
+                    root,
+                    &atom.category,
+                    &atom.package,
+                    installed_best,
+                    config,
+                    newuse,
+                ) {
+                    return Ok(PretendOutcome::Reinstall {
+                        version: installed_best.version.clone(),
+                        changed_flags,
+                    });
+                }
+            }
+            return Ok(PretendOutcome::AlreadyInstalled {
+                version: installed_best.version.clone(),
+            });
+        }
+    }
+
     // Ties on identical version (possible once more than one repo can
     // provide it) are broken toward the higher-priority repo, matching
     // real portage's own `(pkg.version, repo.priority)` sort in
@@ -728,7 +786,6 @@ pub fn resolve_pretend(
         return Ok(PretendOutcome::NoVisibleCandidate);
     };
 
-    let installed = installed_versions(root, &atom.category, &atom.package);
     if installed.iter().any(|v| v == &best.version) {
         if newuse || changed_use {
             if let Some(changed_flags) = reinstall_flags_for_use_change(
@@ -1043,6 +1100,22 @@ pub struct GraphResult {
 ///     is ever collected -- blockers only ever come from a dependency
 ///     string in this pilot, so this falls out for free rather than
 ///     needing its own special case.
+///   - `update` (`--update`/`-u`) is threaded uniformly to every atom this
+///     BFS resolves, top-level and dependency alike, via `resolve_pretend`
+///     -- see that function's own doc comment for the real
+///     `avoid_update`/`dont_miss_updates` behavior it ports, same
+///     whole-graph-uniform application `newuse`/`changed_use` already get
+///     above. `avoid_update`/`dont_miss_updates` are themselves plain
+///     `myopts` checks inside real `_wrapped_select_pkg_highest_available_imp`,
+///     the one package-selection function every atom resolution (args and
+///     dependencies alike) already funnels through in real portage too,
+///     so this isn't a new pilot-specific simplification beyond the one
+///     `newuse`/`changed_use` already made.
+// 8 args trips clippy::too_many_arguments; a bundled options struct
+// would touch every one of this function's own call sites (production
+// and test) for a single-slice-sized addition of one more CLI boolean
+// flag alongside three already threaded the same way -- not worth it.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_pretend_graph(
     config_root: &Path,
     root: &Path,
@@ -1051,6 +1124,7 @@ pub fn resolve_pretend_graph(
     newuse: bool,
     changed_use: bool,
     nodeps: bool,
+    update: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -1101,7 +1175,15 @@ pub fn resolve_pretend_graph(
         }
         let key = (atom.category.clone(), atom.package.clone());
 
-        let outcome = resolve_pretend(&repos, root, &current_atom, config, newuse, changed_use)?;
+        let outcome = resolve_pretend(
+            &repos,
+            root,
+            &current_atom,
+            config,
+            newuse,
+            changed_use,
+            update,
+        )?;
 
         // A top-level atom (as opposed to a dependency reached while
         // recursing) with no visible candidate aborts the whole call --
@@ -1332,7 +1414,27 @@ mod tests {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &test_config(), false, false)
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &test_config(),
+            false,
+            false,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    /// Like `resolve`, but with `--update` enabled -- for the `upgrade`
+    /// test below, and anywhere else `--update`'s own "search for a
+    /// better version even when the installed one already satisfies the
+    /// atom" behavior needs to be exercised directly.
+    fn resolve_update(category: &str, package: &str) -> PretendOutcome {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(&repos, &root, &atom_str, &test_config(), false, false, true)
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -1357,9 +1459,28 @@ mod tests {
     }
 
     #[test]
-    fn upgrade() {
+    fn without_update_an_installed_version_that_still_satisfies_the_atom_is_kept() {
+        // dev-libs/upgradepkg is installed at 1.0; a newer 2.0 is visible
+        // in the tree too. Real depgraph.py's own `avoid_update`
+        // (lines 7814/8448) means plain `emerge dev-libs/upgradepkg`,
+        // with no --update, never even looks for a better version --
+        // see resolve_pretend's own doc comment. This was, before this
+        // slice, this pilot's own (inaccurate) default behavior for
+        // `upgrade` below.
         assert_eq!(
             resolve("dev-libs", "upgradepkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn upgrade() {
+        // Same fixture as above, but with --update: now a real Upgrade,
+        // matching real depgraph.py's own `dont_miss_updates` branch.
+        assert_eq!(
+            resolve_update("dev-libs", "upgradepkg"),
             PretendOutcome::Upgrade {
                 from: "1.0".to_string(),
                 to: "2.0".to_string(),
@@ -1392,7 +1513,7 @@ mod tests {
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &config, false, false)
+        resolve_pretend(&repos, &root, &atom_str, &config, false, false, false)
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -1404,7 +1525,7 @@ mod tests {
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &config, true, false)
+        resolve_pretend(&repos, &root, &atom_str, &config, true, false, false)
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -1415,7 +1536,7 @@ mod tests {
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &config, false, true)
+        resolve_pretend(&repos, &root, &atom_str, &config, false, true, false)
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -1576,6 +1697,7 @@ mod tests {
                 &config,
                 false,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -1588,6 +1710,7 @@ mod tests {
                 &root,
                 "dev-libs/overlayonlypkg::testrepo",
                 &config,
+                false,
                 false,
                 false,
             )
@@ -1816,6 +1939,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -1835,6 +1959,29 @@ mod tests {
             false,
             false,
             true,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+    }
+
+    /// Like `graph`, but with `--update` enabled -- proves `update` threads
+    /// through the whole BFS, not just a top-level atom (see
+    /// `resolve_pretend_graph`'s own doc comment).
+    fn graph_update(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -1845,7 +1992,47 @@ mod tests {
 
     #[test]
     fn recursion_basic_chain() {
+        // dev-libs/upgradepkg is installed at 1.0 with a newer 2.0
+        // visible in the tree too -- without --update, it stays
+        // AlreadyInstalled, same as resolve_pretend's own
+        // without_update_an_installed_version_that_still_satisfies_the_atom_is_kept
+        // test above, just reached here as a dependency instead of a
+        // top-level atom.
         let entries = graph("dev-libs/withdeps");
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/withdeps".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/upgradepkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn recursion_basic_chain_with_update_upgrades_the_dependency() {
+        // Same fixture as recursion_basic_chain above, but with --update:
+        // dev-libs/upgradepkg -- reached only as a *dependency* of
+        // withdeps, never a top-level atom -- still upgrades, proving
+        // `update` threads uniformly through the whole BFS (see
+        // resolve_pretend_graph's own doc comment), not just top-level
+        // atoms.
+        let entries = graph_update("dev-libs/withdeps");
         assert_eq!(
             entries,
             vec![
@@ -1909,6 +2096,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -2036,6 +2224,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -2055,6 +2244,7 @@ mod tests {
             &root,
             &[atom_str.to_string()],
             &config,
+            false,
             false,
             false,
             false,
@@ -2079,6 +2269,7 @@ mod tests {
             true,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2099,6 +2290,7 @@ mod tests {
             &config,
             false,
             true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -2121,6 +2313,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2210,6 +2403,7 @@ mod tests {
             &root,
             &[atom_str.to_string()],
             &config,
+            false,
             false,
             false,
             false,

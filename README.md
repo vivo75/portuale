@@ -1037,6 +1037,50 @@ PORTING/
   profile-chain order, decides the winner, and that a more-specific
   entry from a *later* profile level can still override a less-specific
   one from an earlier level. Final USE: `forceflag -maskflag -specflag`.
+
+  **`--update`/`-u`: real default-vs-update package selection**. Grounded
+  against real `depgraph.py`'s own `_wrapped_select_pkg_highest_available_imp`
+  (`lib/_emerge/depgraph.py`, lines 7814 and 8448): `avoid_update =
+  "--update" not in myopts` is real portage's *default*, and when it
+  holds, an already-installed version that itself still satisfies the
+  requested atom is returned immediately, without ever searching for a
+  newer one -- real `emerge cat/pkg`, with no other flags, does NOT
+  offer to upgrade a package just because a newer version exists; that's
+  what `--update`/`-u` is for. This was a genuine, discovered inaccuracy
+  in this pilot's own prior default behavior: every prior slice's
+  New/Upgrade/AlreadyInstalled decision unconditionally searched for the
+  single best visible version first, with no way to prefer "stay
+  installed" at all -- there was no flag whose absence this
+  unconditional search could even be said to be gated on. Fixed as an
+  early return in `resolve_pretend`, checked before the pre-existing
+  "always resolve to the best visible candidate" logic: without
+  `update`, if some installed version both matches the atom and still
+  has a visible candidate in the tree (mask/keyword-filtered, same as
+  the rest of resolution), the highest such version is used as-is.
+  Requiring a *visible* candidate rather than checking the vdb directly
+  is deliberate, not incidental: it's what lets an installed version
+  that's since become masked fall through to the ordinary
+  best-visible-candidate path unchanged, matching real portage's own
+  "enable upgrade or downgrade to a version with visible KEYWORDS when
+  the installed version is masked" comment sitting right above its own
+  `avoid_update` check -- a real corner this pilot gets right for free,
+  not by accident. `update` threads uniformly through
+  `resolve_pretend_graph`'s whole BFS, top-level atoms and dependencies
+  alike, the same way `newuse`/`changed_use` already do -- and unlike
+  that pair's own whole-graph application (a *documented* simplification
+  of real portage's own more selective default), this one isn't a new
+  pilot-specific simplification at all: `avoid_update`/`dont_miss_updates`
+  are themselves plain `myopts` checks inside the one package-selection
+  function every atom resolution, args and dependencies alike, already
+  funnels through in real portage too. No new fixture was needed:
+  `dev-libs/upgradepkg` (installed at `1.0`, a newer `2.0` visible in the
+  tree -- already exercising the *old*, now-corrected default) turned
+  out to be exactly the right shape to prove the *new* one too, reused
+  as-is. Every pre-existing pinned test/example whose own point was
+  something else entirely (`@world`/`@system` expansion, `--onlydeps`)
+  but happened to lean on `upgradepkg`'s old default-upgrades-unconditionally
+  behavior for its expected output now passes `--update` explicitly,
+  noted inline in each case.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1389,9 +1433,9 @@ Try `emerge --pretend` against the fixture tree:
 ```sh
 ln -sf "$(realpath PORTING/rust/target/release/multicall)" /tmp/emerge
 FX="$(realpath PORTING/fixtures)"
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg     # -> [ebuild  N] ...
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/upgradepkg # -> [ebuild  U] ...
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg    # -> already installed
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg              # -> [ebuild  N] ...
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg # -> [ebuild  U] ...
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg             # -> already installed
 
 # dependency recursion: diamond dependency, deduped (see PORTING/fixtures)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/diamond
@@ -1580,14 +1624,16 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend '!!dev-libs/newpkg'
 # @world expands in place to the fixture world file's own atoms: newpkg
 # directly, withdeps (which recurses into newpkg again -- deduped -- and
 # upgradepkg), and a "@some-nested-set-reference" line that's silently
-# skipped, not mishandled
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend @world
+# skipped, not mishandled. --update is added here purely so upgradepkg
+# actually upgrades (see the --update example further below) rather than
+# staying silently already-installed -- unrelated to @world itself
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update @world
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  N] dev-libs/withdeps-1.0
 # [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
 
 # @world combines with an explicit atom in the same invocation
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg @world
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/samepkg @world
 # dev-libs/samepkg-1.0 is already installed; nothing to do
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  N] dev-libs/withdeps-1.0
@@ -1605,8 +1651,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="/tmp/empty-world-root" /tmp/emerge --pretend @wor
 # the leaf profile's own default/packages contributes withdeps -- proving
 # @system stacks across multiple profile levels and feeds the same
 # recursion machinery @world does (withdeps recurses into newpkg again,
-# deduped, and upgradepkg)
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend @system
+# deduped, and upgradepkg). --update again just so upgradepkg upgrades
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update @system
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  N] dev-libs/withdeps-1.0
 # [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
@@ -1676,6 +1722,24 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs
 # [ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)
 # [ebuild  N] dev-libs/newpkg-1.0
 
+# --update/-u is real and implemented: without it, real emerge does NOT
+# offer to upgrade a package just because a newer version exists --
+# upgradepkg is installed at 1.0, a newer 2.0 is visible in the tree, but
+# plain "emerge dev-libs/upgradepkg" leaves it alone (real depgraph.py's
+# own avoid_update, lines 7814/8448)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/upgradepkg
+# dev-libs/upgradepkg-1.0 is already installed; nothing to do
+# --update (or its short alias -u) is what makes the newer version show up
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg
+# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+# --update threads through the whole dependency graph, not just a
+# top-level atom: here upgradepkg is reached only as withdeps' own
+# dependency, and still upgrades
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/withdeps
+# [ebuild  N] dev-libs/withdeps-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+
 # package.use.mask/package.use.force are real and implemented, atom
 # specificity included: a repo-level package.use.force wildcard entry
 # force-enables "forceflag"; the base profile's own package.use.mask
@@ -1701,8 +1765,9 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -O -v dev-libs/useflag
 
 # --onlydeps/-o is real and implemented: the exact inverse of --nodeps --
 # withdeps' own dependencies (newpkg, upgradepkg) print normally, but
-# withdeps' own [ebuild N] line is suppressed
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --onlydeps dev-libs/withdeps
+# withdeps' own [ebuild N] line is suppressed. --update is added again
+# just so upgradepkg's own dependency-level entry actually upgrades
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --onlydeps dev-libs/withdeps
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
 

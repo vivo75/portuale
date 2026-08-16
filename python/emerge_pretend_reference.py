@@ -855,7 +855,7 @@ def _best_candidate(candidates):
     return best
 
 
-def resolve_pretend(repos, root, atom_str, config, newuse=False, changed_use=False):
+def resolve_pretend(repos, root, atom_str, config, newuse=False, changed_use=False, update=False):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
     supports -- operator, slot, not just a bare category/package) across
@@ -866,7 +866,28 @@ def resolve_pretend(repos, root, atom_str, config, newuse=False, changed_use=Fal
     `changed_use` each enable their own reinstall check (see
     _reinstall_flags_for_use_change) for an already-installed match,
     `newuse` winning if both are set; False for both reproduces this
-    function's behavior from before either existed exactly."""
+    function's behavior from before either existed exactly.
+
+    `update` (--update/-u) mirrors real depgraph.py's own
+    `avoid_update`/`dont_miss_updates` (lib/_emerge/depgraph.py, lines
+    7814 and 8448): `"--update" not in myopts` is real portage's
+    *default*, under which an already-installed version that itself
+    still satisfies the atom is returned immediately, without ever
+    searching for a newer one -- real emerge does NOT offer an upgrade
+    just because `emerge cat/pkg` was run with no other flags. Ported
+    below as an early return, checked before the "always resolve to the
+    single best visible candidate" logic that already existed: if not
+    `update` and some installed version both matches `atom_str` and
+    still has a visible candidate (mask/keyword-filtered above), the
+    highest such version (repo-priority tie-broken exactly like
+    _best_candidate) is used as-is, `newuse`/`changed_use` included.
+    Requiring a *visible* candidate, not just checking the vdb directly,
+    is deliberate: it's what lets an installed version that's since
+    become masked fall through to the ordinary best-visible-candidate
+    path below unchanged, matching real portage's own "enable upgrade or
+    downgrade to a version with visible KEYWORDS when the installed
+    version is masked" comment right above its own avoid_update check.
+    Mirrors portage-repo/src/lib.rs's resolve_pretend exactly."""
     atom = _parse_atom(atom_str)
     if atom is None:
         raise ResolutionError(f'invalid atom "{atom_str}"')
@@ -887,9 +908,23 @@ def resolve_pretend(repos, root, atom_str, config, newuse=False, changed_use=Fal
     matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
     if not matched:
         return ("no_visible_candidate",)
-    best = _best_candidate(matched)
 
     installed = installed_versions(root, category, package)
+
+    if not update:
+        installed_matched = [c for c in matched if c["version"] in installed]
+        if installed_matched:
+            installed_best = _best_candidate(installed_matched)
+            if newuse or changed_use:
+                changed_flags = _reinstall_flags_for_use_change(
+                    root, category, package, installed_best, config, newuse
+                )
+                if changed_flags:
+                    return ("reinstall", installed_best["version"], changed_flags)
+            return ("already_installed", installed_best["version"])
+
+    best = _best_candidate(matched)
+
     if best["version"] in installed:
         if newuse or changed_use:
             changed_flags = _reinstall_flags_for_use_change(
@@ -963,7 +998,14 @@ def resolve_blockers(root, pending, entries):
 
 
 def resolve_pretend_graph(
-    config_root, root, atoms, config, newuse=False, changed_use=False, nodeps=False
+    config_root,
+    root,
+    atoms,
+    config,
+    newuse=False,
+    changed_use=False,
+    nodeps=False,
+    update=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -994,8 +1036,11 @@ def resolve_pretend_graph(
     (real portage's -v output shows a package's own USE regardless of
     whether its dependencies get walked), but no DEPEND/RDEPEND/etc is
     ever read, so no dependency atom is ever queued and no blocker is
-    ever collected. Mirrors portage-repo/src/lib.rs's resolve_pretend_graph
-    exactly.
+    ever collected. `update` (--update/-u) is threaded uniformly to every
+    atom this BFS resolves, top-level and dependency alike, via
+    resolve_pretend -- see that function's own docstring for the real
+    avoid_update/dont_miss_updates behavior it ports. Mirrors
+    portage-repo/src/lib.rs's resolve_pretend_graph exactly.
 
     `atoms` seeds the BFS queue together, in the order given, before any
     dependency is ever pushed -- so all of them are dequeued and resolved
@@ -1059,7 +1104,7 @@ def resolve_pretend_graph(
         key = (category, package)
 
         outcome = resolve_pretend(
-            repos, root, current_atom_str, config, newuse, changed_use
+            repos, root, current_atom_str, config, newuse, changed_use, update
         )
 
         # A top-level atom (as opposed to a dependency reached while
@@ -1232,9 +1277,9 @@ def _parse_atom(atom_str):
 # real emerge flag this pilot doesn't implement yet produces a clear
 # "recognized, but not implemented" message -- distinct from a
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
-# --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, and
-# --help/-h are actually implemented (see run() below); every table
-# here exists purely for recognition, not behavior. Mirrors
+# --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o,
+# --update/-u, and --help/-h are actually implemented (see run() below);
+# every table here exists purely for recognition, not behavior. Mirrors
 # PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
 # three tables exactly, so both sides report identical text for
 # identical input (verified by the shared contract suite).
@@ -1271,7 +1316,6 @@ _BOOLEAN_OPTIONS = [
     ("--skipfirst", None),
     ("--tree", "-t"),
     ("--unordered-display", None),
-    ("--update", "-u"),
     ("--update-if-installed", None),
     ("--cols", None),
     ("--skip-first", None),
@@ -1490,6 +1534,9 @@ def _print_help():
     print("   -U, --changed-use  like -N, but ignores newly added/removed IUSE flags entirely")
     print("   -O, --nodeps    do not resolve or show any dependency, only the given atoms")
     print("   -o, --onlydeps  show only the given atoms' dependencies, not the atoms themselves")
+    print(
+        "   -u, --update    upgrade to a newer visible version even if the installed one satisfies the atom"
+    )
     print("   -h, --help      show this message and exit")
     print()
     print(
@@ -1544,6 +1591,7 @@ def run(args):
     changed_use = False
     nodeps = False
     onlydeps = False
+    update = False
 
     i = 0
     while i < len(args):
@@ -1562,6 +1610,9 @@ def run(args):
             i += 1
         elif arg in ("--onlydeps", "-o"):
             onlydeps = True
+            i += 1
+        elif arg in ("--update", "-u"):
+            update = True
             i += 1
         elif arg in ("--verbose", "-v"):
             # Peeks at the next token, consuming it only if it's exactly
@@ -1607,6 +1658,8 @@ def run(args):
                     nodeps = True
                 elif c == "o":
                     onlydeps = True
+                elif c == "u":
+                    update = True
                 else:
                     return _report_option(f"-{c}")
             i += 1
@@ -1687,7 +1740,7 @@ def run(args):
 
     try:
         result = resolve_pretend_graph(
-            _config_root(), _root(), atom_args, config, newuse, changed_use, nodeps
+            _config_root(), _root(), atom_args, config, newuse, changed_use, nodeps, update
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

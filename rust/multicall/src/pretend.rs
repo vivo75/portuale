@@ -16,6 +16,13 @@
 // simplified subset of real emerge's --pretend output, not
 // byte-identical to it.
 //
+// --update/-u is real and implemented too (see resolve_pretend's own doc
+// comment, portage-repo, for the real `avoid_update` behavior it ports):
+// without it, an already-installed version that still satisfies the
+// requested atom is kept as-is rather than upgraded to a newer visible
+// one -- this is real emerge's own default, not something this pilot
+// invented, and correcting to it was this flag's whole point.
+//
 // A top-level atom may carry an operator/version/slot (e.g.
 // `>=cat/pkg-1.2`, `cat/pkg:0`) -- resolve_pretend's own atom-vs-candidate
 // matching (see portage-repo/src/lib.rs) already handles this correctly
@@ -221,6 +228,9 @@ fn print_help() {
     println!(
         "   -o, --onlydeps  show only the given atoms' dependencies, not the atoms themselves"
     );
+    println!(
+        "   -u, --update    upgrade to a newer visible version even if the installed one satisfies the atom"
+    );
     println!("   -h, --help      show this message and exit");
     println!();
     println!(
@@ -281,6 +291,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut changed_use = false;
     let mut nodeps = false;
     let mut onlydeps = false;
+    let mut update = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -299,6 +310,9 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--onlydeps" || arg == "-o" {
             onlydeps = true;
+            i += 1;
+        } else if arg == "--update" || arg == "-u" {
+            update = true;
             i += 1;
         } else if arg == "--verbose" || arg == "-v" {
             // Peeks at the next token, consuming it only if it's exactly
@@ -342,6 +356,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'U' => changed_use = true,
                     'O' => nodeps = true,
                     'o' => onlydeps = true,
+                    'u' => update = true,
                     _ => return report_option(&format!("-{c}")),
                 }
             }
@@ -448,6 +463,7 @@ pub fn run(args: &[String]) -> ExitCode {
         newuse,
         changed_use,
         nodeps,
+        update,
     ) {
         Ok(result) => result,
         Err(e) => {
