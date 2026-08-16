@@ -318,6 +318,311 @@ pub(crate) fn is_visible_uncached(
     invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
 }
 
+pub(crate) struct VisibleWithRelaxArgs<'a> {
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) relax_license: bool,
+    pub(crate) relax_keywords: bool,
+    pub(crate) relax_masks: bool,
+}
+
+/// Whether `candidate` would pass [`is_visible`] once the named masking
+/// categories are set aside. With all three `false` this is exactly
+/// `is_visible`. `resolve_pretend` walks these levels in sequence, so a
+/// candidate blocked by two categories still resolves once both relax.
+/// Portage: _pkg_visibility_check with _AutounmaskLevel
+pub(crate) fn visible_with_relax(args: VisibleWithRelaxArgs<'_>) -> bool {
+    let VisibleWithRelaxArgs {
+        candidate,
+        category,
+        package,
+        config,
+        relax_license,
+        relax_keywords,
+        relax_masks,
+    } = args;
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+
+    if !relax_masks {
+        let masked =
+            any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+                && !any_config_entry_matches(
+                    &config.package_unmask,
+                    &candidate_str,
+                    category,
+                    package,
+                );
+        if masked {
+            return false;
+        }
+    }
+
+    if !relax_license && !license_accepted(candidate, category, package, &candidate_str, config) {
+        return false;
+    }
+
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
+        return false;
+    }
+
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
+        return false;
+    }
+
+    // The `invalid` mask is never relaxed (Portage offers no autounmask
+    // for it).
+    if !invalid_use_conditional_reasons(candidate, category, package, config).is_empty() {
+        return false;
+    }
+
+    relax_keywords
+        || keywords_accepted(KeywordsAcceptedArgs {
+            keywords: &candidate.keywords,
+            candidate_str: &candidate_str,
+            category,
+            package,
+            accept_keywords: &config.accept_keywords,
+            package_accept_keywords: &config.package_accept_keywords,
+        })
+}
+
+/// True iff `candidate` would be visible except for its own KEYWORDS.
+/// Duplicates `is_visible`'s body rather than returning a reason enum
+/// (only this one question is needed).
+/// Portage: _get_masking_status (keywords-only slice)
+pub(crate) fn keyword_masked_only(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+
+    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
+    if masked {
+        return false;
+    }
+
+    if !license_accepted(candidate, category, package, &candidate_str, config) {
+        return false;
+    }
+
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
+        return false;
+    }
+
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
+        return false;
+    }
+
+    if keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
+        category,
+        package,
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    }) {
+        return false;
+    }
+    // "Masked by X alone" also requires the candidate not be `invalid`.
+    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
+}
+
+/// True iff `candidate` is masked by `package.mask` alone (every other
+/// check passes). Only `--autounmask-keep-masks=n` unmasks (masks are
+/// kept by default); the suggestion carries no source-file comments.
+pub(crate) fn mask_masked_only(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
+    if !masked {
+        return false;
+    }
+    if !keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
+        category,
+        package,
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    }) {
+        return false;
+    }
+    if !license_accepted(candidate, category, package, &candidate_str, config) {
+        return false;
+    }
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
+        return false;
+    }
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
+        return false;
+    }
+    // "Masked by X alone" also requires the candidate not be `invalid`.
+    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
+}
+
+/// The best `--autounmask-keep-masks=n` candidate for
+/// `category/package`, if any: the highest-versioned one masked by
+/// `package.mask` alone.
+pub(crate) fn suggested_mask_candidate(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Option<String> {
+    list_candidates(repos, category, package)
+        .ok()?
+        .iter()
+        .filter(|c| mask_masked_only(c, category, package, config))
+        .max_by(|a, b| {
+            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+        })
+        .map(|c| c.version.clone())
+}
+
+/// True iff `candidate` would be visible except for its own LICENSE
+/// (the `license_masked_only` analogue of `keyword_masked_only`).
+pub(crate) fn license_masked_only(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+
+    let masked = any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package);
+    if masked {
+        return false;
+    }
+
+    if !keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
+        category,
+        package,
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    }) {
+        return false;
+    }
+
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
+        return false;
+    }
+
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
+        return false;
+    }
+
+    if license_accepted(candidate, category, package, &candidate_str, config) {
+        return false;
+    }
+    // "Masked by X alone" also requires the candidate not be `invalid`.
+    invalid_use_conditional_reasons(candidate, category, package, config).is_empty()
+}
+
 /// The keyword `--autounmask` would suggest for `candidate`: the first
 /// non-`-`-prefixed `KEYWORDS` token (`None` if empty or all `-`). A
 /// `-`-prefixed token means "explicitly unsupported", never a suggestion.
@@ -327,6 +632,56 @@ pub(crate) fn suggested_keyword(candidate: &Candidate) -> Option<&str> {
         .iter()
         .find(|k| !k.starts_with('-'))
         .map(String::as_str)
+}
+
+/// The best `--autounmask` keyword suggestion for `category/package`,
+/// if any: among the candidates masked by KEYWORDS alone, the
+/// highest-versioned one (repo priority breaking ties) with its
+/// `suggested_keyword`. Shared by the top-level and dependency
+/// `NoVisibleCandidate` call sites.
+pub(crate) fn suggested_keyword_candidate(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Option<(String, String)> {
+    let candidates = list_candidates(repos, category, package).ok()?;
+    candidates
+        .iter()
+        .filter(|c| keyword_masked_only(c, category, package, config))
+        .filter_map(|c| suggested_keyword(c).map(|k| (c, k)))
+        .max_by(|(a, _), (b, _)| {
+            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+        })
+        .map(|(c, k)| (c.version.clone(), k.to_string()))
+}
+
+/// The `--autounmask-license` analogue: among the candidates masked
+/// by LICENSE alone, the highest-versioned one with its missing
+/// licenses.
+pub(crate) fn suggested_license_candidate(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Option<(String, String)> {
+    let candidates = list_candidates(repos, category, package).ok()?;
+    candidates
+        .iter()
+        .filter(|c| license_masked_only(c, category, package, config))
+        .max_by(|a, b| {
+            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+        })
+        .map(|c| {
+            let cs = format!(
+                "{category}/{package}-{}:{}/{}::{}",
+                c.version, c.slot, c.sub_slot, c.repo_name
+            );
+            (
+                c.version.clone(),
+                missing_licenses(c, category, package, &cs, config).join(" "),
+            )
+        })
 }
 
 /// True iff `candidate` is visible but the atom's use-deps don't match

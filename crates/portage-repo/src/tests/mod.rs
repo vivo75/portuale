@@ -66,6 +66,74 @@ fn candidate(version: &str, keywords: &[&str]) -> Candidate {
 mod tests_164 {
     use super::*;
 
+    #[test]
+    fn keyword_masked_only_164_mask_unmask_interplay() {
+        let rescued = candidate("1.0", &["~amd64"]);
+        // In `package.mask` but rescued by `package.unmask`: the mask
+        // gate stays shut, so a keyword-masked candidate still
+        // counts as keyword-masked only ...
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_mask: vec!["dev-libs/kwunmask".to_string()],
+            package_unmask: vec!["dev-libs/kwunmask".to_string()],
+            ..Default::default()
+        };
+        assert!(keyword_masked_only(
+            &rescued, "dev-libs", "kwunmask", &config
+        ));
+        // ... while a mask with no unmask masks outright, whatever
+        // the keywords say.
+        let config_masked = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_mask: vec!["dev-libs/kwmasked".to_string()],
+            ..Default::default()
+        };
+        assert!(!keyword_masked_only(
+            &rescued,
+            "dev-libs",
+            "kwmasked",
+            &config_masked
+        ));
+    }
+
+    /// A candidate masked by `package.mask` alone (Portage's first
+    /// `_getmaskingstatus` reason).
+    #[test]
+    fn mask_masked_only_164_needs_a_mask_and_nothing_else() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_mask: vec!["dev-libs/maskonly".to_string()],
+            ..Default::default()
+        };
+        let masked = candidate("1.0", &["amd64"]);
+        assert!(mask_masked_only(&masked, "dev-libs", "maskonly", &config));
+        // No mask entry at all: not mask-masked, however visible.
+        assert!(!mask_masked_only(
+            &masked,
+            "dev-libs",
+            "maskabsent",
+            &config
+        ));
+    }
+
+    #[test]
+    fn mask_masked_only_164_unmask_cancels_the_mask() {
+        // Masked AND unmasked: `package.unmask` cancels the mask (Portage's
+        // unmask half), so the candidate is not mask-masked at all.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_mask: vec!["dev-libs/maskrescue".to_string()],
+            package_unmask: vec!["dev-libs/maskrescue".to_string()],
+            ..Default::default()
+        };
+        assert!(!mask_masked_only(
+            &candidate("1.0", &["amd64"]),
+            "dev-libs",
+            "maskrescue",
+            &config
+        ));
+    }
+
     /// Arguments of [`entry_164`].
     struct Entry164Args<'a> {
         category: &'a str,
@@ -178,4 +246,5 @@ mod tests_166;
 
 mod blockers;
 mod tests_184;
+mod use_flags;
 mod visibility;

@@ -397,6 +397,28 @@ pub struct ForcedOrMaskedFlagsArgs<'a> {
     pub config: &'a portage_profile::Config,
 }
 
+/// This candidate's IUSE flags that are force-enabled or
+/// mask-disabled (rendered wrapped in `( … )`, not user-controllable).
+/// Portage: _display_use, forced_flags = pkg.use.force | pkg.use.mask
+pub fn forced_or_masked_flags(args: ForcedOrMaskedFlagsArgs<'_>) -> HashSet<String> {
+    let ForcedOrMaskedFlagsArgs {
+        iuse,
+        keywords,
+        candidate_str,
+        category,
+        package,
+        config,
+    } = args;
+    let iuse_names: HashSet<String> = iuse
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let mut result =
+        forced_or_masked_flags_unfiltered(keywords, candidate_str, category, package, config);
+    result.retain(|f| iuse_names.contains(f));
+    result
+}
+
 /// The same force/mask stack without the IUSE intersection (for the
 /// reinstall-for-flags path, which must also forgive a masked flag the
 /// new ebuild dropped from IUSE).
