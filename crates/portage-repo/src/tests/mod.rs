@@ -260,6 +260,7 @@ mod tests_165;
 mod tests_166;
 
 mod blockers;
+mod masked_deps;
 mod tests_184;
 mod use_flags;
 mod visibility;

@@ -109,6 +109,41 @@ pub fn best_installed_match(
         .max_by(|a, b| vercmp_ordering(a, b))
 }
 
+/// Whether the *slot* of the best USE-ignoring candidate for `atom_str` is itself
+/// installed. Distinct from `atom_cp_installed`: a package installed in some *other*
+/// slot while the needed slot is not still counts as not-installed-in-slot. A
+/// blocker is vacuously satisfied; no candidate at all counts as not installed.
+/// Portage: dep_check.py, dep_zapdeps (all_installed_slots).
+pub(crate) fn atom_installed_in_slot_of(
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    atom_str: &str,
+    extra_constraints: &[String],
+) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if atom.blocker != portage_dep::Blocker::None || atom.category == "virtual" {
+        return true;
+    }
+    let Some((.., slot)) =
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos,
+            atom_str,
+            category: &atom.category,
+            package: &atom.package,
+            config,
+            extra_constraints,
+        })
+    else {
+        return false;
+    };
+    installed_candidates(root, &atom.category, &atom.package)
+        .iter()
+        .any(|(_, installed_slot, _)| *installed_slot == slot)
+}
+
 /// Whether one atom is satisfied by a package already added to the graph this run
 /// (merge-bound), with `[use]` deps checked against that entry's resolved USE.
 /// Portage matches against full package objects -- slot included -- so the candidate

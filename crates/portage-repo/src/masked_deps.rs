@@ -99,6 +99,194 @@ pub(crate) fn atom_currently_satisfiable(
     })
 }
 
+/// Whether an atom whose `[use]` deps no candidate satisfies could be satisfied
+/// by unmasking/unforcing a flag: which flags would have to change, checked
+/// against the best candidate's `use.mask`/`use.force`. Evaluated per single
+/// use-dep so default-marker/missing-IUSE semantics match exactly.
+// Portage: Atom.violated_conditionals; dep_zapdeps all_use_unmasked
+pub(crate) fn atom_all_use_unmasked(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+    extra_constraints: &[String],
+) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return true;
+    };
+    if atom.blocker != portage_dep::Blocker::None {
+        return true;
+    }
+    let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty()) else {
+        return true;
+    };
+    let Some((candidate_str, keywords, iuse, enabled, _slot)) =
+        highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
+            repos,
+            atom_str,
+            category: &atom.category,
+            package: &atom.package,
+            config,
+            extra_constraints,
+        })
+    else {
+        // Nothing to evaluate once the whole choice is `Unsatisfiable`.
+        return true;
+    };
+    let valid_iuse = valid_iuse(&iuse, config);
+    let stable = is_stable(IsStableArgs {
+        keywords: &keywords,
+        candidate_str: &candidate_str,
+        category: &atom.category,
+        package: &atom.package,
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    });
+    let mask = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Mask,
+        config,
+        candidate_str: &candidate_str,
+        category: &atom.category,
+        package: &atom.package,
+        stable,
+    });
+    let force = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+        which: MaskOrForce::Force,
+        config,
+        candidate_str: &candidate_str,
+        category: &atom.category,
+        package: &atom.package,
+        stable,
+    });
+    let mut violated_enabled = Vec::new();
+    let mut violated_disabled = Vec::new();
+    for ud in use_deps {
+        // "Would *this* flag have to change" per-dep classification.
+        if !portage_dep::use_deps_satisfied(std::slice::from_ref(ud), &valid_iuse, &enabled) {
+            match ud.op {
+                portage_dep::UseDepOp::Enabled => violated_enabled.push(ud.flag.clone()),
+                portage_dep::UseDepOp::Disabled => violated_disabled.push(ud.flag.clone()),
+                // Conditional forms impose no candidate constraint in matching,
+                // so they can never be "violated" here either.
+                _ => {}
+            }
+        }
+    }
+    if violated_enabled.iter().any(|f| mask.contains(f)) {
+        return false;
+    }
+    if violated_disabled
+        .iter()
+        .any(|f| force.contains(f) && !mask.contains(f))
+    {
+        return false;
+    }
+    true
+}
+
+/// The highest visible candidate matching an atom's `[...]`-stripped form, plus
+/// its candidate string, IUSE, effective USE and slot -- the seeds of the
+/// `use.mask`/`use.force` probe and the vdb slot check.
+// Portage: dep_check.py, mydbapi_match_pkgs(atom.without_use)[-1]
+pub(crate) type CandidateUseProbe = (
+    String,
+    Vec<String>,
+    HashSet<String>,
+    Rc<HashSet<String>>,
+    String,
+);
+
+/// Arguments of [`highest_available_candidate_ignoring_use`].
+pub(crate) struct HighestAvailableCandidateIgnoringUseArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) atom_str: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) extra_constraints: &'a [String],
+}
+
+/// `extra_constraints` is the same backtrack-loop filter
+/// [`atom_currently_satisfiable`] applies, so once backtracking masks the
+/// highest version this probes the highest *unmasked* one instead.
+pub(crate) fn highest_available_candidate_ignoring_use(
+    args: HighestAvailableCandidateIgnoringUseArgs<'_>,
+) -> Option<CandidateUseProbe> {
+    let HighestAvailableCandidateIgnoringUseArgs {
+        repos,
+        atom_str,
+        category,
+        package,
+        config,
+        extra_constraints,
+    } = args;
+    let stripped = portage_dep::without_use(atom_str);
+    let Ok(candidates) = list_candidates(repos, category, package) else {
+        return None;
+    };
+    let visible: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| is_visible(c, category, package, config))
+        .collect();
+    if visible.is_empty() {
+        return None;
+    }
+    let candidate_strs: Vec<String> = visible
+        .iter()
+        .map(|c| {
+            format!(
+                "{category}/{package}-{}:{}/{}::{}",
+                c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    let matched = portage_dep::match_from_list(stripped, &candidate_str_refs)?;
+    // Same backtrack-loop filter as `atom_currently_satisfiable`.
+    let matched: Vec<&str> = if extra_constraints.is_empty() {
+        matched
+    } else {
+        matched
+            .into_iter()
+            .filter(|m| {
+                extra_constraints.iter().all(|c| {
+                    // Per-instance negatives hide no tree candidate.
+                    if is_instance_only_mask(c) {
+                        return true;
+                    }
+                    if let Some(neg) = c.strip_prefix('!') {
+                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    } else {
+                        portage_dep::match_from_list(c, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    }
+                })
+            })
+            .collect()
+    };
+    let mut by_str: HashMap<&str, &Candidate> = HashMap::new();
+    for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
+        by_str.insert(*s, *c);
+    }
+    // Matches arrive in repo/readdir order, so pick the highest version explicitly.
+    let best = matched
+        .iter()
+        .filter_map(|m| by_str.get(m))
+        .max_by(|a, b| vercmp_ordering(&a.version, &b.version))?;
+    let (iuse, use_flags) = candidate_iuse_and_use(best, category, package, config)?;
+    let best_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        best.version, best.slot, best.sub_slot, best.repo_name
+    );
+    Some((
+        best_str,
+        best.keywords.clone(),
+        iuse,
+        use_flags,
+        best.slot.clone(),
+    ))
+}
+
 /// The IUSE-missing-conditional mask: every `flag? ( … )` group and every conditional
 /// use-dep in the five dep keys must reference a flag valid for the atom-owning package's
 /// own effective IUSE (see [`implicit_iuse_set`]), or the candidate is masked `invalid`.

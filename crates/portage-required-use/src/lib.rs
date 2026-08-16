@@ -51,3 +51,23 @@ impl From<Error> for String {
         e.to_string()
     }
 }
+
+/// Whether a REQUIRED_USE leaf token (`flag`, or `!flag` for negation)
+/// is satisfied against `enabled` (effective USE) and `iuse` (declared
+/// IUSE). `Err` if the flag is not a declared IUSE flag.
+fn is_active(
+    token: &str,
+    enabled: &HashSet<String>,
+    iuse: &HashSet<String>,
+) -> Result<bool, Error> {
+    let (flag, negated) = match token.strip_prefix('!') {
+        Some(rest) => (rest, true),
+        None => (token, false),
+    };
+    if flag.is_empty() || !iuse.contains(flag) {
+        return Err(Error::UndeclaredFlag {
+            flag: flag.to_string(),
+        });
+    }
+    Ok(enabled.contains(flag) != negated)
+}

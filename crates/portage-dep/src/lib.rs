@@ -699,3 +699,220 @@ fn affecting_useflag_re() -> &'static Regex {
     // Modern-EAPI useflag charset; EAPI is not parametrized.
     RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+_@-]*$").unwrap())
 }
+
+#[cfg(test)]
+mod use_dep_satisfaction_tests {
+    use super::*;
+
+    fn use_deps(atom_str: &str) -> Vec<UseDep> {
+        parse_atom(atom_str)
+            .expect("atom must parse")
+            .use_deps
+            .expect("atom must carry use deps")
+    }
+
+    #[test]
+    fn plain_flag_requires_it_declared_and_enabled() {
+        let ud = use_deps("dev-libs/foo[bar]");
+        let iuse = HashSet::from(["bar".to_string()]);
+        assert!(use_deps_satisfied(
+            &ud,
+            &iuse,
+            &HashSet::from(["bar".to_string()])
+        ));
+        assert!(!use_deps_satisfied(&ud, &iuse, &HashSet::new()));
+    }
+
+    #[test]
+    fn negated_flag_requires_it_declared_and_disabled() {
+        let ud = use_deps("dev-libs/foo[-bar]");
+        let iuse = HashSet::from(["bar".to_string()]);
+        assert!(use_deps_satisfied(&ud, &iuse, &HashSet::new()));
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse,
+            &HashSet::from(["bar".to_string()])
+        ));
+    }
+
+    #[test]
+    fn flag_not_in_iuse_at_all_never_matches_without_a_default() {
+        // A default-less flag must be declared in IUSE, whatever its USE state.
+        let ud = use_deps("dev-libs/foo[bar]");
+        assert!(!use_deps_satisfied(
+            &ud,
+            &HashSet::new(),
+            &HashSet::from(["bar".to_string()])
+        ));
+    }
+
+    #[test]
+    fn plus_default_treats_a_missing_flag_as_enabled() {
+        let ud = use_deps("dev-libs/foo[bar(+)]");
+        // "bar" is undeclared: the (+) default stands in for "enabled".
+        assert!(use_deps_satisfied(&ud, &HashSet::new(), &HashSet::new()));
+    }
+
+    #[test]
+    fn minus_default_treats_a_missing_flag_as_disabled() {
+        let ud = use_deps("dev-libs/foo[-bar(-)]");
+        assert!(use_deps_satisfied(&ud, &HashSet::new(), &HashSet::new()));
+    }
+
+    #[test]
+    fn plus_default_does_not_rescue_a_declared_but_disabled_flag() {
+        // "bar" is declared, so the (+) default is moot; its real (disabled) state governs.
+        let ud = use_deps("dev-libs/foo[bar(+)]");
+        let iuse = HashSet::from(["bar".to_string()]);
+        assert!(!use_deps_satisfied(&ud, &iuse, &HashSet::new()));
+    }
+
+    #[test]
+    fn conditional_forms_only_require_the_flag_be_declared_no_state_constraint() {
+        // Conditional forms impose no state constraint; only the declared-IUSE gate applies.
+        for atom_str in [
+            "dev-libs/foo[bar?]",
+            "dev-libs/foo[!bar?]",
+            "dev-libs/foo[bar=]",
+            "dev-libs/foo[!bar=]",
+        ] {
+            let ud = use_deps(atom_str);
+            let iuse = HashSet::from(["bar".to_string()]);
+            assert!(
+                use_deps_satisfied(&ud, &iuse, &HashSet::new()),
+                "{atom_str} with bar disabled"
+            );
+            assert!(
+                use_deps_satisfied(&ud, &iuse, &HashSet::from(["bar".to_string()])),
+                "{atom_str} with bar enabled"
+            );
+            assert!(
+                !use_deps_satisfied(&ud, &HashSet::new(), &HashSet::new()),
+                "{atom_str} with bar undeclared"
+            );
+        }
+    }
+
+    /// Candidate state for a Portage test vector, built from its construction
+    /// atom as Portage's `Package` mock does: `iuse` = default-less flags,
+    /// `enabled` = bare flags. Vectors: lib/portage/tests/dep/test_match_from_list.py
+    fn enabled_of(atom_str: &str) -> HashSet<String> {
+        use_deps(atom_str)
+            .into_iter()
+            .filter(|ud| ud.op == UseDepOp::Enabled)
+            .map(|ud| ud.flag)
+            .collect()
+    }
+
+    fn iuse_of(atom_str: &str) -> HashSet<String> {
+        use_deps(atom_str)
+            .into_iter()
+            .filter(|ud| ud.default.is_none())
+            .map(|ud| ud.flag)
+            .collect()
+    }
+
+    #[test]
+    fn portage_test_suite_vector_foo_and_bar_both_required_neither_declares_bar() {
+        let ud = use_deps("dev-libs/A[foo,bar]");
+        // Package("=dev-libs/A-1[foo]") and Package("=dev-libs/A-2[-foo]")
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-1[foo]"),
+            &enabled_of("=dev-libs/A-1[foo]")
+        ));
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-2[-foo]"),
+            &enabled_of("=dev-libs/A-2[-foo]")
+        ));
+    }
+
+    #[test]
+    fn portage_test_suite_vector_foo_and_bar_both_required_one_satisfies() {
+        let ud = use_deps("dev-libs/A[foo,bar]");
+        // Package("=dev-libs/A-1[foo]") -> foo declared+enabled, but bar
+        // never declared at all -> still rejected.
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-1[foo]"),
+            &enabled_of("=dev-libs/A-1[foo]")
+        ));
+        // Package("=dev-libs/A-2[foo,bar]") -> both declared and enabled.
+        assert!(use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-2[foo,bar]"),
+            &enabled_of("=dev-libs/A-2[foo,bar]")
+        ));
+    }
+
+    #[test]
+    fn portage_test_suite_vector_plus_default_rescues_an_undeclared_flag_only() {
+        let ud = use_deps("dev-libs/A[foo,bar(+)]");
+        // Package("=dev-libs/A-1[-foo]"): bar undeclared -> (+) rescues
+        // it, but foo is declared and disabled -> still rejected.
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-1[-foo]"),
+            &enabled_of("=dev-libs/A-1[-foo]")
+        ));
+        // Package("=dev-libs/A-2[foo]"): foo declared+enabled, bar
+        // undeclared but (+)-rescued -> accepted.
+        assert!(use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-2[foo]"),
+            &enabled_of("=dev-libs/A-2[foo]")
+        ));
+    }
+
+    #[test]
+    fn portage_test_suite_vector_minus_default_on_a_required_enabled_flag_is_a_contradiction() {
+        // "bar(-)" on a required-enabled flag defaults undeclared "bar" to disabled: a contradiction.
+        let ud = use_deps("dev-libs/A[foo,bar(-)]");
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-1[-foo]"),
+            &enabled_of("=dev-libs/A-1[-foo]")
+        ));
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-2[foo]"),
+            &enabled_of("=dev-libs/A-2[foo]")
+        ));
+    }
+
+    #[test]
+    fn portage_test_suite_vector_minus_bar_default_combines_with_a_plain_required_flag() {
+        let ud = use_deps("dev-libs/A[foo,-bar(-)]");
+        // bar is declared here, so bar(-) is moot; foo is declared but disabled -> rejected.
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-1[-foo,bar]"),
+            &enabled_of("=dev-libs/A-1[-foo,bar]")
+        ));
+        // Package("=dev-libs/A-2[foo]"): foo declared+enabled; bar
+        // undeclared, defaults disabled via (-) -> satisfies "-bar(-)".
+        assert!(use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-2[foo]"),
+            &enabled_of("=dev-libs/A-2[foo]")
+        ));
+    }
+
+    #[test]
+    fn multiple_flags_all_must_be_satisfied() {
+        let ud = use_deps("dev-libs/foo[bar,-baz]");
+        let iuse = HashSet::from(["bar".to_string(), "baz".to_string()]);
+        assert!(use_deps_satisfied(
+            &ud,
+            &iuse,
+            &HashSet::from(["bar".to_string()])
+        ));
+        // baz still enabled -- violates the "-baz" requirement.
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse,
+            &HashSet::from(["bar".to_string(), "baz".to_string()])
+        ));
+    }
+}
