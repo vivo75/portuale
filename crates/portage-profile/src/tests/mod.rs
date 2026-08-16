@@ -7,3 +7,4 @@ fn fixtures_root() -> PathBuf {
         .expect("fixtures/ does not resolve: it is a symlink to ../pmtest/fixtures, so the sibling pmtest repo has to be checked out next to this one")
 }
 mod incrementals;
+mod resolve;
