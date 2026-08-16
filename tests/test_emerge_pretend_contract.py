@@ -122,6 +122,9 @@ CASES = [
     ("--help wins over any other flag present, valid or not", ["--deep", "--help"], 0),
     ("-h bundled with other short flags still wins", ["-ph"], 0),
     ("--help wins even without --pretend at all", ["--help", "dev-libs/newpkg"], 0),
+    ("@world expands to the fixture world file's own atoms", ["--pretend", "@world"], 0),
+    ("@world combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@world"], 0),
+    ("@system as a top-level atom: not implemented, clear invalid-atom error", ["--pretend", "@system"], 1),
 ]
 
 
@@ -946,6 +949,62 @@ def test_help_wins_unconditionally_regardless_of_other_flags_or_position(
         assert result.stdout.startswith(
             "emerge (pilot v1): command-line interface to the Rust porting pilot"
         ), args
+
+
+def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixture_env):
+    """PORTING/fixtures/var/lib/portage/world (real portage's own
+    WORLD_FILE, <ROOT>/var/lib/portage/world) lists dev-libs/newpkg and
+    dev-libs/withdeps (which itself recurses into newpkg again -- deduped
+    -- and upgradepkg), plus a "@some-nested-set-reference" line that
+    must be silently skipped, not mishandled -- proving @world expansion
+    feeds the exact same multi-atom/recursion machinery every other
+    invocation already uses, not a separate code path."""
+    result = _run([str(emerge_binary)], ["--pretend", "@world"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/newpkg-1.0",
+        "[ebuild  N] dev-libs/withdeps-1.0",
+        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+    ]
+
+
+def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
+    """@world can appear alongside an explicit atom in the same
+    invocation, expanding in place at whatever position it's given --
+    real portage's own most common combined usage shape."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/samepkg", "@world"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "dev-libs/samepkg-1.0 is already installed; nothing to do",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+        "[ebuild  N] dev-libs/withdeps-1.0",
+        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+    ]
+
+
+def test_world_missing_file_expands_to_nothing_not_an_error(
+    emerge_binary, fixture_env, tmp_path
+):
+    """A missing WORLD_FILE (e.g. a fresh ROOT that's never had anything
+    merged into it) is a real, valid state, not a mistake -- @world
+    expands to an empty list, which then hits the same "nothing to
+    resolve" error an empty target list from any other source would,
+    not a crash or a silent no-op. PORTAGE_CONFIGROOT stays pointed at
+    the real fixtures (for a valid repos.conf/profile); only ROOT is
+    redirected to an empty tmp_path with no var/lib/portage/world at
+    all."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(tmp_path)
+    result = _run([str(emerge_binary)], ["--pretend", "@world"], env)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == "emerge (pilot v1): no package atoms to resolve (the target list, "
+        "after expanding any @world, is empty)"
+    )
 
 
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):

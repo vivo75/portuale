@@ -1262,6 +1262,37 @@ def _print_help():
     print("See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.")
 
 
+def _read_world_atoms(root):
+    """Reads <root>/var/lib/portage/world (real portage's own WORLD_FILE
+    -- lib/portage/const.py) into a list of atom strings, one per line.
+    A missing file is not an error -- an empty, or never-yet-created,
+    world is a real, valid state, not a mistake.
+
+    KNOWN, DOCUMENTED SCOPE CUT: only plain atom lines are read, via a
+    leading "@" check. Real portage's own world file may also contain
+    "@some-set" lines (added by a prior "emerge --noreplace @some-set"),
+    and real @world is itself defined as the union of this file's own
+    atoms with any such referenced sets (see WorldSelectedSet in
+    lib/portage/_sets/files.py) -- resolving those recursively would
+    need general set-recursion machinery this pilot doesn't have, so a
+    "@"-prefixed line here is simply skipped rather than expanded.
+    @system (the profile's own "packages" file) is a separate, different
+    mechanism, already out of scope for unrelated reasons. Only the
+    literal token "@world" triggers this expansion at all. Mirrors
+    pretend.rs's read_world_atoms exactly."""
+    path = os.path.join(root, "var", "lib", "portage", "world")
+    try:
+        with open(path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        return []
+    return [
+        line
+        for line in (raw.strip() for raw in text.splitlines())
+        if line and not line.startswith("#") and not line.startswith("@")
+    ]
+
+
 def run(args):
     if _wants_help(args):
         _print_help()
@@ -1331,6 +1362,26 @@ def run(args):
         print(
             "emerge (pilot v1): expected a package atom, e.g. "
             "`emerge --pretend cat/pkg`",
+            file=sys.stderr,
+        )
+        return 2
+
+    # "@world" expands to the real WORLD_FILE's own atom list, in place,
+    # at whichever position it appears -- see _read_world_atoms's own
+    # docstring for the exact scope (plain atoms only; @system and
+    # nested "@set" references both stay unimplemented).
+    expanded_atoms = []
+    for atom_arg in atom_args:
+        if atom_arg == "@world":
+            expanded_atoms.extend(_read_world_atoms(_root()))
+        else:
+            expanded_atoms.append(atom_arg)
+    atom_args = expanded_atoms
+
+    if not atom_args:
+        print(
+            "emerge (pilot v1): no package atoms to resolve (the target list, "
+            "after expanding any @world, is empty)",
             file=sys.stderr,
         )
         return 2

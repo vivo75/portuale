@@ -111,6 +111,7 @@ use portage_dep::{parse_atom, Blocker};
 use portage_repo::{
     config_root_from_env, resolve_pretend_graph, root_from_env, GraphEntry, PretendOutcome,
 };
+use std::path::Path;
 use std::process::ExitCode;
 
 /// Prints one `[blocks]` line per conflict recorded on `entry` (see
@@ -222,6 +223,43 @@ fn print_help() {
     println!("See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.");
 }
 
+/// Reads `<root>/var/lib/portage/world` (real portage's own `WORLD_FILE`
+/// -- `lib/portage/const.py`) into a list of atom strings, one per line,
+/// with the same comment/blank-line handling every other config file
+/// this pilot already reads uses. A missing file is not an error -- an
+/// empty, or never-yet-created, world is a real, valid state (e.g. a
+/// fresh `ROOT`), not a mistake.
+///
+/// KNOWN, DOCUMENTED SCOPE CUT: only plain atom lines are read, via a
+/// leading `@` check. Real portage's own world file may also contain
+/// `@some-set` lines (added by a prior `emerge --noreplace @some-set`),
+/// and real `@world` is itself defined as the *union* of this file's own
+/// atoms with any such referenced sets (see `WorldSelectedSet` in
+/// `lib/portage/_sets/files.py`) -- resolving those recursively would
+/// need general set-recursion machinery this pilot doesn't have, so a
+/// `@`-prefixed line here is simply skipped rather than expanded.
+/// `@system` (the profile's own `packages` file) is a separate,
+/// different mechanism, already out of scope for unrelated reasons (see
+/// `portage-profile`'s own doc comment on the `packages` file). Only the
+/// literal token `@world` triggers this expansion at all -- `@system`,
+/// `@some-set`, etc. as a top-level target fall through to the normal
+/// atom-parsing path and get a clear "invalid atom" error, not a silent
+/// no-op.
+fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
+    let path = root.join("var/lib/portage/world");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+    };
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('@'))
+        .map(String::from)
+        .collect())
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     if wants_help(args) {
         print_help();
@@ -298,7 +336,36 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    let root = root_from_env();
+
+    // "@world" expands to the real WORLD_FILE's own atom list, in place,
+    // at whichever position it appears -- see read_world_atoms's doc
+    // comment for the exact scope (plain atoms only; @system and nested
+    // "@set" references both stay unimplemented).
+    let mut expanded_atoms: Vec<String> = Vec::new();
     for atom_str in &atom_args {
+        if *atom_str == "@world" {
+            match read_world_atoms(&root) {
+                Ok(world_atoms) => expanded_atoms.extend(world_atoms),
+                Err(e) => {
+                    eprintln!("emerge: {e}");
+                    return ExitCode::from(1);
+                }
+            }
+        } else {
+            expanded_atoms.push((*atom_str).to_string());
+        }
+    }
+
+    if expanded_atoms.is_empty() {
+        eprintln!(
+            "emerge (pilot v1): no package atoms to resolve (the target list, after \
+             expanding any @world, is empty)"
+        );
+        return ExitCode::from(2);
+    }
+
+    for atom_str in &expanded_atoms {
         let Some(atom) = parse_atom(atom_str) else {
             eprintln!("emerge: invalid atom {atom_str:?}");
             return ExitCode::from(1);
@@ -310,7 +377,6 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     let config_root = config_root_from_env();
-    let root = root_from_env();
 
     // resolve_config needs the main repo's own location for
     // package.mask/.unmask's repo-level source (see its doc comment) --
@@ -338,8 +404,7 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let atoms: Vec<String> = atom_args.iter().map(|s| s.to_string()).collect();
-    let result = match resolve_pretend_graph(&config_root, &root, &atoms, &config) {
+    let result = match resolve_pretend_graph(&config_root, &root, &expanded_atoms, &config) {
         Ok(result) => result,
         Err(e) => {
             eprintln!("emerge: {e}");
@@ -354,7 +419,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // dependency-level one, which stays silent below. A top-level atom's
     // own NoVisibleCandidate never reaches here at all: resolve_pretend_graph
     // already aborted the whole call for that case (see its doc comment).
-    let top_level_pkgs: std::collections::HashSet<(String, String)> = atom_args
+    let top_level_pkgs: std::collections::HashSet<(String, String)> = expanded_atoms
         .iter()
         .filter_map(|a| parse_atom(a))
         .map(|a| (a.category, a.package))

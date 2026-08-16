@@ -1,0 +1,9 @@
+# fixture world file: two atoms, one that resolves New (dev-libs/newpkg)
+# and one that pulls in a real dependency chain (dev-libs/withdeps),
+# proving @world expansion feeds the same multi-atom/recursion machinery
+# every other invocation already uses. A "@"-prefixed line (a nested set
+# reference real portage's world file can contain) is included to prove
+# it's skipped, not mishandled.
+dev-libs/newpkg
+@some-nested-set-reference
+dev-libs/withdeps

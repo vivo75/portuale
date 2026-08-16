@@ -767,6 +767,28 @@ PORTING/
   simplification on top of what `package.mask`/`.accept_keywords`
   already established, it just applies the pre-existing one more
   widely.
+
+  **`@world` set support**: the first non-atom target `emerge --pretend`
+  accepts. Grounded against `lib/portage/const.py` (`WORLD_FILE` is
+  `var/lib/portage/world`, `ROOT`-relative -- the same relative-to-`ROOT`
+  convention already used for vdb lookups) and `WorldSelectedSet` in
+  `lib/portage/_sets/files.py`, which confirms real `@world` is the
+  *union* of that flat file's own atoms with any nested `@set`
+  references it may also contain (added by a prior `emerge --noreplace
+  @some-set`). This pilot reads the file's plain atom lines and expands
+  them in place at whatever position `@world` appears in argv, feeding
+  the exact same multi-atom/recursion machinery every other invocation
+  already uses -- not a separate code path. This is a **deliberate,
+  confirmed-with-the-user simplification**: a `@`-prefixed line is
+  silently skipped rather than recursively expanded, since that would
+  need general set-recursion machinery this pilot doesn't have; a
+  missing world file (a fresh `ROOT` that's never had anything merged
+  into it) is treated as a real, valid empty state, not an error. Only
+  the literal token `@world` triggers this expansion -- `@system` (a
+  separate mechanism, the profile's own `packages` file, already out of
+  scope for unrelated reasons noted above) or any other `@`-prefixed
+  top-level target falls through to the ordinary atom-parsing path and
+  gets a clear "invalid atom" error rather than a silent no-op.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -919,6 +941,15 @@ and `profileuseenablepkg` (each with its own `IUSE`-declared flag,
 off everywhere else, pulling in `newpkg` via its own `?`-gated RDEPEND
 only because the repo-level or profile-level source, respectively,
 enables it).
+
+`PORTING/fixtures/var/lib/portage/world` (real portage's own `WORLD_FILE`
+location, `ROOT`-relative) exercises `@world` expansion: it lists
+`dev-libs/newpkg` directly, `dev-libs/withdeps` (which recurses into
+`newpkg` again -- deduped -- and `dev-libs/upgradepkg` via its own
+RDEPEND, proving `@world`'s expanded atoms feed the same recursion
+machinery any other target does), and a `@some-nested-set-reference`
+line proving a nested-set reference is silently skipped rather than
+mishandled.
 
 Four more fixture packages exercise blocker reporting: `blockerpkg`
 (RDEPEND `"!!dev-libs/samepkg"`, a strong blocker matching
@@ -1226,6 +1257,36 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg:0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend '!!dev-libs/newpkg'
 # emerge (pilot v1): "!!dev-libs/newpkg" is a blocker, not a valid emerge target  (exit 2)
 
+# @world expands in place to the fixture world file's own atoms: newpkg
+# directly, withdeps (which recurses into newpkg again -- deduped -- and
+# upgradepkg), and a "@some-nested-set-reference" line that's silently
+# skipped, not mishandled
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend @world
+# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N] dev-libs/withdeps-1.0
+# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+
+# @world combines with an explicit atom in the same invocation
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg @world
+# dev-libs/samepkg-1.0 is already installed; nothing to do
+# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N] dev-libs/withdeps-1.0
+# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+
+# a missing world file (a fresh ROOT that's never had anything merged
+# into it) is a real, valid empty state, not an error -- it hits the same
+# "nothing to resolve" error any other empty target list would
+mkdir -p /tmp/empty-world-root
+PORTAGE_CONFIGROOT="$FX" ROOT="/tmp/empty-world-root" /tmp/emerge --pretend @world
+# emerge (pilot v1): no package atoms to resolve (the target list, after
+# expanding any @world, is empty)  (exit 2)
+
+# @system is a separate, still-unimplemented mechanism (the profile's own
+# "packages" file) -- as a top-level target it falls through to the
+# ordinary atom-parsing path and gets a clear error, not a silent no-op
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend @system
+# emerge: invalid atom "@system"  (exit 1)
+
 # --verbose/-v is real and implemented: USE flags are off by default,
 # same as real emerge, and only shown with -v -- alphabetically sorted,
 # limited to this package's own IUSE (foo enabled, missingflag disabled,
@@ -1272,8 +1333,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # implement is named specifically, not lumped in with a typo
 /tmp/emerge --deep dev-libs/newpkg
 # emerge (pilot v1): option "--deep" is a real emerge option, but is not
-# implemented in this pilot (only --pretend/-p and --verbose/-v are
-# implemented so far; see PROMPT.md)
+# implemented in this pilot (only --pretend/-p, --verbose/-v, and
+# --help/-h are implemented so far; see PROMPT.md)  (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message
