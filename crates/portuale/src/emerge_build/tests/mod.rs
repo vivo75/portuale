@@ -2,6 +2,8 @@ use super::*;
 
 use portage_repo::find_repos;
 
+use portage_util::TempDir;
+
 use std::fs;
 
 fn fixtures_root() -> PathBuf {

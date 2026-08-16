@@ -7,6 +7,8 @@
 // becomes `portage_profile::Config::scanned_binpkgs`, never written back
 // to `Packages`.
 
+use portage_util::TempDir;
+
 #[cfg(test)]
 mod tests;
 

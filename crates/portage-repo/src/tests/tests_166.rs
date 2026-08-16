@@ -2,6 +2,7 @@
 /// test observes the predicate's own return value. Do not edit other
 /// items' `mod tests_16x` blocks.
 use crate::*;
+use portage_util::TempDir;
 
 // ---- `direct_solve_arg_mode` (Portage `_want_installed_pkg`). ----
 

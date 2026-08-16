@@ -1,6 +1,7 @@
 /// Result/display-assembly unit tests: each test observes the
 /// assembled structures directly, never a contract pin's text.
 use crate::*;
+use portage_util::TempDir;
 
 fn new_163(version: &str) -> PretendOutcome {
     PretendOutcome::New {

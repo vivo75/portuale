@@ -34,6 +34,7 @@ pub fn select_phases(defined_phases: &str, has_ebuild: bool, has_environment: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_util::TempDir;
 
     fn fixture(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

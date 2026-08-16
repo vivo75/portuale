@@ -7,7 +7,10 @@
 use std::fs::DirEntry;
 use std::io;
 use std::path::{Path, PathBuf};
+
+mod temp_dir;
 mod varexpand;
+pub use temp_dir::TempDir;
 pub use varexpand::varexpand;
 
 /// The seed from `PORTUALE_SHUFFLE_DIRS` (test/CI-only), if set. Read

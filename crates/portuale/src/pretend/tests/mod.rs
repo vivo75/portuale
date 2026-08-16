@@ -1,5 +1,7 @@
 use super::*;
 
+use portage_util::TempDir;
+
 /// An unowned ROOT for the privilege tests; `None` for a root caller, whose test
 /// returns early.
 #[cfg(unix)]

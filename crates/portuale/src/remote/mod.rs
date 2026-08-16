@@ -23,6 +23,8 @@ mod ledger;
 pub(crate) mod tests;
 pub(crate) use ledger::*;
 
+use portage_util::TempDir;
+
 use std::collections::HashMap;
 
 use std::path::Path;

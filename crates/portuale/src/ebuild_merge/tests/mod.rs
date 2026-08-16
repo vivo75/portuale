@@ -1,5 +1,7 @@
 use super::*;
 
+use portage_util::TempDir;
+
 fn fixtures_root() -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
