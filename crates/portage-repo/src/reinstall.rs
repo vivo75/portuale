@@ -57,6 +57,87 @@ pub(crate) fn canonical_dep_key(
     }
     Some(out)
 }
+
+/// Arguments of [`binary_deps_changed`].
+pub(crate) struct BinaryDepsChangedArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) with_bdeps: bool,
+}
+
+/// `--binpkg-changed-deps` (auto-enabled whenever `--usepkgonly` is not
+/// given): rejects a *binary* candidate whose recorded `*DEPEND` differs
+/// from the current ebuild's, so a binhost package built against a
+/// since-changed ebuild is rebuilt instead. Same canonical comparison as
+/// `deps_changed`, but the built side is the binary's own `Packages`
+/// metadata, reduced with the flags it was *actually built with*
+/// (`Candidate::binary_use`).
+/// Portage: depgraph.py, _wrapped_select_pkg_highest_available_imp.
+pub(crate) fn binary_deps_changed(args: BinaryDepsChangedArgs<'_>) -> bool {
+    let BinaryDepsChangedArgs {
+        root,
+        repos,
+        candidate,
+        category,
+        package,
+        with_bdeps,
+    } = args;
+    let dep_keys: &[&str] = if with_bdeps {
+        &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    };
+    let built_use = candidate.binary_use.clone().unwrap_or_default();
+    let binary_metadata = &candidate.binary_deps;
+    let Ok(repo_candidates) = list_candidates(repos, category, package) else {
+        return false;
+    };
+    let Some(resolved) = repo_candidates
+        .iter()
+        .filter(|c| c.version == candidate.version)
+        .max_by_key(|c| c.repo_priority)
+    else {
+        return false;
+    };
+    let pf = format!("{package}-{}", candidate.version);
+    let Ok(ebuild_metadata) = repo_aux_metadata(&resolved.repo_location, category, &pf) else {
+        return false;
+    };
+    let libc_cps = libc_provider_cps(root);
+
+    let mut built_by_key: Vec<Vec<String>> = Vec::with_capacity(dep_keys.len());
+    for key in dep_keys {
+        match canonical_dep_key(
+            binary_metadata
+                .get(*key)
+                .map(String::as_str)
+                .unwrap_or_default(),
+            &built_use,
+            &libc_cps,
+        ) {
+            Some(canon) => built_by_key.push(canon),
+            None => return true,
+        }
+    }
+    let mut ebuild_by_key: Vec<Vec<String>> = Vec::with_capacity(dep_keys.len());
+    for key in dep_keys {
+        match canonical_dep_key(
+            ebuild_metadata
+                .get(*key)
+                .map(String::as_str)
+                .unwrap_or_default(),
+            &built_use,
+            &libc_cps,
+        ) {
+            Some(canon) => ebuild_by_key.push(canon),
+            None => return false,
+        }
+    }
+    built_by_key != ebuild_by_key
+}
 /// Arguments of [`deps_changed`].
 pub(crate) struct DepsChangedArgs<'a> {
     pub(crate) root: &'a Path,

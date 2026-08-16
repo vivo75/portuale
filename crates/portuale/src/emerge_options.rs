@@ -278,6 +278,12 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_with_bdeps_or_with_bdeps_auto_either() {
+        assert!(lookup("--with-bdeps").is_none());
+        assert!(lookup("--with-bdeps-auto").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }

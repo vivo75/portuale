@@ -718,6 +718,121 @@ fn parse_output_opts<'a>(
     }
 }
 
+/// Removal actions and with-bdeps flags. Returns whether the token was consumed.
+fn parse_action_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--unmerge" || arg == "-C" {
+        opts.unmerge = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--depclean" || arg == "-c" {
+        opts.depclean = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--prune" || arg == "-P" {
+        opts.prune = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--config" {
+        opts.config_action = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--with-bdeps" {
+        // A REQUIRED closed-choice value (`y`/`n`): a missing or other
+        // value is an immediate usage error, with no default to fall back to.
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--with-bdeps\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        match value.as_str() {
+            "y" => {
+                opts.with_bdeps = true;
+                opts.with_bdeps_given = true;
+                *idx += 2;
+            }
+            "n" => {
+                opts.with_bdeps = false;
+                opts.with_bdeps_given = true;
+                *idx += 2;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--with-bdeps=") {
+        match value {
+            "y" => {
+                opts.with_bdeps = true;
+                opts.with_bdeps_given = true;
+                *idx += 1;
+            }
+            "n" => {
+                opts.with_bdeps = false;
+                opts.with_bdeps_given = true;
+                *idx += 1;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if arg == "--with-bdeps-auto" {
+        // Same required closed-choice shape as `--with-bdeps`.
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--with-bdeps-auto\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        match value.as_str() {
+            "y" => {
+                opts.with_bdeps_auto = true;
+                *idx += 2;
+            }
+            "n" => {
+                opts.with_bdeps_auto = false;
+                *idx += 2;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--with-bdeps-auto\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--with-bdeps-auto=") {
+        match value {
+            "y" => {
+                opts.with_bdeps_auto = true;
+                *idx += 1;
+            }
+            "n" => {
+                opts.with_bdeps_auto = false;
+                *idx += 1;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--with-bdeps-auto\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Optional-value boolean toggles. Returns whether the token was consumed.
 fn parse_toggle_opts<'a>(
     opts: &mut EmergeOpts<'a>,
@@ -875,6 +990,135 @@ fn parse_toggle_opts<'a>(
     } else if arg == "--selective=n" {
         opts.selective_flag = Some(false);
         *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Autounmask scope flags. Returns whether the token was consumed.
+fn parse_autounmask_scope_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--autounmask-use" {
+        // A REQUIRED `y`/`n` value.
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--autounmask-use\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        match value.as_str() {
+            "y" => {
+                opts.autounmask_use = Some(true);
+                *idx += 2;
+            }
+            "n" => {
+                opts.autounmask_use = Some(false);
+                *idx += 2;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--autounmask-use\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--autounmask-use=") {
+        match value {
+            "y" => {
+                opts.autounmask_use = Some(true);
+                *idx += 1;
+            }
+            "n" => {
+                opts.autounmask_use = Some(false);
+                *idx += 1;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--autounmask-use\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if arg == "--autounmask-license" {
+        // A REQUIRED `y`/`n` value, like `--autounmask-use`.
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--autounmask-license\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        match value.as_str() {
+            "y" => {
+                opts.autounmask_license = Some(true);
+                *idx += 2;
+            }
+            "n" => {
+                opts.autounmask_license = Some(false);
+                *idx += 2;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--autounmask-license\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--autounmask-license=") {
+        match value {
+            "y" => {
+                opts.autounmask_license = Some(true);
+                *idx += 1;
+            }
+            "n" => {
+                opts.autounmask_license = Some(false);
+                *idx += 1;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--autounmask-license\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if arg == "--autounmask-keep-masks" {
+        // Same shape as `--changed-deps`.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.autounmask_keep_masks = Some(true);
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.autounmask_keep_masks = Some(false);
+                *idx += 2;
+            }
+            _ => {
+                opts.autounmask_keep_masks = Some(true);
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--autounmask-keep-masks=") {
+        match value {
+            "y" | "True" => {
+                opts.autounmask_keep_masks = Some(true);
+                *idx += 1;
+            }
+            "n" => {
+                opts.autounmask_keep_masks = Some(false);
+                *idx += 1;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
         Ok(true)
     } else {
         Ok(false)
