@@ -43,26 +43,29 @@
 //
 // USE deps (`foo[bar]`, `foo[bar?,!baz=,qux(+)]` -- PMS 8.3.4, all 7
 // per-flag forms plus 4-style `(+)`/`(-)` defaults) ARE parsed -- see
-// `UseDep`/`UseDepOp`/`UseDepDefault` and `parse_use_deps` -- but
-// deliberately NOT enforced when matching: `matches_version`/
-// `matches_slot`/`match_from_list` never consult `Atom::use_deps` at
-// all, a documented, deliberate v1 simplification (this pilot's
-// dependency-graph model has no per-package IUSE/USE state to check a
-// use-dep against, and the `opt=`/`opt?` forms would additionally need
-// the *atom-owning* package's own USE state, not just the candidate's --
-// a considerably bigger, separately out-of-scope piece of work). This
-// isn't an invented divergence from real portage, though: verified
-// empirically, real `match_from_list` given the same plain-string
-// candidates this pilot uses already behaves identically -- its own
-// USE-dep filtering is skipped entirely for any candidate that isn't a
-// real Package object with `.use`/`.iuse` attributes (see the `hasattr`
-// check in `lib/portage/dep/__init__.py`'s `match_from_list`), which is
-// exactly the plain-string-candidate case here. Before USE deps were
-// parseable at all, an atom using one wasn't just "under-enforced" --
-// it was rejected as `INVALID` outright, which for a *dependency* atom
-// extracted from DEPEND/RDEPEND meant `resolve_pretend_graph`'s BFS
-// silently dropped it from the graph entirely (same class of bug the
-// slot-operator follow-up found and fixed -- see that doc comment).
+// `UseDep`/`UseDepOp`/`UseDepDefault` and `parse_use_deps` -- and, as of
+// `use_deps_satisfied` (see its own doc comment for the full algorithm,
+// ported from real `match_from_list`'s own USE-dep post-pass), CAN now
+// be enforced too, given real per-candidate IUSE/USE state -- but
+// `matches_version`/`matches_slot`/`match_from_list` themselves still
+// never consult `Atom::use_deps` at all, matching real `match_from_list`
+// exactly: its own USE-dep filtering is skipped entirely for any
+// candidate that isn't a real Package object with `.use`/`.iuse`
+// attributes (see the `hasattr` check in
+// `lib/portage/dep/__init__.py`'s `match_from_list`), which is exactly
+// the plain-string-candidate case `match_from_list` here always sees --
+// so leaving `match_from_list` itself unaware of use deps isn't a
+// divergence, just where real portage's own architecture already draws
+// this line. `portage-repo` calls `use_deps_satisfied` directly, as an
+// extra filter after `match_from_list`'s own version/slot/repo
+// filtering, once it already has each surviving candidate's own real
+// IUSE/effective-USE in hand (computed for other reasons already -- see
+// that crate's own doc comment). Before USE deps were parseable at all,
+// an atom using one wasn't just "under-enforced" -- it was rejected as
+// `INVALID` outright, which for a *dependency* atom extracted from
+// DEPEND/RDEPEND meant `resolve_pretend_graph`'s BFS silently dropped it
+// from the graph entirely (same class of bug the slot-operator follow-up
+// found and fixed -- see that doc comment).
 //
 // The `=*` glob version operator (PMS 8.3.1) IS supported: see
 // `Operator::EqGlob`, `atom_regex`'s doc comment on why the trailing "*"
@@ -107,6 +110,7 @@
 
 use portage_versions::vercmp;
 use regex::Regex;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 const CAT: &str = r"[A-Za-z0-9_][A-Za-z0-9+_.-]*";
@@ -199,8 +203,12 @@ pub enum SlotOperator {
 /// `_usedep_re` groups) a single flag spec uses. `EqualParent`/
 /// `OppositeParent` and `IfParentEnabled`/`IfParentDisabled` are both
 /// conditional on the *atom-owning* package's own USE state, not just the
-/// candidate's -- irrelevant here since `Atom::use_deps` is parsed but
-/// never consulted by matching (see the module doc comment).
+/// candidate's -- `use_deps_satisfied` (see its own doc comment) still
+/// requires their own flag to be a real, declared IUSE flag on the
+/// candidate (same as any other use-dep flag), but, matching real
+/// `match_from_list` exactly, imposes no enabled/disabled constraint
+/// from them at all; only `Enabled`/`Disabled` (the two unconditional
+/// forms) actually constrain a candidate's own USE state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UseDepOp {
     Enabled,          // "flag"
@@ -656,6 +664,116 @@ fn matches_repo(atom: &Atom, candidate: &Candidate) -> bool {
     }
 }
 
+/// Ports real `match_from_list`'s own USE-dep post-pass (its
+/// `if mydep.unevaluated_atom.use:` block, `lib/portage/dep/__init__.py`
+/// lines 3143-3188) -- NOT called from `match_from_list` itself, since
+/// that function only ever sees plain candidate strings, which carry no
+/// IUSE/USE state at all (real `match_from_list` skips this same block
+/// entirely for a plain-string candidate too -- its own `hasattr(x,
+/// "use")` guard -- so this pilot's `match_from_list` staying unaware of
+/// use deps isn't a divergence). Callers with real per-candidate
+/// IUSE/USE state (`portage-repo`, which already computes both via
+/// `read_md5_cache`/`effective_use_flags` for other reasons) call this
+/// directly, after `match_from_list`'s own version/slot/repo filtering.
+///
+/// `iuse` is the candidate's own declared IUSE (flag names, `+`/`-`
+/// default markers already stripped -- same shape `effective_use_flags`'s
+/// callers already extract from md5-cache elsewhere); `enabled` is its
+/// own effective (computed) USE set.
+///
+/// Real behavior, faithfully ported, not simplified: a use-dep flag with
+/// no `(+)`/`(-)` default marker -- of ANY form, including the four
+/// conditional ones below -- must be a real, declared IUSE flag on the
+/// candidate, or the atom doesn't match this candidate at all (real
+/// `_use_dep.required`, checked via `x.iuse.is_valid_flag(...)` before
+/// anything else). Only the two *unconditional* forms, `flag` and
+/// `-flag` (`UseDepOp::Enabled`/`Disabled`), actually constrain the
+/// candidate's own enabled/disabled state; a `(+)`/`(-)` default is
+/// consulted only for a flag that's missing from this candidate's own
+/// IUSE, standing in for "as if the flag were enabled/disabled".
+/// `flag?`/`!flag?`/`flag=`/`!flag=` (`UseDepOp::IfParentEnabled`/
+/// `IfParentDisabled`/`EqualParent`/`OppositeParent`) impose NO
+/// enabled/disabled constraint here at all -- this is real
+/// `match_from_list`'s own genuine behavior (it only ever consults
+/// `mydep.use.enabled`/`.disabled`, which real `_use_dep.__init__` populates
+/// solely from the two unconditional forms; the four conditional ones
+/// land in a separate `.conditional` structure that `match_from_list`
+/// never reads), not a pilot simplification: evaluating a conditional
+/// use-dep needs the *atom-owning* package's own USE state, a completely
+/// different mechanism (dependency-string conditional evaluation) this
+/// pilot doesn't have and `match_from_list` itself doesn't either.
+pub fn use_deps_satisfied(
+    use_deps: &[UseDep],
+    iuse: &HashSet<String>,
+    enabled: &HashSet<String>,
+) -> bool {
+    if use_deps
+        .iter()
+        .any(|ud| ud.default.is_none() && !iuse.contains(&ud.flag))
+    {
+        return false;
+    }
+
+    let missing_enabled: HashSet<&str> = use_deps
+        .iter()
+        .filter(|ud| ud.default == Some(UseDepDefault::Enabled) && !iuse.contains(&ud.flag))
+        .map(|ud| ud.flag.as_str())
+        .collect();
+    let missing_disabled: HashSet<&str> = use_deps
+        .iter()
+        .filter(|ud| ud.default == Some(UseDepDefault::Disabled) && !iuse.contains(&ud.flag))
+        .map(|ud| ud.flag.as_str())
+        .collect();
+
+    let required_enabled: HashSet<&str> = use_deps
+        .iter()
+        .filter(|ud| ud.op == UseDepOp::Enabled)
+        .map(|ud| ud.flag.as_str())
+        .collect();
+    let required_disabled: HashSet<&str> = use_deps
+        .iter()
+        .filter(|ud| ud.op == UseDepOp::Disabled)
+        .map(|ud| ud.flag.as_str())
+        .collect();
+
+    if !required_enabled.is_empty() {
+        if required_enabled
+            .iter()
+            .any(|f| missing_disabled.contains(f))
+        {
+            return false;
+        }
+        let need_enabled: Vec<&str> = required_enabled
+            .iter()
+            .filter(|f| !enabled.contains(**f))
+            .copied()
+            .collect();
+        if !need_enabled.is_empty() && need_enabled.iter().any(|f| !missing_enabled.contains(f)) {
+            return false;
+        }
+    }
+
+    if !required_disabled.is_empty() {
+        if required_disabled
+            .iter()
+            .any(|f| missing_enabled.contains(f))
+        {
+            return false;
+        }
+        let need_disabled: Vec<&str> = required_disabled
+            .iter()
+            .filter(|f| enabled.contains(**f))
+            .copied()
+            .collect();
+        if !need_disabled.is_empty() && need_disabled.iter().any(|f| !missing_disabled.contains(f))
+        {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Mirrors `match_from_list`: given an atom string and a list of candidate
 /// strings, returns the subset (in input order) that match. `None` means
 /// the atom itself failed to parse under the v1 grammar. Unparseable
@@ -788,5 +906,245 @@ mod wildcard_tests {
         assert_eq!(parse_wildcard_atom("dev-libs/"), None);
         assert_eq!(parse_wildcard_atom("/foo"), None);
         assert_eq!(parse_wildcard_atom("dev-libs/foo/bar"), None);
+    }
+}
+
+#[cfg(test)]
+mod use_dep_satisfaction_tests {
+    use super::*;
+
+    fn use_deps(atom_str: &str) -> Vec<UseDep> {
+        parse_atom(atom_str)
+            .expect("atom must parse")
+            .use_deps
+            .expect("atom must carry use deps")
+    }
+
+    #[test]
+    fn plain_flag_requires_it_declared_and_enabled() {
+        let ud = use_deps("dev-libs/foo[bar]");
+        let iuse = HashSet::from(["bar".to_string()]);
+        assert!(use_deps_satisfied(
+            &ud,
+            &iuse,
+            &HashSet::from(["bar".to_string()])
+        ));
+        assert!(!use_deps_satisfied(&ud, &iuse, &HashSet::new()));
+    }
+
+    #[test]
+    fn negated_flag_requires_it_declared_and_disabled() {
+        let ud = use_deps("dev-libs/foo[-bar]");
+        let iuse = HashSet::from(["bar".to_string()]);
+        assert!(use_deps_satisfied(&ud, &iuse, &HashSet::new()));
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse,
+            &HashSet::from(["bar".to_string()])
+        ));
+    }
+
+    #[test]
+    fn flag_not_in_iuse_at_all_never_matches_without_a_default() {
+        // Real _use_dep.required: any use-dep flag with no (+)/(-)
+        // default must be a real, declared IUSE flag on the candidate,
+        // or the atom simply doesn't match -- regardless of enabled/
+        // disabled state.
+        let ud = use_deps("dev-libs/foo[bar]");
+        assert!(!use_deps_satisfied(
+            &ud,
+            &HashSet::new(),
+            &HashSet::from(["bar".to_string()])
+        ));
+    }
+
+    #[test]
+    fn plus_default_treats_a_missing_flag_as_enabled() {
+        let ud = use_deps("dev-libs/foo[bar(+)]");
+        // "bar" isn't declared in IUSE at all -- the (+) default stands
+        // in for "as if enabled", so this still matches.
+        assert!(use_deps_satisfied(&ud, &HashSet::new(), &HashSet::new()));
+    }
+
+    #[test]
+    fn minus_default_treats_a_missing_flag_as_disabled() {
+        let ud = use_deps("dev-libs/foo[-bar(-)]");
+        assert!(use_deps_satisfied(&ud, &HashSet::new(), &HashSet::new()));
+    }
+
+    #[test]
+    fn plus_default_does_not_rescue_a_declared_but_disabled_flag() {
+        // "bar" IS declared in IUSE here, so the (+) default (which only
+        // ever applies to a MISSING flag) doesn't apply -- the candidate's
+        // own actual (disabled) state governs instead.
+        let ud = use_deps("dev-libs/foo[bar(+)]");
+        let iuse = HashSet::from(["bar".to_string()]);
+        assert!(!use_deps_satisfied(&ud, &iuse, &HashSet::new()));
+    }
+
+    #[test]
+    fn conditional_forms_only_require_the_flag_be_declared_no_state_constraint() {
+        // flag? / !flag? / flag= / !flag= never constrain enabled/disabled
+        // state in match_from_list itself (see use_deps_satisfied's own
+        // doc comment) -- only the "must be declared IUSE" gate applies.
+        for atom_str in [
+            "dev-libs/foo[bar?]",
+            "dev-libs/foo[!bar?]",
+            "dev-libs/foo[bar=]",
+            "dev-libs/foo[!bar=]",
+        ] {
+            let ud = use_deps(atom_str);
+            let iuse = HashSet::from(["bar".to_string()]);
+            assert!(
+                use_deps_satisfied(&ud, &iuse, &HashSet::new()),
+                "{atom_str} with bar disabled"
+            );
+            assert!(
+                use_deps_satisfied(&ud, &iuse, &HashSet::from(["bar".to_string()])),
+                "{atom_str} with bar enabled"
+            );
+            assert!(
+                !use_deps_satisfied(&ud, &HashSet::new(), &HashSet::new()),
+                "{atom_str} with bar undeclared"
+            );
+        }
+    }
+
+    /// Real portage's own authoritative test vectors for this exact
+    /// USE-dep-vs-Package-mock matching behavior --
+    /// lib/portage/tests/dep/test_match_from_list.py's own
+    /// testMatch_from_list, the `dev-libs/A[...]` cases (lines 151-195).
+    /// Its own `Package` mock derives a candidate's `iuse` from
+    /// `atom.use.required` (the flags with NO `(+)`/`(-)` default in the
+    /// atom string used to construct that particular candidate) and
+    /// `enabled` from `atom.use.enabled` (bare, non-`-`-prefixed tokens)
+    /// -- reproduced by hand below via `use_deps`/`enabled_of` on the
+    /// same construction atom strings, rather than re-deriving the
+    /// mock's own logic.
+    fn enabled_of(atom_str: &str) -> HashSet<String> {
+        use_deps(atom_str)
+            .into_iter()
+            .filter(|ud| ud.op == UseDepOp::Enabled)
+            .map(|ud| ud.flag)
+            .collect()
+    }
+
+    fn iuse_of(atom_str: &str) -> HashSet<String> {
+        // "required": every use-dep flag with no (+)/(-) default marker.
+        use_deps(atom_str)
+            .into_iter()
+            .filter(|ud| ud.default.is_none())
+            .map(|ud| ud.flag)
+            .collect()
+    }
+
+    #[test]
+    fn real_test_suite_vector_foo_and_bar_both_required_neither_declares_bar() {
+        let ud = use_deps("dev-libs/A[foo,bar]");
+        // Package("=dev-libs/A-1[foo]") and Package("=dev-libs/A-2[-foo]")
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-1[foo]"),
+            &enabled_of("=dev-libs/A-1[foo]")
+        ));
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-2[-foo]"),
+            &enabled_of("=dev-libs/A-2[-foo]")
+        ));
+    }
+
+    #[test]
+    fn real_test_suite_vector_foo_and_bar_both_required_one_satisfies() {
+        let ud = use_deps("dev-libs/A[foo,bar]");
+        // Package("=dev-libs/A-1[foo]") -> foo declared+enabled, but bar
+        // never declared at all -> still rejected.
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-1[foo]"),
+            &enabled_of("=dev-libs/A-1[foo]")
+        ));
+        // Package("=dev-libs/A-2[foo,bar]") -> both declared and enabled.
+        assert!(use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-2[foo,bar]"),
+            &enabled_of("=dev-libs/A-2[foo,bar]")
+        ));
+    }
+
+    #[test]
+    fn real_test_suite_vector_plus_default_rescues_an_undeclared_flag_only() {
+        let ud = use_deps("dev-libs/A[foo,bar(+)]");
+        // Package("=dev-libs/A-1[-foo]"): bar undeclared -> (+) rescues
+        // it, but foo is declared and disabled -> still rejected.
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-1[-foo]"),
+            &enabled_of("=dev-libs/A-1[-foo]")
+        ));
+        // Package("=dev-libs/A-2[foo]"): foo declared+enabled, bar
+        // undeclared but (+)-rescued -> accepted.
+        assert!(use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-2[foo]"),
+            &enabled_of("=dev-libs/A-2[foo]")
+        ));
+    }
+
+    #[test]
+    fn real_test_suite_vector_minus_default_on_a_required_enabled_flag_is_a_contradiction() {
+        // "bar(-)" (no "-" prefix, so op=Enabled) defaults an UNDECLARED
+        // "bar" to disabled -- directly contradicting "bar" being
+        // required enabled, so a candidate missing "bar" entirely is
+        // rejected outright, regardless of "foo".
+        let ud = use_deps("dev-libs/A[foo,bar(-)]");
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-1[-foo]"),
+            &enabled_of("=dev-libs/A-1[-foo]")
+        ));
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-2[foo]"),
+            &enabled_of("=dev-libs/A-2[foo]")
+        ));
+    }
+
+    #[test]
+    fn real_test_suite_vector_minus_bar_default_combines_with_a_plain_required_flag() {
+        let ud = use_deps("dev-libs/A[foo,-bar(-)]");
+        // Package("=dev-libs/A-1[-foo,bar]"): bar IS declared here (no
+        // default in ITS OWN construction atom), so bar(-)'s default
+        // never applies -- foo is declared but disabled, violating the
+        // plain "foo" (must-be-enabled) requirement.
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-1[-foo,bar]"),
+            &enabled_of("=dev-libs/A-1[-foo,bar]")
+        ));
+        // Package("=dev-libs/A-2[foo]"): foo declared+enabled; bar
+        // undeclared, defaults disabled via (-) -> satisfies "-bar(-)".
+        assert!(use_deps_satisfied(
+            &ud,
+            &iuse_of("=dev-libs/A-2[foo]"),
+            &enabled_of("=dev-libs/A-2[foo]")
+        ));
+    }
+
+    #[test]
+    fn multiple_flags_all_must_be_satisfied() {
+        let ud = use_deps("dev-libs/foo[bar,-baz]");
+        let iuse = HashSet::from(["bar".to_string(), "baz".to_string()]);
+        assert!(use_deps_satisfied(
+            &ud,
+            &iuse,
+            &HashSet::from(["bar".to_string()])
+        ));
+        // baz still enabled -- violates the "-baz" requirement.
+        assert!(!use_deps_satisfied(
+            &ud,
+            &iuse,
+            &HashSet::from(["bar".to_string(), "baz".to_string()])
+        ));
     }
 }

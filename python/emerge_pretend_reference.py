@@ -513,6 +513,103 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
     return sorted(flags) if flags else None
 
 
+def _use_deps_satisfied(atom, iuse, enabled):
+    """Ports real match_from_list's own USE-dep post-pass (its
+    "if mydep.unevaluated_atom.use:" block, lib/portage/dep/__init__.py
+    lines 3143-3188) -- NOT called from match_from_list itself, since
+    real match_from_list skips this same block entirely for a
+    plain-string candidate (its own "hasattr(x, 'use')" guard), which is
+    exactly what this pilot's own candidate strings always are -- see
+    portage-repo/src/lib.rs's own use_deps_satisfied doc comment for the
+    full architecture writeup this mirrors. Called separately, after
+    match_from_list's own version/slot/repo filtering, once a real
+    candidate's own IUSE/effective-USE is in hand.
+
+    `atom` is a real Atom (so `atom.use` is a real `_use_dep` object --
+    `.required`/`.enabled`/`.disabled`/`.missing_enabled`/
+    `.missing_disabled` used directly, not re-derived); `iuse` is the
+    candidate's own declared IUSE (a set of flag names, `+`/`-` default
+    markers already stripped); `enabled` is its own effective USE set.
+
+    Real behavior, faithfully ported, not simplified: a use-dep flag
+    with no `(+)`/`(-)` default marker -- of ANY form, including the
+    four conditional ones -- must be a real, declared IUSE flag on the
+    candidate, or the atom doesn't match this candidate at all (real
+    `.required`, checked before anything else). Only the two
+    *unconditional* forms, `flag` and `-flag` (real `.enabled`/
+    `.disabled`, which real `_use_dep.__init__` populates solely from
+    these two), actually constrain the candidate's own enabled/disabled
+    state; a `(+)`/`(-)` default only ever matters for a flag missing
+    from this candidate's own IUSE, standing in for "as if
+    enabled/disabled". The four conditional forms (`flag?`/`!flag?`/
+    `flag=`/`!flag=`) impose NO enabled/disabled constraint here at all
+    -- genuine real match_from_list behavior (it never reads their own
+    `.conditional` structure), not a pilot simplification: evaluating a
+    conditional use-dep needs the *atom-owning* package's own USE state,
+    a completely different mechanism this pilot doesn't have and
+    match_from_list itself doesn't either."""
+    use = atom.use
+    if use is None:
+        return True
+
+    if any(flag not in iuse for flag in use.required):
+        return False
+
+    missing_enabled = frozenset(flag for flag in use.missing_enabled if flag not in iuse)
+    missing_disabled = frozenset(flag for flag in use.missing_disabled if flag not in iuse)
+
+    if use.enabled:
+        if any(f in missing_disabled for f in use.enabled):
+            return False
+        need_enabled = use.enabled - enabled
+        if need_enabled and any(f not in missing_enabled for f in need_enabled):
+            return False
+
+    if use.disabled:
+        if any(f in missing_enabled for f in use.disabled):
+            return False
+        need_disabled = use.disabled & enabled
+        if need_disabled and any(f not in missing_disabled for f in need_disabled):
+            return False
+
+    return True
+
+
+def _candidate_iuse_and_use(candidate, category, package, config):
+    """`candidate`'s own current IUSE (read fresh from its own md5-cache
+    entry -- the current tree's metadata, not the vdb) and its own
+    effective (computed) USE set. Used by resolve_pretend's own USE-dep
+    filtering (_use_deps_satisfied); a missing md5-cache entry, or a
+    missing IUSE key within one (a real, valid "declares no USE flags at
+    all" state, same "absence is real, not an error" precedent
+    _read_vdb_flag_set already sets), returns (set(), set()) rather than
+    raising -- the caller treats that as "can't tell, so this use-dep
+    can't be satisfied by a declared flag" via the ordinary matching
+    logic, not a separate error path. Mirrors portage-repo/src/lib.rs's
+    candidate_iuse_and_use exactly."""
+    try:
+        metadata = read_md5_cache(
+            candidate["repo_location"], category, f"{package}-{candidate['version']}"
+        )
+    except OSError:
+        return (set(), set())
+    iuse = {tok.lstrip("+-") for tok in metadata.get("IUSE", "").split()}
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}::"
+        f"{candidate['repo_name']}"
+    )
+    use_flags = effective_use_flags(
+        config["use_flags"],
+        config["package_use"],
+        config["package_use_force"],
+        config["package_use_mask"],
+        candidate_str,
+        category,
+        package,
+    )
+    return (iuse, use_flags)
+
+
 def _max_version(versions):
     best = versions[0]
     for v in versions[1:]:
@@ -906,6 +1003,20 @@ def resolve_pretend(repos, root, atom_str, config, newuse=False, changed_use=Fal
     ]
     by_str = dict(zip(candidate_strs, visible))
     matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
+
+    # USE deps (dev-libs/foo[bar]/[-bar], (+)/(-) defaults -- PMS 8.3.4):
+    # a post-filter on top of match_from_list's own version/slot/repo
+    # matching, exactly where real portage's own match_from_list applies
+    # its equivalent USE-dep post-pass too -- see _use_deps_satisfied's
+    # own docstring for the ported algorithm and why match_from_list
+    # itself doesn't do this. Mirrors portage-repo/src/lib.rs exactly.
+    if atom.use:
+        matched = [
+            c
+            for c in matched
+            if _use_deps_satisfied(atom, *_candidate_iuse_and_use(c, category, package, config))
+        ]
+
     if not matched:
         return ("no_visible_candidate",)
 

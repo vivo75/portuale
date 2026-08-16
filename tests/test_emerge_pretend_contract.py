@@ -52,7 +52,11 @@ CASES = [
     ("exact-version top-level atom: already installed", ["--pretend", "=dev-libs/samepkg-1.0"], 0),
     ("blocker top-level atom: not a valid target", ["--pretend", "!!dev-libs/newpkg"], 2),
     ("weak-blocker top-level atom: not a valid target", ["--pretend", "!dev-libs/newpkg"], 2),
-    ("USE-dep top-level atom: now in v1 grammar, resolves New", ["--pretend", "dev-libs/foo[bar]"], 0),
+    (
+        "USE-dep top-level atom: now in v1 grammar, resolves New",
+        ["--pretend", "dev-libs/foo[bar(+)]"],
+        0,
+    ),
     ("repo-constrained top-level atom: resolves New from the named repo", ["--pretend", "dev-libs/foo::testrepo"], 0),
     ("repo-constrained top-level atom: wrong repo, no ebuilds satisfy it", ["--pretend", "dev-libs/foo::overlay"], 1),
     (
@@ -84,6 +88,41 @@ CASES = [
     ("recursion: IDEPEND is walked", ["--pretend", "dev-libs/idependpkg"], 0),
     ("recursion: slot-operator dependency atoms are resolved, not dropped", ["--pretend", "dev-libs/slotoperatorpkg"], 0),
     ("recursion: USE-dep dependency atoms are resolved, not dropped", ["--pretend", "dev-libs/usedeppkg"], 0),
+    (
+        "recursion: a genuinely unsatisfied USE-dep dependency atom is rejected",
+        ["--pretend", "dev-libs/usedeprejectedpkg"],
+        0,
+    ),
+    (
+        "USE-dep enforcement: plain flag declared and enabled matches",
+        ["--pretend", "dev-libs/useflagpkg[foo]"],
+        0,
+    ),
+    (
+        "USE-dep enforcement: negated flag declared but enabled does not match",
+        ["--pretend", "dev-libs/useflagpkg[-foo]"],
+        1,
+    ),
+    (
+        "USE-dep enforcement: plain flag declared but disabled does not match",
+        ["--pretend", "dev-libs/useflagpkg[missingflag]"],
+        1,
+    ),
+    (
+        "USE-dep enforcement: negated flag declared and disabled matches",
+        ["--pretend", "dev-libs/useflagpkg[-missingflag]"],
+        0,
+    ),
+    (
+        "USE-dep enforcement: flag not declared in IUSE at all, no default, never matches",
+        ["--pretend", "dev-libs/useflagpkg[nonexistentflag]"],
+        1,
+    ),
+    (
+        "USE-dep enforcement: (+) default rescues a flag missing from IUSE",
+        ["--pretend", "dev-libs/useflagpkg[nonexistentflag(+)]"],
+        0,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     ("package.mask: hidden, no unmask", ["--pretend", "dev-libs/hardmaskedpkg"], 1),
     ("package.mask + package.unmask: masked then unmasked", ["--pretend", "dev-libs/maskedandunmaskedpkg"], 0),
@@ -342,24 +381,147 @@ def test_slot_operator_dependency_atoms_resolve_both_forms(emerge_binary, fixtur
 
 def test_use_dep_dependency_atoms_are_resolved_not_dropped(emerge_binary, fixture_env):
     """dev-libs/usedeppkg's own RDEPEND is
-    "dev-libs/newpkg[bar] dev-libs/multislotpkg:1[baz?]" -- same class of
-    bug slot operators had (see
+    "dev-libs/newpkg[bar(+)] dev-libs/multislotpkg:1[baz(+)?]" -- same
+    class of bug slot operators had (see
     test_slot_operator_dependency_atoms_resolve_both_forms): before this
     slice, portage-dep's v1 grammar didn't parse USE deps at all, so both
-    tokens would have been silently dropped from the graph. The USE-dep
-    constraint itself is deliberately never enforced by matching (see
-    portage-dep's module doc comment -- verified against real portage,
-    which already behaves identically for plain-string candidates), so
-    both dependencies resolve exactly as if the "[...]" suffix weren't
-    there at all -- newpkg (any version) and multislotpkg's SLOT=1
-    version (2.0, combined with a plain slot restriction here rather than
-    a slot operator)."""
+    tokens would have been silently dropped from the graph. Both use-dep
+    flags are `(+)`-defaulted and missing from their own target's IUSE
+    (see use_deps_satisfied's own doc comment, portage-dep, for why that
+    trivially satisfies them regardless of profile USE state) -- proving
+    USE-dep atoms are genuinely resolved AND enforced now, not just
+    grammar-recognized-but-ignored (see the dedicated USE-dep enforcement
+    tests below for the rejection side of that)."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/usedeppkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         "[ebuild  N] dev-libs/usedeppkg-1.0",
         "[ebuild  N] dev-libs/newpkg-1.0",
         "[ebuild  N] dev-libs/multislotpkg-2.0",
+    ]
+
+
+def test_use_dep_rejected_dependency_atom_reports_no_visible_ebuild(
+    emerge_binary, fixture_env
+):
+    """dev-libs/usedeprejectedpkg's own RDEPEND is
+    "dev-libs/useflagpkg[-foo]" -- useflagpkg's own "foo" is enabled
+    globally by the fixture profile chain (see the plain --verbose
+    contract test), so "-foo" is genuinely never satisfied. Same "report,
+    don't fail the whole graph" spirit as an unresolvable dependency
+    (test_unresolvable_dependency_is_reported_not_silently_dropped
+    above): the parent still resolves, the rejected dependency is
+    reported on stderr, not silently dropped or silently accepted."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/usedeprejectedpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/usedeprejectedpkg-1.0"]
+    assert (
+        result.stderr.strip()
+        == '!!! no visible ebuild for dependency "dev-libs/useflagpkg"'
+    )
+
+
+def test_use_dep_enforcement_plain_flag_declared_and_enabled_matches(
+    emerge_binary, fixture_env
+):
+    """dev-libs/useflagpkg's own IUSE="foo missingflag", with "foo"
+    enabled globally by the fixture profile chain -- a top-level atom's
+    own "[foo]" use-dep (declared, enabled) is genuinely satisfied, so
+    this resolves exactly like the plain "dev-libs/useflagpkg" atom
+    would (still recursing into its own foo?-gated RDEPEND)."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg[foo]"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/useflagpkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_use_dep_enforcement_negated_flag_declared_but_enabled_does_not_match(
+    emerge_binary, fixture_env
+):
+    """Same fixture as above, but "[-foo]": "foo" IS declared, but it's
+    enabled, not disabled -- genuinely unsatisfied, so there's no visible
+    candidate for this atom at all."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg[-foo]"], fixture_env
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".'
+    )
+
+
+def test_use_dep_enforcement_plain_flag_declared_but_disabled_does_not_match(
+    emerge_binary, fixture_env
+):
+    """"missingflag" is declared in useflagpkg's own IUSE but never
+    enabled anywhere in the fixture profile chain -- "[missingflag]"
+    (must be enabled) is genuinely unsatisfied."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg[missingflag]"], fixture_env
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+
+
+def test_use_dep_enforcement_negated_flag_declared_and_disabled_matches(
+    emerge_binary, fixture_env
+):
+    """Same fixture, "[-missingflag]": declared and disabled -- the
+    negated form's own requirement is genuinely satisfied."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/useflagpkg[-missingflag]"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/useflagpkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_use_dep_enforcement_undeclared_flag_with_no_default_never_matches(
+    emerge_binary, fixture_env
+):
+    """Real _use_dep.required (see use_deps_satisfied's own doc comment):
+    a use-dep flag with no (+)/(-) default marker must be a real,
+    declared IUSE flag on the candidate, or the atom simply doesn't match
+    at all -- "nonexistentflag" isn't in useflagpkg's own IUSE anywhere,
+    and has no default here, so this is unsatisfiable regardless of
+    enabled/disabled state."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/useflagpkg[nonexistentflag]"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+
+
+def test_use_dep_enforcement_plus_default_rescues_an_undeclared_flag(
+    emerge_binary, fixture_env
+):
+    """Same undeclared "nonexistentflag" as above, but with a "(+)"
+    default this time -- missing from IUSE no longer disqualifies it,
+    the default stands in for "as if enabled", satisfying the plain
+    (must-be-enabled) form."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/useflagpkg[nonexistentflag(+)]"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/useflagpkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
     ]
 
 

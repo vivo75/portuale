@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: RDEPEND's own USE-dep atom is genuinely unsatisfiable (useflagpkg's own "foo" is enabled globally, so "-foo" never matches), proving a rejected dependency-level USE-dep atom reports NoVisibleCandidate for that entry without failing the whole graph
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/useflagpkg[-foo]
+SLOT=0
+_md5_=0000000000000000000000000000000

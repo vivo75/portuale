@@ -580,6 +580,53 @@ fn read_vdb_flag_set(
         .collect()
 }
 
+/// `candidate`'s own current IUSE (read fresh from its own md5-cache
+/// entry -- the current tree's metadata, not the vdb) and its own
+/// effective (computed) USE set, via `effective_use_flags`. Shared by
+/// `reinstall_flags_for_use_change`'s own "cur_iuse"/"cur_use" (the
+/// current-tree side of a `--newuse`/`--changed-use` comparison) and
+/// `resolve_pretend`'s own USE-dep filtering (`use_deps_satisfied`,
+/// portage-dep) -- both need exactly this same pair for a candidate
+/// that's about to be installed or is already installed, computed the
+/// same way regardless of which. Returns `None` if this candidate's own
+/// metadata can't be read at all (e.g. `IUSE` missing).
+fn candidate_iuse_and_use(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Option<(HashSet<String>, HashSet<String>)> {
+    let pf = format!("{package}-{}", candidate.version);
+    let metadata = read_md5_cache(&candidate.repo_location, category, &pf).ok()?;
+    // A missing IUSE key is a real, valid "declares no USE flags at all"
+    // state (same "absence is real, not an error" precedent
+    // read_vdb_flag_set already sets for a missing vdb IUSE/USE file),
+    // not a reason to treat this whole candidate as unreadable -- unlike
+    // a missing md5-cache entry entirely (the `?` just above), which
+    // really does mean "can't tell anything about this candidate".
+    let iuse: HashSet<String> = metadata
+        .get("IUSE")
+        .map(|s| s.as_str())
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}::{}",
+        candidate.version, candidate.slot, candidate.repo_name
+    );
+    let use_flags = effective_use_flags(
+        &config.use_flags,
+        &config.package_use,
+        &config.package_use_force,
+        &config.package_use_mask,
+        &candidate_str,
+        category,
+        package,
+    );
+    Some((iuse, use_flags))
+}
+
 /// `--newuse`/`--changed-use`: ports both the `newuse` and `elif
 /// changed_use` branches of real `depgraph.py`'s `_reinstall_for_flags`
 /// -- whether `candidate` (a version already installed) needs
@@ -617,26 +664,7 @@ fn reinstall_flags_for_use_change(
     let orig_use = read_vdb_flag_set(root, category, package, version, "USE");
     let orig_iuse = read_vdb_flag_set(root, category, package, version, "IUSE");
 
-    let pf = format!("{package}-{version}");
-    let metadata = read_md5_cache(&candidate.repo_location, category, &pf).ok()?;
-    let cur_iuse: HashSet<String> = metadata
-        .get("IUSE")?
-        .split_whitespace()
-        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
-        .collect();
-    let candidate_str = format!(
-        "{category}/{package}-{version}:{}::{}",
-        candidate.slot, candidate.repo_name
-    );
-    let cur_use = effective_use_flags(
-        &config.use_flags,
-        &config.package_use,
-        &config.package_use_force,
-        &config.package_use_mask,
-        &candidate_str,
-        category,
-        package,
-    );
+    let (cur_iuse, cur_use) = candidate_iuse_and_use(candidate, category, package, config)?;
 
     let orig_enabled: HashSet<String> = orig_iuse.intersection(&orig_use).cloned().collect();
     let cur_enabled: HashSet<String> = cur_iuse.intersection(&cur_use).cloned().collect();
@@ -738,6 +766,34 @@ pub fn resolve_pretend(
     for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
         by_str.insert(*s, *c);
     }
+
+    // USE deps (`dev-libs/foo[bar]`/`[-bar]`, `(+)`/`(-)` defaults --
+    // PMS 8.3.4): a post-filter on top of match_from_list's own version/
+    // slot/repo matching, exactly where real portage's own
+    // `match_from_list` applies its equivalent USE-dep post-pass too --
+    // see `use_deps_satisfied`'s own doc comment (portage-dep) for the
+    // ported algorithm and why match_from_list itself doesn't do this.
+    // Each surviving candidate's own current-tree IUSE/effective-USE
+    // (`candidate_iuse_and_use`) decides it -- a candidate whose own
+    // metadata can't even be read is dropped, same "can't tell, so
+    // exclude" precedent `reinstall_flags_for_use_change` already sets.
+    let matched: Vec<&str> = match &atom.use_deps {
+        Some(use_deps) if !use_deps.is_empty() => matched
+            .into_iter()
+            .filter(|m| {
+                let Some(candidate) = by_str.get(m) else {
+                    return false;
+                };
+                let Some((iuse, use_flags)) =
+                    candidate_iuse_and_use(candidate, &atom.category, &atom.package, config)
+                else {
+                    return false;
+                };
+                portage_dep::use_deps_satisfied(use_deps, &iuse, &use_flags)
+            })
+            .collect(),
+        _ => matched,
+    };
 
     let installed = installed_versions(root, &atom.category, &atom.package);
 
@@ -2392,6 +2448,90 @@ mod tests {
             .map(|(name, _)| name)
             .collect();
         assert_eq!(full_names, vec!["dev-libs/packageusedisablepkg"]);
+    }
+
+    #[test]
+    fn use_dep_enforcement_matches_a_declared_and_enabled_flag() {
+        // dev-libs/useflagpkg's own IUSE="foo missingflag", "foo"
+        // enabled globally by the fixture profile chain -- see
+        // resolve_pretend's own doc comment on use_deps_satisfied.
+        assert_eq!(
+            resolve_real("dev-libs", "useflagpkg[foo]"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn use_dep_enforcement_rejects_a_negated_but_actually_enabled_flag() {
+        assert_eq!(
+            resolve_real("dev-libs", "useflagpkg[-foo]"),
+            PretendOutcome::NoVisibleCandidate
+        );
+    }
+
+    #[test]
+    fn use_dep_enforcement_rejects_a_declared_but_disabled_flag() {
+        assert_eq!(
+            resolve_real("dev-libs", "useflagpkg[missingflag]"),
+            PretendOutcome::NoVisibleCandidate
+        );
+    }
+
+    #[test]
+    fn use_dep_enforcement_matches_a_negated_and_actually_disabled_flag() {
+        assert_eq!(
+            resolve_real("dev-libs", "useflagpkg[-missingflag]"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn use_dep_enforcement_rejects_an_undeclared_flag_with_no_default() {
+        assert_eq!(
+            resolve_real("dev-libs", "useflagpkg[nonexistentflag]"),
+            PretendOutcome::NoVisibleCandidate
+        );
+    }
+
+    #[test]
+    fn use_dep_enforcement_plus_default_rescues_an_undeclared_flag() {
+        assert_eq!(
+            resolve_real("dev-libs", "useflagpkg[nonexistentflag(+)]"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn use_dep_enforcement_rejects_a_dependency_atom_but_does_not_fail_the_graph() {
+        // dev-libs/usedeprejectedpkg's own RDEPEND is
+        // "dev-libs/useflagpkg[-foo]", genuinely unsatisfiable -- the
+        // parent still resolves, and the dependency gets its own
+        // NoVisibleCandidate entry (reported, not silently dropped or
+        // failing the whole graph -- same "report, don't fail"
+        // precedent an unresolvable dependency atom already gets; see
+        // resolve_pretend_graph's own doc comment).
+        let entries = graph_real("dev-libs/usedeprejectedpkg");
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/usedeprejectedpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/useflagpkg".to_string(),
+                    PretendOutcome::NoVisibleCandidate
+                ),
+            ]
+        );
     }
 
     fn graph_result_real(atom_str: &str) -> GraphResult {

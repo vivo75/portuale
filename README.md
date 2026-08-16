@@ -191,18 +191,23 @@ PORTING/
   that a flag's `(+)`/`(-)` default stays consistent across every token
   mentioning it in the same atom -- both rules verified directly against
   real `Atom`), but the *values* are never consulted by
-  `matches_version`/`matches_slot`/`match_from_list`. Full enforcement
-  was scoped out because the `opt=`/`opt?` forms are conditional on the
-  *atom-owning* package's own USE state, not just the candidate's --
-  genuinely new matching architecture, not a grammar extension -- and
-  this pilot's `Candidate`/`match_from_list` model has no per-candidate
-  IUSE/USE state to check a use-dep against at all. This isn't an
+  `matches_version`/`matches_slot`/`match_from_list` -- at the time this
+  paragraph was written, full enforcement was scoped out because this
+  pilot's `Candidate`/`match_from_list` model had no per-candidate
+  IUSE/USE state to check a use-dep against at all. This wasn't an
   invented gap, though: verified empirically, real `match_from_list`
   given this pilot's own plain-string candidates (no `.use`/`.iuse`
   attributes) already skips its own USE-dep filtering entirely too --
   `dev-libs/foo[bar]` and `dev-libs/foo[-bar]` return the identical
   match set against real `match_from_list` itself, not just this pilot's
-  port of it.
+  port of it. **Now stale**: once `package.use`/`package.use.mask`/
+  `.force` gave every candidate real, computable IUSE/effective-USE
+  state for other reasons, this stopped being a hard blocker -- see the
+  dedicated **USE-dep enforcement** paragraph further below for the
+  follow-up that closes most of this gap (the `opt=`/`opt?` forms stay
+  genuinely out of scope, for the reason named above -- they're
+  conditional on the *atom-owning* package's own USE state, not just the
+  candidate's, a wholly different mechanism).
 
   **The `=*` glob version operator** (PMS 8.3.1) closes the last named
   scope cut in `portage-dep`'s own module doc comment. PMS: "if the
@@ -1081,6 +1086,66 @@ PORTING/
   but happened to lean on `upgradepkg`'s old default-upgrades-unconditionally
   behavior for its expected output now passes `--update` explicitly,
   noted inline in each case.
+
+  **USE-dep enforcement** (`dev-libs/foo[bar]`/`[-bar]`, `(+)`/`(-)`
+  defaults -- PMS 8.3.4). `portage-dep` has parsed the full 7-form USE-dep
+  grammar since the slot-operator follow-up, but never enforced it when
+  matching -- confirmed by grepping both crates: `matches_version`/
+  `matches_slot`/`match_from_list` never once consulted `Atom::use_deps`.
+  This was a *deliberate* cut at the time ("this pilot's dependency-graph
+  model has no per-package IUSE/USE state to check a use-dep against"),
+  but that stopped being true once `package.use`/`package.use.mask`/
+  `.force` gave every candidate a real, computable effective-USE set --
+  closing part of an existing, explicitly-documented gap, not a redesign.
+  Grounded against real `match_from_list`'s own USE-dep post-pass
+  (`lib/portage/dep/__init__.py` lines 3143-3188) and, for the trickier
+  multi-flag/default-interaction cases, against real portage's own
+  authoritative test vectors (`lib/portage/tests/dep/test_match_from_list.py`'s
+  `dev-libs/A[...]` cases) -- ported as `use_deps_satisfied`
+  (`portage-dep`), called by `portage-repo`'s `resolve_pretend` as a
+  post-filter *after* `match_from_list`'s own version/slot/repo matching,
+  never inside `match_from_list` itself: real `match_from_list` skips its
+  own USE-dep block entirely for a plain-string candidate (its own
+  `hasattr(x, "use")` guard), which is exactly what every candidate this
+  pilot ever builds already is -- so `portage-repo` only calls
+  `use_deps_satisfied` once it has a real candidate's own current-tree
+  IUSE and effective USE in hand (`candidate_iuse_and_use`, extracted
+  from what `reinstall_flags_for_use_change` already computed the same
+  way). A use-dep flag with no `(+)`/`(-)` default -- of *any* form,
+  including the four conditional ones (`flag?`/`!flag?`/`flag=`/
+  `!flag=`) -- must be a real, declared IUSE flag on the candidate, or
+  the atom doesn't match at all; only the two *unconditional* forms
+  (`flag`/`-flag`) actually constrain enabled/disabled state, and a
+  `(+)`/`(-)` default only ever matters for a flag missing from IUSE.
+  The four conditional forms impose no enabled/disabled constraint
+  here at all -- genuine real `match_from_list` behavior (their own
+  values live in a separate `.conditional` structure it never reads),
+  not a pilot simplification: evaluating one for real needs the
+  *atom-owning* package's own USE state, a wholly different mechanism
+  this pilot doesn't have and `match_from_list` itself doesn't either.
+  Wiring this up surfaced a second, real latent bug along the way,
+  fixed as part of the same slice: `candidate_iuse_and_use` (and the
+  `reinstall_flags_for_use_change` code it was extracted from) used to
+  treat a missing `IUSE` key in an md5-cache entry as "unreadable,
+  exclude this candidate" -- but a package that simply declares no USE
+  flags at all is a real, valid state (same "absence is real, not an
+  error" precedent `read_vdb_flag_set` already sets for a missing vdb
+  file), and roughly a dozen older fixture packages' own md5-cache
+  entries genuinely omit `IUSE=` entirely (predating IUSE being modeled
+  in this pilot at all) -- previously harmless, since nothing before
+  this slice ever read a non-installed candidate's IUSE this broadly.
+  `dev-libs/useflagpkg` (already-established `IUSE="foo missingflag"`,
+  `foo` enabled globally, `missingflag` not) needed no new fixture at
+  all to prove every combination -- declared+enabled, declared+disabled,
+  each negated, and an undeclared flag with and without a `(+)` default;
+  `dev-libs/usedeppkg`'s own pre-existing RDEPEND (from the slot-operator/
+  USE-dep grammar follow-up) picked up `(+)` defaults so it stays
+  genuinely satisfied under real enforcement instead of merely
+  unenforced; and a new `dev-libs/usedeprejectedpkg` (RDEPEND
+  `dev-libs/useflagpkg[-foo]`, genuinely unsatisfiable) proves a
+  rejected *dependency-level* USE-dep atom reports `NoVisibleCandidate`
+  for that one entry without failing the whole graph, the same
+  "report, don't fail" precedent an unresolvable dependency already had.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1146,9 +1211,13 @@ parametrization are all deferred (slot operators `:=`/`:*`/`:slot=`,
 USE deps `[bar]`, the `=*` glob version operator, and the `::reponame`
 repo constraint are now supported -- see the "Slot operators", "USE
 deps", "`=*` glob version operator", and "`::reponame` repo constraint"
-paragraphs in "What this proves" above; USE deps are parsed
-but not enforced by matching, a separately-noted, deliberate cut of their
-own). Candidates for matching are plain
+paragraphs in "What this proves" above; USE deps are parsed and
+`atom-harness`/`match_from_list` itself still never enforces them --
+matching real `match_from_list`'s own behavior for the same
+plain-string candidates this pilot always uses -- but `portage-repo`
+now enforces them as a separate post-filter, once it has a real
+candidate's own IUSE/effective-USE in hand; see the "USE-dep
+enforcement" paragraph in "What this proves" above). Candidates for matching are plain
 `category/package-version[-rN][:slot[/subslot]][::repo]` strings rather
 than full Package objects (no package-db/depgraph model exists yet in
 this pilot), which mirrors a fallback path the real `match_from_list`
@@ -1170,8 +1239,11 @@ of the three is actually walked, not just DEPEND/RDEPEND -- a package
 explicit slot, resolving specifically the SLOT=1 version) proving those
 dependency tokens are now resolved rather than silently dropped, a
 package (`usedeppkg`) exercising the same fix for USE-dep syntax
-(`dev-libs/newpkg[bar]`; `dev-libs/multislotpkg:1[baz?]`, combined with a
-plain slot restriction), and (for profile resolution) a three-level
+(`dev-libs/newpkg[bar(+)]`; `dev-libs/multislotpkg:1[baz(+)?]`, combined
+with a plain slot restriction -- both `(+)`-defaulted so they stay
+genuinely satisfied under real USE-dep enforcement too, not just
+grammar-parseable; see the "USE-dep enforcement" paragraph above), and
+(for profile resolution) a three-level
 same-repo profile chain
 (`profiles/base`, `profiles/arch/amd64`, `profiles/default` -- the latter
 inheriting from both of the former, in that order) plus `make.conf`
@@ -1235,6 +1307,18 @@ and `profileuseenablepkg` (each with its own `IUSE`-declared flag,
 off everywhere else, pulling in `newpkg` via its own `?`-gated RDEPEND
 only because the repo-level or profile-level source, respectively,
 enables it).
+
+`dev-libs/useflagpkg`'s own already-established `IUSE="foo missingflag"`
+(`foo` enabled globally, `missingflag` not) needed no new fixture at all
+to exercise USE-dep enforcement as a top-level atom: `[foo]`/`[-missingflag]`
+(declared, matching state) resolve normally; `[-foo]`/`[missingflag]`
+(declared, opposite state) and `[nonexistentflag]` (undeclared, no
+default) all report no visible candidate; `[nonexistentflag(+)]`
+(undeclared, `(+)`-defaulted) resolves anyway. `dev-libs/usedeprejectedpkg`
+(RDEPEND `dev-libs/useflagpkg[-foo]`, genuinely unsatisfiable since `foo`
+is enabled globally) proves the same rejection at the *dependency* level:
+the parent still resolves, `useflagpkg` gets its own `NoVisibleCandidate`
+entry, reported on stderr, not silently dropped or accepted.
 
 `PORTING/fixtures/var/lib/portage/world` (real portage's own `WORLD_FILE`
 location, `ROOT`-relative) exercises `@world` expansion: it lists
@@ -1459,14 +1543,40 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/slotoperatorp
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  N] dev-libs/multislotpkg-2.0
 
-# real USE-dep dependency atoms are resolved too, not silently dropped --
-# the "[bar]"/"[baz?]" constraints themselves aren't enforced (v1's
-# deliberate parse-only scope), so this resolves identically to the same
-# dependencies without any USE-dep suffix at all
+# real USE-dep dependency atoms are resolved AND enforced now: both
+# "[bar(+)]"/"[baz(+)?]" are (+)-defaulted flags missing from their own
+# target's IUSE, so both are genuinely, trivially satisfied
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeppkg
 # [ebuild  N] dev-libs/usedeppkg-1.0
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  N] dev-libs/multislotpkg-2.0
+
+# USE-dep enforcement, top-level: useflagpkg's own IUSE="foo missingflag",
+# "foo" enabled globally -- "[foo]" (declared, enabled) is satisfied
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[foo]'
+# [ebuild  N] dev-libs/useflagpkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+# "[-foo]" (declared, but enabled, not disabled) is genuinely unsatisfied
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[-foo]'
+# emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".  (exit 1)
+# a flag not declared in IUSE at all, with no (+)/(-) default, never
+# matches -- real _use_dep.required, checked before enabled/disabled at all
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[nonexistentflag]'
+# emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[nonexistentflag]".  (exit 1)
+# ...but a "(+)" default rescues a flag missing from IUSE, standing in
+# for "as if enabled"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[nonexistentflag(+)]'
+# [ebuild  N] dev-libs/useflagpkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# USE-dep enforcement, dependency level: usedeprejectedpkg's own RDEPEND
+# is "dev-libs/useflagpkg[-foo]", genuinely unsatisfiable -- the parent
+# still resolves, the rejected dependency is reported, not silently
+# dropped or accepted (same "report, don't fail" spirit as an
+# unresolvable dependency)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeprejectedpkg
+# [ebuild  N] dev-libs/usedeprejectedpkg-1.0
+# !!! no visible ebuild for dependency "dev-libs/useflagpkg"  (stderr)
 
 # real profile/make.conf resolution: "foo" is enabled by the fixture's
 # profile chain, so this package's foo?-gated dependency is pulled in
