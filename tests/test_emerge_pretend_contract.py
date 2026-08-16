@@ -321,6 +321,46 @@ CASES = [
         ["--pretend", "--update", "dev-libs/withdeps"],
         0,
     ),
+    (
+        "--with-bdeps default (auto/y): --deep walks DEPEND/BDEPEND of an already-installed package",
+        ["--pretend", "--deep", "dev-libs/withbdepspkg"],
+        0,
+    ),
+    (
+        "--with-bdeps=n: --deep skips DEPEND/BDEPEND but still walks RDEPEND",
+        ["--pretend", "--deep", "--with-bdeps", "n", "dev-libs/withbdepspkg"],
+        0,
+    ),
+    (
+        "--with-bdeps=y explicit: same as the default",
+        ["--pretend", "--deep", "--with-bdeps", "y", "dev-libs/withbdepspkg"],
+        0,
+    ),
+    (
+        "--with-bdeps=n inline form",
+        ["--pretend", "--deep", "--with-bdeps=n", "dev-libs/withbdepspkg"],
+        0,
+    ),
+    (
+        "--with-bdeps has no effect on a New (not-yet-installed) top-level atom",
+        ["--pretend", "--with-bdeps", "n", "dev-libs/withbdepspkg"],
+        0,
+    ),
+    (
+        "--with-bdeps with no argument is a real, immediate usage error",
+        ["--pretend", "--with-bdeps"],
+        2,
+    ),
+    (
+        "--with-bdeps with an invalid choice is a real, immediate usage error",
+        ["--pretend", "--with-bdeps", "auto", "dev-libs/newpkg"],
+        2,
+    ),
+    (
+        "--with-bdeps-auto is real but stays recognized-not-implemented",
+        ["--pretend", "--with-bdeps-auto", "n", "dev-libs/newpkg"],
+        2,
+    ),
 ]
 
 
@@ -1465,7 +1505,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -1520,6 +1560,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)\n"
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)\n"
         "   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)\n"
+        "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies\n"
         "   -h, --help      show this message and exit\n"
         "       --json      dump the whole resolved graph as one line of JSON instead "
         "of the lines above (pilot-specific, not a real emerge option)\n"
@@ -2608,7 +2649,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -2622,7 +2663,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -2636,7 +2677,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 

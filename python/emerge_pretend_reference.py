@@ -1765,6 +1765,7 @@ def resolve_pretend_graph(
     update=False,
     deep=0,
     excluded=(),
+    with_bdeps=True,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -1818,7 +1819,18 @@ def resolve_pretend_graph(
     an AlreadyInstalled package reached only via --deep's own walk,
     since that dependency atom re-enters this same BFS loop and
     resolve_pretend call like any other, with no special case needed.
-    Mirrors portage-repo/src/lib.rs's resolve_pretend_graph exactly.
+    `with_bdeps` (--with-bdeps, real depgraph.py's own "if pkg.built and
+    not removal_action: ... else: ignore_build_time_deps = True") skips
+    DEPEND/BDEPEND -- never RDEPEND/PDEPEND/IDEPEND -- for an
+    AlreadyInstalled package's own dependency walk under --deep when
+    False; like `deep` immediately above, it has no effect at all on
+    New/Upgrade/Reinstall packages, since real portage only ever drops
+    build-time deps for an already-built package. `True` covers both
+    real `y` and the real default `auto` (depgraph.py itself only ever
+    tests `in ("y", "auto")`, never distinguishing the two); see
+    _enqueue_dependencies's own docstring for where the distinction is
+    actually made. Mirrors portage-repo/src/lib.rs's
+    resolve_pretend_graph exactly.
 
     `atoms` seeds the BFS queue together, in the order given, before any
     dependency is ever pushed -- so all of them are dequeued and resolved
@@ -1946,6 +1958,7 @@ def resolve_pretend_graph(
                     pending_blockers,
                     key,
                     outcome[1],
+                    with_bdeps,
                 )
             entries.append((category, package, outcome, [], None, [], []))
             continue
@@ -2153,6 +2166,7 @@ def _enqueue_dependencies(
     pending_blockers,
     owner_key,
     owner_version,
+    with_bdeps=True,
 ):
     """Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+
     PDEPEND+IDEPEND metadata (from whichever repo actually carries this
@@ -2172,7 +2186,17 @@ def _enqueue_dependencies(
     (installed_versions only checks presence, never reads DEPEND/USE/
     etc), so this reuses the repo's current metadata for that version
     instead, same as every other candidate lookup in this pilot already
-    does. Mirrors portage-repo/src/lib.rs's enqueue_dependencies exactly."""
+    does.
+
+    `with_bdeps` (real --with-bdeps, see resolve_pretend_graph's own
+    docstring for the full grounding): when False, DEPEND and BDEPEND are
+    left out of the dep-key list entirely -- RDEPEND/PDEPEND/IDEPEND are
+    unaffected. This is the one place that distinction is ever made;
+    resolve_pretend_graph's own main loop (the New/Upgrade/Reinstall
+    path this function mirrors) deliberately doesn't take a with_bdeps
+    parameter at all, since real portage only ever drops build-time deps
+    for an already-built package. Mirrors portage-repo/src/lib.rs's
+    enqueue_dependencies exactly."""
     repo_candidates = [c for c in list_candidates(repos, category, package) if c["version"] == version]
     if not repo_candidates:
         return
@@ -2204,11 +2228,12 @@ def _enqueue_dependencies(
         package,
     )
 
-    depstr = " ".join(
-        metadata[k]
-        for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
-        if metadata.get(k)
+    dep_keys = (
+        ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
+        if with_bdeps
+        else ("RDEPEND", "PDEPEND", "IDEPEND")
     )
+    depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
     try:
         flat_deps = use_reduce(depstr, flat=True, uselist=use_flags)
     except InvalidDependString:
@@ -2253,9 +2278,9 @@ def _parse_atom(atom_str):
 # "recognized, but not implemented" message -- distinct from a
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
 # --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o,
-# --update/-u, --deep/-D, --exclude/-X, and --help/-h are actually
-# implemented (see run() below); every table here exists purely for
-# recognition, not behavior. Mirrors
+# --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, and
+# --help/-h are actually implemented (see run() below); every table here
+# exists purely for recognition, not behavior. Mirrors
 # PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
 # three tables exactly, so both sides report identical text for
 # identical input (verified by the shared contract suite).
@@ -2337,7 +2362,6 @@ _VALUE_OPTIONS = [
     ("--keep-going", None),
     ("--load-average", "-l"),
     ("--misspell-suggestions", None),
-    ("--with-bdeps", None),
     ("--with-bdeps-auto", None),
     ("--reinstall", None),
     ("--reinstall-atoms", None),
@@ -2581,8 +2605,8 @@ def _report_option(token):
             "but is not implemented in this pilot (only --pretend/-p, "
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
-            "--deselect/-W, and --help/-h are implemented so far; see "
-            "PROMPT.md)",
+            "--deselect/-W, --with-bdeps, and --help/-h are implemented "
+            "so far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -2632,6 +2656,9 @@ def _print_help():
     )
     print(
         '   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)'
+    )
+    print(
+        "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies"
     )
     print("   -h, --help      show this message and exit")
     print(
@@ -2757,6 +2784,7 @@ def run(args):
     excluded = []
     json_output = False
     deselect = False
+    with_bdeps = True
 
     i = 0
     while i < len(args):
@@ -2879,6 +2907,48 @@ def run(args):
         elif arg == "--deselect=n":
             deselect = False
             i += 1
+        elif arg == "--with-bdeps":
+            # Real "argument_options" with "choices": ("y", "n") --
+            # unlike --exclude (arbitrary text) or --deep/--verbose
+            # (either an optional peek, or values beyond y/n), this is a
+            # REQUIRED, closed-choice value: a missing value is a real,
+            # immediate usage error (same shape as --exclude's own), and
+            # a value that's neither "y" nor "n" is *also* a real,
+            # immediate usage error (real argparse's own choices
+            # validation) -- there's no "not given at all" default to
+            # silently fall back to for either failure mode.
+            if i + 1 >= len(args):
+                print('emerge: option "--with-bdeps" requires an argument', file=sys.stderr)
+                return 2
+            value = args[i + 1]
+            if value == "y":
+                with_bdeps = True
+                i += 2
+            elif value == "n":
+                with_bdeps = False
+                i += 2
+            else:
+                print(
+                    f'emerge: option "--with-bdeps": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
+        elif arg.startswith("--with-bdeps="):
+            value = arg[len("--with-bdeps=") :]
+            if value == "y":
+                with_bdeps = True
+                i += 1
+            elif value == "n":
+                with_bdeps = False
+                i += 1
+            else:
+                print(
+                    f'emerge: option "--with-bdeps": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
         elif not arg.startswith("-"):
             atom_args.append(arg)
             i += 1
@@ -3014,6 +3084,7 @@ def run(args):
             update,
             deep,
             excluded,
+            with_bdeps,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

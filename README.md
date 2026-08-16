@@ -684,6 +684,45 @@ PORTING/
   pilot's existing "not yet implemented" rejection) and `--json` output
   (simply not offered for deselect mode).
 
+  **`--with-bdeps y|n`: build-time deps for an already-installed
+  package's own `--deep` walk.** Grounded against real
+  `create_depgraph_params.py`'s own `bdeps` param and `depgraph.py`'s
+  `_add_pkg_dep_string` (`if pkg.built and not removal_action: ... else:
+  ignore_build_time_deps = True`): real portage only ever drops
+  `DEPEND`/`BDEPEND` for a package that's *already built* (installed),
+  never for one being freshly resolved from an ebuild -- so, like
+  `--deep` itself, this has zero effect on New/Upgrade/Reinstall
+  packages, and only ever matters for an `AlreadyInstalled` package's own
+  dependency walk once `--deep` says to walk it at all. The real default,
+  `auto` (`create_depgraph_params.py`'s own `myparams["bdeps"] = "auto"`
+  whenever `--usepkg` isn't given -- which this pilot's own
+  `--usepkg`-less CLI always satisfies), and the real `y` are collapsed
+  into one caller-facing `true`, since `depgraph.py` itself only ever
+  tests `bdeps in ("y", "auto")`, never distinguishing the two -- so this
+  pilot's own pre-existing "walk all five dependency-string keys
+  uniformly" behavior (see the dependency-recursion paragraph above) was
+  already exactly the real default, and `--with-bdeps=n` is the one value
+  that actually changes anything. Unlike `--exclude` (arbitrary text) or
+  `--deep`/`--verbose` (an optional peek), real `--with-bdeps` is
+  `argument_options` with a REQUIRED, closed `"choices": ("y", "n")`
+  value -- a missing value is a real, immediate usage error (same shape
+  as `--exclude`'s own), and a value that's neither `y` nor `n` is *also*
+  a real, immediate usage error (real `argparse`'s own choices
+  validation, reproduced here as a pilot-specific message rather than
+  argparse's own multi-line usage banner, consistent with every other
+  CLI error in this pilot). It has no short alias and isn't
+  bundle-compatible either -- real `main.py` declares no `shortopt` for
+  it at all, so unlike `--exclude`'s own deliberate bundling cut, there's
+  no bundling concept to begin with. `--with-bdeps-auto` (the only other
+  real lever on this same `bdeps` value, relevant only once
+  `--usepkg`/binary-package support exists) stays a deliberate,
+  documented out-of-scope cut. New fixture packages `withbdepspkg`
+  (installed, `DEPEND`s on `builddeponlypkg`, `BDEPEND`s on
+  `hostdeponlypkg`, `RDEPEND`s on the existing `newpkg`) prove the
+  distinction end to end: under `--deep`, the default walks all three;
+  `--with-bdeps=n` walks only `newpkg` (`RDEPEND`), leaving the other two
+  entirely unmentioned.
+
   **Multiple top-level atoms**: `emerge --pretend foo bar` -- real
   emerge's most common invocation shape -- was, until this slice,
   explicitly rejected ("only a single package atom is supported"). Now
@@ -2561,8 +2600,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): option "--debug" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
 # --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see
-# PROMPT.md)  (exit 2)
+# --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented
+# so far; see PROMPT.md)  (exit 2)
 
 # --help/-h is real and implemented: a short, honest, pilot-specific
 # summary, not a port of real emerge's own (157-line, colorized,
@@ -2581,8 +2620,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): option "--jobs" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
 # --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# --exclude/-X, --deselect/-W, and --help/-h are implemented so far; see
-# PROMPT.md)  (exit 2)
+# --exclude/-X, --deselect/-W, --with-bdeps, and --help/-h are implemented
+# so far; see PROMPT.md)  (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message
@@ -2607,6 +2646,20 @@ ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/foo
 # all) never becomes an expanded atom, so nothing is reported for it
 ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/bar
 # >>> No matching atoms found in "world" favorites file...
+
+# --with-bdeps: withbdepspkg is already installed, DEPENDs on
+# builddeponlypkg, BDEPENDs on hostdeponlypkg, RDEPENDs on newpkg --
+# --deep's default (--with-bdeps=y/auto) walks all three
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep dev-libs/withbdepspkg
+# dev-libs/withbdepspkg-1.0 is already installed; nothing to do
+# [ebuild  N] dev-libs/builddeponlypkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N] dev-libs/hostdeponlypkg-1.0
+
+# --with-bdeps=n: DEPEND/BDEPEND are skipped, but RDEPEND is unaffected
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep --with-bdeps n dev-libs/withbdepspkg
+# dev-libs/withbdepspkg-1.0 is already installed; nothing to do
+# [ebuild  N] dev-libs/newpkg-1.0
 ```
 
 Try the `ebuild` stub (still a dry-run placeholder -- no real phase

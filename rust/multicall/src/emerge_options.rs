@@ -12,9 +12,9 @@
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
 // (verified by the shared contract suite). `--deep`/`-D`,
-// `--exclude`/`-X`, and `--deselect`/`-W` are ALSO implemented now (see
-// below) -- all excluded from `VALUE_OPTIONS` too, not just
-// `BOOLEAN_OPTIONS`.
+// `--exclude`/`-X`, `--deselect`/`-W`, and `--with-bdeps` are ALSO
+// implemented now (see below) -- all excluded from `VALUE_OPTIONS` too,
+// not just `BOOLEAN_OPTIONS`.
 //
 // KNOWN, DOCUMENTED SCOPE CUTS:
 //   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own
@@ -96,6 +96,26 @@
 //     resolution -- see `pretend.rs`'s own `run_deselect` for the real
 //     `action_deselect` behavior it ports, and its own documented
 //     `Atom.intersects()` scope cut.
+//   - `--with-bdeps` IS implemented now too, deliberately excluded from
+//     `VALUE_OPTIONS` for the same reason -- real `argument_options` with
+//     `"choices": ("y", "n")`, a REQUIRED closed-choice value (unlike
+//     `--exclude`'s arbitrary text, or `--deep`/`--verbose`'s optional
+//     peek): a missing value, or one that's neither `y` nor `n`, is a
+//     real, immediate usage error either way (the latter is real
+//     `argparse`'s own choices validation), so it has no short alias and
+//     is deliberately NOT bundle-compatible either -- real `main.py`
+//     declares no `shortopt` for it at all, so there's no bundling
+//     concept to begin with, unlike `--exclude`'s own deliberate bundling
+//     cut. See `resolve_pretend_graph`'s own doc comment (portage-repo)
+//     for the real `depgraph.py`/`create_depgraph_params.py` `bdeps`
+//     semantics it ports (`n` skips DEPEND/BDEPEND for an
+//     already-installed package's own dependency walk under `--deep`;
+//     `y`/the real default `auto` both keep them, collapsed into one
+//     bool since `depgraph.py` itself never distinguishes the two).
+//     `--with-bdeps-auto` (the only other real lever on this same
+//     `bdeps` value, relevant only once `--usepkg`/binary-package support
+//     exists) is a deliberate, documented out-of-scope cut -- stays
+//     recognized-but-unimplemented via this same table.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -189,7 +209,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--keep-going", None),
     ("--load-average", Some("-l")),
     ("--misspell-suggestions", None),
-    ("--with-bdeps", None),
     ("--with-bdeps-auto", None),
     ("--reinstall", None),
     ("--reinstall-atoms", None),
@@ -410,6 +429,16 @@ mod tests {
         // implemented), not through this "not implemented" table.
         assert!(lookup("--deselect").is_none());
         assert!(lookup("-W").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_with_bdeps_itself_but_still_recognizes_with_bdeps_auto() {
+        // --with-bdeps is handled directly by the caller (it's
+        // implemented), not through this "not implemented" table --
+        // --with-bdeps-auto is a real, separate option that stays
+        // unimplemented, so it must still be found.
+        assert!(lookup("--with-bdeps").is_none());
+        assert!(lookup("--with-bdeps-auto").is_some());
     }
 
     #[test]

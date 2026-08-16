@@ -446,8 +446,9 @@ fn report_option(token: &str) -> ExitCode {
             "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
              --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
-             --update/-u, --deep/-D, --exclude/-X, --deselect/-W, and \
-             --help/-h are implemented so far; see PROMPT.md)",
+             --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
+             --with-bdeps, and --help/-h are implemented so far; see \
+             PROMPT.md)",
             found.canonical
         );
     } else {
@@ -496,6 +497,9 @@ fn print_help() {
     );
     println!(
         "   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)"
+    );
+    println!(
+        "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies"
     );
     println!("   -h, --help      show this message and exit");
     println!(
@@ -674,6 +678,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut excluded: Vec<String> = Vec::new();
     let mut json = false;
     let mut deselect = false;
+    let mut with_bdeps = true;
 
     let mut i = 0;
     while i < args.len() {
@@ -820,6 +825,49 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--deselect=n" {
             deselect = false;
             i += 1;
+        } else if arg == "--with-bdeps" {
+            // Real "argument_options" with `"choices": ("y", "n")` --
+            // unlike --exclude (arbitrary text) or --deep/--verbose
+            // (either an optional peek, or values beyond y/n), this is a
+            // REQUIRED, closed-choice value: a missing value is a real,
+            // immediate usage error (same shape as --exclude's own), and
+            // a value that's neither "y" nor "n" is *also* a real,
+            // immediate usage error (real argparse's own choices
+            // validation) -- there's no "not given at all" default to
+            // silently fall back to for either failure mode.
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--with-bdeps\" requires an argument");
+                return ExitCode::from(2);
+            };
+            match value.as_str() {
+                "y" => {
+                    with_bdeps = true;
+                    i += 2;
+                }
+                "n" => {
+                    with_bdeps = false;
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--with-bdeps=") {
+            match value {
+                "y" => {
+                    with_bdeps = true;
+                    i += 1;
+                }
+                "n" => {
+                    with_bdeps = false;
+                    i += 1;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
         } else if !arg.starts_with('-') {
             atom_args.push(arg);
             i += 1;
@@ -967,6 +1015,7 @@ pub fn run(args: &[String]) -> ExitCode {
         update,
         deep,
         &excluded,
+        with_bdeps,
     ) {
         Ok(result) => result,
         Err(e) => {

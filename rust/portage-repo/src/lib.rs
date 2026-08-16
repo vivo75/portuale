@@ -1868,7 +1868,12 @@ type QueueItem = (String, u32, Option<(String, String)>);
 ///     repeats (e.g. a shared dependency, or a cycle) are deduped via a
 ///     visited-atom-text set purely to guarantee termination -- see below
 ///     for how repeat visits to the same resolved category/package/slot
-///     are actually handled.
+///     are actually handled. `with_bdeps` (`--with-bdeps`, see below) is
+///     the one exception to "no distinction between them": DEPEND/BDEPEND
+///     specifically (never RDEPEND/PDEPEND/IDEPEND) are skipped when it's
+///     `false`, but only for an AlreadyInstalled package's own dependency
+///     walk under `--deep` -- see `enqueue_dependencies`'s own doc
+///     comment, which is the only place that distinction is ever made.
 ///   - `config` (USE, ACCEPT_KEYWORDS, package.mask/.unmask/.accept_keywords)
 ///     is supplied by the caller (computed via `portage_profile::resolve_config`
 ///     -- see that crate's doc comment for what real profile/make.conf/
@@ -1951,6 +1956,25 @@ type QueueItem = (String, u32, Option<(String, String)>);
 ///     walked. It has no effect at all on New/Upgrade/Reinstall packages
 ///     (already always walked, `deep` or not) and is itself ignored
 ///     outright when `nodeps` disables the dependency walk entirely.
+///   - `with_bdeps` (`--with-bdeps`, real `create_depgraph_params.py`'s
+///     own `bdeps` param): grounded against real `depgraph.py`'s own
+///     `_add_pkg_dep_string` (`if pkg.built and not removal_action: ...
+///     else: ignore_build_time_deps = True`) -- real portage only ever
+///     drops DEPEND/BDEPEND for a package that's *already built*
+///     (installed), never for one being freshly resolved from an ebuild,
+///     so this has no effect on New/Upgrade/Reinstall packages either,
+///     same shape as `deep` immediately above; the two combine naturally
+///     since an AlreadyInstalled package's own dependencies are only ever
+///     walked at all once `deep` says to. `false` is real
+///     `--with-bdeps=n`; `true` covers both real `y` and the real default
+///     `auto` (`create_depgraph_params.py`'s own `myparams["bdeps"] =
+///     "auto"` whenever `--usepkg` isn't given, which this pilot's own
+///     `--usepkg`-less CLI always satisfies) -- `depgraph.py` itself only
+///     ever tests `in ("y", "auto")`, never distinguishing the two, so
+///     collapsing them into one caller-facing bool loses no real
+///     behavior. `--with-bdeps-auto` (the only other real lever on this
+///     same `myparams["bdeps"]` value) is a documented, out-of-scope cut
+///     -- see `pretend.rs`'s own module doc comment.
 ///   - `excluded` (`--exclude`/`-X`, see `resolve_pretend`'s own doc
 ///     comment) is threaded uniformly to every atom this BFS resolves,
 ///     top-level and dependency alike, same whole-graph-uniform
@@ -1970,10 +1994,10 @@ type QueueItem = (String, u32, Option<(String, String)>);
 ///     `visited_atoms`/`resolved_slots`/`other_outcomes`'s own dedup
 ///     decisions, so a diamond dependency's second (deduped) owner is
 ///     still recorded even though it never triggers a new resolution.
-// 10 args trips clippy::too_many_arguments; a bundled options struct
+// 11 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
-// alongside five already threaded the same way -- not worth it.
+// alongside six already threaded the same way -- not worth it.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_pretend_graph(
     config_root: &Path,
@@ -1986,6 +2010,7 @@ pub fn resolve_pretend_graph(
     update: bool,
     deep: Deep,
     excluded: &[String],
+    with_bdeps: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -2119,6 +2144,7 @@ pub fn resolve_pretend_graph(
                         &mut pending_blockers,
                         key.clone(),
                         version.clone(),
+                        with_bdeps,
                     );
                 }
             }
@@ -2377,6 +2403,17 @@ pub fn resolve_pretend_graph(
 /// own copy of that exact version's ebuild changed since it was
 /// installed (rare, and already a pre-existing gap for e.g. `--newuse`'s
 /// own IUSE-diffing, not a new one introduced here).
+///
+/// `with_bdeps` (real `--with-bdeps`, see `resolve_pretend_graph`'s own
+/// doc comment for the full grounding): when `false`, DEPEND and BDEPEND
+/// are left out of the dep-key list entirely, so their own tokens are
+/// never parsed, flattened, or queued -- RDEPEND/PDEPEND/IDEPEND are
+/// unaffected. This is the one place that distinction is ever made:
+/// `resolve_pretend_graph`'s own main loop (the New/Upgrade/Reinstall
+/// path, which this function's own doc comment above says it mirrors)
+/// deliberately does *not* take a `with_bdeps` parameter at all, since
+/// real portage only ever drops build-time deps for an *already-built*
+/// package -- see `resolve_pretend_graph`'s own doc comment.
 #[allow(clippy::too_many_arguments)]
 fn enqueue_dependencies(
     repos: &[RepoConfig],
@@ -2389,6 +2426,7 @@ fn enqueue_dependencies(
     pending_blockers: &mut Vec<PendingBlocker>,
     owner_key: (String, String),
     owner_version: String,
+    with_bdeps: bool,
 ) {
     let Ok(repo_candidates) = list_candidates(repos, category, package) else {
         return;
@@ -2427,9 +2465,14 @@ fn enqueue_dependencies(
         package,
     );
 
+    let dep_keys: &[&str] = if with_bdeps {
+        &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    };
     let mut depstr = String::new();
-    for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
-        if let Some(d) = metadata.get(dep_key) {
+    for dep_key in dep_keys {
+        if let Some(d) = metadata.get(*dep_key) {
             depstr.push_str(d);
             depstr.push(' ');
         }
@@ -3223,6 +3266,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3245,6 +3289,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3269,6 +3314,7 @@ mod tests {
             true,
             Deep::NotRequested,
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3297,6 +3343,7 @@ mod tests {
             true,
             Deep::NotRequested,
             &["dev-libs/upgradepkg".to_string()],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -3342,6 +3389,7 @@ mod tests {
             false,
             deep,
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3422,6 +3470,98 @@ mod tests {
         );
     }
 
+    fn graph_deep_with_bdeps(atom_str: &str, with_bdeps: bool) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            false,
+            Deep::Unlimited,
+            &[],
+            with_bdeps,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+    }
+
+    #[test]
+    fn with_bdeps_default_true_walks_depend_and_bdepend_of_an_already_installed_package() {
+        // withbdepspkg is already installed, RDEPENDs on newpkg, DEPENDs
+        // on builddeponlypkg, BDEPENDs on hostdeponlypkg -- with_bdeps
+        // defaulting to true (real --with-bdeps=auto/y, this pilot's own
+        // --usepkg-less default) walks all three under --deep, same as
+        // before --with-bdeps existed.
+        // Dep-key iteration order (DEPEND, RDEPEND, BDEPEND, PDEPEND,
+        // IDEPEND) determines queue order here, same as every other
+        // dependency-recursion test in this file: DEPEND's own
+        // builddeponlypkg is queued (and therefore resolved) before
+        // RDEPEND's newpkg, which is queued before BDEPEND's
+        // hostdeponlypkg.
+        assert_eq!(
+            graph_deep_with_bdeps("dev-libs/withbdepspkg", true),
+            vec![
+                (
+                    "dev-libs/withbdepspkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/builddeponlypkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/hostdeponlypkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn with_bdeps_false_skips_depend_and_bdepend_but_not_rdepend() {
+        // Real depgraph.py's own "if pkg.built and not removal_action":
+        // --with-bdeps=n only ever drops DEPEND/BDEPEND for an
+        // already-built (here: AlreadyInstalled) package -- RDEPEND is
+        // never affected, so newpkg (RDEPEND) still shows up while
+        // builddeponlypkg (DEPEND) and hostdeponlypkg (BDEPEND) don't.
+        assert_eq!(
+            graph_deep_with_bdeps("dev-libs/withbdepspkg", false),
+            vec![
+                (
+                    "dev-libs/withbdepspkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ]
+        );
+    }
+
     #[test]
     fn deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely() {
         // --nodeps trumps --deep -- real create_depgraph_params.py pops
@@ -3439,6 +3579,7 @@ mod tests {
             false,
             Deep::Unlimited,
             &[],
+            true,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -3565,6 +3706,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -3634,6 +3776,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3760,6 +3903,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -3837,6 +3981,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3862,6 +4007,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -3884,6 +4030,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3908,6 +4055,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3932,6 +4080,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4155,6 +4304,7 @@ mod tests {
             false,
             Deep::NotRequested,
             &[],
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
