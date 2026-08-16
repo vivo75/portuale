@@ -260,6 +260,12 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_deep_itself() {
+        assert!(lookup("--deep").is_none());
+        assert!(lookup("-D").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }

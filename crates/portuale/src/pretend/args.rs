@@ -537,6 +537,89 @@ fn parse_mode_opts<'a>(
     }
 }
 
+/// Depth and backtrack limits. Returns whether the token was consumed.
+fn parse_depth_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--update" || arg == "-u" {
+        opts.update = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--noreplace" || arg == "-n" {
+        // A plain boolean, no value; its only effect is setting selective.
+        opts.noreplace = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--deep" || arg == "-D" {
+        // Peeks at the next token, consuming it only if it parses as a
+        // non-negative integer; otherwise unlimited depth.
+        match args.get(*idx + 1).map(|s| s.parse::<u32>()) {
+            Some(Ok(0)) => {
+                opts.deep = portage_repo::Deep::NotRequested;
+                *idx += 2;
+            }
+            Some(Ok(n)) => {
+                opts.deep = portage_repo::Deep::Bounded(n);
+                *idx += 2;
+            }
+            _ => {
+                opts.deep = portage_repo::Deep::Unlimited;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--deep=") {
+        // The `=` form errors on a non-numeric value instead of leaving
+        // the token alone.
+        match value.parse::<u32>() {
+            Ok(0) => {
+                opts.deep = portage_repo::Deep::NotRequested;
+                *idx += 1;
+            }
+            Ok(n) => {
+                opts.deep = portage_repo::Deep::Bounded(n);
+                *idx += 1;
+            }
+            Err(_) => {
+                eprintln!("emerge: invalid --deep parameter: {value:?}");
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if arg == "--backtrack" {
+        // Like `--deep`: the next token is consumed only if an integer;
+        // a bare flag keeps the default.
+        match args.get(*idx + 1).map(|s| s.parse::<u32>()) {
+            Some(Ok(n)) => {
+                opts.backtrack_max = n;
+                *idx += 2;
+            }
+            _ => {
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--backtrack=") {
+        // Like `--deep=`: a non-integer here is a parse error.
+        match value.parse::<u32>() {
+            Ok(n) => {
+                opts.backtrack_max = n;
+                *idx += 1;
+            }
+            Err(_) => {
+                eprintln!("emerge: invalid --backtrack parameter: {value:?}");
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Verbosity and deselect flags. Returns whether the token was consumed.
 fn parse_output_opts<'a>(
     opts: &mut EmergeOpts<'a>,

@@ -57,6 +57,74 @@ pub(crate) fn canonical_dep_key(
     }
     Some(out)
 }
+/// Arguments of [`deps_changed`].
+pub(crate) struct DepsChangedArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) with_bdeps: bool,
+}
+
+pub(crate) fn deps_changed(args: DepsChangedArgs<'_>) -> bool {
+    let DepsChangedArgs {
+        root,
+        repos,
+        category,
+        package,
+        version,
+        with_bdeps,
+    } = args;
+    let dep_keys: &[&str] = if with_bdeps {
+        &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    };
+
+    let installed_use = read_vdb_flag_set(root, category, package, version, "USE");
+
+    let Ok(repo_candidates) = list_candidates(repos, category, package) else {
+        return false;
+    };
+    let Some(resolved) = repo_candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)
+    else {
+        return false;
+    };
+    let pf = format!("{package}-{version}");
+    let Ok(metadata) = repo_aux_metadata(&resolved.repo_location, category, &pf) else {
+        return false;
+    };
+
+    let libc_cps = libc_provider_cps(root);
+    let canonical_key = |depstr: &str| canonical_dep_key(depstr, &installed_use, &libc_cps);
+
+    // vdb side first: an unparsable vdb string is unconditionally "changed".
+    let mut vdb_by_key: Vec<Vec<String>> = Vec::with_capacity(dep_keys.len());
+    for key in dep_keys {
+        match canonical_key(&read_vdb_string(root, category, package, version, key)) {
+            Some(canon) => vdb_by_key.push(canon),
+            None => return true,
+        }
+    }
+
+    // repo side: the ebuild is assumed well-formed, so an unparsable one
+    // stays the tolerant "can't tell, don't crash" `false`.
+    let mut repo_by_key: Vec<Vec<String>> = Vec::with_capacity(dep_keys.len());
+    for key in dep_keys {
+        match canonical_key(metadata.get(*key).map(String::as_str).unwrap_or_default()) {
+            Some(canon) => repo_by_key.push(canon),
+            None => return false,
+        }
+    }
+
+    // Per-key comparison, element-wise like Portage's `built_deps` vs
+    // `unbuilt_deps`.
+    vdb_by_key != repo_by_key
+}
 
 /// Splits a raw `SLOT` string into `(slot, sub_slot)`: `SLOT="main/sub"`,
 /// `sub_slot` defaulting to the slot itself when no `/` is present. An

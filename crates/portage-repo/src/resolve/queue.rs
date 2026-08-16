@@ -17,6 +17,21 @@ pub enum Deep {
     Bounded(u32),
 }
 
+impl Deep {
+    /// Whether an already-installed, already-satisfied package at `depth` (0 for a
+    /// directly-requested top-level atom) has its further dependencies walked:
+    /// never for `NotRequested`, always for `Unlimited`, while `depth < n` for
+    /// `Bounded(n)`.
+    // Portage: depgraph.py recurse = deep is True or not _too_deep(_depth_increment(depth, n=1))
+    pub(crate) fn recurses_at(self, depth: u32) -> bool {
+        match self {
+            Deep::NotRequested => false,
+            Deep::Unlimited => true,
+            Deep::Bounded(n) => depth < n,
+        }
+    }
+}
+
 /// One BFS-queued dependency-walk item: the atom text, its depth (see `Deep`),
 /// the `(category, package)` that pushed it if any (`None` for a top-level atom,
 /// consulted for `GraphEntry::required_by`), and the atom's own *unevaluated* text
