@@ -243,10 +243,16 @@ def _parse_package_accept_keywords_lines(lines):
     return result
 
 
-def _load_package_use(config_root):
-    path = os.path.join(config_root, "etc", "portage", "package.use")
+def _parse_package_use_lines(lines):
+    """A line with no tokens after the atom is a documented no-op,
+    matching _parse_package_accept_keywords_lines. Purely additive across
+    sources, like package.accept_keywords and unlike package.mask/
+    .unmask: real portage's own package.use consumption only ever
+    .extend()s a growing token list per source, never removes a previous
+    entry. Mirrors portage-profile/src/lib.rs's parse_package_use_lines
+    exactly."""
     result = []
-    for line in _read_config_lines(path):
+    for line in lines:
         parts = line.split()
         atom, tokens = parts[0], parts[1:]
         if not tokens:
@@ -623,13 +629,31 @@ def resolve_config(config_root, main_repo_location):
         )
     )
 
+    # package.use: repo-level, then every profile level's own package.use
+    # (in chain order), then user-level -- same file-location convention
+    # package.mask/package.accept_keywords both already use, and purely
+    # additive like package.accept_keywords. Mirrors
+    # portage-profile/src/lib.rs's resolve_config exactly, including the
+    # same deliberate, confirmed-with-the-user simplification (a flat
+    # concatenation, not real portage's own repo/defaults/pkg USE_ORDER
+    # layering -- see that crate's own doc comment for the full
+    # reasoning).
+    use_lines = _read_config_lines(
+        os.path.join(main_repo_location, "profiles", "package.use")
+    )
+    for level in chain:
+        use_lines.extend(_read_config_lines(os.path.join(level, "package.use")))
+    use_lines.extend(
+        _read_config_lines(os.path.join(config_root, "etc", "portage", "package.use"))
+    )
+
     return {
         "use_flags": use_flags,
         "accept_keywords": accept_keywords,
         "package_mask": _stack_mask_lines(mask_sources),
         "package_unmask": _stack_mask_lines(unmask_sources),
         "package_accept_keywords": _parse_package_accept_keywords_lines(accept_keywords_lines),
-        "package_use": _load_package_use(config_root),
+        "package_use": _parse_package_use_lines(use_lines),
     }
 
 

@@ -742,6 +742,31 @@ PORTING/
   would be actively misleading); it's a short, honest, pilot-specific
   summary of what's actually implemented, ending with a pointer to
   `PORTING/README.md`/`PORTING/PROMPT.md` for the rest.
+
+  **`package.use` repo+profile stacking**: the follow-up deliberately
+  left out of the `package.accept_keywords` slice above, now closing the
+  last of the three per-package config files that were still
+  user-level-only. Grounded directly against `UseManager.__init__`,
+  which confirms repo-level `package.use` lives at
+  `<repo>/profiles/package.use` and profile-level at
+  `<profile.location>/package.use` -- the exact same file-location
+  convention `package.mask` and `package.accept_keywords` both already
+  use -- and, like `package.accept_keywords`, purely additive (no
+  `-atom` removal exists for this file in real portage at all), so a
+  flat concatenation (repo, then every profile level in chain order,
+  then user) parsed once is equivalent to parsing each source separately
+  and concatenating the results. This remains a **deliberate,
+  confirmed-with-the-user simplification**, not a full port of real
+  portage's own mechanism: real repo-level `package.use` lands in a
+  distinct `configdict["repo"]` `USE_ORDER` layer and profile-level in
+  `configdict["defaults"]` (merged per-level with that level's own
+  `make.defaults` USE), while this pilot's own per-package application
+  (`effective_use_flags`, unchanged by this slice) already flattens
+  `package.use` into one incremental list regardless of source --
+  extending that flat model from one source to three doesn't add a *new*
+  simplification on top of what `package.mask`/`.accept_keywords`
+  already established, it just applies the pre-existing one more
+  widely.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -886,6 +911,14 @@ enabled globally by the fixture profile chain -- same as
 `useflagpkg`'s own `foo?`-gated dependency, which *is* pulled in -- because
 a `dev-libs/packageusedisablepkg -foo` entry disables it for this one
 package only).
+
+`PORTING/fixtures/repo/profiles/package.use` (repo-level) and
+`PORTING/fixtures/repo/profiles/default/package.use` (the leaf profile's
+own) exercise `package.use` repo+profile stacking: `repouseenablepkg`
+and `profileuseenablepkg` (each with its own `IUSE`-declared flag,
+off everywhere else, pulling in `newpkg` via its own `?`-gated RDEPEND
+only because the repo-level or profile-level source, respectively,
+enables it).
 
 Four more fixture packages exercise blocker reporting: `blockerpkg`
 (RDEPEND `"!!dev-libs/samepkg"`, a strong blocker matching
@@ -1103,6 +1136,15 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packageuseena
 # dev-libs/useflagpkg above, whose own foo?-gated dependency IS pulled in)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packageusedisablepkg
 # [ebuild  N] dev-libs/packageusedisablepkg-1.0
+
+# package.use is now stacked from repo+profile too, not just
+# /etc/portage -- neither of these packages has any user-level entry
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/repouseenablepkg
+# [ebuild  N] dev-libs/repouseenablepkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/profileuseenablepkg
+# [ebuild  N] dev-libs/profileuseenablepkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
 
 # a strong (!!) blocker matching an already-installed package is reported
 # (not enforced -- exit code is still 0, same as real --pretend)

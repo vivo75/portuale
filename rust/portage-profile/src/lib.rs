@@ -65,24 +65,36 @@
 //     *user*-level entry never gets, so kept simple and symmetric
 //     between the two rather than adding a profile-only special case
 //     (see `parse_package_accept_keywords_lines`'s own doc comment).
-//   - `package.use` remains user-level only for now: real portage's
-//     repo-level `package.use` lands in a distinct `configdict["repo"]`
-//     layer and profile-level in `configdict["defaults"]`, both governed
-//     by the full `USE_ORDER` precedence sequence this pilot only
-//     partially implements (see the "Only the `defaults`... layers of
-//     real config.py's `USE_ORDER`" bullet above) -- a materially bigger,
-//     separate piece of work than the flat concatenation
-//     `package.mask`/`.accept_keywords` both use, so it's deliberately
-//     left as its own, still-open follow-up rather than folded into this
-//     one. `package.use` entries are applied per package (not globally):
-//     a matching entry's tokens are layered on top of the base
-//     `use_flags` set with the same incremental semantics as `USE`
-//     itself (see `apply_incremental`), scoped to only the one package
-//     being resolved/recursed into -- see `portage-repo`'s
-//     `resolve_pretend_graph` for where that per-package application
-//     happens (it needs the candidate's SLOT to match slotted
-//     `package.use` entries, which only exists at that later,
-//     repo-aware layer).
+//   - `package.use` is stacked from all three real sources -- repo-level
+//     (`<main_repo_location>/profiles/package.use`), every profile
+//     level's own `package.use` (in chain order), and user-level -- the
+//     same file-location convention `package.mask` and
+//     `package.accept_keywords` both already use (confirmed by reading
+//     `UseManager.__init__`), concatenated and parsed once, purely
+//     additive like `package.accept_keywords` (no `-atom` removal
+//     exists for this file at all -- see `parse_package_use_lines`).
+//     This is a deliberate, confirmed-with-the-user simplification, not
+//     a full port of real portage's own mechanism: real repo-level
+//     `package.use` lands in a distinct `configdict["repo"]` USE_ORDER
+//     layer and profile-level in `configdict["defaults"]` (merged
+//     per-level with that level's own `make.defaults` USE), both part of
+//     the full `USE_ORDER` precedence sequence this pilot only partially
+//     implements (see the "Only the `defaults`... layers of real
+//     config.py's `USE_ORDER`" bullet above) -- but since this pilot's
+//     own per-package application (see below) already flattens
+//     `package.use` into one incremental list regardless of source,
+//     extending that flat model from one source to three doesn't add a
+//     *new* simplification, it just applies the pre-existing one more
+//     widely, the same reasoning that applied to `package.mask` and
+//     `package.accept_keywords` before it. `package.use` entries are
+//     applied per package (not globally): a matching entry's tokens are
+//     layered on top of the base `use_flags` set with the same
+//     incremental semantics as `USE` itself (see `apply_incremental`),
+//     scoped to only the one package being resolved/recursed into -- see
+//     `portage-repo`'s `resolve_pretend_graph` for where that
+//     per-package application happens (it needs the candidate's SLOT to
+//     match slotted `package.use` entries, which only exists at that
+//     later, repo-aware layer).
 //
 // One real, deliberately-preserved quirk from lib/portage/package/ebuild/
 // config.py (see the comment above its `expand_map.pop("USE", None)`):
@@ -395,12 +407,17 @@ fn parse_package_accept_keywords_lines(lines: &[String]) -> Vec<(String, Vec<Str
 
 /// `package.use`: each line is `<atom-or-wildcard> <use-token...>`. A line
 /// with no tokens after the atom is a documented no-op, matching
-/// `load_package_accept_keywords`. The USE_EXPAND-prefix shorthand
+/// `parse_package_accept_keywords_lines`. The USE_EXPAND-prefix shorthand
 /// (`VIDEO_CARDS: nvidia`) is out of scope -- see the module doc comment.
-fn load_package_use(config_root: &Path) -> Result<Vec<(String, Vec<String>)>, String> {
-    let path = config_root.join("etc/portage/package.use");
+/// Purely additive across sources, like `package.accept_keywords` and
+/// unlike `package.mask`/`.unmask`: real portage's own `package.use`
+/// consumption (`config.py`'s `regenerate` -- see the module doc comment
+/// on `USE_ORDER`) only ever `.extend()`s a growing token list per
+/// source, never removes a previous entry, so there's no `-atom`
+/// semantics to port here at all.
+fn parse_package_use_lines(lines: &[String]) -> Vec<(String, Vec<String>)> {
     let mut result = Vec::new();
-    for line in read_config_lines(&path)? {
+    for line in lines {
         let mut parts = line.split_whitespace();
         let Some(atom) = parts.next() else {
             continue;
@@ -411,7 +428,7 @@ fn load_package_use(config_root: &Path) -> Result<Vec<(String, Vec<String>)>, St
         }
         result.push((atom.to_string(), tokens));
     }
-    Ok(result)
+    result
 }
 
 /// Computes the real USE/ACCEPT_KEYWORDS/visibility `Config` for
@@ -511,7 +528,32 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
     )?);
     config.package_accept_keywords = parse_package_accept_keywords_lines(&accept_keywords_lines);
 
-    config.package_use = load_package_use(config_root)?;
+    // package.use: repo-level (<main_repo_location>/profiles/package.use),
+    // then every profile level's own package.use (in chain order), then
+    // user-level -- same file-location convention package.mask and
+    // package.accept_keywords both already use (confirmed by reading
+    // UseManager.__init__'s _parse_repository_files_to_dict_of_dicts/
+    // _parse_profile_files_to_tuple_of_dicts calls), and purely additive
+    // like package.accept_keywords (see parse_package_use_lines). This is
+    // a deliberate, confirmed-with-the-user simplification, not a full
+    // port of real portage's own package.use handling: real repo-level
+    // package.use lands in a distinct configdict["repo"] USE_ORDER layer
+    // and profile-level in configdict["defaults"] (merged per-level with
+    // that level's own make.defaults USE), while this pilot's existing
+    // per-package application (see portage-repo's effective_use_flags)
+    // already flattens everything into one incremental list regardless
+    // of source -- extending that flat model to three sources instead of
+    // one doesn't add a new simplification, it just applies the
+    // pre-existing one more widely.
+    let mut use_lines: Vec<String> =
+        read_config_lines(&main_repo_location.join("profiles/package.use"))?;
+    for level in &chain {
+        use_lines.extend(read_config_lines(&level.join("package.use"))?);
+    }
+    use_lines.extend(read_config_lines(
+        &config_root.join("etc/portage/package.use"),
+    )?);
+    config.package_use = parse_package_use_lines(&use_lines);
 
     Ok(config)
 }
@@ -727,6 +769,42 @@ mod tests {
             vec![
                 ("dev-libs/a".to_string(), vec!["~amd64".to_string()]),
                 ("dev-libs/b".to_string(), vec!["~amd64".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn package_use_stacks_repo_then_profile_chain_then_user() {
+        // Repo-level entry for "a", profile-level entry for "b",
+        // user-level entry for "c" -- all three must appear, in that
+        // order, proving no repo/profile-level source is silently
+        // dropped and no `-atom` removal happens anywhere (package.use
+        // is purely additive, unlike package.mask).
+        let root = std::env::temp_dir().join("portage-profile-test-package-use-stack");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let portage_dir = root.join("etc/portage");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&repo_profiles).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(repo_profiles.join("package.use"), "dev-libs/a flaga\n").unwrap();
+        fs::write(leaf.join("package.use"), "dev-libs/b flagb\n").unwrap();
+        fs::write(portage_dir.join("package.use"), "dev-libs/c flagc\n").unwrap();
+
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.package_use,
+            vec![
+                ("dev-libs/a".to_string(), vec!["flaga".to_string()]),
+                ("dev-libs/b".to_string(), vec!["flagb".to_string()]),
+                ("dev-libs/c".to_string(), vec!["flagc".to_string()]),
             ]
         );
     }

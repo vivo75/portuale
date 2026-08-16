@@ -1,0 +1,3 @@
+# profile-level package.use: enables a flag for anyone inheriting this
+# leaf profile, stacked alongside the repo-level and user-level sources.
+dev-libs/profileuseenablepkg profileuseflag

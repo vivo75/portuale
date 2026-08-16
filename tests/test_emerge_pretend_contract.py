@@ -85,6 +85,8 @@ CASES = [
     ("package.accept_keywords: ** accepts no-keywords package", ["--pretend", "dev-libs/livekeywordpkg"], 0),
     ("package.use: wildcard entry enables a flag not on globally", ["--pretend", "dev-libs/packageuseenablepkg"], 0),
     ("package.use: entry disables a flag that is on globally", ["--pretend", "dev-libs/packageusedisablepkg"], 0),
+    ("package.use: repo-level entry enables a flag not on globally", ["--pretend", "dev-libs/repouseenablepkg"], 0),
+    ("package.use: profile-level entry enables a flag not on globally", ["--pretend", "dev-libs/profileuseenablepkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
     ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
@@ -474,6 +476,42 @@ def test_package_use_entry_disables_a_globally_enabled_flag_for_one_package(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/packageusedisablepkg-1.0"]
+
+
+def test_repo_level_package_use_enables_a_flag_and_pulls_in_a_dependency(
+    emerge_binary, fixture_env
+):
+    """PORTING/fixtures/repo/profiles/package.use (the main repo's own
+    repo-level package.use) has a "dev-libs/repouseenablepkg
+    repouseflag" entry -- "repouseflag" is off everywhere else, so its
+    own repouseflag?-gated dependency is pulled in only because this
+    repo-level source is now stacked in, proving package.use is no
+    longer user-level only."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/repouseenablepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/repouseenablepkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_profile_level_package_use_enables_a_flag_and_pulls_in_a_dependency(
+    emerge_binary, fixture_env
+):
+    """PORTING/fixtures/repo/profiles/default/package.use (the leaf
+    profile's own package.use) has a "dev-libs/profileuseenablepkg
+    profileuseflag" entry -- same proof as the repo-level case above, for
+    the profile-chain source instead."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/profileuseenablepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/profileuseenablepkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
 
 
 def test_strong_blocker_matches_an_installed_package(emerge_binary, fixture_env):

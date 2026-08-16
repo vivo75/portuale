@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: its foo?-gated dependency is pulled in only because repo-level profiles/package.use enables a flag that's off everywhere else
+EAPI=8
+IUSE=repouseflag
+KEYWORDS=amd64
+RDEPEND=repouseflag? ( dev-libs/newpkg )
+SLOT=0
+_md5_=0000000000000000000000000000000
