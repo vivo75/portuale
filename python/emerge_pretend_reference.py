@@ -693,7 +693,7 @@ def _apply_incremental(tokens, target_set):
             target_set.add(tok)
 
 
-def _process_config_lines(text, scalars, use_flags, accept_keywords):
+def _process_config_lines(text, scalars, use_flags, accept_keywords, use_expand):
     for line in text.splitlines():
         parsed = _parse_kv_line(line)
         if parsed is None:
@@ -704,6 +704,8 @@ def _process_config_lines(text, scalars, use_flags, accept_keywords):
             _apply_incremental(value, use_flags)
         elif key == "ACCEPT_KEYWORDS":
             _apply_incremental(value, accept_keywords)
+        elif key == "USE_EXPAND":
+            _apply_incremental(value, use_expand)
         scalars[key] = value
 
 
@@ -739,7 +741,9 @@ def _resolve_profile_chain(leaf):
     return chain
 
 
-def _process_make_conf_file(path, config_root, scalars, use_flags, accept_keywords, visited_sources):
+def _process_make_conf_file(
+    path, config_root, scalars, use_flags, accept_keywords, use_expand, visited_sources
+):
     """Resolves "source <path>" against config_root as if it were "/"
     (chroot-style), matching PORTAGE_CONFIGROOT/ROOT semantics elsewhere
     in this pilot. A missing sourced file is silently skipped."""
@@ -760,7 +764,13 @@ def _process_make_conf_file(path, config_root, scalars, use_flags, accept_keywor
             else:
                 resolved = os.path.join(os.path.dirname(canon), sourced)
             _process_make_conf_file(
-                resolved, config_root, scalars, use_flags, accept_keywords, visited_sources
+                resolved,
+                config_root,
+                scalars,
+                use_flags,
+                accept_keywords,
+                use_expand,
+                visited_sources,
             )
             continue
         parsed = _parse_kv_line(trimmed)
@@ -772,6 +782,8 @@ def _process_make_conf_file(path, config_root, scalars, use_flags, accept_keywor
             _apply_incremental(value, use_flags)
         elif key == "ACCEPT_KEYWORDS":
             _apply_incremental(value, accept_keywords)
+        elif key == "USE_EXPAND":
+            _apply_incremental(value, use_expand)
         scalars[key] = value
 
 
@@ -787,7 +799,7 @@ def resolve_config(config_root, main_repo_location):
     cuts. Returns a dict with keys "use_flags", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
     "package_use", "system_packages", "use_force", "use_mask",
-    "package_use_force", "package_use_mask".
+    "package_use_force", "package_use_mask", "use_expand".
 
     main_repo_location (the main repo's own tree root -- see
     find_repos/is_main) is needed for package.mask/.unmask's repo-level
@@ -801,6 +813,7 @@ def resolve_config(config_root, main_repo_location):
     the one main repo's is read here."""
     use_flags = set()
     accept_keywords = set()
+    use_expand = set()
     scalars = {}
 
     make_profile = os.path.join(config_root, "etc", "portage", "make.profile")
@@ -814,11 +827,47 @@ def resolve_config(config_root, main_repo_location):
         scalars.pop("USE", None)
         with open(make_defaults) as f:
             text = f.read()
-        _process_config_lines(text, scalars, use_flags, accept_keywords)
+        _process_config_lines(text, scalars, use_flags, accept_keywords, use_expand)
 
     make_conf = os.path.join(config_root, "etc", "portage", "make.conf")
     if os.path.isfile(make_conf):
-        _process_make_conf_file(make_conf, config_root, scalars, use_flags, accept_keywords, set())
+        _process_make_conf_file(
+            make_conf, config_root, scalars, use_flags, accept_keywords, use_expand, set()
+        )
+
+    # USE_EXPAND (PMS 7.3.4; real config.py's own regenerate(), "Do the
+    # USE calculation last because it depends on USE_EXPAND"): now that
+    # every profile level's own make.defaults plus make.conf have been
+    # read, use_expand holds the final, incrementally-stacked set of
+    # USE_EXPAND variable NAMES (e.g. "VIDEO_CARDS"). Each named
+    # variable's own current VALUE -- read from scalars, the same
+    # last-level-wins mechanism every other non-USE/ACCEPT_KEYWORDS
+    # variable already uses (a deliberate simplification of real
+    # portage's own genuinely-incremental per-USE_EXPAND-variable
+    # behavior -- extending the pre-existing "no incremental merge
+    # outside USE/ACCEPT_KEYWORDS" cut to these variables too, not a new
+    # one) -- is expanded into lowercase-prefixed pseudo-USE-flags via
+    # the exact same _apply_incremental token semantics USE itself
+    # already uses, folded directly into use_flags. Mirrors
+    # portage-profile/src/lib.rs's resolve_config exactly, including its
+    # own doc comment's list of deliberately out-of-scope USE_EXPAND
+    # corners (USE_EXPAND_UNPREFIXED, IUSE-aware wildcard expansion,
+    # USE_EXPAND_HIDDEN/_IMPLICIT, and package.use's own USE_EXPAND-prefix
+    # shorthand, a separate, not-yet-ported follow-up).
+    for var in use_expand:
+        value = scalars.get(var)
+        if value is None:
+            continue
+        prefix = var.lower()
+        prefixed_tokens = []
+        for tok in value.split():
+            if tok.startswith("-"):
+                prefixed_tokens.append(f"-{prefix}_{tok[1:]}")
+            elif tok.startswith("+"):
+                prefixed_tokens.append(f"{prefix}_{tok[1:]}")
+            else:
+                prefixed_tokens.append(f"{prefix}_{tok}")
+        _apply_incremental(" ".join(prefixed_tokens), use_flags)
 
     # use.mask/use.force: every profile level's own file (in chain
     # order), stacked with the same "-atom" removal semantics
@@ -935,6 +984,7 @@ def resolve_config(config_root, main_repo_location):
         "use_mask": use_mask,
         "package_use_force": _parse_package_use_lines(use_force_lines),
         "package_use_mask": _parse_package_use_lines(use_mask_lines),
+        "use_expand": use_expand,
     }
 
 

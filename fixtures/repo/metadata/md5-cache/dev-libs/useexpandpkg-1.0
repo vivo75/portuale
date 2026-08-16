@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: USE_EXPAND (VIDEO_CARDS="nvidia" in profiles/base/make.defaults expands into the pseudo-USE flag video_cards_nvidia) drives a dependency exactly like a normal USE flag would
+EAPI=8
+IUSE=video_cards_nvidia video_cards_amdgpu
+KEYWORDS=amd64
+RDEPEND=video_cards_nvidia? ( dev-libs/newpkg ) video_cards_amdgpu? ( dev-libs/hiddendep )
+SLOT=0
+_md5_=0000000000000000000000000000000

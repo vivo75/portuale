@@ -2334,6 +2334,18 @@ mod tests {
         assert_eq!(full_names, vec!["dev-libs/useflagpkg", "dev-libs/newpkg"]);
     }
 
+    #[test]
+    fn use_expand_flag_drives_dependency_recursion() {
+        // profiles/base/make.defaults declares USE_EXPAND="VIDEO_CARDS"
+        // and VIDEO_CARDS="nvidia" -- expands into "video_cards_nvidia",
+        // which dev-libs/useexpandpkg's own RDEPEND is gated on.
+        let full_names: Vec<String> = graph_real("dev-libs/useexpandpkg")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(full_names, vec!["dev-libs/useexpandpkg", "dev-libs/newpkg"]);
+    }
+
     fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root, &root.join("repo"))

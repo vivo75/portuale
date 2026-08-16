@@ -139,6 +139,11 @@ CASES = [
         1,
     ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
+    (
+        "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
+        ["--pretend", "-v", "dev-libs/useexpandpkg"],
+        0,
+    ),
     ("package.mask: hidden, no unmask", ["--pretend", "dev-libs/hardmaskedpkg"], 1),
     ("package.mask + package.unmask: masked then unmasked", ["--pretend", "dev-libs/maskedandunmaskedpkg"], 0),
     ("package.mask: -atom removal leaves candidate unaffected", ["--pretend", "dev-libs/samepkg"], 0),
@@ -625,6 +630,27 @@ def test_real_use_flags_from_profile_gate_a_dependency(emerge_binary, fixture_en
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         "[ebuild  N] dev-libs/useflagpkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+    assert "hiddendep" not in result.stdout
+
+
+def test_use_expand_variable_drives_a_dependency(emerge_binary, fixture_env):
+    """PORTING/fixtures/repo/profiles/base/make.defaults declares
+    USE_EXPAND="VIDEO_CARDS" and VIDEO_CARDS="nvidia" -- real config.py's
+    own USE_EXPAND mechanism (PMS 7.3.4) expands that into the pseudo-USE
+    flag "video_cards_nvidia", added to the global USE set exactly like
+    an ordinary profile-declared flag would be. dev-libs/useexpandpkg's
+    own `video_cards_nvidia? ( dev-libs/newpkg )` proves the expanded
+    flag genuinely drives dependency recursion, not just USE display;
+    `video_cards_amdgpu` (never set by anything) stays off, so its own
+    `? ( dev-libs/hiddendep )` clause is never pulled in."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/useexpandpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '[ebuild  N] dev-libs/useexpandpkg-1.0  USE="-video_cards_amdgpu video_cards_nvidia"',
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
     assert "hiddendep" not in result.stdout

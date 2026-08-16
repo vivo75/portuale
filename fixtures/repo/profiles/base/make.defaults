@@ -4,3 +4,8 @@
 # pattern (see e.g. the real tree's profiles/base/make.defaults).
 USE="foo"
 USE="${USE} bar"
+
+# Exercises USE_EXPAND: VIDEO_CARDS="nvidia" expands into the pseudo-USE
+# flag "video_cards_nvidia" (see dev-libs/useexpandpkg).
+USE_EXPAND="VIDEO_CARDS"
+VIDEO_CARDS="nvidia"

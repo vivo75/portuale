@@ -384,10 +384,12 @@ PORTING/
   out of scope: cross-repo profile parents (`reponame:path` syntax, which
   the real dev machine's own profile actually uses -- so testing this
   mechanism needed a new synthetic same-repo, multi-parent fixture chain
-  rather than the real system profile), `USE_EXPAND`, wildcard `_*`
-  expansion, and every `USE_ORDER` layer except `defaults` (profile) and
-  `conf` (make.conf) -- see the doc comment at the top of
-  `rust/portage-profile/src/lib.rs`.
+  rather than the real system profile), wildcard `_*` expansion, and
+  every `USE_ORDER` layer except `defaults` (profile) and `conf`
+  (make.conf) -- see the doc comment at the top of
+  `rust/portage-profile/src/lib.rs`. `USE_EXPAND` itself is no longer on
+  this list -- see its own paragraph further below for the follow-up
+  that closed it.
 
   **`package.mask`/`.unmask`/`.accept_keywords`**: the last piece of
   "which packages are even visible" -- a candidate is masked if it matches
@@ -1221,6 +1223,43 @@ PORTING/
   requiredusebadparentpkg` (RDEPENDs on the violated package) proves the
   fatal-abort severity really does apply regardless of graph position,
   not just to a top-level atom's own REQUIRED_USE.
+
+  **`USE_EXPAND` support** (PMS 7.3.4). Closes a gap named explicitly in
+  `portage-profile`'s own doc comment since the original profile-chain
+  slice. Grounded against real `config.py`'s own `regenerate()` --
+  genuinely elaborate machinery (incremental-vs-non-incremental
+  per-variable handling, a separate `USE_EXPAND_UNPREFIXED` mode,
+  IUSE-aware wildcard expansion for cases like `linguas_*`, an
+  early-expand pass specifically so sub-profiles get useful incremental
+  behavior) considerably bigger than this pilot's own flat accumulation
+  model, so v1 ports a deliberately narrower core: `USE_EXPAND` itself
+  (the variable-NAME list, e.g. `VIDEO_CARDS PYTHON_TARGETS`) accumulates
+  incrementally across the profile chain and `make.conf`, the exact same
+  `apply_incremental` mechanism `USE`/`ACCEPT_KEYWORDS` already use; each
+  named variable's own VALUE (e.g. `VIDEO_CARDS="nvidia"`) is read via
+  this pilot's own pre-existing, already-documented "last-level-wins,
+  no incremental merge" scalar mechanism (the same one `ARCH` already
+  uses) -- a deliberate simplification of real portage's own genuinely
+  per-variable-incremental behavior, extending an already-confirmed cut
+  to one more case rather than inventing a new one. Each value's own
+  tokens expand into lowercase-`varname_`-prefixed pseudo-USE-flags
+  (`VIDEO_CARDS="nvidia"` -> `video_cards_nvidia`), folded directly into
+  the same flat `use_flags` set every other USE source already
+  populates -- no separate per-variable breakdown is kept, since nothing
+  in this pilot (no `--info` action) needs one. Deliberately out of
+  scope, all confirmed real, named corners: `USE_EXPAND_UNPREFIXED`,
+  IUSE-aware wildcard expansion (needs a specific package's own IUSE,
+  which global config resolution has no access to), `USE_EXPAND_HIDDEN`/
+  `_IMPLICIT` (real `emerge --info` display-only concerns), and
+  `package.use`'s own `USE_EXPAND`-prefix shorthand (`VIDEO_CARDS:
+  nvidia` lines) -- a separate, not-yet-ported follow-up building on top
+  of this same base mechanism, not required to make it useful on its
+  own. `dev-libs/useexpandpkg` (`IUSE="video_cards_nvidia
+  video_cards_amdgpu"`, RDEPEND gated on each) proves the expanded flag
+  genuinely drives dependency recursion, not just USE display:
+  `video_cards_nvidia` (declared by `profiles/base/make.defaults`) pulls
+  in its dependency, `video_cards_amdgpu` (never declared anywhere)
+  doesn't.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1405,6 +1444,15 @@ second has nothing forcing `bar` on at all, genuinely violating it.
 `dev-libs/requiredusebadparentpkg` (RDEPEND
 `dev-libs/requiredusebadpkg`) proves the resulting fatal abort applies
 the same way when the violation is reached only as a dependency.
+
+`PORTING/fixtures/repo/profiles/base/make.defaults`'s own
+`USE_EXPAND="VIDEO_CARDS"`/`VIDEO_CARDS="nvidia"` lines exercise
+`USE_EXPAND`: `dev-libs/useexpandpkg` (`IUSE="video_cards_nvidia
+video_cards_amdgpu"`) RDEPENDs on `dev-libs/newpkg` only when
+`video_cards_nvidia` (the expanded pseudo-flag) is enabled, and on the
+never-reached `dev-libs/hiddendep` when `video_cards_amdgpu` (declared
+nowhere at all) is -- proving the expansion feeds real dependency
+resolution, not just `-v`'s own USE display.
 
 `PORTING/fixtures/var/lib/portage/world` (real portage's own `WORLD_FILE`
 location, `ROOT`-relative) exercises `@world` expansion: it lists
@@ -1689,6 +1737,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requireduseba
 # profile chain, so this package's foo?-gated dependency is pulled in
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useflagpkg
 # [ebuild  N] dev-libs/useflagpkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# USE_EXPAND is real and implemented: profiles/base/make.defaults'
+# VIDEO_CARDS="nvidia" expands into the pseudo-USE flag
+# "video_cards_nvidia", which genuinely gates a dependency, not just -v
+# display
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/useexpandpkg
+# [ebuild  N] dev-libs/useexpandpkg-1.0  USE="-video_cards_amdgpu video_cards_nvidia"
 # [ebuild  N] dev-libs/newpkg-1.0
 
 # package.mask: hidden, no matching package.unmask entry

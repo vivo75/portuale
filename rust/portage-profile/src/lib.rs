@@ -223,6 +223,20 @@ pub struct Config {
     /// (atom-or-wildcard string, flag tokens) pairs from `package.use.mask`.
     /// See `package_use_force`'s own doc comment.
     pub package_use_mask: Vec<(String, Vec<String>)>,
+    /// `USE_EXPAND` itself (PMS 7.3.4 profiles doc; real `const.py`'s own
+    /// `INCREMENTALS` list): the set of variable NAMES (e.g. `VIDEO_CARDS`,
+    /// `PYTHON_TARGETS`) accumulated incrementally across every profile
+    /// level's own `make.defaults` plus `make.conf`, same mechanism `USE`/
+    /// `ACCEPT_KEYWORDS` already use. Each named variable's own VALUE is
+    /// expanded into lowercase-prefixed pseudo-USE-flags already folded
+    /// into `use_flags` by the time `resolve_config` returns (e.g.
+    /// `VIDEO_CARDS="nvidia"` contributes `video_cards_nvidia`) -- see
+    /// the module doc comment's own `USE_EXPAND` bullet for the full
+    /// scope writeup and its deliberate simplifications. Exposed here
+    /// too (not just folded into `use_flags`) purely for
+    /// documentation/testability, same reasoning `use_force`/`use_mask`
+    /// already have for being separately visible.
+    pub use_expand: HashSet<String>,
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -303,6 +317,7 @@ fn process_lines(text: &str, scalars: &mut HashMap<String, String>, config: &mut
         match key {
             "USE" => apply_incremental(&value, &mut config.use_flags),
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
+            "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
             _ => {}
         }
         scalars.insert(key.to_string(), value);
@@ -404,6 +419,7 @@ fn process_make_conf_file(
         match key {
             "USE" => apply_incremental(&value, &mut config.use_flags),
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
+            "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
             _ => {}
         }
         scalars.insert(key.to_string(), value);
@@ -578,6 +594,59 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
         )?;
     }
 
+    // USE_EXPAND (PMS 7.3.4; real config.py's own regenerate(), "Do the
+    // USE calculation last because it depends on USE_EXPAND"): now that
+    // every profile level's own make.defaults plus make.conf have been
+    // read, `config.use_expand` holds the final, incrementally-stacked
+    // set of USE_EXPAND variable NAMES (e.g. "VIDEO_CARDS"). Each named
+    // variable's own current VALUE -- read from `scalars`, the same
+    // last-level-wins mechanism every other non-USE/ACCEPT_KEYWORDS
+    // variable already uses (see the module doc comment; a deliberate
+    // simplification of real portage's own genuinely-incremental
+    // per-USE_EXPAND-variable behavior -- extending the pre-existing
+    // "no incremental merge outside USE/ACCEPT_KEYWORDS" cut to these
+    // variables too, not a new one) -- is expanded into
+    // lowercase-prefixed pseudo-USE-flags via the exact same
+    // apply_incremental token semantics (`-flag`/`flag`/`+flag`/`-*`)
+    // USE itself already uses, folded directly into `use_flags`. Out of
+    // scope, all deliberately: `USE_EXPAND_UNPREFIXED` (a separate,
+    // rarer unprefixed-expansion mode), IUSE-aware wildcard expansion
+    // (`linguas_*`, which needs a specific package's own IUSE -- global
+    // config resolution has no such per-package context at all), and
+    // `USE_EXPAND_HIDDEN`/`USE_EXPAND_IMPLICIT` (real `emerge --info`
+    // display-only concerns, irrelevant to a `--pretend`-only pilot with
+    // no `--info` action). `package.use`'s own USE_EXPAND-prefix
+    // shorthand (`VIDEO_CARDS: nvidia` lines) stays a separate,
+    // not-yet-ported follow-up -- this slice is the base/global
+    // mechanism those lines would build on, not that shorthand itself.
+    let use_expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
+    for var in use_expand_vars {
+        let Some(value) = scalars.get(&var) else {
+            continue;
+        };
+        let prefix = var.to_lowercase();
+        let prefixed: String = value
+            .split_whitespace()
+            .map(|tok| {
+                // Real config.py's own early-expand loop: "-flag" keeps
+                // its own "-" outside the new prefix ("-video_cards_x",
+                // still recognized as a removal by apply_incremental
+                // below); a leading "+" is stripped first, matching
+                // ordinary USE token handling, so it doesn't get
+                // literally baked into the prefixed flag name.
+                if let Some(rest) = tok.strip_prefix('-') {
+                    format!("-{prefix}_{rest}")
+                } else if let Some(rest) = tok.strip_prefix('+') {
+                    format!("{prefix}_{rest}")
+                } else {
+                    format!("{prefix}_{tok}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        apply_incremental(&prefixed, &mut config.use_flags);
+    }
+
     // use.mask/use.force: every profile level's own file (in chain
     // order), stacked with the same -atom removal semantics
     // package.mask uses (see stack_mask_lines) -- confirmed by reading
@@ -749,7 +818,12 @@ mod tests {
                 "baz".to_string(),
                 "localflag".to_string(),
                 "confflag".to_string(),
+                "video_cards_nvidia".to_string(),
             ])
+        );
+        assert_eq!(
+            config.use_expand,
+            HashSet::from(["VIDEO_CARDS".to_string()])
         );
         assert_eq!(config.accept_keywords, HashSet::from(["amd64".to_string()]));
     }
@@ -972,6 +1046,85 @@ mod tests {
             config.use_mask,
             HashSet::from(["maskflag".to_string(), "bothflag".to_string()])
         );
+    }
+
+    #[test]
+    fn use_expand_variable_names_stack_incrementally_across_profile_levels() {
+        // base declares USE_EXPAND="VIDEO_CARDS" and VIDEO_CARDS="nvidia";
+        // leaf (its own parent -> base) declares USE_EXPAND="PYTHON_TARGETS"
+        // (incremental add, not a replace -- both variable names must end
+        // up recognized) and PYTHON_TARGETS="python3_11". Each variable's
+        // own value is set at only one level, proving expansion works
+        // regardless of which level actually declared USE_EXPAND for it.
+        let root = std::env::temp_dir().join("portage-profile-test-use-expand-names-stack");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let base = repo_profiles.join("base");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(
+            base.join("make.defaults"),
+            "USE_EXPAND=\"VIDEO_CARDS\"\nVIDEO_CARDS=\"nvidia\"\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("parent"), "../repo/profiles/base\n").unwrap();
+        fs::write(
+            leaf.join("make.defaults"),
+            "USE_EXPAND=\"PYTHON_TARGETS\"\nPYTHON_TARGETS=\"python3_11\"\n",
+        )
+        .unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.use_expand,
+            HashSet::from(["VIDEO_CARDS".to_string(), "PYTHON_TARGETS".to_string()])
+        );
+        assert!(config.use_flags.contains("video_cards_nvidia"));
+        assert!(config.use_flags.contains("python_targets_python3_11"));
+    }
+
+    #[test]
+    fn use_expand_variable_value_expands_with_negation_and_plus_stripped() {
+        // A single USE_EXPAND variable's own value exercises all three
+        // ordinary incremental token forms in one pass (real config.py's
+        // own early-expand loop keeps a "-" token's own "-" outside the
+        // new prefix, and a "+" token has it stripped, same as any
+        // ordinary USE token): "nvidia" adds, "+intel" adds (with the
+        // "+" stripped, not baked into the flag name), "-nvidia" then
+        // removes the flag "nvidia" itself already added earlier in the
+        // very same value list -- final: only video_cards_intel remains.
+        let root = std::env::temp_dir().join("portage-profile-test-use-expand-negation");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let base = repo_profiles.join("base");
+        fs::create_dir_all(&base).unwrap();
+
+        fs::write(
+            base.join("make.defaults"),
+            "USE_EXPAND=\"VIDEO_CARDS\"\nVIDEO_CARDS=\"nvidia +intel -nvidia\"\n",
+        )
+        .unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&base, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert!(!config.use_flags.contains("video_cards_nvidia"));
+        assert!(config.use_flags.contains("video_cards_intel"));
+        assert!(!config.use_flags.contains("+video_cards_intel"));
     }
 
     #[test]
