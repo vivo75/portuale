@@ -484,6 +484,7 @@ mod tests_166;
 mod blockers;
 mod license;
 mod masked_deps;
+mod reinstall;
 mod tests_184;
 mod use_flags;
 mod visibility;

@@ -272,6 +272,12 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_deselect_itself() {
+        assert!(lookup("--deselect").is_none());
+        assert!(lookup("-W").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }

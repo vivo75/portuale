@@ -205,6 +205,47 @@ pub(crate) fn atom_matches_graph(
     })
 }
 
+/// The circular-self-dep gate's cp-level presence check: does a merge-bound entry (or
+/// a queued-but-unresolved atom) share the atom's `cat/pkg`? Deliberately slot-blind,
+/// unlike `atom_matches_graph`: a same-cp cross-slot atom must still proceed to the
+/// choice bins, so slot precision here would wrongly refuse it as circular.
+pub(crate) fn atom_cp_present_in_graph(
+    atom_str: &str,
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+    queued_cps: &HashSet<(String, String)>,
+) -> bool {
+    let Some(parsed) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if parsed.blocker != portage_dep::Blocker::None {
+        return false;
+    }
+    if queued_cps.contains(&(parsed.category.clone(), parsed.package.clone())) {
+        return true;
+    };
+    let use_deps = parsed.use_deps.unwrap_or_default();
+    entries.iter().any(|e| {
+        let Some(cpv) = merge_bound_cpv(e) else {
+            return false;
+        };
+        if e.category != parsed.category || e.package != parsed.package {
+            return false;
+        }
+        if portage_dep::match_from_list(atom_str, &[cpv.as_str()]).is_none_or(|m| m.is_empty()) {
+            return false;
+        }
+        let enabled: HashSet<String> = e
+            .use_flags_display
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(f, _)| f.clone())
+            .collect();
+        let iuse: HashSet<String> = e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
+        portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
+    })
+}
+
 /// The visible tree candidates matching `atom_str` (USE deps ignored) after the
 /// backtrack loop's `runtime_pkg_mask` constraints, as `(version, slot)` -- the listing
 /// half of `atom_currently_satisfiable`, returned rather than collapsed to a bool so

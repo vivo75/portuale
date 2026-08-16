@@ -2,6 +2,23 @@
 
 use crate::*;
 
+/// `package.provided` (`pkgsettings.pprovideddict`): true when `atom_str`'s
+/// `cat/pkg` is listed and its constraint matches one of that cp's provided
+/// CPVs (Portage `match_from_list(atom, pprovided)`). Same check the main
+/// resolver's `pprovided_refs` logic performs.
+/// Portage: depgraph, dep_check
+pub(crate) fn pprovided_matches(atom_str: &str, package_provided: &[String]) -> bool {
+    !package_provided.is_empty()
+        && portage_dep::match_from_list(
+            atom_str,
+            &package_provided
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        )
+        .is_some_and(|m| !m.is_empty())
+}
+
 /// One cp's `emerge --prune --nodeps` split: `best_version` is
 /// `protected` (kept), `other_versions` (ascending) are all `selected`
 /// for removal.

@@ -277,6 +277,70 @@ fn metadata_key_accepted_memo_does_not_leak_between_differing_candidate_iuse() {
     );
 }
 
+/// A repeated call with identical arguments hits the memo, and the
+/// `MetadataKey` discriminant keeps `PROPERTIES`/`RESTRICT` apart.
+#[test]
+fn metadata_key_accepted_memo_hits_on_a_repeat_and_separates_metadata_keys() {
+    let config = portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        accept_properties: vec!["*".to_string()],
+        accept_restrict: vec![],
+        ..Default::default()
+    };
+    let c = Candidate {
+        properties: "test".to_string(),
+        restrict: "test".to_string(),
+        ..candidate("1.0", &["amd64"])
+    };
+    let candidate_str = "dev-libs/memokey-1.0:0/0::test";
+    let call =
+        |which: MetadataKey, value: &str, global: &[String], package: &[(String, Vec<String>)]| {
+            metadata_key_accepted(MetadataKeyAcceptedArgs {
+                value_str: value,
+                candidate: &c,
+                category: "dev-libs",
+                package: "memokey",
+                candidate_str,
+                config: &config,
+                which,
+                global_accept: global,
+                package_accept: package,
+            })
+        };
+    let properties = || {
+        call(
+            MetadataKey::Properties,
+            &c.properties,
+            &config.accept_properties,
+            &config.package_properties,
+        )
+    };
+    let restrict = || {
+        call(
+            MetadataKey::Restrict,
+            &c.restrict,
+            &config.accept_restrict,
+            &config.package_accept_restrict,
+        )
+    };
+
+    let before = metadata_key_accepted_uncached_calls();
+    assert!(properties());
+    let after_first = metadata_key_accepted_uncached_calls();
+    assert_eq!(after_first, before + 1, "first call is a miss");
+    assert!(properties());
+    assert_eq!(
+        metadata_key_accepted_uncached_calls(),
+        after_first,
+        "a repeat with identical arguments must hit the memo"
+    );
+    // Same value string, same candidate, same config: only the
+    // `MetadataKey` discriminant separates the two accept-list pairs,
+    // and `accept_restrict=[]` rejects "test" while
+    // `accept_properties=["*"]` accepts it.
+    assert!(!restrict());
+}
+
 #[test]
 fn package_mask_hides_a_matching_candidate() {
     let config = portage_profile::Config {

@@ -42,6 +42,32 @@ pub(crate) fn cycle_restartable(
     })
 }
 
+/// Whether the owner's kept `deps` edges name and match its own merge-bound
+/// instance. Self-loops touching an installed instance stay invisible:
+/// reporting one would flip an outcome-correct resolve into a spurious
+/// circular abort.
+pub(crate) fn owner_self_loop(
+    entries: &[GraphEntry],
+    kept: &[std::collections::HashSet<usize>],
+    oi: usize,
+    root: &Path,
+) -> bool {
+    let Some(owner_cpv) = merge_bound_cpv(&entries[oi]) else {
+        return false;
+    };
+    if !installed_candidates(root, &entries[oi].category, &entries[oi].package).is_empty() {
+        return false;
+    }
+    entries[oi].deps.iter().enumerate().any(|(ei, d)| {
+        (d.alt.is_none() || kept[oi].contains(&ei))
+            && d.category == entries[oi].category
+            && d.package == entries[oi].package
+            && !d.priority.optional
+            && portage_dep::match_from_list(&d.atom, &[owner_cpv.as_str()])
+                .is_some_and(|m| !m.is_empty())
+    })
+}
+
 /// Splits `category/package-version` into its three parts (the last `-`
 /// boundary whose right half verifies as a version).
 pub fn split_cpv(cpv: &str) -> Option<(String, String, String)> {
