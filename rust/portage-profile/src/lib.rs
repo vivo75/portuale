@@ -18,14 +18,14 @@
 //     Gentoo's desktop/plasma profiles often do) will NOT fully resolve
 //     under v1; testing this mechanism needs a same-repo synthetic
 //     fixture chain instead (see PORTING/fixtures/repo/profiles).
-//   - USE_EXPAND (LINGUAS, VIDEO_CARDS, ...), wildcard `_*` IUSE-aware
-//     expansion, and ARCH-based KEYWORDS-format validation are all out
-//     of scope. `package.use`'s
-//     USE_EXPAND-prefix shorthand (`VIDEO_CARDS: nvidia` lines applying a
-//     `video_cards_` prefix to subsequent flags until a blank line resets
-//     it -- see real `UseManager._parse_user_files_to_extatomdict`) is
-//     also out of scope; only plain `-flag`/`flag`/`+flag` tokens are
-//     read.
+//   - Wildcard `_*` IUSE-aware expansion (e.g. `linguas_*`, which needs a
+//     specific package's own IUSE -- global config resolution has no
+//     such per-package context at all) and ARCH-based KEYWORDS-format
+//     validation are out of scope. **Now stale**: `USE_EXPAND` itself
+//     and `package.use`'s own `USE_EXPAND`-prefix shorthand (`VIDEO_CARDS:
+//     nvidia` lines) used to be listed here too -- see the dedicated
+//     `USE_EXPAND` bullet further below for the follow-up that closed
+//     both.
 //   - Only the `defaults` (profile) and `conf` (make.conf) layers of real
 //     config.py's `USE_ORDER` are implemented -- no `env`, `pkginternal`,
 //     `features`, `repo`, `env.d`, or per-package (`pkg`) layers.
@@ -150,14 +150,63 @@
 //     which entries actually apply to a given candidate and in what
 //     order -- see that crate's doc comment for the atom-specificity
 //     algorithm this needed (real `ordered_by_atom_specificity`, ported)
-//     and the deliberate simplifications made along the way (no
-//     stable-vs-`~arch` KEYWORDS distinction at all -- real portage's own
-//     *separate* `use.stable.mask`/`.force`/`package.use.stable.mask`/
-//     `.force` files and `_isStable` check are out of scope entirely; and
-//     comparison-operator atoms lose real `best_match_to_list`'s
-//     "closest version wins a tie" refinement, since real-world
-//     `package.use.mask`/`.force` files essentially never use `>`/`<`/
-//     `>=`/`<=` atoms in practice).
+//     and a deliberate simplification made along the way: comparison-
+//     operator atoms lose real `best_match_to_list`'s "closest version
+//     wins a tie" refinement, since real-world `package.use.mask`/
+//     `.force` files essentially never use `>`/`<`/`>=`/`<=` atoms in
+//     practice. The stable-vs-`~arch` KEYWORDS distinction named as a
+//     cut here at the time this comment was written -- real portage's
+//     own *separate* `use.stable.mask`/`.force`/`package.use.stable.
+//     mask`/`.force` files and `_isStable` check -- is **now stale**:
+//     see the `use.stable.mask`/`.force` bullet further below for the
+//     follow-up that closed it.
+//   - `USE_EXPAND` itself (PMS 7.3.4) IS now read too: the variable-NAME
+//     list (e.g. `VIDEO_CARDS PYTHON_TARGETS`) accumulates incrementally
+//     across the profile chain and `make.conf`, the same mechanism
+//     `USE`/`ACCEPT_KEYWORDS` already use; each named variable's own
+//     VALUE is read via this pilot's own pre-existing "last-level-wins,
+//     no incremental merge" scalar mechanism (the same one `ARCH`
+//     already uses -- real portage is genuinely per-variable-incremental
+//     here, but this pilot's own blanket "no incremental merge outside
+//     USE/ACCEPT_KEYWORDS" cut, confirmed above, already covers every
+//     other such variable, so this just extends it rather than inventing
+//     a new one) and expanded into lowercase-`varname_`-prefixed
+//     pseudo-USE-flags folded directly into `use_flags`. `package.use`'s
+//     own `USE_EXPAND`-prefix shorthand (`VIDEO_CARDS: nvidia` lines,
+//     confirmed real-portage-user-level-only by reading
+//     `UseManager.__init__` -- the repo-level/profile-level parsers go
+//     through a different real function that never applies it) IS now
+//     read too, which is why `package.use`'s own bullet above parses
+//     repo-level/profile-level lines separately from user-level ones.
+//     Still out of scope: `USE_EXPAND_UNPREFIXED` (a separate, rarer
+//     unprefixed-expansion mode) and `USE_EXPAND_HIDDEN`/`_IMPLICIT`
+//     (real `emerge --info` display-only concerns).
+//   - `use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
+//     (PMS 5+, always recognized here per this pilot's own "no EAPI
+//     parametrization" precedent) ARE now read too, closing the
+//     stable-vs-`~arch` cut named above: ported as `portage-repo`'s own
+//     `is_stable`, grounded against real `KeywordsManager.isStable` --
+//     genuinely more subtle than a raw "no `~` prefix" check (a
+//     candidate counts as stable if replacing *every* one of its own
+//     KEYWORDS with its `~`-prefixed unstable form would make it
+//     invisible under the current `ACCEPT_KEYWORDS`/
+//     `package.accept_keywords`). `use_stable_force`/`use_stable_mask`
+//     stay separate `Config` fields rather than folding into
+//     `use_flags` like `use_force`/`use_mask` do, since real
+//     `getUseMask`/`getUseForce`'s own global (`pkg=None`) branch never
+//     even looks at the stable variant at all -- "stable" is inherently
+//     a per-candidate property with no meaningful global value, so
+//     `portage-repo`'s own `effective_use_flags` applies these
+//     conditionally instead, once it knows a specific candidate's own
+//     stability. `use.stable.mask`/`.force` read from the profile chain
+//     only (matching this pilot's own already-established profile-only
+//     sourcing for the non-stable global files, not real per-package
+//     `getUseMask`/`getUseForce`'s own additional repo-level source for
+//     them, which this pilot's global mechanism never had either);
+//     `package.use.stable.mask`/`.force` read repo-level (main repo
+//     only) plus profile-chain, mirroring `package.use.mask`/`.force`'s
+//     own sourcing exactly, no user-level source (same
+//     `UseManager.__init__` file/variable table confirmation).
 //
 // One real, deliberately-preserved quirk from lib/portage/package/ebuild/
 // config.py (see the comment above its `expand_map.pop("USE", None)`):
