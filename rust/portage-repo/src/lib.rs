@@ -2346,6 +2346,22 @@ mod tests {
         assert_eq!(full_names, vec!["dev-libs/useexpandpkg", "dev-libs/newpkg"]);
     }
 
+    #[test]
+    fn package_use_expand_shorthand_drives_dependency_recursion() {
+        // fixtures/etc/portage/package.use has "dev-libs/
+        // packageuseexpandpkg PYTHON_TARGETS: python3_12" -- expands into
+        // "python_targets_python3_12", which
+        // dev-libs/packageuseexpandpkg's own RDEPEND is gated on.
+        let full_names: Vec<String> = graph_real("dev-libs/packageuseexpandpkg")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            full_names,
+            vec!["dev-libs/packageuseexpandpkg", "dev-libs/newpkg"]
+        );
+    }
+
     fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root, &root.join("repo"))

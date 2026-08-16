@@ -243,18 +243,41 @@ def _parse_package_accept_keywords_lines(lines):
     return result
 
 
-def _parse_package_use_lines(lines):
+def _parse_package_use_lines(lines, use_expand_shorthand=False):
     """A line with no tokens after the atom is a documented no-op,
     matching _parse_package_accept_keywords_lines. Purely additive across
     sources, like package.accept_keywords and unlike package.mask/
     .unmask: real portage's own package.use consumption only ever
     .extend()s a growing token list per source, never removes a previous
-    entry. Mirrors portage-profile/src/lib.rs's parse_package_use_lines
-    exactly."""
+    entry.
+
+    use_expand_shorthand, when True, ports real
+    UseManager._parse_user_files_to_extatomdict's own "VIDEO_CARDS:
+    nvidia intel" syntax: a token ending in ":" sets a
+    lowercase(name) + "_" prefix applied to every following token on
+    that same line (a leading "-" stays outside the new prefix), reset
+    back to none at the start of every line. Callers pass False for
+    repo-level/profile-level lines: confirmed by reading
+    UseManager.__init__, only the user-level source ever applies this
+    shorthand at all -- see portage-profile/src/lib.rs's own
+    parse_package_use_lines doc comment for the full grounding. Mirrors
+    that function exactly."""
     result = []
     for line in lines:
         parts = line.split()
-        atom, tokens = parts[0], parts[1:]
+        atom, raw_tokens = parts[0], parts[1:]
+        prefix = ""
+        tokens = []
+        for tok in raw_tokens:
+            if use_expand_shorthand and tok.endswith(":"):
+                prefix = tok[:-1].lower() + "_"
+                continue
+            if not prefix:
+                tokens.append(tok)
+            elif tok.startswith("-"):
+                tokens.append(f"-{prefix}{tok[1:]}")
+            else:
+                tokens.append(f"{prefix}{tok}")
         if not tokens:
             continue
         result.append((atom, tokens))
@@ -927,13 +950,20 @@ def resolve_config(config_root, main_repo_location):
     # concatenation, not real portage's own repo/defaults/pkg USE_ORDER
     # layering -- see that crate's own doc comment for the full
     # reasoning).
-    use_lines = _read_config_lines(
+    # Repo-level/profile-level lines are parsed separately from
+    # user-level ones (rather than one concatenated pass, like every
+    # other package.use.* file here) only because of the
+    # USE_EXPAND-prefix shorthand's own real user-only restriction --
+    # see _parse_package_use_lines's own docstring.
+    repo_and_profile_use_lines = _read_config_lines(
         os.path.join(main_repo_location, "profiles", "package.use")
     )
     for level in chain:
-        use_lines.extend(_read_config_lines(os.path.join(level, "package.use")))
-    use_lines.extend(
-        _read_config_lines(os.path.join(config_root, "etc", "portage", "package.use"))
+        repo_and_profile_use_lines.extend(
+            _read_config_lines(os.path.join(level, "package.use"))
+        )
+    user_use_lines = _read_config_lines(
+        os.path.join(config_root, "etc", "portage", "package.use")
     )
 
     # package.use.mask/package.use.force: repo-level (main repo only, no
@@ -978,7 +1008,10 @@ def resolve_config(config_root, main_repo_location):
         "package_mask": _stack_mask_lines(mask_sources),
         "package_unmask": _stack_mask_lines(unmask_sources),
         "package_accept_keywords": _parse_package_accept_keywords_lines(accept_keywords_lines),
-        "package_use": _parse_package_use_lines(use_lines),
+        "package_use": (
+            _parse_package_use_lines(repo_and_profile_use_lines)
+            + _parse_package_use_lines(user_use_lines, use_expand_shorthand=True)
+        ),
         "system_packages": system_packages,
         "use_force": use_force,
         "use_mask": use_mask,

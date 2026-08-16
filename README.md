@@ -437,10 +437,13 @@ PORTING/
   `package.mask`/`.unmask`/`.accept_keywords`, which is why it needs the
   candidate's resolved `SLOT` (only available at `portage-repo`'s
   repo-aware layer, unlike `USE`/`ACCEPT_KEYWORDS`/`package.mask`, which
-  `portage-profile` can compute on its own). Out of scope: the
+  `portage-profile` can compute on its own). **Now stale**: the
   `USE_EXPAND`-prefix shorthand real `package.use` supports (`VIDEO_CARDS:
-  nvidia` lines applying a `video_cards_` prefix to subsequent flags until
-  a blank line resets it) -- only plain tokens are read.
+  nvidia` lines applying a `video_cards_` prefix to subsequent flags,
+  reset at the start of every physical line) used to be out of scope
+  here -- see the dedicated paragraph further below for the follow-up
+  that closed it (real portage's own reset condition turned out to be
+  "every line," not "a blank line" as this sentence used to claim).
 
   **Blockers**: `!atom`/`!!atom` tokens found while flattening a New/
   Upgrade package's own DEPEND/RDEPEND (see `BlockerConflict`,
@@ -1249,17 +1252,55 @@ PORTING/
   in this pilot (no `--info` action) needs one. Deliberately out of
   scope, all confirmed real, named corners: `USE_EXPAND_UNPREFIXED`,
   IUSE-aware wildcard expansion (needs a specific package's own IUSE,
-  which global config resolution has no access to), `USE_EXPAND_HIDDEN`/
-  `_IMPLICIT` (real `emerge --info` display-only concerns), and
-  `package.use`'s own `USE_EXPAND`-prefix shorthand (`VIDEO_CARDS:
-  nvidia` lines) -- a separate, not-yet-ported follow-up building on top
-  of this same base mechanism, not required to make it useful on its
-  own. `dev-libs/useexpandpkg` (`IUSE="video_cards_nvidia
+  which global config resolution has no access to), and
+  `USE_EXPAND_HIDDEN`/`_IMPLICIT` (real `emerge --info` display-only
+  concerns). **Now stale**: `package.use`'s own `USE_EXPAND`-prefix
+  shorthand (`VIDEO_CARDS: nvidia` lines) used to be listed here as a
+  separate, not-yet-ported follow-up -- see the dedicated paragraph
+  further below for the follow-up that closed it. `dev-libs/useexpandpkg` (`IUSE="video_cards_nvidia
   video_cards_amdgpu"`, RDEPEND gated on each) proves the expanded flag
   genuinely drives dependency recursion, not just USE display:
   `video_cards_nvidia` (declared by `profiles/base/make.defaults`) pulls
   in its dependency, `video_cards_amdgpu` (never declared anywhere)
   doesn't.
+
+  **`package.use`'s own `USE_EXPAND`-prefix shorthand**. The
+  explicitly-deferred follow-up to the base `USE_EXPAND` slice above.
+  Grounded against real `UseManager._parse_user_files_to_extatomdict`: a
+  token ending in `:` (e.g. `VIDEO_CARDS:`) sets a
+  `lowercase(name) + "_"` prefix applied to every *following* token on
+  that same line (a leading `-` stays outside the new prefix, so
+  `-intel` becomes `-video_cards_intel`, not `video_cards_-intel`),
+  reset back to none at the start of every physical line -- confirmed by
+  reading real `grabdict_package`'s own `newlines=1` marker handling (a
+  fresh `"\n"` token is inserted between every line for the same atom,
+  and the real code's own loop resets its prefix on each one; the
+  original `package.use` slice's own paragraph above had mis-described
+  this as "resets on a blank line," now fixed). A genuinely real,
+  *user-level-only* restriction, not a pilot-invented one: confirmed by
+  reading `UseManager.__init__`, only `_parse_user_files_to_extatomdict`
+  (the user-level `package.use` parser) ever applies this shorthand --
+  the repo-level/profile-level parsers
+  (`_parse_repository_files_to_dict_of_dicts`/
+  `_parse_profile_files_to_tuple_of_dicts`) both go through
+  `_parse_file_to_dict` instead, which never passes `newlines=1` and has
+  no such expansion step at all, so the identical `VIDEO_CARDS:` syntax
+  in a repo-level or profile-level `package.use` file is just a literal,
+  unexpanded token there. This real distinction meant splitting this
+  pilot's own previously-uniform "concatenate all three sources, parse
+  once" `package.use` handling into two parses -- repo+profile-level
+  lines (no shorthand) and user-level lines (shorthand enabled) --
+  concatenated together afterward, rather than adding a new pilot-wide
+  simplification. `dev-libs/packageuseexpandpkg`, gated by a
+  `PORTING/fixtures/etc/portage/package.use` entry reading
+  `dev-libs/packageuseexpandpkg PYTHON_TARGETS: python3_12`, proves the
+  shorthand expansion drives real dependency resolution end to end, not
+  just token substitution in isolation -- and, since the shorthand
+  itself never checks whether `PYTHON_TARGETS` is an actually-declared
+  `USE_EXPAND` variable anywhere (confirmed by reading the real parsing
+  loop: it's a purely syntactic transform), this fixture needed no
+  change to the base `USE_EXPAND` slice's own profile fixture state at
+  all.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1453,6 +1494,14 @@ video_cards_amdgpu"`) RDEPENDs on `dev-libs/newpkg` only when
 never-reached `dev-libs/hiddendep` when `video_cards_amdgpu` (declared
 nowhere at all) is -- proving the expansion feeds real dependency
 resolution, not just `-v`'s own USE display.
+
+`PORTING/fixtures/etc/portage/package.use`'s own
+`dev-libs/packageuseexpandpkg PYTHON_TARGETS: python3_12` entry
+exercises `package.use`'s own `USE_EXPAND`-prefix shorthand:
+`dev-libs/packageuseexpandpkg` (`IUSE="python_targets_python3_12"`)
+RDEPENDs on `dev-libs/newpkg` only once that entry's own shorthand
+expands to `python_targets_python3_12`, exactly as if it had been
+written out in full.
 
 `PORTING/fixtures/var/lib/portage/world` (real portage's own `WORLD_FILE`
 location, `ROOT`-relative) exercises `@world` expansion: it lists
@@ -1745,6 +1794,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useflagpkg
 # display
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/useexpandpkg
 # [ebuild  N] dev-libs/useexpandpkg-1.0  USE="-video_cards_amdgpu video_cards_nvidia"
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# package.use's own USE_EXPAND-prefix shorthand is real and implemented
+# too: "dev-libs/packageuseexpandpkg PYTHON_TARGETS: python3_12" in
+# fixtures/etc/portage/package.use expands to
+# "python_targets_python3_12", user-level package.use only
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/packageuseexpandpkg
+# [ebuild  N] dev-libs/packageuseexpandpkg-1.0  USE="python_targets_python3_12"
 # [ebuild  N] dev-libs/newpkg-1.0
 
 # package.mask: hidden, no matching package.unmask entry

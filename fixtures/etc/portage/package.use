@@ -1,3 +1,4 @@
 */packageuseenablepkg pkguseflag
 dev-libs/packageusedisablepkg -foo
 dev-libs/requireduseokpkg bar
+dev-libs/packageuseexpandpkg PYTHON_TARGETS: python3_12

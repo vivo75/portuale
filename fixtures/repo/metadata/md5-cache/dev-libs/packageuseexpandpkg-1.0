@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: package.use's own USE_EXPAND-prefix shorthand (PYTHON_TARGETS: python3_12) expands to python_targets_python3_12, exactly like an ordinary package.use-enabled flag would
+EAPI=8
+IUSE=python_targets_python3_12
+KEYWORDS=amd64
+RDEPEND=python_targets_python3_12? ( dev-libs/newpkg )
+SLOT=0
+_md5_=0000000000000000000000000000000

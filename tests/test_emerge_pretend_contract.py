@@ -144,6 +144,11 @@ CASES = [
         ["--pretend", "-v", "dev-libs/useexpandpkg"],
         0,
     ),
+    (
+        "package.use USE_EXPAND-prefix shorthand: PYTHON_TARGETS: python3_12 gates a dependency",
+        ["--pretend", "-v", "dev-libs/packageuseexpandpkg"],
+        0,
+    ),
     ("package.mask: hidden, no unmask", ["--pretend", "dev-libs/hardmaskedpkg"], 1),
     ("package.mask + package.unmask: masked then unmasked", ["--pretend", "dev-libs/maskedandunmaskedpkg"], 0),
     ("package.mask: -atom removal leaves candidate unaffected", ["--pretend", "dev-libs/samepkg"], 0),
@@ -654,6 +659,27 @@ def test_use_expand_variable_drives_a_dependency(emerge_binary, fixture_env):
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
     assert "hiddendep" not in result.stdout
+
+
+def test_package_use_expand_prefix_shorthand_drives_a_dependency(emerge_binary, fixture_env):
+    """PORTING/fixtures/etc/portage/package.use has "dev-libs/
+    packageuseexpandpkg PYTHON_TARGETS: python3_12" -- real
+    UseManager._parse_user_files_to_extatomdict's own shorthand syntax
+    (PMS-adjacent, user-level package.use only -- see
+    parse_package_use_lines's own doc comment, portage-profile) expands
+    that into "python_targets_python3_12" exactly as if it had been
+    written out in full, gating dev-libs/packageuseexpandpkg's own
+    RDEPEND."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "dev-libs/packageuseexpandpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '[ebuild  N] dev-libs/packageuseexpandpkg-1.0  USE="python_targets_python3_12"',
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
 
 
 def test_package_mask_hides_with_no_matching_unmask(emerge_binary, fixture_env):

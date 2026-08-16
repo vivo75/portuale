@@ -514,22 +514,61 @@ fn parse_package_accept_keywords_lines(lines: &[String]) -> Vec<(String, Vec<Str
 
 /// `package.use`: each line is `<atom-or-wildcard> <use-token...>`. A line
 /// with no tokens after the atom is a documented no-op, matching
-/// `parse_package_accept_keywords_lines`. The USE_EXPAND-prefix shorthand
-/// (`VIDEO_CARDS: nvidia`) is out of scope -- see the module doc comment.
-/// Purely additive across sources, like `package.accept_keywords` and
-/// unlike `package.mask`/`.unmask`: real portage's own `package.use`
-/// consumption (`config.py`'s `regenerate` -- see the module doc comment
-/// on `USE_ORDER`) only ever `.extend()`s a growing token list per
-/// source, never removes a previous entry, so there's no `-atom`
-/// semantics to port here at all.
-fn parse_package_use_lines(lines: &[String]) -> Vec<(String, Vec<String>)> {
+/// `parse_package_accept_keywords_lines`. Purely additive across sources,
+/// like `package.accept_keywords` and unlike `package.mask`/`.unmask`:
+/// real portage's own `package.use` consumption (`config.py`'s
+/// `regenerate` -- see the module doc comment on `USE_ORDER`) only ever
+/// `.extend()`s a growing token list per source, never removes a
+/// previous entry, so there's no `-atom` semantics to port here at all.
+///
+/// `use_expand_shorthand`, when true, ports real
+/// `UseManager._parse_user_files_to_extatomdict`'s own `VIDEO_CARDS:
+/// nvidia intel` syntax: a token ending in `:` sets a
+/// `lowercase(name) + "_"` prefix applied to every following token on
+/// *that same line* (a leading `-` stays outside the new prefix, e.g.
+/// `-flag` becomes `-video_cards_flag`, not `video_cards_-flag`) --
+/// reset back to none at the start of every line, confirmed by reading
+/// real `grabdict_package`'s own `newlines=1` marker handling (a fresh
+/// `"\n"` token is inserted between every physical line for the same
+/// atom, and the real code's own loop resets its prefix on each one).
+/// Callers pass `false` for repo-level/profile-level lines: confirmed by
+/// reading `UseManager.__init__`, only the *user*-level source
+/// (`_parse_user_files_to_extatomdict`) ever applies this shorthand at
+/// all -- `_parse_repository_files_to_dict_of_dicts`/
+/// `_parse_profile_files_to_tuple_of_dicts` both go through
+/// `_parse_file_to_dict` instead, which never passes `newlines=1` and
+/// has no such expansion step, so a `VIDEO_CARDS:` token in a
+/// repo-level or profile-level `package.use` file is (in real portage)
+/// just a literal, almost-certainly-invalid USE token, not shorthand at
+/// all. This is genuine real behavior, not a pilot-invented
+/// restriction -- see `resolve_config`'s own call sites.
+fn parse_package_use_lines(
+    lines: &[String],
+    use_expand_shorthand: bool,
+) -> Vec<(String, Vec<String>)> {
     let mut result = Vec::new();
     for line in lines {
         let mut parts = line.split_whitespace();
         let Some(atom) = parts.next() else {
             continue;
         };
-        let tokens: Vec<String> = parts.map(String::from).collect();
+        let mut prefix = String::new();
+        let mut tokens: Vec<String> = Vec::new();
+        for tok in parts {
+            if use_expand_shorthand {
+                if let Some(name) = tok.strip_suffix(':') {
+                    prefix = format!("{}_", name.to_lowercase());
+                    continue;
+                }
+            }
+            if prefix.is_empty() {
+                tokens.push(tok.to_string());
+            } else if let Some(rest) = tok.strip_prefix('-') {
+                tokens.push(format!("-{prefix}{rest}"));
+            } else {
+                tokens.push(format!("{prefix}{tok}"));
+            }
+        }
         if tokens.is_empty() {
             continue;
         }
@@ -732,16 +771,21 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
     // already flattens everything into one incremental list regardless
     // of source -- extending that flat model to three sources instead of
     // one doesn't add a new simplification, it just applies the
-    // pre-existing one more widely.
-    let mut use_lines: Vec<String> =
+    // pre-existing one more widely. Repo-level/profile-level lines are
+    // parsed separately from user-level ones (rather than one
+    // concatenated pass, like every other package.use.* file here) only
+    // because of the USE_EXPAND-prefix shorthand's own real user-only
+    // restriction -- see parse_package_use_lines's own doc comment.
+    let mut repo_and_profile_use_lines: Vec<String> =
         read_config_lines(&main_repo_location.join("profiles/package.use"))?;
     for level in &chain {
-        use_lines.extend(read_config_lines(&level.join("package.use"))?);
+        repo_and_profile_use_lines.extend(read_config_lines(&level.join("package.use"))?);
     }
-    use_lines.extend(read_config_lines(
-        &config_root.join("etc/portage/package.use"),
-    )?);
-    config.package_use = parse_package_use_lines(&use_lines);
+    let user_use_lines = read_config_lines(&config_root.join("etc/portage/package.use"))?;
+    config.package_use = parse_package_use_lines(&repo_and_profile_use_lines, false);
+    config
+        .package_use
+        .extend(parse_package_use_lines(&user_use_lines, true));
 
     // package.use.mask/package.use.force: repo-level (main repo only, no
     // masters -- same cut package.mask's own repo-level source already
@@ -762,8 +806,11 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
         use_force_lines.extend(read_config_lines(&level.join("package.use.force"))?);
         use_mask_lines.extend(read_config_lines(&level.join("package.use.mask"))?);
     }
-    config.package_use_force = parse_package_use_lines(&use_force_lines);
-    config.package_use_mask = parse_package_use_lines(&use_mask_lines);
+    // No shorthand here either: package.use.force/.mask have no
+    // user-level source at all (see this crate's own doc comment), and
+    // real portage's own shorthand support is genuinely user-only.
+    config.package_use_force = parse_package_use_lines(&use_force_lines, false);
+    config.package_use_mask = parse_package_use_lines(&use_mask_lines, false);
 
     // packages (@system): every profile level's own file, in chain
     // order, stacked with the same -atom removal semantics package.mask
@@ -1197,6 +1244,95 @@ mod tests {
                 ("dev-libs/b".to_string(), vec!["flagb".to_string()]),
                 ("dev-libs/c".to_string(), vec!["flagc".to_string()]),
             ]
+        );
+    }
+
+    #[test]
+    fn package_use_expand_shorthand_applies_prefix_to_following_tokens_on_the_same_line() {
+        // User-level "dev-libs/a VIDEO_CARDS: nvidia -intel plainflag" --
+        // "nvidia"/"intel" get the video_cards_ prefix (negation kept
+        // outside it), "plainflag" (before the "VIDEO_CARDS:" marker)
+        // does not.
+        let root = std::env::temp_dir().join("portage-profile-test-package-use-expand-shorthand");
+        let repo = root.join("repo");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+
+        fs::write(
+            portage_dir.join("package.use"),
+            "dev-libs/a plainflag VIDEO_CARDS: nvidia -intel\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.package_use,
+            vec![(
+                "dev-libs/a".to_string(),
+                vec![
+                    "plainflag".to_string(),
+                    "video_cards_nvidia".to_string(),
+                    "-video_cards_intel".to_string(),
+                ]
+            )]
+        );
+    }
+
+    #[test]
+    fn package_use_expand_shorthand_resets_at_the_start_of_each_line() {
+        // Two lines for the SAME atom: the first sets a shorthand prefix
+        // that must not leak into the second line's own tokens.
+        let root = std::env::temp_dir().join("portage-profile-test-package-use-expand-reset");
+        let repo = root.join("repo");
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+
+        fs::write(
+            portage_dir.join("package.use"),
+            "dev-libs/a VIDEO_CARDS: nvidia\ndev-libs/a plainflag\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.package_use,
+            vec![
+                (
+                    "dev-libs/a".to_string(),
+                    vec!["video_cards_nvidia".to_string()]
+                ),
+                ("dev-libs/a".to_string(), vec!["plainflag".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn package_use_expand_shorthand_is_user_level_only() {
+        // The same "VIDEO_CARDS:" syntax in a repo-level or profile-level
+        // package.use file is genuine real behavior's own literal,
+        // unexpanded token -- real portage's shorthand support is
+        // user-only (see parse_package_use_lines's own doc comment).
+        let root = std::env::temp_dir().join("portage-profile-test-package-use-expand-user-only");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        fs::create_dir_all(&repo_profiles).unwrap();
+        fs::create_dir_all(root.join("etc/portage")).unwrap();
+
+        fs::write(
+            repo_profiles.join("package.use"),
+            "dev-libs/a VIDEO_CARDS: nvidia\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.package_use,
+            vec![(
+                "dev-libs/a".to_string(),
+                vec!["VIDEO_CARDS:".to_string(), "nvidia".to_string()]
+            )]
         );
     }
 
