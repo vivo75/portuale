@@ -18,6 +18,21 @@ fn test_config() -> portage_profile::Config {
     }
 }
 
+/// Arguments of [`run_161`].
+struct Run161Args<'a> {
+    dir: &'a Path,
+    atoms: &'a [String],
+    update: bool,
+    installed: &'a [(&'a str, &'a str, &'a str)],
+    newuse: bool,
+    usepkgonly: bool,
+    nodeps: bool,
+    selective: bool,
+    usepkg: bool,
+    deep: Deep,
+    with_bdeps: bool,
+}
+
 /// Arguments of [`euf_flat`].
 struct EufFlatArgs<'a> {
     iuse: &'a str,
