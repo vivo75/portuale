@@ -427,29 +427,49 @@ fn effective_use_flags(
     // package.use.stable.force (when stable) join the force tier;
     // use.stable.mask/package.use.stable.mask (when stable) join the
     // mask tier -- see this function's own doc comment.
-    for flag in specificity_ordered_flags(package_use_force, candidate_str, category, package) {
+    for flag in specificity_ordered_flags(
+        package_use_force,
+        candidate_str,
+        category,
+        package,
+        HashSet::new(),
+    ) {
         use_flags.insert(flag);
     }
     if stable {
         for flag in use_stable_force {
             use_flags.insert(flag.clone());
         }
-        for flag in
-            specificity_ordered_flags(package_use_stable_force, candidate_str, category, package)
-        {
+        for flag in specificity_ordered_flags(
+            package_use_stable_force,
+            candidate_str,
+            category,
+            package,
+            HashSet::new(),
+        ) {
             use_flags.insert(flag);
         }
     }
-    for flag in specificity_ordered_flags(package_use_mask, candidate_str, category, package) {
+    for flag in specificity_ordered_flags(
+        package_use_mask,
+        candidate_str,
+        category,
+        package,
+        HashSet::new(),
+    ) {
         use_flags.remove(&flag);
     }
     if stable {
         for flag in use_stable_mask {
             use_flags.remove(flag);
         }
-        for flag in
-            specificity_ordered_flags(package_use_stable_mask, candidate_str, category, package)
-        {
+        for flag in specificity_ordered_flags(
+            package_use_stable_mask,
+            candidate_str,
+            category,
+            package,
+            HashSet::new(),
+        ) {
             use_flags.remove(&flag);
         }
     }
@@ -457,22 +477,31 @@ fn effective_use_flags(
 }
 
 /// Computes the final per-candidate flag set from `entries` (raw
-/// `package.use.mask`/`.force` `(atom, tokens)` pairs): filters to
-/// entries whose atom actually matches `candidate_str`, orders the
-/// matches from least to most specific (see `atom_specificity`, a
-/// simplified port of real `best_match_to_list`'s own ranking table,
-/// used by `ordered_by_atom_specificity`), then applies each one's own
-/// tokens via the same incremental `-flag`/`flag`/`+flag` semantics
-/// `package.use` itself uses (`apply_incremental`), onto an initially
-/// empty set -- so a more-specific atom's own `-flag` can cancel a
-/// less-specific atom's own mask/force, exactly mirroring real
-/// portage's own `stack_lists(incremental=True)` applied to the
-/// specificity-ordered entry list.
+/// `package.use.mask`/`.force`/`package.accept_keywords` `(atom,
+/// tokens)` pairs): filters to entries whose atom actually matches
+/// `candidate_str`, orders the matches from least to most specific (see
+/// `atom_specificity`, a simplified port of real `best_match_to_list`'s
+/// own ranking table, used by `ordered_by_atom_specificity`), then
+/// applies each one's own tokens via the same incremental
+/// `-flag`/`flag`/`+flag` semantics `package.use` itself uses
+/// (`apply_incremental`), onto `seed` -- so a more-specific atom's own
+/// `-flag` can cancel a less-specific atom's own mask/force (or, for
+/// `keywords_accepted`'s own use below, even a keyword `seed` itself
+/// already contains), exactly mirroring real portage's own
+/// `stack_lists(incremental=True)` applied to the specificity-ordered
+/// entry list. `seed` is empty for every `package.use.mask`/`.force`
+/// caller (real `MaskManager`'s own equivalent stack has no comparable
+/// "start from something already accepted" step) -- `keywords_accepted`
+/// is the one caller that seeds it with something real, mirroring real
+/// `KeywordsManager.getMissingKeywords`'s own `pgroups = global_accept_
+/// keywords.split(); pgroups.extend(unmaskgroups)` (seed first, then
+/// fold in package-specific contributions) exactly.
 fn specificity_ordered_flags(
     entries: &[(String, Vec<String>)],
     candidate_str: &str,
     category: &str,
     package: &str,
+    mut seed: HashSet<String>,
 ) -> HashSet<String> {
     let mut matching: Vec<&(String, Vec<String>)> = entries
         .iter()
@@ -482,11 +511,10 @@ fn specificity_ordered_flags(
     // this pilot deliberately doesn't further distinguish -- see the
     // module doc comment) keep their original file/stacking order.
     matching.sort_by_key(|(entry, _)| atom_specificity(entry));
-    let mut flags = HashSet::new();
     for (_, tokens) in matching {
-        portage_profile::apply_incremental(&tokens.join(" "), &mut flags);
+        portage_profile::apply_incremental(&tokens.join(" "), &mut seed);
     }
-    flags
+    seed
 }
 
 /// Simplified port of real `best_match_to_list`'s own specificity
@@ -1024,6 +1052,33 @@ pub fn is_visible(
 /// established style, takes individual pre-extracted fields rather
 /// than a `Config` reference -- can call `is_stable` without needing
 /// one either.
+///
+/// Grounded against real `KeywordsManager.getMissingKeywords`/
+/// `_getEgroups` (`lib/portage/package/ebuild/_config/
+/// KeywordsManager.py`): a `package.accept_keywords` entry doesn't just
+/// *add* keywords on top of the global `ACCEPT_KEYWORDS` set -- real
+/// `_getEgroups` folds `-token`/`-*` removals too, over the *combined*
+/// list (global keywords first, then each matching entry's own tokens,
+/// in atom-specificity order), so a more-specific `package.accept_
+/// keywords` line can revoke a keyword the global set already granted,
+/// not just add new ones. Ported here via `specificity_ordered_flags`
+/// (already established for `package.use.mask`/`.force`'s own identical
+/// "specificity-ordered incremental fold" shape) seeded with
+/// `accept_keywords` itself, rather than the previous, incorrect
+/// "union everything a matching entry ever mentions, ignore any `-`
+/// prefix" accumulation. `"**"` is folded in exactly like any other
+/// token now (removable by a later `-*`/`-**`), rather than a separate
+/// unconditional-accept pre-scan that ignored fold order entirely --
+/// once folded, its presence in the final accepted set still means
+/// "accept any KEYWORDS state, even empty," the same real `"**" in
+/// pgroups` unconditional-match rule this pilot already documented.
+/// Deliberately unchanged: a bare `package.accept_keywords` atom with no
+/// keyword list at all stays a documented no-op (real `accept_keywords_
+/// defaults` substitution -- implicitly accepting the `~`-prefixed
+/// unstable form of every currently-accepted keyword -- is a separate
+/// mechanism, not negation, and was already out of scope before this;
+/// see `parse_package_accept_keywords_lines`'s own doc comment,
+/// portage-profile).
 fn keywords_accepted(
     keywords: &[String],
     candidate_str: &str,
@@ -1032,23 +1087,17 @@ fn keywords_accepted(
     accept_keywords: &HashSet<String>,
     package_accept_keywords: &[(String, Vec<String>)],
 ) -> bool {
-    let mut accept_any = false;
-    let mut extra_keywords: HashSet<&str> = HashSet::new();
-    for (atom, kw) in package_accept_keywords {
-        if matches_config_entry(atom, candidate_str, category, package) {
-            if kw.iter().any(|k| k == "**") {
-                accept_any = true;
-            }
-            extra_keywords.extend(kw.iter().map(String::as_str));
-        }
-    }
-    if accept_any {
+    let accepted = specificity_ordered_flags(
+        package_accept_keywords,
+        candidate_str,
+        category,
+        package,
+        accept_keywords.clone(),
+    );
+    if accepted.contains("**") {
         return true;
     }
-
-    keywords
-        .iter()
-        .any(|k| accept_keywords.contains(k) || extra_keywords.contains(k.as_str()))
+    keywords.iter().any(|k| accepted.contains(k))
 }
 
 /// Whether `keywords` (a candidate's own KEYWORDS) count as "stable"
@@ -4837,6 +4886,112 @@ mod tests {
     }
 
     #[test]
+    fn package_accept_keywords_negation_revokes_a_globally_accepted_keyword() {
+        // Globally "amd64" is accepted, but a package.accept_keywords
+        // "-amd64" entry revokes it for this one package specifically --
+        // real KeywordsManager._getEgroups folds "-token" removals over
+        // the combined global+package list, not just unions everything
+        // a matching entry ever mentions.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_accept_keywords: vec![(
+                "dev-libs/norevoke".to_string(),
+                vec!["-amd64".to_string()],
+            )],
+            ..Default::default()
+        };
+        assert!(!is_visible(
+            &candidate("1.0", &["amd64"]),
+            "dev-libs",
+            "norevoke",
+            &config
+        ));
+        // An unrelated package keeps the global "amd64" acceptance.
+        assert!(is_visible(
+            &candidate("1.0", &["amd64"]),
+            "dev-libs",
+            "unrelated",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_accept_keywords_dash_star_clears_every_globally_accepted_keyword() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string(), "x86".to_string()]),
+            package_accept_keywords: vec![(
+                "dev-libs/norevoke".to_string(),
+                vec!["-*".to_string()],
+            )],
+            ..Default::default()
+        };
+        assert!(!is_visible(
+            &candidate("1.0", &["amd64"]),
+            "dev-libs",
+            "norevoke",
+            &config
+        ));
+        assert!(!is_visible(
+            &candidate("1.0", &["x86"]),
+            "dev-libs",
+            "norevoke",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_accept_keywords_more_specific_entry_re_grants_after_a_less_specific_revoke() {
+        // A bare-package "-amd64" revokes it, but a more specific
+        // exact-version entry re-adds "amd64" -- specificity ordering
+        // applies to package.accept_keywords the same way it already
+        // does for package.use.mask/.force (specificity_ordered_flags).
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_accept_keywords: vec![
+                (
+                    "=dev-libs/regrant-2.0".to_string(),
+                    vec!["amd64".to_string()],
+                ),
+                ("dev-libs/regrant".to_string(), vec!["-amd64".to_string()]),
+            ],
+            ..Default::default()
+        };
+        assert!(!is_visible(
+            &candidate("1.0", &["amd64"]),
+            "dev-libs",
+            "regrant",
+            &config
+        ));
+        assert!(is_visible(
+            &candidate("2.0", &["amd64"]),
+            "dev-libs",
+            "regrant",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_accept_keywords_dash_star_can_revoke_an_earlier_double_star() {
+        // A more specific "-*" revokes even an unconditional "**" grant
+        // from a less specific entry -- proving "**" is folded in fold
+        // order now, not checked via a separate order-blind pre-scan.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            package_accept_keywords: vec![
+                ("dev-libs/live".to_string(), vec!["**".to_string()]),
+                ("=dev-libs/live-9999".to_string(), vec!["-*".to_string()]),
+            ],
+            ..Default::default()
+        };
+        assert!(!is_visible(
+            &candidate("9999", &[]),
+            "dev-libs",
+            "live",
+            &config
+        ));
+    }
+
+    #[test]
     fn effective_use_flags_layers_a_matching_package_use_entry_on_top_of_base() {
         let base = HashSet::from(["foo".to_string()]);
         let package_use = vec![(
@@ -5043,7 +5198,13 @@ mod tests {
             ("=dev-libs/bar-1.0".to_string(), vec!["-flag".to_string()]),
             ("dev-libs/bar".to_string(), vec!["flag".to_string()]),
         ];
-        let flags = specificity_ordered_flags(&entries, "dev-libs/bar-1.0:0", "dev-libs", "bar");
+        let flags = specificity_ordered_flags(
+            &entries,
+            "dev-libs/bar-1.0:0",
+            "dev-libs",
+            "bar",
+            HashSet::new(),
+        );
         assert!(!flags.contains("flag"));
     }
 

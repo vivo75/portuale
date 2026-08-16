@@ -6,3 +6,7 @@
 */wildcardkeywordpkg ~amd64
 dev-libs/livekeywordpkg **
 dev-libs/unstableusepkg ~amd64
+# "-amd64" negation: revokes the global ACCEPT_KEYWORDS="amd64" grant for
+# this one stable package specifically (real KeywordsManager._getEgroups
+# folds "-token" removals, not just additions).
+dev-libs/keywordrevokedpkg -amd64

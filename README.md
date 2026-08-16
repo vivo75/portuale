@@ -879,11 +879,18 @@ PORTING/
   pattern: real portage has **no repo-level source for
   `package.accept_keywords` at all** (confirmed by reading
   `KeywordsManager.__init__`, which never reads a repo-location path for
-  it), so this is a clean 2-source extension, not 3 -- and it's purely
-  additive on both sides (no `-atom` removal exists for this file in
-  real portage either), so concatenating profile-chain lines (in order)
-  then user-level lines, then parsing once, is equivalent to real
-  portage's own per-source-then-extend loop. `package.use`, by contrast,
+  it), so this is a clean 2-source extension, not 3. **Correction (see
+  the `package.accept_keywords` negation paragraph further below): this
+  pilot's own matching *was* purely additive at the time this paragraph
+  was first written, but real `package.accept_keywords` itself was never
+  purely additive -- real `KeywordsManager._getEgroups` supports
+  `-atom`/`-*` removal too, ported later, not at this slice.**
+  Concatenating profile-chain lines (in order) then user-level lines,
+  then parsing once, was equivalent to real portage's own
+  per-source-then-extend loop for this slice's own union-only matching;
+  see the later paragraph for why a *negating* entry that crosses a
+  source boundary still doesn't get real portage's own strict
+  per-source precedence even after that fix. `package.use`, by contrast,
   turned out to be considerably more entangled: real portage's
   repo-level `package.use` lands in a distinct `configdict["repo"]`
   layer and profile-level in `configdict["defaults"]`, both governed by
@@ -900,6 +907,40 @@ PORTING/
   bare entry as a no-op at both levels, same simplification the
   pre-existing user-level-only handling already made, kept deliberately
   symmetric rather than adding a profile-only special case.
+
+  **`package.accept_keywords` negation.** A correctness fix, not a new
+  feature: grounded against real `KeywordsManager.getMissingKeywords`/
+  `_getEgroups` (`lib/portage/package/ebuild/_config/
+  KeywordsManager.py`), which folds `-token`/`-*` *removals* over the
+  combined global-`ACCEPT_KEYWORDS`-plus-`package.accept_keywords` list,
+  not just additions -- so a `package.accept_keywords` entry can revoke
+  a keyword the global set already granted, not only extend it (the
+  stale claim two paragraphs up, corrected there). This pilot's own
+  `keywords_accepted` previously just unioned every matching entry's own
+  tokens (including a literal, never-matching `"-amd64"` string) onto
+  the global set, silently no-op'ing any negation instead of applying
+  it. The fix reuses `specificity_ordered_flags` -- already established
+  for `package.use.mask`/`.force`'s own identical "specificity-ordered
+  incremental fold" shape -- seeded with the global `accept_keywords`
+  set itself (a new `seed` parameter on that function; every
+  `package.use.mask`/`.force` caller still passes an empty one, so
+  behavior there is unchanged) rather than duplicating the fold logic.
+  `"**"` (`accept-any`) is now folded in as an ordinary token too,
+  rather than a separate pre-scan that ignored fold order entirely --
+  proven to matter by a new test where a more-specific `-*` entry
+  revokes an unconditional `"**"` grant from a less-specific one, which
+  the old pre-scan-based code couldn't express at all. One deliberate,
+  documented cut inherited from the pre-existing architecture, not
+  introduced by this fix: like `package.mask`/`package.use.mask`/
+  `.force` before it, every source (repo, profile chain, user) is
+  concatenated into one flat entry list and folded by atom specificity
+  alone -- real portage instead applies each *source* fully before
+  moving to the next (specificity only breaks ties *within* one
+  source), so a negating entry that crosses a source boundary can, in
+  principle, resolve differently here than in real portage. Not
+  addressed here since it's a pre-existing simplification spanning
+  every one of these masking mechanisms, not something specific to
+  keywords -- reopening it would be its own, separately-scoped slice.
 
   **Real `-v` value semantics + short-flag bundling**: closes two related
   CLI gaps at once, both grounded in `lib/_emerge/main.py`'s
@@ -2229,6 +2270,12 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/wildcardkeywo
 # package.accept_keywords "**" accepts a package with no KEYWORDS at all
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/livekeywordpkg
 # [ebuild  N] dev-libs/livekeywordpkg-9999
+
+# package.accept_keywords negation ("-amd64") revokes a keyword the
+# global ACCEPT_KEYWORDS="amd64" already granted -- for this one
+# genuinely stable package specifically
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/keywordrevokedpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/keywordrevokedpkg".  (exit 1)
 
 # package.accept_keywords is now also stacked from the profile chain, not
 # just /etc/portage -- this package has no user-level entry at all, only

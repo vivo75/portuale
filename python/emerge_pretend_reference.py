@@ -696,19 +696,37 @@ def _keywords_accepted(
     of a candidate's own real keywords -- real KeywordsManager.isStable/
     getMissingKeywords share this exact same matching logic with real
     visibility checking too, just against a different input keyword
-    set, not a separate algorithm. Mirrors portage-repo/src/lib.rs's
-    keywords_accepted exactly."""
-    accept_any = False
-    extra_keywords = set()
-    for atom, kw in package_accept_keywords:
-        if _matches_config_entry(atom, candidate_str, category, package):
-            if "**" in kw:
-                accept_any = True
-            extra_keywords.update(kw)
-    if accept_any:
-        return True
+    set, not a separate algorithm.
 
-    return bool((accept_keywords | extra_keywords) & set(keywords))
+    Grounded against real KeywordsManager.getMissingKeywords/
+    _getEgroups: a package.accept_keywords entry doesn't just *add*
+    keywords on top of the global ACCEPT_KEYWORDS set -- real
+    _getEgroups folds "-token"/"-*" removals too, over the *combined*
+    list (global keywords first, then each matching entry's own tokens,
+    in atom-specificity order), so a more-specific package.accept_
+    keywords line can revoke a keyword the global set already granted,
+    not just add new ones. Ported here via _specificity_ordered_flags
+    (already established for package.use.mask/.force's own identical
+    "specificity-ordered incremental fold" shape) seeded with
+    accept_keywords itself, rather than a "union everything a matching
+    entry ever mentions, ignore any '-' prefix" accumulation. "**" is
+    folded in exactly like any other token now (removable by a later
+    "-*"/"-**"), rather than a separate unconditional-accept pre-scan
+    that ignored fold order entirely -- once folded, its presence in the
+    final accepted set still means "accept any KEYWORDS state, even
+    empty," the same real '"**" in pgroups' unconditional-match rule
+    this pilot already documented. Deliberately unchanged: a bare
+    package.accept_keywords atom with no keyword list at all stays a
+    documented no-op (real accept_keywords_defaults substitution is a
+    separate mechanism, not negation, and was already out of scope
+    before this). Mirrors portage-repo/src/lib.rs's keywords_accepted
+    exactly."""
+    accepted = _specificity_ordered_flags(
+        package_accept_keywords, candidate_str, category, package, seed=accept_keywords
+    )
+    if "**" in accepted:
+        return True
+    return bool(accepted & set(keywords))
 
 
 def _is_stable(keywords, candidate_str, category, package, accept_keywords, package_accept_keywords):
@@ -810,24 +828,32 @@ def _atom_specificity(entry):
     return max(op_val, slot_val)
 
 
-def _specificity_ordered_flags(entries, candidate_str, category, package):
+def _specificity_ordered_flags(entries, candidate_str, category, package, seed=None):
     """Computes the final per-candidate flag set from `entries` (raw
-    package.use.mask/.force (atom, tokens) pairs): filters to entries
-    whose atom actually matches `candidate_str`, orders the matches from
-    least to most specific (_atom_specificity), then applies each one's
-    own tokens via the same incremental semantics package.use itself
-    uses, onto an initially empty set -- so a more-specific atom's own
-    "-flag" can cancel a less-specific atom's own mask/force. Mirrors
-    portage-repo/src/lib.rs's specificity_ordered_flags exactly
-    (Python's own list.sort() is stable, matching Rust's sort_by_key, so
-    ties keep their original file/stacking order)."""
+    package.use.mask/.force/package.accept_keywords (atom, tokens)
+    pairs): filters to entries whose atom actually matches
+    `candidate_str`, orders the matches from least to most specific
+    (_atom_specificity), then applies each one's own tokens via the same
+    incremental semantics package.use itself uses, onto `seed` (an empty
+    set if not given) -- so a more-specific atom's own "-flag" can
+    cancel a less-specific atom's own mask/force (or, for
+    _keywords_accepted's own use below, even a keyword `seed` itself
+    already contains). Mirrors portage-repo/src/lib.rs's
+    specificity_ordered_flags exactly (Python's own list.sort() is
+    stable, matching Rust's sort_by_key, so ties keep their original
+    file/stacking order). `seed` is empty for every package.use.mask/
+    .force caller -- _keywords_accepted is the one caller that seeds it
+    with something real, mirroring real KeywordsManager.
+    getMissingKeywords's own "pgroups = global_accept_keywords.split();
+    pgroups.extend(unmaskgroups)" (seed first, then fold in
+    package-specific contributions) exactly."""
     matching = [
         (entry, tokens)
         for entry, tokens in entries
         if _matches_config_entry(entry, candidate_str, category, package)
     ]
     matching.sort(key=lambda et: _atom_specificity(et[0]))
-    flags = set()
+    flags = set() if seed is None else set(seed)
     for _entry, tokens in matching:
         _apply_incremental(" ".join(tokens), flags)
     return flags
