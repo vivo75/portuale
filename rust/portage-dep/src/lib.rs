@@ -4,10 +4,10 @@
 // resolution follow-up work.
 //
 // KNOWN, DOCUMENTED SCOPE CUT vs. the real grammar (PMS chapter 8):
-// `Atom`/`parse_atom`/`match_from_list` support no USE deps (`foo[bar]`),
-// no extended/wildcard atoms (`*/foo-1`), no build-ids (`foo-1.0@2`), no
-// repo constraint (`::gentoo`), no `=*` glob version operator, and no
-// EAPI parametrization (the real grammar changes shape per-EAPI --
+// `Atom`/`parse_atom`/`match_from_list` support no extended/wildcard
+// atoms (`*/foo-1`), no build-ids (`foo-1.0@2`), no repo constraint
+// (`::gentoo`), and no EAPI parametrization (the real grammar changes
+// shape per-EAPI --
 // slot-operator support itself is EAPI 5+, but since nothing here is
 // EAPI-parametrized in the first place, it's just always recognized, the
 // same way every other EAPI-gated feature already ported is). The Python
@@ -65,6 +65,22 @@
 // silently dropped it from the graph entirely (same class of bug the
 // slot-operator follow-up found and fixed -- see that doc comment).
 //
+// The `=*` glob version operator (PMS 8.3.1) IS supported: see
+// `Operator::EqGlob`, `atom_regex`'s doc comment on why the trailing "*"
+// is captured generically rather than as a second grammar alternative,
+// and `matches_version`'s own `EqGlob` arm (plus
+// `normalize_leading_zeros`/`glob_compare_string`) for the boundary-aware
+// prefix-match algorithm this needed -- real portage implements `=*` as
+// a literal string-prefix match, not a `vercmp`-based one (its own
+// comment: "Nasty special casing for leading zeros / Required as =* is a
+// literal prefix match, so can't use vercmp"), with a component-boundary
+// check fixing a real historical bug (560466: "1*" must not match "10").
+// Grounded against the PMS's own historical note on this operator too:
+// the component-wise "wildcard for any further components" semantic here
+// is the *current* one -- a raw string-prefix match (e.g. "=foo-5.2*"
+// matching "foo-5.22.0") was the original EAPI 0-5 behavior, retroactively
+// dropped in October 2015, well before this repo's EAPI 5+ floor.
+//
 // One easy-to-miss PMS rule that IS ported: a bare (no-operator) atom
 // whose package name is followed by something that looks like a version
 // (e.g. "foo-bar-2", which could be read as package "foo-bar" version "2")
@@ -101,6 +117,14 @@ pub enum Blocker {
 pub enum Operator {
     None,
     Eq,
+    /// `=*` (PMS 8.3.1): "if the version specified has an asterisk
+    /// immediately following it, then only the given number of version
+    /// components is used for comparison, i.e. the asterisk acts as a
+    /// wildcard for any further components." A real, distinct operator
+    /// value in real portage too (`Atom.operator == "=*"`), not `Eq` with
+    /// a flag -- see `matches_version`'s own `EqGlob` arm for the
+    /// matching algorithm this enables.
+    EqGlob,
     Gt,
     Ge,
     Lt,
@@ -113,6 +137,7 @@ impl Operator {
         match self {
             Operator::None => "",
             Operator::Eq => "=",
+            Operator::EqGlob => "=*",
             Operator::Gt => ">",
             Operator::Ge => ">=",
             Operator::Lt => "<",
@@ -226,8 +251,18 @@ fn atom_regex() -> &'static Regex {
         // capture (`_use` in lib/portage/dep/__init__.py): validated in a
         // second stage by `parse_use_deps`, same two-stage split as the
         // slot part above.
+        // "glob" (a trailing "*" right after the version/revision, PMS
+        // 8.3.1's "=*" operator) is captured for ANY of the 6 operators
+        // here, not just "=" -- real portage's own grammar only ever
+        // allows it after "=" (a separate, dedicated "star" alternative
+        // in _get_atom_re, distinct from its general "op" alternative),
+        // but `parse_atom` below rejects a captured "glob" paired with
+        // any operator other than "=" explicitly, which is simpler than
+        // duplicating the whole op+cpv sequence into a second regex
+        // alternative just to exclude 5 of 6 operators from one optional
+        // trailing character.
         Regex::new(&format!(
-            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r\d+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?P<usedeps>\[.*\])?$"
+            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?(?P<glob>\*)?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r\d+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?P<usedeps>\[.*\])?$"
         ))
         .unwrap()
     })
@@ -317,8 +352,17 @@ pub fn parse_atom(s: &str) -> Option<Atom> {
     };
 
     let (operator, category, package, version, revision) = if let Some(op) = caps.name("op") {
+        let operator = match caps.name("glob") {
+            // "an asterisk used with any other operator is illegal" (PMS
+            // 8.3.1) -- e.g. ">=cat/pkg-1.2*" must be rejected outright,
+            // not silently truncated to ">=cat/pkg-1.2" or accepted as a
+            // glob under the wrong operator.
+            Some(_) if op.as_str() != "=" => return None,
+            Some(_) => Operator::EqGlob,
+            None => Operator::from_str(op.as_str()),
+        };
         (
-            Operator::from_str(op.as_str()),
+            operator,
             caps.name("vcat").unwrap().as_str().to_string(),
             caps.name("vpkg").unwrap().as_str().to_string(),
             Some(caps.name("ver").unwrap().as_str().to_string()),
@@ -427,12 +471,88 @@ pub fn parse_candidate(s: &str) -> Option<Candidate> {
     })
 }
 
+/// Collapses a leading run of `'0'` characters in `version` the way real
+/// `match_from_list`'s own `=*` branch does before ever comparing
+/// anything (its own comment: "XXX: Nasty special casing for leading
+/// zeros / Required as =* is a literal prefix match, so can't use
+/// vercmp"). `=*` matches by literal string prefix, not `vercmp`, so
+/// without this a version's own incidental leading zeros (e.g. "01" vs
+/// "1", numerically identical) would make two numerically-equal versions
+/// compare unequal as prefixes. Only ever applied to the plain version
+/// (never the `-rN` revision suffix, matching real portage's own
+/// `mycpv_cps[2]`/`xs[2]` -- the `catpkgsplit`-style "version, no
+/// revision" component).
+///
+/// Empirically verified against real `portage.dep.match_from_list`
+/// (`python3 -c` probing several leading-zero cases) before relying on
+/// this port: `"0" -> "0"`, `"00" -> "0"`, `"01" -> "1"`, `"0.5" -> "0.5"`
+/// (unchanged: the single leading zero is a real, meaningful digit, not
+/// redundant), `"00.5" -> "0.5"` (the redundant *second* zero is
+/// dropped).
+fn normalize_leading_zeros(version: &str) -> String {
+    let stripped = version.trim_start_matches('0');
+    let starts_with_digit = stripped.starts_with(|c: char| c.is_ascii_digit());
+    if starts_with_digit {
+        stripped.to_string()
+    } else {
+        format!("0{stripped}")
+    }
+}
+
+/// The exact string `=*` prefix-compares against for one side (atom or
+/// candidate) of an `EqGlob` match: `version` with its own leading zeros
+/// collapsed (see `normalize_leading_zeros`), plus `-r{revision}` if
+/// present, unchanged -- mirrors real portage's own targeted
+/// `mycpv.replace(cp + "-" + orig_version, cp + "-" + normalized, 1)`,
+/// which only ever rewrites the plain-version substring, never the
+/// revision.
+fn glob_compare_string(version: &str, revision: &Option<String>) -> String {
+    let normalized = normalize_leading_zeros(version);
+    match revision {
+        Some(r) => format!("{normalized}-r{r}"),
+        None => normalized,
+    }
+}
+
 /// Mirrors match_from_list's per-candidate filtering, for a single
 /// candidate that has already matched category/package.
 fn matches_version(atom: &Atom, candidate: &Candidate) -> bool {
     match atom.operator {
         Operator::None => true,
         Operator::Eq => vercmp(&candidate.full_version(), &atom.full_version().unwrap()) == Some(0),
+        // PMS 8.3.1: "only the given number of version components is
+        // used for comparison, i.e. the asterisk acts as a wildcard for
+        // any further components." Real portage implements this as a
+        // literal string-prefix match (not vercmp-based -- see
+        // normalize_leading_zeros's doc comment) on
+        // category/package-version[-rN], but only at a genuine
+        // component boundary: real portage's own bug 560466 fix means
+        // "1*" must NOT match "10" (both digits, no real boundary there)
+        // even though "10" literally starts with "1" -- captured below
+        // by the digit-adjacency check. category/package equality is
+        // already guaranteed by match_from_list's own caller-side filter
+        // before matches_version ever runs, so comparing just the
+        // version[-rN] suffix (rather than the full
+        // category/package-version[-rN] string real portage's own
+        // implementation slices) is equivalent and simpler.
+        Operator::EqGlob => {
+            let atom_cmp = glob_compare_string(atom.version.as_ref().unwrap(), &atom.revision);
+            let cand_cmp = glob_compare_string(&candidate.version, &candidate.revision);
+            let Some(rest) = cand_cmp.strip_prefix(&atom_cmp) else {
+                return false;
+            };
+            match rest.chars().next() {
+                None => true,
+                Some('.' | '_' | '-') => true,
+                Some(next) => {
+                    let last_is_digit = atom_cmp
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_ascii_digit());
+                    last_is_digit != next.is_ascii_digit()
+                }
+            }
+        }
         Operator::Tilde => candidate.version == *atom.version.as_ref().unwrap(),
         Operator::Gt | Operator::Ge | Operator::Lt | Operator::Le => {
             match vercmp(&candidate.full_version(), &atom.full_version().unwrap()) {

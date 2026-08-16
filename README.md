@@ -202,6 +202,38 @@ PORTING/
   `dev-libs/foo[bar]` and `dev-libs/foo[-bar]` return the identical
   match set against real `match_from_list` itself, not just this pilot's
   port of it.
+
+  **The `=*` glob version operator** (PMS 8.3.1) closes the last named
+  scope cut in `portage-dep`'s own module doc comment. PMS: "if the
+  version specified has an asterisk immediately following it, then only
+  the given number of version components is used for comparison, i.e.
+  the asterisk acts as a wildcard for any further components" -- and, per
+  the PMS's own historical note, this component-wise semantic is the
+  *current* one: a raw string-prefix match (e.g. `=foo-5.2*` matching
+  `foo-5.22.0`) was the original EAPI 0-5 behavior, retroactively dropped
+  in October 2015, well before this repo's EAPI 5+ floor. Real portage
+  still implements it as a literal string-prefix match rather than a
+  `vercmp`-based one (its own comment: "Nasty special casing for leading
+  zeros / Required as =* is a literal prefix match, so can't use
+  vercmp"), so this pilot ports that same algorithm: a prefix match on
+  `version[-rN]`, accepted only at a genuine component boundary (fixing
+  real bug 560466 -- `"1*"` must not match `"10"`, even though `"10"`
+  literally starts with `"1"`: the boundary check is "next character is
+  `.`/`_`/`-`, or its digit-ness differs from the matched prefix's last
+  character"), plus the "leading zeros" normalization (`"01"` and `"1"`
+  compare identically as prefixes, `"00.5"`'s redundant second zero is
+  dropped, `"0.5"`'s single leading zero is kept since it's a real digit)
+  -- both verified empirically against real `match_from_list` (a `python3
+  -c` probe over several leading-zero/boundary cases) before relying on
+  either. Unlike slot operators/USE deps, this operator's Python side
+  needed no new harness code at all: `atom_harness.py` already wraps real
+  `match_from_list`, so letting `"=*"` through its own
+  `_SUPPORTED_OPERATORS` allow-list was the only change required for it
+  to run against real portage's actual `=*` branch, unmodified. PMS is
+  also explicit that "an asterisk used with any other operator is
+  illegal" (e.g. `>=foo-1.2*`) -- ported as an explicit rejection, not a
+  silent truncation to `>=foo-1.2` or a silent accept under the wrong
+  operator.
 - **`use-reduce-harness`**: ports `use_reduce(flat=True)` -- USE-conditional
   (`flag? ( ... )`) and any-of (`|| ( ... )`) dependency-string flattening.
   Unlike `atom-harness`, this is *not* a narrowed grammar: flat mode's
@@ -893,9 +925,10 @@ integers. See the comment at the top of
 Known scope cut: `atom-harness` ports a documented v1 subset of the real
 atom grammar (see above and the doc comment in
 `rust/portage-dep/src/lib.rs`) -- wildcards, build-ids, repo constraints,
-and EAPI parametrization are all deferred (slot operators `:=`/`:*`/`:slot=`
-and USE deps `[bar]` are now supported -- see the "Slot operators" and
-"USE deps" paragraphs in "What this proves" above; USE deps are parsed
+and EAPI parametrization are all deferred (slot operators `:=`/`:*`/`:slot=`,
+USE deps `[bar]`, and the `=*` glob version operator are now supported --
+see the "Slot operators", "USE deps", and "`=*` glob version operator"
+paragraphs in "What this proves" above; USE deps are parsed
 but not enforced by matching, a separately-noted, deliberate cut of their
 own). Candidates for matching are plain
 `category/package-version[-rN][:slot[/subslot]]` strings rather than full
@@ -1110,6 +1143,13 @@ PORTING/rust/target/release/atom-harness match "dev-libs/foo[bar]" \
 PORTING/rust/target/release/atom-harness match "dev-libs/foo[-bar]" \
     dev-libs/foo-1.0 dev-libs/foo-2.0
 # dev-libs/foo-1.0,dev-libs/foo-2.0
+
+# "=*" glob version operator: component-boundary aware, not a naive
+# string prefix -- "1*" matches "1.2" (real boundary: ".") but not "10"
+# (both digits, no real boundary -- bug 560466)
+PORTING/rust/target/release/atom-harness match "=dev-libs/foo-1*" \
+    dev-libs/foo-1.2 dev-libs/foo-10
+# dev-libs/foo-1.2
 ```
 
 Try the use_reduce harness:

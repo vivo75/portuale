@@ -50,6 +50,9 @@ PARSE_VALID_ATOMS = [
     "dev-libs/foo:0[bar]",  # USE dep combined with a plain slot
     "dev-libs/foo:0=[bar]",  # USE dep combined with a slot operator
     ">=dev-libs/foo-1.0[bar]",  # USE dep combined with a version operator
+    "=dev-libs/foo-1.2.3*",  # "=*" glob version operator (PMS 8.3.1)
+    "=dev-libs/foo-1.2.3-r1*",  # glob combined with an explicit revision
+    "=dev-libs/foo-1*",  # single version component before the glob
 ]
 
 # Not valid at all, or valid PMS atoms that use a feature outside the v1
@@ -61,7 +64,9 @@ PARSE_INVALID_ATOMS = [
     "/foo",
     "dev-libs/foo-1.2.3",  # bare version with no operator: not a valid atom
     "dev-libs/foo::gentoo",  # repo constraint: out of v1 scope
-    "=dev-libs/foo-1.2.3*",  # glob operator: out of v1 scope
+    ">=dev-libs/foo-1.2.3*",  # PMS 8.3.1: "*" is illegal with any operator
+    "<dev-libs/foo-1.2.3*",   # other than "=" -- not silently truncated
+    "~dev-libs/foo-1.2.3*",   # or accepted under the wrong operator
     "*/foo-1",  # extended/wildcard syntax: out of v1 scope
     "dev-libs/foo-1.0@2",  # build id: out of v1 scope
     "dev-libs/foo-bar-2",  # bare atom whose package name would end in
@@ -158,6 +163,39 @@ MATCH_CASES = [
     ("dev-libs/foo[bar]", CANDIDATES),
     ("dev-libs/foo[-bar]", CANDIDATES),
     ("dev-libs/foo:2[bar?]", CANDIDATES),  # combined with a slot restriction
+]
+
+# "=*" glob version operator (PMS 8.3.1): dedicated candidates exercising
+# the component-boundary rule (bug 560466: "1*" must not match "10", even
+# though "10" literally starts with "1") and the "leading zeros" special
+# case real match_from_list's own "=*" branch applies before comparing
+# (see portage-dep's normalize_leading_zeros doc comment) -- neither is
+# covered by the plain CANDIDATES list above.
+GLOB_CANDIDATES = [
+    "dev-libs/foo-1.2",
+    "dev-libs/foo-1.20",  # digit immediately after the "1.2" prefix: NOT a
+                           # real boundary, must not match "=...-1.2*"
+    "dev-libs/foo-1.2.3",  # "." after the prefix: a real boundary
+    "dev-libs/foo-1.2-r1",  # "-" after the prefix: a real boundary too
+    "dev-libs/foo-1.3",  # doesn't share the "1.2" prefix at all
+    "dev-libs/foo-1",
+    "dev-libs/foo-10",  # bug 560466's own example: "1*" must not match this
+    "dev-libs/foo-1b",  # letter suffix right after "1": digit/non-digit
+                         # adjacency, a real boundary
+]
+
+MATCH_CASES += [
+    ("=dev-libs/foo-1.2*", GLOB_CANDIDATES),
+    ("=dev-libs/foo-1*", GLOB_CANDIDATES),
+    # leading zeros in the atom's own version are normalized before the
+    # prefix comparison, so "01*" behaves identically to "1*" above.
+    ("=dev-libs/foo-01*", GLOB_CANDIDATES),
+    # a glob combined with an explicit revision: the boundary rule applies
+    # to the revision digits too, not just the plain version.
+    ("=dev-libs/foo-1.2-r1*", ["dev-libs/foo-1.2-r1", "dev-libs/foo-1.2-r10"]),
+    # redundant leading zeros in a CANDIDATE's own version are normalized
+    # too, not just the atom's -- "00.5" is numerically identical to "0.5".
+    ("=dev-libs/foo-0.5*", ["dev-libs/foo-0.5", "dev-libs/foo-0.50", "dev-libs/foo-00.5"]),
 ]
 
 
