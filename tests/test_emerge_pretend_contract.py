@@ -115,6 +115,11 @@ CASES = [
     ("short-flag bundle -pd: pretend + unimplemented option", ["-pd", "dev-libs/useflagpkg"], 2),
     ("short-flag bundle -pz: pretend + genuinely unrecognized", ["-pz", "dev-libs/useflagpkg"], 2),
     ("bundled -v never consumes a following token as its value", ["-pv", "n"], 1),
+    ("--help is now implemented, not rejected", ["--help"], 0),
+    ("-h short alias is now implemented, not rejected", ["-h"], 0),
+    ("--help wins over any other flag present, valid or not", ["--deep", "--help"], 0),
+    ("-h bundled with other short flags still wins", ["-ph"], 0),
+    ("--help wins even without --pretend at all", ["--help", "dev-libs/newpkg"], 0),
 ]
 
 
@@ -826,7 +831,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
     assert (
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p and --verbose/-v are implemented "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, and --help/-h are implemented "
         "so far; see PROMPT.md)"
     )
 
@@ -850,6 +855,59 @@ def test_bundled_verbose_never_consumes_the_next_token_as_its_value(
     result = _run([str(emerge_binary)], ["-pv", "n"], fixture_env)
     assert result.returncode == 1
     assert result.stderr.strip() == 'emerge: invalid atom "n"'
+
+
+def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
+    emerge_binary, fixture_env
+):
+    """--help/-h is real and implemented, but the text is a short,
+    honest, pilot-specific summary -- not a port of real emerge's own
+    _emerge/help.py (157 lines of colorized usage syntax for its full
+    ~130-flag surface, most of which this pilot doesn't implement).
+    Pinned in full since it's this pilot's own content, not derived from
+    real emerge's own output."""
+    result = _run([str(emerge_binary)], ["--help"], fixture_env)
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == (
+        "emerge (pilot v1): command-line interface to the Rust porting pilot\n"
+        "\n"
+        "Usage:\n"
+        "   emerge --pretend [--verbose] <atom> [<atom> ...]\n"
+        "   emerge --help\n"
+        "\n"
+        "Options:\n"
+        "   -p, --pretend   required: the only real merge calculation this pilot implements\n"
+        '   -v, --verbose   show USE="..." on each [ebuild ...] line (optionally: -v y|n)\n'
+        "   -h, --help      show this message and exit\n"
+        "\n"
+        "Every other real emerge option/action is recognized by name (see "
+        "lib/_emerge/main.py) but not implemented -- using one reports which "
+        "option or action it is, instead of a generic error.\n"
+        "See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.\n"
+    )
+
+
+def test_help_wins_unconditionally_regardless_of_other_flags_or_position(
+    emerge_binary, fixture_env
+):
+    """Matches real emerge's own behavior: main.py's parse_opts maps
+    -h/--help to the "help" action, and main() checks
+    "if myaction == 'help'" once, after the whole line has already
+    parsed successfully -- so help wins no matter where it appears or
+    what else (valid but unimplemented) accompanies it. "-h" bundled
+    with another short flag must win the same way a standalone "-h"
+    does, and --help must win even with no --pretend/atom at all."""
+    for args in (
+        ["--deep", "--help"],
+        ["-ph"],
+        ["--help", "dev-libs/newpkg"],
+    ):
+        result = _run([str(emerge_binary)], args, fixture_env)
+        assert result.returncode == 0, args
+        assert result.stdout.startswith(
+            "emerge (pilot v1): command-line interface to the Rust porting pilot"
+        ), args
 
 
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
@@ -897,7 +955,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--deep" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p and --verbose/-v are implemented so far; see "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, and --help/-h are implemented so far; see "
         "PROMPT.md)"
     )
 
@@ -911,7 +969,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p and --verbose/-v are implemented so far; see "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, and --help/-h are implemented so far; see "
         "PROMPT.md)"
     )
 
@@ -925,7 +983,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     assert result.returncode == 2
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
-        "implemented in this pilot (only --pretend/-p and --verbose/-v are implemented so far; see "
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, and --help/-h are implemented so far; see "
         "PROMPT.md)"
     )
     assert result.stderr.strip() == expected

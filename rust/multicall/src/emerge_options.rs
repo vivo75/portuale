@@ -3,10 +3,10 @@
 // `argument_options` dict, and `actions` frozenset), so that using any
 // real emerge flag this pilot doesn't implement yet produces a clear
 // "recognized, but not implemented" message -- distinct from a
-// genuinely unknown/misspelled flag. Only `--pretend`/`-p` and
-// `--verbose`/`-v` are actually implemented (see pretend.rs); every
-// table here exists purely for recognition, not behavior. Mirrored
-// exactly in
+// genuinely unknown/misspelled flag. Only `--pretend`/`-p`,
+// `--verbose`/`-v`, and `--help`/`-h` are actually implemented (see
+// pretend.rs); every table here exists purely for recognition, not
+// behavior. Mirrored exactly in
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
 // (verified by the shared contract suite).
@@ -28,9 +28,12 @@
 //     or skip over that argument: every lookup here reports and exits
 //     immediately, so nothing after a recognized-but-unimplemented
 //     option is ever looked at again in that invocation.
-//   - `--help`/`-h` is recognized as a real (unimplemented) action, not
-//     given its own pilot help text -- a real `--help` would be a
-//     separate, later slice.
+//   - `--help`/`-h` IS implemented now, deliberately excluded from
+//     `ACTIONS` below for the same reason `--pretend`/`-p` and
+//     `--verbose`/`-v` are excluded from their own tables -- see
+//     pretend.rs for the pilot-specific (not a port of real emerge's own
+//     `_emerge/help.py`) help text, and why it's checked before anything
+//     else, unconditionally, regardless of position in argv.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -182,13 +185,13 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
 /// Real actions (things that replace, not augment, "calculate and show a
 /// merge list" -- `--depclean`, `--sync`, `--search`, etc.), from
 /// `main.py`'s `actions` frozenset, with short aliases from
-/// `shortmapping` where real emerge defines one.
+/// `shortmapping` where real emerge defines one. `--help`/`-h` is
+/// deliberately excluded -- see the module doc comment.
 pub const ACTIONS: &[(&str, Option<&str>)] = &[
     ("--clean", None),
     ("--check-news", None),
     ("--config", None),
     ("--depclean", Some("-c")),
-    ("--help", Some("-h")),
     ("--info", None),
     ("--list-sets", None),
     ("--metadata", None),

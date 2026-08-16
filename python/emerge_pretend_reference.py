@@ -1119,7 +1119,7 @@ _ACTIONS = [
     ("--check-news", None),
     ("--config", None),
     ("--depclean", "-c"),
-    ("--help", "-h"),
+    # "--help"/"-h" deliberately excluded -- see the module doc comment.
     ("--info", None),
     ("--list-sets", None),
     ("--metadata", None),
@@ -1192,8 +1192,8 @@ def _report_option(token):
         kind = "action" if category == "action" else "option"
         print(
             f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
-            "but is not implemented in this pilot (only --pretend/-p and "
-            "--verbose/-v are implemented so far; see PROMPT.md)",
+            "but is not implemented in this pilot (only --pretend/-p, "
+            "--verbose/-v, and --help/-h are implemented so far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -1201,7 +1201,48 @@ def _report_option(token):
     return 2
 
 
+def _wants_help(args):
+    """Whether --help/-h appears anywhere in args, including as one
+    character of a short-flag bundle -- see pretend.rs's module doc
+    comment on why this wins unconditionally, checked before anything
+    else."""
+    for arg in args:
+        if (
+            arg in ("--help", "-h")
+            or (arg.startswith("-") and not arg.startswith("--") and "h" in arg[1:])
+        ):
+            return True
+    return False
+
+
+def _print_help():
+    """A short, honest, pilot-specific summary -- not a port of real
+    emerge's own _emerge/help.py (see pretend.rs's module doc comment for
+    why). Mirrors pretend.rs's print_help exactly."""
+    print("emerge (pilot v1): command-line interface to the Rust porting pilot")
+    print()
+    print("Usage:")
+    print("   emerge --pretend [--verbose] <atom> [<atom> ...]")
+    print("   emerge --help")
+    print()
+    print("Options:")
+    print("   -p, --pretend   required: the only real merge calculation this pilot implements")
+    print('   -v, --verbose   show USE="..." on each [ebuild ...] line (optionally: -v y|n)')
+    print("   -h, --help      show this message and exit")
+    print()
+    print(
+        "Every other real emerge option/action is recognized by name (see "
+        "lib/_emerge/main.py) but not implemented -- using one reports which "
+        "option or action it is, instead of a generic error."
+    )
+    print("See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.")
+
+
 def run(args):
+    if _wants_help(args):
+        _print_help()
+        return 0
+
     atom_args = []
     pretend = False
     verbose = False

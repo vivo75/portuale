@@ -65,8 +65,8 @@
 // `short_arg_opts_n`/"Don't make things like '-kn' expand to '-k n'"
 // comment explains why: allowing an inline or next-token value for a
 // bundled single-letter flag would be ambiguous with "another bundled
-// flag character". See `consume_verbose_value` and the bundle-handling
-// comment below.
+// flag character". See the `--verbose`/`-v` handling and the
+// bundle-handling comment, both in `run` below.
 //
 // Short-flag bundling (`-pv`, `-pd`, ...): a single-dash token longer
 // than one character decomposes into its individual short options, one
@@ -83,6 +83,28 @@
 // either way, which internal algorithm finds it first is unobservable
 // except in the rare case of two DIFFERENT unimplemented flags bundled
 // together, where this pilot always reports the leftmost one.
+//
+// --help/-h is real and implemented, checked unconditionally before
+// anything else in `args` -- matching real emerge's own behavior
+// (`main.py`'s `parse_opts` maps `-h`/`--help` to the "help" action,
+// which `main()` special-cases: `if myaction == "help": emerge_help();
+// return os.EX_OK` -- checked once, after the *whole* line has already
+// parsed successfully, so it wins regardless of where in argv it
+// appears or what other real-but-unimplemented flags accompany it).
+// This pilot's own scan is a documented simplification of that: it
+// checks every token (including each character of a short-flag bundle)
+// for a literal `--help`/`-h`/`h` match unconditionally, rather than
+// first confirming the rest of the line would even parse -- so
+// `emerge --help --this-is-not-a-real-flag-at-all` prints help here,
+// where real emerge would report a parse error instead, since
+// `--this-is-not-a-real-flag-at-all` would never successfully reach
+// argparse's post-parse action dispatch at all. The help text itself is
+// NOT a port of real emerge's own `_emerge/help.py` (157 lines of
+// colorized usage syntax for its full ~130-flag surface, most of which
+// this pilot doesn't implement -- reproducing it here would be actively
+// misleading) -- it's a short, honest, pilot-specific summary of what
+// this pilot actually supports, ending with a pointer to
+// PORTING/README.md and PORTING/PROMPT.md for the rest.
 
 use crate::emerge_options;
 use portage_dep::{parse_atom, Blocker};
@@ -157,8 +179,8 @@ fn report_option(token: &str) -> ExitCode {
         };
         eprintln!(
             "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
-             implemented in this pilot (only --pretend/-p and --verbose/-v are \
-             implemented so far; see PROMPT.md)",
+             implemented in this pilot (only --pretend/-p, --verbose/-v, and \
+             --help/-h are implemented so far; see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -167,7 +189,45 @@ fn report_option(token: &str) -> ExitCode {
     ExitCode::from(2)
 }
 
+/// Whether `--help`/`-h` appears anywhere in `args`, including as one
+/// character of a short-flag bundle -- see the module doc comment on why
+/// this wins unconditionally, checked before anything else.
+fn wants_help(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        arg == "--help"
+            || arg == "-h"
+            || (arg.starts_with('-') && !arg.starts_with("--") && arg[1..].contains('h'))
+    })
+}
+
+/// A short, honest, pilot-specific summary -- not a port of real
+/// emerge's own `_emerge/help.py` (see the module doc comment for why).
+fn print_help() {
+    println!("emerge (pilot v1): command-line interface to the Rust porting pilot");
+    println!();
+    println!("Usage:");
+    println!("   emerge --pretend [--verbose] <atom> [<atom> ...]");
+    println!("   emerge --help");
+    println!();
+    println!("Options:");
+    println!("   -p, --pretend   required: the only real merge calculation this pilot implements");
+    println!("   -v, --verbose   show USE=\"...\" on each [ebuild ...] line (optionally: -v y|n)");
+    println!("   -h, --help      show this message and exit");
+    println!();
+    println!(
+        "Every other real emerge option/action is recognized by name (see \
+         lib/_emerge/main.py) but not implemented -- using one reports which \
+         option or action it is, instead of a generic error."
+    );
+    println!("See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.");
+}
+
 pub fn run(args: &[String]) -> ExitCode {
+    if wants_help(args) {
+        print_help();
+        return ExitCode::SUCCESS;
+    }
+
     let mut atom_args: Vec<&str> = Vec::new();
     let mut pretend = false;
     let mut verbose = false;

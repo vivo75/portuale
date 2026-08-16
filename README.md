@@ -465,10 +465,8 @@ PORTING/
   scope: any actual argument-value semantics for an unimplemented option
   (its value, if it takes one, is never inspected -- the CLI reports and
   exits immediately, before ever needing to skip over it; short-flag
-  bundling was *also* out of scope at this point, but got its own,
-  later follow-up -- see below). `--help`/`-h` is recognized as an
-  unimplemented action like any other; a real, pilot-specific `--help`
-  would be its own separate slice.
+  bundling and `--help`/`-h` were *also* out of scope at this point, but
+  each got its own, later follow-up -- see below).
 
   **`ebuild`'s own CLI surface**: the same treatment, applied to
   `ebuild`'s much smaller real surface -- `multicall/src/ebuild_options.rs`
@@ -721,6 +719,29 @@ PORTING/
   reported as a generic "unrecognized option" -- a worse outcome than
   even a "recognized, not implemented" report, since `-p` and `-v`
   genuinely are both implemented.
+
+  **`--help`/`-h`**: real and implemented, finally closing a gap flagged
+  since the original CLI-surface-recognition slice. Checked
+  unconditionally, before anything else in `argv` -- matching real
+  emerge's own behavior exactly: `main.py`'s `parse_opts` maps `-h`/
+  `--help` to the `"help"` action, and `main()` special-cases it
+  (`if myaction == "help": emerge_help(); return os.EX_OK`), checked
+  once *after* the whole line has already parsed successfully, so it
+  wins regardless of position or what other real-but-unimplemented flags
+  accompany it -- including bundled, e.g. `-ph`. This pilot's own scan
+  is a documented simplification of that: it checks every token
+  (including each character of a short-flag bundle) for a literal
+  `--help`/`-h`/`h` match unconditionally, rather than first confirming
+  the rest of the line would even parse, so `emerge --help
+  --this-is-not-a-real-flag-at-all` prints help here where real emerge
+  would report a parse error instead (that flag would never reach
+  argparse's post-parse action dispatch at all). The help text itself is
+  deliberately **not** a port of real emerge's own `_emerge/help.py`
+  (157 lines of colorized usage syntax for its full ~130-flag surface,
+  most of which this pilot doesn't implement -- reproducing it here
+  would be actively misleading); it's a short, honest, pilot-specific
+  summary of what's actually implemented, ending with a pointer to
+  `PORTING/README.md`/`PORTING/PROMPT.md` for the rest.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1191,8 +1212,19 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # right, exactly like a standalone occurrence of it would
 /tmp/emerge -pd dev-libs/newpkg
 # emerge (pilot v1): option "--debug" is a real emerge option, but is not
-# implemented in this pilot (only --pretend/-p and --verbose/-v are
-# implemented so far; see PROMPT.md)  (exit 2)
+# implemented in this pilot (only --pretend/-p, --verbose/-v, and
+# --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+
+# --help/-h is real and implemented: a short, honest, pilot-specific
+# summary, not a port of real emerge's own (157-line, colorized,
+# ~130-flag) help text -- wins unconditionally, regardless of position
+# or what else accompanies it
+/tmp/emerge --help
+# emerge (pilot v1): command-line interface to the Rust porting pilot
+# ...
+# See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.
+/tmp/emerge --deep --help          # --help wins even combined with other flags
+/tmp/emerge -ph                    # ...and even bundled with other short flags
 
 # CLI surface recognition: a real emerge option this pilot doesn't
 # implement is named specifically, not lumped in with a typo
