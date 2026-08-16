@@ -4,6 +4,32 @@
 use crate::*;
 use portage_util::TempDir;
 
+// ---- `filter_usepkg_exclude_include` (Portage usepkg-exclude/include). ----
+
+/// Hand-built binary candidate in the `cand_162` shape (same
+/// fields; `candidate_str` renders `cat/pkg-ver:slot/sub::repo`).
+fn cand_166(version: &str) -> Candidate {
+    Candidate {
+        version: version.to_string(),
+        keywords: vec!["amd64".to_string()],
+        slot: "0".to_string(),
+        sub_slot: "0".to_string(),
+        repo_location: PathBuf::new(),
+        repo_priority: 0,
+        repo_name: "testrepo".to_string(),
+        license: String::new(),
+        iuse: String::new(),
+        properties: String::new(),
+        restrict: String::new(),
+        source: CandidateSource::Binary,
+        binary_use: None,
+        remote: false,
+        build_id: None,
+        build_time: None,
+        binary_deps: HashMap::new(),
+    }
+}
+
 // ---- `direct_solve_arg_mode` (Portage `_want_installed_pkg`). ----
 
 /// Minimal visibility config in the `test_config` shape

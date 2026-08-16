@@ -636,3 +636,12 @@ struct ResolveDisjunctionsArgs<'a> {
     empty_groups_always_true: bool,
     tie_break: &'a mut TieBreak<'a>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toks(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
+}

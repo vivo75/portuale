@@ -33,3 +33,27 @@ pub(crate) fn live_metadata_for_installed(
                 .and_then(|c| repo_aux_metadata(&c.repo_location, category, &pf).ok())
         })
 }
+
+/// Every atom in one raw (vdb) `*DEPEND` string that is a *built* slot-operator dep
+/// (`:=` with a sub-slot, flattened against the recorded USE). A `use_reduce`
+/// failure reads as no built atoms. Portage: _slot_operator.py, find_built_slot_operator_atoms.
+pub(crate) fn built_slot_operator_atoms(
+    raw_depstr: &str,
+    use_flags: &HashSet<String>,
+) -> Vec<String> {
+    let tokens: Vec<String> = raw_depstr.split_whitespace().map(String::from).collect();
+    let Ok(flat) = portage_use_reduce::use_reduce_flat(
+        &tokens,
+        use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    ) else {
+        return Vec::new();
+    };
+    flat.into_iter()
+        .filter(|tok| {
+            portage_dep::parse_atom(tok).is_some_and(|a| {
+                a.slot_operator == Some(portage_dep::SlotOperator::Equals) && a.sub_slot.is_some()
+            })
+        })
+        .collect()
+}

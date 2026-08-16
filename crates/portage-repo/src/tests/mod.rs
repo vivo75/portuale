@@ -143,10 +143,24 @@ fn candidate(version: &str, keywords: &[&str]) -> Candidate {
     }
 }
 
+fn license_tokens(s: &str) -> Vec<String> {
+    s.split_whitespace().map(String::from).collect()
+}
+
 /// Direct unit legs for the masking/visibility stack: each leg observes its
 /// predicate's own result, no end-to-end contract reproduction.
 mod tests_164 {
     use super::*;
+
+    /// Hand-built binary candidate: `binary_use` is the baked USE set
+    /// (Portage's `pkg.use.enabled`), `iuse` its domain.
+    fn binary_164(version: &str, iuse: &str, use_flags: &[&str]) -> Candidate {
+        let mut c = candidate(version, &["amd64"]);
+        c.source = CandidateSource::Binary;
+        c.iuse = iuse.to_string();
+        c.binary_use = Some(use_flags.iter().map(|s| s.to_string()).collect());
+        c
+    }
 
     #[test]
     fn keyword_masked_only_164_mask_unmask_interplay() {
@@ -199,6 +213,47 @@ mod tests_164 {
     }
 
     #[test]
+    fn mask_masked_only_164_false_when_another_reason_blocks() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["MIT".to_string()],
+            package_mask: vec![
+                "dev-libs/maskkw".to_string(),
+                "dev-libs/masklic".to_string(),
+                "dev-libs/maskprops".to_string(),
+                "dev-libs/maskrestrict".to_string(),
+            ],
+            ..Default::default()
+        };
+        // Masked AND keyword-rejected.
+        let kw = candidate("1.0", &["~amd64"]);
+        assert!(!mask_masked_only(&kw, "dev-libs", "maskkw", &config));
+        // Masked AND license-unaccepted.
+        let lic = Candidate {
+            license: "GPL-2".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(!mask_masked_only(&lic, "dev-libs", "masklic", &config));
+        // Masked AND PROPERTIES-unaccepted.
+        let props = Candidate {
+            properties: "interactive".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(!mask_masked_only(&props, "dev-libs", "maskprops", &config));
+        // Masked AND RESTRICT-unaccepted.
+        let restrict = Candidate {
+            restrict: "fetch".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(!mask_masked_only(
+            &restrict,
+            "dev-libs",
+            "maskrestrict",
+            &config
+        ));
+    }
+
+    #[test]
     fn mask_masked_only_164_unmask_cancels_the_mask() {
         // Masked AND unmasked: `package.unmask` cancels the mask (Portage's
         // unmask half), so the candidate is not mask-masked at all.
@@ -212,6 +267,106 @@ mod tests_164 {
             &candidate("1.0", &["amd64"]),
             "dev-libs",
             "maskrescue",
+            &config
+        ));
+    }
+
+    /// A candidate masked by LICENSE alone (Portage's `LicenseManager`).
+    #[test]
+    fn license_masked_only_164_needs_a_license_and_only_a_license() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["MIT".to_string()],
+            ..Default::default()
+        };
+        // GPL-2 unaccepted, keywords fine: license-masked only.
+        let lic_only = Candidate {
+            license: "GPL-2".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(license_masked_only(
+            &lic_only, "dev-libs", "liconly", &config
+        ));
+        // License accepted: not license-masked at all.
+        let accepted = Candidate {
+            license: "MIT".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(!license_masked_only(
+            &accepted, "dev-libs", "licok", &config
+        ));
+    }
+
+    #[test]
+    fn license_masked_only_164_mask_unmask_leaves_the_license_verdict() {
+        // In `package.mask` but rescued by `package.unmask`: the
+        // mask gate stays shut, so the license verdict still shows.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["MIT".to_string()],
+            package_mask: vec!["dev-libs/licunmask".to_string()],
+            package_unmask: vec!["dev-libs/licunmask".to_string()],
+            ..Default::default()
+        };
+        let lic = Candidate {
+            license: "GPL-2".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(license_masked_only(&lic, "dev-libs", "licunmask", &config));
+    }
+
+    #[test]
+    fn license_masked_only_164_use_conditional_follows_the_flag() {
+        // Portage `use_reduce`'s own "if '?' in license_str" path: the
+        // `foo? ( ... )` group only constrains once `foo` is enabled.
+        // `+foo` in IUSE is enabled by default, no profile needed.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["MIT".to_string()],
+            ..Default::default()
+        };
+        // MIT accepted but the active conditional pulls in an
+        // unaccepted GPL-2: license-masked only.
+        let cond = Candidate {
+            license: "MIT foo? ( GPL-2 )".to_string(),
+            iuse: "+foo".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(license_masked_only(&cond, "dev-libs", "liccond", &config));
+        // Same shape with the flag default-off: the group drops out,
+        // MIT alone is accepted -- not license-masked.
+        let cond_off = Candidate {
+            license: "MIT foo? ( GPL-2 )".to_string(),
+            iuse: "-foo".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(!license_masked_only(
+            &cond_off,
+            "dev-libs",
+            "liccondoff",
+            &config
+        ));
+    }
+
+    #[test]
+    fn license_masked_only_164_invalid_is_never_license_only() {
+        // `invalid` disqualifies the claim even with a genuinely unaccepted
+        // LICENSE.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["MIT".to_string()],
+            ..Default::default()
+        };
+        let mut invalid = binary_164("1.0", "", &[]);
+        invalid.license = "GPL-2".to_string();
+        invalid.binary_deps = HashMap::from([(
+            "RDEPEND".to_string(),
+            "bogusflag? ( dev-libs/foo )".to_string(),
+        )]);
+        assert!(!license_masked_only(
+            &invalid,
+            "dev-libs",
+            "licinvalid",
             &config
         ));
     }
@@ -327,6 +482,7 @@ mod tests_165;
 mod tests_166;
 
 mod blockers;
+mod license;
 mod masked_deps;
 mod tests_184;
 mod use_flags;

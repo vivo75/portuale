@@ -45,6 +45,22 @@ fn license_eula_style_negation_masks_a_matching_license() {
 }
 
 #[test]
+fn license_package_license_override_unmasks_for_one_matching_package_only() {
+    let config = portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        accept_license: vec!["*".to_string(), "-SomeEula".to_string()],
+        package_license: vec![("dev-libs/foo".to_string(), vec!["SomeEula".to_string()])],
+        ..Default::default()
+    };
+    let c = Candidate {
+        license: "SomeEula".to_string(),
+        ..candidate("1.0", &["amd64"])
+    };
+    assert!(is_visible(&c, "dev-libs", "foo", &config));
+    assert!(!is_visible(&c, "dev-libs", "bar", &config));
+}
+
+#[test]
 fn license_any_of_group_is_satisfied_by_one_accepted_alternative() {
     let config = portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
@@ -56,6 +72,30 @@ fn license_any_of_group_is_satisfied_by_one_accepted_alternative() {
         ..candidate("1.0", &["amd64"])
     };
     assert!(is_visible(&c, "dev-libs", "foo", &config));
+}
+
+#[test]
+fn license_use_conditional_only_masks_once_the_flag_is_actually_enabled() {
+    let c = Candidate {
+        license: "GPL-2 foo? ( MIT )".to_string(),
+        iuse: "foo".to_string(),
+        ..candidate("1.0", &["amd64"])
+    };
+    let config_foo_off = portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        accept_license: vec!["GPL-2".to_string()],
+        ..Default::default()
+    };
+    assert!(is_visible(&c, "dev-libs", "foo-pkg", &config_foo_off));
+
+    let config_foo_on = portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        accept_license: vec!["GPL-2".to_string()],
+        use_flags: HashSet::from(["foo".to_string()]),
+        use_tokens: vec!["foo".to_string()],
+        ..Default::default()
+    };
+    assert!(!is_visible(&c, "dev-libs", "foo-pkg", &config_foo_on));
 }
 
 #[test]
@@ -87,6 +127,22 @@ fn properties_not_in_the_acceptable_set_is_masked() {
 }
 
 #[test]
+fn package_properties_override_unmasks_for_one_matching_package_only() {
+    let config = portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        accept_properties: vec![],
+        package_properties: vec![("dev-libs/foo".to_string(), vec!["live".to_string()])],
+        ..Default::default()
+    };
+    let c = Candidate {
+        properties: "live".to_string(),
+        ..candidate("1.0", &["amd64"])
+    };
+    assert!(is_visible(&c, "dev-libs", "foo", &config));
+    assert!(!is_visible(&c, "dev-libs", "bar", &config));
+}
+
+#[test]
 fn restrict_default_star_accepts_any_declared_token() {
     let config = portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
@@ -115,6 +171,22 @@ fn restrict_not_in_the_acceptable_set_is_masked() {
 }
 
 #[test]
+fn package_accept_restrict_override_unmasks_for_one_matching_package_only() {
+    let config = portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        accept_restrict: vec![],
+        package_accept_restrict: vec![("dev-libs/foo".to_string(), vec!["bindist".to_string()])],
+        ..Default::default()
+    };
+    let c = Candidate {
+        restrict: "bindist".to_string(),
+        ..candidate("1.0", &["amd64"])
+    };
+    assert!(is_visible(&c, "dev-libs", "foo", &config));
+    assert!(!is_visible(&c, "dev-libs", "bar", &config));
+}
+
+#[test]
 fn restrict_multiple_tokens_all_need_accepting() {
     let config = portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
@@ -126,6 +198,83 @@ fn restrict_multiple_tokens_all_need_accepting() {
         ..candidate("1.0", &["amd64"])
     };
     assert!(!is_visible(&c, "dev-libs", "foo", &config));
+}
+
+/// The memo key distinguishes configs that differ only in their
+/// accept lists (outside the USE-context fingerprint).
+#[test]
+fn metadata_key_accepted_memo_does_not_leak_between_differing_accept_lists() {
+    let base = |accept: &str| portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        accept_properties: vec![accept.to_string()],
+        ..Default::default()
+    };
+    let star = base("*");
+    let interactive = base("interactive");
+    let c = Candidate {
+        properties: "live".to_string(),
+        ..candidate("1.0", &["amd64"])
+    };
+    let candidate_str = "dev-libs/memoaccept-1.0:0/0::test";
+    let call = |config: &portage_profile::Config| {
+        metadata_key_accepted(MetadataKeyAcceptedArgs {
+            value_str: &c.properties,
+            candidate: &c,
+            category: "dev-libs",
+            package: "memoaccept",
+            candidate_str,
+            config,
+            which: MetadataKey::Properties,
+            global_accept: &config.accept_properties,
+            package_accept: &config.package_properties,
+        })
+    };
+    assert!(call(&star));
+    assert!(
+        !call(&interactive),
+        "a differing accept_properties must not reuse the memo entry"
+    );
+}
+
+/// The memo key includes the candidate's own `IUSE`/`KEYWORDS`
+/// (`candidate_str` does not encode them).
+#[test]
+fn metadata_key_accepted_memo_does_not_leak_between_differing_candidate_iuse() {
+    let config = portage_profile::Config {
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        accept_properties: vec![],
+        ..Default::default()
+    };
+    let value = "!test? ( test )";
+    let candidate_str = "dev-libs/memoiuse-1.0:0/0::test";
+    let call = |iuse: &str| {
+        let c = Candidate {
+            iuse: iuse.to_string(),
+            properties: value.to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        metadata_key_accepted(MetadataKeyAcceptedArgs {
+            value_str: &c.properties,
+            candidate: &c,
+            category: "dev-libs",
+            package: "memoiuse",
+            candidate_str,
+            config: &config,
+            which: MetadataKey::Properties,
+            global_accept: &config.accept_properties,
+            package_accept: &config.package_properties,
+        })
+    };
+    // IUSE="+test" enables the flag through its own default marker, so
+    // `!test?` is false and the group is dropped -> true.
+    assert!(call("+test"));
+    // IUSE="test" carries no default marker, so the flag stays off,
+    // `!test?` holds, the group yields "test" and nothing accepts it
+    // -> false. Only the candidate's own IUSE separates the two calls.
+    assert!(
+        !call("test"),
+        "a differing candidate IUSE must not reuse the memo entry"
+    );
 }
 
 #[test]

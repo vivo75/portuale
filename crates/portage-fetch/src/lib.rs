@@ -98,3 +98,18 @@ impl From<Error> for String {
         e.to_string()
     }
 }
+
+/// One flattened `SRC_URI` entry: the remote URI, and the local filename
+/// it should be saved as (the `->` rename, or the URI's own basename).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SrcUriEntry {
+    pub uri: String,
+    pub filename: String,
+    /// Portage `override_mirror` (`fetch.py`): this URI token had a
+    /// `mirror+` prefix, re-permitting the public mirror list even under
+    /// `RESTRICT=mirror`. Implies `override_fetch` too.
+    pub override_mirror: bool,
+    /// Portage `override_fetch` (`fetch.py`): `mirror+` or `fetch+`
+    /// prefix, exempting this one URI under `RESTRICT=fetch`. (See notes.)
+    pub override_fetch: bool,
+}

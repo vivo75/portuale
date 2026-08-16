@@ -8,9 +8,11 @@
 // to `Packages`.
 
 use portage_util::TempDir;
+mod extract;
 
 #[cfg(test)]
 mod tests;
+pub use extract::*;
 
 use std::collections::HashMap;
 
