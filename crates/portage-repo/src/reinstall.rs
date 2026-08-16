@@ -178,3 +178,65 @@ pub(crate) fn candidate_iuse_and_use(
     });
     Some((iuse, use_flags))
 }
+
+/// Arguments of [`reinstall_flags_for_use_change`].
+pub(crate) struct ReinstallFlagsForUseChangeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) newuse: bool,
+}
+
+/// `--newuse`/`--changed-use`: whether `candidate` (a version already
+/// installed) needs reinstalling because its currently-effective USE
+/// differs from what the vdb recorded at merge time. Returns the sorted
+/// list of flags that triggered it, or `None` if nothing did. If both
+/// flags are given, `newuse` wins.
+/// Portage: depgraph.py, _reinstall_for_flags.
+///
+/// Both branches share one term -- the enablement change of a flag present
+/// in IUSE on both sides -- which alone is the *entire* `--changed-use`
+/// formula. `--newuse` adds IUSE presence changes on top, minus profile-
+/// forced flags (`config.use_force ∪ config.use_mask`).
+pub(crate) fn reinstall_flags_for_use_change(
+    args: ReinstallFlagsForUseChangeArgs<'_>,
+) -> Option<Vec<String>> {
+    let ReinstallFlagsForUseChangeArgs {
+        root,
+        category,
+        package,
+        candidate,
+        config,
+        newuse,
+    } = args;
+    let version = &candidate.version;
+    let orig_use = read_vdb_flag_set(root, category, package, version, "USE");
+    let orig_iuse = read_vdb_flag_set(root, category, package, version, "IUSE");
+
+    let (cur_iuse, cur_use) = candidate_iuse_and_use(candidate, category, package, config)?;
+
+    let orig_enabled: HashSet<String> = orig_iuse.intersection(&orig_use).cloned().collect();
+    let cur_enabled: HashSet<String> = cur_iuse.intersection(&cur_use).cloned().collect();
+    let mut flags: HashSet<String> = orig_enabled
+        .symmetric_difference(&cur_enabled)
+        .cloned()
+        .collect();
+
+    if newuse {
+        let mut presence_diff: HashSet<String> =
+            orig_iuse.symmetric_difference(&cur_iuse).cloned().collect();
+        for forced in config.use_force.union(&config.use_mask) {
+            presence_diff.remove(forced);
+        }
+        flags.extend(presence_diff);
+    }
+
+    if flags.is_empty() {
+        return None;
+    }
+    let mut sorted: Vec<String> = flags.into_iter().collect();
+    sorted.sort();
+    Some(sorted)
+}

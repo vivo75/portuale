@@ -220,3 +220,22 @@ pub(crate) fn visible_tree_matches(
         .map(|(c, _)| (c.version.clone(), c.slot.clone()))
         .collect()
 }
+
+/// A downgrade to `version` is *desirable* only when no visible, not-installed
+/// candidate in its slot is at the same or a higher version (the current one is
+/// masked or gone). `slot_atom` is `cat/pkg:slot`; `extra_constraints` is the
+/// `runtime_pkg_mask` the similar-available iteration skips.
+/// Portage: depgraph.py, _downgrade_probe.
+pub(crate) fn downgrade_probe(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    slot_atom: &str,
+    version: &str,
+    extra_constraints: &[String],
+) -> bool {
+    let similar = visible_tree_matches(repos, slot_atom, config, extra_constraints);
+    !similar.is_empty()
+        && !similar
+            .iter()
+            .any(|(v, _)| vercmp_ordering(v, version) != Ordering::Less)
+}

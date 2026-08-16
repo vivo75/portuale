@@ -135,3 +135,16 @@ pub struct CircularDepChild {
     pub(crate) slot: Option<String>,
     pub(crate) sub_slot: Option<String>,
 }
+
+impl BacktrackParams {
+    /// Just the `runtime_pkg_mask` negatives for one `cat/pkg` (no
+    /// positives): tells mask-induced unsatisfiability (retry with the
+    /// parent masked) from genuine absence and USE-only failure.
+    /// Portage: the dep-level `runtime_pkg_mask` probe.
+    pub(crate) fn masked_negatives_for(&self, cp: &(String, String)) -> Vec<String> {
+        self.runtime_pkg_mask
+            .get(cp)
+            .map(|bucket| bucket.iter().map(|m| m.neg.clone()).collect())
+            .unwrap_or_default()
+    }
+}

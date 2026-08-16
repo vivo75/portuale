@@ -65,3 +65,13 @@ pub(crate) fn dep_priority_rank(p: &DepPriority) -> i8 {
         -6
     }
 }
+
+/// The `DepPriority` with the greatest [`dep_priority_rank`] in `prios`.
+/// `prios` is never empty at a digraph edge.
+pub(crate) fn max_priority(prios: &[DepPriority]) -> DepPriority {
+    prios
+        .iter()
+        .copied()
+        .max_by_key(dep_priority_rank)
+        .unwrap_or_default()
+}

@@ -44,6 +44,8 @@ use crate::ebuild_phases;
 
 use crate::emerge_build;
 
+use crate::emerge_getbinpkg;
+
 use crate::emerge_options;
 
 use portage_dep::{Atom, Blocker, Operator, SlotOperator, match_from_list, parse_atom};

@@ -2,6 +2,54 @@
 
 use crate::ebuild_merge::*;
 
+/// The installed `SLOT` (main slot only) of an installed
+/// `<category>/<package>-<version>`, through the shared
+/// `vdb_entry_slot` seam. A missing or empty `SLOT` reads as `"0"`.
+/// Always `Some` in practice: callers only query listed versions.
+/// Portage: vartree.py, aux_get
+pub(crate) fn read_installed_slot(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<String> {
+    let pf = format!("{package}-{version}");
+    let raw = portage_repo::vdb_entry_slot(root, category, &pf);
+    let main = raw.split('/').next().unwrap_or("");
+    if main.is_empty() {
+        Some("0".to_string())
+    } else {
+        Some(main.to_string())
+    }
+}
+
+/// The installed same-slot instance this merge upgrades over: among
+/// every other installed version of this `category/package/slot`, the
+/// one with the highest `COUNTER`. `None` when none exists.
+/// Portage: vartree.py, _installed_instance
+pub(crate) fn installed_instance_pf(
+    root: &Path,
+    category: &str,
+    package: &str,
+    slot: &str,
+) -> Option<String> {
+    portage_repo::installed_versions(root, category, package)
+        .into_iter()
+        .filter(|version| {
+            read_installed_slot(root, category, package, version).as_deref() == Some(slot)
+        })
+        .filter_map(|version| {
+            let pf = format!("{package}-{version}");
+            let counter: i64 = read_entry_text(root, category, &pf, "COUNTER")?
+                .trim()
+                .parse()
+                .ok()?;
+            Some((pf, counter))
+        })
+        .max_by_key(|(_, counter)| *counter)
+        .map(|(pf, _)| pf)
+}
+
 /// Whether the installed `<package>-<version>` already claims `abs_path`
 /// in its `CONTENTS`, through the `PackagesDb` seam. `abs_path` is a
 /// logical absolute path; the leading `/` is stripped to meet the seam's

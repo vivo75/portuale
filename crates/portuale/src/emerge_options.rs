@@ -242,6 +242,12 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_newuse_itself() {
+        assert!(lookup("--newuse").is_none());
+        assert!(lookup("-N").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }

@@ -196,3 +196,38 @@ impl PackagesDb for VdbReader<'_> {
         self.root
     }
 }
+
+/// The local `$PKGDIR` `BinpkgIndex`: Portage `bintree.py`'s local-store
+/// candidates via `portage_repo::BinaryIndex`. One of two backends (the
+/// other is [`RemoteBinhostIndex`]).
+pub struct PkgdirBinIndex<'a> {
+    /// The parsed `$PKGDIR` index and path for provenance.
+    pub index: &'a portage_repo::BinaryIndex,
+    /// The `$PKGDIR` directory this reads, for [`BinpkgIndex::source_name`].
+    pub pkgdir: &'a Path,
+}
+impl BinpkgIndex for PkgdirBinIndex<'_> {
+    fn candidates(&self, category: &str, package: &str) -> Vec<portage_repo::Candidate> {
+        portage_repo::list_binary_candidates(self.index, category, package)
+    }
+    fn metadata(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<std::collections::HashMap<String, String>> {
+        portage_repo::read_binary_metadata(self.index, category, package, version)
+    }
+    fn metadata_with_source(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<(String, std::collections::HashMap<String, String>)> {
+        self.metadata(category, package, version)
+            .map(|m| (self.pkgdir.to_string_lossy().into_owned(), m))
+    }
+    fn source_name(&self) -> String {
+        self.pkgdir.to_string_lossy().into_owned()
+    }
+}
