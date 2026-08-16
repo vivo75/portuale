@@ -789,6 +789,31 @@ PORTING/
   scope for unrelated reasons noted above) or any other `@`-prefixed
   top-level target falls through to the ordinary atom-parsing path and
   gets a clear "invalid atom" error rather than a silent no-op.
+
+  **`--newuse`/`-N` reinstall detection**: closes the exact scope cut
+  `resolve_pretend_graph`'s own doc comment named ("v1 has no
+  --newuse/--changed-use equivalent"). Ports the `newuse` branch of real
+  `depgraph.py`'s `_reinstall_for_flags`: an already-installed package is
+  reinstalled if its currently-effective USE differs from what the vdb
+  recorded at merge time -- `flags = (orig_iuse ^ cur_iuse) |
+  ((orig_iuse∩orig_use) ^ (cur_iuse∩cur_use))`, read from two new vdb
+  files (`USE`/`IUSE`, alongside the `CATEGORY`/`SLOT` this pilot already
+  read) and the candidate ebuild's own current IUSE/`effective_use_flags`.
+  A `Reinstall` entry is walked for dependencies exactly like New/Upgrade
+  (the dead end an already-installed package used to always be), printed
+  as `[ebuild r ]`, reusing the exact same bracket-column precedent
+  `N`/`U` already established, with the changed flags named inline
+  (`(reinstall for changed USE: foo)`) for a deterministic, testable
+  report -- real emerge instead color-hints changed flags within its
+  `-v` USE display, a UI feature out of scope for this pilot's plain-text
+  output. This is a **deliberate, confirmed-with-the-user
+  simplification**: real `_reinstall_for_flags` also subtracts a
+  `forced_flags` set (from `use.force`/`use.mask`) before deciding, which
+  this pilot always treats as empty (`use.force`/`use.mask` aren't
+  modeled anywhere in `portage_profile::Config`, the same "not modeled
+  yet, so it's a no-op" precedent every other absent profile mechanism
+  here follows); and `--changed-use`/`-U`, a real, narrower alternative
+  to `--newuse`, stays recognized-but-unimplemented.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -950,6 +975,18 @@ RDEPEND, proving `@world`'s expanded atoms feed the same recursion
 machinery any other target does), and a `@some-nested-set-reference`
 line proving a nested-set reference is silently skipped rather than
 mishandled.
+
+`dev-libs/reinstallpkg` exercises `--newuse` reinstall detection:
+installed at `1.0` with `IUSE="foo"` declared but an empty vdb `USE` file
+(`PORTING/fixtures/var/db/pkg/dev-libs/reinstallpkg-1.0/USE` -- `foo` was
+off at merge time), while the fixture profile chain enables `foo`
+globally now, so `--newuse` must report a Reinstall for the changed
+`foo` flag; its `RDEPEND="dev-libs/newpkg"` proves a Reinstall entry is
+still walked for dependencies, not treated as a dead end the way
+AlreadyInstalled is. `dev-libs/samepkg` (already used elsewhere, no
+`IUSE` at all) doubles as the negative case: `--newuse` must leave it
+AlreadyInstalled, proving it doesn't force a reinstall of every
+already-installed package, just ones with an actual USE mismatch.
 
 Four more fixture packages exercise blocker reporting: `blockerpkg`
 (RDEPEND `"!!dev-libs/samepkg"`, a strong blocker matching
@@ -1304,6 +1341,25 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v n dev-libs/useflagp
 # [ebuild  N] dev-libs/useflagpkg-1.0   (explicit "n": no USE= shown)
 # [ebuild  N] dev-libs/newpkg-1.0
 
+# --newuse/-N is real and implemented: reinstallpkg is installed with
+# IUSE="foo" declared but an empty vdb USE file (foo was off at merge
+# time); the fixture profile chain enables "foo" globally now, so
+# --newuse reports a Reinstall for the changed flag -- and still recurses
+# into its own RDEPEND, exactly like a New/Upgrade entry would
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/reinstallpkg
+# [ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# without --newuse, the exact same package stays AlreadyInstalled -- the
+# USE mismatch is real, but nothing checks for it unless --newuse is given
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/reinstallpkg
+# dev-libs/reinstallpkg-1.0 is already installed; nothing to do
+
+# --newuse is a no-op when USE hasn't changed -- samepkg has no IUSE at
+# all (declared or in the vdb), so there's nothing to detect a change in
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/samepkg
+# dev-libs/samepkg-1.0 is already installed; nothing to do
+
 # short-flag bundling: "-pv" decomposes into -p + -v, both real,
 # implemented flags -- native argparse behavior for boolean short
 # options, not something requiring emerge-specific parsing
@@ -1315,8 +1371,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # right, exactly like a standalone occurrence of it would
 /tmp/emerge -pd dev-libs/newpkg
 # emerge (pilot v1): option "--debug" is a real emerge option, but is not
-# implemented in this pilot (only --pretend/-p, --verbose/-v, and
-# --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+# implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
+# and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
 
 # --help/-h is real and implemented: a short, honest, pilot-specific
 # summary, not a port of real emerge's own (157-line, colorized,
@@ -1333,8 +1389,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # implement is named specifically, not lumped in with a typo
 /tmp/emerge --deep dev-libs/newpkg
 # emerge (pilot v1): option "--deep" is a real emerge option, but is not
-# implemented in this pilot (only --pretend/-p, --verbose/-v, and
-# --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+# implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
+# and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message

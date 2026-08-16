@@ -387,6 +387,54 @@ def effective_use_flags(base, package_use, candidate_str, category, package):
     return use_flags
 
 
+def _read_vdb_flag_set(root, category, package, version, filename):
+    """Reads <root>/var/db/pkg/<category>/<package>-<version>/<filename>
+    (a vdb aux file, e.g. USE or IUSE -- same directory SLOT/CATEGORY
+    already come from) as a set of flag names, one per whitespace-
+    separated token, with any "+"/"-" IUSE default-marker prefix
+    stripped. A missing file is an empty set, not an error. Mirrors
+    portage-repo/src/lib.rs's read_vdb_flag_set exactly."""
+    path = os.path.join(root, "var", "db", "pkg", category, f"{package}-{version}", filename)
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    return {tok.lstrip("+-") for tok in text.split()}
+
+
+def _reinstall_flags_for_newuse(root, category, package, candidate, config):
+    """--newuse: ports the "newuse" branch of real depgraph.py's
+    _reinstall_for_flags -- whether `candidate` (a version already
+    installed) needs reinstalling because its currently-effective USE
+    differs from what the vdb recorded at merge time. Returns the sorted
+    list of flags that triggered it, or None if nothing did. Mirrors
+    portage-repo/src/lib.rs's reinstall_flags_for_newuse exactly,
+    including its documented forced_flags/--changed-use scope cuts (see
+    that function's own doc comment)."""
+    version = candidate["version"]
+    orig_use = _read_vdb_flag_set(root, category, package, version, "USE")
+    orig_iuse = _read_vdb_flag_set(root, category, package, version, "IUSE")
+
+    try:
+        metadata = read_md5_cache(candidate["repo_location"], category, f"{package}-{version}")
+    except OSError:
+        return None
+    if not metadata.get("IUSE"):
+        return None
+    cur_iuse = {tok.lstrip("+-") for tok in metadata["IUSE"].split()}
+    candidate_str = f"{category}/{package}-{version}:{candidate['slot']}"
+    cur_use = effective_use_flags(
+        config["use_flags"], config["package_use"], candidate_str, category, package
+    )
+
+    # flags = (orig_iuse ^ cur_iuse) | (orig_iuse∩orig_use ^ cur_iuse∩cur_use)
+    flags = orig_iuse ^ cur_iuse
+    flags |= (orig_iuse & orig_use) ^ (cur_iuse & cur_use)
+
+    return sorted(flags) if flags else None
+
+
 def _max_version(versions):
     best = versions[0]
     for v in versions[1:]:
@@ -671,14 +719,17 @@ def _best_candidate(candidates):
     return best
 
 
-def resolve_pretend(repos, root, atom_str, config):
+def resolve_pretend(repos, root, atom_str, config, newuse=False):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
     supports -- operator, slot, not just a bare category/package) across
     all of `repos` (the main repo and any overlays -- see find_repos),
     compare it against what's installed. Returns a tuple whose first
-    element is the outcome tag: "new", "upgrade", "already_installed", or
-    "no_visible_candidate"."""
+    element is the outcome tag: "new", "upgrade", "reinstall",
+    "already_installed", or "no_visible_candidate". `newuse` enables the
+    --newuse reinstall check (see _reinstall_flags_for_newuse) for an
+    already-installed match; False reproduces this function's behavior
+    from before --newuse existed exactly."""
     atom = _parse_atom(atom_str)
     if atom is None:
         raise ResolutionError(f'invalid atom "{atom_str}"')
@@ -699,14 +750,18 @@ def resolve_pretend(repos, root, atom_str, config):
     matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
     if not matched:
         return ("no_visible_candidate",)
-    best = _best_candidate(matched)["version"]
+    best = _best_candidate(matched)
 
     installed = installed_versions(root, category, package)
-    if best in installed:
-        return ("already_installed", best)
+    if best["version"] in installed:
+        if newuse:
+            changed_flags = _reinstall_flags_for_newuse(root, category, package, best, config)
+            if changed_flags:
+                return ("reinstall", best["version"], changed_flags)
+        return ("already_installed", best["version"])
     if installed:
-        return ("upgrade", _max_version(installed), best)
-    return ("new", best)
+        return ("upgrade", _max_version(installed), best["version"])
+    return ("new", best["version"])
 
 
 def resolve_blockers(root, pending, entries):
@@ -736,6 +791,8 @@ def resolve_blockers(root, pending, entries):
                 version = outcome[1]
             elif outcome[0] == "upgrade":
                 version = outcome[2]
+            elif outcome[0] == "reinstall":
+                version = outcome[1]
             else:
                 continue
             if slot is None:
@@ -766,7 +823,7 @@ def resolve_blockers(root, pending, entries):
     return conflicts
 
 
-def resolve_pretend_graph(config_root, root, atoms, config):
+def resolve_pretend_graph(config_root, root, atoms, config, newuse=False):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
     IDEPEND atoms, breadth-first. Returns a dict with keys "entries" (a
@@ -781,8 +838,12 @@ def resolve_pretend_graph(config_root, root, atoms, config):
     `slot` is the resolved SLOT string, `use_display` is a sorted list of
     (flag, enabled) pairs for this package's own IUSE-declared flags (for
     --pretend -v's USE="..." display -- see run() below); all three are
-    only ever non-empty/non-None for New/Upgrade entries. See the module
-    doc comment for the recursion's documented scope cuts.
+    only ever non-empty/non-None for New/Upgrade/Reinstall entries. See
+    the module doc comment for the recursion's documented scope cuts.
+    `newuse` enables the --newuse reinstall check (see resolve_pretend)
+    for an already-installed package, walking its dependencies too when
+    it triggers -- False reproduces this function's behavior from before
+    --newuse existed exactly.
 
     `atoms` seeds the BFS queue together, in the order given, before any
     dependency is ever pushed -- so all of them are dequeued and resolved
@@ -845,7 +906,7 @@ def resolve_pretend_graph(config_root, root, atoms, config):
         category, package = atom.cp.split("/", 1)
         key = (category, package)
 
-        outcome = resolve_pretend(repos, root, current_atom_str, config)
+        outcome = resolve_pretend(repos, root, current_atom_str, config, newuse)
 
         # A top-level atom (as opposed to a dependency reached while
         # recursing) with no visible candidate aborts the whole call --
@@ -859,6 +920,8 @@ def resolve_pretend_graph(config_root, root, atoms, config):
             version = outcome[1]
         elif outcome[0] == "upgrade":
             version = outcome[2]
+        elif outcome[0] == "reinstall":
+            version = outcome[1]
         else:
             # AlreadyInstalled / NoVisibleCandidate: no slot to key a
             # repeat by, so dedup on category/package alone, same as v1
@@ -892,7 +955,9 @@ def resolve_pretend_graph(config_root, root, atoms, config):
             existing_idx = resolved_slots[slot_key]
             existing_outcome = entries[existing_idx][2]
             existing_version = (
-                existing_outcome[1] if existing_outcome[0] == "new" else existing_outcome[2]
+                existing_outcome[1]
+                if existing_outcome[0] in ("new", "reinstall")
+                else existing_outcome[2]
             )
             existing_str = f"{category}/{package}-{existing_version}:{slot}"
             satisfied = bool(match_from_list(current_atom_str, [existing_str]))
@@ -996,9 +1061,9 @@ def _parse_atom(atom_str):
 # `argument_options` dict, and `actions` frozenset), so that using any
 # real emerge flag this pilot doesn't implement yet produces a clear
 # "recognized, but not implemented" message -- distinct from a
-# genuinely unknown/misspelled flag. Only --pretend/-p and --verbose/-v
-# are actually implemented (see run() below); every table here exists
-# purely for recognition, not behavior. Mirrors
+# genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
+# --newuse/-N, and --help/-h are actually implemented (see run() below);
+# every table here exists purely for recognition, not behavior. Mirrors
 # PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
 # three tables exactly, so both sides report identical text for
 # identical input (verified by the shared contract suite).
@@ -1008,8 +1073,9 @@ def _parse_atom(atom_str):
 # "-v"); "category" (boolean/value/action) is tracked for accurate
 # enumeration only -- run() reports and exits immediately on any
 # recognized-but-unimplemented option, so it never needs to parse or
-# skip over that option's own argument; --help/-h is recognized as a
-# real (unimplemented) action, not given its own pilot help text.
+# skip over that option's own argument. --changed-use/-U, a real,
+# narrower alternative to --newuse, stays in _BOOLEAN_OPTIONS below,
+# unimplemented -- see _reinstall_flags_for_newuse's own doc comment.
 
 _BOOLEAN_OPTIONS = [
     ("--alphabetical", None),
@@ -1026,7 +1092,6 @@ _BOOLEAN_OPTIONS = [
     ("--ignore-default-opts", None),
     ("--noconfmem", None),
     ("--newrepo", None),
-    ("--newuse", "-N"),
     ("--nobindeps", None),
     ("--nodeps", "-O"),
     ("--noreplace", "-n"),
@@ -1205,9 +1270,9 @@ def _has_unsupported_top_level_features(a):
 
 def _report_option(token):
     """Reports and returns the exit code for a single option/action token
-    ("-x" or "--long", never a positional atom) that isn't --pretend/-p
-    or --verbose/-v -- shared between a standalone token and one
-    character of a decomposed short-flag bundle, so both produce
+    ("-x" or "--long", never a positional atom) that isn't --pretend/-p,
+    --verbose/-v, or --newuse/-N -- shared between a standalone token and
+    one character of a decomposed short-flag bundle, so both produce
     identical messages for the same underlying flag. Mirrors
     pretend.rs's report_option exactly."""
     found = _lookup_option(token)
@@ -1217,7 +1282,8 @@ def _report_option(token):
         print(
             f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
             "but is not implemented in this pilot (only --pretend/-p, "
-            "--verbose/-v, and --help/-h are implemented so far; see PROMPT.md)",
+            "--verbose/-v, --newuse/-N, and --help/-h are implemented so far; "
+            "see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -1252,6 +1318,7 @@ def _print_help():
     print("Options:")
     print("   -p, --pretend   required: the only real merge calculation this pilot implements")
     print('   -v, --verbose   show USE="..." on each [ebuild ...] line (optionally: -v y|n)')
+    print("   -N, --newuse    reinstall an already-installed package if its USE has changed")
     print("   -h, --help      show this message and exit")
     print()
     print(
@@ -1301,12 +1368,16 @@ def run(args):
     atom_args = []
     pretend = False
     verbose = False
+    newuse = False
 
     i = 0
     while i < len(args):
         arg = args[i]
         if arg in ("--pretend", "-p"):
             pretend = True
+            i += 1
+        elif arg in ("--newuse", "-N"):
+            newuse = True
             i += 1
         elif arg in ("--verbose", "-v"):
             # Peeks at the next token, consuming it only if it's exactly
@@ -1344,6 +1415,8 @@ def run(args):
                     pretend = True
                 elif c == "v":
                     verbose = True
+                elif c == "N":
+                    newuse = True
                 else:
                     return _report_option(f"-{c}")
             i += 1
@@ -1409,7 +1482,7 @@ def run(args):
         # side's own pretend.rs exactly.
         main_repo = next(r for r in find_repos(_config_root()) if r["is_main"])
         config = resolve_config(_config_root(), main_repo["location"])
-        result = resolve_pretend_graph(_config_root(), _root(), atom_args, config)
+        result = resolve_pretend_graph(_config_root(), _root(), atom_args, config, newuse)
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
@@ -1451,6 +1524,14 @@ def run(args):
                 f"{use_suffix(use_display)}"
             )
             print_blockers(category, package, outcome[2], blockers)
+        elif tag == "reinstall":
+            changed_flags = outcome[2]
+            print(
+                f"[ebuild  r] {category}/{package}-{outcome[1]} "
+                f"(reinstall for changed USE: {', '.join(changed_flags)})"
+                f"{use_suffix(use_display)}"
+            )
+            print_blockers(category, package, outcome[1], blockers)
         elif tag == "already_installed":
             # Already-satisfied dependencies aren't shown, matching real
             # emerge's usual "don't clutter the list" behavior -- only a

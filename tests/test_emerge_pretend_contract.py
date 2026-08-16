@@ -125,6 +125,26 @@ CASES = [
     ("@world expands to the fixture world file's own atoms", ["--pretend", "@world"], 0),
     ("@world combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@world"], 0),
     ("@system as a top-level atom: not implemented, clear invalid-atom error", ["--pretend", "@system"], 1),
+    (
+        "--newuse reinstalls a package whose USE changed since it was installed",
+        ["--pretend", "--newuse", "dev-libs/reinstallpkg"],
+        0,
+    ),
+    (
+        "--newuse short alias -N, bundled with -p",
+        ["-pN", "dev-libs/reinstallpkg"],
+        0,
+    ),
+    (
+        "without --newuse, a USE-changed package stays already-installed",
+        ["--pretend", "dev-libs/reinstallpkg"],
+        0,
+    ),
+    (
+        "--newuse is a no-op when USE hasn't changed",
+        ["--pretend", "--newuse", "dev-libs/samepkg"],
+        0,
+    ),
 ]
 
 
@@ -872,8 +892,8 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
     assert (
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, and --help/-h are implemented "
-        "so far; see PROMPT.md)"
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, and --help/-h are "
+        "implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -920,6 +940,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "Options:\n"
         "   -p, --pretend   required: the only real merge calculation this pilot implements\n"
         '   -v, --verbose   show USE="..." on each [ebuild ...] line (optionally: -v y|n)\n'
+        "   -N, --newuse    reinstall an already-installed package if its USE has changed\n"
         "   -h, --help      show this message and exit\n"
         "\n"
         "Every other real emerge option/action is recognized by name (see "
@@ -1007,6 +1028,73 @@ def test_world_missing_file_expands_to_nothing_not_an_error(
     )
 
 
+def test_newuse_reinstalls_a_package_whose_use_changed(emerge_binary, fixture_env):
+    """PORTING/fixtures/var/db/pkg/dev-libs/reinstallpkg-1.0 is installed
+    with IUSE="foo" but an empty vdb USE file (foo was off at merge
+    time); the fixture profile chain enables "foo" globally now, so
+    --newuse must report a Reinstall for the changed "foo" flag -- and,
+    since reinstallpkg RDEPENDs on dev-libs/newpkg, still recurse into
+    its own dependencies exactly like a New/Upgrade entry would."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--newuse", "dev-libs/reinstallpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_newuse_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
+    """-N is --newuse's real short alias (see lib/_emerge/main.py's
+    shortmapping); bundled with -p ("-pN") it must behave identically to
+    the long-flag invocation above."""
+    result = _run([str(emerge_binary)], ["-pN", "dev-libs/reinstallpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_newuse_verbose_shows_use_flags_too(emerge_binary, fixture_env):
+    """-v combines with -N exactly like it does with New/Upgrade: shows
+    this package's own IUSE-declared flags, alphabetically sorted."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-N", "-v", "dev-libs/reinstallpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)  USE="foo"',
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_without_newuse_a_use_changed_package_stays_already_installed(
+    emerge_binary, fixture_env
+):
+    """The exact same fixture as the Reinstall test above, but without
+    --newuse: the USE mismatch is real, but nothing checks for it unless
+    --newuse is given, so this must stay the pre-existing
+    AlreadyInstalled outcome -- not a Reinstall, and not a NEW dependency
+    recursion into dev-libs/newpkg either."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/reinstallpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/reinstallpkg-1.0 is already installed; nothing to do\n"
+
+
+def test_newuse_is_a_noop_when_use_has_not_changed(emerge_binary, fixture_env):
+    """dev-libs/samepkg has no IUSE at all (declared or in the vdb), so
+    there's nothing for --newuse to detect a change in -- must stay
+    AlreadyInstalled even with --newuse enabled, proving --newuse doesn't
+    force a reinstall of every already-installed package."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--newuse", "dev-libs/samepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/samepkg-1.0 is already installed; nothing to do\n"
+
+
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
     """virtual/texteditor is shaped exactly like a real virtual (e.g.
     virtual/pager in the real Gentoo tree, confirmed by inspection): an
@@ -1052,8 +1140,8 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--deep" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, and --help/-h are implemented so far; see "
-        "PROMPT.md)"
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, and --help/-h are implemented so far; "
+        "see PROMPT.md)"
     )
 
 
@@ -1066,8 +1154,8 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
     assert (
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, and --help/-h are implemented so far; see "
-        "PROMPT.md)"
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, and --help/-h are implemented so far; "
+        "see PROMPT.md)"
     )
 
 
@@ -1080,8 +1168,8 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     assert result.returncode == 2
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
-        "implemented in this pilot (only --pretend/-p, --verbose/-v, and --help/-h are implemented so far; see "
-        "PROMPT.md)"
+        "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, and --help/-h are implemented so far; "
+        "see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 

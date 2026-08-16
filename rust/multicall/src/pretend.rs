@@ -162,9 +162,9 @@ fn print_blockers(entry: &GraphEntry, owner_version: &str) {
 }
 
 /// Reports and returns the exit code for a single option/action token
-/// ("-x" or "--long", never a positional atom) that isn't --pretend/-p
-/// or --verbose/-v -- shared between a standalone token and one
-/// character of a decomposed short-flag bundle, so both produce
+/// ("-x" or "--long", never a positional atom) that isn't --pretend/-p,
+/// --verbose/-v, or --newuse/-N -- shared between a standalone token and
+/// one character of a decomposed short-flag bundle, so both produce
 /// identical messages for the same underlying flag.
 fn report_option(token: &str) -> ExitCode {
     if let Some(found) = emerge_options::lookup(token) {
@@ -180,8 +180,8 @@ fn report_option(token: &str) -> ExitCode {
         };
         eprintln!(
             "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
-             implemented in this pilot (only --pretend/-p, --verbose/-v, and \
-             --help/-h are implemented so far; see PROMPT.md)",
+             implemented in this pilot (only --pretend/-p, --verbose/-v, \
+             --newuse/-N, and --help/-h are implemented so far; see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -213,6 +213,7 @@ fn print_help() {
     println!("Options:");
     println!("   -p, --pretend   required: the only real merge calculation this pilot implements");
     println!("   -v, --verbose   show USE=\"...\" on each [ebuild ...] line (optionally: -v y|n)");
+    println!("   -N, --newuse    reinstall an already-installed package if its USE has changed");
     println!("   -h, --help      show this message and exit");
     println!();
     println!(
@@ -269,12 +270,16 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut atom_args: Vec<&str> = Vec::new();
     let mut pretend = false;
     let mut verbose = false;
+    let mut newuse = false;
 
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
         if arg == "--pretend" || arg == "-p" {
             pretend = true;
+            i += 1;
+        } else if arg == "--newuse" || arg == "-N" {
+            newuse = true;
             i += 1;
         } else if arg == "--verbose" || arg == "-v" {
             // Peeks at the next token, consuming it only if it's exactly
@@ -314,6 +319,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 match c {
                     'p' => pretend = true,
                     'v' => verbose = true,
+                    'N' => newuse = true,
                     _ => return report_option(&format!("-{c}")),
                 }
             }
@@ -404,7 +410,8 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
 
-    let result = match resolve_pretend_graph(&config_root, &root, &expanded_atoms, &config) {
+    let result = match resolve_pretend_graph(&config_root, &root, &expanded_atoms, &config, newuse)
+    {
         Ok(result) => result,
         Err(e) => {
             eprintln!("emerge: {e}");
@@ -444,6 +451,19 @@ pub fn run(args: &[String]) -> ExitCode {
                     use_suffix(entry, verbose)
                 );
                 print_blockers(entry, to);
+            }
+            PretendOutcome::Reinstall {
+                version,
+                changed_flags,
+            } => {
+                println!(
+                    "[ebuild  r] {}/{}-{version} (reinstall for changed USE: {}){}",
+                    entry.category,
+                    entry.package,
+                    changed_flags.join(", "),
+                    use_suffix(entry, verbose)
+                );
+                print_blockers(entry, version);
             }
             PretendOutcome::AlreadyInstalled { version } => {
                 // Already-satisfied dependencies aren't shown, matching

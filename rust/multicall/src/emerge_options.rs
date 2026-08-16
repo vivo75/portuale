@@ -4,9 +4,9 @@
 // real emerge flag this pilot doesn't implement yet produces a clear
 // "recognized, but not implemented" message -- distinct from a
 // genuinely unknown/misspelled flag. Only `--pretend`/`-p`,
-// `--verbose`/`-v`, and `--help`/`-h` are actually implemented (see
-// pretend.rs); every table here exists purely for recognition, not
-// behavior. Mirrored exactly in
+// `--verbose`/`-v`, `--help`/`-h`, and `--newuse`/`-N` are actually
+// implemented (see pretend.rs); every table here exists purely for
+// recognition, not behavior. Mirrored exactly in
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
 // (verified by the shared contract suite).
@@ -34,6 +34,12 @@
 //     pretend.rs for the pilot-specific (not a port of real emerge's own
 //     `_emerge/help.py`) help text, and why it's checked before anything
 //     else, unconditionally, regardless of position in argv.
+//   - `--newuse`/`-N` IS implemented now too, deliberately excluded from
+//     `BOOLEAN_OPTIONS` for the same reason -- see pretend.rs for the
+//     flag parsing and portage-repo's `reinstall_flags_for_newuse` for
+//     the reinstall-detection logic it enables. `--changed-use`/`-U`, a
+//     real, narrower alternative, stays in `BOOLEAN_OPTIONS` below,
+//     unimplemented.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -50,9 +56,12 @@ pub struct Lookup {
 
 /// Real boolean (no-argument) options, from `main.py`'s `options` list
 /// plus its two `longopt_aliases` entries (`--cols`, `--skip-first`) --
-/// `--pretend`/`-p` and `--verbose`/`-v` are both deliberately excluded,
-/// since they're implemented and handled directly by the caller, not
-/// through this "not implemented" table.
+/// `--pretend`/`-p`, `--verbose`/`-v`, and `--newuse`/`-N` are all
+/// deliberately excluded, since they're implemented and handled directly
+/// by the caller, not through this "not implemented" table.
+/// `--changed-use`/`-U` is a real, narrower alternative to `--newuse`
+/// that stays unimplemented -- see
+/// `portage-repo`'s `reinstall_flags_for_newuse` doc comment.
 pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--alphabetical", None),
     ("--ask-enter-invalid", None),
@@ -68,7 +77,6 @@ pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--ignore-default-opts", None),
     ("--noconfmem", None),
     ("--newrepo", None),
-    ("--newuse", Some("-N")),
     ("--nobindeps", None),
     ("--nodeps", Some("-O")),
     ("--noreplace", Some("-n")),
@@ -296,6 +304,18 @@ mod tests {
         // implemented), not through this "not implemented" table.
         assert!(lookup("--pretend").is_none());
         assert!(lookup("-p").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_newuse_itself() {
+        // --newuse/-N is handled directly by the caller (it's
+        // implemented), not through this "not implemented" table --
+        // --changed-use/-U, a real, separate, still-unimplemented flag,
+        // stays recognized.
+        assert!(lookup("--newuse").is_none());
+        assert!(lookup("-N").is_none());
+        assert!(lookup("--changed-use").is_some());
+        assert!(lookup("-U").is_some());
     }
 
     #[test]

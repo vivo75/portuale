@@ -445,9 +445,114 @@ pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<Str
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PretendOutcome {
     NoVisibleCandidate,
-    New { version: String },
-    Upgrade { from: String, to: String },
-    AlreadyInstalled { version: String },
+    New {
+        version: String,
+    },
+    Upgrade {
+        from: String,
+        to: String,
+    },
+    AlreadyInstalled {
+        version: String,
+    },
+    /// `--newuse`: already installed at this exact version, but this
+    /// package's currently-effective USE differs from what the vdb
+    /// recorded at merge time -- see `reinstall_flags_for_newuse`.
+    /// `changed_flags` is the sorted set of flag names that triggered it
+    /// (real depgraph's own `_reinstall_for_flags` return value, kept here
+    /// purely for display, matching `Upgrade`'s own `from`/`to` pattern).
+    Reinstall {
+        version: String,
+        changed_flags: Vec<String>,
+    },
+}
+
+/// Reads `<root>/var/db/pkg/<category>/<package>-<version>/<filename>`
+/// (a vdb aux file, e.g. `USE` or `IUSE` -- same directory `SLOT`/
+/// `CATEGORY` already come from) as a set of flag names, one per
+/// whitespace-separated token, with any `+`/`-` IUSE default-marker
+/// prefix stripped (irrelevant here: a reinstall check only cares which
+/// flags exist/are enabled, not their declared defaults). A missing file
+/// (e.g. an older vdb entry from before this pilot's fixtures modeled
+/// USE/IUSE at all) is an empty set, not an error -- same "absence is a
+/// real, valid state" precedent `read_world_atoms` (pretend.rs) already
+/// established.
+fn read_vdb_flag_set(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    filename: &str,
+) -> HashSet<String> {
+    let path = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{package}-{version}"))
+        .join(filename);
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect()
+}
+
+/// `--newuse`: ports the `newuse` branch of real `depgraph.py`'s
+/// `_reinstall_for_flags` -- whether `candidate` (a version already
+/// installed) needs reinstalling because its currently-effective USE
+/// differs from what the vdb recorded at merge time. Returns the sorted
+/// list of flags that triggered it, or `None` if nothing did.
+///
+/// KNOWN, DOCUMENTED SCOPE CUT: real `_reinstall_for_flags` also takes a
+/// `forced_flags` set (from `use.force`/`use.mask`, via `pkg.use.force`/
+/// `pkg.use.mask`) and subtracts it from the symmetric-difference result,
+/// so a flag forced on/off by the profile never triggers a reinstall on
+/// its own -- this pilot has no `use.force`/`use.mask` support at all
+/// (not modeled anywhere in `portage_profile::Config`), so `forced_flags`
+/// is always the empty set here, same "not modeled yet, so it's a no-op"
+/// precedent every other absent profile mechanism in this pilot follows.
+/// `--changed-use`'s own, narrower comparison (the `elif changed_use`
+/// branch of the real function) stays unimplemented -- a real, separate
+/// flag (`--changed-use`/`-U`) this pilot still reports as
+/// recognized-but-not-implemented.
+fn reinstall_flags_for_newuse(
+    root: &Path,
+    category: &str,
+    package: &str,
+    candidate: &Candidate,
+    config: &portage_profile::Config,
+) -> Option<Vec<String>> {
+    let version = &candidate.version;
+    let orig_use = read_vdb_flag_set(root, category, package, version, "USE");
+    let orig_iuse = read_vdb_flag_set(root, category, package, version, "IUSE");
+
+    let pf = format!("{package}-{version}");
+    let metadata = read_md5_cache(&candidate.repo_location, category, &pf).ok()?;
+    let cur_iuse: HashSet<String> = metadata
+        .get("IUSE")?
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let candidate_str = format!("{category}/{package}-{version}:{}", candidate.slot);
+    let cur_use = effective_use_flags(
+        &config.use_flags,
+        &config.package_use,
+        &candidate_str,
+        category,
+        package,
+    );
+
+    // flags = (orig_iuse ^ cur_iuse) | (orig_iuse∩orig_use ^ cur_iuse∩cur_use)
+    let mut flags: HashSet<String> = orig_iuse.symmetric_difference(&cur_iuse).cloned().collect();
+    let orig_enabled: HashSet<String> = orig_iuse.intersection(&orig_use).cloned().collect();
+    let cur_enabled: HashSet<String> = cur_iuse.intersection(&cur_use).cloned().collect();
+    flags.extend(orig_enabled.symmetric_difference(&cur_enabled).cloned());
+
+    if flags.is_empty() {
+        return None;
+    }
+    let mut sorted: Vec<String> = flags.into_iter().collect();
+    sorted.sort();
+    Some(sorted)
 }
 
 /// The single-atom v1 `emerge --pretend` decision: find the best visible
@@ -457,12 +562,15 @@ pub enum PretendOutcome {
 /// portage-dep's v1 grammar supports), not just a bare category/package:
 /// this is what lets dependency atoms extracted from DEPEND/RDEPEND (see
 /// `resolve_pretend_graph`) reuse the exact same resolution logic as the
-/// top-level CLI atom.
+/// top-level CLI atom. `newuse` enables the `--newuse` reinstall check
+/// (see `reinstall_flags_for_newuse`) for an already-installed match;
+/// `false` reproduces this function's pre-`--newuse` behavior exactly.
 pub fn resolve_pretend(
     repos: &[RepoConfig],
     root: &Path,
     atom_str: &str,
     config: &portage_profile::Config,
+    newuse: bool,
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
@@ -512,6 +620,16 @@ pub fn resolve_pretend(
 
     let installed = installed_versions(root, &atom.category, &atom.package);
     if installed.iter().any(|v| v == &best.version) {
+        if newuse {
+            if let Some(changed_flags) =
+                reinstall_flags_for_newuse(root, &atom.category, &atom.package, best, config)
+            {
+                return Ok(PretendOutcome::Reinstall {
+                    version: best.version.clone(),
+                    changed_flags,
+                });
+            }
+        }
         return Ok(PretendOutcome::AlreadyInstalled {
             version: best.version.clone(),
         });
@@ -615,6 +733,7 @@ fn resolve_blockers(
             let version = match &entry.outcome {
                 PretendOutcome::New { version } => Some(version.clone()),
                 PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+                PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
                 _ => None,
             };
             let (Some(version), Some(slot)) = (version, entry.slot.clone()) else {
@@ -788,17 +907,21 @@ pub struct GraphResult {
 ///     "unresolvable dependency doesn't fail the graph" rule above, and
 ///     with `SlotConflict` being reported rather than enforced too.
 ///   - A package's dependencies are only walked if resolving it produced
-///     New or Upgrade; an already-installed package's own dependencies
-///     are presumed already satisfied (v1 has no --newuse/--changed-use
-///     equivalent). This also means blockers -- and slot conflicts -- are
-///     only ever detected from New/Upgrade packages' own dependency strings;
-///     an already-installed package's blockers are never inspected, same
-///     as the rest of its dependencies.
+///     New, Upgrade, or (with `newuse`) Reinstall; an already-installed
+///     package that stays AlreadyInstalled has its own dependencies
+///     presumed already satisfied, same as before `--newuse` existed.
+///     This also means blockers -- and slot conflicts -- are only ever
+///     detected from New/Upgrade/Reinstall packages' own dependency
+///     strings; an AlreadyInstalled package's blockers are never
+///     inspected, same as the rest of its dependencies. `--changed-use`
+///     (a real, narrower alternative to `--newuse`) stays unimplemented --
+///     see `reinstall_flags_for_newuse`'s own doc comment.
 pub fn resolve_pretend_graph(
     config_root: &Path,
     root: &Path,
     atoms: &[String],
     config: &portage_profile::Config,
+    newuse: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -849,7 +972,7 @@ pub fn resolve_pretend_graph(
         }
         let key = (atom.category.clone(), atom.package.clone());
 
-        let outcome = resolve_pretend(&repos, root, &current_atom, config)?;
+        let outcome = resolve_pretend(&repos, root, &current_atom, config, newuse)?;
 
         // A top-level atom (as opposed to a dependency reached while
         // recursing) with no visible candidate aborts the whole call --
@@ -868,6 +991,7 @@ pub fn resolve_pretend_graph(
         let resolved_version = match &outcome {
             PretendOutcome::New { version } => Some(version.clone()),
             PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+            PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
             _ => None,
         };
 
@@ -918,7 +1042,8 @@ pub fn resolve_pretend_graph(
             let existing_version = match &entries[existing_idx].outcome {
                 PretendOutcome::New { version } => version.clone(),
                 PretendOutcome::Upgrade { to, .. } => to.clone(),
-                _ => unreachable!("resolved_slots only ever indexes New/Upgrade entries"),
+                PretendOutcome::Reinstall { version, .. } => version.clone(),
+                _ => unreachable!("resolved_slots only ever indexes New/Upgrade/Reinstall entries"),
             };
             let existing_str = format!("{}/{}-{existing_version}:{slot}", key.0, key.1);
             let satisfied = portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
@@ -1059,7 +1184,7 @@ mod tests {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &test_config())
+        resolve_pretend(&repos, &root, &atom_str, &test_config(), false)
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -1119,8 +1244,61 @@ mod tests {
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &config)
+        resolve_pretend(&repos, &root, &atom_str, &config, false)
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    /// Like `resolve_real`, but with `--newuse` enabled -- for the
+    /// `PretendOutcome::Reinstall` tests below.
+    fn resolve_real_newuse(category: &str, package: &str) -> PretendOutcome {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(&repos, &root, &atom_str, &config, true)
+            .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn newuse_reinstalls_when_vdb_use_differs_from_current_use() {
+        // dev-libs/reinstallpkg is installed at 1.0 with IUSE="foo" but an
+        // empty vdb USE file (foo was off at merge time); the fixture
+        // profile chain enables "foo" globally now, so --newuse must
+        // report a Reinstall for the changed "foo" flag.
+        assert_eq!(
+            resolve_real_newuse("dev-libs", "reinstallpkg"),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: vec!["foo".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn without_newuse_the_same_package_stays_already_installed() {
+        // Same fixture as above, but without --newuse: the USE mismatch
+        // is real but the flag that would detect it is off, so this must
+        // stay the pre-existing AlreadyInstalled outcome.
+        assert_eq!(
+            resolve_real("dev-libs", "reinstallpkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn newuse_does_not_reinstall_when_use_has_not_changed() {
+        // dev-libs/samepkg has no IUSE at all (declared or in the vdb),
+        // so there's nothing for --newuse to detect a change in -- must
+        // stay AlreadyInstalled even with --newuse enabled.
+        assert_eq!(
+            resolve_real_newuse("dev-libs", "samepkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
     }
 
     #[test]
@@ -1349,7 +1527,7 @@ mod tests {
 
     fn graph(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &test_config())
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &test_config(), false)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
             .entries
             .into_iter()
@@ -1492,10 +1670,15 @@ mod tests {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
-        let entries =
-            resolve_pretend_graph(&root, &root, &["dev-libs/useflagpkg".to_string()], &config)
-                .expect("resolve_pretend_graph must succeed")
-                .entries;
+        let entries = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/useflagpkg".to_string()],
+            &config,
+            false,
+        )
+        .expect("resolve_pretend_graph must succeed")
+        .entries;
         let full_names: Vec<String> = entries
             .iter()
             .map(|e| format!("{}/{}", e.category, e.package))
@@ -1507,12 +1690,51 @@ mod tests {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
-        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config)
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config, false)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
             .entries
             .into_iter()
             .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
             .collect()
+    }
+
+    /// Like `graph_real`, but with `--newuse` enabled.
+    fn graph_real_newuse(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config, true)
+            .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+            .entries
+            .into_iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+            .collect()
+    }
+
+    #[test]
+    fn newuse_reinstall_still_recurses_into_its_own_dependencies() {
+        // dev-libs/reinstallpkg RDEPENDs on dev-libs/newpkg -- proving a
+        // Reinstall entry is walked for dependencies exactly like New/
+        // Upgrade, not treated like the AlreadyInstalled dead-end it used
+        // to be before --newuse existed.
+        assert_eq!(
+            graph_real_newuse("dev-libs/reinstallpkg"),
+            vec![
+                (
+                    "dev-libs/reinstallpkg".to_string(),
+                    PretendOutcome::Reinstall {
+                        version: "1.0".to_string(),
+                        changed_flags: vec!["foo".to_string()],
+                    }
+                ),
+                (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -1551,7 +1773,7 @@ mod tests {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
-        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config)
+        resolve_pretend_graph(&root, &root, &[atom_str.to_string()], &config, false)
             .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
 
