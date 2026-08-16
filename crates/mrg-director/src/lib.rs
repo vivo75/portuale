@@ -79,6 +79,50 @@ pub enum MergeKind {
     Binary,
 }
 
+/// Portage `Scheduler._pkg_count`: the per-package `(curval, maxval)`
+/// snapshot each `MergeListItem` carries (`maxval` counts only merges).
+/// Every merge progress line prints it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeProgress {
+    /// 1-based ordinal of this unit among the run's merging entries.
+    pub cur: usize,
+    /// Total merging entries in the run.
+    pub max: usize,
+}
+
+/// A single unit of merge work: one resolved entry as plain data (never
+/// how a source merge is executed). Derived from the solver's
+/// [`portage_repo::GraphEntry`] plus the entry's `CandidateSource`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeUnit {
+    /// The resolved target, `category/package-version`.
+    pub cpv: String,
+    /// Source build or binary unpack.
+    pub kind: MergeKind,
+    /// `::repo` the candidate resolved from, for provenance.
+    pub repo: Option<String>,
+    /// The `${ROOT}` this unit merges into.
+    pub root: PathBuf,
+    /// The in-slot installed version an in-place same-slot replace must
+    /// unmerge first. `None` when nothing is replaced.
+    pub replaces_same_slot: Option<String>,
+    /// A binary unit fetchable from a binhost. Source units ignore it.
+    pub remote_binary: bool,
+    /// A build-id-qualified binary: the exact `$PKGDIR` file among
+    /// multi-instance same-version binpkgs. Source units ignore it.
+    pub build_id: Option<String>,
+    /// The resolved slot/sub-slot, threaded into the build-phase env.
+    /// `None` behaves like the resolver's own `unwrap_or("0")` default.
+    pub slot: Option<String>,
+    /// See [`MergeUnit::slot`].
+    pub sub_slot: Option<String>,
+    /// The entry's resolved IUSE flags: the source engine exports the
+    /// enabled ones as the build-phase `USE`. Empty means `USE=""`.
+    pub use_flags: Vec<(String, bool)>,
+    /// This unit's `(curval, maxval)` snapshot; hand-built units keep `single()`.
+    pub progress: MergeProgress,
+}
+
 // ---------------------------------------------------------------------------
 // BinpkgIndex
 // ---------------------------------------------------------------------------
