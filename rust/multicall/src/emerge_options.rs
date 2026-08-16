@@ -11,7 +11,9 @@
 // behavior. Mirrored exactly in
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
-// (verified by the shared contract suite).
+// (verified by the shared contract suite). `--deep`/`-D` is ALSO
+// implemented now (see below) -- excluded from `VALUE_OPTIONS` too, not
+// just `BOOLEAN_OPTIONS`.
 //
 // KNOWN, DOCUMENTED SCOPE CUTS:
 //   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own
@@ -61,6 +63,14 @@
 //     already-installed version that still satisfies the requested atom
 //     is kept as-is, never upgraded to a newer visible version just
 //     because one exists.
+//   - `--deep`/`-D` IS implemented now too, deliberately excluded from
+//     `VALUE_OPTIONS` for the same reason -- it's real `argument_options`
+//     with an *optional* value (`--deep` alone means unlimited depth;
+//     `--deep=N`/`--deep N` bounds it), not a plain boolean, so
+//     pretend.rs's own parsing follows the same `insert_optional_args`
+//     pattern already established there for `--verbose`/`-v`. See
+//     `resolve_pretend_graph`'s own doc comment (portage-repo) for
+//     `Deep`, the real depth-cutoff semantics it ports.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -141,7 +151,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--complete-graph", None),
     ("--complete-graph-if-new-use", None),
     ("--complete-graph-if-new-ver", None),
-    ("--deep", Some("-D")),
     ("--depclean-lib-check", None),
     ("--deselect", Some("-W")),
     ("--dynamic-deps", None),
@@ -286,16 +295,16 @@ mod tests {
 
     #[test]
     fn recognizes_a_long_value_option() {
-        let found = lookup("--deep").unwrap();
+        let found = lookup("--jobs").unwrap();
         assert_eq!(found.category, Category::Value);
-        assert_eq!(found.canonical, "--deep");
+        assert_eq!(found.canonical, "--jobs");
     }
 
     #[test]
     fn recognizes_a_short_value_option() {
-        let found = lookup("-D").unwrap();
+        let found = lookup("-j").unwrap();
         assert_eq!(found.category, Category::Value);
-        assert_eq!(found.canonical, "--deep");
+        assert_eq!(found.canonical, "--jobs");
     }
 
     #[test]
@@ -354,6 +363,14 @@ mod tests {
         // implemented" table.
         assert!(lookup("--onlydeps").is_none());
         assert!(lookup("-o").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_deep_itself() {
+        // --deep/-D is handled directly by the caller (it's
+        // implemented), not through this "not implemented" table.
+        assert!(lookup("--deep").is_none());
+        assert!(lookup("-D").is_none());
     }
 
     #[test]

@@ -23,6 +23,26 @@
 // one -- this is real emerge's own default, not something this pilot
 // invented, and correcting to it was this flag's whole point.
 //
+// --deep/-D is real and implemented too (see portage-repo's `Deep` and
+// `resolve_pretend_graph`'s own doc comment for the real depth-cutoff
+// semantics it ports): without it, an already-installed package's own
+// further dependencies are never walked, no matter how deep the graph
+// goes -- only New/Upgrade/Reinstall packages (things that actually need
+// work) recurse unconditionally either way. Like `--verbose`/`-v`, it's
+// real `argument_options` with an *optional* value, not a plain boolean:
+// a standalone `--deep`/`-D` peeks at the next token, consuming it only
+// if it parses as a non-negative integer (matching real
+// `insert_optional_args`'s own `valid_integers` check) -- anything else,
+// including nothing at all, leaves depth unlimited without consuming.
+// `--deep=N` (argparse's own native `=`-form) is a separate mechanism: a
+// non-numeric or negative value there is a real, immediate parse error
+// (exit 2), matching real `parser.error("Invalid --deep parameter")`. A
+// *bundled* -D (e.g. `-pvD`) never consumes anything, always defaulting
+// to unlimited depth -- the same "no ambiguity with another bundled
+// flag character" reasoning already established for a bundled -v. `N==0`
+// (either form) is indistinguishable from `--deep` never being given at
+// all, matching real `create_depgraph_params.py`'s own `!= 0` check.
+//
 // A top-level atom may carry an operator/version/slot (e.g.
 // `>=cat/pkg-1.2`, `cat/pkg:0`) -- resolve_pretend's own atom-vs-candidate
 // matching (see portage-repo/src/lib.rs) already handles this correctly
@@ -189,8 +209,9 @@ fn report_option(token: &str) -> ExitCode {
         eprintln!(
             "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
-             --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, and \
-             --help/-h are implemented so far; see PROMPT.md)",
+             --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
+             --update/-u, --deep/-D, and --help/-h are implemented so far; \
+             see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -230,6 +251,9 @@ fn print_help() {
     );
     println!(
         "   -u, --update    upgrade to a newer visible version even if the installed one satisfies the atom"
+    );
+    println!(
+        "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)"
     );
     println!("   -h, --help      show this message and exit");
     println!();
@@ -292,6 +316,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut nodeps = false;
     let mut onlydeps = false;
     let mut update = false;
+    let mut deep = portage_repo::Deep::NotRequested;
 
     let mut i = 0;
     while i < args.len() {
@@ -314,6 +339,49 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--update" || arg == "-u" {
             update = true;
             i += 1;
+        } else if arg == "--deep" || arg == "-D" {
+            // Peeks at the next token, consuming it only if it parses as
+            // a non-negative integer -- see the module doc comment (real
+            // `valid_integers`'s own `__contains__`, checked by
+            // `insert_optional_args` before optparse ever sees the
+            // value). A bare `--deep`/`-D`, or one followed by anything
+            // that doesn't parse this way, means unlimited depth,
+            // matching real `myoptions.deep == "True"`.
+            match args.get(i + 1).map(|s| s.parse::<u32>()) {
+                Some(Ok(0)) => {
+                    deep = portage_repo::Deep::NotRequested;
+                    i += 2;
+                }
+                Some(Ok(n)) => {
+                    deep = portage_repo::Deep::Bounded(n);
+                    i += 2;
+                }
+                _ => {
+                    deep = portage_repo::Deep::Unlimited;
+                    i += 1;
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--deep=") {
+            // argparse's own native `=`-form -- a separate mechanism from
+            // the optional-next-token one above, so a non-numeric value
+            // here is a real, immediate parse error (matching real
+            // `parser.error("Invalid --deep parameter: ...")`, unlike a
+            // non-numeric *next token* above, which just means "no value
+            // given" and is left alone).
+            match value.parse::<u32>() {
+                Ok(0) => {
+                    deep = portage_repo::Deep::NotRequested;
+                    i += 1;
+                }
+                Ok(n) => {
+                    deep = portage_repo::Deep::Bounded(n);
+                    i += 1;
+                }
+                Err(_) => {
+                    eprintln!("emerge: invalid --deep parameter: {value:?}");
+                    return ExitCode::from(2);
+                }
+            }
         } else if arg == "--verbose" || arg == "-v" {
             // Peeks at the next token, consuming it only if it's exactly
             // "y"/"n" -- see the module doc comment on why (real
@@ -357,6 +425,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'O' => nodeps = true,
                     'o' => onlydeps = true,
                     'u' => update = true,
+                    'D' => deep = portage_repo::Deep::Unlimited,
                     _ => return report_option(&format!("-{c}")),
                 }
             }
@@ -464,6 +533,7 @@ pub fn run(args: &[String]) -> ExitCode {
         changed_use,
         nodeps,
         update,
+        deep,
     ) {
         Ok(result) => result,
         Err(e) => {

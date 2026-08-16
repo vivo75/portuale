@@ -186,9 +186,9 @@ check "emerge --pretend reports a REQUIRED_USE violation inside the scratch cont
 # CLI surface recognition (see multicall/src/emerge_options.rs): a real
 # emerge option this pilot doesn't implement gets a specific message,
 # not a generic one, even with nothing else in the image to fall back on.
-actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge "${IMAGE}" --deep dev-libs/newpkg 2>&1 || true)
+actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge "${IMAGE}" --jobs dev-libs/newpkg 2>&1 || true)
 check "emerge reports a real, unimplemented option by name inside the scratch container" \
-    grep -q 'option "--deep" is a real emerge option' <<<"${actual}"
+    grep -q 'option "--jobs" is a real emerge option' <<<"${actual}"
 
 actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild merge)
 check "ebuild dispatch prints the ebuild stub" \

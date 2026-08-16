@@ -1334,6 +1334,7 @@ def resolve_pretend_graph(
     changed_use=False,
     nodeps=False,
     update=False,
+    deep=0,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -1367,8 +1368,21 @@ def resolve_pretend_graph(
     ever collected. `update` (--update/-u) is threaded uniformly to every
     atom this BFS resolves, top-level and dependency alike, via
     resolve_pretend -- see that function's own docstring for the real
-    avoid_update/dont_miss_updates behavior it ports. Mirrors
-    portage-repo/src/lib.rs's resolve_pretend_graph exactly.
+    avoid_update/dont_miss_updates behavior it ports. `deep` (--deep/-D)
+    gates only whether an AlreadyInstalled package's own further
+    dependencies get walked -- `0` (the default) means never, matching
+    real portage's own default (deep=0, permanently "too deep" at every
+    depth, since create_depgraph_params.py only sets myparams["deep"] at
+    all when --deep's own value is present and non-zero); `True` means
+    unlimited depth (a bare --deep); a positive int bounds it to that
+    many levels past a directly-requested top-level atom (depth 0) --
+    exactly real portage's own three `myoptions.deep` shapes, reused
+    directly rather than wrapped in a dedicated type, unlike the Rust
+    side's own `Deep` enum (see _deep_recurses_at). It has no effect at
+    all on New/Upgrade/Reinstall packages (already always walked, `deep`
+    or not) and is itself ignored outright when `nodeps` disables the
+    dependency walk entirely. Mirrors portage-repo/src/lib.rs's
+    resolve_pretend_graph exactly.
 
     `atoms` seeds the BFS queue together, in the order given, before any
     dependency is ever pushed -- so all of them are dequeued and resolved
@@ -1415,11 +1429,16 @@ def resolve_pretend_graph(
 
     entries = []
     slot_conflicts = []
-    queue = deque(atoms)
+    # Each queued atom carries its own depth (0 for a directly-requested
+    # top-level atom, parent's depth + 1 for anything reached only via a
+    # dependency string) -- only consulted by _deep_recurses_at below,
+    # for deciding whether an AlreadyInstalled package's own further
+    # dependencies get walked; every other outcome ignores it entirely.
+    queue = deque((a, 0) for a in atoms)
     pending_blockers = []
 
     while queue:
-        current_atom_str = queue.popleft()
+        current_atom_str, depth = queue.popleft()
         atom = _parse_atom(current_atom_str)
         if atom is None:
             continue
@@ -1456,6 +1475,26 @@ def resolve_pretend_graph(
             if key in other_outcomes:
                 continue
             other_outcomes.add(key)
+            # --deep: an AlreadyInstalled package's own further
+            # dependencies are walked too, once `deep` allows recursion
+            # at this package's own depth (see _deep_recurses_at) --
+            # never for NoVisibleCandidate (no version to look anything
+            # up by), and never when `nodeps` disables the dependency
+            # walk entirely, matching every other outcome's own `nodeps`
+            # handling further below.
+            if outcome[0] == "already_installed" and not nodeps and _deep_recurses_at(deep, depth):
+                _enqueue_dependencies(
+                    repos,
+                    category,
+                    package,
+                    outcome[1],
+                    config,
+                    depth + 1,
+                    queue,
+                    pending_blockers,
+                    key,
+                    outcome[1],
+                )
             entries.append((category, package, outcome, [], None, []))
             continue
 
@@ -1610,7 +1649,7 @@ def resolve_pretend_graph(
                     }
                 )
                 continue
-            queue.append(tok)
+            queue.append((tok, depth + 1))
 
     # setdefault (not a dict comprehension) so the *first* entry for a
     # given owner wins when the same category/package appears more than
@@ -1624,6 +1663,111 @@ def resolve_pretend_graph(
         blockers_by_owner[owner_key].append(conflict)
 
     return {"entries": entries, "slot_conflicts": slot_conflicts}
+
+
+def _deep_recurses_at(deep, depth):
+    """Whether an already-installed, already-satisfied package sitting at
+    `depth` (0 for a directly-requested top-level atom) should have its
+    own further dependencies walked. Mirrors real depgraph.py's own
+    `recurse = deep is True or not self._too_deep(self._depth_increment(depth, n=1))`:
+    `deep=0` (the default) is never satisfied, regardless of depth;
+    `deep is True` always is; a positive int is satisfied while
+    `depth < deep`, so a dependency discovered this way lands at
+    `depth + 1 <= deep`. Mirrors portage-repo/src/lib.rs's
+    Deep::recurses_at exactly."""
+    if deep is True:
+        return True
+    return depth < deep
+
+
+def _enqueue_dependencies(
+    repos,
+    category,
+    package,
+    version,
+    config,
+    child_depth,
+    queue,
+    pending_blockers,
+    owner_key,
+    owner_version,
+):
+    """Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+
+    PDEPEND+IDEPEND metadata (from whichever repo actually carries this
+    exact version) and enqueues each flattened dependency token -- into
+    `pending_blockers` if it's a blocker atom, `queue` (at `child_depth`)
+    otherwise -- exactly the same lookup-and-flatten steps
+    resolve_pretend_graph's own main loop already takes for a freshly
+    resolved New/Upgrade/Reinstall candidate, factored out here so
+    --deep's AlreadyInstalled walk can reuse it without duplicating that
+    logic. Silently does nothing if `version` can't be found in any
+    repo, or its md5-cache entry can't be read -- matching the same
+    tolerance the main loop already has for those cases.
+
+    Deliberate simplification: real portage reads an AlreadyInstalled
+    package's metadata from the vdb's own installed-time snapshot, not
+    the repo's *current* ebuild -- this pilot has no vdb-metadata reader
+    (installed_versions only checks presence, never reads DEPEND/USE/
+    etc), so this reuses the repo's current metadata for that version
+    instead, same as every other candidate lookup in this pilot already
+    does. Mirrors portage-repo/src/lib.rs's enqueue_dependencies exactly."""
+    repo_candidates = [c for c in list_candidates(repos, category, package) if c["version"] == version]
+    if not repo_candidates:
+        return
+    resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
+    slot = resolved["slot"]
+    repo_location = resolved["repo_location"]
+    repo_name = resolved["repo_name"]
+
+    pf = f"{package}-{version}"
+    try:
+        metadata = read_md5_cache(repo_location, category, pf)
+    except OSError:
+        return
+    candidate_str = f"{category}/{package}-{version}:{slot}::{repo_name}"
+    use_flags = effective_use_flags(
+        config["use_flags"],
+        config["package_use"],
+        config["package_use_force"],
+        config["package_use_mask"],
+        config["use_stable_force"],
+        config["use_stable_mask"],
+        config["package_use_stable_force"],
+        config["package_use_stable_mask"],
+        resolved["keywords"],
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+        candidate_str,
+        category,
+        package,
+    )
+
+    depstr = " ".join(
+        metadata[k]
+        for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
+        if metadata.get(k)
+    )
+    try:
+        flat_deps = use_reduce(depstr, flat=True, uselist=use_flags)
+    except InvalidDependString:
+        return
+    for tok in flat_deps:
+        if tok == "||":
+            continue
+        dep_atom = _parse_atom(tok)
+        if dep_atom is not None and dep_atom.blocker:
+            pending_blockers.append(
+                {
+                    "atom_str": tok,
+                    "strong": bool(dep_atom.blocker.overlap.forbid),
+                    "target_category": dep_atom.cp.split("/", 1)[0],
+                    "target_package": dep_atom.cp.split("/", 1)[1],
+                    "owner_key": owner_key,
+                    "owner_version": owner_version,
+                }
+            )
+            continue
+        queue.append((tok, child_depth))
 
 
 def _parse_atom(atom_str):
@@ -1647,11 +1791,12 @@ def _parse_atom(atom_str):
 # "recognized, but not implemented" message -- distinct from a
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
 # --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o,
-# --update/-u, and --help/-h are actually implemented (see run() below);
-# every table here exists purely for recognition, not behavior. Mirrors
-# PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
-# three tables exactly, so both sides report identical text for
-# identical input (verified by the shared contract suite).
+# --update/-u, --deep/-D, and --help/-h are actually implemented (see
+# run() below); every table here exists purely for recognition, not
+# behavior. Mirrors PORTING/rust/multicall/src/emerge_options.rs's own
+# copy of these same three tables exactly, so both sides report
+# identical text for identical input (verified by the shared contract
+# suite).
 #
 # KNOWN, DOCUMENTED SCOPE CUTS (see emerge_options.rs for the full
 # writeup): no short-flag bundling ("-pv" isn't recognized as "-p" +
@@ -1717,7 +1862,6 @@ _VALUE_OPTIONS = [
     ("--complete-graph", None),
     ("--complete-graph-if-new-use", None),
     ("--complete-graph-if-new-ver", None),
-    ("--deep", "-D"),
     ("--depclean-lib-check", None),
     ("--deselect", "-W"),
     ("--dynamic-deps", None),
@@ -1863,8 +2007,8 @@ def _report_option(token):
             f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
             "but is not implemented in this pilot (only --pretend/-p, "
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-            "--onlydeps/-o, and --help/-h are implemented so far; "
-            "see PROMPT.md)",
+            "--onlydeps/-o, --update/-u, --deep/-D, and --help/-h are "
+            "implemented so far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -1905,6 +2049,9 @@ def _print_help():
     print("   -o, --onlydeps  show only the given atoms' dependencies, not the atoms themselves")
     print(
         "   -u, --update    upgrade to a newer visible version even if the installed one satisfies the atom"
+    )
+    print(
+        "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)"
     )
     print("   -h, --help      show this message and exit")
     print()
@@ -1961,6 +2108,7 @@ def run(args):
     nodeps = False
     onlydeps = False
     update = False
+    deep = 0
 
     i = 0
     while i < len(args):
@@ -1983,6 +2131,35 @@ def run(args):
         elif arg in ("--update", "-u"):
             update = True
             i += 1
+        elif arg in ("--deep", "-D"):
+            # Peeks at the next token, consuming it only if it parses as
+            # a non-negative integer -- see pretend.rs's module doc
+            # comment (real valid_integers's own __contains__, checked
+            # by insert_optional_args before optparse ever sees the
+            # value). A bare --deep/-D, or one followed by anything that
+            # doesn't parse this way, means unlimited depth, matching
+            # real myoptions.deep == "True".
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt is not None and nxt.isdigit():
+                deep = int(nxt)
+                i += 2
+            else:
+                deep = True
+                i += 1
+        elif arg.startswith("--deep="):
+            # argparse's own native "="-form -- a separate mechanism from
+            # the optional-next-token one above, so a non-numeric value
+            # here is a real, immediate parse error (matching real
+            # parser.error("Invalid --deep parameter: ...")), unlike a
+            # non-numeric *next token* above, which just means "no value
+            # given" and is left alone.
+            value = arg[len("--deep=") :]
+            if value.isdigit():
+                deep = int(value)
+                i += 1
+            else:
+                print(f'emerge: invalid --deep parameter: "{value}"', file=sys.stderr)
+                return 2
         elif arg in ("--verbose", "-v"):
             # Peeks at the next token, consuming it only if it's exactly
             # "y"/"n" -- see pretend.rs's module doc comment on why (real
@@ -2029,6 +2206,8 @@ def run(args):
                     onlydeps = True
                 elif c == "u":
                     update = True
+                elif c == "D":
+                    deep = True
                 else:
                     return _report_option(f"-{c}")
             i += 1
@@ -2109,7 +2288,15 @@ def run(args):
 
     try:
         result = resolve_pretend_graph(
-            _config_root(), _root(), atom_args, config, newuse, changed_use, nodeps, update
+            _config_root(),
+            _root(),
+            atom_args,
+            config,
+            newuse,
+            changed_use,
+            nodeps,
+            update,
+            deep,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

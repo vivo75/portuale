@@ -1373,6 +1373,52 @@ PORTING/
   `package.use.stable.mask` masks `maskflag` back off despite
   `package.use` enabling it, for the stable candidate only; the
   unstable one gets neither.
+  **`--deep`/`-D`: also recurse into an already-installed package's own
+  dependencies.** Grounded against real `lib/_emerge/main.py`'s own
+  `"--deep": valid_integers` declaration and
+  `create_depgraph_params.py`/`depgraph.py`'s `_too_deep`/`_add_pkg`
+  combination: real portage's own default (`deep` absent from
+  `myparams` entirely unless `--deep`'s own value is present and
+  non-zero) means an already-installed, already-satisfied package's own
+  further dependencies are *never* walked, at any depth -- which turned
+  out to already be exactly this pilot's own pre-existing, hardcoded
+  behavior (an AlreadyInstalled outcome never reads its own DEPEND/
+  RDEPEND/etc at all), so implementing `--deep` meant adding the
+  recursion this pilot never had, not fixing a gap in what it already
+  did. A bare `--deep` means real Python `True` (unlimited depth);
+  `--deep=N`/`--deep N` bounds it to `N` levels past a directly-
+  requested top-level atom (depth `0`) -- both threaded through the BFS
+  as a per-queued-atom depth counter (`portage-repo`'s own `Deep` enum
+  and `Deep::recurses_at`), exactly mirroring real depgraph.py's own
+  graded, non-boolean cutoff rather than collapsing it to a simpler
+  on/off simplification. Like `--verbose`/`-v`, it's real
+  `argument_options` with an *optional* value, not a plain boolean, so
+  the CLI parsing follows the same `insert_optional_args`-derived
+  "peek the next token, consume only if it validates" pattern already
+  established there -- a bundled `-D` (e.g. `-pvD`) never consumes a
+  value either, same "no ambiguity with another bundled flag character"
+  reasoning as a bundled `-v`. An AlreadyInstalled package's own
+  dependency metadata is read from the repo's *current* ebuild for that
+  version (via `enqueue_dependencies`, factored out of the ordinary New/
+  Upgrade/Reinstall dependency walk so both share the same lookup-and-
+  flatten logic) rather than from real portage's own vdb-snapshot
+  metadata, since this pilot has no vdb-metadata reader at all -- a
+  deliberate, documented simplification consistent with every other
+  candidate lookup in this pilot already working this way, not a new
+  gap introduced here. `dev-libs/deeppkg` (installed, RDEPENDs on
+  `dev-libs/deeppkg2`) and `dev-libs/deeppkg2` (also installed, RDEPENDs
+  on `dev-libs/newpkg`, New) exercise the exact depth-cutoff semantics:
+  without `--deep`, only `deeppkg`'s own "nothing to do" line shows;
+  a bare `--deep` reaches all the way to `newpkg`; `--deep=1` reaches
+  `deeppkg2` but not `newpkg` (indistinguishable from no `--deep` at all
+  in this pilot's own plain-text output, since `deeppkg2` stays a
+  silent, non-top-level AlreadyInstalled entry either way); `--deep=2`
+  reaches `newpkg`, same as unlimited -- proving the bound is real in
+  both directions, not silently ignored. `--deep=0` parses fine but is
+  indistinguishable from `--deep` never being given at all, matching
+  real `create_depgraph_params.py`'s own `!= 0` check; a negative
+  `--deep=N` is a real, immediate parse error (exit `2`), matching real
+  `parser.error("Invalid --deep parameter: ...")`.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1417,7 +1463,7 @@ PORTING/
   reported, two different slots of the same package correctly
   coexisting instead of one silently overwriting the other, a
   `virtual/*` atom resolving as a dependency with no dedicated code
-  involved, and a real-but-unimplemented option like `--deep` being
+  involved, and a real-but-unimplemented option like `--jobs` being
   named specifically in the CLI's refusal message), `ebuild`-dispatch
   (still succeeding as a no-op for real, valid syntax like `merge`, but
   now rejecting a genuinely unrecognized command by name), and batch
@@ -2167,6 +2213,27 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/with
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
 
+# --deep/-D is real and implemented: without it, real emerge never walks
+# an already-installed package's own further dependencies, no matter how
+# deep the graph goes -- deeppkg is installed and RDEPENDs on deeppkg2
+# (also installed), which itself RDEPENDs on newpkg (New), but neither
+# ever shows up here
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/deeppkg
+# dev-libs/deeppkg-1.0 is already installed; nothing to do
+# a bare --deep (unlimited depth) walks the whole already-installed
+# chain -- deeppkg2 itself stays silent (already installed, not a
+# top-level atom), but newpkg's own [ebuild N] line now appears
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep dev-libs/deeppkg
+# dev-libs/deeppkg-1.0 is already installed; nothing to do
+# [ebuild  N] dev-libs/newpkg-1.0
+# --deep=N bounds the depth: 1 level reaches deeppkg2 but not newpkg
+# (identical output to no --deep at all); 2 levels reaches all the way
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep=1 dev-libs/deeppkg
+# dev-libs/deeppkg-1.0 is already installed; nothing to do
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep=2 dev-libs/deeppkg
+# dev-libs/deeppkg-1.0 is already installed; nothing to do
+# [ebuild  N] dev-libs/newpkg-1.0
+
 # package.use.mask/package.use.force are real and implemented, atom
 # specificity included: a repo-level package.use.force wildcard entry
 # force-enables "forceflag"; the base profile's own package.use.mask
@@ -2216,8 +2283,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 /tmp/emerge -pd dev-libs/newpkg
 # emerge (pilot v1): option "--debug" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
-# --nodeps/-O, --onlydeps/-o, and --help/-h are implemented so far; see
-# PROMPT.md)  (exit 2)
+# --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
+# and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
 
 # --help/-h is real and implemented: a short, honest, pilot-specific
 # summary, not a port of real emerge's own (157-line, colorized,
@@ -2227,16 +2294,16 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): command-line interface to the Rust porting pilot
 # ...
 # See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.
-/tmp/emerge --deep --help          # --help wins even combined with other flags
+/tmp/emerge --jobs --help          # --help wins even combined with other flags
 /tmp/emerge -ph                    # ...and even bundled with other short flags
 
 # CLI surface recognition: a real emerge option this pilot doesn't
 # implement is named specifically, not lumped in with a typo
-/tmp/emerge --deep dev-libs/newpkg
-# emerge (pilot v1): option "--deep" is a real emerge option, but is not
+/tmp/emerge --jobs dev-libs/newpkg
+# emerge (pilot v1): option "--jobs" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
-# --nodeps/-O, --onlydeps/-o, and --help/-h are implemented so far; see
-# PROMPT.md)  (exit 2)
+# --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
+# and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message

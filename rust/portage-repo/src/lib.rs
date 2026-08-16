@@ -1177,6 +1177,51 @@ pub struct GraphResult {
     pub slot_conflicts: Vec<SlotConflict>,
 }
 
+/// `--deep`/`-D` (real `lib/_emerge/main.py`'s own `"--deep": valid_integers`
+/// declaration, `create_depgraph_params.py`'s `myparams["deep"]`, and
+/// `depgraph.py`'s own `_too_deep`/`_add_pkg` combination): how far past
+/// an already-installed, already-satisfied package to keep walking
+/// dependencies. Real portage's own default (`deep` absent from
+/// `myparams` entirely, since `create_depgraph_params.py` only sets it
+/// when `--deep`'s own value is present and non-zero) means an
+/// AlreadyInstalled package's own further dependencies are *never*
+/// walked, at any depth -- exactly this pilot's own pre-existing,
+/// hardcoded behavior (see `resolve_pretend_graph`'s own doc comment,
+/// "A package's dependencies are only walked if..."), which is why
+/// `NotRequested` needed no new code of its own to stay correct. A bare
+/// `--deep` stores real Python `True` (unlimited depth); `--deep=N`
+/// stores the integer `N`, rejected by real `parser.error()` if negative
+/// -- `--deep=0` parses fine but is indistinguishable from not passing
+/// `--deep` at all, since `create_depgraph_params.py`'s own `!= 0` check
+/// excludes it from `myparams` either way (`Bounded(0)` is never
+/// constructed here for the same reason -- see the CLI parsing in
+/// `multicall/src/pretend.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Deep {
+    #[default]
+    NotRequested,
+    Unlimited,
+    Bounded(u32),
+}
+
+impl Deep {
+    /// Whether an already-installed, already-satisfied package sitting at
+    /// `depth` (0 for a directly-requested top-level atom) should have
+    /// its own further dependencies walked. Mirrors real depgraph.py's
+    /// `recurse = deep is True or not self._too_deep(self._depth_increment(depth, n=1))`:
+    /// `NotRequested` (`deep=0`) is never satisfied, regardless of depth;
+    /// `Unlimited` (`deep is True`) always is; `Bounded(n)` is satisfied
+    /// while `depth < n`, so a dependency discovered this way lands at
+    /// `depth + 1 <= n`.
+    fn recurses_at(self, depth: u32) -> bool {
+        match self {
+            Deep::NotRequested => false,
+            Deep::Unlimited => true,
+            Deep::Bounded(n) => depth < n,
+        }
+    }
+}
+
 /// Recursively resolves every atom in `atoms` and -- for packages that
 /// would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
 /// IDEPEND atoms, breadth-first. Returns one `GraphEntry` per distinct
@@ -1274,12 +1319,21 @@ pub struct GraphResult {
 ///     New, Upgrade, or (with `newuse`/`changed_use`) Reinstall; an
 ///     already-installed package that stays AlreadyInstalled has its
 ///     own dependencies presumed already satisfied, same as before
-///     `--newuse` existed. This also means blockers -- and slot
-///     conflicts -- are only ever detected from New/Upgrade/Reinstall
-///     packages' own dependency strings; an AlreadyInstalled package's
-///     blockers are never inspected, same as the rest of its
-///     dependencies. See `reinstall_flags_for_use_change`'s own doc
-///     comment for how `newuse`/`changed_use` combine.
+///     `--newuse` existed -- unless `deep` (`--deep`/`-D`, see `Deep`)
+///     says otherwise for this particular package's own depth, in which
+///     case its dependencies are walked too (via the same repo-metadata
+///     lookup as any other resolved candidate, since this pilot has no
+///     vdb-metadata reader of its own -- a deliberate simplification vs
+///     real portage, which reads the installed copy's own recorded
+///     metadata instead; see `enqueue_dependencies`'s own doc comment).
+///     This also means blockers -- and slot conflicts -- are only ever
+///     detected from New/Upgrade/Reinstall packages' own dependency
+///     strings, and from an AlreadyInstalled package's own dependency
+///     strings only when `deep` says to walk them; blockers are never
+///     inspected for a `NotRequested`-depth AlreadyInstalled package,
+///     same as before `--deep` existed. See
+///     `reinstall_flags_for_use_change`'s own doc comment for how
+///     `newuse`/`changed_use` combine.
 ///   - `nodeps` (`--nodeps`/`-O`) disables the dependency walk entirely,
 ///     for every entry, not just top-level atoms: only `atoms` themselves
 ///     are ever resolved, ported from real `create_depgraph_params.py`
@@ -1303,10 +1357,15 @@ pub struct GraphResult {
 ///     dependencies alike) already funnels through in real portage too,
 ///     so this isn't a new pilot-specific simplification beyond the one
 ///     `newuse`/`changed_use` already made.
-// 8 args trips clippy::too_many_arguments; a bundled options struct
+///   - `deep` (`--deep`/`-D`, see `Deep`'s own doc comment): gates only
+///     whether an AlreadyInstalled package's own further dependencies get
+///     walked. It has no effect at all on New/Upgrade/Reinstall packages
+///     (already always walked, `deep` or not) and is itself ignored
+///     outright when `nodeps` disables the dependency walk entirely.
+// 9 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
-// and test) for a single-slice-sized addition of one more CLI boolean
-// flag alongside three already threaded the same way -- not worth it.
+// and test) for a single-slice-sized addition of one more CLI flag
+// alongside four already threaded the same way -- not worth it.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_pretend_graph(
     config_root: &Path,
@@ -1317,6 +1376,7 @@ pub fn resolve_pretend_graph(
     changed_use: bool,
     nodeps: bool,
     update: bool,
+    deep: Deep,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -1348,14 +1408,20 @@ pub fn resolve_pretend_graph(
 
     let mut entries: Vec<GraphEntry> = Vec::new();
     let mut slot_conflicts: Vec<SlotConflict> = Vec::new();
-    let mut queue: VecDeque<String> = VecDeque::new();
+    // Each queued atom carries its own depth (0 for a directly-requested
+    // top-level atom, parent's depth + 1 for anything reached only via a
+    // dependency string) -- only consulted by `deep.recurses_at` below,
+    // for deciding whether an AlreadyInstalled package's own further
+    // dependencies get walked; every other outcome ignores it entirely
+    // (see `Deep`'s own doc comment).
+    let mut queue: VecDeque<(String, u32)> = VecDeque::new();
     for a in atoms {
-        queue.push_back(a.clone());
+        queue.push_back((a.clone(), 0));
     }
 
     let mut pending_blockers: Vec<PendingBlocker> = Vec::new();
 
-    while let Some(current_atom) = queue.pop_front() {
+    while let Some((current_atom, depth)) = queue.pop_front() {
         let Some(atom) = portage_dep::parse_atom(&current_atom) else {
             continue;
         };
@@ -1404,6 +1470,29 @@ pub fn resolve_pretend_graph(
             // always did before slot-aware resolution existed.
             if !other_outcomes.insert(key.clone()) {
                 continue;
+            }
+            // `--deep`: an AlreadyInstalled package's own further
+            // dependencies are walked too, once `deep` allows recursion
+            // at this package's own depth (see `Deep::recurses_at`'s own
+            // doc comment) -- never for NoVisibleCandidate (no version to
+            // look anything up by), and never when `nodeps` disables the
+            // dependency walk entirely, matching every other outcome's
+            // own `nodeps` handling further below.
+            if let PretendOutcome::AlreadyInstalled { version } = &outcome {
+                if !nodeps && deep.recurses_at(depth) {
+                    enqueue_dependencies(
+                        &repos,
+                        &key.0,
+                        &key.1,
+                        version,
+                        config,
+                        depth + 1,
+                        &mut queue,
+                        &mut pending_blockers,
+                        key.clone(),
+                        version.clone(),
+                    );
+                }
             }
             entries.push(GraphEntry {
                 category: key.0,
@@ -1605,7 +1694,7 @@ pub fn resolve_pretend_graph(
                     continue;
                 }
             }
-            queue.push_back(tok);
+            queue.push_back((tok, depth + 1));
         }
     }
 
@@ -1624,6 +1713,114 @@ pub fn resolve_pretend_graph(
         entries,
         slot_conflicts,
     })
+}
+
+/// Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+PDEPEND+
+/// IDEPEND metadata (from whichever repo actually carries this exact
+/// version) and enqueues each flattened dependency token -- into
+/// `pending_blockers` if it's a blocker atom, `queue` (at `child_depth`)
+/// otherwise -- exactly the same lookup-and-flatten steps
+/// `resolve_pretend_graph`'s own main loop already takes for a freshly
+/// resolved New/Upgrade/Reinstall candidate, factored out here so
+/// `--deep`'s AlreadyInstalled walk (see `Deep`) can reuse it without
+/// duplicating that logic. Silently does nothing if `version` can't be
+/// found in any repo, or its md5-cache entry can't be read -- matching
+/// the same tolerance the main loop already has for those cases.
+///
+/// Deliberate simplification: real portage reads an AlreadyInstalled
+/// package's metadata from the vdb's own installed-time snapshot, not
+/// the repo's *current* ebuild -- this pilot has no vdb-metadata reader
+/// (`installed_versions` only checks presence, never reads DEPEND/USE/
+/// etc), so this reuses the repo's current metadata for that version
+/// instead, same as every other candidate lookup in this pilot already
+/// does. This can only observably differ from real portage if the repo's
+/// own copy of that exact version's ebuild changed since it was
+/// installed (rare, and already a pre-existing gap for e.g. `--newuse`'s
+/// own IUSE-diffing, not a new one introduced here).
+#[allow(clippy::too_many_arguments)]
+fn enqueue_dependencies(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    version: &str,
+    config: &portage_profile::Config,
+    child_depth: u32,
+    queue: &mut VecDeque<(String, u32)>,
+    pending_blockers: &mut Vec<PendingBlocker>,
+    owner_key: (String, String),
+    owner_version: String,
+) {
+    let Ok(repo_candidates) = list_candidates(repos, category, package) else {
+        return;
+    };
+    let Some(resolved) = repo_candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)
+    else {
+        return;
+    };
+    let slot = resolved.slot.clone();
+    let repo_location = resolved.repo_location.clone();
+    let repo_name = resolved.repo_name.clone();
+    let keywords = resolved.keywords.clone();
+
+    let pf = format!("{package}-{version}");
+    let Ok(metadata) = read_md5_cache(&repo_location, category, &pf) else {
+        return;
+    };
+    let candidate_str = format!("{category}/{package}-{version}:{slot}::{repo_name}");
+    let use_flags = effective_use_flags(
+        &config.use_flags,
+        &config.package_use,
+        &config.package_use_force,
+        &config.package_use_mask,
+        &config.use_stable_force,
+        &config.use_stable_mask,
+        &config.package_use_stable_force,
+        &config.package_use_stable_mask,
+        &keywords,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
+        &candidate_str,
+        category,
+        package,
+    );
+
+    let mut depstr = String::new();
+    for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
+        if let Some(d) = metadata.get(dep_key) {
+            depstr.push_str(d);
+            depstr.push(' ');
+        }
+    }
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    let Ok(flat_deps) = portage_use_reduce::use_reduce_flat(
+        &tokens,
+        &use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    ) else {
+        return;
+    };
+    for tok in flat_deps {
+        if tok == "||" {
+            continue;
+        }
+        if let Some(dep_atom) = portage_dep::parse_atom(&tok) {
+            if dep_atom.blocker != portage_dep::Blocker::None {
+                pending_blockers.push(PendingBlocker {
+                    atom_str: tok,
+                    strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                    target_category: dep_atom.category,
+                    target_package: dep_atom.package,
+                    owner_key: owner_key.clone(),
+                    owner_version: owner_version.clone(),
+                });
+                continue;
+            }
+        }
+        queue.push_back((tok, child_depth));
+    }
 }
 
 #[cfg(test)]
@@ -2183,6 +2380,7 @@ mod tests {
             false,
             false,
             false,
+            Deep::NotRequested,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2203,6 +2401,7 @@ mod tests {
             false,
             true,
             false,
+            Deep::NotRequested,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2225,12 +2424,139 @@ mod tests {
             false,
             false,
             true,
+            Deep::NotRequested,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
         .collect()
+    }
+
+    /// Like `graph`, but with a specific `Deep` value.
+    fn graph_deep(atom_str: &str, deep: Deep) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            false,
+            deep,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+    }
+
+    #[test]
+    fn deep_not_requested_never_walks_an_already_installed_packages_own_dependencies() {
+        // dev-libs/deeppkg is already installed and stays AlreadyInstalled
+        // (no --update); its own RDEPEND chain (-> deeppkg2 -> newpkg) is
+        // never read at all without --deep, matching real portage's own
+        // default (deep=0, permanently "too deep" at every depth -- see
+        // `Deep::NotRequested`'s own doc comment).
+        assert_eq!(
+            graph_deep("dev-libs/deeppkg", Deep::NotRequested),
+            vec![(
+                "dev-libs/deeppkg".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
+                }
+            )]
+        );
+    }
+
+    #[test]
+    fn deep_unlimited_walks_the_whole_already_installed_chain() {
+        // Bare --deep: unlimited depth, so both already-installed steps
+        // (deeppkg -> deeppkg2) get walked, reaching deeppkg2's own
+        // RDEPEND on newpkg (New).
+        assert_eq!(
+            graph_deep("dev-libs/deeppkg", Deep::Unlimited),
+            vec![
+                (
+                    "dev-libs/deeppkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/deeppkg2".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn deep_bounded_one_walks_exactly_one_level_of_already_installed_packages() {
+        // --deep=1: deeppkg (depth 0) recurses since 0 < 1, discovering
+        // deeppkg2 at depth 1 -- but deeppkg2 itself does NOT recurse
+        // (1 < 1 is false), so newpkg is never reached.
+        assert_eq!(
+            graph_deep("dev-libs/deeppkg", Deep::Bounded(1)),
+            vec![
+                (
+                    "dev-libs/deeppkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/deeppkg2".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely() {
+        // --nodeps trumps --deep -- real create_depgraph_params.py pops
+        // "recurse" out of myparams outright, which the dependency walk
+        // itself checks for before `deep` is ever consulted.
+        let root = fixtures_root();
+        let entries: Vec<(String, PretendOutcome)> = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/deeppkg".to_string()],
+            &test_config(),
+            false,
+            false,
+            true,
+            false,
+            Deep::Unlimited,
+        )
+        .expect("resolve_pretend_graph must succeed")
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect();
+        assert_eq!(
+            entries,
+            vec![(
+                "dev-libs/deeppkg".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
+                }
+            )]
+        );
     }
 
     #[test]
@@ -2340,6 +2666,7 @@ mod tests {
             false,
             true,
             false,
+            Deep::NotRequested,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -2468,6 +2795,7 @@ mod tests {
             false,
             false,
             false,
+            Deep::NotRequested,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -2543,6 +2871,7 @@ mod tests {
             false,
             false,
             false,
+            Deep::NotRequested,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2566,6 +2895,7 @@ mod tests {
             false,
             false,
             false,
+            Deep::NotRequested,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -2586,6 +2916,7 @@ mod tests {
             false,
             false,
             false,
+            Deep::NotRequested,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2608,6 +2939,7 @@ mod tests {
             true,
             false,
             false,
+            Deep::NotRequested,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2630,6 +2962,7 @@ mod tests {
             false,
             true,
             false,
+            Deep::NotRequested,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2851,6 +3184,7 @@ mod tests {
             false,
             false,
             false,
+            Deep::NotRequested,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

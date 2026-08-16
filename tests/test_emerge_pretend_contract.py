@@ -41,6 +41,12 @@ CASES = [
     ),
     ("--update: upgrade available", ["--pretend", "--update", "dev-libs/upgradepkg"], 0),
     ("-u short alias for --update", ["--pretend", "-u", "dev-libs/upgradepkg"], 0),
+    ("without --deep, an already-installed package's own deps stay unwalked", ["--pretend", "dev-libs/deeppkg"], 0),
+    ("--deep: walks the whole already-installed chain", ["--pretend", "--deep", "dev-libs/deeppkg"], 0),
+    ("-D short alias for --deep", ["--pretend", "-D", "dev-libs/deeppkg"], 0),
+    ("--deep=N inline form", ["--pretend", "--deep=2", "dev-libs/deeppkg"], 0),
+    ("--deep=0 matches not passing --deep at all", ["--pretend", "--deep=0", "dev-libs/deeppkg"], 0),
+    ("--deep=-1 is a real, immediate parse error", ["--pretend", "--deep=-1", "dev-libs/deeppkg"], 2),
     ("only ~keyword, not visible", ["--pretend", "dev-libs/maskedpkg"], 1),
     ("package does not exist", ["--pretend", "dev-libs/does-not-exist"], 1),
     ("sibling-prefix package: new", ["--pretend", "dev-libs/foo"], 0),
@@ -71,7 +77,7 @@ CASES = [
     ("syntactically invalid atom", ["--pretend", "not an atom!"], 1),
     ("no atom given", ["--pretend"], 2),
     ("missing --pretend", ["dev-libs/newpkg"], 2),
-    ("real emerge option, value-taking, not implemented", ["--deep", "dev-libs/newpkg"], 2),
+    ("real emerge option, value-taking, not implemented", ["--jobs", "dev-libs/newpkg"], 2),
     ("real emerge option, boolean, not implemented", ["--debug", "--pretend", "dev-libs/newpkg"], 2),
     ("real emerge option, inline =value form, not implemented", ["--jobs=4", "--pretend", "dev-libs/newpkg"], 2),
     ("real emerge action, not implemented", ["--depclean"], 2),
@@ -193,7 +199,7 @@ CASES = [
     ("-v short alias is now implemented, not rejected", ["--pretend", "-v", "dev-libs/newpkg"], 0),
     ("without --verbose, USE= is never shown even for a package with IUSE", ["--pretend", "dev-libs/useflagpkg"], 0),
     ("-v on a package with no IUSE at all: no USE= line", ["--pretend", "-v", "dev-libs/newpkg"], 0),
-    ("-v combined with a real-but-unimplemented option: still rejected", ["--pretend", "-v", "--deep", "dev-libs/newpkg"], 2),
+    ("-v combined with a real-but-unimplemented option: still rejected", ["--pretend", "-v", "--jobs", "dev-libs/newpkg"], 2),
     ("-v explicit disable via a following \"n\" token", ["--pretend", "-v", "n", "dev-libs/useflagpkg"], 0),
     ("-v explicit enable via a following \"y\" token", ["--pretend", "-v", "y", "dev-libs/useflagpkg"], 0),
     ("--verbose=n inline form disables", ["--pretend", "--verbose=n", "dev-libs/useflagpkg"], 0),
@@ -205,7 +211,7 @@ CASES = [
     ("bundled -v never consumes a following token as its value", ["-pv", "n"], 1),
     ("--help is now implemented, not rejected", ["--help"], 0),
     ("-h short alias is now implemented, not rejected", ["-h"], 0),
-    ("--help wins over any other flag present, valid or not", ["--deep", "--help"], 0),
+    ("--help wins over any other flag present, valid or not", ["--jobs", "--help"], 0),
     ("-h bundled with other short flags still wins", ["-ph"], 0),
     ("--help wins even without --pretend at all", ["--help", "dev-libs/newpkg"], 0),
     ("@world expands to the fixture world file's own atoms", ["--pretend", "@world"], 0),
@@ -1331,7 +1337,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -1383,6 +1389,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -O, --nodeps    do not resolve or show any dependency, only the given atoms\n"
         "   -o, --onlydeps  show only the given atoms' dependencies, not the atoms themselves\n"
         "   -u, --update    upgrade to a newer visible version even if the installed one satisfies the atom\n"
+        "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)\n"
         "   -h, --help      show this message and exit\n"
         "\n"
         "Every other real emerge option/action is recognized by name (see "
@@ -1403,7 +1410,7 @@ def test_help_wins_unconditionally_regardless_of_other_flags_or_position(
     with another short flag must win the same way a standalone "-h"
     does, and --help must win even with no --pretend/atom at all."""
     for args in (
-        ["--deep", "--help"],
+        ["--jobs", "--help"],
         ["-ph"],
         ["--help", "dev-libs/newpkg"],
     ):
@@ -1818,6 +1825,114 @@ def test_update_threads_through_dependency_recursion_not_just_top_level(
     ]
 
 
+def test_without_deep_an_already_installed_packages_own_deps_stay_unwalked(
+    emerge_binary, fixture_env
+):
+    """dev-libs/deeppkg is already installed and RDEPENDs on
+    dev-libs/deeppkg2 (also already installed), which itself RDEPENDs on
+    dev-libs/newpkg (New) -- without --deep, real portage's own default
+    (deep=0) never walks an already-installed package's own further
+    dependencies, at any depth, so neither deeppkg2 nor newpkg ever
+    appears here, only deeppkg's own top-level "nothing to do" line."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/deeppkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
+
+
+def test_deep_walks_the_whole_already_installed_chain(emerge_binary, fixture_env):
+    """Same fixture as above, but with a bare --deep (unlimited depth,
+    real myoptions.deep is True): both already-installed steps
+    (deeppkg -> deeppkg2) get walked, reaching deeppkg2's own RDEPEND on
+    newpkg (New) -- deeppkg2 itself stays silent (AlreadyInstalled, not
+    a top-level atom, same "don't clutter the list" rule as ever), but
+    newpkg's own [ebuild N] line now appears."""
+    result = _run([str(emerge_binary)], ["--pretend", "--deep", "dev-libs/deeppkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "dev-libs/deeppkg-1.0 is already installed; nothing to do",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_deep_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
+    """-D is --deep's real short alias (see lib/_emerge/main.py's
+    shortmapping); bundled with -p ("-pD") it must behave identically to
+    the long-flag invocation above, never consuming a following token as
+    its own value -- same "no ambiguity with another bundled flag
+    character" rule already established for a bundled -v."""
+    result = _run([str(emerge_binary)], ["-pD", "dev-libs/deeppkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "dev-libs/deeppkg-1.0 is already installed; nothing to do",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_deep_bounded_depth_stops_short_of_the_full_chain(emerge_binary, fixture_env):
+    """--deep=1: deeppkg (depth 0) recurses since 0 < 1, discovering
+    deeppkg2 at depth 1 -- but deeppkg2 itself does NOT recurse (1 < 1
+    is false), so newpkg is never reached, and the output is identical
+    to not passing --deep at all. --deep=2 (one level deeper) reaches
+    all the way to newpkg, same as unlimited -- proving the bound is
+    real and not silently ignored in either direction."""
+    bounded_one = _run(
+        [str(emerge_binary)], ["--pretend", "--deep=1", "dev-libs/deeppkg"], fixture_env
+    )
+    assert bounded_one.returncode == 0
+    assert bounded_one.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
+
+    bounded_two = _run(
+        [str(emerge_binary)], ["--pretend", "--deep=2", "dev-libs/deeppkg"], fixture_env
+    )
+    assert bounded_two.returncode == 0
+    assert bounded_two.stdout.splitlines() == [
+        "dev-libs/deeppkg-1.0 is already installed; nothing to do",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_deep_equals_zero_matches_not_passing_deep_at_all(emerge_binary, fixture_env):
+    """--deep=0 parses fine (unlike a negative value) but is
+    indistinguishable from --deep never being given at all, matching
+    real create_depgraph_params.py's own `!= 0` check that excludes it
+    from myparams either way."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--deep=0", "dev-libs/deeppkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
+
+
+def test_deep_rejects_a_negative_inline_value(emerge_binary, fixture_env):
+    """--deep=N is argparse's own native "="-form -- a non-numeric or
+    negative value there is a real, immediate parse error (matching real
+    parser.error("Invalid --deep parameter: ...")), unlike a negative
+    *next token*, which the pre-processor never even consumes as --deep's
+    own value in the first place (real valid_integers rejects it), so it
+    falls through as a separate, likely-invalid token instead."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--deep=-1", "dev-libs/deeppkg"], fixture_env
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr.strip() == 'emerge: invalid --deep parameter: "-1"'
+
+
+def test_deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely(
+    emerge_binary, fixture_env
+):
+    """--nodeps trumps --deep -- real create_depgraph_params.py pops
+    "recurse" out of myparams outright, which the dependency walk itself
+    checks for before `deep` is ever consulted."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deep", "--nodeps", "dev-libs/deeppkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
+
+
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
     """virtual/texteditor is shaped exactly like a real virtual (e.g.
     virtual/pager in the real Gentoo tree, confirmed by inspection): an
@@ -1853,18 +1968,18 @@ def test_virtual_is_resolved_as_a_dependency(emerge_binary, fixture_env):
 
 
 def test_real_option_not_implemented_message_names_the_option(emerge_binary, fixture_env):
-    """--deep is a real emerge option (see lib/_emerge/main.py's
+    """--jobs is a real emerge option (see lib/_emerge/main.py's
     argument_options) this pilot doesn't implement -- the error must
     name it specifically and say "option", distinct from both a
     genuinely unrecognized flag and an unimplemented action."""
-    result = _run([str(emerge_binary)], ["--deep", "dev-libs/newpkg"], fixture_env)
+    result = _run([str(emerge_binary)], ["--jobs", "dev-libs/newpkg"], fixture_env)
     assert result.returncode == 2
     assert result.stdout == ""
     assert (
         result.stderr.strip()
-        == 'emerge (pilot v1): option "--deep" is a real emerge option, but is not '
+        == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -1878,7 +1993,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -1892,7 +2007,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 
