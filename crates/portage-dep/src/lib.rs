@@ -574,6 +574,137 @@ pub fn use_deps_satisfied(
     true
 }
 
+/// Renders one `UseDep` back to its atom-string token (inverse of `parse_use_deps`).
+fn render_use_dep(ud: &UseDep) -> String {
+    let default = match ud.default {
+        None => "",
+        Some(UseDepDefault::Enabled) => "(+)",
+        Some(UseDepDefault::Disabled) => "(-)",
+    };
+    match ud.op {
+        UseDepOp::Enabled => format!("{}{default}", ud.flag),
+        UseDepOp::Disabled => format!("-{}{default}", ud.flag),
+        UseDepOp::IfParentEnabled => format!("{}?{default}", ud.flag),
+        UseDepOp::IfParentDisabled => format!("!{}?{default}", ud.flag),
+        UseDepOp::EqualParent => format!("{}={default}", ud.flag),
+        UseDepOp::OppositeParent => format!("!{}={default}", ud.flag),
+    }
+}
+
+/// Resolves the four parent-conditional forms against `parent_use`, the
+/// atom-owning package's effective USE set:
+///
+/// ```text
+///     parent state   conditional   result
+///      x              x?            x
+///     -x              x?            (dropped -- no constraint at all)
+///      x             !x?            (dropped -- no constraint at all)
+///     -x             !x?           -x
+///      x              x=            x
+///     -x              x=           -x
+///      x             !x=           -x
+///     -x             !x=            x
+/// ```
+///
+/// A dropped token imposes no constraint; an empty result means "no use-dep".
+/// `Enabled`/`Disabled` and any `(+)`/`(-)` default pass through unchanged.
+/// Portage: lib/portage/dep/__init__.py, Atom.evaluate_conditionals
+pub fn evaluate_use_dep_conditionals(
+    use_deps: &[UseDep],
+    parent_use: &HashSet<String>,
+) -> Vec<UseDep> {
+    use_deps
+        .iter()
+        .filter_map(|ud| {
+            let op = match ud.op {
+                UseDepOp::Enabled | UseDepOp::Disabled => ud.op.clone(),
+                UseDepOp::IfParentEnabled => {
+                    if parent_use.contains(&ud.flag) {
+                        UseDepOp::Enabled
+                    } else {
+                        return None;
+                    }
+                }
+                UseDepOp::IfParentDisabled => {
+                    if parent_use.contains(&ud.flag) {
+                        return None;
+                    } else {
+                        UseDepOp::Disabled
+                    }
+                }
+                UseDepOp::EqualParent => {
+                    if parent_use.contains(&ud.flag) {
+                        UseDepOp::Enabled
+                    } else {
+                        UseDepOp::Disabled
+                    }
+                }
+                UseDepOp::OppositeParent => {
+                    if parent_use.contains(&ud.flag) {
+                        UseDepOp::Disabled
+                    } else {
+                        UseDepOp::Enabled
+                    }
+                }
+            };
+            Some(UseDep {
+                flag: ud.flag.clone(),
+                op,
+                default: ud.default.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Applies `evaluate_use_dep_conditionals` to the atom string itself,
+/// rewriting its `[...]` block.
+///
+/// Returns the input unchanged when it has no conditional use-deps, and `None`
+/// if it doesn't parse. Lives here because `portage-use-reduce` stays
+/// atom-agnostic; callers apply it per flattened token.
+/// Portage: lib/portage/dep/__init__.py, use_reduce (per-token `evaluate_conditionals`)
+pub fn evaluate_atom_conditionals(atom_str: &str, parent_use: &HashSet<String>) -> Option<String> {
+    let atom = parse_atom(atom_str)?;
+    let Some(use_deps) = atom.use_deps.as_ref().filter(|d| !d.is_empty()) else {
+        return Some(atom_str.to_string());
+    };
+    if !use_deps.iter().any(|ud| {
+        matches!(
+            ud.op,
+            UseDepOp::IfParentEnabled
+                | UseDepOp::IfParentDisabled
+                | UseDepOp::EqualParent
+                | UseDepOp::OppositeParent
+        )
+    }) {
+        return Some(atom_str.to_string());
+    }
+    let evaluated = evaluate_use_dep_conditionals(use_deps, parent_use);
+
+    let caps = atom_regex().captures(atom_str)?;
+    let bracket_start = match caps.name("usedeps") {
+        Some(m) => m.start(),
+        None => atom_str.len(),
+    };
+    let bracket_end = atom_str.len();
+    let new_bracket = if evaluated.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "[{}]",
+            evaluated
+                .iter()
+                .map(render_use_dep)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
+    Some(format!(
+        "{}{new_bracket}",
+        &atom_str[..bracket_start.min(bracket_end)]
+    ))
+}
+
 /// Returns the candidates (input order) matching `atom_str`; `None` if the
 /// atom doesn't parse. Unparseable candidates are skipped.
 /// Portage: lib/portage/dep/__init__.py, match_from_list

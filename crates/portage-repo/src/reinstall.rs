@@ -2,6 +2,62 @@
 
 use crate::*;
 
+/// `--changed-deps`: whether `version`'s vdb-recorded dependency strings
+/// differ from the repo's *current* ebuild for that exact version, once both
+/// are flattened against the installed package's own recorded `USE` (so a
+/// purely USE-driven difference never triggers this) and compared key by key
+/// (`DEPEND` moving to `RDEPEND` registers as changed), structured (a plain
+/// reorder registers as changed; redundant brackets don't), with
+/// `strip_slot_operator_slots` and top-level-only `strip_libc_deps`.
+/// A vdb-side string that fails to parse counts as "changed"; a repo-side one
+/// reports "unchanged" (tolerant fallback).
+/// Portage: depgraph.py, _changed_deps.
+/// One `*DEPEND` string reduced to a canonical token stream (`(`/`)`
+/// around every group, `||` markers kept). `None` if the string -- or any
+/// atom in it -- doesn't parse. Shared by `deps_changed` (installed side)
+/// and `binary_deps_changed` (a binhost binary's baked deps).
+pub(crate) fn canonical_dep_key(
+    depstr: &str,
+    use_flags: &HashSet<String>,
+    libc_cps: &HashSet<(String, String)>,
+) -> Option<Vec<String>> {
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    let reduced = portage_use_reduce::use_reduce_structured(
+        &tokens,
+        use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    )
+    .ok()?;
+    let mut out: Vec<String> = Vec::with_capacity(reduced.len());
+    let mut depth: usize = 0;
+    for tok in reduced {
+        match tok.as_str() {
+            "(" => {
+                depth += 1;
+                out.push(tok);
+            }
+            ")" => {
+                depth = depth.saturating_sub(1);
+                out.push(tok);
+            }
+            "||" => out.push(tok),
+            _ => {
+                let evaluated = portage_dep::evaluate_atom_conditionals(&tok, use_flags)?;
+                let stripped = strip_slot_operator_one(&evaluated);
+                if depth == 0
+                    && !libc_cps.is_empty()
+                    && let Some(atom) = portage_dep::parse_atom(&stripped)
+                    && libc_cps.contains(&(atom.category, atom.package))
+                {
+                    continue;
+                }
+                out.push(stripped);
+            }
+        }
+    }
+    Some(out)
+}
+
 /// Splits a raw `SLOT` string into `(slot, sub_slot)`: `SLOT="main/sub"`,
 /// `sub_slot` defaulting to the slot itself when no `/` is present. An
 /// empty string (missing `SLOT` file/key) defaults to `("0", "0")`, the

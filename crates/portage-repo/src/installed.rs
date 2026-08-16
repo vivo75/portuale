@@ -611,6 +611,27 @@ pub(crate) fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Optio
     Some(flat.into_iter().filter(|t| t != "||").collect())
 }
 
+/// The `(category, package)` of every atom `virtual/libc`'s installed `RDEPEND` names
+/// (flattened against its installed `USE`) -- empty when `virtual/libc` isn't installed. One
+/// level only. Used by `deps_changed` to strip libc noise, and by `inject_libc_dep` for providers.
+// Portage: portage.dep.libc.find_libc_deps, strip_libc_deps, doebuild._inject_libc_dep
+pub fn libc_provider_cps(root: &Path) -> HashSet<(String, String)> {
+    let mut result = HashSet::new();
+    for version in installed_versions(root, "virtual", "libc") {
+        let use_flags = read_vdb_flag_set(root, "virtual", "libc", &version, "USE");
+        let rdepend = read_vdb_string(root, "virtual", "libc", &version, "RDEPEND");
+        let Some(atoms) = flat_dep_atoms(&rdepend, &use_flags) else {
+            continue;
+        };
+        for atom_str in atoms {
+            if let Some(atom) = portage_dep::parse_atom(&atom_str) {
+                result.insert((atom.category, atom.package));
+            }
+        }
+    }
+    result
+}
+
 /// One installed package in the vdb, `category/package-version` plus its recorded
 /// main `SLOT`.
 // Portage: vartree.dbapi.cpv_all, _pkg_str
