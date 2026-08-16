@@ -43,6 +43,62 @@ pub struct DepEdge {
     pub key: u8,
 }
 
+pub(crate) fn s_ignore_satisfied_runtime_post(p: &DepPriority) -> bool {
+    if p.optional {
+        return true;
+    }
+    if !p.satisfied {
+        return false;
+    }
+    if p.buildtime || p.runtime {
+        return false;
+    }
+    p.runtime_post
+}
+
+pub(crate) fn s_ignore_runtime_post(p: &DepPriority) -> bool {
+    if p.optional {
+        return true;
+    }
+    if p.buildtime || p.runtime {
+        return false;
+    }
+    p.runtime_post
+}
+
+pub(crate) fn s_ignore_satisfied_runtime(p: &DepPriority) -> bool {
+    if p.optional {
+        return true;
+    }
+    if p.buildtime {
+        return false;
+    }
+    if !p.runtime {
+        return true;
+    }
+    p.satisfied
+}
+
+pub(crate) fn s_ignore_satisfied_buildtime(p: &DepPriority) -> bool {
+    if p.optional {
+        return true;
+    }
+    if p.buildtime_slot_op {
+        return false;
+    }
+    p.satisfied
+}
+
+pub(crate) fn s_ignore_satisfied_buildtime_slot_op(p: &DepPriority) -> bool {
+    if p.optional {
+        return true;
+    }
+    if p.satisfied {
+        return true;
+    }
+    !p.buildtime && !p.runtime
+}
+
 impl std::fmt::Display for DepPriority {
     /// The single highest classification; `Priority:` lines and edge labels use it.
     /// Portage: _emerge/DepPriority.py, __str__

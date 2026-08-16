@@ -16,6 +16,8 @@
 // `custommirrors["local"]` fast path, only `BLAKE2B`/`SHA512` verified,
 // `DIST` lines only.
 
+pub mod mirror_cache;
+
 use std::collections::HashMap;
 use std::path::Path;
 

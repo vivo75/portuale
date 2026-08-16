@@ -20,8 +20,10 @@
 use crate::color::{self, Colorizer};
 
 mod args;
+mod conflicts;
 mod env_config;
 mod help;
+mod json;
 mod news;
 mod prompt;
 mod removal;
@@ -31,8 +33,10 @@ mod world;
 mod tests;
 
 pub(crate) use args::*;
+pub(crate) use conflicts::*;
 pub(crate) use env_config::*;
 pub(crate) use help::*;
+pub(crate) use json::*;
 pub use news::*;
 pub(crate) use prompt::*;
 pub(crate) use removal::*;
