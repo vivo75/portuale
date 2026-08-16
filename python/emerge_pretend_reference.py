@@ -1169,7 +1169,16 @@ def _best_candidate(candidates):
     return best
 
 
-def resolve_pretend(repos, root, atom_str, config, newuse=False, changed_use=False, update=False):
+def resolve_pretend(
+    repos,
+    root,
+    atom_str,
+    config,
+    newuse=False,
+    changed_use=False,
+    update=False,
+    excluded=(),
+):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
     supports -- operator, slot, not just a bare category/package) across
@@ -1201,6 +1210,26 @@ def resolve_pretend(repos, root, atom_str, config, newuse=False, changed_use=Fal
     path below unchanged, matching real portage's own "enable upgrade or
     downgrade to a version with visible KEYWORDS when the installed
     version is masked" comment right above its own avoid_update check.
+
+    `excluded` (--exclude/-X) is a list of raw atom/wildcard-atom
+    strings (real WildcardPackageSet, ported here as the same
+    _matches_config_entry two-tier matcher package.mask/.unmask already
+    uses). Checked in two places, mirroring real depgraph.py's own
+    scattered excluded_pkgs.findAtomForPackage call sites: (1) if an
+    installed version matches both `atom_str` and an exclude atom, it's
+    returned as already_installed immediately, before update/newuse/
+    changed_use ever get a say -- ported from _want_update_pkg's and
+    _replace_installed_atom's own excluded-check-first pattern; (2) an
+    excluded candidate is never eligible to be selected as the
+    new/upgrade "best visible candidate" either -- if every remaining
+    candidate is excluded and none is already installed, this resolves
+    to no_visible_candidate, the same outcome an atom with no eligible
+    candidate for any other reason already gets. Deliberately NOT
+    replicated: real depgraph.py's own ~18 excluded_pkgs call sites
+    cover many more specific interaction points this pilot doesn't
+    implement at all -- these two checks cover the dominant real-world
+    use ("pin an installed package so --update/--deep never touch it")
+    and the new/upgrade selection case, not every real edge case.
     Mirrors portage-repo/src/lib.rs's resolve_pretend exactly."""
     atom = _parse_atom(atom_str)
     if atom is None:
@@ -1239,6 +1268,22 @@ def resolve_pretend(repos, root, atom_str, config, newuse=False, changed_use=Fal
 
     installed = installed_versions(root, category, package)
 
+    # --exclude/-X: an installed version matching an exclude atom is
+    # left exactly as-is, unconditionally, before --update/--newuse/
+    # --changed-use ever get a say -- see this function's own docstring.
+    if excluded:
+        installed_matched = [c for c in matched if c["version"] in installed]
+        if installed_matched:
+            installed_best = _best_candidate(installed_matched)
+            installed_str = (
+                f"{category}/{package}-{installed_best['version']}:"
+                f"{installed_best['slot']}::{installed_best['repo_name']}"
+            )
+            if any(
+                _matches_config_entry(ex, installed_str, category, package) for ex in excluded
+            ):
+                return ("already_installed", installed_best["version"])
+
     if not update:
         installed_matched = [c for c in matched if c["version"] in installed]
         if installed_matched:
@@ -1250,6 +1295,29 @@ def resolve_pretend(repos, root, atom_str, config, newuse=False, changed_use=Fal
                 if changed_flags:
                     return ("reinstall", installed_best["version"], changed_flags)
             return ("already_installed", installed_best["version"])
+
+    # --exclude/-X: an excluded candidate is never eligible to become
+    # the new/upgrade "best visible candidate" either -- see this
+    # function's own docstring. Any already-installed match was already
+    # handled (and returned) above, so nothing here can silently drop an
+    # installed-and-excluded version -- only a not-yet-installed one can
+    # end up filtered out entirely.
+    if excluded:
+        matched = [
+            c
+            for c in matched
+            if not any(
+                _matches_config_entry(
+                    ex,
+                    f"{category}/{package}-{c['version']}:{c['slot']}::{c['repo_name']}",
+                    category,
+                    package,
+                )
+                for ex in excluded
+            )
+        ]
+        if not matched:
+            return ("no_visible_candidate",)
 
     best = _best_candidate(matched)
 
@@ -1335,6 +1403,7 @@ def resolve_pretend_graph(
     nodeps=False,
     update=False,
     deep=0,
+    excluded=(),
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -1381,8 +1450,14 @@ def resolve_pretend_graph(
     side's own `Deep` enum (see _deep_recurses_at). It has no effect at
     all on New/Upgrade/Reinstall packages (already always walked, `deep`
     or not) and is itself ignored outright when `nodeps` disables the
-    dependency walk entirely. Mirrors portage-repo/src/lib.rs's
-    resolve_pretend_graph exactly.
+    dependency walk entirely. `excluded` (--exclude/-X, see
+    resolve_pretend's own docstring) is threaded uniformly to every atom
+    this BFS resolves, top-level and dependency alike, same whole-graph-
+    uniform application every other flag above already gets -- including
+    an AlreadyInstalled package reached only via --deep's own walk,
+    since that dependency atom re-enters this same BFS loop and
+    resolve_pretend call like any other, with no special case needed.
+    Mirrors portage-repo/src/lib.rs's resolve_pretend_graph exactly.
 
     `atoms` seeds the BFS queue together, in the order given, before any
     dependency is ever pushed -- so all of them are dequeued and resolved
@@ -1451,7 +1526,7 @@ def resolve_pretend_graph(
         key = (category, package)
 
         outcome = resolve_pretend(
-            repos, root, current_atom_str, config, newuse, changed_use, update
+            repos, root, current_atom_str, config, newuse, changed_use, update, excluded
         )
 
         # A top-level atom (as opposed to a dependency reached while
@@ -1791,12 +1866,12 @@ def _parse_atom(atom_str):
 # "recognized, but not implemented" message -- distinct from a
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
 # --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o,
-# --update/-u, --deep/-D, and --help/-h are actually implemented (see
-# run() below); every table here exists purely for recognition, not
-# behavior. Mirrors PORTING/rust/multicall/src/emerge_options.rs's own
-# copy of these same three tables exactly, so both sides report
-# identical text for identical input (verified by the shared contract
-# suite).
+# --update/-u, --deep/-D, --exclude/-X, and --help/-h are actually
+# implemented (see run() below); every table here exists purely for
+# recognition, not behavior. Mirrors
+# PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
+# three tables exactly, so both sides report identical text for
+# identical input (verified by the shared contract suite).
 #
 # KNOWN, DOCUMENTED SCOPE CUTS (see emerge_options.rs for the full
 # writeup): no short-flag bundling ("-pv" isn't recognized as "-p" +
@@ -1865,7 +1940,6 @@ _VALUE_OPTIONS = [
     ("--depclean-lib-check", None),
     ("--deselect", "-W"),
     ("--dynamic-deps", None),
-    ("--exclude", "-X"),
     ("--fail-clean", None),
     ("--fuzzy-search", None),
     ("--ignore-built-slot-operator-deps", None),
@@ -2007,8 +2081,8 @@ def _report_option(token):
             f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
             "but is not implemented in this pilot (only --pretend/-p, "
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-            "--onlydeps/-o, --update/-u, --deep/-D, and --help/-h are "
-            "implemented so far; see PROMPT.md)",
+            "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, and "
+            "--help/-h are implemented so far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -2052,6 +2126,9 @@ def _print_help():
     )
     print(
         "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)"
+    )
+    print(
+        "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)"
     )
     print("   -h, --help      show this message and exit")
     print()
@@ -2109,6 +2186,7 @@ def run(args):
     onlydeps = False
     update = False
     deep = 0
+    excluded = []
 
     i = 0
     while i < len(args):
@@ -2160,6 +2238,24 @@ def run(args):
             else:
                 print(f'emerge: invalid --deep parameter: "{value}"', file=sys.stderr)
                 return 2
+        elif arg in ("--exclude", "-X"):
+            # Real "action": "append" -- repeatable, each occurrence's
+            # own value is itself a *space-separated* atom list (real
+            # bin/emerge's own help text: "A space separated list of
+            # package names or slot atoms"), so both accumulate: multiple
+            # --exclude/-X occurrences, and multiple atoms within one
+            # occurrence's value. Unlike --deep/-D's own optional value,
+            # this one is required -- a missing value is a real,
+            # immediate usage error, not "no value given, fall back to a
+            # default."
+            if i + 1 >= len(args):
+                print('emerge: option "--exclude" requires an argument', file=sys.stderr)
+                return 2
+            excluded.extend(args[i + 1].split())
+            i += 2
+        elif arg.startswith("--exclude="):
+            excluded.extend(arg[len("--exclude=") :].split())
+            i += 1
         elif arg in ("--verbose", "-v"):
             # Peeks at the next token, consuming it only if it's exactly
             # "y"/"n" -- see pretend.rs's module doc comment on why (real
@@ -2208,6 +2304,19 @@ def run(args):
                     update = True
                 elif c == "D":
                     deep = True
+                elif c == "X":
+                    # Unlike every other bundle-compatible short flag
+                    # here, -X's own value is *required*, not optional --
+                    # there's no sensible "just default it" behavior the
+                    # way a bundled -v/-D has, so this pilot deliberately
+                    # doesn't support bundling -X at all, with a specific
+                    # message instead of a misleading generic one.
+                    print(
+                        "emerge: -X (--exclude) requires an argument and can't be "
+                        "bundled with other short flags in this pilot",
+                        file=sys.stderr,
+                    )
+                    return 2
                 else:
                     return _report_option(f"-{c}")
             i += 1
@@ -2297,6 +2406,7 @@ def run(args):
             nodeps,
             update,
             deep,
+            excluded,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

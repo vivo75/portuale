@@ -861,6 +861,41 @@ fn reinstall_flags_for_use_change(
 /// version is masked" comment right above its own `avoid_update` check.
 /// When `update` is true, or no installed version qualifies this way,
 /// behavior is exactly as before this parameter existed.
+///
+/// `excluded` (`--exclude`/`-X`) is a list of raw atom/wildcard-atom
+/// strings (real `WildcardPackageSet`, ported here as the same "try
+/// `match_from_list`, fall back to `parse_wildcard_atom`" two-tier
+/// matcher `matches_config_entry` already uses for `package.mask`/
+/// `.unmask` -- both are real portage atom-set matchers with the
+/// identical "plain atom or `*`-wildcard" grammar). Checked in two
+/// places, mirroring real depgraph.py's own scattered
+/// `excluded_pkgs.findAtomForPackage` call sites: (1) if an installed
+/// version matches both `atom_str` and an exclude atom, it's returned
+/// as `AlreadyInstalled` immediately, before `update`/`newuse`/
+/// `changed_use` ever get a say -- ported from `_want_update_pkg`'s and
+/// `_replace_installed_atom`'s own excluded-check-first pattern (real
+/// portage: "the user has not explicitly requested for this package to
+/// be replaced", so excluding it means never touching it, full stop);
+/// (2) an excluded candidate is never eligible to be selected as the
+/// New/Upgrade "best visible candidate" either, mirroring the
+/// `excluded_pkgs`-gated candidate-selection loops elsewhere in
+/// depgraph.py (e.g. around its own lines 2331 and 5544) -- if every
+/// remaining candidate for this atom is excluded and none is already
+/// installed, this resolves to `NoVisibleCandidate`, the same outcome
+/// this pilot already gives an atom with no eligible candidate for any
+/// other reason. Deliberately NOT replicated: real depgraph.py's own
+/// ~18 `excluded_pkgs` call sites cover many more specific interaction
+/// points (autounmask, binpkg selection, `--complete-graph`, ...) this
+/// pilot doesn't implement at all -- the two checks above cover the
+/// dominant real-world use ("pin an installed package so `--update`/
+/// `--deep` never touch it") and the New/Upgrade selection case, not
+/// every real edge case.
+// 8 args trips clippy::too_many_arguments; a bundled options struct
+// would touch every one of this function's own call sites (production
+// and test) for a single-slice-sized addition of one more CLI flag
+// alongside three already threaded the same way -- not worth it, same
+// reasoning as resolve_pretend_graph's own identical allow below.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_pretend(
     repos: &[RepoConfig],
     root: &Path,
@@ -869,6 +904,7 @@ pub fn resolve_pretend(
     newuse: bool,
     changed_use: bool,
     update: bool,
+    excluded: &[String],
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
@@ -933,6 +969,38 @@ pub fn resolve_pretend(
 
     let installed = installed_versions(root, &atom.category, &atom.package);
 
+    // --exclude/-X: an installed version matching an exclude atom is
+    // left exactly as-is, unconditionally, before --update/--newuse/
+    // --changed-use ever get a say -- see this function's own doc
+    // comment.
+    if !excluded.is_empty() {
+        if let Some(installed_best) = matched
+            .iter()
+            .filter_map(|m| by_str.get(m).copied())
+            .filter(|c| installed.iter().any(|v| v == &c.version))
+            .max_by(|a, b| {
+                vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+            })
+        {
+            let installed_str = format!(
+                "{}/{}-{}:{}::{}",
+                atom.category,
+                atom.package,
+                installed_best.version,
+                installed_best.slot,
+                installed_best.repo_name
+            );
+            if excluded
+                .iter()
+                .any(|ex| matches_config_entry(ex, &installed_str, &atom.category, &atom.package))
+            {
+                return Ok(PretendOutcome::AlreadyInstalled {
+                    version: installed_best.version.clone(),
+                });
+            }
+        }
+    }
+
     // --update/-u: see this function's own doc comment.
     if !update {
         if let Some(installed_best) = matched
@@ -968,9 +1036,24 @@ pub fn resolve_pretend(
     // provide it) are broken toward the higher-priority repo, matching
     // real portage's own `(pkg.version, repo.priority)` sort in
     // `portdbapi.cp_list`.
+    // --exclude/-X: an excluded candidate is never eligible to become
+    // the New/Upgrade "best visible candidate" either -- see this
+    // function's own doc comment. Any already-installed match was
+    // already handled (and returned) above, so nothing here can
+    // silently drop an installed-and-excluded version -- only a
+    // not-yet-installed one can end up filtered out entirely.
     let Some(best) = matched
         .iter()
         .filter_map(|m| by_str.get(m).copied())
+        .filter(|c| {
+            let candidate_str = format!(
+                "{}/{}-{}:{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.repo_name
+            );
+            !excluded
+                .iter()
+                .any(|ex| matches_config_entry(ex, &candidate_str, &atom.category, &atom.package))
+        })
         .max_by(|a, b| {
             vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
         })
@@ -1362,10 +1445,18 @@ impl Deep {
 ///     walked. It has no effect at all on New/Upgrade/Reinstall packages
 ///     (already always walked, `deep` or not) and is itself ignored
 ///     outright when `nodeps` disables the dependency walk entirely.
-// 9 args trips clippy::too_many_arguments; a bundled options struct
+///   - `excluded` (`--exclude`/`-X`, see `resolve_pretend`'s own doc
+///     comment) is threaded uniformly to every atom this BFS resolves,
+///     top-level and dependency alike, same whole-graph-uniform
+///     application every other flag above already gets -- including an
+///     AlreadyInstalled package reached only via `--deep`'s own walk,
+///     since that dependency atom re-enters this same BFS loop and
+///     `resolve_pretend` call like any other, with no special case
+///     needed.
+// 10 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
-// alongside four already threaded the same way -- not worth it.
+// alongside five already threaded the same way -- not worth it.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_pretend_graph(
     config_root: &Path,
@@ -1377,6 +1468,7 @@ pub fn resolve_pretend_graph(
     nodeps: bool,
     update: bool,
     deep: Deep,
+    excluded: &[String],
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -1441,6 +1533,7 @@ pub fn resolve_pretend_graph(
             newuse,
             changed_use,
             update,
+            excluded,
         )?;
 
         // A top-level atom (as opposed to a dependency reached while
@@ -1862,6 +1955,7 @@ mod tests {
             false,
             false,
             false,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -1874,8 +1968,114 @@ mod tests {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &test_config(), false, false, true)
-            .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &test_config(),
+            false,
+            false,
+            true,
+            &[],
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    /// Like `resolve_update`, but with `excluded` too -- for exercising
+    /// `--exclude`'s own "leave an installed package alone regardless of
+    /// --update" precedence directly.
+    fn resolve_update_excluded(
+        category: &str,
+        package: &str,
+        excluded: &[String],
+    ) -> PretendOutcome {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &test_config(),
+            false,
+            false,
+            true,
+            excluded,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn exclude_leaves_an_already_installed_package_alone_even_with_update() {
+        // dev-libs/upgradepkg is installed at 1.0, a newer 2.0 is
+        // visible -- without --exclude, --update offers the upgrade
+        // (see the `upgrade` test below); --exclude matching it
+        // overrides --update entirely, same as real
+        // _want_update_pkg's/_replace_installed_atom's own
+        // excluded-checked-first precedent.
+        assert_eq!(
+            resolve_update_excluded(
+                "dev-libs",
+                "upgradepkg",
+                &["dev-libs/upgradepkg".to_string()]
+            ),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn exclude_matches_via_a_wildcard_atom_too() {
+        // Real WildcardPackageSet accepts wildcard atoms, not just plain
+        // ones -- ported here as the same two-tier matches_config_entry
+        // package.mask/.unmask already uses.
+        assert_eq!(
+            resolve_update_excluded("dev-libs", "upgradepkg", &["dev-libs/*".to_string()]),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn exclude_does_not_affect_a_non_matching_package() {
+        // A --exclude atom for an unrelated package has no effect at
+        // all -- --update still offers the upgrade normally.
+        assert_eq!(
+            resolve_update_excluded(
+                "dev-libs",
+                "upgradepkg",
+                &["dev-libs/does-not-exist".to_string()]
+            ),
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn exclude_prevents_a_not_yet_installed_package_from_being_offered() {
+        // dev-libs/newpkg has no installed version at all -- excluding
+        // it means there's no eligible candidate left, same
+        // NoVisibleCandidate outcome as any other unsatisfiable atom.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        assert_eq!(
+            resolve_pretend(
+                &repos,
+                &root,
+                "dev-libs/newpkg",
+                &test_config(),
+                false,
+                false,
+                false,
+                &["dev-libs/newpkg".to_string()],
+            )
+            .expect("resolve_pretend must succeed"),
+            PretendOutcome::NoVisibleCandidate
+        );
     }
 
     #[test]
@@ -1953,7 +2153,7 @@ mod tests {
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &config, false, false, false)
+        resolve_pretend(&repos, &root, &atom_str, &config, false, false, false, &[])
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -1965,7 +2165,7 @@ mod tests {
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &config, true, false, false)
+        resolve_pretend(&repos, &root, &atom_str, &config, true, false, false, &[])
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -1976,7 +2176,7 @@ mod tests {
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
             .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
-        resolve_pretend(&repos, &root, &atom_str, &config, false, true, false)
+        resolve_pretend(&repos, &root, &atom_str, &config, false, true, false, &[])
             .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
@@ -2138,6 +2338,7 @@ mod tests {
                 false,
                 false,
                 false,
+                &[],
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -2153,6 +2354,7 @@ mod tests {
                 false,
                 false,
                 false,
+                &[],
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -2381,6 +2583,7 @@ mod tests {
             false,
             false,
             Deep::NotRequested,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2402,6 +2605,7 @@ mod tests {
             true,
             false,
             Deep::NotRequested,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2425,12 +2629,64 @@ mod tests {
             false,
             true,
             Deep::NotRequested,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
         .collect()
+    }
+
+    #[test]
+    fn exclude_threads_through_dependency_recursion_not_just_top_level() {
+        // dev-libs/upgradepkg is reached only as a dependency of
+        // dev-libs/withdeps here, never a top-level atom -- --exclude
+        // must still leave it alone despite --update, proving the flag
+        // threads uniformly through the whole BFS (see
+        // resolve_pretend_graph's own doc comment), not just a
+        // top-level atom.
+        let root = fixtures_root();
+        let entries: Vec<(String, PretendOutcome)> = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/withdeps".to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            true,
+            Deep::NotRequested,
+            &["dev-libs/upgradepkg".to_string()],
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect();
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/withdeps".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/upgradepkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ]
+        );
     }
 
     /// Like `graph`, but with a specific `Deep` value.
@@ -2446,6 +2702,7 @@ mod tests {
             false,
             false,
             deep,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2542,6 +2799,7 @@ mod tests {
             true,
             false,
             Deep::Unlimited,
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -2667,6 +2925,7 @@ mod tests {
             true,
             false,
             Deep::NotRequested,
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -2796,6 +3055,7 @@ mod tests {
             false,
             false,
             Deep::NotRequested,
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -2872,6 +3132,7 @@ mod tests {
             false,
             false,
             Deep::NotRequested,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2896,6 +3157,7 @@ mod tests {
             false,
             false,
             Deep::NotRequested,
+            &[],
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -2917,6 +3179,7 @@ mod tests {
             false,
             false,
             Deep::NotRequested,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2940,6 +3203,7 @@ mod tests {
             false,
             false,
             Deep::NotRequested,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -2963,6 +3227,7 @@ mod tests {
             true,
             false,
             Deep::NotRequested,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3185,6 +3450,7 @@ mod tests {
             false,
             false,
             Deep::NotRequested,
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

@@ -1419,6 +1419,43 @@ PORTING/
   real `create_depgraph_params.py`'s own `!= 0` check; a negative
   `--deep=N` is a real, immediate parse error (exit `2`), matching real
   `parser.error("Invalid --deep parameter: ...")`.
+  **`--exclude`/`-X`: leave a matching package alone.** Grounded against
+  real `lib/_emerge/main.py`'s own `"--exclude": {"shortopt": "-X",
+  "action": "append", ...}` declaration and depgraph.py's own scattered
+  `excluded_pkgs.findAtomForPackage` call sites (`self.excluded_pkgs =
+  WildcardPackageSet(atoms)`, checked at ~18 different points throughout
+  package selection). Real help text: "Emerge won't install any ebuild
+  or binary package that matches any of the given package atoms" -- but
+  reading the actual call sites shows two distinct effects, not one:
+  (1) `_want_update_pkg`/`_replace_installed_atom` both check
+  `excluded_pkgs` *first*, before any `--update`/USE-change logic even
+  runs, so an installed package matching an exclude atom is left exactly
+  as-is unconditionally -- the dominant real-world use ("pin an
+  installed package so `--update`/`--deep` never touch it"); (2) several
+  candidate-selection loops (e.g. depgraph.py's own lines 2331 and 5544)
+  skip an excluded candidate when picking the best available version, so
+  a not-yet-installed package matching an exclude atom is never offered
+  either. Both are ported as two checks inside `resolve_pretend`, using
+  the exact atom text/version at each point (not a separate "is this
+  category/package excluded" shortcut), matching how real portage
+  re-checks per specific candidate rather than blacklisting a whole
+  category/package once. Deliberately NOT replicated: real depgraph.py's
+  remaining `excluded_pkgs` call sites cover interaction points this
+  pilot doesn't implement at all (autounmask, binpkg selection,
+  `--complete-graph`, ...) -- a documented scope cut, not an oversight.
+  Real `WildcardPackageSet` accepts wildcard atoms as well as plain
+  ones, so this reuses the exact same two-tier `matches_config_entry`
+  matcher `package.mask`/`.unmask` already established (try
+  `match_from_list` first, fall back to the bounded wildcard-atom
+  matcher). CLI-wise, real `main.py` declares `--exclude` `"action":
+  "append"` with each occurrence's own value itself a *space-separated*
+  atom list (help text: "A space separated list of package names or
+  slot atoms") -- both accumulate here: `--exclude foo --exclude "bar
+  baz"` excludes all three. Unlike `--deep`/`-D`'s own optional value,
+  `--exclude`'s is required, so this pilot deliberately doesn't support
+  bundling it (`-pX` gets a specific "requires an argument, can't be
+  bundled" message) -- there's no sensible default the way a bundled
+  `-v`/`-D` has.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -2234,6 +2271,25 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep=2 dev-libs/deep
 # dev-libs/deeppkg-1.0 is already installed; nothing to do
 # [ebuild  N] dev-libs/newpkg-1.0
 
+# --exclude/-X is real and implemented: without it, --update offers the
+# visible upgrade normally
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg
+# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+# --exclude matching the installed package overrides --update entirely --
+# it's checked first, unconditionally, before --update/--newuse/
+# --changed-use ever get a say
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --exclude dev-libs/upgradepkg dev-libs/upgradepkg
+# dev-libs/upgradepkg-1.0 is already installed; nothing to do
+# excluding a package that isn't installed at all means there's no
+# eligible candidate left -- the same fatal "no ebuilds to satisfy"
+# outcome any other unsatisfiable top-level atom already gets
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --exclude dev-libs/newpkg dev-libs/newpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/newpkg".  (exit 1)
+# real "action": "append" -- repeatable, and each occurrence's own value
+# is itself a space-separated atom list, so both accumulate
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --exclude "dev-libs/does-not-exist dev-libs/upgradepkg" dev-libs/upgradepkg
+# dev-libs/upgradepkg-1.0 is already installed; nothing to do
+
 # package.use.mask/package.use.force are real and implemented, atom
 # specificity included: a repo-level package.use.force wildcard entry
 # force-enables "forceflag"; the base profile's own package.use.mask
@@ -2284,7 +2340,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): option "--debug" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
 # --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+# --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
 
 # --help/-h is real and implemented: a short, honest, pilot-specific
 # summary, not a port of real emerge's own (157-line, colorized,
@@ -2303,7 +2359,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): option "--jobs" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
 # --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+# --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message

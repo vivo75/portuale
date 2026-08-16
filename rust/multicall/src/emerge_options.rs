@@ -11,9 +11,9 @@
 // behavior. Mirrored exactly in
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
-// (verified by the shared contract suite). `--deep`/`-D` is ALSO
-// implemented now (see below) -- excluded from `VALUE_OPTIONS` too, not
-// just `BOOLEAN_OPTIONS`.
+// (verified by the shared contract suite). `--deep`/`-D` and
+// `--exclude`/`-X` are ALSO implemented now (see below) -- both excluded
+// from `VALUE_OPTIONS` too, not just `BOOLEAN_OPTIONS`.
 //
 // KNOWN, DOCUMENTED SCOPE CUTS:
 //   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own
@@ -71,6 +71,18 @@
 //     pattern already established there for `--verbose`/`-v`. See
 //     `resolve_pretend_graph`'s own doc comment (portage-repo) for
 //     `Deep`, the real depth-cutoff semantics it ports.
+//   - `--exclude`/`-X` IS implemented now too, deliberately excluded from
+//     `VALUE_OPTIONS` for the same reason -- unlike every other value
+//     option here, its own value is *required*, not optional, and real
+//     `main.py` declares it `"action": "append"` (repeatable, each
+//     occurrence's own value itself a space-separated atom list -- see
+//     pretend.rs's own parsing). Deliberately NOT bundle-compatible (a
+//     bundled `-X` gets its own specific "requires an argument, can't be
+//     bundled" message instead), since there's no sensible default value
+//     the way a bundled `-v`/`-D` has. See `resolve_pretend`'s own doc
+//     comment (portage-repo) for the real `excluded_pkgs`/
+//     `WildcardPackageSet` behavior it ports, and its own documented
+//     scope cut relative to real depgraph.py's ~18 call sites.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -154,7 +166,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--depclean-lib-check", None),
     ("--deselect", Some("-W")),
     ("--dynamic-deps", None),
-    ("--exclude", Some("-X")),
     ("--fail-clean", None),
     ("--fuzzy-search", None),
     ("--ignore-built-slot-operator-deps", None),
@@ -371,6 +382,14 @@ mod tests {
         // implemented), not through this "not implemented" table.
         assert!(lookup("--deep").is_none());
         assert!(lookup("-D").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_exclude_itself() {
+        // --exclude/-X is handled directly by the caller (it's
+        // implemented), not through this "not implemented" table.
+        assert!(lookup("--exclude").is_none());
+        assert!(lookup("-X").is_none());
     }
 
     #[test]

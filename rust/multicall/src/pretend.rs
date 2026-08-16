@@ -43,6 +43,26 @@
 // (either form) is indistinguishable from `--deep` never being given at
 // all, matching real `create_depgraph_params.py`'s own `!= 0` check.
 //
+// --exclude/-X is real and implemented too (see portage-repo's
+// `resolve_pretend`'s own doc comment for the real `excluded_pkgs`/
+// `WildcardPackageSet` behavior it ports, and the documented scope cut
+// relative to real depgraph.py's own ~18 call sites): an installed
+// package matching an exclude atom is left exactly as-is, regardless of
+// `--update`/`--newuse`/`--changed-use`, and a not-yet-installed package
+// matching one is never offered as a New/Upgrade candidate either. Real
+// `main.py` declares it `"action": "append"` -- repeatable, each
+// occurrence's own value itself a *space-separated* atom list (real
+// help text: "A space separated list of package names or slot atoms"),
+// so both accumulate here too: `--exclude foo --exclude "bar baz"`
+// excludes all three. Unlike `--deep`/`-D`'s own optional value, this
+// one is required: a missing value (nothing left in `args`) is a real,
+// immediate usage error (exit 2), not "fall back to a default." A
+// *bundled* -X (e.g. `-pX`) is deliberately NOT supported at all --
+// there's no sensible default the way a bundled -v/-D has, so it gets
+// its own specific "requires an argument, can't be bundled" message
+// instead of being silently misparsed or falling through to a
+// misleading generic error.
+//
 // A top-level atom may carry an operator/version/slot (e.g.
 // `>=cat/pkg-1.2`, `cat/pkg:0`) -- resolve_pretend's own atom-vs-candidate
 // matching (see portage-repo/src/lib.rs) already handles this correctly
@@ -210,8 +230,8 @@ fn report_option(token: &str) -> ExitCode {
             "emerge (pilot v1): {kind} {:?} is a real emerge {kind}, but is not \
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
              --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
-             --update/-u, --deep/-D, and --help/-h are implemented so far; \
-             see PROMPT.md)",
+             --update/-u, --deep/-D, --exclude/-X, and --help/-h are \
+             implemented so far; see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -254,6 +274,9 @@ fn print_help() {
     );
     println!(
         "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)"
+    );
+    println!(
+        "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)"
     );
     println!("   -h, --help      show this message and exit");
     println!();
@@ -317,6 +340,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut onlydeps = false;
     let mut update = false;
     let mut deep = portage_repo::Deep::NotRequested;
+    let mut excluded: Vec<String> = Vec::new();
 
     let mut i = 0;
     while i < args.len() {
@@ -382,6 +406,25 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 }
             }
+        } else if arg == "--exclude" || arg == "-X" {
+            // Real "action": "append" -- repeatable, each occurrence's own
+            // value is itself a *space-separated* atom list (real
+            // bin/emerge's own help text: "A space separated list of
+            // package names or slot atoms"), so both accumulate: multiple
+            // `--exclude`/`-X` occurrences, and multiple atoms within one
+            // occurrence's value. Unlike `--deep`/`-D`'s own optional
+            // value, this one is required -- a missing value is a real,
+            // immediate usage error, not "no value given, fall back to a
+            // default."
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--exclude\" requires an argument");
+                return ExitCode::from(2);
+            };
+            excluded.extend(value.split_whitespace().map(String::from));
+            i += 2;
+        } else if let Some(value) = arg.strip_prefix("--exclude=") {
+            excluded.extend(value.split_whitespace().map(String::from));
+            i += 1;
         } else if arg == "--verbose" || arg == "-v" {
             // Peeks at the next token, consuming it only if it's exactly
             // "y"/"n" -- see the module doc comment on why (real
@@ -426,6 +469,20 @@ pub fn run(args: &[String]) -> ExitCode {
                     'o' => onlydeps = true,
                     'u' => update = true,
                     'D' => deep = portage_repo::Deep::Unlimited,
+                    'X' => {
+                        // Unlike every other bundle-compatible short flag
+                        // here, -X's own value is *required*, not
+                        // optional -- there's no sensible "just default
+                        // it" behavior the way a bundled -v/-D has, so
+                        // this pilot deliberately doesn't support
+                        // bundling -X at all, with a specific message
+                        // instead of a misleading generic one.
+                        eprintln!(
+                            "emerge: -X (--exclude) requires an argument and can't be \
+                             bundled with other short flags in this pilot"
+                        );
+                        return ExitCode::from(2);
+                    }
                     _ => return report_option(&format!("-{c}")),
                 }
             }
@@ -534,6 +591,7 @@ pub fn run(args: &[String]) -> ExitCode {
         nodeps,
         update,
         deep,
+        &excluded,
     ) {
         Ok(result) => result,
         Err(e) => {

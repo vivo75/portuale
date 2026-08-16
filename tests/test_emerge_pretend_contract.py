@@ -47,6 +47,12 @@ CASES = [
     ("--deep=N inline form", ["--pretend", "--deep=2", "dev-libs/deeppkg"], 0),
     ("--deep=0 matches not passing --deep at all", ["--pretend", "--deep=0", "dev-libs/deeppkg"], 0),
     ("--deep=-1 is a real, immediate parse error", ["--pretend", "--deep=-1", "dev-libs/deeppkg"], 2),
+    ("--exclude: leaves an installed package alone despite --update", ["--pretend", "--update", "--exclude", "dev-libs/upgradepkg", "dev-libs/upgradepkg"], 0),
+    ("-X short alias for --exclude", ["--pretend", "--update", "-X", "dev-libs/upgradepkg", "dev-libs/upgradepkg"], 0),
+    ("--exclude=ATOM inline form", ["--pretend", "--update", "--exclude=dev-libs/upgradepkg", "dev-libs/upgradepkg"], 0),
+    ("--exclude prevents a not-yet-installed package from being offered", ["--pretend", "--exclude", "dev-libs/newpkg", "dev-libs/newpkg"], 1),
+    ("--exclude with no argument is a real, immediate usage error", ["--pretend", "--exclude"], 2),
+    ("-X bundled with other short flags is not supported", ["-pX", "dev-libs/upgradepkg"], 2),
     ("only ~keyword, not visible", ["--pretend", "dev-libs/maskedpkg"], 1),
     ("package does not exist", ["--pretend", "dev-libs/does-not-exist"], 1),
     ("sibling-prefix package: new", ["--pretend", "dev-libs/foo"], 0),
@@ -1337,7 +1343,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -1390,6 +1396,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -o, --onlydeps  show only the given atoms' dependencies, not the atoms themselves\n"
         "   -u, --update    upgrade to a newer visible version even if the installed one satisfies the atom\n"
         "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)\n"
+        "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)\n"
         "   -h, --help      show this message and exit\n"
         "\n"
         "Every other real emerge option/action is recognized by name (see "
@@ -1933,6 +1940,165 @@ def test_deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely(
     assert result.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
 
 
+def test_exclude_leaves_an_already_installed_package_alone_even_with_update(
+    emerge_binary, fixture_env
+):
+    """dev-libs/upgradepkg is installed at 1.0, a newer 2.0 is visible --
+    without --exclude, --update offers the upgrade (see the --update
+    contract tests); --exclude matching it overrides --update entirely,
+    same as real _want_update_pkg's/_replace_installed_atom's own
+    excluded-checked-first precedent."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--exclude", "dev-libs/upgradepkg", "dev-libs/upgradepkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+
+
+def test_exclude_matches_via_a_wildcard_atom_too(emerge_binary, fixture_env):
+    """Real WildcardPackageSet accepts wildcard atoms, not just plain
+    ones -- ported here as the same two-tier matcher package.mask/
+    .unmask already uses."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--exclude", "dev-libs/*", "dev-libs/upgradepkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+
+
+def test_exclude_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
+    """-X is --exclude's real short alias (see lib/_emerge/main.py's
+    shortmapping); standalone (never bundled -- see the CLI-surface
+    tests below) it must behave identically to the long-flag invocation
+    above."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "-X", "dev-libs/upgradepkg", "dev-libs/upgradepkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+
+
+def test_exclude_does_not_affect_a_non_matching_package(emerge_binary, fixture_env):
+    """A --exclude atom for an unrelated package has no effect at all --
+    --update still offers the upgrade normally."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--exclude", "dev-libs/does-not-exist", "dev-libs/upgradepkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)\n"
+
+
+def test_exclude_prevents_a_not_yet_installed_package_from_being_offered(
+    emerge_binary, fixture_env
+):
+    """dev-libs/newpkg has no installed version at all -- excluding it as
+    a top-level atom means there's no eligible candidate left, the same
+    fatal "no ebuilds to satisfy" outcome any other unsatisfiable
+    top-level atom already gets."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--exclude", "dev-libs/newpkg", "dev-libs/newpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == 'emerge: there are no ebuilds to satisfy "dev-libs/newpkg".'
+
+
+def test_exclude_threads_through_dependency_recursion_not_just_top_level(
+    emerge_binary, fixture_env
+):
+    """dev-libs/upgradepkg is reached only as a *dependency* of
+    dev-libs/withdeps here, never a top-level atom -- --exclude must
+    still leave it alone despite --update, proving the flag threads
+    uniformly through the whole BFS, not just a top-level atom (same
+    precedent --update's own equivalent test already set)."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--exclude", "dev-libs/upgradepkg", "dev-libs/withdeps"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/withdeps-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_exclude_repeated_occurrences_and_space_separated_values_both_accumulate(
+    emerge_binary, fixture_env
+):
+    """Real bin/emerge declares --exclude "action": "append" (repeatable)
+    with a help text describing "a space separated list" as one
+    occurrence's own value -- both forms must accumulate into the same
+    exclude set, not just whichever form happens to be used."""
+    repeated = _run(
+        [str(emerge_binary)],
+        [
+            "--pretend",
+            "--update",
+            "--exclude",
+            "dev-libs/upgradepkg",
+            "--exclude",
+            "dev-libs/does-not-exist",
+            "dev-libs/upgradepkg",
+        ],
+        fixture_env,
+    )
+    assert repeated.returncode == 0
+    assert repeated.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+
+    space_separated = _run(
+        [str(emerge_binary)],
+        [
+            "--pretend",
+            "--update",
+            "--exclude",
+            "dev-libs/does-not-exist dev-libs/upgradepkg",
+            "dev-libs/upgradepkg",
+        ],
+        fixture_env,
+    )
+    assert space_separated.returncode == 0
+    assert space_separated.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+
+
+def test_exclude_inline_equals_form_and_missing_argument(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--exclude=dev-libs/upgradepkg", "dev-libs/upgradepkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+
+    missing_arg = _run([str(emerge_binary)], ["--pretend", "--exclude"], fixture_env)
+    assert missing_arg.returncode == 2
+    assert missing_arg.stdout == ""
+    assert missing_arg.stderr.strip() == 'emerge: option "--exclude" requires an argument'
+
+
+def test_exclude_is_not_bundle_compatible(emerge_binary, fixture_env):
+    """Unlike -v/-D, -X's own value is required, not optional, so this
+    pilot deliberately doesn't support bundling it -- a specific message
+    instead of a misleading generic one."""
+    result = _run([str(emerge_binary)], ["-pX", "dev-libs/upgradepkg"], fixture_env)
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr.strip() == (
+        "emerge: -X (--exclude) requires an argument and can't be bundled with "
+        "other short flags in this pilot"
+    )
+
+
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
     """virtual/texteditor is shaped exactly like a real virtual (e.g.
     virtual/pager in the real Gentoo tree, confirmed by inspection): an
@@ -1979,7 +2145,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -1993,7 +2159,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -2007,7 +2173,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 
