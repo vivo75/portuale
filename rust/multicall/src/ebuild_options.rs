@@ -11,10 +11,37 @@
 // real syntax lets `ebuild.rs` tell "a real ebuild option/command this
 // pilot doesn't implement yet" apart from "not valid ebuild syntax at
 // all", the same distinction `emerge_options.rs` draws for `emerge`.
-// Mirrored exactly in
-// PORTING/python/emerge_pretend_reference.py's sibling `ebuild`
-// reference script (see that file), so both sides report identical
-// text for identical input.
+// Unlike `emerge --pretend`, `ebuild` has no Python reference
+// implementation at all -- it's Rust-only, tested directly against the
+// compiled binary by `PORTING/tests/test_multicall.py` (see that
+// file's own doc comment).
+//
+// `-h`/`--help` IS implemented now, deliberately excluded from
+// `OPTIONS` for the same reason `emerge_options.rs`'s own `--help`/`-h`
+// is excluded from its tables -- see `ebuild.rs` for the pilot-specific
+// help text. Real bin/ebuild declares no short aliases for any of its
+// own six options ("None have short aliases" below still holds), so
+// `-h` is purely argparse's own auto-added short form for `--help`; no
+// bundling concept exists for `ebuild` at all (unlike `emerge`'s own
+// `-pv`-style bundling), so this is a plain whole-token check.
+//
+// `--version` is deliberately NOT implemented, despite looking like an
+// equally simple case at first (and having been scoped that way before
+// digging in): real bin/ebuild's own `print("Portage", portage.VERSION)`
+// looks static, but `portage.VERSION` (lib/portage/__init__.py) is only
+// a fixed, build-substituted `"@VERSION@"` string for an *installed*
+// copy -- for a `installation.TYPE == installation.TYPES.SOURCE`
+// checkout (exactly what this repo itself is, confirmed by there being
+// no `lib/portage/VERSION` file anywhere in it), `VERSION` is instead
+// derived live via `git describe --dirty --long --match "portage-*"`
+// against the current commit and working-tree state (verified directly:
+// `git describe` in this repo returns `portage-3.0.81-272-g1cb1941de`,
+// parsed into `3.0.81.dev272+g1cb1941de`) -- host/git-state-dependent,
+// non-deterministic output this pilot's own pinned-test philosophy
+// already rules out elsewhere (the same reasoning that ruled out
+// `emerge --version`/`-V`'s own `getportageversion()`, which pulls in
+// live python/gcc/libc/uname info -- a different real function, same
+// disqualifying trait).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

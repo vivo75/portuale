@@ -27,11 +27,66 @@
 // one. This pilot deliberately reports an unrecognized option
 // immediately and specifically instead, matching the clearer error
 // philosophy `emerge`'s own CLI already uses.
+//
+// `-h`/`--help` IS real and implemented, checked unconditionally before
+// anything else in `args` -- matching real bin/ebuild's own behavior
+// (argparse's auto-added `-h`/`--help` is checked during parsing itself,
+// before any of the app's own logic runs, so it wins regardless of what
+// else -- valid or not -- accompanies it). See `ebuild_options.rs`'s
+// own doc comment for why `--version` is deliberately NOT implemented
+// alongside it. The help text itself is NOT a port of real bin/ebuild's
+// own argparse-generated usage block -- it's a short, honest,
+// pilot-specific summary, the same "pilot-specific summary, not a port
+// of real formatting" precedent `emerge --help` already set.
 
 use crate::ebuild_options::{self, Kind};
 use std::process::ExitCode;
 
+/// Whether `--help`/`-h` appears anywhere in `args` -- unlike `emerge`'s
+/// own `wants_help`, no short-flag-bundle scanning is needed here: real
+/// bin/ebuild declares no short aliases for any of its own six options,
+/// so `-h` is never part of a bundle to begin with.
+fn wants_help(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--help" || arg == "-h")
+}
+
+/// A short, honest, pilot-specific summary -- not a port of real
+/// bin/ebuild's own argparse-generated usage block (see the module doc
+/// comment for why).
+fn print_help() {
+    println!("ebuild (pilot stub): command-line interface to the Rust porting pilot");
+    println!();
+    println!("Usage:");
+    println!("   ebuild <ebuild file> <command> [command...]");
+    println!("   ebuild --help");
+    println!();
+    println!("Still a pure dry-run stub: real phase execution is deferred (see");
+    println!("PROMPT.md's \"Deferred: ebuild phase execution\"), so no command below");
+    println!("actually does anything yet beyond being recognized and accepted.");
+    println!();
+    println!("Options:");
+    println!("   --force              regenerate digests (with the digest/manifest commands)");
+    println!("   --color y|n          enable or disable color output");
+    println!("   --debug              show debug output");
+    println!("   --ignore-default-opts  do not use the EBUILD_DEFAULT_OPTS environment variable");
+    println!("   --skip-manifest      skip all manifest checks");
+    println!("   -h, --help           show this message and exit");
+    println!();
+    println!(
+        "Every other real ebuild option is recognized by name (see bin/ebuild) but \
+         not implemented -- using one reports which option it is, instead of a \
+         generic error. Real commands (doebuild()'s own validcommands list) are \
+         recognized and accepted, still as a no-op."
+    );
+    println!("See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.");
+}
+
 pub fn run(args: &[String]) -> ExitCode {
+    if wants_help(args) {
+        print_help();
+        return ExitCode::SUCCESS;
+    }
+
     let mut ebuild_file: Option<&str> = None;
     let mut commands: Vec<&str> = Vec::new();
 
@@ -157,5 +212,28 @@ mod tests {
     fn rejects_a_missing_command() {
         let code = run(&args(&["foo-1.0.ebuild"]));
         assert_eq!(code, ExitCode::from(2));
+    }
+
+    #[test]
+    fn help_is_implemented_and_exits_success_with_no_other_args() {
+        let code = run(&args(&["--help"]));
+        assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn short_help_alias_is_implemented() {
+        let code = run(&args(&["-h"]));
+        assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn help_wins_unconditionally_regardless_of_position_or_other_args() {
+        // Even with an otherwise-complete, valid invocation alongside it,
+        // and even with a genuinely unrecognized option present too --
+        // help is checked before anything else is parsed at all.
+        let code = run(&args(&["foo-1.0.ebuild", "merge", "--help"]));
+        assert_eq!(code, ExitCode::SUCCESS);
+        let code = run(&args(&["--not-a-real-option", "--help"]));
+        assert_eq!(code, ExitCode::SUCCESS);
     }
 }

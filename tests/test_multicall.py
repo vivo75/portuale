@@ -198,3 +198,70 @@ def test_ebuild_rejects_missing_required_args(ebuild_binary):
     )
     assert no_command.returncode == 2
     assert no_command.stderr.strip() == "ebuild: missing required args"
+
+
+def test_ebuild_help_is_implemented(ebuild_binary):
+    """-h/--help are real and implemented now (real bin/ebuild's own
+    argparse auto-adds them) -- previously neither was even in
+    ebuild_options.rs's own OPTIONS table at all, so a bare "--help"
+    invocation used to be rejected as an unrecognized option instead of
+    printing help and exiting 0."""
+    result = subprocess.run(
+        [str(ebuild_binary), "--help"], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.startswith(
+        "ebuild (pilot stub): command-line interface to the Rust porting pilot"
+    )
+
+
+def test_ebuild_short_help_alias_is_implemented(ebuild_binary):
+    result = subprocess.run(
+        [str(ebuild_binary), "-h"], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0
+    assert result.stdout.startswith(
+        "ebuild (pilot stub): command-line interface to the Rust porting pilot"
+    )
+
+
+def test_ebuild_help_wins_unconditionally_regardless_of_position_or_other_args(
+    ebuild_binary,
+):
+    """Matches real bin/ebuild's own behavior: argparse's own -h/--help
+    action is checked during parsing itself, so it wins no matter where
+    it appears or what else (valid or not) accompanies it -- same
+    precedent emerge's own --help already set."""
+    for args in (
+        ["foo-1.0.ebuild", "merge", "--help"],
+        ["--not-a-real-option", "--help"],
+        ["-h", "foo-1.0.ebuild"],
+    ):
+        result = subprocess.run(
+            [str(ebuild_binary), *args], capture_output=True, text=True, check=False
+        )
+        assert result.returncode == 0, args
+        assert result.stdout.startswith(
+            "ebuild (pilot stub): command-line interface to the Rust porting pilot"
+        ), args
+
+
+def test_ebuild_version_is_recognized_but_not_specially_implemented(ebuild_binary):
+    """--version is deliberately NOT specially implemented -- see
+    ebuild_options.rs's own doc comment: real bin/ebuild's own
+    portage.VERSION is derived live via "git describe" for a
+    from-source checkout (exactly what this repo is), not a static
+    string, so printing a real version was ruled out. It's still a real,
+    recognized ebuild option like the other five, though -- ebuild.rs's
+    own stub treats every declared option uniformly (accepted, no
+    special behavior), unlike emerge's own CLI, which explicitly rejects
+    every merely-recognized-but-unimplemented option by name."""
+    result = subprocess.run(
+        [str(ebuild_binary), "--version", "foo-1.0.ebuild", "merge"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "ebuild (pilot stub)" in result.stdout

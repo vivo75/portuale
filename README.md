@@ -610,6 +610,35 @@ PORTING/
   `test_multicall.py`'s black-box tests against the real compiled binary
   are the only test surface, same as before this slice.
 
+  **`ebuild`'s own `--help`/`-h`**. Real bin/ebuild is pure `argparse`,
+  which auto-adds `-h`/`--help` for free -- but neither was ever in
+  `ebuild_options.rs`'s own `OPTIONS` table (only the six explicitly
+  declared options are, "none with short aliases" per that table's own
+  doc comment), so a bare `ebuild --help` used to be rejected as an
+  unrecognized option instead of printing help and exiting `0`. Checked
+  unconditionally before anything else in `args`, same "wins regardless
+  of position, valid or not" precedent `emerge --help` already set --
+  but simpler here, since real `ebuild` declares no short aliases for
+  any option at all, so there's no bundling concept to scan through
+  (unlike `emerge`'s own `-pv`-style bundling). The help text itself is
+  a short, honest, pilot-specific summary, not a port of real
+  `argparse`'s own generated usage block, matching `emerge --help`'s own
+  precedent there too. `--version` was scoped alongside it but turned
+  out to be a considerably worse fit than expected: real `bin/ebuild`'s
+  own `print("Portage", portage.VERSION)` looks like a simple static
+  read, but `portage.VERSION` (`lib/portage/__init__.py`) is a fixed,
+  build-substituted string only for an *installed* copy -- for a
+  from-source checkout (confirmed to be exactly what this repo itself
+  is, by there being no `lib/portage/VERSION` file anywhere in it),
+  `VERSION` is instead derived live via `git describe --dirty --long
+  --match "portage-*"` against the current commit and working-tree state
+  (verified directly against this repo: returns
+  `portage-3.0.81-272-g1cb1941de`, parsed into
+  `3.0.81.dev272+g1cb1941de`) -- the same host/git-state-dependent,
+  non-deterministic-output problem that already ruled out `emerge
+  --version`/`-V`'s own (differently-sourced) real value, so `--version`
+  stays an ordinary recognized-but-unimplemented option here too.
+
   **Multiple top-level atoms**: `emerge --pretend foo bar` -- real
   emerge's most common invocation shape -- was, until this slice,
   explicitly rejected ("only a single package atom is supported"). Now
@@ -2244,6 +2273,23 @@ ln -sf "$(realpath PORTING/rust/target/release/multicall)" /tmp/ebuild
 # rejected, not silently accepted like the original bare stub did
 /tmp/ebuild foo-1.0.ebuild not-a-real-phase
 # ebuild: "not-a-real-phase" is not one of the valid ebuild commands
+
+# --help/-h are real and implemented too, winning unconditionally
+# regardless of position or what else accompanies them
+/tmp/ebuild --help
+# ebuild (pilot stub): command-line interface to the Rust porting pilot
+# ...
+/tmp/ebuild --not-a-real-option -h
+# (same help text -- wins even alongside an otherwise-invalid option)
+
+# --version is deliberately NOT specially implemented (see
+# ebuild_options.rs's own doc comment: real portage.VERSION is derived
+# live via "git describe" for a from-source checkout, not a static
+# string) -- it's still a real, recognized option though, just a no-op
+# like the other five, unlike emerge's own CLI philosophy of rejecting
+# every merely-recognized-but-unimplemented flag by name
+/tmp/ebuild --version foo-1.0.ebuild merge
+# ebuild (pilot stub): dry-run only, no phase execution yet ...
 ```
 
 Run the contract suite (builds the Rust binaries itself; requires `cargo`
