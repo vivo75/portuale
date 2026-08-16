@@ -245,13 +245,13 @@ fn print_help() {
 /// `lib/portage/_sets/files.py`) -- resolving those recursively would
 /// need general set-recursion machinery this pilot doesn't have, so a
 /// `@`-prefixed line here is simply skipped rather than expanded.
-/// `@system` (the profile's own `packages` file) is a separate,
-/// different mechanism, already out of scope for unrelated reasons (see
-/// `portage-profile`'s own doc comment on the `packages` file). Only the
-/// literal token `@world` triggers this expansion at all -- `@system`,
-/// `@some-set`, etc. as a top-level target fall through to the normal
-/// atom-parsing path and get a clear "invalid atom" error, not a silent
-/// no-op.
+/// `@system` (the profile's own `packages` file -- see
+/// `portage_profile::Config::system_packages`) is a separate, different
+/// mechanism with its own expansion in `run` below, not handled by this
+/// function at all. Only the literal token `@world` triggers *this*
+/// expansion -- `@some-set`, `@another-random-name`, etc. as a top-level
+/// target fall through to the normal atom-parsing path and get a clear
+/// "invalid atom" error, not a silent no-op.
 fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
     let path = root.join("var/lib/portage/world");
     let text = match std::fs::read_to_string(&path) {
@@ -359,45 +359,6 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     let root = root_from_env();
-
-    // "@world" expands to the real WORLD_FILE's own atom list, in place,
-    // at whichever position it appears -- see read_world_atoms's doc
-    // comment for the exact scope (plain atoms only; @system and nested
-    // "@set" references both stay unimplemented).
-    let mut expanded_atoms: Vec<String> = Vec::new();
-    for atom_str in &atom_args {
-        if *atom_str == "@world" {
-            match read_world_atoms(&root) {
-                Ok(world_atoms) => expanded_atoms.extend(world_atoms),
-                Err(e) => {
-                    eprintln!("emerge: {e}");
-                    return ExitCode::from(1);
-                }
-            }
-        } else {
-            expanded_atoms.push((*atom_str).to_string());
-        }
-    }
-
-    if expanded_atoms.is_empty() {
-        eprintln!(
-            "emerge (pilot v1): no package atoms to resolve (the target list, after \
-             expanding any @world, is empty)"
-        );
-        return ExitCode::from(2);
-    }
-
-    for atom_str in &expanded_atoms {
-        let Some(atom) = parse_atom(atom_str) else {
-            eprintln!("emerge: invalid atom {atom_str:?}");
-            return ExitCode::from(1);
-        };
-        if atom.blocker != Blocker::None {
-            eprintln!("emerge (pilot v1): {atom_str:?} is a blocker, not a valid emerge target");
-            return ExitCode::from(2);
-        }
-    }
-
     let config_root = config_root_from_env();
 
     // resolve_config needs the main repo's own location for
@@ -405,7 +366,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // found via the same find_repos repos.conf parsing
     // resolve_pretend_graph uses internally a few lines down; called
     // again here since portage-profile can't depend back on portage-repo
-    // (portage-repo already depends on portage-profile).
+    // (portage-repo already depends on portage-profile). Resolved before
+    // @world/@system expansion below: @system's own atom list lives in
+    // `config` (see portage-profile's `system_packages`), so the config
+    // must already exist by the time a "@system" token is seen.
     let repos = match portage_repo::find_repos(&config_root) {
         Ok(repos) => repos,
         Err(e) => {
@@ -425,6 +389,50 @@ pub fn run(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+
+    // "@world"/"@system" each expand to their own real atom list, in
+    // place, at whichever position they appear -- see read_world_atoms's
+    // doc comment for @world's exact scope (plain atoms only; nested
+    // "@set" references stay unimplemented), and portage-profile's
+    // `system_packages` doc comment for @system's. Only these two
+    // literal tokens trigger expansion -- any other "@"-prefixed token
+    // falls through to the ordinary atom-parsing path below and gets a
+    // clear "invalid atom" error, not a silent no-op.
+    let mut expanded_atoms: Vec<String> = Vec::new();
+    for atom_str in &atom_args {
+        if *atom_str == "@world" {
+            match read_world_atoms(&root) {
+                Ok(world_atoms) => expanded_atoms.extend(world_atoms),
+                Err(e) => {
+                    eprintln!("emerge: {e}");
+                    return ExitCode::from(1);
+                }
+            }
+        } else if *atom_str == "@system" {
+            expanded_atoms.extend(config.system_packages.iter().cloned());
+        } else {
+            expanded_atoms.push((*atom_str).to_string());
+        }
+    }
+
+    if expanded_atoms.is_empty() {
+        eprintln!(
+            "emerge (pilot v1): no package atoms to resolve (the target list, after \
+             expanding any @world/@system, is empty)"
+        );
+        return ExitCode::from(2);
+    }
+
+    for atom_str in &expanded_atoms {
+        let Some(atom) = parse_atom(atom_str) else {
+            eprintln!("emerge: invalid atom {atom_str:?}");
+            return ExitCode::from(1);
+        };
+        if atom.blocker != Blocker::None {
+            eprintln!("emerge (pilot v1): {atom_str:?} is a blocker, not a valid emerge target");
+            return ExitCode::from(2);
+        }
+    }
 
     let result = match resolve_pretend_graph(
         &config_root,

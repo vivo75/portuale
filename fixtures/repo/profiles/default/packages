@@ -1,0 +1,7 @@
+# leaf-profile packages file: contributes dev-libs/withdeps to @system,
+# proving @system stacks across multiple profile levels (not just the
+# leaf) and that its expanded atoms feed the same recursion/dedup
+# machinery every other target already uses -- withdeps' own RDEPEND
+# pulls dev-libs/newpkg again (deduped against base's own @system entry
+# below) and dev-libs/upgradepkg.
+*dev-libs/withdeps

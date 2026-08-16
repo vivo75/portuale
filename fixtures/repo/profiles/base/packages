@@ -1,0 +1,6 @@
+# profile-level packages file: contributes dev-libs/newpkg to @system
+# (the "*" prefix is what makes a line a real @system atom -- see
+# portage-profile's own doc comment), plus a non-"*"-prefixed hint line
+# that must never contribute an atom of its own.
+*dev-libs/newpkg
+dev-libs/hintonly

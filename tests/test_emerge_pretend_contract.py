@@ -124,7 +124,9 @@ CASES = [
     ("--help wins even without --pretend at all", ["--help", "dev-libs/newpkg"], 0),
     ("@world expands to the fixture world file's own atoms", ["--pretend", "@world"], 0),
     ("@world combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@world"], 0),
-    ("@system as a top-level atom: not implemented, clear invalid-atom error", ["--pretend", "@system"], 1),
+    ("@system expands to the fixture profile chain's own packages files", ["--pretend", "@system"], 0),
+    ("@system combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@system"], 0),
+    ("@some-other-set as a top-level atom: not implemented, clear invalid-atom error", ["--pretend", "@some-other-set"], 1),
     (
         "--newuse reinstalls a package whose USE changed since it was installed",
         ["--pretend", "--newuse", "dev-libs/reinstallpkg"],
@@ -1056,8 +1058,59 @@ def test_world_missing_file_expands_to_nothing_not_an_error(
     assert (
         result.stderr.strip()
         == "emerge (pilot v1): no package atoms to resolve (the target list, "
-        "after expanding any @world, is empty)"
+        "after expanding any @world/@system, is empty)"
     )
+
+
+def test_system_expands_to_the_fixture_profile_chains_own_packages_files(
+    emerge_binary, fixture_env
+):
+    """PORTING/fixtures/repo/profiles/base/packages contributes
+    dev-libs/newpkg (plus a non-"*"-prefixed "hint" line that must never
+    contribute an atom of its own), and PORTING/fixtures/repo/profiles/
+    default/packages (the leaf) contributes dev-libs/withdeps -- proving
+    @system stacks across multiple profile levels (not just the leaf,
+    real PackagesSystemSet's own behavior) and that its expanded atoms
+    feed the exact same multi-atom/recursion machinery every other
+    invocation already uses: withdeps' own RDEPEND recurses into newpkg
+    again (deduped against base's own @system entry) and upgradepkg."""
+    result = _run([str(emerge_binary)], ["--pretend", "@system"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/newpkg-1.0",
+        "[ebuild  N] dev-libs/withdeps-1.0",
+        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+    ]
+
+
+def test_system_combines_with_an_explicit_atom(emerge_binary, fixture_env):
+    """@system can appear alongside an explicit atom in the same
+    invocation, expanding in place at whatever position it's given, same
+    as @world."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/samepkg", "@system"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "dev-libs/samepkg-1.0 is already installed; nothing to do",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+        "[ebuild  N] dev-libs/withdeps-1.0",
+        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+    ]
+
+
+def test_some_other_set_as_a_top_level_atom_is_not_implemented(emerge_binary, fixture_env):
+    """Only the literal tokens "@world" and "@system" trigger set
+    expansion -- any other "@"-prefixed top-level target (a nested set
+    reference real portage's own world file/packages files can contain,
+    but this pilot doesn't resolve -- see read_world_atoms's and
+    resolve_config's own doc comments) falls through to the ordinary
+    atom-parsing path and gets a clear "invalid atom" error, not a
+    silent no-op."""
+    result = _run([str(emerge_binary)], ["--pretend", "@some-other-set"], fixture_env)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == 'emerge: invalid atom "@some-other-set"'
 
 
 def test_newuse_reinstalls_a_package_whose_use_changed(emerge_binary, fixture_env):

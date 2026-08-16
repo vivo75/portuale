@@ -610,7 +610,8 @@ def resolve_config(config_root, main_repo_location):
     portage-profile/src/lib.rs's resolve_config exactly -- see that
     crate's doc comment for the full algorithm and its documented scope
     cuts. Returns a dict with keys "use_flags", "accept_keywords",
-    "package_mask", "package_unmask", "package_accept_keywords".
+    "package_mask", "package_unmask", "package_accept_keywords",
+    "package_use", "system_packages".
 
     main_repo_location (the main repo's own tree root -- see
     find_repos/is_main) is needed for package.mask/.unmask's repo-level
@@ -695,6 +696,22 @@ def resolve_config(config_root, main_repo_location):
         _read_config_lines(os.path.join(config_root, "etc", "portage", "package.use"))
     )
 
+    # packages (@system): every profile level's own file, in chain order,
+    # stacked with the same "-atom" removal semantics package.mask uses
+    # (see _stack_mask_lines) -- mirrors portage-profile/src/lib.rs's
+    # resolve_config exactly, including its own "packages" doc comment:
+    # only *after* stacking are the "*"-prefixed lines kept (with the "*"
+    # stripped) as the real @system atom list; every other stacked line
+    # is a "known but not system" hint with no @system-set meaning of its
+    # own. No repo-level or user-level source exists for this file in
+    # real portage at all.
+    packages_sources = [
+        _read_config_lines(os.path.join(level, "packages")) for level in chain
+    ]
+    system_packages = [
+        line[1:] for line in _stack_mask_lines(packages_sources) if line.startswith("*")
+    ]
+
     return {
         "use_flags": use_flags,
         "accept_keywords": accept_keywords,
@@ -702,6 +719,7 @@ def resolve_config(config_root, main_repo_location):
         "package_unmask": _stack_mask_lines(unmask_sources),
         "package_accept_keywords": _parse_package_accept_keywords_lines(accept_keywords_lines),
         "package_use": _parse_package_use_lines(use_lines),
+        "system_packages": system_packages,
     }
 
 
@@ -1363,10 +1381,11 @@ def _read_world_atoms(root):
     lib/portage/_sets/files.py) -- resolving those recursively would
     need general set-recursion machinery this pilot doesn't have, so a
     "@"-prefixed line here is simply skipped rather than expanded.
-    @system (the profile's own "packages" file) is a separate, different
-    mechanism, already out of scope for unrelated reasons. Only the
-    literal token "@world" triggers this expansion at all. Mirrors
-    pretend.rs's read_world_atoms exactly."""
+    @system (the profile's own "packages" file -- see resolve_config's
+    own "system_packages" key) is a separate, different mechanism with
+    its own expansion in run() below, not handled by this function at
+    all. Only the literal token "@world" triggers *this* expansion.
+    Mirrors pretend.rs's read_world_atoms exactly."""
     path = os.path.join(root, "var", "lib", "portage", "world")
     try:
         with open(path) as f:
@@ -1471,14 +1490,36 @@ def run(args):
         )
         return 2
 
-    # "@world" expands to the real WORLD_FILE's own atom list, in place,
-    # at whichever position it appears -- see _read_world_atoms's own
-    # docstring for the exact scope (plain atoms only; @system and
-    # nested "@set" references both stay unimplemented).
+    try:
+        # resolve_config needs the main repo's own location for
+        # package.mask/.unmask's repo-level source (see its own
+        # docstring) -- found via the same find_repos repos.conf parsing
+        # resolve_pretend_graph uses internally a few lines down; called
+        # again here since it's cheap and keeps this mirroring the Rust
+        # side's own pretend.rs exactly. Resolved before @world/@system
+        # expansion below: @system's own atom list lives in config's
+        # "system_packages" key, so config must already exist by the
+        # time a "@system" token is seen.
+        main_repo = next(r for r in find_repos(_config_root()) if r["is_main"])
+        config = resolve_config(_config_root(), main_repo["location"])
+    except ResolutionError as e:
+        print(f"emerge: {e}", file=sys.stderr)
+        return 1
+
+    # "@world"/"@system" each expand to their own real atom list, in
+    # place, at whichever position they appear -- see _read_world_atoms's
+    # own docstring for @world's exact scope (plain atoms only; nested
+    # "@set" references stay unimplemented), and resolve_config's own
+    # docstring for @system's. Only these two literal tokens trigger
+    # expansion -- any other "@"-prefixed token falls through to the
+    # ordinary atom-parsing path below and gets a clear "invalid atom"
+    # error, not a silent no-op.
     expanded_atoms = []
     for atom_arg in atom_args:
         if atom_arg == "@world":
             expanded_atoms.extend(_read_world_atoms(_root()))
+        elif atom_arg == "@system":
+            expanded_atoms.extend(config["system_packages"])
         else:
             expanded_atoms.append(atom_arg)
     atom_args = expanded_atoms
@@ -1486,7 +1527,7 @@ def run(args):
     if not atom_args:
         print(
             "emerge (pilot v1): no package atoms to resolve (the target list, "
-            "after expanding any @world, is empty)",
+            "after expanding any @world/@system, is empty)",
             file=sys.stderr,
         )
         return 2
@@ -1506,14 +1547,6 @@ def run(args):
     top_level_pkgs = {tuple(_parse_atom(a).cp.split("/", 1)) for a in atom_args}
 
     try:
-        # resolve_config needs the main repo's own location for
-        # package.mask/.unmask's repo-level source (see its own
-        # docstring) -- found via the same find_repos repos.conf parsing
-        # resolve_pretend_graph uses internally a few lines down; called
-        # again here since it's cheap and keeps this mirroring the Rust
-        # side's own pretend.rs exactly.
-        main_repo = next(r for r in find_repos(_config_root()) if r["is_main"])
-        config = resolve_config(_config_root(), main_repo["location"])
         result = resolve_pretend_graph(
             _config_root(), _root(), atom_args, config, newuse, nodeps
         )

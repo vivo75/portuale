@@ -817,10 +817,10 @@ PORTING/
   missing world file (a fresh `ROOT` that's never had anything merged
   into it) is treated as a real, valid empty state, not an error. Only
   the literal token `@world` triggers this expansion -- `@system` (a
-  separate mechanism, the profile's own `packages` file, already out of
-  scope for unrelated reasons noted above) or any other `@`-prefixed
-  top-level target falls through to the ordinary atom-parsing path and
-  gets a clear "invalid atom" error rather than a silent no-op.
+  separate mechanism, the profile's own `packages` file -- now also
+  implemented, see below) or any other `@`-prefixed top-level target
+  falls through to the ordinary atom-parsing path and gets a clear
+  "invalid atom" error rather than a silent no-op.
 
   **`--newuse`/`-N` reinstall detection**: closes the exact scope cut
   `resolve_pretend_graph`'s own doc comment named ("v1 has no
@@ -879,6 +879,30 @@ PORTING/
   not -- now correctly produces *no output at all* under `--onlydeps`,
   not a spurious status line for a package that was asked not to be
   shown.
+
+  **`@system` set support**: closes the gap the `@world` paragraph above
+  named as still open. Grounded against `PackagesSystemSet` in
+  `lib/portage/_sets/profiles.py`: real `@system` reads a `packages` file
+  from *every* profile level in the chain (the same directory
+  `make.defaults`/`package.mask` already come from), stacked with the
+  identical `stack_lists(incremental=1)` function `MaskManager` uses for
+  `package.mask` (confirmed by reading both call sites) -- ported here by
+  reusing `stack_mask_lines` as-is, no new stacking logic needed. Real
+  portage keeps only the *post-stack* lines starting with `*` (the `*`
+  stripped) as the actual `@system` atom list; every other line is a
+  "known to the profile but not part of the base system" hint with no
+  `@system`-set meaning of its own -- read and stacked (so a later
+  `-*atom` can still remove an earlier `*atom`) but never itself
+  contributing an atom. `portage_profile::Config::system_packages` is
+  computed once in `resolve_config` alongside `package_mask`/etc, and
+  `pretend.rs`/`emerge_pretend_reference.py`'s own `run()` needed to be
+  reordered to resolve `config` *before* expanding `@world`/`@system`
+  (previously config was resolved only after atom validation) -- `@system`'s
+  atom list lives inside it, unlike `@world`'s, which only ever needed
+  `ROOT`. No repo-level or user-level source exists for this file in real
+  portage at all (confirmed by reading `PackagesSystemSet.__init__`,
+  which only ever consults the profile chain), unlike `package.mask`'s
+  repo-level `profiles/package.mask`.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1041,6 +1065,15 @@ RDEPEND, proving `@world`'s expanded atoms feed the same recursion
 machinery any other target does), and a `@some-nested-set-reference`
 line proving a nested-set reference is silently skipped rather than
 mishandled.
+
+`PORTING/fixtures/repo/profiles/base/packages` (`*dev-libs/newpkg`, plus
+a non-`*`-prefixed `dev-libs/hintonly` hint line that must never
+contribute an atom) and `PORTING/fixtures/repo/profiles/default/packages`
+(the leaf profile's own, `*dev-libs/withdeps`) exercise `@system`
+expansion: proving it stacks across multiple profile levels, not just
+the leaf, and that its expanded atoms feed the same recursion machinery
+`@world` does too -- `withdeps` recurses into `newpkg` again (deduped)
+and `upgradepkg`.
 
 `dev-libs/reinstallpkg` exercises `--newuse` reinstall detection:
 installed at `1.0` with `IUSE="foo"` declared but an empty vdb `USE` file
@@ -1389,13 +1422,23 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg @worl
 mkdir -p /tmp/empty-world-root
 PORTAGE_CONFIGROOT="$FX" ROOT="/tmp/empty-world-root" /tmp/emerge --pretend @world
 # emerge (pilot v1): no package atoms to resolve (the target list, after
-# expanding any @world, is empty)  (exit 2)
+# expanding any @world/@system, is empty)  (exit 2)
 
-# @system is a separate, still-unimplemented mechanism (the profile's own
-# "packages" file) -- as a top-level target it falls through to the
-# ordinary atom-parsing path and gets a clear error, not a silent no-op
+# @system is real and implemented too: base/packages contributes newpkg,
+# the leaf profile's own default/packages contributes withdeps -- proving
+# @system stacks across multiple profile levels and feeds the same
+# recursion machinery @world does (withdeps recurses into newpkg again,
+# deduped, and upgradepkg)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend @system
-# emerge: invalid atom "@system"  (exit 1)
+# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N] dev-libs/withdeps-1.0
+# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+
+# only the literal tokens "@world"/"@system" trigger expansion -- any
+# other "@"-prefixed target falls through to the ordinary atom-parsing
+# path and gets a clear error, not a silent no-op
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend @some-other-set
+# emerge: invalid atom "@some-other-set"  (exit 1)
 
 # --verbose/-v is real and implemented: USE flags are off by default,
 # same as real emerge, and only shown with -v -- alphabetically sorted,

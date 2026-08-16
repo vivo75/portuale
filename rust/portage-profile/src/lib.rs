@@ -19,8 +19,8 @@
 //     under v1; testing this mechanism needs a same-repo synthetic
 //     fixture chain instead (see PORTING/fixtures/repo/profiles).
 //   - USE_EXPAND (LINGUAS, VIDEO_CARDS, ...), wildcard `_*` IUSE-aware
-//     expansion, `use.mask`/`.force`, the `packages` file, and ARCH-based
-//     KEYWORDS-format validation are all out of scope. `package.use`'s
+//     expansion, `use.mask`/`.force`, and ARCH-based KEYWORDS-format
+//     validation are all out of scope. `package.use`'s
 //     USE_EXPAND-prefix shorthand (`VIDEO_CARDS: nvidia` lines applying a
 //     `video_cards_` prefix to subsequent flags until a blank line resets
 //     it -- see real `UseManager._parse_user_files_to_extatomdict`) is
@@ -95,6 +95,26 @@
 //     per-package application happens (it needs the candidate's SLOT to
 //     match slotted `package.use` entries, which only exists at that
 //     later, repo-aware layer).
+//   - `packages` (`@system`'s real source -- `PackagesSystemSet` in
+//     `lib/portage/_sets/profiles.py`) IS now read: every profile level's
+//     own `<level>/packages` file, in chain order, stacked with the
+//     identical `stack_lists(incremental=1)` semantics `package.mask`
+//     already ports (see `stack_mask_lines`) -- confirmed by reading
+//     `PackagesSystemSet.load`, which calls the exact same real
+//     `stack_lists` function `MaskManager` does, on the *raw* lines
+//     (`*foo` and plain `foo` alike -- `-foo` only ever removes an
+//     earlier exact-text `foo`, never a `*foo`, same plain string
+//     equality `stack_mask_lines` already uses). Only *after* stacking
+//     does real portage keep the subset starting with `*` (stripping the
+//     `*`) as the actual `@system` atom list -- every other stacked line
+//     is a "this package is known to the profile but not part of the
+//     base system" hint with no `@system`-set meaning of its own, so
+//     `system_packages` applies that same post-stack filter. No
+//     repo-level or user-level source exists for this file in real
+//     portage at all -- confirmed by reading (only
+//     `PackagesSystemSet.__init__`'s `profiles` list, never
+//     `config_root`), unlike `package.mask`'s repo-level
+//     `profiles/package.mask`.
 //
 // One real, deliberately-preserved quirk from lib/portage/package/ebuild/
 // config.py (see the comment above its `expand_map.pop("USE", None)`):
@@ -132,6 +152,11 @@ pub struct Config {
     /// Tokens use the same `-flag`/`flag`/`+flag` incremental syntax as
     /// `USE` itself -- see `apply_incremental`.
     pub package_use: Vec<(String, Vec<String>)>,
+    /// `@system`'s real atom source: every profile level's own `packages`
+    /// file, stacked in chain order and filtered to `*`-prefixed lines
+    /// (the `*` stripped) -- see the module doc comment's `packages`
+    /// bullet and `PackagesSystemSet.load`.
+    pub system_packages: Vec<String>,
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -555,6 +580,24 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
     )?);
     config.package_use = parse_package_use_lines(&use_lines);
 
+    // packages (@system): every profile level's own file, in chain
+    // order, stacked with the same -atom removal semantics package.mask
+    // uses (see stack_mask_lines) -- confirmed by reading
+    // PackagesSystemSet.load, which calls the identical real
+    // stack_lists(incremental=1) function. Only *after* stacking are the
+    // "*"-prefixed lines kept (with the "*" stripped) as the real
+    // @system atom list -- see the module doc comment's `packages`
+    // bullet for why every other stacked line is read/stacked but never
+    // contributes an atom of its own.
+    let mut packages_sources: Vec<Vec<String>> = Vec::new();
+    for level in &chain {
+        packages_sources.push(read_config_lines(&level.join("packages"))?);
+    }
+    config.system_packages = stack_mask_lines(&packages_sources)
+        .into_iter()
+        .filter_map(|line| line.strip_prefix('*').map(String::from))
+        .collect();
+
     Ok(config)
 }
 
@@ -734,6 +777,39 @@ mod tests {
             config.package_mask,
             vec!["dev-libs/b".to_string(), "dev-libs/d".to_string()]
         );
+    }
+
+    #[test]
+    fn system_packages_stack_across_profile_levels_with_atom_removal_and_star_filter() {
+        // base: adds "*dev-libs/a" (a real @system atom) and a bare
+        // "dev-libs/hint" line (no "*" -- a real "known but not system"
+        // hint, must never contribute an atom on its own).
+        // leaf (its own parent -> base): "-*dev-libs/a" removes base's
+        // own system atom (proving -atom removal spans levels, not just
+        // within one file), and adds "*dev-libs/b".
+        // Final @system list: just "dev-libs/b" -- "a" was added then
+        // removed, "hint" was never eligible in the first place.
+        let root = std::env::temp_dir().join("portage-profile-test-system-packages");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let base = repo_profiles.join("base");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(base.join("packages"), "*dev-libs/a\ndev-libs/hint\n").unwrap();
+        fs::write(leaf.join("parent"), "../repo/profiles/base\n").unwrap();
+        fs::write(leaf.join("packages"), "-*dev-libs/a\n*dev-libs/b\n").unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(config.system_packages, vec!["dev-libs/b".to_string()]);
     }
 
     #[test]
