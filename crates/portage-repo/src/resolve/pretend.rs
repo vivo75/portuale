@@ -2,6 +2,115 @@
 
 use crate::*;
 
+/// Shared by both of `resolve_pretend`'s `!update` shortcut call sites: once an
+/// installed version is chosen to keep, decides between `AlreadyInstalled` and
+/// `Reinstall`. Each of `newuse`/`changed_use`/`changed_deps`/`changed_slot`/
+/// `rebuilt_binaries`/`newrepo` can independently trigger a reinstall with no
+/// version change at all.
+pub(crate) fn already_installed_or_reinstall(
+    source: &SelectSource,
+    opts: &SelectOptions,
+    atom: &portage_dep::Atom,
+    installed_best: &Candidate,
+    // `BUILD_TIME` of the binary candidate at `installed_best.version`, for the
+    // `--rebuilt-binaries` check; `None` when the pool has no binary for it.
+    binary_build_time: Option<i64>,
+) -> Result<PretendOutcome, Error> {
+    let SelectSource {
+        repos,
+        root,
+        config,
+        ..
+    } = *source;
+    let SelectOptions {
+        newuse,
+        changed_use,
+        changed_deps,
+        with_bdeps,
+        changed_slot,
+        usepkg,
+        usepkgonly,
+        rebuilt_binaries,
+        rebuilt_binaries_timestamp,
+        newrepo,
+        // `--emptytree`/`-e`: installed packages are not selected, so every atom in
+        // the deep tree resolves to a merge. The pool is already tree-only, so `empty`
+        // forces the would-be `AlreadyInstalled` fallback to a bare `Reinstall`
+        // (Portage's reasonless `[ebuild R]`).
+        // Portage: create_depgraph_params.py; depgraph.py; output.py attr_display
+        empty,
+        ..
+    } = *opts;
+    let changed_flags = if newuse || changed_use {
+        reinstall_flags_for_use_change(ReinstallFlagsForUseChangeArgs {
+            root,
+            category: &atom.category,
+            package: &atom.package,
+            candidate: installed_best,
+            config,
+            newuse,
+        })
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let deps_changed_flag = changed_deps
+        && deps_changed(DepsChangedArgs {
+            root,
+            repos,
+            category: &atom.category,
+            package: &atom.package,
+            version: &installed_best.version,
+            with_bdeps,
+        });
+    let slot_changed_flag = changed_slot
+        && slot_changed(
+            root,
+            repos,
+            &atom.category,
+            &atom.package,
+            &installed_best.version,
+        );
+    let rebuilt_binary_flag = (usepkg || usepkgonly)
+        && rebuilt_binaries
+        && rebuilt_binary_changed(RebuiltBinaryChangedArgs {
+            root,
+            binary_build_time,
+            category: &atom.category,
+            package: &atom.package,
+            version: &installed_best.version,
+            rebuilt_binaries_timestamp,
+        });
+    let new_repo_flag = newrepo
+        && new_repo_changed(
+            root,
+            &atom.category,
+            &atom.package,
+            &installed_best.version,
+            &installed_best.repo_name,
+        );
+    if empty
+        || !changed_flags.is_empty()
+        || deps_changed_flag
+        || slot_changed_flag
+        || rebuilt_binary_flag
+        || new_repo_flag
+    {
+        return Ok(PretendOutcome::Reinstall {
+            version: installed_best.version.clone(),
+            changed_flags,
+            deps_changed: deps_changed_flag,
+            slot_changed: slot_changed_flag,
+            rebuilt_binary: rebuilt_binary_flag,
+            new_repo: new_repo_flag,
+            slot_operator_rebuild: false,
+        });
+    }
+    Ok(PretendOutcome::AlreadyInstalled {
+        version: installed_best.version.clone(),
+    })
+}
+
 // Reads one `slot_operator_mask_built` negative in binary-marked form
 // (`!=cat/pkg-ver[binary]`). Portage keys the mask by package object so only the
 // binary instance hides; portuale's string readers match both, so the marker keeps

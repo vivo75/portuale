@@ -77,3 +77,13 @@ pub(crate) fn merge_use_state(
     let (iuse, use_flags) = candidate_iuse_and_use(cand, category, package, config)?;
     Some(((*use_flags).clone(), iuse))
 }
+
+/// Arguments of [`merge_use_changed_vs_installed`].
+pub(crate) struct MergeUseChangedVsInstalledArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+}
