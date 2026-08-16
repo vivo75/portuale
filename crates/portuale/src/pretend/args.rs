@@ -355,3 +355,564 @@ impl<'a> Default for EmergeOpts<'a> {
         }
     }
 }
+
+/// Prompt and process-wide flags. Returns whether the token was consumed.
+fn parse_prompt_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--pretend" || arg == "-p" {
+        opts.pretend = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--ask-enter-invalid" {
+        // `UserQuery.query`'s `enter_invalid` gate, stored process-wide.
+        ASK_ENTER_INVALID.store(true, std::sync::atomic::Ordering::Relaxed);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--ignore-default-opts" {
+        // Skip `EMERGE_DEFAULT_OPTS` entirely (handled on the raw argv);
+        // accepted here as a no-op.
+        // Portage: main.py
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--ask" || arg == "-a" {
+        // Bare flag or `--ask=y`; a separate `y`/`n` word is consumed, a
+        // separate `True` stays a positional atom (see `emerge_options`).
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.ask = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.ask = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.ask = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--ask=y" || arg == "--ask=True" {
+        opts.ask = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--ask=n" {
+        opts.ask = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--read-news" {
+        // Same optional-value shape as `--ask`.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.read_news = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.read_news = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.read_news = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--read-news=y" || arg == "--read-news=True" {
+        opts.read_news = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--read-news=n" {
+        opts.read_news = false;
+        *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Verbosity and deselect flags. Returns whether the token was consumed.
+fn parse_output_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--json" {
+        // Portuale-only structured-output mode, so not routed through
+        // emerge_options.rs's CLI-surface tables; no short alias.
+        opts.json = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--verbose" || arg == "-v" {
+        // Peeks at the next token, consuming it only if exactly `y`/`n`
+        // (see `emerge_options`' `insert_optional_args` handling).
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.verbose = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.verbose = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.verbose = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--verbose=y" || arg == "--verbose=True" {
+        opts.verbose = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--verbose=n" {
+        opts.verbose = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--quiet" || arg == "-q" {
+        // Same optional-value shape as `--verbose`; sets verbosity to 1
+        // (see `use_suffix` / `attr_display_field` for what that changes).
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.quiet = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.quiet = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.quiet = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--quiet=y" || arg == "--quiet=True" {
+        opts.quiet = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--quiet=n" {
+        opts.quiet = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--deselect" || arg == "-W" {
+        // Same optional-value shape as `--verbose`, but a bare flag turns
+        // this into the standalone deselect action (see `run_deselect`).
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.deselect = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.deselect = false;
+                opts.deselect_n = true;
+                *idx += 2;
+            }
+            _ => {
+                opts.deselect = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--deselect=y" || arg == "--deselect=True" {
+        opts.deselect = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--deselect=n" {
+        opts.deselect = false;
+        opts.deselect_n = true;
+        *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Optional-value boolean toggles. Returns whether the token was consumed.
+fn parse_toggle_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--changed-deps" {
+        // Same optional-value shape as `--verbose`; an ordinary
+        // --pretend modifier, not a standalone action.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.changed_deps = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.changed_deps = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.changed_deps = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--changed-deps=y" || arg == "--changed-deps=True" {
+        opts.changed_deps = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--changed-deps=n" {
+        opts.changed_deps = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--changed-deps-report" {
+        // Same shape as `--changed-deps`, but never changes what gets
+        // reinstalled.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.changed_deps_report = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.changed_deps_report = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.changed_deps_report = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--changed-deps-report=y" || arg == "--changed-deps-report=True" {
+        opts.changed_deps_report = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--changed-deps-report=n" {
+        opts.changed_deps_report = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--verbose-conflicts" {
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.verbose_conflicts = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.verbose_conflicts = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.verbose_conflicts = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--verbose-conflicts=y" {
+        opts.verbose_conflicts = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--verbose-conflicts=n" {
+        opts.verbose_conflicts = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--verbose-slot-rebuilds" {
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.verbose_slot_rebuilds = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.verbose_slot_rebuilds = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.verbose_slot_rebuilds = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--verbose-slot-rebuilds=y" {
+        opts.verbose_slot_rebuilds = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--verbose-slot-rebuilds=n" {
+        opts.verbose_slot_rebuilds = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--ignore-built-slot-operator-deps" {
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.ignore_built_slot_operator_deps = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.ignore_built_slot_operator_deps = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.ignore_built_slot_operator_deps = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--ignore-built-slot-operator-deps=y" {
+        opts.ignore_built_slot_operator_deps = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--ignore-built-slot-operator-deps=n" {
+        opts.ignore_built_slot_operator_deps = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--selective" {
+        // Same shape as `--changed-deps`. `n` explicitly CANCELS selective
+        // even if another flag already set it (applied before resolving).
+        // (`-n` is the separate bare-boolean `--noreplace` spelling.)
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.selective_flag = Some(true);
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.selective_flag = Some(false);
+                *idx += 2;
+            }
+            _ => {
+                opts.selective_flag = Some(true);
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--selective=y" || arg == "--selective=True" {
+        opts.selective_flag = Some(true);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--selective=n" {
+        opts.selective_flag = Some(false);
+        *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Binary-package flags. Returns whether the token was consumed.
+fn parse_binpkg_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--usepkg" || arg == "-k" {
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.usepkg = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.usepkg = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.usepkg = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--usepkg=y" {
+        opts.usepkg = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--usepkg=n" {
+        opts.usepkg = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--usepkgonly" || arg == "-K" {
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.usepkgonly = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.usepkgonly = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.usepkgonly = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--usepkgonly=y" {
+        opts.usepkgonly = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--usepkgonly=n" {
+        opts.usepkgonly = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--getbinpkg" || arg == "-g" {
+        // Folded into `usepkg`, plus `getbinpkg` for remote candidates.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.getbinpkg = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.getbinpkg = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.getbinpkg = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--getbinpkg=y" {
+        opts.getbinpkg = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--getbinpkg=n" {
+        opts.getbinpkg = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--getbinpkgonly" || arg == "-G" {
+        // Implies binary-only (`usepkgonly`); folded the same way.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.getbinpkgonly = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.getbinpkgonly = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.getbinpkgonly = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--getbinpkgonly=y" {
+        opts.getbinpkgonly = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--getbinpkgonly=n" {
+        opts.getbinpkgonly = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--binpkg-respect-use" {
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.binpkg_respect_use = Some(true);
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.binpkg_respect_use = Some(false);
+                *idx += 2;
+            }
+            _ => {
+                opts.binpkg_respect_use = Some(true);
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--binpkg-respect-use=y" {
+        opts.binpkg_respect_use = Some(true);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--binpkg-respect-use=n" {
+        opts.binpkg_respect_use = Some(false);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--rebuilt-binaries" {
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.rebuilt_binaries = Some(true);
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.rebuilt_binaries = Some(false);
+                *idx += 2;
+            }
+            _ => {
+                opts.rebuilt_binaries = Some(true);
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--rebuilt-binaries=y" {
+        opts.rebuilt_binaries = Some(true);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--rebuilt-binaries=n" {
+        opts.rebuilt_binaries = Some(false);
+        *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Positional atoms, bundles, unknown options. Returns whether the token was consumed.
+fn parse_tail_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if !arg.starts_with('-') {
+        opts.atom_args.push(arg);
+        *idx += 1;
+        Ok(true)
+    } else if !arg.starts_with("--") && arg.len() > 2 {
+        // Short-flag bundle (e.g. "-pv"): one character at a time, left to
+        // right. A bundled flag never consumes a value (unlike standalone).
+        for c in arg[1..].chars() {
+            match c {
+                'p' => opts.pretend = true,
+                'a' => opts.ask = true,
+                'v' => opts.verbose = true,
+                'q' => opts.quiet = true,
+                'N' => opts.newuse = true,
+                'U' => opts.changed_use = true,
+                'O' => opts.nodeps = true,
+                'o' => opts.onlydeps = true,
+                '1' => opts.oneshot = true,
+                't' => opts.tree = true,
+                'u' => opts.update = true,
+                'n' => opts.noreplace = true,
+                'd' => opts.debug = true,
+                'D' => opts.deep = portage_repo::Deep::Unlimited,
+                'e' => opts.emptytree = true,
+                'k' => opts.usepkg = true,
+                'K' => opts.usepkgonly = true,
+                'g' => opts.getbinpkg = true,
+                'G' => opts.getbinpkgonly = true,
+                'W' => opts.deselect = true,
+                'C' => opts.unmerge = true,
+                'c' => opts.depclean = true,
+                'P' => opts.prune = true,
+                's' => opts.search_action = true,
+                'S' => {
+                    opts.search_action = true;
+                    opts.searchdesc = true;
+                }
+                'B' => opts.buildpkgonly = true,
+                'b' => opts.buildpkg_opt = Some(true),
+                'X' => {
+                    // -X requires a value, so it can't be bundled; error
+                    // specifically instead of a misleading generic one.
+                    eprintln!(
+                        "emerge: -X (--exclude) requires an argument and can't be \
+                             bundled with other short flags in portuale"
+                    );
+                    return Err(ExitCode::from(2));
+                }
+                _ => return Err(report_option(&format!("-{c}"))),
+            }
+        }
+        *idx += 1;
+        Ok(true)
+    } else {
+        Err(report_option(arg))
+    }
+}

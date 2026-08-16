@@ -22,6 +22,7 @@ use crate::color::{self, Colorizer};
 mod args;
 mod env_config;
 mod news;
+mod prompt;
 mod removal;
 mod world;
 
@@ -31,6 +32,7 @@ mod tests;
 pub(crate) use args::*;
 pub(crate) use env_config::*;
 pub use news::*;
+pub(crate) use prompt::*;
 pub(crate) use removal::*;
 pub(crate) use world::*;
 
