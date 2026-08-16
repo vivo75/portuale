@@ -45,6 +45,110 @@ fn entry_162(
     }
 }
 
+/// A `Reinstall` with only a slot change enables on `if_new_ver`
+/// alone; the crossed shape stays off.
+#[test]
+fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
+    let slot_churn = entry_162(
+        "dev-libs",
+        "re",
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: true,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        },
+        Some("0"),
+        false,
+    );
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: std::slice::from_ref(&slot_churn),
+        if_new_use: true,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: std::slice::from_ref(&slot_churn),
+        if_new_use: false,
+        if_new_ver: true,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &[slot_churn],
+        if_new_use: false,
+        if_new_ver: false,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+    let crossed = entry_162(
+        "dev-libs",
+        "re",
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: vec!["flip".to_string()],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        },
+        Some("0"),
+        false,
+    );
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &[crossed],
+        if_new_use: false,
+        if_new_ver: true,
+        if_new_slot: false,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+}
+
+/// Settled entries never enable, whatever the flags.
+#[test]
+fn complete_graph_auto_enable_settled_entries_stay_off() {
+    let entries = vec![
+        entry_162(
+            "dev-libs",
+            "kept",
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string(),
+            },
+            None,
+            false,
+        ),
+        entry_162(
+            "dev-libs",
+            "gone",
+            PretendOutcome::NoVisibleCandidate,
+            None,
+            false,
+        ),
+    ];
+    assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+        entries: &entries,
+        if_new_use: true,
+        if_new_ver: true,
+        if_new_slot: true,
+        root: std::path::Path::new(""),
+        repos: &[],
+        config: &portage_profile::Config::default()
+    }));
+}
+
 /// Fixed "amd64"-only, no-overrides config, mirroring `tests`'
 /// own `test_config` (visibility is pinned the same way so a
 /// `KEYWORDS="amd64"` scratch ebuild is always visible).

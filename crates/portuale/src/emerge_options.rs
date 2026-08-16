@@ -284,6 +284,12 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_changed_deps_or_changed_deps_report_either() {
+        assert!(lookup("--changed-deps").is_none());
+        assert!(lookup("--changed-deps-report").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }
