@@ -434,6 +434,109 @@ fn parse_prompt_opts<'a>(
     }
 }
 
+/// Update-mode flags. Returns whether the token was consumed.
+fn parse_mode_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--newuse" || arg == "-N" {
+        opts.newuse = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--changed-use" || arg == "-U" {
+        opts.changed_use = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--nodeps" || arg == "-O" {
+        opts.nodeps = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--onlydeps" || arg == "-o" {
+        opts.onlydeps = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--onlydeps-with-rdeps" {
+        // A separate value is consumed only for `y`/`n`; `=True` is
+        // accepted explicitly, any other value is a usage error.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.onlydeps_with_rdeps = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.onlydeps_with_rdeps = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.onlydeps_with_rdeps = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--onlydeps-with-rdeps=") {
+        match value {
+            "y" | "True" => {
+                opts.onlydeps_with_rdeps = true;
+                *idx += 1;
+            }
+            "n" => {
+                opts.onlydeps_with_rdeps = false;
+                *idx += 1;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--onlydeps-with-rdeps\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if arg == "--onlydeps-with-ideps" {
+        // Same shape as `--onlydeps-with-rdeps`.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.onlydeps_with_ideps = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.onlydeps_with_ideps = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.onlydeps_with_ideps = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--onlydeps-with-ideps=") {
+        match value {
+            "y" | "True" => {
+                opts.onlydeps_with_ideps = true;
+                *idx += 1;
+            }
+            "n" => {
+                opts.onlydeps_with_ideps = false;
+                *idx += 1;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--onlydeps-with-ideps\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if arg == "--oneshot" || arg == "-1" {
+        opts.oneshot = true;
+        *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Verbosity and deselect flags. Returns whether the token was consumed.
 fn parse_output_opts<'a>(
     opts: &mut EmergeOpts<'a>,

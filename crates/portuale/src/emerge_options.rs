@@ -248,6 +248,18 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_changed_use_itself() {
+        assert!(lookup("--changed-use").is_none());
+        assert!(lookup("-U").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_onlydeps_itself() {
+        assert!(lookup("--onlydeps").is_none());
+        assert!(lookup("-o").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }
