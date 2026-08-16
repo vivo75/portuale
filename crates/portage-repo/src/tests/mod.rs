@@ -56,6 +56,71 @@ struct EufFlatArgs<'a> {
     package: &'a str,
 }
 
+/// Test shim for the pre-"Config depth" positional `effective_use_flags`
+/// signature (single flat `package_use` list). Tests that exercise the split
+/// call `effective_use_flags` directly.
+fn euf_flat(args: EufFlatArgs<'_>) -> HashSet<String> {
+    let EufFlatArgs {
+        iuse,
+        use_tokens,
+        package_use,
+        package_use_force,
+        package_use_mask,
+        use_force,
+        use_mask,
+        use_stable_force,
+        use_stable_mask,
+        package_use_stable_force,
+        package_use_stable_mask,
+        keywords,
+        accept_keywords,
+        package_accept_keywords,
+        candidate_str,
+        category,
+        package,
+    } = args;
+    let config = portage_profile::Config {
+        use_tokens: use_tokens.to_vec(),
+        package_use: package_use.to_vec(),
+        package_use_force: package_use_force.to_vec(),
+        package_use_mask: package_use_mask.to_vec(),
+        use_force: use_force.clone(),
+        use_mask: use_mask.clone(),
+        use_stable_force: use_stable_force.clone(),
+        use_stable_mask: use_stable_mask.clone(),
+        package_use_stable_force: package_use_stable_force.to_vec(),
+        package_use_stable_mask: package_use_stable_mask.to_vec(),
+        accept_keywords: accept_keywords.clone(),
+        package_accept_keywords: package_accept_keywords.to_vec(),
+        // `effective_use_flags`/`forced_or_masked_flags` now read the
+        // per-level view; collapse every flat input into one
+        // synthetic level (global-then-package, same as the old flat
+        // application).
+        use_mask_force_levels: vec![portage_profile::UseMaskForceLevel {
+            use_mask: use_mask.iter().cloned().collect(),
+            use_force: use_force.iter().cloned().collect(),
+            use_stable_mask: use_stable_mask.iter().cloned().collect(),
+            use_stable_force: use_stable_force.iter().cloned().collect(),
+            package_use_mask: package_use_mask.to_vec(),
+            package_use_force: package_use_force.to_vec(),
+            package_use_stable_mask: package_use_stable_mask.to_vec(),
+            package_use_stable_force: package_use_stable_force.to_vec(),
+        }],
+        ..Default::default()
+    };
+    // Test helper keeps the owned return; the `Rc` is unwrapped here.
+    effective_use_flags(EffectiveUseFlagsArgs {
+        config: &config,
+        iuse,
+        keywords,
+        candidate_str,
+        category,
+        package,
+    })
+    .as_ref()
+    .clone()
+}
+
 fn candidate(version: &str, keywords: &[&str]) -> Candidate {
     Candidate {
         version: version.to_string(),
