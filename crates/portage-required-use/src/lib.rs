@@ -72,6 +72,91 @@ fn is_active(
     Ok(enabled.contains(flag) != negated)
 }
 
+/// Consumes tokens starting at `*pos` up to (not including) the next
+/// unmatched `)` or end of input, returning each top-level item's own
+/// satisfied bool, in order.
+fn parse_items(
+    tokens: &[&str],
+    pos: &mut usize,
+    enabled: &HashSet<String>,
+    iuse: &HashSet<String>,
+) -> Result<Vec<bool>, Error> {
+    let mut results = Vec::new();
+    while *pos < tokens.len() && tokens[*pos] != ")" {
+        let tok = tokens[*pos];
+        if tok == "(" {
+            // A bare all-of group, no preceding operator token.
+            *pos += 1;
+            let inner = parse_items(tokens, pos, enabled, iuse)?;
+            expect_close_paren(tokens, pos)?;
+            results.push(!inner.contains(&false));
+        } else if tok == "||" || tok == "^^" || tok == "??" {
+            *pos += 1;
+            expect_open_paren(tokens, pos)?;
+            let inner = parse_items(tokens, pos, enabled, iuse)?;
+            expect_close_paren(tokens, pos)?;
+            let true_count = inner.iter().filter(|&&b| b).count();
+            let satisfied = match tok {
+                "||" => true_count > 0,
+                "^^" => true_count == 1,
+                "??" => true_count <= 1,
+                _ => unreachable!(),
+            };
+            results.push(satisfied);
+        } else if let Some(cond) = tok.strip_suffix('?') {
+            // A use-conditional group; `cond` is checked like a leaf token.
+            *pos += 1;
+            expect_open_paren(tokens, pos)?;
+            let inner = parse_items(tokens, pos, enabled, iuse)?;
+            expect_close_paren(tokens, pos)?;
+            let active = is_active(cond, enabled, iuse)?;
+            results.push(!active || !inner.contains(&false));
+        } else {
+            results.push(is_active(tok, enabled, iuse)?);
+            *pos += 1;
+        }
+    }
+    Ok(results)
+}
+
+fn expect_open_paren(tokens: &[&str], pos: &mut usize) -> Result<(), Error> {
+    if tokens.get(*pos) != Some(&"(") {
+        return Err(Error::MissingOpenParen);
+    }
+    *pos += 1;
+    Ok(())
+}
+
+fn expect_close_paren(tokens: &[&str], pos: &mut usize) -> Result<(), Error> {
+    if tokens.get(*pos) != Some(&")") {
+        return Err(Error::UnbalancedParens);
+    }
+    *pos += 1;
+    Ok(())
+}
+
+/// Checks whether `required_use` is satisfied by `enabled` (effective
+/// USE) given `iuse` (declared IUSE).
+///
+/// # Errors
+///
+/// `Err` on malformed syntax (unbalanced parentheses, an
+/// operator/conditional not immediately followed by `(`) or a referenced
+/// flag missing from `iuse`.
+pub fn check_required_use(
+    required_use: &str,
+    enabled: &HashSet<String>,
+    iuse: &HashSet<String>,
+) -> Result<bool, Error> {
+    let tokens: Vec<&str> = required_use.split_whitespace().collect();
+    let mut pos = 0;
+    let results = parse_items(&tokens, &mut pos, enabled, iuse)?;
+    if pos != tokens.len() {
+        return Err(Error::UnbalancedParens);
+    }
+    Ok(!results.contains(&false))
+}
+
 /// Rewrites the `||`/`^^`/`??` operators of a REQUIRED_USE string to
 /// their human-readable spellings, as Portage's depgraph does before
 /// printing.
@@ -414,4 +499,167 @@ fn build_required_use_tree(
         .iter()
         .any(|it| matches!(it, StackItem::Bool(false)));
     Ok((tree, root, satisfied))
+}
+
+/// Returns `None` when `required_use` is satisfied, else `Some(reduced)`
+/// with the minimal still-unsatisfied sub-expression (operators NOT yet
+/// rewritten; run [`human_readable`] for that).
+///
+/// # Errors
+///
+/// `Err` on the same malformed-syntax / undeclared-flag conditions as
+/// [`check_required_use`].
+pub fn unsatisfied_reduced(
+    required_use: &str,
+    enabled: &HashSet<String>,
+    iuse: &HashSet<String>,
+) -> Result<Option<String>, Error> {
+    let (tree, root, satisfied) = build_required_use_tree(required_use, enabled, iuse)?;
+    if satisfied {
+        return Ok(None);
+    }
+    Ok(Some(tree.tounicode(root)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sets(enabled: &[&str], iuse: &[&str]) -> (HashSet<String>, HashSet<String>) {
+        (
+            enabled.iter().map(|s| s.to_string()).collect(),
+            iuse.iter().map(|s| s.to_string()).collect(),
+        )
+    }
+
+    #[test]
+    fn plain_flag_enabled_satisfies_itself() {
+        let (enabled, iuse) = sets(&["foo"], &["foo"]);
+        assert_eq!(check_required_use("foo", &enabled, &iuse), Ok(true));
+    }
+
+    #[test]
+    fn plain_flag_disabled_is_unsatisfied() {
+        let (enabled, iuse) = sets(&[], &["foo"]);
+        assert_eq!(check_required_use("foo", &enabled, &iuse), Ok(false));
+    }
+
+    #[test]
+    fn negated_flag_disabled_satisfies_itself() {
+        let (enabled, iuse) = sets(&[], &["foo"]);
+        assert_eq!(check_required_use("!foo", &enabled, &iuse), Ok(true));
+    }
+
+    #[test]
+    fn undeclared_flag_is_an_error() {
+        let (enabled, iuse) = sets(&[], &[]);
+        assert!(check_required_use("foo", &enabled, &iuse).is_err());
+    }
+
+    #[test]
+    fn any_of_needs_at_least_one() {
+        let (enabled, iuse) = sets(&[], &["a", "b"]);
+        assert_eq!(check_required_use("|| ( a b )", &enabled, &iuse), Ok(false));
+        let (enabled, _) = sets(&["a"], &["a", "b"]);
+        assert_eq!(check_required_use("|| ( a b )", &enabled, &iuse), Ok(true));
+    }
+
+    #[test]
+    fn exactly_one_of_rejects_zero_and_two() {
+        let (_, iuse) = sets(&[], &["a", "b"]);
+        let (none, _) = sets(&[], &["a", "b"]);
+        assert_eq!(check_required_use("^^ ( a b )", &none, &iuse), Ok(false));
+        let (both, _) = sets(&["a", "b"], &["a", "b"]);
+        assert_eq!(check_required_use("^^ ( a b )", &both, &iuse), Ok(false));
+        let (one, _) = sets(&["a"], &["a", "b"]);
+        assert_eq!(check_required_use("^^ ( a b )", &one, &iuse), Ok(true));
+    }
+
+    #[test]
+    fn at_most_one_of_accepts_zero_and_one_rejects_two() {
+        let (_, iuse) = sets(&[], &["a", "b"]);
+        let (none, _) = sets(&[], &["a", "b"]);
+        assert_eq!(check_required_use("?? ( a b )", &none, &iuse), Ok(true));
+        let (one, _) = sets(&["a"], &["a", "b"]);
+        assert_eq!(check_required_use("?? ( a b )", &one, &iuse), Ok(true));
+        let (both, _) = sets(&["a", "b"], &["a", "b"]);
+        assert_eq!(check_required_use("?? ( a b )", &both, &iuse), Ok(false));
+    }
+
+    #[test]
+    fn use_conditional_group_only_applies_when_the_flag_is_active() {
+        let (enabled, iuse) = sets(&["foo"], &["foo", "bar"]);
+        assert_eq!(
+            check_required_use("foo? ( bar )", &enabled, &iuse),
+            Ok(false)
+        );
+        let (enabled, _) = sets(&[], &["foo", "bar"]);
+        assert_eq!(
+            check_required_use("foo? ( bar )", &enabled, &iuse),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn negated_conditional_flag() {
+        let (enabled, iuse) = sets(&[], &["foo", "bar"]);
+        assert_eq!(
+            check_required_use("!foo? ( bar )", &enabled, &iuse),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn bare_all_of_group_is_implicit_and() {
+        let (enabled, iuse) = sets(&["a"], &["a", "b"]);
+        assert_eq!(check_required_use("( a b )", &enabled, &iuse), Ok(false));
+        let (enabled, _) = sets(&["a", "b"], &["a", "b"]);
+        assert_eq!(check_required_use("( a b )", &enabled, &iuse), Ok(true));
+    }
+
+    #[test]
+    fn top_level_is_an_implicit_all_of_with_no_wrapping_parens_needed() {
+        let (enabled, iuse) = sets(&["a"], &["a", "b"]);
+        assert_eq!(check_required_use("a b", &enabled, &iuse), Ok(false));
+        let (enabled, _) = sets(&["a", "b"], &["a", "b"]);
+        assert_eq!(check_required_use("a b", &enabled, &iuse), Ok(true));
+    }
+
+    #[test]
+    fn nested_groups() {
+        let (enabled, iuse) = sets(&["foo", "a"], &["foo", "a", "b", "c"]);
+        assert_eq!(
+            check_required_use("foo? ( || ( a ^^ ( b c ) ) )", &enabled, &iuse),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn empty_group_uses_ordinary_operator_evaluation_not_vacuous_true() {
+        // No EAPI<=6 "empty groups always true" special case.
+        let (enabled, iuse) = sets(&[], &[]);
+        assert_eq!(check_required_use("|| ( )", &enabled, &iuse), Ok(false));
+        assert_eq!(check_required_use("?? ( )", &enabled, &iuse), Ok(true));
+    }
+
+    #[test]
+    fn unbalanced_parens_is_an_error() {
+        let (enabled, iuse) = sets(&[], &["a"]);
+        assert!(check_required_use("( a", &enabled, &iuse).is_err());
+        assert!(check_required_use("a )", &enabled, &iuse).is_err());
+    }
+
+    #[test]
+    fn operator_not_followed_by_open_paren_is_an_error() {
+        let (enabled, iuse) = sets(&[], &["a"]);
+        assert!(check_required_use("||", &enabled, &iuse).is_err());
+        assert!(check_required_use("|| a", &enabled, &iuse).is_err());
+        assert!(check_required_use("foo?", &enabled, &iuse).is_err());
+    }
+
+    #[test]
+    fn reduced_is_none_when_satisfied() {
+        let (enabled, iuse) = sets(&["a"], &["a", "b"]);
+        assert_eq!(unsatisfied_reduced("|| ( a b )", &enabled, &iuse), Ok(None));
+    }
 }
