@@ -3,6 +3,48 @@
 use crate::*;
 use portage_util::TempDir;
 
+/// Minimal merge-bound `GraphEntry` for the predicate legs (slot
+/// and `new_slot` as the leg needs; everything display-side left
+/// at its empty default).
+fn entry_162(
+    cat: &str,
+    pkg: &str,
+    outcome: PretendOutcome,
+    slot: Option<&str>,
+    new_slot: bool,
+) -> GraphEntry {
+    GraphEntry {
+        discovery: 0,
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        outcome,
+        blockers: Vec::new(),
+        slot: slot.map(str::to_string),
+        sub_slot: slot.map(str::to_string),
+        repo_name: Some("testrepo".to_string()),
+        oldbest: Vec::new(),
+        use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: Vec::new(),
+        source: CandidateSource::Ebuild,
+        provenance: VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    }
+}
+
 /// Fixed "amd64"-only, no-overrides config, mirroring `tests`'
 /// own `test_config` (visibility is pinned the same way so a
 /// `KEYWORDS="amd64"` scratch ebuild is always visible).

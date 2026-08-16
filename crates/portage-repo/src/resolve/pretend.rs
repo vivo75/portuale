@@ -57,3 +57,78 @@ pub(crate) fn slot_operator_installed_masked_version(
 pub(crate) fn is_instance_only_mask(constraint: &str) -> bool {
     is_binary_only_mask(constraint) || is_installed_only_mask(constraint)
 }
+
+// A bundled options struct would touch every call site for each single-flag
+// addition; not worth it (same reasoning as `resolve_pretend_graph`'s allow).
+/// Where [`resolve_pretend`] selects from: the repos, the target root,
+/// its config and the local binary-package index.
+#[derive(Clone, Copy)]
+pub struct SelectSource<'a> {
+    pub repos: &'a [RepoConfig],
+    pub root: &'a Path,
+    pub config: &'a portage_profile::Config,
+    /// The run's already-built local `$PKGDIR` binary index.
+    pub local_binpkg: &'a std::sync::Arc<BinaryIndex>,
+}
+
+/// The emerge options that shape one [`resolve_pretend`] selection.
+/// `Default` is emerge with no option given (`--with-bdeps` and
+/// `--selective` on, everything else off) for a dependency atom.
+#[derive(Debug, Clone, Copy)]
+pub struct SelectOptions<'a> {
+    pub newuse: bool,
+    pub changed_use: bool,
+    pub update: bool,
+    pub excluded: &'a [String],
+    pub changed_deps: bool,
+    pub with_bdeps: bool,
+    pub changed_slot: bool,
+    pub selective: bool,
+    pub is_top_level: bool,
+    pub usepkg: bool,
+    pub usepkgonly: bool,
+    pub binpkg_respect_use: bool,
+    pub usepkg_exclude: &'a [String],
+    pub usepkg_include: &'a [String],
+    pub rebuilt_binaries: bool,
+    pub rebuilt_binaries_timestamp: Option<u64>,
+    pub newrepo: bool,
+    pub empty: bool,
+    pub getbinpkg: bool,
+    pub autounmask_keywords: bool,
+    pub autounmask_use: bool,
+    pub autounmask_license: bool,
+    pub autounmask_masks: bool,
+    pub extra_constraints: &'a [String],
+}
+
+impl Default for SelectOptions<'_> {
+    fn default() -> Self {
+        Self {
+            newuse: false,
+            changed_use: false,
+            update: false,
+            excluded: &[],
+            changed_deps: false,
+            with_bdeps: true,
+            changed_slot: false,
+            selective: true,
+            is_top_level: false,
+            usepkg: false,
+            usepkgonly: false,
+            binpkg_respect_use: false,
+            usepkg_exclude: &[],
+            usepkg_include: &[],
+            rebuilt_binaries: false,
+            rebuilt_binaries_timestamp: None,
+            newrepo: false,
+            empty: false,
+            getbinpkg: false,
+            autounmask_keywords: false,
+            autounmask_use: false,
+            autounmask_license: false,
+            autounmask_masks: false,
+            extra_constraints: &[],
+        }
+    }
+}

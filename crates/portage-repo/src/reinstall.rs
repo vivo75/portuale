@@ -301,6 +301,54 @@ pub(crate) fn new_repo_changed(
     vdb_repo != current_repo_name
 }
 
+/// Arguments of [`rebuilt_binary_changed`].
+pub(crate) struct RebuiltBinaryChangedArgs<'a> {
+    pub(crate) root: &'a Path,
+    /// The `BUILD_TIME` of the binary candidate for this exact version --
+    /// local `$PKGDIR` *or* a `--getbinpkg` remote binhost. `None` when no
+    /// binary candidate exists, or its `Packages` entry carried no
+    /// `BUILD_TIME`.
+    pub(crate) binary_build_time: Option<i64>,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) rebuilt_binaries_timestamp: Option<u64>,
+}
+
+/// `--rebuilt-binaries`: compares a binary candidate's `BUILD_TIME`
+/// against the installed package's recorded `BUILD_TIME` ("replace
+/// installed packages with binary packages that have been rebuilt").
+/// Portage: depgraph.py's reinstall trigger.
+///
+/// `rebuilt_binaries_timestamp` mirrors `--rebuilt-binaries-timestamp`:
+/// when given, only a strictly *newer* binary at or above that cutoff
+/// triggers a reinstall; when absent, any *different* `BUILD_TIME` does.
+/// A missing/unparseable `BUILD_TIME` on either side never triggers one.
+/// Both call sites gate this on `usepkg || usepkgonly`.
+pub(crate) fn rebuilt_binary_changed(args: RebuiltBinaryChangedArgs<'_>) -> bool {
+    let RebuiltBinaryChangedArgs {
+        root,
+        binary_build_time,
+        category,
+        package,
+        version,
+        rebuilt_binaries_timestamp,
+    } = args;
+    let Some(built_timestamp) = binary_build_time else {
+        return false;
+    };
+    let Some(installed_timestamp) = read_vdb_string(root, category, package, version, "BUILD_TIME")
+        .parse::<i64>()
+        .ok()
+    else {
+        return false;
+    };
+    match rebuilt_binaries_timestamp {
+        Some(minimal) => built_timestamp > installed_timestamp && built_timestamp >= minimal as i64,
+        None => built_timestamp != installed_timestamp,
+    }
+}
+
 /// Whether a *visible* ebuild still exists in the tree at `version`
 /// (no slot comparison). Queried from the tree independently of the
 /// resolver's candidate pool, so it stays meaningful under `--usepkgonly`.
