@@ -68,6 +68,9 @@ CASES = [
     ("package.license unmasks an otherwise EULA-masked package", ["--pretend", "dev-libs/packagelicensepkg"], 0),
     ("USE-conditional LICENSE, visible with the flag off", ["--pretend", "dev-libs/uselicensepkg"], 0),
     ("USE-conditional LICENSE, masked once package.use forces the flag on", ["--pretend", "dev-libs/uselicensepkgforced"], 1),
+    ("PROPERTIES visible under the real default ACCEPT_PROPERTIES=*", ["--pretend", "dev-libs/propertiespkg"], 0),
+    ("package.properties narrows acceptance for one package", ["--pretend", "dev-libs/interactivepkg"], 1),
+    ("package.accept_restrict narrows acceptance for one package", ["--pretend", "dev-libs/restrictedpkg"], 1),
     ("sibling-prefix package: new", ["--pretend", "dev-libs/foo"], 0),
     ("sibling-prefix package: installed", ["--pretend", "dev-libs/foo-bar"], 0),
     ("versioned top-level atom: resolves New", ["--pretend", ">=dev-libs/foo-1.0"], 0),
@@ -856,6 +859,45 @@ def test_license_use_conditional_visible_when_flag_off_masked_when_forced_on(
     assert (
         forced_on.stderr.strip()
         == 'emerge: there are no ebuilds to satisfy "dev-libs/uselicensepkgforced".'
+    )
+
+
+def test_properties_default_star_accepts_a_declared_property(emerge_binary, fixture_env):
+    """dev-libs/propertiespkg's own PROPERTIES="live" is visible under
+    the real default ACCEPT_PROPERTIES=* (from real cnf/make.globals,
+    replicated as a hardcoded fallback -- neither the fixture profile
+    chain nor make.conf sets ACCEPT_PROPERTIES at all)."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/propertiespkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/propertiespkg-1.0"
+
+
+def test_package_properties_narrows_acceptance_for_one_package(emerge_binary, fixture_env):
+    """PORTING/fixtures/etc/portage/package.properties revokes
+    "interactive" for dev-libs/interactivepkg specifically ("-interactive"
+    layered on top of the permissive global "*" default still narrows
+    that one package's own effective accept set), despite the same real
+    default that leaves dev-libs/propertiespkg (above) visible."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/interactivepkg"], fixture_env)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/interactivepkg".'
+    )
+
+
+def test_package_accept_restrict_narrows_acceptance_for_one_package(emerge_binary, fixture_env):
+    """PORTING/fixtures/etc/portage/package.accept_restrict revokes
+    "bindist" for dev-libs/restrictedpkg specifically -- same "-token
+    narrows despite a permissive global default" mechanism as
+    package.properties above, just for RESTRICT instead of PROPERTIES."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/restrictedpkg"], fixture_env)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/restrictedpkg".'
     )
 
 

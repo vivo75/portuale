@@ -257,6 +257,13 @@ pub struct Candidate {
     /// packages' LICENSE has no conditional at all, so most candidates
     /// never need this field for anything).
     pub iuse: String,
+    /// The raw `PROPERTIES` metadata string, same "already have it,
+    /// zero extra I/O" reasoning as `license`/`iuse` -- see
+    /// `properties_accepted`'s own doc comment.
+    pub properties: String,
+    /// The raw `RESTRICT` metadata string. See `properties`'s own doc
+    /// comment.
+    pub restrict: String,
 }
 
 /// A directory entry's name is only accepted as `<package>-<version>` if
@@ -329,6 +336,8 @@ pub fn list_candidates(
                 repo_name: repo.name.clone(),
                 license: metadata.get("LICENSE").cloned().unwrap_or_default(),
                 iuse: metadata.get("IUSE").cloned().unwrap_or_default(),
+                properties: metadata.get("PROPERTIES").cloned().unwrap_or_default(),
+                restrict: metadata.get("RESTRICT").cloned().unwrap_or_default(),
             });
         }
     }
@@ -732,70 +741,100 @@ fn has_masked_license(
 /// (differently-plumbed) `InvalidDependString` handling, which routes a
 /// malformed `LICENSE` to a wholly separate "invalid metadata" masking
 /// reason this pilot has no equivalent pathway for.
-fn license_accepted(
+/// This candidate's own effective USE, only actually resolved if
+/// `value_str` (a `LICENSE`/`PROPERTIES`/`RESTRICT` string) contains a
+/// `?` at all -- real `use_reduce`'s own "if '?' in license_str"
+/// optimization, shared by every metadata key that needs this same
+/// "resolve USE, but only when it could possibly matter" treatment.
+#[allow(clippy::too_many_arguments)]
+fn use_flags_if_conditional(
+    value_str: &str,
     candidate: &Candidate,
     category: &str,
     package: &str,
     candidate_str: &str,
     config: &portage_profile::Config,
-) -> bool {
-    if candidate.license.trim().is_empty() {
-        return true;
+) -> HashSet<String> {
+    if !value_str.contains('?') {
+        return HashSet::new();
     }
+    effective_use_flags(
+        &config.use_flags,
+        &config.package_use,
+        &config.package_use_force,
+        &config.package_use_mask,
+        &config.use_stable_force,
+        &config.use_stable_mask,
+        &config.package_use_stable_force,
+        &config.package_use_stable_mask,
+        &candidate.keywords,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
+        candidate_str,
+        category,
+        package,
+    )
+}
 
-    // Real use_reduce's own "if '?' in license_str" optimization: most
-    // packages' LICENSE has no USE-conditional at all, so most
-    // candidates never need their own effective USE resolved for this
-    // check.
-    let use_flags: HashSet<String> = if candidate.license.contains('?') {
-        effective_use_flags(
-            &config.use_flags,
-            &config.package_use,
-            &config.package_use_force,
-            &config.package_use_mask,
-            &config.use_stable_force,
-            &config.use_stable_mask,
-            &config.package_use_stable_force,
-            &config.package_use_stable_mask,
-            &candidate.keywords,
-            &config.accept_keywords,
-            &config.package_accept_keywords,
-            candidate_str,
-            category,
-            package,
-        )
-    } else {
-        HashSet::new()
-    };
-
-    let mut matching_package_license: Vec<&(String, Vec<String>)> = config
-        .package_license
+/// This candidate's own effective `ACCEPT_LICENSE`/`ACCEPT_PROPERTIES`/
+/// `ACCEPT_RESTRICT`-style symbolic token list: `global_accept`, with
+/// every matching `package_accept` entry's own tokens layered on top,
+/// in atom-specificity order -- real `_getPkgAcceptLicense`'s own
+/// `accept_license.extend(x)` loop over `ordered_by_atom_specificity`
+/// matches (and its `_getMissingProperties`/`_getMissingRestrict`
+/// siblings, which do the identical thing for their own accept lists),
+/// ported the same way `package.use.mask`/`.force` already order
+/// multiple matches in this pilot (see `effective_use_flags`).
+fn resolve_accept_tokens(
+    global_accept: &[String],
+    package_accept: &[(String, Vec<String>)],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+) -> Vec<String> {
+    let mut matching: Vec<&(String, Vec<String>)> = package_accept
         .iter()
         .filter(|(atom, _)| matches_config_entry(atom, candidate_str, category, package))
         .collect();
-    matching_package_license.sort_by_key(|(atom, _)| atom_specificity(atom));
+    matching.sort_by_key(|(atom, _)| atom_specificity(atom));
 
-    let mut accept_tokens = config.accept_license.clone();
-    for (_, tokens) in matching_package_license {
+    let mut accept_tokens = global_accept.to_vec();
+    for (_, tokens) in matching {
         accept_tokens.extend(tokens.iter().cloned());
     }
+    accept_tokens
+}
 
-    let license_tokens: Vec<String> = candidate
-        .license
-        .split_whitespace()
-        .map(String::from)
-        .collect();
-    let Ok(all_mentioned) = portage_use_reduce::use_reduce_flat(
-        &license_tokens,
+/// Every token `value_str` (a `LICENSE`/`PROPERTIES`/`RESTRICT` string)
+/// could possibly mention, USE-conditionals included -- real
+/// `matchall=1` semantics (every conditional forced active), needed to
+/// resolve a `"*"` token in an accept-list into something concrete.
+/// Reuses `portage_use_reduce::use_reduce_flat` with `MatchMode::All`
+/// directly: group boundaries (`||`) don't matter for this flat "what
+/// token names exist at all" question, unlike the real masking check
+/// itself for `LICENSE` (see `has_masked_license`'s own doc comment).
+fn all_mentioned_tokens(value_str: &str) -> Result<HashSet<String>, String> {
+    let tokens: Vec<String> = value_str.split_whitespace().map(String::from).collect();
+    let flat = portage_use_reduce::use_reduce_flat(
+        &tokens,
         &HashSet::new(),
         portage_use_reduce::MatchMode::All,
-    ) else {
-        return false;
-    };
-    let all_mentioned: HashSet<String> = all_mentioned.into_iter().filter(|t| t != "||").collect();
+    )?;
+    Ok(flat.into_iter().filter(|t| t != "||").collect())
+}
 
+/// Resolves `accept_tokens` (symbolic -- `"*"`/`"-*"`/`"-token"`/
+/// `"token"`) into a concrete acceptable-token set, given
+/// `all_mentioned` (see `all_mentioned_tokens`). Shared by
+/// `license_accepted`/`metadata_key_accepted` -- real
+/// `getMissingLicenses`/`_getMissingProperties`/`_getMissingRestrict`
+/// all use this identical algorithm, just for a different metadata key.
+fn resolve_acceptable_tokens(
+    accept_tokens: &[String],
+    all_mentioned: &HashSet<String>,
+) -> HashSet<String> {
     let mut acceptable: HashSet<String> = HashSet::new();
-    for token in &accept_tokens {
+    for token in accept_tokens {
         if token == "*" {
             acceptable.extend(all_mentioned.iter().cloned());
         } else if token == "-*" {
@@ -806,9 +845,96 @@ fn license_accepted(
             acceptable.insert(token.clone());
         }
     }
+    acceptable
+}
+
+fn license_accepted(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    candidate_str: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    if candidate.license.trim().is_empty() {
+        return true;
+    }
+    let use_flags = use_flags_if_conditional(
+        &candidate.license,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+    );
+    let accept_tokens = resolve_accept_tokens(
+        &config.accept_license,
+        &config.package_license,
+        candidate_str,
+        category,
+        package,
+    );
+    let Ok(all_mentioned) = all_mentioned_tokens(&candidate.license) else {
+        return false;
+    };
+    let acceptable = resolve_acceptable_tokens(&accept_tokens, &all_mentioned);
 
     match has_masked_license(&candidate.license, &use_flags, &acceptable) {
         Ok(masked) => !masked,
+        Err(_) => false,
+    }
+}
+
+/// Whether every token in `value_str` (a candidate's own real
+/// `PROPERTIES`/`RESTRICT` metadata) is accepted -- real
+/// `_getMissingProperties`/`_getMissingRestrict`, ported as a bool.
+/// Unlike `LICENSE` (which needs `||`-group *structure* -- see
+/// `has_masked_license`'s own doc comment), `PROPERTIES`/`RESTRICT` have
+/// no any-of semantics at all: real config.py's own comment says it
+/// plainly, "ACCEPT_PROPERTIES works like ACCEPT_LICENSE, without
+/// groups" -- every flattened token individually needs to be accepted,
+/// so this reuses `use_reduce_flat` directly instead of the bespoke
+/// `LicenseNode` tree (no `||`-structure to lose in the first place).
+#[allow(clippy::too_many_arguments)]
+fn metadata_key_accepted(
+    value_str: &str,
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    candidate_str: &str,
+    config: &portage_profile::Config,
+    global_accept: &[String],
+    package_accept: &[(String, Vec<String>)],
+) -> bool {
+    if value_str.trim().is_empty() {
+        return true;
+    }
+    let use_flags = use_flags_if_conditional(
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+    );
+    let accept_tokens = resolve_accept_tokens(
+        global_accept,
+        package_accept,
+        candidate_str,
+        category,
+        package,
+    );
+    let Ok(all_mentioned) = all_mentioned_tokens(value_str) else {
+        return false;
+    };
+    let acceptable = resolve_acceptable_tokens(&accept_tokens, &all_mentioned);
+
+    let tokens: Vec<String> = value_str.split_whitespace().map(String::from).collect();
+    match portage_use_reduce::use_reduce_flat(
+        &tokens,
+        &use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    ) {
+        Ok(flat) => flat.iter().all(|t| acceptable.contains(t)),
         Err(_) => false,
     }
 }
@@ -819,7 +945,10 @@ fn license_accepted(
 /// keywords contributed by a matching `package.accept_keywords` entry,
 /// with a `"**"` token in such an entry meaning "accept unconditionally"
 /// for matching candidates (even ones with empty/no KEYWORDS) -- and its
-/// own declared `LICENSE` is fully accepted (see `license_accepted`).
+/// own declared `LICENSE`/`PROPERTIES`/`RESTRICT` are all fully accepted
+/// (see `license_accepted`/`metadata_key_accepted`) -- real `Package.py`'s
+/// own `_masks` dict collects `package.mask`, `LICENSE`, `PROPERTIES`,
+/// and `RESTRICT` as four independent masking reasons the same way.
 pub fn is_visible(
     candidate: &Candidate,
     category: &str,
@@ -844,6 +973,32 @@ pub fn is_visible(
     }
 
     if !license_accepted(candidate, category, package, &candidate_str, config) {
+        return false;
+    }
+
+    if !metadata_key_accepted(
+        &candidate.properties,
+        candidate,
+        category,
+        package,
+        &candidate_str,
+        config,
+        &config.accept_properties,
+        &config.package_properties,
+    ) {
+        return false;
+    }
+
+    if !metadata_key_accepted(
+        &candidate.restrict,
+        candidate,
+        category,
+        package,
+        &candidate_str,
+        config,
+        &config.accept_restrict,
+        &config.package_accept_restrict,
+    ) {
         return false;
     }
 
@@ -2993,6 +3148,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fixture_properties_default_star_accepts_a_declared_property() {
+        assert_eq!(
+            resolve_real("dev-libs", "propertiespkg"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fixture_package_properties_narrows_acceptance_for_one_package() {
+        // fixtures/etc/portage/package.properties revokes "interactive"
+        // for dev-libs/interactivepkg specifically, despite the real
+        // default ACCEPT_PROPERTIES=* that leaves dev-libs/propertiespkg
+        // (above) visible.
+        assert_eq!(
+            resolve_real("dev-libs", "interactivepkg"),
+            PretendOutcome::NoVisibleCandidate
+        );
+    }
+
+    #[test]
+    fn fixture_package_accept_restrict_narrows_acceptance_for_one_package() {
+        // fixtures/etc/portage/package.accept_restrict revokes "bindist"
+        // for dev-libs/restrictedpkg specifically, same "-token narrows
+        // despite a permissive global default" mechanism as
+        // package.properties above.
+        assert_eq!(
+            resolve_real("dev-libs", "restrictedpkg"),
+            PretendOutcome::NoVisibleCandidate
+        );
+    }
+
     /// Regression test: a sibling package sharing a name prefix
     /// ("foo-bar" installed) must not be misread as an installed version
     /// of "foo" when scanning the vdb category directory. Without the
@@ -4038,6 +4227,8 @@ mod tests {
             repo_name: "test".to_string(),
             license: String::new(),
             iuse: String::new(),
+            properties: String::new(),
+            restrict: String::new(),
         }
     }
 
@@ -4290,6 +4481,111 @@ mod tests {
             ..Default::default()
         };
         assert!(!is_visible(&c, "dev-libs", "foo-pkg", &config_foo_on));
+    }
+
+    #[test]
+    fn properties_default_star_accepts_any_declared_property() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_properties: vec!["*".to_string()],
+            ..Default::default()
+        };
+        let c = Candidate {
+            properties: "live".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(is_visible(&c, "dev-libs", "foo", &config));
+    }
+
+    #[test]
+    fn properties_not_in_the_acceptable_set_is_masked() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_properties: vec!["interactive".to_string()],
+            ..Default::default()
+        };
+        let c = Candidate {
+            properties: "live".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(!is_visible(&c, "dev-libs", "foo", &config));
+    }
+
+    #[test]
+    fn package_properties_override_unmasks_for_one_matching_package_only() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_properties: vec![],
+            package_properties: vec![("dev-libs/foo".to_string(), vec!["live".to_string()])],
+            ..Default::default()
+        };
+        let c = Candidate {
+            properties: "live".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(is_visible(&c, "dev-libs", "foo", &config));
+        assert!(!is_visible(&c, "dev-libs", "bar", &config));
+    }
+
+    #[test]
+    fn restrict_default_star_accepts_any_declared_token() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_restrict: vec!["*".to_string()],
+            ..Default::default()
+        };
+        let c = Candidate {
+            restrict: "test bindist".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(is_visible(&c, "dev-libs", "foo", &config));
+    }
+
+    #[test]
+    fn restrict_not_in_the_acceptable_set_is_masked() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_restrict: vec!["test".to_string()],
+            ..Default::default()
+        };
+        let c = Candidate {
+            restrict: "bindist".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(!is_visible(&c, "dev-libs", "foo", &config));
+    }
+
+    #[test]
+    fn package_accept_restrict_override_unmasks_for_one_matching_package_only() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_restrict: vec![],
+            package_accept_restrict: vec![(
+                "dev-libs/foo".to_string(),
+                vec!["bindist".to_string()],
+            )],
+            ..Default::default()
+        };
+        let c = Candidate {
+            restrict: "bindist".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(is_visible(&c, "dev-libs", "foo", &config));
+        assert!(!is_visible(&c, "dev-libs", "bar", &config));
+    }
+
+    #[test]
+    fn restrict_multiple_tokens_all_need_accepting() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_restrict: vec!["test".to_string()],
+            ..Default::default()
+        };
+        let c = Candidate {
+            restrict: "test bindist".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(!is_visible(&c, "dev-libs", "foo", &config));
     }
 
     #[test]

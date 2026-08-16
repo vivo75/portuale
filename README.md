@@ -1547,6 +1547,42 @@ PORTING/
   with the flag off by default, masked once `package.use` forces it on
   for the `forced` sibling specifically) exercise the full mechanism end
   to end through real `emerge --pretend`.
+  **`PROPERTIES`/`ACCEPT_PROPERTIES`/`package.properties` and
+  `RESTRICT`/`ACCEPT_RESTRICT`/`package.accept_restrict` masking.** A
+  natural, smaller follow-up to the `LICENSE` slice above, grounded
+  against real `config.py`'s own `_getMissingProperties`/
+  `_getMissingRestrict` -- and its own comment says it plainly:
+  "ACCEPT_PROPERTIES works like ACCEPT_LICENSE, without groups". Unlike
+  `LICENSE`, neither `PROPERTIES` nor `RESTRICT` has any `||`-any-of
+  semantics at all, so this reuses `use_reduce_flat` directly (every
+  flattened token individually needs to be accepted) instead of the
+  bespoke `LicenseNode` tree -- confirmed by reading both real functions
+  side by side with `getMissingLicenses`, not assumed from the name
+  alone. The shared `*`/`-*`/`-token`/`token` acceptance algorithm and
+  the atom-specificity-ordered `package_accept` layering were factored
+  out of `license_accepted` into `resolve_accept_tokens`/
+  `resolve_acceptable_tokens`/`use_flags_if_conditional` (Rust) and
+  their Python mirrors, verified behavior-preserving for `LICENSE`
+  itself (all of that slice's own tests still pass unchanged) before
+  building `PROPERTIES`/`RESTRICT` on top of the same three functions,
+  rather than copy-pasting the algorithm a second time. Real portage's
+  own default -- `"*"` (accept everything) -- comes from
+  `cnf/make.globals`, a real, always-sourced config layer this pilot
+  doesn't model as an actual read file (unlike the profile chain/
+  make.conf), so it's replicated as a hardcoded fallback, the same "real
+  default, ported without modeling the file it technically comes from"
+  treatment `accept_license`'s own `"* -@EULA"` already gets (there, the
+  default is a genuine Python-level hardcoded fallback even in real
+  portage itself, not read from any file at all -- a slightly different
+  real mechanism arriving at the same pilot-side treatment).
+  `dev-libs/propertiespkg` (`PROPERTIES="live"`, visible under the real
+  default) and `dev-libs/restrictedpkg`/`interactivepkg`
+  (`RESTRICT="bindist"`/`PROPERTIES="interactive"`, each individually
+  masked once `package.accept_restrict`/`package.properties` narrows
+  that one package's own effective accept set with a `-token` layered on
+  top of the otherwise-permissive global `"*"` -- a real, meaningful
+  per-package narrowing mechanism, not just an additive one) exercise
+  the mechanism end to end.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -2415,6 +2451,20 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/uselicensepkg
 # [ebuild  N] dev-libs/uselicensepkg-1.0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/uselicensepkgforced
 # emerge: there are no ebuilds to satisfy "dev-libs/uselicensepkgforced".  (exit 1)
+
+# PROPERTIES/ACCEPT_PROPERTIES/package.properties and RESTRICT/
+# ACCEPT_RESTRICT/package.accept_restrict masking are real and
+# implemented: real portage's own default (from cnf/make.globals) is
+# "*", accepting everything, so a plain declared PROPERTIES is visible
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/propertiespkg
+# [ebuild  N] dev-libs/propertiespkg-1.0
+# package.properties/package.accept_restrict can still narrow
+# acceptance for one specific package via a "-token", even under the
+# otherwise-permissive global "*" default
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/interactivepkg
+# emerge: there are no ebuilds to satisfy "dev-libs/interactivepkg".  (exit 1)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/restrictedpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/restrictedpkg".  (exit 1)
 
 # package.use.mask/package.use.force are real and implemented, atom
 # specificity included: a repo-level package.use.force wildcard entry

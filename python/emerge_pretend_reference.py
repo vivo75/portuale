@@ -244,10 +244,11 @@ def _parse_package_accept_keywords_lines(lines):
 
 
 def _parse_package_license_lines(lines):
-    """package.license: each line is "<atom-or-wildcard> <license or
-    @group ...>". Same shape as package.accept_keywords -- kept as its
-    own function for documentation clarity per real file format, mirroring
-    portage-profile/src/lib.rs's parse_package_license_lines exactly."""
+    """package.license/package.properties/package.accept_restrict: each
+    line is "<atom-or-wildcard> <token...>". Same shape as
+    package.accept_keywords, reused directly for all three real files.
+    Mirrors portage-profile/src/lib.rs's parse_package_license_lines
+    exactly."""
     return _parse_package_accept_keywords_lines(lines)
 
 
@@ -430,6 +431,8 @@ def list_candidates(repos, category, package):
                     # Candidate.license/.iuse exactly.
                     "license": metadata.get("LICENSE", ""),
                     "iuse": metadata.get("IUSE", ""),
+                    "properties": metadata.get("PROPERTIES", ""),
+                    "restrict": metadata.get("RESTRICT", ""),
                 }
             )
     return candidates
@@ -481,72 +484,63 @@ def _license_struct_has_masked(struct, acceptable):
     return False
 
 
-def _license_accepted(candidate, category, package, candidate_str, config):
-    """Whether `candidate`'s own declared LICENSE is fully accepted --
-    real Package.py's own `settings._getMissingLicenses` check (via
-    LicenseManager.getMissingLicenses/_getPkgAcceptLicense).
+def _use_flags_if_conditional(value_str, candidate, category, package, candidate_str, config):
+    """This candidate's own effective USE, only actually resolved if
+    `value_str` (a LICENSE/PROPERTIES/RESTRICT string) contains a "?" at
+    all -- real use_reduce's own "if '?' in license_str" optimization,
+    shared by every metadata key that needs this same "resolve USE, but
+    only when it could possibly matter" treatment. Mirrors
+    portage-repo/src/lib.rs's use_flags_if_conditional exactly."""
+    if "?" not in value_str:
+        return set()
+    return effective_use_flags(
+        config["use_flags"],
+        config["package_use"],
+        config["package_use_force"],
+        config["package_use_mask"],
+        config["use_stable_force"],
+        config["use_stable_mask"],
+        config["package_use_stable_force"],
+        config["package_use_stable_mask"],
+        candidate["keywords"],
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+        candidate_str,
+        category,
+        package,
+    )
 
-    config["accept_license"] (global, already @group-expanded but still
-    symbolic -- see that field's own doc comment, portage-profile's
-    resolve_config) is layered with every matching package.license
-    entry's own tokens, in atom-specificity order (mirrors
-    _specificity_ordered_flags's own established pattern for
-    package.use.mask/.force). The resulting symbolic token list is
-    resolved into a concrete per-candidate acceptable-license set via
-    the same "*"/"-*"/"-license"/"license" algorithm real
-    getMissingLicenses/get_pruned_accept_license both use -- "*" needs
-    "every license LICENSE could possibly mention" (real matchall=1),
-    computed here via real use_reduce's own matchall=True + flat=True.
 
-    A LICENSE string real use_reduce can't parse is treated as masked
-    (not visible) rather than accepted -- matching the "can't tell, so
-    exclude" precedent this pilot's own _reinstall_flags_for_use_change
-    already establishes for an unreadable candidate. Mirrors
-    portage-repo/src/lib.rs's license_accepted exactly."""
-    license_str = candidate.get("license", "")
-    if not license_str.strip():
-        return True
-
-    # Real use_reduce's own "if '?' in license_str" optimization: most
-    # packages' LICENSE has no USE-conditional at all.
-    if "?" in license_str:
-        use_flags = effective_use_flags(
-            config["use_flags"],
-            config["package_use"],
-            config["package_use_force"],
-            config["package_use_mask"],
-            config["use_stable_force"],
-            config["use_stable_mask"],
-            config["package_use_stable_force"],
-            config["package_use_stable_mask"],
-            candidate["keywords"],
-            config["accept_keywords"],
-            config["package_accept_keywords"],
-            candidate_str,
-            category,
-            package,
-        )
-    else:
-        use_flags = set()
-
-    matching_package_license = [
+def _resolve_accept_tokens(global_accept, package_accept, candidate_str, category, package):
+    """This candidate's own effective ACCEPT_LICENSE/ACCEPT_PROPERTIES/
+    ACCEPT_RESTRICT-style symbolic token list: `global_accept`, with
+    every matching `package_accept` entry's own tokens layered on top,
+    in atom-specificity order -- real _getPkgAcceptLicense's own
+    accept_license.extend(x) loop over ordered_by_atom_specificity
+    matches (and its _getMissingProperties/_getMissingRestrict
+    siblings, which do the identical thing for their own accept lists).
+    Mirrors portage-repo/src/lib.rs's resolve_accept_tokens exactly."""
+    matching = [
         (atom, tokens)
-        for atom, tokens in config["package_license"]
+        for atom, tokens in package_accept
         if _matches_config_entry(atom, candidate_str, category, package)
     ]
-    matching_package_license.sort(key=lambda et: _atom_specificity(et[0]))
-
-    accept_tokens = list(config["accept_license"])
-    for _atom, tokens in matching_package_license:
+    matching.sort(key=lambda et: _atom_specificity(et[0]))
+    accept_tokens = list(global_accept)
+    for _atom, tokens in matching:
         accept_tokens.extend(tokens)
+    return accept_tokens
 
-    try:
-        all_mentioned = {
-            t for t in use_reduce(license_str, matchall=True, flat=True) if t != "||"
-        }
-    except InvalidDependString:
-        return False
 
+def _resolve_acceptable_tokens(accept_tokens, all_mentioned):
+    """Resolves `accept_tokens` (symbolic -- "*"/"-*"/"-token"/"token")
+    into a concrete acceptable-token set, given `all_mentioned` (every
+    token the candidate's own metadata value could possibly mention,
+    real matchall=1 semantics). Shared by _license_accepted/
+    _metadata_key_accepted -- real getMissingLicenses/
+    _getMissingProperties/_getMissingRestrict all use this identical
+    algorithm, just for a different metadata key. Mirrors
+    portage-repo/src/lib.rs's resolve_acceptable_tokens exactly."""
     acceptable = set()
     for token in accept_tokens:
         if token == "*":
@@ -557,12 +551,77 @@ def _license_accepted(candidate, category, package, candidate_str, config):
             acceptable.discard(token[1:])
         else:
             acceptable.add(token)
+    return acceptable
+
+
+def _license_accepted(candidate, category, package, candidate_str, config):
+    """Whether `candidate`'s own declared LICENSE is fully accepted --
+    real Package.py's own `settings._getMissingLicenses` check (via
+    LicenseManager.getMissingLicenses/_getPkgAcceptLicense). A LICENSE
+    string real use_reduce can't parse is treated as masked (not
+    visible) rather than accepted -- matching the "can't tell, so
+    exclude" precedent this pilot's own _reinstall_flags_for_use_change
+    already establishes for an unreadable candidate. Mirrors
+    portage-repo/src/lib.rs's license_accepted exactly."""
+    license_str = candidate.get("license", "")
+    if not license_str.strip():
+        return True
+
+    use_flags = _use_flags_if_conditional(
+        license_str, candidate, category, package, candidate_str, config
+    )
+    accept_tokens = _resolve_accept_tokens(
+        config["accept_license"], config["package_license"], candidate_str, category, package
+    )
+    try:
+        all_mentioned = {
+            t for t in use_reduce(license_str, matchall=True, flat=True) if t != "||"
+        }
+    except InvalidDependString:
+        return False
+    acceptable = _resolve_acceptable_tokens(accept_tokens, all_mentioned)
 
     try:
         struct = use_reduce(license_str, uselist=list(use_flags), opconvert=True)
     except InvalidDependString:
         return False
     return not _license_struct_has_masked(struct, acceptable)
+
+
+def _metadata_key_accepted(
+    value_str, candidate, category, package, candidate_str, config, global_accept, package_accept
+):
+    """Whether every token in `value_str` (a candidate's own real
+    PROPERTIES/RESTRICT metadata) is accepted -- real
+    _getMissingProperties/_getMissingRestrict, ported as a bool. Unlike
+    LICENSE (which needs "||"-group *structure*), PROPERTIES/RESTRICT
+    have no any-of semantics at all: real config.py's own comment says
+    it plainly, "ACCEPT_PROPERTIES works like ACCEPT_LICENSE, without
+    groups" -- every flattened token individually needs to be accepted,
+    so this calls real use_reduce with flat=True directly, the same way
+    the Rust side reuses use_reduce_flat directly instead of its own
+    bespoke LicenseNode tree. Mirrors portage-repo/src/lib.rs's
+    metadata_key_accepted exactly."""
+    if not value_str.strip():
+        return True
+
+    use_flags = _use_flags_if_conditional(
+        value_str, candidate, category, package, candidate_str, config
+    )
+    accept_tokens = _resolve_accept_tokens(
+        global_accept, package_accept, candidate_str, category, package
+    )
+    try:
+        all_mentioned = {t for t in use_reduce(value_str, matchall=True, flat=True) if t != "||"}
+    except InvalidDependString:
+        return False
+    acceptable = _resolve_acceptable_tokens(accept_tokens, all_mentioned)
+
+    try:
+        flat = use_reduce(value_str, uselist=list(use_flags), flat=True)
+    except InvalidDependString:
+        return False
+    return all(t in acceptable for t in flat)
 
 
 def is_visible(candidate, category, package, config):
@@ -572,7 +631,10 @@ def is_visible(candidate, category, package, config):
     keywords contributed by a matching package.accept_keywords entry,
     with a "**" token in such an entry meaning "accept unconditionally"
     for matching candidates (even ones with empty/no KEYWORDS) -- and its
-    own declared LICENSE is fully accepted (see _license_accepted)."""
+    own declared LICENSE/PROPERTIES/RESTRICT are all fully accepted (see
+    _license_accepted/_metadata_key_accepted) -- real Package.py's own
+    _masks dict collects package.mask, LICENSE, PROPERTIES, and RESTRICT
+    as four independent masking reasons the same way."""
     candidate_str = (
         f"{category}/{package}-{candidate['version']}:{candidate['slot']}"
         f"::{candidate['repo_name']}"
@@ -589,6 +651,30 @@ def is_visible(candidate, category, package, config):
         return False
 
     if not _license_accepted(candidate, category, package, candidate_str, config):
+        return False
+
+    if not _metadata_key_accepted(
+        candidate.get("properties", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_properties"],
+        config["package_properties"],
+    ):
+        return False
+
+    if not _metadata_key_accepted(
+        candidate.get("restrict", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_restrict"],
+        config["package_accept_restrict"],
+    ):
         return False
 
     return _keywords_accepted(
@@ -1381,6 +1467,25 @@ def resolve_config(config_root, main_repo_location):
         for atom, tokens in _parse_package_license_lines(package_license_lines)
     ]
 
+    # ACCEPT_PROPERTIES/ACCEPT_RESTRICT: last-level-wins scalars, real
+    # "*" default (see portage-profile/src/lib.rs's own
+    # accept_properties doc comment) -- no "@group" expansion for
+    # either, unlike ACCEPT_LICENSE/package.license just above.
+    accept_properties = scalars.get("ACCEPT_PROPERTIES", "*").split()
+    accept_restrict = scalars.get("ACCEPT_RESTRICT", "*").split()
+
+    # package.properties/package.accept_restrict: user-level only, same
+    # "atom + raw tokens" shape package.license already reads (reused
+    # directly -- see _parse_package_license_lines's own docstring).
+    package_properties = _parse_package_license_lines(
+        _read_config_lines(os.path.join(config_root, "etc", "portage", "package.properties"))
+    )
+    package_accept_restrict = _parse_package_license_lines(
+        _read_config_lines(
+            os.path.join(config_root, "etc", "portage", "package.accept_restrict")
+        )
+    )
+
     return {
         "use_flags": use_flags,
         "accept_keywords": accept_keywords,
@@ -1404,6 +1509,10 @@ def resolve_config(config_root, main_repo_location):
         "license_groups": license_groups,
         "accept_license": accept_license,
         "package_license": package_license,
+        "accept_properties": accept_properties,
+        "package_properties": package_properties,
+        "accept_restrict": accept_restrict,
+        "package_accept_restrict": package_accept_restrict,
     }
 
 

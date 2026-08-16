@@ -368,6 +368,37 @@ pub struct Config {
     /// entry, matched via the same wildcard-atom machinery every other
     /// `*/*` entry in this pilot already uses.
     pub package_license: Vec<(String, Vec<String>)>,
+    /// `ACCEPT_PROPERTIES`, last-level-wins scalar (same reasoning as
+    /// `accept_license`'s own doc comment -- real config.py's own
+    /// comment: "ACCEPT_PROPERTIES works like ACCEPT_LICENSE, without
+    /// groups"; no `@group` expansion exists for this variable at all,
+    /// confirmed by reading `config.py`'s own `ACCEPT_PROPERTIES`
+    /// handling, which never touches `LicenseManager`). Real portage's
+    /// own default when unset anywhere -- `"*"` -- comes from
+    /// `cnf/make.globals` (a real, always-sourced config layer this
+    /// pilot doesn't model as an actual read file), so it's replicated
+    /// here as a hardcoded fallback, the same "real default, ported
+    /// without modeling the file it technically comes from" approach
+    /// `accept_license`'s own `"* -@EULA"` already takes (there, the
+    /// default is a genuine Python-level hardcoded fallback even in
+    /// real portage itself, not read from any file at all -- a slightly
+    /// different real mechanism arriving at the same pilot-side
+    /// treatment).
+    pub accept_properties: Vec<String>,
+    /// (atom-or-wildcard string, raw tokens) pairs from
+    /// `package.properties`, user-level only (real
+    /// `LocationsManager.abs_user_config`, confirmed by reading
+    /// `config.py`'s own `package.properties` read site -- no
+    /// repo-level or profile-level source exists for this file at all).
+    pub package_properties: Vec<(String, Vec<String>)>,
+    /// `ACCEPT_RESTRICT`. See `accept_properties`'s own doc comment --
+    /// identical real mechanism and default, just for `RESTRICT`
+    /// instead of `PROPERTIES`.
+    pub accept_restrict: Vec<String>,
+    /// (atom-or-wildcard string, raw tokens) pairs from
+    /// `package.accept_restrict`, user-level only. See
+    /// `package_properties`'s own doc comment.
+    pub package_accept_restrict: Vec<(String, Vec<String>)>,
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -643,13 +674,15 @@ fn parse_package_accept_keywords_lines(lines: &[String]) -> Vec<(String, Vec<Str
     result
 }
 
-/// `package.license`: each line is `<atom-or-wildcard> <license or
-/// @group ...>`. Same shape as `package.accept_keywords` (bare-atom
-/// lines are a documented no-op), kept as its own function rather than
-/// reused for documentation clarity per real file format, matching
-/// `parse_package_use_lines`'s own separateness from
-/// `parse_package_accept_keywords_lines` despite the identical shape
-/// when no shorthand applies.
+/// `package.license`/`package.properties`/`package.accept_restrict`:
+/// each line is `<atom-or-wildcard> <token...>`. Same shape as
+/// `package.accept_keywords` (bare-atom lines are a documented no-op),
+/// reused directly for all three real files (unlike
+/// `parse_package_use_lines`'s own deliberate separateness from
+/// `parse_package_accept_keywords_lines`, which exists only because of
+/// `package.use`'s own `USE_EXPAND`-shorthand parameter -- these three
+/// have no such per-file divergence to justify three near-identical
+/// wrapper functions).
 fn parse_package_license_lines(lines: &[String]) -> Vec<(String, Vec<String>)> {
     parse_package_accept_keywords_lines(lines)
 }
@@ -1146,6 +1179,29 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
         .map(|(atom, tokens)| (atom, expand_license_tokens(&tokens, &config.license_groups)))
         .collect();
 
+    // ACCEPT_PROPERTIES/ACCEPT_RESTRICT: last-level-wins scalars, real
+    // "*" default (see `accept_properties`'s own doc comment) -- no
+    // `@group` expansion for either, unlike ACCEPT_LICENSE/
+    // package.license just above.
+    config.accept_properties = scalars
+        .get("ACCEPT_PROPERTIES")
+        .map(|s| s.split_whitespace().map(String::from).collect())
+        .unwrap_or_else(|| vec!["*".to_string()]);
+    config.accept_restrict = scalars
+        .get("ACCEPT_RESTRICT")
+        .map(|s| s.split_whitespace().map(String::from).collect())
+        .unwrap_or_else(|| vec!["*".to_string()]);
+
+    // package.properties/package.accept_restrict: user-level only, same
+    // "atom + raw tokens" shape package.license already reads (reused
+    // directly -- see parse_package_license_lines's own doc comment).
+    config.package_properties = parse_package_license_lines(&read_config_lines(
+        &config_root.join("etc/portage/package.properties"),
+    )?);
+    config.package_accept_restrict = parse_package_license_lines(&read_config_lines(
+        &config_root.join("etc/portage/package.accept_restrict"),
+    )?);
+
     Ok(config)
 }
 
@@ -1295,6 +1351,8 @@ mod tests {
             config.accept_license,
             vec!["*".to_string(), "-@EULA".to_string()]
         );
+        assert_eq!(config.accept_properties, vec!["*".to_string()]);
+        assert_eq!(config.accept_restrict, vec!["*".to_string()]);
     }
 
     #[test]
