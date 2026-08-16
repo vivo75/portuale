@@ -387,21 +387,74 @@ def is_visible(candidate, category, package, config):
     if masked:
         return False
 
+    return _keywords_accepted(
+        candidate["keywords"],
+        candidate_str,
+        category,
+        package,
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+    )
+
+
+def _keywords_accepted(
+    keywords, candidate_str, category, package, accept_keywords, package_accept_keywords
+):
+    """The keyword-matching half of is_visible (everything except the
+    package.mask/.unmask check), factored out so _is_stable below can
+    reuse it against an artificially-unstabilized keyword list instead
+    of a candidate's own real keywords -- real KeywordsManager.isStable/
+    getMissingKeywords share this exact same matching logic with real
+    visibility checking too, just against a different input keyword
+    set, not a separate algorithm. Mirrors portage-repo/src/lib.rs's
+    keywords_accepted exactly."""
     accept_any = False
     extra_keywords = set()
-    for atom, keywords in config["package_accept_keywords"]:
+    for atom, kw in package_accept_keywords:
         if _matches_config_entry(atom, candidate_str, category, package):
-            if "**" in keywords:
+            if "**" in kw:
                 accept_any = True
-            extra_keywords.update(keywords)
+            extra_keywords.update(kw)
     if accept_any:
         return True
 
-    return bool((config["accept_keywords"] | extra_keywords) & set(candidate["keywords"]))
+    return bool((accept_keywords | extra_keywords) & set(keywords))
+
+
+def _is_stable(keywords, candidate_str, category, package, accept_keywords, package_accept_keywords):
+    """Whether `keywords` (a candidate's own KEYWORDS) count as "stable"
+    for the purposes of use.stable.mask/.force/package.use.stable.mask/
+    .force -- ported from real KeywordsManager.isStable: NOT a raw "no
+    ~ prefix" check. A candidate counts as stable if replacing every one
+    of its own keywords with its "~"-prefixed unstable form would make
+    it invisible under the current ACCEPT_KEYWORDS/package.accept_keywords
+    -- real portage's own comment explains why: "this guarantees that
+    the effective use.force/mask settings for a particular ebuild do not
+    change when that ebuild is stabilized." Reuses _keywords_accepted
+    (the same matching logic is_visible itself uses) against that
+    artificially-unstabilized list. Mirrors portage-repo/src/lib.rs's
+    is_stable exactly."""
+    unstable = [k if k.startswith("~") else f"~{k}" for k in keywords]
+    return not _keywords_accepted(
+        unstable, candidate_str, category, package, accept_keywords, package_accept_keywords
+    )
 
 
 def effective_use_flags(
-    base, package_use, package_use_force, package_use_mask, candidate_str, category, package
+    base,
+    package_use,
+    package_use_force,
+    package_use_mask,
+    use_stable_force,
+    use_stable_mask,
+    package_use_stable_force,
+    package_use_stable_mask,
+    keywords,
+    accept_keywords,
+    package_accept_keywords,
+    candidate_str,
+    category,
+    package,
 ):
     """The USE flags in effect for one specific package: `base` with every
     matching package.use entry's tokens layered on top, in file order, via
@@ -409,20 +462,40 @@ def effective_use_flags(
     _apply_incremental), THEN package.use.force/package.use.mask layered
     on top of that (force winning first, then mask -- see
     _specificity_ordered_flags for how a conflict between multiple
-    matching mask/force entries is resolved). Applied per package,
-    mirroring portage-repo/src/lib.rs's effective_use_flags exactly -- a
-    package.use entry never affects any other package's own
-    resolution."""
+    matching mask/force entries is resolved), THEN, only if this candidate
+    counts as "stable" (_is_stable), use_stable_force/package_use_stable_force
+    and use_stable_mask/package_use_stable_mask -- the .stable. variants of
+    the sources already applied above, ported from real getUseMask/
+    getUseForce's own per-package branch (which appends the stable variant
+    right alongside the ordinary one at each accumulation step, but only
+    when stable). Applied per package, mirroring
+    portage-repo/src/lib.rs's effective_use_flags exactly -- a package.use
+    entry never affects any other package's own resolution."""
     use_flags = set(base)
     for entry, tokens in package_use:
         if _matches_config_entry(entry, candidate_str, category, package):
             _apply_incremental(" ".join(tokens), use_flags)
+
+    stable = _is_stable(
+        keywords, candidate_str, category, package, accept_keywords, package_accept_keywords
+    )
+
     use_flags |= _specificity_ordered_flags(
         package_use_force, candidate_str, category, package
     )
+    if stable:
+        use_flags |= use_stable_force
+        use_flags |= _specificity_ordered_flags(
+            package_use_stable_force, candidate_str, category, package
+        )
     use_flags -= _specificity_ordered_flags(
         package_use_mask, candidate_str, category, package
     )
+    if stable:
+        use_flags -= use_stable_mask
+        use_flags -= _specificity_ordered_flags(
+            package_use_stable_mask, candidate_str, category, package
+        )
     return use_flags
 
 
@@ -515,6 +588,13 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
         config["package_use"],
         config["package_use_force"],
         config["package_use_mask"],
+        config["use_stable_force"],
+        config["use_stable_mask"],
+        config["package_use_stable_force"],
+        config["package_use_stable_mask"],
+        candidate["keywords"],
+        config["accept_keywords"],
+        config["package_accept_keywords"],
         candidate_str,
         category,
         package,
@@ -626,6 +706,13 @@ def _candidate_iuse_and_use(candidate, category, package, config):
         config["package_use"],
         config["package_use_force"],
         config["package_use_mask"],
+        config["use_stable_force"],
+        config["use_stable_mask"],
+        config["package_use_stable_force"],
+        config["package_use_stable_mask"],
+        candidate["keywords"],
+        config["accept_keywords"],
+        config["package_accept_keywords"],
         candidate_str,
         category,
         package,
@@ -822,7 +909,8 @@ def resolve_config(config_root, main_repo_location):
     cuts. Returns a dict with keys "use_flags", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
     "package_use", "system_packages", "use_force", "use_mask",
-    "package_use_force", "package_use_mask", "use_expand".
+    "package_use_force", "package_use_mask", "use_expand", "use_stable_force",
+    "use_stable_mask", "package_use_stable_force", "package_use_stable_mask".
 
     main_repo_location (the main repo's own tree root -- see
     find_repos/is_main) is needed for package.mask/.unmask's repo-level
@@ -986,6 +1074,48 @@ def resolve_config(config_root, main_repo_location):
         use_force_lines.extend(_read_config_lines(os.path.join(level, "package.use.force")))
         use_mask_lines.extend(_read_config_lines(os.path.join(level, "package.use.mask")))
 
+    # use.stable.mask/use.stable.force (PMS 5+; real
+    # eapi_supports_stable_use_forcing_and_masking's own EAPI floor,
+    # always recognized here -- this pilot's established "no EAPI
+    # parametrization" precedent): profile-chain only, same
+    # "-atom"-removal stacking use_force/use_mask already get --
+    # deliberately NOT folded into use_flags here, since "stable" is a
+    # per-candidate property (depends on that candidate's own KEYWORDS)
+    # with no meaningful "global" value -- real getUseForce's own
+    # pkg=None case never even looks at the stable variant at all.
+    # effective_use_flags applies these conditionally, once it knows a
+    # specific candidate's own stability. Mirrors
+    # portage-profile/src/lib.rs's resolve_config exactly, including its
+    # own deliberate simplification of not also adding the repo-level
+    # sourcing real per-package getUseForce(pkg) has for the *non-stable*
+    # global file (which use_force/use_mask never had here either).
+    use_stable_force_sources = [
+        _read_config_lines(os.path.join(level, "use.stable.force")) for level in chain
+    ]
+    use_stable_mask_sources = [
+        _read_config_lines(os.path.join(level, "use.stable.mask")) for level in chain
+    ]
+    use_stable_force = set(_stack_mask_lines(use_stable_force_sources))
+    use_stable_mask = set(_stack_mask_lines(use_stable_mask_sources))
+
+    # package.use.stable.mask/package.use.stable.force: repo-level (main
+    # repo only) plus every profile level's own file (in chain order) --
+    # NO user-level source at all, mirroring package.use.force/.mask's
+    # own confirmed sourcing exactly. No shorthand either, same reasoning.
+    use_stable_force_lines = _read_config_lines(
+        os.path.join(main_repo_location, "profiles", "package.use.stable.force")
+    )
+    use_stable_mask_lines = _read_config_lines(
+        os.path.join(main_repo_location, "profiles", "package.use.stable.mask")
+    )
+    for level in chain:
+        use_stable_force_lines.extend(
+            _read_config_lines(os.path.join(level, "package.use.stable.force"))
+        )
+        use_stable_mask_lines.extend(
+            _read_config_lines(os.path.join(level, "package.use.stable.mask"))
+        )
+
     # packages (@system): every profile level's own file, in chain order,
     # stacked with the same "-atom" removal semantics package.mask uses
     # (see _stack_mask_lines) -- mirrors portage-profile/src/lib.rs's
@@ -1018,6 +1148,10 @@ def resolve_config(config_root, main_repo_location):
         "package_use_force": _parse_package_use_lines(use_force_lines),
         "package_use_mask": _parse_package_use_lines(use_mask_lines),
         "use_expand": use_expand,
+        "use_stable_force": use_stable_force,
+        "use_stable_mask": use_stable_mask,
+        "package_use_stable_force": _parse_package_use_lines(use_stable_force_lines),
+        "package_use_stable_mask": _parse_package_use_lines(use_stable_mask_lines),
     }
 
 
@@ -1381,6 +1515,13 @@ def resolve_pretend_graph(
             config["package_use"],
             config["package_use_force"],
             config["package_use_mask"],
+            config["use_stable_force"],
+            config["use_stable_mask"],
+            config["package_use_stable_force"],
+            config["package_use_stable_mask"],
+            resolved["keywords"],
+            config["accept_keywords"],
+            config["package_accept_keywords"],
             candidate_str,
             category,
             package,

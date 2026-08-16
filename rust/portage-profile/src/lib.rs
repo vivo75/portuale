@@ -237,6 +237,39 @@ pub struct Config {
     /// documentation/testability, same reasoning `use_force`/`use_mask`
     /// already have for being separately visible.
     pub use_expand: HashSet<String>,
+    /// `use.stable.force`: every profile level's own file (in chain
+    /// order), stacked the same `-atom`-removal way `use_force` already
+    /// is -- but, unlike `use_force`, deliberately NOT folded into
+    /// `use_flags` here: real `getUseForce`'s own `pkg=None` (global)
+    /// case never even looks at the stable variant at all (confirmed by
+    /// reading it), since "stable" is inherently a per-candidate
+    /// property (it depends on that candidate's own KEYWORDS) with no
+    /// meaningful "global" value. `portage-repo`'s own `effective_use_flags`
+    /// applies this conditionally, once it knows a specific candidate's
+    /// own stability -- see that crate's own doc comment for the full
+    /// `package.use.stable.mask`/`.force` scope writeup, including the
+    /// deliberate simplification of not also adding the repo-level
+    /// sourcing real per-package `getUseForce(pkg)` has for the
+    /// *non-stable* global file (which this pilot's own `use_force`
+    /// never had either, profile-chain-only, so the stable variant stays
+    /// consistent with it rather than gaining new capability the
+    /// non-stable one lacks).
+    pub use_stable_force: HashSet<String>,
+    /// `use.stable.mask`. See `use_stable_force`'s own doc comment.
+    pub use_stable_mask: HashSet<String>,
+    /// (atom-or-wildcard string, flag tokens) pairs from
+    /// `package.use.stable.force` -- repo-level (main repo only) and
+    /// every profile level's own file, flat-concatenated exactly like
+    /// `package_use_force` already is (same no-user-level-source
+    /// confirmation from `UseManager.__init__`'s own file/variable
+    /// table). Applied by `portage-repo` conditionally, only for a
+    /// candidate `effective_use_flags` has already determined to be
+    /// stable -- see that crate's own doc comment.
+    pub package_use_stable_force: Vec<(String, Vec<String>)>,
+    /// (atom-or-wildcard string, flag tokens) pairs from
+    /// `package.use.stable.mask`. See `package_use_stable_force`'s own
+    /// doc comment.
+    pub package_use_stable_mask: Vec<(String, Vec<String>)>,
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -812,6 +845,42 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
     config.package_use_force = parse_package_use_lines(&use_force_lines, false);
     config.package_use_mask = parse_package_use_lines(&use_mask_lines, false);
 
+    // use.stable.mask/use.stable.force (PMS 5+; real
+    // eapi_supports_stable_use_forcing_and_masking's own EAPI floor,
+    // always recognized here -- see this crate's own module doc comment
+    // for this pilot's established "no EAPI parametrization"
+    // precedent): profile-chain only, same -atom-removal stacking
+    // use_force/use_mask already get -- deliberately NOT folded into
+    // use_flags here; see use_stable_force's own doc comment for why.
+    let mut use_stable_force_sources: Vec<Vec<String>> = Vec::new();
+    let mut use_stable_mask_sources: Vec<Vec<String>> = Vec::new();
+    for level in &chain {
+        use_stable_force_sources.push(read_config_lines(&level.join("use.stable.force"))?);
+        use_stable_mask_sources.push(read_config_lines(&level.join("use.stable.mask"))?);
+    }
+    config.use_stable_force = stack_mask_lines(&use_stable_force_sources)
+        .into_iter()
+        .collect();
+    config.use_stable_mask = stack_mask_lines(&use_stable_mask_sources)
+        .into_iter()
+        .collect();
+
+    // package.use.stable.mask/package.use.stable.force: repo-level (main
+    // repo only) plus every profile level's own file (in chain order) --
+    // NO user-level source at all, mirroring package_use_force/_mask's
+    // own confirmed sourcing exactly (same UseManager.__init__ file/
+    // variable table). No shorthand either, same reasoning.
+    let mut use_stable_force_lines: Vec<String> =
+        read_config_lines(&main_repo_location.join("profiles/package.use.stable.force"))?;
+    let mut use_stable_mask_lines: Vec<String> =
+        read_config_lines(&main_repo_location.join("profiles/package.use.stable.mask"))?;
+    for level in &chain {
+        use_stable_force_lines.extend(read_config_lines(&level.join("package.use.stable.force"))?);
+        use_stable_mask_lines.extend(read_config_lines(&level.join("package.use.stable.mask"))?);
+    }
+    config.package_use_stable_force = parse_package_use_lines(&use_stable_force_lines, false);
+    config.package_use_stable_mask = parse_package_use_lines(&use_stable_mask_lines, false);
+
     // packages (@system): every profile level's own file, in chain
     // order, stacked with the same -atom removal semantics package.mask
     // uses (see stack_mask_lines) -- confirmed by reading
@@ -1379,6 +1448,104 @@ mod tests {
         );
         assert_eq!(
             config.package_use_force,
+            vec![
+                ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
+                ("dev-libs/b".to_string(), vec!["forceb".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn use_stable_mask_and_force_stack_profile_chain_only_and_stay_out_of_use_flags() {
+        // use.stable.mask/.force: profile-chain only (no repo-level
+        // source, matching use_mask/use_force's own existing profile-
+        // chain-only sourcing) -- and, unlike use_mask/use_force,
+        // deliberately never folded into use_flags itself (see
+        // use_stable_force's own doc comment: stability is per-candidate,
+        // so portage-repo applies these conditionally instead).
+        let root = std::env::temp_dir().join("portage-profile-test-use-stable-mask-force");
+        let repo = root.join("repo");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(leaf.join("use.stable.mask"), "stablemaskflag\n").unwrap();
+        fs::write(leaf.join("use.stable.force"), "stableforceflag\n").unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.use_stable_mask,
+            HashSet::from(["stablemaskflag".to_string()])
+        );
+        assert_eq!(
+            config.use_stable_force,
+            HashSet::from(["stableforceflag".to_string()])
+        );
+        assert!(!config.use_flags.contains("stablemaskflag"));
+        assert!(!config.use_flags.contains("stableforceflag"));
+    }
+
+    #[test]
+    fn package_use_stable_mask_and_force_stack_repo_then_profile_only_no_user_source() {
+        // Mirrors package_use_mask_and_force_stack_repo_then_profile_only_no_user_source
+        // exactly, for the stable variant: repo-level entry for "a",
+        // profile-level entry for "b", a deliberately-written user-level
+        // file completely ignored (no such source exists in real
+        // portage).
+        let root = std::env::temp_dir().join("portage-profile-test-package-use-stable-mask-force");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let portage_dir = root.join("etc/portage");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&repo_profiles).unwrap();
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(
+            repo_profiles.join("package.use.stable.mask"),
+            "dev-libs/a maska\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("package.use.stable.mask"), "dev-libs/b maskb\n").unwrap();
+        fs::write(
+            portage_dir.join("package.use.stable.mask"),
+            "dev-libs/c maskc\n",
+        )
+        .unwrap();
+        fs::write(
+            repo_profiles.join("package.use.stable.force"),
+            "dev-libs/a forcea\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("package.use.stable.force"), "dev-libs/b forceb\n").unwrap();
+        fs::write(
+            portage_dir.join("package.use.stable.force"),
+            "dev-libs/c forcec\n",
+        )
+        .unwrap();
+
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.package_use_stable_mask,
+            vec![
+                ("dev-libs/a".to_string(), vec!["maska".to_string()]),
+                ("dev-libs/b".to_string(), vec!["maskb".to_string()]),
+            ]
+        );
+        assert_eq!(
+            config.package_use_stable_force,
             vec![
                 ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
                 ("dev-libs/b".to_string(), vec!["forceb".to_string()]),

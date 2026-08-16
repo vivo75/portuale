@@ -1,0 +1,7 @@
+# fixture use.stable.force: forces a flag no other fixture package's
+# IUSE declares, so this has zero effect on any other test -- exercises
+# the global (non-package) half of use.stable.mask/.force, applied only
+# to a candidate real KeywordsManager.isStable would consider stable
+# (see dev-libs/stableusepkg vs dev-libs/unstableusepkg, and
+# portage-repo's own is_stable doc comment).
+stableforceflag

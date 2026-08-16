@@ -149,6 +149,16 @@ CASES = [
         ["--pretend", "-v", "dev-libs/packageuseexpandpkg"],
         0,
     ),
+    (
+        "use.stable.force/package.use.stable.mask apply to a genuinely stable candidate",
+        ["--pretend", "-v", "dev-libs/stableusepkg"],
+        0,
+    ),
+    (
+        "use.stable.force/package.use.stable.mask do not apply to an unstable candidate",
+        ["--pretend", "-v", "dev-libs/unstableusepkg"],
+        0,
+    ),
     ("package.mask: hidden, no unmask", ["--pretend", "dev-libs/hardmaskedpkg"], 1),
     ("package.mask + package.unmask: masked then unmasked", ["--pretend", "dev-libs/maskedandunmaskedpkg"], 0),
     ("package.mask: -atom removal leaves candidate unaffected", ["--pretend", "dev-libs/samepkg"], 0),
@@ -680,6 +690,50 @@ def test_package_use_expand_prefix_shorthand_drives_a_dependency(emerge_binary, 
         '[ebuild  N] dev-libs/packageuseexpandpkg-1.0  USE="python_targets_python3_12"',
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
+
+
+def test_use_stable_force_and_package_use_stable_mask_apply_when_stable(
+    emerge_binary, fixture_env
+):
+    """dev-libs/stableusepkg's own KEYWORDS="amd64" (no "~") is genuinely
+    stable under real KeywordsManager.isStable (PMS-adjacent; see
+    portage-repo's own is_stable doc comment): converting it to "~amd64"
+    would fall outside the fixture's own ACCEPT_KEYWORDS="amd64", so
+    portage-repo's own is_stable check is True. use.stable.force (global,
+    profiles/base/use.stable.force) forces "stableforceflag" on, pulling
+    in its own RDEPEND; package.use.stable.mask (repo-level) masks
+    "maskflag" back off even though PORTING/fixtures/etc/portage/
+    package.use enables it first -- proving package.use.stable.mask wins
+    over package.use, but only for a genuinely stable candidate."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/stableusepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '[ebuild  N] dev-libs/stableusepkg-1.0  USE="-maskflag stableforceflag"',
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_use_stable_force_and_package_use_stable_mask_skip_an_unstable_candidate(
+    emerge_binary, fixture_env
+):
+    """dev-libs/unstableusepkg's own KEYWORDS="~amd64" is genuinely NOT
+    stable (its own already-"~"-prefixed keyword is unchanged by
+    is_stable's own re-unstabilization, so it stays visible either way)
+    -- same use.stable.force/package.use are in play as
+    dev-libs/stableusepkg's own test above, but neither
+    use.stable.force nor package.use.stable.mask apply here at all:
+    "stableforceflag" stays off (no dependency pulled in), and
+    "maskflag" -- enabled by the same package.use entry stableusepkg's
+    own test uses -- stays on, unmasked."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/unstableusepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == (
+        '[ebuild  N] dev-libs/unstableusepkg-1.0  USE="maskflag -stableforceflag"\n'
+    )
 
 
 def test_package_mask_hides_with_no_matching_unmask(emerge_binary, fixture_env):

@@ -343,11 +343,36 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// keywords checks (which only ever add to an accepted set), this can both
 /// add and remove flags relative to `base`, and does so per package -- a
 /// `package.use` entry never affects any other package's own resolution.
+///
+/// `use_stable_force`/`use_stable_mask`/`package_use_stable_force`/
+/// `package_use_stable_mask` (`keywords`/`candidate_str` decide, via
+/// `is_stable`, whether this candidate even counts as "stable") are the
+/// `.stable.` variants of the global/per-package force/mask sources
+/// already applied above -- ported from real `getUseMask`/`getUseForce`'s
+/// own per-package (`pkg is not None`) branch, which appends the stable
+/// variant right alongside the ordinary one at each accumulation step,
+/// but *only* when `stable` -- see this module's own `is_stable` doc
+/// comment for the real "would masking every keyword make this
+/// invisible" definition. Grouped here as force-then-mask, ordinary
+/// then stable, within each tier (not real portage's own
+/// per-profile-level interleaving, which this pilot's own flat global
+/// `use_force`/`use_mask` accumulation already doesn't replicate either
+/// -- see `portage-profile`'s own `package.use.mask`/`.force` doc
+/// comment for that established, confirmed simplification, extended
+/// here rather than re-litigated).
+#[allow(clippy::too_many_arguments)]
 fn effective_use_flags(
     base: &HashSet<String>,
     package_use: &[(String, Vec<String>)],
     package_use_force: &[(String, Vec<String>)],
     package_use_mask: &[(String, Vec<String>)],
+    use_stable_force: &HashSet<String>,
+    use_stable_mask: &HashSet<String>,
+    package_use_stable_force: &[(String, Vec<String>)],
+    package_use_stable_mask: &[(String, Vec<String>)],
+    keywords: &[String],
+    accept_keywords: &HashSet<String>,
+    package_accept_keywords: &[(String, Vec<String>)],
     candidate_str: &str,
     category: &str,
     package: &str,
@@ -358,16 +383,49 @@ fn effective_use_flags(
             portage_profile::apply_incremental(&tokens.join(" "), &mut use_flags);
         }
     }
+
+    let stable = is_stable(
+        keywords,
+        candidate_str,
+        category,
+        package,
+        accept_keywords,
+        package_accept_keywords,
+    );
+
     // package.use.mask/.force, layered on top of package.use, force
     // winning first then mask -- see specificity_ordered_flags's own doc
     // comment for how a conflict between multiple matching entries is
     // resolved, and the module doc comment's own `package.use.mask`/
-    // `.force` bullet for the full scope writeup.
+    // `.force` bullet for the full scope writeup. use.stable.force/
+    // package.use.stable.force (when stable) join the force tier;
+    // use.stable.mask/package.use.stable.mask (when stable) join the
+    // mask tier -- see this function's own doc comment.
     for flag in specificity_ordered_flags(package_use_force, candidate_str, category, package) {
         use_flags.insert(flag);
     }
+    if stable {
+        for flag in use_stable_force {
+            use_flags.insert(flag.clone());
+        }
+        for flag in
+            specificity_ordered_flags(package_use_stable_force, candidate_str, category, package)
+        {
+            use_flags.insert(flag);
+        }
+    }
     for flag in specificity_ordered_flags(package_use_mask, candidate_str, category, package) {
         use_flags.remove(&flag);
+    }
+    if stable {
+        for flag in use_stable_mask {
+            use_flags.remove(flag);
+        }
+        for flag in
+            specificity_ordered_flags(package_use_stable_mask, candidate_str, category, package)
+        {
+            use_flags.remove(&flag);
+        }
     }
     use_flags
 }
@@ -462,24 +520,95 @@ pub fn is_visible(
         return false;
     }
 
+    keywords_accepted(
+        &candidate.keywords,
+        &candidate_str,
+        category,
+        package,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
+    )
+}
+
+/// The keyword-matching half of `is_visible` (everything except the
+/// `package.mask`/`.unmask` check), factored out so `is_stable` below
+/// can reuse it against an artificially-unstabilized keyword list
+/// instead of `candidate.keywords` itself -- real `KeywordsManager.
+/// isStable`/`getMissingKeywords` share this exact same matching logic
+/// with real visibility checking too, just against a different input
+/// keyword set, not a separate algorithm. Takes the two config pieces
+/// it actually needs directly (rather than a whole `Config`) so
+/// `effective_use_flags` -- which, like the rest of this file's
+/// established style, takes individual pre-extracted fields rather
+/// than a `Config` reference -- can call `is_stable` without needing
+/// one either.
+fn keywords_accepted(
+    keywords: &[String],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+    accept_keywords: &HashSet<String>,
+    package_accept_keywords: &[(String, Vec<String>)],
+) -> bool {
     let mut accept_any = false;
     let mut extra_keywords: HashSet<&str> = HashSet::new();
-    for (atom, keywords) in &config.package_accept_keywords {
-        if matches_config_entry(atom, &candidate_str, category, package) {
-            if keywords.iter().any(|k| k == "**") {
+    for (atom, kw) in package_accept_keywords {
+        if matches_config_entry(atom, candidate_str, category, package) {
+            if kw.iter().any(|k| k == "**") {
                 accept_any = true;
             }
-            extra_keywords.extend(keywords.iter().map(String::as_str));
+            extra_keywords.extend(kw.iter().map(String::as_str));
         }
     }
     if accept_any {
         return true;
     }
 
-    candidate
-        .keywords
+    keywords
         .iter()
-        .any(|k| config.accept_keywords.contains(k) || extra_keywords.contains(k.as_str()))
+        .any(|k| accept_keywords.contains(k) || extra_keywords.contains(k.as_str()))
+}
+
+/// Whether `keywords` (a candidate's own KEYWORDS) count as "stable"
+/// for the purposes of `use.stable.mask`/`.force`/`package.use.stable.
+/// mask`/`.force` -- ported from real `KeywordsManager.isStable`
+/// (`lib/portage/package/ebuild/_config/KeywordsManager.py`): NOT a raw
+/// "no `~` prefix" check. A candidate counts as stable if replacing
+/// *every* one of its own keywords with its `~`-prefixed unstable form
+/// would make it invisible under the current `ACCEPT_KEYWORDS`/
+/// `package.accept_keywords` -- real portage's own comment explains why:
+/// "this guarantees that the effective use.force/mask settings for a
+/// particular ebuild do not change when that ebuild is stabilized."
+/// Reuses `keywords_accepted` (the same matching logic `is_visible`
+/// itself uses for its own KEYWORDS half) against that artificially-
+/// unstabilized list rather than reimplementing keyword matching a
+/// second time.
+fn is_stable(
+    keywords: &[String],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+    accept_keywords: &HashSet<String>,
+    package_accept_keywords: &[(String, Vec<String>)],
+) -> bool {
+    let unstable: Vec<String> = keywords
+        .iter()
+        .map(|k| {
+            if k.starts_with('~') {
+                k.clone()
+            } else {
+                format!("~{k}")
+            }
+        })
+        .collect();
+    !keywords_accepted(
+        &unstable,
+        candidate_str,
+        category,
+        package,
+        accept_keywords,
+        package_accept_keywords,
+    )
 }
 
 fn vercmp_ordering(a: &str, b: &str) -> Ordering {
@@ -620,6 +749,13 @@ fn candidate_iuse_and_use(
         &config.package_use,
         &config.package_use_force,
         &config.package_use_mask,
+        &config.use_stable_force,
+        &config.use_stable_mask,
+        &config.package_use_stable_force,
+        &config.package_use_stable_mask,
+        &candidate.keywords,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
         &candidate_str,
         category,
         package,
@@ -1299,6 +1435,7 @@ pub fn resolve_pretend_graph(
         let slot = resolved.slot.clone();
         let repo_location = resolved.repo_location.clone();
         let repo_name = resolved.repo_name.clone();
+        let keywords = resolved.keywords.clone();
 
         let slot_key = (key.0.clone(), key.1.clone(), slot.clone());
         if let Some(&existing_idx) = resolved_slots.get(&slot_key) {
@@ -1348,6 +1485,13 @@ pub fn resolve_pretend_graph(
             &config.package_use,
             &config.package_use_force,
             &config.package_use_mask,
+            &config.use_stable_force,
+            &config.use_stable_mask,
+            &config.package_use_stable_force,
+            &config.package_use_stable_mask,
+            &keywords,
+            &config.accept_keywords,
+            &config.package_accept_keywords,
             &candidate_str,
             &key.0,
             &key.1,
@@ -2362,6 +2506,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fixture_stable_use_force_and_package_use_stable_mask_apply_when_stable() {
+        // dev-libs/stableusepkg's own KEYWORDS="amd64" (no "~") is
+        // genuinely stable -- use.stable.force (profiles/base) pulls in
+        // its own RDEPEND.
+        let full_names: Vec<String> = graph_real("dev-libs/stableusepkg")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(full_names, vec!["dev-libs/stableusepkg", "dev-libs/newpkg"]);
+    }
+
+    #[test]
+    fn fixture_stable_use_force_skips_an_unstable_candidate() {
+        // dev-libs/unstableusepkg's own KEYWORDS="~amd64" is genuinely
+        // NOT stable -- the same use.stable.force never applies, so its
+        // own stableforceflag?-gated RDEPEND is never pulled in.
+        let full_names: Vec<String> = graph_real("dev-libs/unstableusepkg")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(full_names, vec!["dev-libs/unstableusepkg"]);
+    }
+
     fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(&root, &root.join("repo"))
@@ -2866,6 +3034,13 @@ mod tests {
             &package_use,
             &[],
             &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &[],
             "dev-libs/bar-1.0:0",
             "dev-libs",
             "bar",
@@ -2882,6 +3057,13 @@ mod tests {
             &package_use,
             &[],
             &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &[],
             "dev-libs/unrelated-1.0:0",
             "dev-libs",
             "unrelated",
@@ -2897,6 +3079,13 @@ mod tests {
             &base,
             &package_use,
             &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
             &[],
             "dev-libs/bar-1.0:0",
             "dev-libs",
@@ -2915,6 +3104,13 @@ mod tests {
             &[],
             &package_use_force,
             &package_use_mask,
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &[],
             "dev-libs/bar-1.0:0",
             "dev-libs",
             "bar",
@@ -2936,11 +3132,90 @@ mod tests {
             &[],
             &package_use_force,
             &package_use_mask,
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &[],
             "dev-libs/bar-1.0:0",
             "dev-libs",
             "bar",
         );
         assert!(!use_flags.contains("bothflag"));
+    }
+
+    #[test]
+    fn effective_use_flags_applies_stable_force_and_mask_only_when_stable() {
+        // "amd64" (no "~") is stable in this synthetic config: converting
+        // it to "~amd64" would fall outside accept_keywords={"amd64"},
+        // so is_stable's own "would masking every keyword make this
+        // invisible" check is true. use_stable_force/package_use_stable_force
+        // and use_stable_mask/package_use_stable_mask should all apply.
+        let base = HashSet::new();
+        let use_stable_force = HashSet::from(["globalstableforce".to_string()]);
+        let use_stable_mask = HashSet::from(["globalstablemask".to_string()]);
+        let package_use_stable_force = vec![(
+            "dev-libs/bar".to_string(),
+            vec!["pkgstableforce".to_string()],
+        )];
+        let package_use_stable_mask = vec![(
+            "dev-libs/bar".to_string(),
+            vec!["pkgstablemask".to_string()],
+        )];
+        let accept_keywords = HashSet::from(["amd64".to_string()]);
+        let use_flags = effective_use_flags(
+            &base,
+            &[],
+            &[],
+            &[],
+            &use_stable_force,
+            &use_stable_mask,
+            &package_use_stable_force,
+            &package_use_stable_mask,
+            &["amd64".to_string()],
+            &accept_keywords,
+            &[],
+            "dev-libs/bar-1.0:0",
+            "dev-libs",
+            "bar",
+        );
+        assert_eq!(
+            use_flags,
+            HashSet::from([
+                "globalstableforce".to_string(),
+                "pkgstableforce".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn effective_use_flags_skips_stable_force_and_mask_when_not_stable() {
+        // "~amd64" (already unstable) is NOT stable: replacing it with
+        // its own already-"~"-prefixed form changes nothing, so it stays
+        // visible either way -- is_stable's own check is false. None of
+        // the stable-only sources should apply at all.
+        let base = HashSet::new();
+        let use_stable_force = HashSet::from(["globalstableforce".to_string()]);
+        let accept_keywords = HashSet::from(["~amd64".to_string()]);
+        let use_flags = effective_use_flags(
+            &base,
+            &[],
+            &[],
+            &[],
+            &use_stable_force,
+            &HashSet::new(),
+            &[],
+            &[],
+            &["~amd64".to_string()],
+            &accept_keywords,
+            &[],
+            "dev-libs/bar-1.0:0",
+            "dev-libs",
+            "bar",
+        );
+        assert!(use_flags.is_empty());
     }
 
     #[test]

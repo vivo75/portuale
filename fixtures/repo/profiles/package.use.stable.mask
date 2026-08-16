@@ -1,0 +1,7 @@
+# fixture package.use.stable.mask (repo-level): masks "maskflag" for
+# dev-libs/stableusepkg specifically -- a package.use entry (see
+# PORTING/fixtures/etc/portage/package.use) enables the same flag first,
+# so this proves package.use.stable.mask wins over package.use, but
+# only for a candidate real KeywordsManager.isStable would consider
+# stable (see dev-libs/stableusepkg's own KEYWORDS="amd64").
+dev-libs/stableusepkg maskflag

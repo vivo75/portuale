@@ -5,3 +5,4 @@
 # at all).
 */wildcardkeywordpkg ~amd64
 dev-libs/livekeywordpkg **
+dev-libs/unstableusepkg ~amd64

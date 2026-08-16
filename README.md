@@ -1057,11 +1057,12 @@ PORTING/
   applies each specificity-ordered entry's tokens via the same
   incremental semantics `package.use` itself uses, so a more-specific
   entry's own `-flag` can cancel a less-specific entry's own mask/force.
-  Two deliberate scope cuts beyond that: no stable-vs-`~arch` KEYWORDS
-  distinction at all (real portage's own separate `use.stable.mask`/
-  `.force`/`package.use.stable.mask`/`.force` files and `_isStable`
-  check are out of scope entirely -- this pilot never determines
-  stability anywhere), and comparison-operator atoms (`>`/`<`/`>=`/
+  Two deliberate scope cuts beyond that at the time this paragraph was
+  written: no stable-vs-`~arch` KEYWORDS distinction at all (real
+  portage's own separate `use.stable.mask`/`.force`/`package.use.stable.
+  mask`/`.force` files and `_isStable` check were out of scope entirely
+  -- **now stale**, see the dedicated paragraph further below for the
+  follow-up that closed it), and comparison-operator atoms (`>`/`<`/`>=`/
   `<=`) share one specificity tier without real `best_match_to_list`'s
   "closest version wins a tie" refinement, since real-world
   `package.use.mask`/`.force` files essentially never use these
@@ -1301,6 +1302,48 @@ PORTING/
   loop: it's a purely syntactic transform), this fixture needed no
   change to the base `USE_EXPAND` slice's own profile fixture state at
   all.
+
+  **`use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
+  (stable-vs-`~arch` distinction)**. Closes the last named cut in the
+  `package.use.mask`/`.force` slice's own paragraph above. Grounded
+  against real `KeywordsManager.isStable`, which is genuinely more
+  subtle than a raw "no `~` prefix" check: a candidate counts as
+  "stable" if replacing *every* one of its own KEYWORDS with its
+  `~`-prefixed unstable form would make it invisible under the current
+  `ACCEPT_KEYWORDS`/`package.accept_keywords` -- real portage's own
+  comment explains why: "this guarantees that the effective use.force/
+  mask settings for a particular ebuild do not change when that ebuild
+  is stabilized." Ported as `is_stable`, reusing `is_visible`'s own
+  keyword-matching logic (factored out into `keywords_accepted`) against
+  that artificially-unstabilized list instead of a candidate's real
+  KEYWORDS -- not a second, separate matching algorithm. Also confirmed
+  by reading real `getUseMask`/`getUseForce`'s own `pkg=None` (global)
+  branch: it never even looks at the stable variant at all, since
+  "stable" is inherently a per-candidate property with no meaningful
+  global value -- so, unlike the already-shipped, config-resolution-time-
+  folded `use_force`/`use_mask`, `use_stable_force`/`use_stable_mask`
+  stay separate fields on `Config`, applied by `portage-repo`'s own
+  `effective_use_flags` conditionally, once it knows a specific
+  candidate's own stability (the same layer `package.use.mask`/`.force`
+  and USE-dep enforcement already work at). `use.stable.mask`/`.force`
+  read from the profile chain only, matching this pilot's own
+  already-established (not newly cut) profile-only sourcing for the
+  non-stable global `use.mask`/`.force`, rather than also adding the
+  repo-level sourcing real per-package `getUseMask`/`getUseForce` has
+  for it that this pilot's own global mechanism never had either;
+  `package.use.stable.mask`/`.force` read repo-level (main repo only)
+  plus profile-chain, mirroring `package.use.mask`/`.force`'s own
+  already-confirmed sourcing exactly, no user-level source (same
+  `UseManager.__init__` file/variable table confirmation). `dev-libs/
+  stableusepkg` (`KEYWORDS="amd64"`, genuinely stable under the fixture's
+  own `ACCEPT_KEYWORDS="amd64"`) and `dev-libs/unstableusepkg`
+  (`KEYWORDS="~amd64"`, genuinely not) share identical `IUSE`/RDEPEND
+  and an identical `package.use` entry enabling `maskflag` -- proving,
+  end to end through real `emerge --pretend`, that `use.stable.force`
+  forces `stableforceflag` on (pulling in a real dependency) and
+  `package.use.stable.mask` masks `maskflag` back off despite
+  `package.use` enabling it, for the stable candidate only; the
+  unstable one gets neither.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1502,6 +1545,18 @@ exercises `package.use`'s own `USE_EXPAND`-prefix shorthand:
 RDEPENDs on `dev-libs/newpkg` only once that entry's own shorthand
 expands to `python_targets_python3_12`, exactly as if it had been
 written out in full.
+
+`dev-libs/stableusepkg` (`KEYWORDS="amd64"`) and `dev-libs/unstableusepkg`
+(`KEYWORDS="~amd64"`, visible only via its own
+`package.accept_keywords` entry) exercise `use.stable.mask`/`.force`/
+`package.use.stable.mask`/`.force`: `PORTING/fixtures/repo/profiles/base/
+use.stable.force` (`stableforceflag`) and `PORTING/fixtures/repo/
+profiles/package.use.stable.mask` (`dev-libs/stableusepkg maskflag`)
+both apply only to the genuinely-stable `stableusepkg` (real
+`KeywordsManager.isStable`'s own "would masking every keyword make this
+invisible" check) -- `unstableusepkg` shares the identical `IUSE`/
+RDEPEND and the identical `package.use`-enabled `maskflag`, but gets
+neither the force nor the mask.
 
 `PORTING/fixtures/var/lib/portage/world` (real portage's own `WORLD_FILE`
 location, `ROOT`-relative) exercises `@world` expansion: it lists
@@ -1803,6 +1858,19 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/useexpandp
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/packageuseexpandpkg
 # [ebuild  N] dev-libs/packageuseexpandpkg-1.0  USE="python_targets_python3_12"
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# use.stable.force/package.use.stable.mask are real and implemented too:
+# stableusepkg's own KEYWORDS="amd64" (no "~") is genuinely stable, so
+# both apply -- stableforceflag forced on (pulling in a real dependency)
+# and maskflag masked back off despite package.use enabling it first
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/stableusepkg
+# [ebuild  N] dev-libs/stableusepkg-1.0  USE="-maskflag stableforceflag"
+# [ebuild  N] dev-libs/newpkg-1.0
+# unstableusepkg shares the identical IUSE/RDEPEND/package.use entry,
+# but its own KEYWORDS="~amd64" is genuinely NOT stable -- neither
+# applies: stableforceflag stays off, maskflag stays on
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/unstableusepkg
+# [ebuild  N] dev-libs/unstableusepkg-1.0  USE="maskflag -stableforceflag"
 
 # package.mask: hidden, no matching package.unmask entry
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/hardmaskedpkg
