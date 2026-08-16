@@ -87,3 +87,28 @@ pub(crate) struct MergeUseChangedVsInstalledArgs<'a> {
     pub(crate) package: &'a str,
     pub(crate) version: &'a str,
 }
+
+/// Portage's USE-change trigger: merge IUSE or enabled-USE∩IUSE differs from
+/// the installed instance's, independent of `--newuse`. `None` when unreadable.
+// Portage: depgraph.py, _complete_graph (complete_if_new_use)
+pub(crate) fn merge_use_changed_vs_installed(
+    args: MergeUseChangedVsInstalledArgs<'_>,
+) -> Option<bool> {
+    let MergeUseChangedVsInstalledArgs {
+        root,
+        repos,
+        config,
+        category,
+        package,
+        version,
+    } = args;
+    let (merge_use, merge_iuse) = merge_use_state(repos, config, category, package, version)?;
+    let inst_use = read_vdb_flag_set(root, category, package, version, "USE");
+    let inst_iuse = read_vdb_flag_set(root, category, package, version, "IUSE");
+    if merge_iuse != inst_iuse {
+        return Some(true);
+    }
+    let merge_enabled: HashSet<&String> = merge_use.intersection(&merge_iuse).collect();
+    let inst_enabled: HashSet<&String> = inst_use.intersection(&inst_iuse).collect();
+    Some(merge_enabled != inst_enabled)
+}

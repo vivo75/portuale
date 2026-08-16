@@ -12,3 +12,42 @@ pub struct CompleteGraphAutoEnableArgs<'a> {
     pub repos: &'a [RepoConfig],
     pub config: &'a portage_profile::Config,
 }
+
+/// Whether a first pass that merged or reinstalled anything installed
+/// requires a second, complete-mode resolve.
+// Portage: depgraph.py, _complete_graph
+pub fn complete_graph_auto_enable(args: CompleteGraphAutoEnableArgs<'_>) -> bool {
+    let CompleteGraphAutoEnableArgs {
+        entries,
+        if_new_use,
+        if_new_ver,
+        if_new_slot,
+        root,
+        repos,
+        config,
+    } = args;
+    entries.iter().any(|e| match &e.outcome {
+        PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => if_new_ver,
+        PretendOutcome::New { .. } if e.new_slot => if_new_ver || if_new_slot,
+        PretendOutcome::Reinstall {
+            version,
+            changed_flags,
+            slot_changed,
+            ..
+        } => {
+            (if_new_ver && *slot_changed)
+                || (if_new_use
+                    && (!changed_flags.is_empty()
+                        || merge_use_changed_vs_installed(MergeUseChangedVsInstalledArgs {
+                            root,
+                            repos,
+                            config,
+                            category: &e.category,
+                            package: &e.package,
+                            version,
+                        })
+                        .unwrap_or(false)))
+        }
+        _ => false,
+    })
+}
