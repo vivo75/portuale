@@ -135,3 +135,10 @@ pub struct GraphEntry {
 /// A root-qualified `cat/pkg`: the same cp merged in both roots is two nodes, so every
 /// node-keyed map uses this. Portage: depgraph.py (Package.root_config).
 pub type RootCp = (bool, String, String);
+
+/// Per walked dependency edge, whether it was ever pulled build-time-only and/or via
+/// a softer route. Unbreakable in a cycle when hard-only (or under an unsatisfied
+/// non-optional slot-operator priority the token text cannot see). Root-qualified on
+/// both ends. Built in `resolve_pretend_graph`; read by merge-order and cycles.
+/// Portage: resolver/package_tracker.py (PackageTracker).
+pub(crate) type EdgeKindMap = HashMap<(RootCp, RootCp), (bool, bool)>;
