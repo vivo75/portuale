@@ -63,6 +63,27 @@
 // instead of being silently misparsed or falling through to a
 // misleading generic error.
 //
+// --json is NOT a real emerge option at all -- real portage has no
+// structured-output mode for --pretend, so unlike every other flag in
+// this file, there's no real behavior to port. Built as a pilot-specific
+// convenience, requested directly by name (not routed through
+// emerge_options.rs's real-CLI-surface tables the way every other
+// unimplemented-but-real flag is, since it isn't one). Dumps the whole
+// resolved graph as one line of JSON, `{"entries": [...],
+// "slot_conflicts": [...]}`, instead of the plain-text lines below --
+// see `print_json`'s own doc comment for the exact shape, including two
+// fields no plain-text line carries at all: `requested` and
+// `required_by` (see `GraphEntry::required_by`'s own doc comment,
+// portage-repo, for how the latter is tracked through the BFS). Hand-
+// rolled JSON (`json_escape`/`json_string`), not a crate dependency --
+// see `json_escape`'s own doc comment for why. The Python reference
+// mirrors this output byte-for-byte (verified directly, not just
+// structurally-equal-as-JSON), via its own hand-rolled
+// `_json_escape`/`_entry_to_json`/`_print_json`, the same "two
+// independent implementations building the identical string via the
+// identical algorithm" approach this pilot uses everywhere else, rather
+// than two different JSON libraries that merely happen to agree.
+//
 // A top-level atom may carry an operator/version/slot (e.g.
 // `>=cat/pkg-1.2`, `cat/pkg:0`) -- resolve_pretend's own atom-vs-candidate
 // matching (see portage-repo/src/lib.rs) already handles this correctly
@@ -157,7 +178,9 @@ use crate::emerge_options;
 use portage_dep::{parse_atom, Blocker};
 use portage_repo::{
     config_root_from_env, resolve_pretend_graph, root_from_env, GraphEntry, PretendOutcome,
+    SlotConflict,
 };
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -206,6 +229,167 @@ fn print_blockers(entry: &GraphEntry, owner_version: &str) {
             b.atom_str
         );
     }
+}
+
+/// Escapes `s` for embedding in a JSON string literal (quote, backslash,
+/// and control characters -- category/package/version/atom text from
+/// this pilot's own inputs never needs anything fancier). Hand-rolled
+/// rather than pulling in a JSON crate: `--json`'s own output is a
+/// small, flat shape, and this pilot has no other dependency beyond
+/// `regex` anywhere in the workspace -- see the module doc comment for
+/// why `--json` exists at all (it's NOT a port of any real emerge
+/// behavior).
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn json_string(s: &str) -> String {
+    format!("\"{}\"", json_escape(s))
+}
+
+/// One JSON object per `GraphEntry` -- a structured mirror of the plain-
+/// text `[ebuild ...]`/"already installed"/blocker lines above, plus
+/// two fields no plain-text line carries at all: `requested` (was this
+/// exact category/package one of `atoms` directly, as opposed to reached
+/// only via a dependency string) and `required_by` (which package(s), if
+/// any, pulled it in that way -- see `GraphEntry::required_by`'s own doc
+/// comment, portage-repo). `source` is always `"ebuild"`: this pilot has
+/// no binary-package support anywhere (no `--usepkg`/`--getbinpkg`, no
+/// binpkg reading in `portage-repo` at all), so nothing else is ever
+/// possible -- included so a consumer doesn't have to assume it, not
+/// because this pilot actually distinguishes binary from source.
+/// Deliberately NOT affected by `--onlydeps`'s own suppression (a
+/// display-only concern for the plain-text loop below): `--json` always
+/// dumps the whole resolved graph, letting a consumer filter on
+/// `requested` itself if they want the `--onlydeps` view.
+fn entry_to_json(
+    entry: &GraphEntry,
+    top_level_pkgs: &HashSet<(String, String)>,
+    verbose: bool,
+) -> String {
+    let requested = top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
+    let mut fields: Vec<String> = vec![
+        format!("\"category\":{}", json_string(&entry.category)),
+        format!("\"package\":{}", json_string(&entry.package)),
+    ];
+    let outcome_tag = match &entry.outcome {
+        PretendOutcome::New { .. } => "new",
+        PretendOutcome::Upgrade { .. } => "upgrade",
+        PretendOutcome::Reinstall { .. } => "reinstall",
+        PretendOutcome::AlreadyInstalled { .. } => "already_installed",
+        PretendOutcome::NoVisibleCandidate => "no_visible_candidate",
+    };
+    fields.push(format!("\"outcome\":{}", json_string(outcome_tag)));
+    match &entry.outcome {
+        PretendOutcome::New { version } | PretendOutcome::AlreadyInstalled { version } => {
+            fields.push(format!("\"version\":{}", json_string(version)));
+        }
+        PretendOutcome::Upgrade { from, to } => {
+            fields.push(format!("\"version\":{}", json_string(to)));
+            fields.push(format!("\"from_version\":{}", json_string(from)));
+        }
+        PretendOutcome::Reinstall {
+            version,
+            changed_flags,
+        } => {
+            fields.push(format!("\"version\":{}", json_string(version)));
+            let changed_use: Vec<String> = changed_flags.iter().map(|f| json_string(f)).collect();
+            fields.push(format!("\"changed_use\":[{}]", changed_use.join(",")));
+        }
+        PretendOutcome::NoVisibleCandidate => {}
+    }
+    fields.push(format!(
+        "\"slot\":{}",
+        entry
+            .slot
+            .as_deref()
+            .map(json_string)
+            .unwrap_or_else(|| "null".to_string())
+    ));
+    if !matches!(entry.outcome, PretendOutcome::NoVisibleCandidate) {
+        fields.push("\"source\":\"ebuild\"".to_string());
+    }
+    fields.push(format!("\"requested\":{requested}"));
+    let required_by: Vec<String> = entry
+        .required_by
+        .iter()
+        .map(|(category, package)| {
+            format!(
+                "{{\"category\":{},\"package\":{}}}",
+                json_string(category),
+                json_string(package)
+            )
+        })
+        .collect();
+    fields.push(format!("\"required_by\":[{}]", required_by.join(",")));
+    if verbose && !entry.use_flags_display.is_empty() {
+        let use_flags: Vec<String> = entry
+            .use_flags_display
+            .iter()
+            .map(|(flag, enabled)| format!("{}:{enabled}", json_string(flag)))
+            .collect();
+        fields.push(format!("\"use_flags\":{{{}}}", use_flags.join(",")));
+    }
+    let blockers: Vec<String> = entry
+        .blockers
+        .iter()
+        .map(|b| {
+            format!(
+                "{{\"atom\":{},\"strong\":{},\"matched_category\":{},\"matched_package\":{},\"matched_version\":{}}}",
+                json_string(&b.atom_str),
+                b.strong,
+                json_string(&b.matched_category),
+                json_string(&b.matched_package),
+                json_string(&b.matched_version)
+            )
+        })
+        .collect();
+    fields.push(format!("\"blockers\":[{}]", blockers.join(",")));
+    format!("{{{}}}", fields.join(","))
+}
+
+fn slot_conflict_to_json(c: &SlotConflict) -> String {
+    format!(
+        "{{\"category\":{},\"package\":{},\"slot\":{},\"resolved_version\":{},\"conflicting_atom\":{}}}",
+        json_string(&c.category),
+        json_string(&c.package),
+        json_string(&c.slot),
+        json_string(&c.resolved_version),
+        json_string(&c.conflicting_atom)
+    )
+}
+
+/// The whole `--json` output: `{"entries": [...], "slot_conflicts": [...]}`,
+/// one line, no pretty-printing (a pilot-specific convenience format, not
+/// a stable schema -- see the module doc comment).
+fn print_json(
+    entries: &[GraphEntry],
+    slot_conflicts: &[SlotConflict],
+    top_level_pkgs: &HashSet<(String, String)>,
+    verbose: bool,
+) {
+    let entries_json: Vec<String> = entries
+        .iter()
+        .map(|e| entry_to_json(e, top_level_pkgs, verbose))
+        .collect();
+    let conflicts_json: Vec<String> = slot_conflicts.iter().map(slot_conflict_to_json).collect();
+    println!(
+        "{{\"entries\":[{}],\"slot_conflicts\":[{}]}}",
+        entries_json.join(","),
+        conflicts_json.join(",")
+    );
 }
 
 /// Reports and returns the exit code for a single option/action token
@@ -279,6 +463,10 @@ fn print_help() {
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)"
     );
     println!("   -h, --help      show this message and exit");
+    println!(
+        "       --json      dump the whole resolved graph as one line of JSON instead \
+         of the lines above (pilot-specific, not a real emerge option)"
+    );
     println!();
     println!(
         "Every other real emerge option/action is recognized by name (see \
@@ -341,6 +529,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut update = false;
     let mut deep = portage_repo::Deep::NotRequested;
     let mut excluded: Vec<String> = Vec::new();
+    let mut json = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -424,6 +613,14 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 2;
         } else if let Some(value) = arg.strip_prefix("--exclude=") {
             excluded.extend(value.split_whitespace().map(String::from));
+            i += 1;
+        } else if arg == "--json" {
+            // NOT a real emerge option at all -- real portage has no
+            // structured-output mode for --pretend. Pilot-specific, so
+            // deliberately not routed through emerge_options.rs's
+            // real-CLI-surface tables at all (unlike every other flag
+            // here), and given no short alias (nothing to bundle).
+            json = true;
             i += 1;
         } else if arg == "--verbose" || arg == "-v" {
             // Peeks at the next token, consuming it only if it's exactly
@@ -607,11 +804,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // dependency-level one, which stays silent below. A top-level atom's
     // own NoVisibleCandidate never reaches here at all: resolve_pretend_graph
     // already aborted the whole call for that case (see its doc comment).
-    let top_level_pkgs: std::collections::HashSet<(String, String)> = expanded_atoms
+    let top_level_pkgs: HashSet<(String, String)> = expanded_atoms
         .iter()
         .filter_map(|a| parse_atom(a))
         .map(|a| (a.category, a.package))
         .collect();
+
+    if json {
+        print_json(entries, &result.slot_conflicts, &top_level_pkgs, verbose);
+        return ExitCode::SUCCESS;
+    }
 
     for entry in entries {
         // --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the

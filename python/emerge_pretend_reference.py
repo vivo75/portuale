@@ -1354,7 +1354,7 @@ def resolve_blockers(root, pending, entries):
         candidates = list(
             installed_candidates(root, pb["target_category"], pb["target_package"])
         )
-        for category, package, outcome, _blockers, slot, _use_display in entries:
+        for category, package, outcome, _blockers, slot, _use_display, _required_by in entries:
             if (category, package) != target_key:
                 continue
             if outcome[0] == "new":
@@ -1508,22 +1508,38 @@ def resolve_pretend_graph(
     # top-level atom, parent's depth + 1 for anything reached only via a
     # dependency string) -- only consulted by _deep_recurses_at below,
     # for deciding whether an AlreadyInstalled package's own further
-    # dependencies get walked; every other outcome ignores it entirely.
-    queue = deque((a, 0) for a in atoms)
+    # dependencies get walked; every other outcome ignores it entirely --
+    # and the (category, package) that pushed it, if any (None for a
+    # directly-requested top-level atom), only consulted by
+    # required_by_map below, for each entry's own required_by.
+    queue = deque((a, 0, None) for a in atoms)
     pending_blockers = []
+    # (category, package) -> set of every distinct owner that reached it
+    # via a dependency string, accumulated separately from the BFS's own
+    # dedup/recursion decisions below (visited_atoms/resolved_slots/
+    # other_outcomes) so a diamond dependency's second (deduped) owner
+    # still gets recorded even though it never triggers a new
+    # resolution -- merged into entries in a single post-pass at the
+    # end, the same "accumulate now, merge once the whole graph is
+    # known" shape pending_blockers/resolve_blockers already use.
+    # Pilot-specific, no real portage equivalent -- see run()'s own
+    # --json handling for why it exists at all.
+    required_by_map = {}
 
     while queue:
-        current_atom_str, depth = queue.popleft()
+        current_atom_str, depth, owner = queue.popleft()
         atom = _parse_atom(current_atom_str)
         if atom is None:
             continue
         if atom.blocker:
             continue
+        category, package = atom.cp.split("/", 1)
+        key = (category, package)
+        if owner is not None:
+            required_by_map.setdefault(key, set()).add(owner)
         if current_atom_str in visited_atoms:
             continue
         visited_atoms.add(current_atom_str)
-        category, package = atom.cp.split("/", 1)
-        key = (category, package)
 
         outcome = resolve_pretend(
             repos, root, current_atom_str, config, newuse, changed_use, update, excluded
@@ -1570,7 +1586,7 @@ def resolve_pretend_graph(
                     key,
                     outcome[1],
                 )
-            entries.append((category, package, outcome, [], None, []))
+            entries.append((category, package, outcome, [], None, [], []))
             continue
 
         # The resolved version may have come from any of `repos` (not
@@ -1616,7 +1632,7 @@ def resolve_pretend_graph(
             continue
         entry_idx = len(entries)
         resolved_slots[slot_key] = entry_idx
-        entries.append((category, package, outcome, [], slot, []))
+        entries.append((category, package, outcome, [], slot, [], []))
 
         pf = f"{package}-{version}"
         try:
@@ -1688,7 +1704,7 @@ def resolve_pretend_graph(
                 (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
                 for flag in metadata["IUSE"].split()
             )
-            entries[entry_idx] = (category, package, outcome, [], slot, display)
+            entries[entry_idx] = (category, package, outcome, [], slot, display, [])
 
         # --nodeps: skip this package's own DEPEND/RDEPEND/etc entirely --
         # see this function's own docstring.
@@ -1724,7 +1740,17 @@ def resolve_pretend_graph(
                     }
                 )
                 continue
-            queue.append((tok, depth + 1))
+            queue.append((tok, depth + 1, key))
+
+    # Merge required_by_map into entries in a single post-pass, mirroring
+    # portage-repo/src/lib.rs's own identical final loop (run before
+    # resolve_blockers below, same order) -- entries are tuples
+    # (immutable), so this rebuilds each one rather than mutating in
+    # place.
+    entries = [
+        (category, package, outcome, blockers, slot, use_display, sorted(required_by_map.get((category, package), ())))
+        for category, package, outcome, blockers, slot, use_display, _required_by in entries
+    ]
 
     # setdefault (not a dict comprehension) so the *first* entry for a
     # given owner wins when the same category/package appears more than
@@ -1732,7 +1758,7 @@ def resolve_pretend_graph(
     # `entries.iter_mut().find(...)`, which also attaches to the first
     # match.
     blockers_by_owner = {}
-    for category, package, _o, blockers, _slot, _use_display in entries:
+    for category, package, _o, blockers, _slot, _use_display, _required_by in entries:
         blockers_by_owner.setdefault((category, package), blockers)
     for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
         blockers_by_owner[owner_key].append(conflict)
@@ -1842,7 +1868,7 @@ def _enqueue_dependencies(
                 }
             )
             continue
-        queue.append((tok, child_depth))
+        queue.append((tok, child_depth, owner_key))
 
 
 def _parse_atom(atom_str):
@@ -2065,6 +2091,119 @@ def _has_unsupported_top_level_features(a):
     return a.extended_syntax or a.build_id is not None
 
 
+def _json_escape(s):
+    """Escapes `s` for embedding in a JSON string literal (quote,
+    backslash, and control characters -- category/package/version/atom
+    text from this pilot's own inputs never needs anything fancier).
+    Hand-rolled, not json.dumps, so this side's --json output is
+    byte-for-byte identical to pretend.rs's own hand-rolled
+    json_escape/json_string -- both build the exact same string via the
+    exact same field order, rather than two different serializers that
+    merely happen to agree. See run()'s own --json handling for why
+    --json exists at all (it's NOT a port of any real emerge behavior)."""
+    out = []
+    for c in s:
+        if c == '"':
+            out.append('\\"')
+        elif c == "\\":
+            out.append("\\\\")
+        elif c == "\n":
+            out.append("\\n")
+        elif c == "\r":
+            out.append("\\r")
+        elif c == "\t":
+            out.append("\\t")
+        elif ord(c) < 0x20:
+            out.append(f"\\u{ord(c):04x}")
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+def _json_string(s):
+    return f'"{_json_escape(s)}"'
+
+
+def _json_bool(b):
+    return "true" if b else "false"
+
+
+def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, top_level_pkgs, verbose):
+    """One JSON object per entry -- a structured mirror of the plain-text
+    "[ebuild ...]"/"already installed"/blocker lines in run(), plus two
+    fields no plain-text line carries at all: "requested" (was this
+    exact category/package one of the atoms given directly, as opposed
+    to reached only via a dependency string) and "required_by" (which
+    package(s), if any, pulled it in that way). "source" is always
+    "ebuild": this pilot has no binary-package support anywhere (no
+    --usepkg/--getbinpkg, no binpkg reading at all), so nothing else is
+    ever possible -- included so a consumer doesn't have to assume it,
+    not because this pilot actually distinguishes binary from source.
+    Deliberately NOT affected by --onlydeps's own suppression (a
+    display-only concern for the plain-text loop in run()): --json
+    always dumps the whole resolved graph, letting a consumer filter on
+    "requested" itself if they want the --onlydeps view. Mirrors
+    pretend.rs's own entry_to_json exactly, field for field, in the same
+    order."""
+    requested = (category, package) in top_level_pkgs
+    fields = [
+        f'"category":{_json_string(category)}',
+        f'"package":{_json_string(package)}',
+    ]
+    tag = outcome[0]
+    fields.append(f'"outcome":{_json_string(tag)}')
+    if tag in ("new", "already_installed"):
+        fields.append(f'"version":{_json_string(outcome[1])}')
+    elif tag == "upgrade":
+        fields.append(f'"version":{_json_string(outcome[2])}')
+        fields.append(f'"from_version":{_json_string(outcome[1])}')
+    elif tag == "reinstall":
+        fields.append(f'"version":{_json_string(outcome[1])}')
+        changed_use = ",".join(_json_string(f) for f in outcome[2])
+        fields.append(f'"changed_use":[{changed_use}]')
+    fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
+    if tag != "no_visible_candidate":
+        fields.append('"source":"ebuild"')
+    fields.append(f'"requested":{_json_bool(requested)}')
+    required_by_json = ",".join(
+        f'{{"category":{_json_string(c)},"package":{_json_string(p)}}}' for c, p in required_by
+    )
+    fields.append(f'"required_by":[{required_by_json}]')
+    if verbose and use_display:
+        use_flags = ",".join(f"{_json_string(flag)}:{_json_bool(enabled)}" for flag, enabled in use_display)
+        fields.append(f'"use_flags":{{{use_flags}}}')
+    blockers_json = ",".join(
+        f'{{"atom":{_json_string(b["atom_str"])},"strong":{_json_bool(b["strong"])},'
+        f'"matched_category":{_json_string(b["matched_category"])},'
+        f'"matched_package":{_json_string(b["matched_package"])},'
+        f'"matched_version":{_json_string(b["matched_version"])}}}'
+        for b in blockers
+    )
+    fields.append(f'"blockers":[{blockers_json}]')
+    return "{" + ",".join(fields) + "}"
+
+
+def _slot_conflict_to_json(c):
+    return (
+        f'{{"category":{_json_string(c["category"])},"package":{_json_string(c["package"])},'
+        f'"slot":{_json_string(c["slot"])},"resolved_version":{_json_string(c["resolved_version"])},'
+        f'"conflicting_atom":{_json_string(c["conflicting_atom"])}}}'
+    )
+
+
+def _print_json(entries, slot_conflicts, top_level_pkgs, verbose):
+    """The whole --json output: {"entries": [...], "slot_conflicts": [...]},
+    one line, no pretty-printing (a pilot-specific convenience format,
+    not a stable schema -- see run()'s own --json handling). Mirrors
+    pretend.rs's own print_json exactly."""
+    entries_json = ",".join(
+        _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, top_level_pkgs, verbose)
+        for category, package, outcome, blockers, slot, use_display, required_by in entries
+    )
+    conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)
+    print(f'{{"entries":[{entries_json}],"slot_conflicts":[{conflicts_json}]}}')
+
+
 def _report_option(token):
     """Reports and returns the exit code for a single option/action token
     ("-x" or "--long", never a positional atom) that isn't --pretend/-p,
@@ -2131,6 +2270,10 @@ def _print_help():
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)"
     )
     print("   -h, --help      show this message and exit")
+    print(
+        "       --json      dump the whole resolved graph as one line of JSON instead "
+        "of the lines above (pilot-specific, not a real emerge option)"
+    )
     print()
     print(
         "Every other real emerge option/action is recognized by name (see "
@@ -2187,6 +2330,7 @@ def run(args):
     update = False
     deep = 0
     excluded = []
+    json_output = False
 
     i = 0
     while i < len(args):
@@ -2255,6 +2399,14 @@ def run(args):
             i += 2
         elif arg.startswith("--exclude="):
             excluded.extend(arg[len("--exclude=") :].split())
+            i += 1
+        elif arg == "--json":
+            # NOT a real emerge option at all -- real portage has no
+            # structured-output mode for --pretend. Pilot-specific, so
+            # deliberately not routed through _lookup_option's real-CLI-
+            # surface tables at all (unlike every other flag here), and
+            # given no short alias (nothing to bundle).
+            json_output = True
             i += 1
         elif arg in ("--verbose", "-v"):
             # Peeks at the next token, consuming it only if it's exactly
@@ -2438,7 +2590,11 @@ def run(args):
         flags = [flag if enabled else f"-{flag}" for flag, enabled in use_display]
         return '  USE="{}"'.format(" ".join(flags))
 
-    for category, package, outcome, blockers, _slot, use_display in entries:
+    if json_output:
+        _print_json(entries, result["slot_conflicts"], top_level_pkgs, verbose)
+        return 0
+
+    for category, package, outcome, blockers, _slot, use_display, _required_by in entries:
         tag = outcome[0]
         # --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
         # dependencies of the packages specified, not the packages

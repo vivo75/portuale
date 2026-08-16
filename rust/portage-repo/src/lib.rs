@@ -1133,6 +1133,17 @@ pub struct GraphEntry {
     /// computed regardless of `--verbose` (cheap; the CLI layer decides
     /// whether to print it) -- see pretend.rs.
     pub use_flags_display: Vec<(String, bool)>,
+    /// Every `(category, package)` that reached this entry via its own
+    /// DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND (sorted, deduplicated) --
+    /// empty for a directly-requested top-level atom with no other
+    /// owner. A package required by more than one parent (a diamond
+    /// dependency) lists every one of them, not just whichever reached
+    /// it first -- tracked separately from the BFS's own dedup/
+    /// recursion decisions (`visited_atoms`/`resolved_slots`/
+    /// `other_outcomes`), which only ever decide whether to *resolve*
+    /// an atom again, never whether to *record* who asked for it. See
+    /// `resolve_pretend_graph`'s own doc comment.
+    pub required_by: Vec<(String, String)>,
 }
 
 /// A blocker atom found while flattening one package's own dependency strings,
@@ -1305,6 +1316,13 @@ impl Deep {
     }
 }
 
+/// One BFS-queued dependency-walk item: the atom text, its own depth
+/// (see `Deep`), and the `(category, package)` that pushed it, if any
+/// (`None` for a directly-requested top-level atom) -- the latter only
+/// consulted by `resolve_pretend_graph`'s own `required_by_map`, for
+/// `GraphEntry::required_by`.
+type QueueItem = (String, u32, Option<(String, String)>);
+
 /// Recursively resolves every atom in `atoms` and -- for packages that
 /// would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
 /// IDEPEND atoms, breadth-first. Returns one `GraphEntry` per distinct
@@ -1453,6 +1471,17 @@ impl Deep {
 ///     since that dependency atom re-enters this same BFS loop and
 ///     `resolve_pretend` call like any other, with no special case
 ///     needed.
+///   - Each `GraphEntry`'s own `required_by` (which package(s), if any,
+///     pulled it in via a dependency string -- pilot-specific, no real
+///     portage equivalent asked for by this pilot's own `--json` output;
+///     see `GraphEntry`'s own doc comment) is tracked in a separate
+///     `required_by_map` accumulated throughout the BFS and merged into
+///     `entries` in one pass at the end, the same "accumulate now, merge
+///     once the whole graph is known" shape `pending_blockers`/
+///     `resolve_blockers` already use -- deliberately independent of
+///     `visited_atoms`/`resolved_slots`/`other_outcomes`'s own dedup
+///     decisions, so a diamond dependency's second (deduped) owner is
+///     still recorded even though it never triggers a new resolution.
 // 10 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
@@ -1505,25 +1534,43 @@ pub fn resolve_pretend_graph(
     // dependency string) -- only consulted by `deep.recurses_at` below,
     // for deciding whether an AlreadyInstalled package's own further
     // dependencies get walked; every other outcome ignores it entirely
-    // (see `Deep`'s own doc comment).
-    let mut queue: VecDeque<(String, u32)> = VecDeque::new();
+    // (see `Deep`'s own doc comment) -- and the `(category, package)`
+    // that pushed it, if any (`None` for a directly-requested top-level
+    // atom), only consulted by `required_by_map` below, for `GraphEntry`'s
+    // own `required_by` field.
+    let mut queue: VecDeque<QueueItem> = VecDeque::new();
     for a in atoms {
-        queue.push_back((a.clone(), 0));
+        queue.push_back((a.clone(), 0, None));
     }
 
     let mut pending_blockers: Vec<PendingBlocker> = Vec::new();
+    // (category, package) -> every distinct owner that reached it via a
+    // dependency string, accumulated separately from the BFS's own
+    // dedup/recursion decisions below (`visited_atoms`/`resolved_slots`/
+    // `other_outcomes`) so a diamond dependency's *second* (deduped)
+    // owner still gets recorded even though it never triggers a new
+    // resolution -- merged into `entries` in a single post-pass at the
+    // end, mirroring `pending_blockers`/`resolve_blockers`'s own
+    // "accumulate now, merge once the whole graph is known" shape.
+    let mut required_by_map: HashMap<(String, String), HashSet<(String, String)>> = HashMap::new();
 
-    while let Some((current_atom, depth)) = queue.pop_front() {
+    while let Some((current_atom, depth, owner)) = queue.pop_front() {
         let Some(atom) = portage_dep::parse_atom(&current_atom) else {
             continue;
         };
         if atom.blocker != portage_dep::Blocker::None {
             continue;
         }
+        let key = (atom.category.clone(), atom.package.clone());
+        if let Some(owner) = owner {
+            required_by_map
+                .entry(key.clone())
+                .or_default()
+                .insert(owner);
+        }
         if !visited_atoms.insert(current_atom.clone()) {
             continue;
         }
-        let key = (atom.category.clone(), atom.package.clone());
 
         let outcome = resolve_pretend(
             &repos,
@@ -1594,6 +1641,7 @@ pub fn resolve_pretend_graph(
                 blockers: Vec::new(),
                 slot: None,
                 use_flags_display: Vec::new(),
+                required_by: Vec::new(),
             });
             continue;
         };
@@ -1655,6 +1703,7 @@ pub fn resolve_pretend_graph(
             blockers: Vec::new(),
             slot: Some(slot.clone()),
             use_flags_display: Vec::new(),
+            required_by: Vec::new(),
         });
 
         let pf = format!("{}-{version}", key.1);
@@ -1787,7 +1836,17 @@ pub fn resolve_pretend_graph(
                     continue;
                 }
             }
-            queue.push_back((tok, depth + 1));
+            queue.push_back((tok, depth + 1, Some(key.clone())));
+        }
+    }
+
+    for entry in &mut entries {
+        if let Some(owners) =
+            required_by_map.remove(&(entry.category.clone(), entry.package.clone()))
+        {
+            let mut owners: Vec<(String, String)> = owners.into_iter().collect();
+            owners.sort();
+            entry.required_by = owners;
         }
     }
 
@@ -1838,7 +1897,7 @@ fn enqueue_dependencies(
     version: &str,
     config: &portage_profile::Config,
     child_depth: u32,
-    queue: &mut VecDeque<(String, u32)>,
+    queue: &mut VecDeque<QueueItem>,
     pending_blockers: &mut Vec<PendingBlocker>,
     owner_key: (String, String),
     owner_version: String,
@@ -1912,7 +1971,7 @@ fn enqueue_dependencies(
                 continue;
             }
         }
-        queue.push_back((tok, child_depth));
+        queue.push_back((tok, child_depth, Some(owner_key.clone())));
     }
 }
 
@@ -2982,6 +3041,71 @@ mod tests {
         assert_eq!(names.iter().filter(|n| **n == "dev-libs/common").count(), 1);
     }
 
+    fn full_graph(atom_str: &str) -> Vec<GraphEntry> {
+        let root = fixtures_root();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+    }
+
+    #[test]
+    fn required_by_is_empty_for_a_directly_requested_top_level_atom() {
+        let entries = full_graph("dev-libs/newpkg");
+        assert_eq!(entries[0].category, "dev-libs");
+        assert_eq!(entries[0].package, "newpkg");
+        assert_eq!(entries[0].required_by, Vec::new());
+    }
+
+    #[test]
+    fn required_by_names_the_single_owner_of_a_plain_dependency() {
+        // dev-libs/withdeps RDEPENDs on newpkg and upgradepkg -- both
+        // should list withdeps as their only owner.
+        let entries = full_graph("dev-libs/withdeps");
+        for entry in &entries {
+            if entry.category == "dev-libs"
+                && (entry.package == "newpkg" || entry.package == "upgradepkg")
+            {
+                assert_eq!(
+                    entry.required_by,
+                    vec![("dev-libs".to_string(), "withdeps".to_string())],
+                    "{}/{}",
+                    entry.category,
+                    entry.package
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn required_by_lists_every_owner_of_a_diamond_dependency() {
+        // dev-libs/common is reached via both shared-a and shared-b --
+        // both owners must be recorded (sorted), not just whichever one
+        // the BFS happened to resolve it through first.
+        let entries = full_graph("dev-libs/diamond");
+        let common = entries
+            .iter()
+            .find(|e| e.category == "dev-libs" && e.package == "common")
+            .expect("dev-libs/common must be in the graph");
+        assert_eq!(
+            common.required_by,
+            vec![
+                ("dev-libs".to_string(), "shared-a".to_string()),
+                ("dev-libs".to_string(), "shared-b".to_string()),
+            ]
+        );
+    }
+
     #[test]
     fn recursion_terminates_on_a_dependency_cycle() {
         let entries = graph("dev-libs/cycle-a");
@@ -3850,6 +3974,7 @@ mod tests {
             blockers: Vec::new(),
             slot: Some("0".to_string()),
             use_flags_display: Vec::new(),
+            required_by: Vec::new(),
         }
     }
 

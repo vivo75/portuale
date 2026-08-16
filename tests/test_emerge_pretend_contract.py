@@ -24,6 +24,7 @@ higher-priority overlay repo alongside the main one), and asserts their
 stdout, stderr, and exit codes all match exactly.
 """
 
+import json
 import subprocess
 
 import pytest
@@ -53,6 +54,13 @@ CASES = [
     ("--exclude prevents a not-yet-installed package from being offered", ["--pretend", "--exclude", "dev-libs/newpkg", "dev-libs/newpkg"], 1),
     ("--exclude with no argument is a real, immediate usage error", ["--pretend", "--exclude"], 2),
     ("-X bundled with other short flags is not supported", ["-pX", "dev-libs/upgradepkg"], 2),
+    ("--json: new install", ["--pretend", "--json", "dev-libs/newpkg"], 0),
+    ("--json: with --verbose, includes use_flags", ["--pretend", "-v", "--json", "dev-libs/useflagpkg"], 0),
+    ("--json: diamond dependency, required_by lists both owners", ["--pretend", "--json", "dev-libs/diamond"], 0),
+    ("--json: upgrade includes from_version", ["--pretend", "--update", "--json", "dev-libs/upgradepkg"], 0),
+    ("--json: blocker match", ["--pretend", "--json", "dev-libs/blockerpkg"], 0),
+    ("--json: slot conflict", ["--pretend", "--json", "dev-libs/slotconflictparent"], 0),
+    ("--json: combined with --deep", ["--pretend", "--update", "--deep", "--json", "dev-libs/deeppkg"], 0),
     ("only ~keyword, not visible", ["--pretend", "dev-libs/maskedpkg"], 1),
     ("package does not exist", ["--pretend", "dev-libs/does-not-exist"], 1),
     ("sibling-prefix package: new", ["--pretend", "dev-libs/foo"], 0),
@@ -1398,6 +1406,8 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)\n"
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)\n"
         "   -h, --help      show this message and exit\n"
+        "       --json      dump the whole resolved graph as one line of JSON instead "
+        "of the lines above (pilot-specific, not a real emerge option)\n"
         "\n"
         "Every other real emerge option/action is recognized by name (see "
         "lib/_emerge/main.py) but not implemented -- using one reports which "
@@ -2097,6 +2107,130 @@ def test_exclude_is_not_bundle_compatible(emerge_binary, fixture_env):
         "emerge: -X (--exclude) requires an argument and can't be bundled with "
         "other short flags in this pilot"
     )
+
+
+def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
+    """--json is a pilot-specific addition (real portage has no
+    structured-output mode for --pretend at all) -- pinned in full since
+    it's this pilot's own content, not derived from any real emerge
+    output, unlike every other flag's own contract test."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--json", "dev-libs/newpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == (
+        '{"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new",'
+        '"version":"1.0","slot":"0","source":"ebuild","requested":true,'
+        '"required_by":[],"blockers":[]}],"slot_conflicts":[]}\n'
+    )
+
+
+def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--json", "dev-libs/upgradepkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == (
+        '{"entries":[{"category":"dev-libs","package":"upgradepkg","outcome":"upgrade",'
+        '"version":"2.0","from_version":"1.0","slot":"0","source":"ebuild",'
+        '"requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[]}\n'
+    )
+
+
+def test_json_diamond_dependency_lists_both_required_by_owners(emerge_binary, fixture_env):
+    """dev-libs/common is reached via both shared-a and shared-b -- --json
+    must list both owners, sorted, not just whichever the BFS resolved
+    first (see portage-repo's own required_by_map)."""
+    result = _run([str(emerge_binary)], ["--pretend", "--json", "dev-libs/diamond"], fixture_env)
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    common = next(e for e in payload["entries"] if e["package"] == "common")
+    assert common["required_by"] == [
+        {"category": "dev-libs", "package": "shared-a"},
+        {"category": "dev-libs", "package": "shared-b"},
+    ]
+
+
+def test_json_requested_reflects_top_level_vs_dependency(emerge_binary, fixture_env):
+    """--json's own "requested" field, unlike the plain-text loop's
+    "already installed; nothing to do" line, is available for every
+    entry regardless of outcome -- true only for dev-libs/withdeps
+    itself, false for everything it pulls in."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--json", "dev-libs/withdeps"], fixture_env
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    requested = {e["package"]: e["requested"] for e in payload["entries"]}
+    assert requested == {"withdeps": True, "newpkg": False, "upgradepkg": False}
+
+
+def test_json_verbose_includes_use_flags(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "--json", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    useflagpkg = next(e for e in payload["entries"] if e["package"] == "useflagpkg")
+    assert useflagpkg["use_flags"] == {"foo": True, "missingflag": False}
+
+
+def test_json_without_verbose_omits_use_flags(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--json", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    useflagpkg = next(e for e in payload["entries"] if e["package"] == "useflagpkg")
+    assert "use_flags" not in useflagpkg
+
+
+def test_json_source_is_always_ebuild_except_for_no_visible_candidate(
+    emerge_binary, fixture_env
+):
+    """This pilot has no binary-package support anywhere -- "source" is
+    always "ebuild" for anything actually resolved, and omitted
+    entirely (nothing was resolved at all) for a dependency-level
+    no_visible_candidate."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--json", "dev-libs/missingdep"], fixture_env
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    by_outcome = {e["outcome"]: e for e in payload["entries"]}
+    assert by_outcome["new"]["source"] == "ebuild"
+    assert "source" not in by_outcome["no_visible_candidate"]
+
+
+def test_json_dumps_the_whole_graph_unaffected_by_onlydeps(emerge_binary, fixture_env):
+    """Unlike the plain-text loop, --json's own output isn't suppressed
+    by --onlydeps -- withdeps itself still appears (requested: true),
+    letting a consumer filter on "requested" if they want the
+    --onlydeps view instead."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--onlydeps", "--json", "dev-libs/withdeps"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    packages = {e["package"] for e in payload["entries"]}
+    assert packages == {"withdeps", "newpkg", "upgradepkg"}
+
+
+def test_json_includes_slot_conflicts(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--json", "dev-libs/slotconflictparent"], fixture_env
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert len(payload["slot_conflicts"]) == 1
+    conflict = payload["slot_conflicts"][0]
+    assert conflict["category"] == "dev-libs"
+    assert conflict["package"] == "slotconflicttarget"
 
 
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):

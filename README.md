@@ -1456,6 +1456,44 @@ PORTING/
   bundling it (`-pX` gets a specific "requires an argument, can't be
   bundled" message) -- there's no sensible default the way a bundled
   `-v`/`-D` has.
+  **`--json`: structured output, plus `required_by`.** Unlike every
+  other flag in this series, `--json` is NOT a port of any real emerge
+  behavior -- real portage has no structured-output mode for
+  `--pretend` at all. Built at the user's own explicit request, with two
+  fields no plain-text line has ever carried: `requested` (was this
+  exact category/package one of the atoms given directly, vs. reached
+  only via a dependency string) and `required_by` (which package(s), if
+  any, pulled it in that way -- a genuinely new piece of graph state,
+  not just a different rendering of what already existed). `required_by`
+  needed real BFS surgery: the queue now carries each item's own owner
+  alongside its atom text and depth, and a `required_by_map` accumulates
+  every distinct owner per `(category, package)` throughout the walk,
+  merged into `entries` in one pass at the end -- deliberately
+  *independent* of the BFS's own `visited_atoms`/`resolved_slots`/
+  `other_outcomes` dedup decisions (which only ever decide whether to
+  *resolve* an atom again), so a diamond dependency's second, deduped
+  owner still gets recorded even though it never triggers a new
+  resolution -- verified against the existing `dev-libs/diamond` fixture
+  (`shared-a`/`shared-b` both RDEPEND on `dev-libs/common`): `common`'s
+  own `required_by` lists both, sorted, not just whichever branch the
+  BFS happened to resolve first. `source` is always `"ebuild"` -- this
+  pilot has no binary-package support anywhere (no `--usepkg`/
+  `--getbinpkg`, no binpkg reading in `portage-repo` at all), so nothing
+  else is ever possible; included so a JSON consumer doesn't have to
+  assume it, not because this pilot actually distinguishes binary from
+  source (confirmed with the user directly, choosing this over omitting
+  the field entirely). Output is deliberately unaffected by `--onlydeps`
+  (a display-only concern for the plain-text loop): `--json` always
+  dumps the *whole* resolved graph, so a consumer can filter on
+  `requested` themselves instead. Hand-rolled JSON on both sides
+  (`json_escape`/`json_string`/`entry_to_json`/`print_json` in
+  `pretend.rs`, `_json_escape`/`_entry_to_json`/`_print_json` in the
+  Python reference) rather than a JSON library on either side -- the
+  same "two independent implementations building the identical string
+  via the identical algorithm" approach this whole pilot uses
+  everywhere else, verified to produce genuinely byte-for-byte identical
+  output (not just structurally-equal-as-JSON) via the shared contract
+  suite.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -2289,6 +2327,17 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --exclude dev-libs/new
 # is itself a space-separated atom list, so both accumulate
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --exclude "dev-libs/does-not-exist dev-libs/upgradepkg" dev-libs/upgradepkg
 # dev-libs/upgradepkg-1.0 is already installed; nothing to do
+
+# --json is pilot-specific (NOT a real emerge option): the whole
+# resolved graph as one line of JSON instead of the plain-text lines
+# above, including "requested" and "required_by" -- two fields no
+# plain-text line has ever carried
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/newpkg
+# {"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new","version":"1.0","slot":"0","source":"ebuild","requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[]}
+# dev-libs/common is a diamond dependency (both shared-a and shared-b
+# RDEPEND on it) -- required_by lists both owners, sorted
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/diamond | python3 -c 'import json,sys; print(next(e["required_by"] for e in json.load(sys.stdin)["entries"] if e["package"] == "common"))'
+# [{'category': 'dev-libs', 'package': 'shared-a'}, {'category': 'dev-libs', 'package': 'shared-b'}]
 
 # package.use.mask/package.use.force are real and implemented, atom
 # specificity included: a repo-level package.use.force wildcard entry
