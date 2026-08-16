@@ -48,17 +48,37 @@
 //     matches the overlays follow-up's own already-confirmed "per-repo
 //     package.mask/.unmask/profiles/ out of scope" cut), and `masters`
 //     (eclass/mask inheritance across repos via a repo's own `masters`
-//     setting). `package.accept_keywords`/`.use` remain user-level only
-//     for now -- real portage has repo- and profile-level equivalents for
-//     both too (`KeywordsManager`'s per-profile `package.accept_keywords`,
-//     `UseManager`'s repo- and profile-level `package.use`), but stacking
-//     those wasn't part of this follow-up's confirmed scope, so it's a
-//     separate, still-open cut, not something this slice claims to close.
-//     `package.use` entries are applied per package (not globally): a
-//     matching entry's tokens are layered on top of the base `use_flags`
-//     set with the same incremental semantics as `USE` itself (see
-//     `apply_incremental`), scoped to only the one package being
-//     resolved/recursed into -- see `portage-repo`'s
+//     setting).
+//   - `package.accept_keywords` is stacked from profile-chain (in chain
+//     order) + user-level sources, mirroring real `KeywordsManager.
+//     getPKeywords` exactly -- confirmed by reading it, there's no
+//     repo-level source for this file in real portage at all (unlike
+//     `package.mask`'s repo-level `profiles/package.mask`). Purely
+//     additive, like the pilot's own pre-existing user-level-only
+//     handling always was: no `-atom` removal exists for this file in
+//     real portage either, so every matching source's keyword tokens are
+//     just unioned together (see `is_visible`). A bare atom with no
+//     keyword tokens is a no-op at *both* levels here, which is only a
+//     simplification for the profile-level source -- real portage gives
+//     a bare *profile*-level entry an implicit derived `~arch` meaning
+//     (`accept_keywords_defaults` in `getPKeywords`) that a bare
+//     *user*-level entry never gets, so kept simple and symmetric
+//     between the two rather than adding a profile-only special case
+//     (see `parse_package_accept_keywords_lines`'s own doc comment).
+//   - `package.use` remains user-level only for now: real portage's
+//     repo-level `package.use` lands in a distinct `configdict["repo"]`
+//     layer and profile-level in `configdict["defaults"]`, both governed
+//     by the full `USE_ORDER` precedence sequence this pilot only
+//     partially implements (see the "Only the `defaults`... layers of
+//     real config.py's `USE_ORDER`" bullet above) -- a materially bigger,
+//     separate piece of work than the flat concatenation
+//     `package.mask`/`.accept_keywords` both use, so it's deliberately
+//     left as its own, still-open follow-up rather than folded into this
+//     one. `package.use` entries are applied per package (not globally):
+//     a matching entry's tokens are layered on top of the base
+//     `use_flags` set with the same incremental semantics as `USE`
+//     itself (see `apply_incremental`), scoped to only the one package
+//     being resolved/recursed into -- see `portage-repo`'s
 //     `resolve_pretend_graph` for where that per-package application
 //     happens (it needs the candidate's SLOT to match slotted
 //     `package.use` entries, which only exists at that later,
@@ -347,12 +367,19 @@ fn stack_mask_lines(sources: &[Vec<String>]) -> Vec<String> {
 
 /// `package.accept_keywords`: each line is `<atom-or-wildcard>
 /// <keyword...>`. A line with no keyword tokens after the atom is a
-/// documented no-op for v1 (real portage gives it EAPI/ARCH-dependent
-/// implicit meaning this pilot doesn't implement).
-fn load_package_accept_keywords(config_root: &Path) -> Result<Vec<(String, Vec<String>)>, String> {
-    let path = config_root.join("etc/portage/package.accept_keywords");
+/// documented no-op for v1 -- real portage gives a bare profile-level
+/// entry EAPI/ARCH-dependent implicit meaning (see `KeywordsManager.
+/// getPKeywords`'s `accept_keywords_defaults`, which derives an implicit
+/// `~arch` set from the *current* global `ACCEPT_KEYWORDS`); a bare
+/// user-level entry is already a no-op in real portage too (no
+/// `accept_keywords_defaults` substitution happens for
+/// `self.pkeywordsdict`), so this v1 simplification only actually
+/// changes behavior for the profile-level source, kept deliberately
+/// simple and consistent between the two rather than adding a
+/// profile-only special case.
+fn parse_package_accept_keywords_lines(lines: &[String]) -> Vec<(String, Vec<String>)> {
     let mut result = Vec::new();
-    for line in read_config_lines(&path)? {
+    for line in lines {
         let mut parts = line.split_whitespace();
         let Some(atom) = parts.next() else {
             continue;
@@ -363,7 +390,7 @@ fn load_package_accept_keywords(config_root: &Path) -> Result<Vec<(String, Vec<S
         }
         result.push((atom.to_string(), keywords));
     }
-    Ok(result)
+    result
 }
 
 /// `package.use`: each line is `<atom-or-wildcard> <use-token...>`. A line
@@ -462,7 +489,28 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
 
     config.package_mask = stack_mask_lines(&mask_sources);
     config.package_unmask = stack_mask_lines(&unmask_sources);
-    config.package_accept_keywords = load_package_accept_keywords(config_root)?;
+
+    // package.accept_keywords: profile-chain (in chain order), then
+    // user-level -- real KeywordsManager.getPKeywords iterates its own
+    // per-profile-level dicts first, then the user-level one, extending
+    // the same accumulating "extra accepted keywords" list each time (no
+    // "-atom" removal exists for this file at all, unlike package.mask,
+    // so a flat concatenation-then-parse is equivalent to parsing each
+    // source separately and concatenating the results). No repo-level
+    // source exists for this file in real portage at all (unlike
+    // package.mask's repo-level profiles/package.mask) -- confirmed by
+    // reading KeywordsManager.__init__, which never reads a
+    // repo-location path for either package.accept_keywords or its
+    // package.keywords alias.
+    let mut accept_keywords_lines: Vec<String> = Vec::new();
+    for level in &chain {
+        accept_keywords_lines.extend(read_config_lines(&level.join("package.accept_keywords"))?);
+    }
+    accept_keywords_lines.extend(read_config_lines(
+        &config_root.join("etc/portage/package.accept_keywords"),
+    )?);
+    config.package_accept_keywords = parse_package_accept_keywords_lines(&accept_keywords_lines);
+
     config.package_use = load_package_use(config_root)?;
 
     Ok(config)
@@ -643,6 +691,43 @@ mod tests {
         assert_eq!(
             config.package_mask,
             vec!["dev-libs/b".to_string(), "dev-libs/d".to_string()]
+        );
+    }
+
+    #[test]
+    fn package_accept_keywords_stacks_profile_chain_then_user_no_repo_source() {
+        // Profile-level entry for "a", user-level entry for "b" -- both
+        // must appear, in that order (profile-chain first, matching real
+        // KeywordsManager.getPKeywords), proving there's no repo-level
+        // source at all (only the pilot's existing repo/profiles/package.mask
+        // convention would exist if there were one, and this test
+        // deliberately never creates that file).
+        let root = std::env::temp_dir().join("portage-profile-test-accept-keywords-stack");
+        let repo = root.join("repo");
+        let portage_dir = root.join("etc/portage");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&portage_dir).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(leaf.join("package.accept_keywords"), "dev-libs/a ~amd64\n").unwrap();
+        fs::write(
+            portage_dir.join("package.accept_keywords"),
+            "dev-libs/b ~amd64\ndev-libs/bare-no-op\n",
+        )
+        .unwrap();
+
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo).expect("config must resolve");
+        assert_eq!(
+            config.package_accept_keywords,
+            vec![
+                ("dev-libs/a".to_string(), vec!["~amd64".to_string()]),
+                ("dev-libs/b".to_string(), vec!["~amd64".to_string()]),
+            ]
         );
     }
 

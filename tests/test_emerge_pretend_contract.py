@@ -81,6 +81,7 @@ CASES = [
     ("package.mask: profile-level package.unmask cancels a repo-level mask", ["--pretend", "dev-libs/repomaskedthenprofileunmaskedpkg"], 0),
     ("package.mask: user-level -atom removes a repo-level mask entry", ["--pretend", "dev-libs/repomaskedthenuserremovedpkg"], 0),
     ("package.accept_keywords: wildcard extends visibility", ["--pretend", "dev-libs/wildcardkeywordpkg"], 0),
+    ("package.accept_keywords: profile-level entry extends visibility", ["--pretend", "dev-libs/profileacceptkeywordspkg"], 0),
     ("package.accept_keywords: ** accepts no-keywords package", ["--pretend", "dev-libs/livekeywordpkg"], 0),
     ("package.use: wildcard entry enables a flag not on globally", ["--pretend", "dev-libs/packageuseenablepkg"], 0),
     ("package.use: entry disables a flag that is on globally", ["--pretend", "dev-libs/packageusedisablepkg"], 0),
@@ -398,6 +399,25 @@ def test_package_accept_keywords_double_star_accepts_no_keywords_package(
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/livekeywordpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.strip() == "[ebuild  N] dev-libs/livekeywordpkg-9999"
+
+
+def test_package_accept_keywords_profile_level_entry_extends_visibility(
+    emerge_binary, fixture_env
+):
+    """dev-libs/profileacceptkeywordspkg is only ~amd64, made visible not
+    by the user-level package.accept_keywords fixture (which has no entry
+    for it) but by PORTING/fixtures/repo/profiles/arch/amd64's own
+    package.accept_keywords -- proving package.accept_keywords is now
+    stacked from the profile chain too, not just user-level, mirroring
+    real KeywordsManager.getPKeywords (which has no repo-level source for
+    this file at all, unlike package.mask)."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/profileacceptkeywordspkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/profileacceptkeywordspkg-1.0"
 
 
 def test_unrelated_masked_by_keywords_package_is_still_hidden(emerge_binary, fixture_env):

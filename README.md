@@ -648,10 +648,42 @@ PORTING/
   matching the overlays follow-up's own already-confirmed cut: an
   *overlay* repo's own repo-level `package.mask`/`.unmask` (only the one
   main repo's is read), and `masters` (eclass/mask inheritance across
-  repos). `package.accept_keywords`/`.use` remain user-level only for
+  repos). `package.accept_keywords`/`.use` remained user-level only for
   now -- real portage has repo/profile-level equivalents for both too,
-  but stacking those is a separate, still-open cut this slice doesn't
-  claim to close.
+  but stacking those was a separate, still-open cut this slice didn't
+  claim to close (`package.accept_keywords` closed in the follow-up
+  below; `package.use` remains open).
+
+  **`package.accept_keywords` profile-chain stacking**: extends this
+  same file from user-level-only to profile-chain (in chain order) +
+  user-level, grounded directly against real `KeywordsManager.
+  getPKeywords`. Digging into the real mechanism first turned up an
+  asymmetry worth confirming with the user before assuming
+  `package.use` would be an equally simple extension of the same
+  pattern: real portage has **no repo-level source for
+  `package.accept_keywords` at all** (confirmed by reading
+  `KeywordsManager.__init__`, which never reads a repo-location path for
+  it), so this is a clean 2-source extension, not 3 -- and it's purely
+  additive on both sides (no `-atom` removal exists for this file in
+  real portage either), so concatenating profile-chain lines (in order)
+  then user-level lines, then parsing once, is equivalent to real
+  portage's own per-source-then-extend loop. `package.use`, by contrast,
+  turned out to be considerably more entangled: real portage's
+  repo-level `package.use` lands in a distinct `configdict["repo"]`
+  layer and profile-level in `configdict["defaults"]`, both governed by
+  the full `USE_ORDER` precedence sequence this pilot only partially
+  implements -- extending it the same way `package.mask` and
+  `package.accept_keywords` were would be a further, undocumented
+  simplification beyond what's already there, not a precedent-following
+  extension, so -- confirmed with the user -- it was deliberately left
+  out of this slice for its own, properly-scoped follow-up. One more
+  small asymmetry worth noting: real portage gives a bare *profile*-level
+  `package.accept_keywords` entry (no keyword tokens after the atom) an
+  implicit derived `~arch` meaning (`accept_keywords_defaults` in
+  `getPKeywords`) that a bare *user*-level entry never gets; v1 treats a
+  bare entry as a no-op at both levels, same simplification the
+  pre-existing user-level-only handling already made, kept deliberately
+  symmetric rather than adding a profile-only special case.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -778,6 +810,14 @@ the existing user-level `package.mask` fixture -- `-atom` removal
 reaching all the way from the user's own file back to an entry a
 different, earlier source added, the specific thing that wasn't
 possible before this slice).
+
+`PORTING/fixtures/repo/profiles/arch/amd64/package.accept_keywords` (a
+third, previously-untouched profile level, complementing `base`'s own
+`package.mask` and `default`'s own `package.unmask`) exercises
+`package.accept_keywords` profile-chain stacking:
+`profileacceptkeywordspkg` (only `~amd64`, made visible not by the
+user-level `package.accept_keywords` fixture -- which has no entry for
+it at all -- but by this profile-level one).
 
 `PORTING/fixtures/etc/portage/package.use` exercises the per-package USE
 slice: `packageuseenablepkg` (its `pkguseflag?`-gated dependency is only
@@ -987,6 +1027,12 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/wildcardkeywo
 # package.accept_keywords "**" accepts a package with no KEYWORDS at all
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/livekeywordpkg
 # [ebuild  N] dev-libs/livekeywordpkg-9999
+
+# package.accept_keywords is now also stacked from the profile chain, not
+# just /etc/portage -- this package has no user-level entry at all, only
+# a profile-level one (see PORTING/fixtures/repo/profiles/arch/amd64)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/profileacceptkeywordspkg
+# [ebuild  N] dev-libs/profileacceptkeywordspkg-1.0
 
 # package.use ("*/packageuseenablepkg pkguseflag") enables a flag that's
 # off everywhere else, pulling in its pkguseflag?-gated dependency

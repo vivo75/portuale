@@ -225,10 +225,16 @@ def _stack_mask_lines(sources):
     return result
 
 
-def _load_package_accept_keywords(config_root):
-    path = os.path.join(config_root, "etc", "portage", "package.accept_keywords")
+def _parse_package_accept_keywords_lines(lines):
+    """A line with no keyword tokens after the atom is a documented v1
+    no-op -- see portage-profile/src/lib.rs's
+    parse_package_accept_keywords_lines for why this is a simplification
+    only for the profile-level source (real portage gives a bare
+    profile-level entry an implicit derived "~arch" meaning a bare
+    user-level entry never gets), kept simple and symmetric between the
+    two here rather than adding a profile-only special case."""
     result = []
-    for line in _read_config_lines(path):
+    for line in lines:
         parts = line.split()
         atom, keywords = parts[0], parts[1:]
         if not keywords:
@@ -599,12 +605,30 @@ def resolve_config(config_root, main_repo_location):
         _read_config_lines(os.path.join(config_root, "etc", "portage", "package.unmask"))
     )
 
+    # package.accept_keywords: profile-chain (in chain order), then
+    # user-level -- mirrors portage-profile/src/lib.rs's resolve_config
+    # exactly (see its own comment for why, grounded in real
+    # KeywordsManager.getPKeywords: no repo-level source exists for this
+    # file in real portage at all, and it's purely additive -- no "-atom"
+    # removal -- so concatenating lines before parsing is equivalent to
+    # parsing each source separately and concatenating the results).
+    accept_keywords_lines = []
+    for level in chain:
+        accept_keywords_lines.extend(
+            _read_config_lines(os.path.join(level, "package.accept_keywords"))
+        )
+    accept_keywords_lines.extend(
+        _read_config_lines(
+            os.path.join(config_root, "etc", "portage", "package.accept_keywords")
+        )
+    )
+
     return {
         "use_flags": use_flags,
         "accept_keywords": accept_keywords,
         "package_mask": _stack_mask_lines(mask_sources),
         "package_unmask": _stack_mask_lines(unmask_sources),
-        "package_accept_keywords": _load_package_accept_keywords(config_root),
+        "package_accept_keywords": _parse_package_accept_keywords_lines(accept_keywords_lines),
         "package_use": _load_package_use(config_root),
     }
 

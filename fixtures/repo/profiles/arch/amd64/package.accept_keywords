@@ -1,0 +1,5 @@
+# profile-level package.accept_keywords: extends the globally-accepted
+# keyword set for anyone inheriting this profile level, stacked
+# alongside the user-level source (no repo-level source exists for this
+# file in real portage at all).
+dev-libs/profileacceptkeywordspkg ~amd64
