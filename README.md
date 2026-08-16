@@ -859,11 +859,26 @@ PORTING/
   shown by `-v` regardless -- real portage's USE display is about a
   package's own metadata, unrelated to whether its dependencies get
   walked, confirmed by testing `-O -v` together against a fixture package
-  whose own foo?-gated dependency `-O` suppresses. `--onlydeps`/`-o`,
-  `--nodeps`'s real complement (man page: "Only merge (or pretend to
+  whose own foo?-gated dependency `-O` suppresses.
+
+  **`--onlydeps`/`-o`: the merge list excludes the atom itself**.
+  `--nodeps`'s real complement -- man page: "Only merge (or pretend to
   merge) the dependencies of the packages specified, not the packages
-  themselves" -- the opposite exclusion), stays recognized-but-
-  unimplemented.
+  themselves" (the opposite exclusion: `--nodeps` shows the atom but
+  hides its dependencies, `--onlydeps` shows the dependencies but hides
+  the atom). Unlike `--nodeps`, this needed zero changes to
+  `resolve_pretend_graph` at all -- dependency recursion already happens
+  identically no matter which top-level entries end up printed, so this
+  is purely a `pretend.rs` print-loop change: a directly-requested
+  (top-level) entry's own line is suppressed, whatever its outcome
+  (New/Upgrade/Reinstall/AlreadyInstalled), while every entry reached
+  only as a dependency (which is never a top-level atom) prints exactly
+  as before. Applying the same suppression to AlreadyInstalled's own
+  "nothing to do" line means an atom that's already installed -- and so
+  never had any dependencies walked in the first place, `--onlydeps` or
+  not -- now correctly produces *no output at all* under `--onlydeps`,
+  not a spurious status line for a package that was asked not to be
+  shown.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -1430,6 +1445,19 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --nodeps dev-libs/with
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -O -v dev-libs/useflagpkg
 # [ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
 
+# --onlydeps/-o is real and implemented: the exact inverse of --nodeps --
+# withdeps' own dependencies (newpkg, upgradepkg) print normally, but
+# withdeps' own [ebuild N] line is suppressed
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --onlydeps dev-libs/withdeps
+# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+
+# --onlydeps on an already-installed atom: no dependencies were ever
+# going to be walked (same as without --onlydeps), and its own "already
+# installed" line is suppressed too -- so the whole run prints nothing
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --onlydeps dev-libs/samepkg
+# (no output)
+
 # short-flag bundling: "-pv" decomposes into -p + -v, both real,
 # implemented flags -- native argparse behavior for boolean short
 # options, not something requiring emerge-specific parsing
@@ -1442,7 +1470,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 /tmp/emerge -pd dev-libs/newpkg
 # emerge (pilot v1): option "--debug" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
-# --nodeps/-O, and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+# --nodeps/-O, --onlydeps/-o, and --help/-h are implemented so far; see
+# PROMPT.md)  (exit 2)
 
 # --help/-h is real and implemented: a short, honest, pilot-specific
 # summary, not a port of real emerge's own (157-line, colorized,
@@ -1460,7 +1489,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 /tmp/emerge --deep dev-libs/newpkg
 # emerge (pilot v1): option "--deep" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
-# --nodeps/-O, and --help/-h are implemented so far; see PROMPT.md)  (exit 2)
+# --nodeps/-O, --onlydeps/-o, and --help/-h are implemented so far; see
+# PROMPT.md)  (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message

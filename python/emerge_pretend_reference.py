@@ -1081,12 +1081,12 @@ def _parse_atom(atom_str):
 # real emerge flag this pilot doesn't implement yet produces a clear
 # "recognized, but not implemented" message -- distinct from a
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
-# --newuse/-N, --nodeps/-O, and --help/-h are actually implemented (see
-# run() below); every table here exists purely for recognition, not
-# behavior. Mirrors PORTING/rust/multicall/src/emerge_options.rs's own
-# copy of these same three tables exactly, so both sides report
-# identical text for identical input (verified by the shared contract
-# suite).
+# --newuse/-N, --nodeps/-O, --onlydeps/-o, and --help/-h are actually
+# implemented (see run() below); every table here exists purely for
+# recognition, not behavior. Mirrors
+# PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
+# three tables exactly, so both sides report identical text for
+# identical input (verified by the shared contract suite).
 #
 # KNOWN, DOCUMENTED SCOPE CUTS (see emerge_options.rs for the full
 # writeup): no short-flag bundling ("-pv" isn't recognized as "-p" +
@@ -1096,8 +1096,6 @@ def _parse_atom(atom_str):
 # skip over that option's own argument. --changed-use/-U, a real,
 # narrower alternative to --newuse, stays in _BOOLEAN_OPTIONS below,
 # unimplemented -- see _reinstall_flags_for_newuse's own doc comment.
-# --onlydeps/-o, --nodeps's real complement (dependencies only, not the
-# atom itself), stays in _BOOLEAN_OPTIONS below, unimplemented too.
 
 _BOOLEAN_OPTIONS = [
     ("--alphabetical", None),
@@ -1118,7 +1116,6 @@ _BOOLEAN_OPTIONS = [
     ("--noreplace", "-n"),
     ("--nospinner", None),
     ("--oneshot", "-1"),
-    ("--onlydeps", "-o"),
     ("--quiet-repo-display", None),
     ("--quiet-unmerge-warn", None),
     ("--resume", "-r"),
@@ -1292,10 +1289,10 @@ def _has_unsupported_top_level_features(a):
 def _report_option(token):
     """Reports and returns the exit code for a single option/action token
     ("-x" or "--long", never a positional atom) that isn't --pretend/-p,
-    --verbose/-v, --newuse/-N, or --nodeps/-O -- shared between a
-    standalone token and one character of a decomposed short-flag bundle,
-    so both produce identical messages for the same underlying flag.
-    Mirrors pretend.rs's report_option exactly."""
+    --verbose/-v, --newuse/-N, --nodeps/-O, or --onlydeps/-o -- shared
+    between a standalone token and one character of a decomposed
+    short-flag bundle, so both produce identical messages for the same
+    underlying flag. Mirrors pretend.rs's report_option exactly."""
     found = _lookup_option(token)
     if found is not None:
         category, canonical = found
@@ -1303,8 +1300,8 @@ def _report_option(token):
         print(
             f'emerge (pilot v1): {kind} "{canonical}" is a real emerge {kind}, '
             "but is not implemented in this pilot (only --pretend/-p, "
-            "--verbose/-v, --newuse/-N, --nodeps/-O, and --help/-h are "
-            "implemented so far; see PROMPT.md)",
+            "--verbose/-v, --newuse/-N, --nodeps/-O, --onlydeps/-o, and "
+            "--help/-h are implemented so far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -1341,6 +1338,7 @@ def _print_help():
     print('   -v, --verbose   show USE="..." on each [ebuild ...] line (optionally: -v y|n)')
     print("   -N, --newuse    reinstall an already-installed package if its USE has changed")
     print("   -O, --nodeps    do not resolve or show any dependency, only the given atoms")
+    print("   -o, --onlydeps  show only the given atoms' dependencies, not the atoms themselves")
     print("   -h, --help      show this message and exit")
     print()
     print(
@@ -1392,6 +1390,7 @@ def run(args):
     verbose = False
     newuse = False
     nodeps = False
+    onlydeps = False
 
     i = 0
     while i < len(args):
@@ -1404,6 +1403,9 @@ def run(args):
             i += 1
         elif arg in ("--nodeps", "-O"):
             nodeps = True
+            i += 1
+        elif arg in ("--onlydeps", "-o"):
+            onlydeps = True
             i += 1
         elif arg in ("--verbose", "-v"):
             # Peeks at the next token, consuming it only if it's exactly
@@ -1445,6 +1447,8 @@ def run(args):
                     newuse = True
                 elif c == "O":
                     nodeps = True
+                elif c == "o":
+                    onlydeps = True
                 else:
                     return _report_option(f"-{c}")
             i += 1
@@ -1545,29 +1549,40 @@ def run(args):
 
     for category, package, outcome, blockers, _slot, use_display in entries:
         tag = outcome[0]
+        # --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
+        # dependencies of the packages specified, not the packages
+        # themselves"): a directly-requested (top-level) atom's own line
+        # is suppressed -- whatever its outcome -- while its dependencies
+        # (reached the same as always, since resolve_pretend_graph's own
+        # recursion is entirely unaffected by this flag) print normally.
+        onlydeps_suppressed = onlydeps and (category, package) in top_level_pkgs
         if tag == "new":
-            print(f"[ebuild  N] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
+            if not onlydeps_suppressed:
+                print(f"[ebuild  N] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
-            print(
-                f"[ebuild  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})"
-                f"{use_suffix(use_display)}"
-            )
+            if not onlydeps_suppressed:
+                print(
+                    f"[ebuild  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})"
+                    f"{use_suffix(use_display)}"
+                )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "reinstall":
             changed_flags = outcome[2]
-            print(
-                f"[ebuild  r] {category}/{package}-{outcome[1]} "
-                f"(reinstall for changed USE: {', '.join(changed_flags)})"
-                f"{use_suffix(use_display)}"
-            )
+            if not onlydeps_suppressed:
+                print(
+                    f"[ebuild  r] {category}/{package}-{outcome[1]} "
+                    f"(reinstall for changed USE: {', '.join(changed_flags)})"
+                    f"{use_suffix(use_display)}"
+                )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "already_installed":
             # Already-satisfied dependencies aren't shown, matching real
             # emerge's usual "don't clutter the list" behavior -- only a
             # directly-requested (top-level) atom gets its own
-            # "is already installed; nothing to do" line.
-            if (category, package) in top_level_pkgs:
+            # "is already installed; nothing to do" line, and --onlydeps
+            # suppresses that too, same as every other outcome above.
+            if (category, package) in top_level_pkgs and not onlydeps_suppressed:
                 print(f"{category}/{package}-{outcome[1]} is already installed; nothing to do")
         else:
             print(
