@@ -242,6 +242,21 @@ pub struct Candidate {
     /// `profiles/repo_name` file too; this pilot reuses the already-read
     /// `repos.conf` name as-is rather than reading a second file.
     pub repo_name: String,
+    /// The raw `LICENSE` metadata string (PMS 7.3.2), unreduced -- read
+    /// alongside `keywords`/`slot` at zero extra I/O cost (the same
+    /// md5-cache metadata dict `list_candidates` already reads for
+    /// them). Empty string for no `LICENSE` at all, matching real
+    /// `use_reduce("")`'s own empty result -- see `is_visible`'s own
+    /// license-masking check.
+    pub license: String,
+    /// The raw `IUSE` metadata string, same "already have it, zero
+    /// extra I/O" reasoning as `license` -- only ever consulted when
+    /// `license` actually contains a `?` USE-conditional, to resolve
+    /// this specific candidate's own effective USE (real `use_reduce`'s
+    /// own "if '?' in license_str" optimization, ported as-is: most
+    /// packages' LICENSE has no conditional at all, so most candidates
+    /// never need this field for anything).
+    pub iuse: String,
 }
 
 /// A directory entry's name is only accepted as `<package>-<version>` if
@@ -312,6 +327,8 @@ pub fn list_candidates(
                 repo_location: repo.location.clone(),
                 repo_priority: repo.priority,
                 repo_name: repo.name.clone(),
+                license: metadata.get("LICENSE").cloned().unwrap_or_default(),
+                iuse: metadata.get("IUSE").cloned().unwrap_or_default(),
             });
         }
     }
@@ -491,12 +508,318 @@ fn atom_specificity(entry: &str) -> i32 {
     op_val.max(slot_val)
 }
 
+/// LICENSE's own PMS 7.3.2 grammar structure -- plain license tokens,
+/// `||` any-of groups, and (once a `flag?` USE-conditional has already
+/// been resolved) the *bundle* a conditional or plain sub-group
+/// contributes when it sits directly inside a `||` group's own
+/// alternative list (`AllOf`) -- verified directly against real
+/// `portage.dep.use_reduce(..., opconvert=True)`: a `||` group's own
+/// members are flat (`['||', 'MIT', 'BSD']`, not double-nested), but a
+/// *plain* sub-group (or a conditional's own resolved contents) sitting
+/// directly inside that same `||`'s member list stays a genuine nested
+/// unit (`['||', ['GPL-2', 'MIT'], 'BSD']` for `|| ( ( GPL-2 MIT ) BSD
+/// )` -- "GPL-2 AND MIT" is one whole alternative, not two independent
+/// ones) -- while the identical sub-group anywhere *else* (top level, or
+/// inside another plain/conditional group) flattens directly into its
+/// parent instead (opconvert's own "AND of AND is just AND" collapse).
+/// This distinction is why `use_reduce_flat` (which discards *all* group
+/// boundaries, a deliberate, already-documented simplification real
+/// DEPEND/RDEPEND recursion in this pilot relies on) can't be reused for
+/// LICENSE at all -- the same reasoning that already made
+/// `portage_required_use` its own separate algorithm rather than a mode
+/// of this same function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LicenseNode {
+    License(String),
+    AnyOf(Vec<LicenseNode>),
+    AllOf(Vec<LicenseNode>),
+}
+
+/// What opened the bracket currently being collected -- mirrors
+/// `use_reduce_flat`'s own `need_bracket`/conditional-pop dance, just
+/// carried explicitly here since this parser's own stack holds
+/// `LicenseNode`s (which can't carry a pending "flag?" or "||" marker
+/// the way a flat `Vec<String>` stack can).
+enum PendingBracket {
+    None,
+    Conditional(String),
+    AnyOf,
+}
+
+/// Parses `tokens` (a `LICENSE` string, pre-split on whitespace) into
+/// its own real `||`/USE-conditional tree structure -- see
+/// `LicenseNode`'s own doc comment for the exact real-structure ground
+/// truth this mirrors, and why. Bracket/`need_bracket` handling is
+/// otherwise a direct structural port of `use_reduce_flat`'s own
+/// (`portage-use-reduce`), just building a tree instead of flattening.
+fn parse_license_tree(
+    tokens: &[String],
+    use_flags: &HashSet<String>,
+) -> Result<Vec<LicenseNode>, String> {
+    let mut stack: Vec<Vec<LicenseNode>> = vec![Vec::new()];
+    let mut bracket_stack: Vec<PendingBracket> = Vec::new();
+    let mut pending = PendingBracket::None;
+    let mut need_bracket = false;
+
+    for (pos, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => {
+                if tokens.get(pos + 1).map(String::as_str) == Some(")") {
+                    return Err(format!(
+                        "expected: dependency string, got: ')', token {}",
+                        pos + 2
+                    ));
+                }
+                need_bracket = false;
+                stack.push(Vec::new());
+                bracket_stack.push(std::mem::replace(&mut pending, PendingBracket::None));
+            }
+            ")" => {
+                if need_bracket {
+                    return Err(format!("expected: '(', got: ')', token {}", pos + 1));
+                }
+                if stack.len() <= 1 {
+                    return Err(format!("no matching '(' for ')', token {}", pos + 1));
+                }
+                let collected = stack.pop().unwrap();
+                let opened_by = bracket_stack.pop().unwrap();
+                // Whether the group we just closed sits directly inside
+                // a `||`'s own alternative list -- decides flatten
+                // (`extend`) vs. nest (`AllOf`) for a plain/conditional
+                // group; see `LicenseNode`'s own doc comment.
+                let parent_is_any_of = matches!(bracket_stack.last(), Some(PendingBracket::AnyOf));
+                match opened_by {
+                    PendingBracket::AnyOf => {
+                        stack
+                            .last_mut()
+                            .unwrap()
+                            .push(LicenseNode::AnyOf(collected));
+                    }
+                    PendingBracket::Conditional(cond) => {
+                        if portage_use_reduce::is_active(
+                            &cond,
+                            use_flags,
+                            portage_use_reduce::MatchMode::Normal,
+                        )? {
+                            if parent_is_any_of {
+                                stack
+                                    .last_mut()
+                                    .unwrap()
+                                    .push(LicenseNode::AllOf(collected));
+                            } else {
+                                stack.last_mut().unwrap().extend(collected);
+                            }
+                        }
+                    }
+                    PendingBracket::None => {
+                        if parent_is_any_of {
+                            stack
+                                .last_mut()
+                                .unwrap()
+                                .push(LicenseNode::AllOf(collected));
+                        } else {
+                            stack.last_mut().unwrap().extend(collected);
+                        }
+                    }
+                }
+            }
+            "||" => {
+                if need_bracket {
+                    return Err(format!("expected: '(', got: '||', token {}", pos + 1));
+                }
+                need_bracket = true;
+                pending = PendingBracket::AnyOf;
+            }
+            _ => {
+                if need_bracket {
+                    return Err(format!("expected: '(', got: '{token}', token {}", pos + 1));
+                }
+                if token.ends_with('?') {
+                    need_bracket = true;
+                    pending = PendingBracket::Conditional(token.clone());
+                } else {
+                    stack
+                        .last_mut()
+                        .unwrap()
+                        .push(LicenseNode::License(token.clone()));
+                }
+            }
+        }
+    }
+
+    if stack.len() != 1 {
+        return Err("Missing ')' at end of string".to_string());
+    }
+    if need_bracket {
+        return Err("Missing '(' at end of string".to_string());
+    }
+    Ok(stack.pop().unwrap())
+}
+
+/// Whether `nodes` (implicit AND -- the top level, or an `AllOf` bundle)
+/// has at least one license that isn't in `acceptable`. Mirrors real
+/// `LicenseManager._getMaskedLicenses`'s own non-`||` branch, as a bool
+/// rather than the full "list every masked license" diagnostic (this
+/// pilot has no mask-reason display to feed it -- same simplification
+/// `check_required_use` already makes for REQUIRED_USE).
+fn tree_has_masked_license(nodes: &[LicenseNode], acceptable: &HashSet<String>) -> bool {
+    nodes.iter().any(|n| node_has_masked_license(n, acceptable))
+}
+
+fn node_has_masked_license(node: &LicenseNode, acceptable: &HashSet<String>) -> bool {
+    match node {
+        LicenseNode::License(name) => !acceptable.contains(name),
+        LicenseNode::AllOf(members) => tree_has_masked_license(members, acceptable),
+        // Satisfied (not masked) once at least one alternative is fully
+        // unmasked -- mirrors real _getMaskedLicenses's own "||" branch:
+        // "if not tmp: return []" the moment one alternative comes back
+        // clean.
+        LicenseNode::AnyOf(members) => !members
+            .iter()
+            .any(|m| !node_has_masked_license(m, acceptable)),
+    }
+}
+
+/// Whether `license_str` (a candidate's own real `LICENSE` metadata,
+/// PMS 7.3.2) has at least one required-but-unaccepted license, given
+/// `use_flags` (this candidate's own resolved USE, only ever consulted
+/// if `license_str` actually contains a `?`) and `acceptable` (the
+/// fully-resolved, concrete set of accepted license names for this
+/// specific candidate -- see `license_accepted`). Mirrors real
+/// `LicenseManager.getMissingLicenses` (via `_getMaskedLicenses`), ported
+/// as a bool. An empty `license_str` is never masked, matching real
+/// `use_reduce("")`'s own empty result.
+fn has_masked_license(
+    license_str: &str,
+    use_flags: &HashSet<String>,
+    acceptable: &HashSet<String>,
+) -> Result<bool, String> {
+    if license_str.trim().is_empty() {
+        return Ok(false);
+    }
+    let tokens: Vec<String> = license_str.split_whitespace().map(String::from).collect();
+    let tree = parse_license_tree(&tokens, use_flags)?;
+    Ok(tree_has_masked_license(&tree, acceptable))
+}
+
+/// Whether `candidate`'s own declared LICENSE is fully accepted -- real
+/// `Package.py`'s own `settings._getMissingLicenses` check (via
+/// `LicenseManager.getMissingLicenses`/`_getPkgAcceptLicense`).
+///
+/// `config.accept_license` (global, already `@group`-expanded but still
+/// symbolic -- see that field's own doc comment, portage-profile) is
+/// layered with every matching `package.license` entry's own tokens, in
+/// atom-specificity order -- real `_getPkgAcceptLicense`'s own
+/// `accept_license.extend(x)` loop over `ordered_by_atom_specificity`
+/// matches, ported the same way `package.use.mask`/`.force` already
+/// order multiple matches in this pilot (see `effective_use_flags`).
+/// The resulting symbolic token list is resolved into a *concrete*
+/// per-candidate acceptable-license set via the same `*`/`-*`/
+/// `-license`/`license` algorithm real `getMissingLicenses`/
+/// `get_pruned_accept_license` both use -- `*` needs "every license
+/// LICENSE could possibly mention" (real `matchall=1`: every USE-
+/// conditional forced active, ported here by reusing
+/// `portage_use_reduce::use_reduce_flat` with `MatchMode::All`, since
+/// group boundaries don't matter for this flat "what license names
+/// exist at all" question the way they do for the real masking check
+/// below).
+///
+/// A `LICENSE` string this pilot's own bespoke parser can't make sense
+/// of is treated as masked (not visible) rather than accepted --
+/// matching the "can't tell, so exclude" precedent this pilot's own
+/// `reinstall_flags_for_use_change`/`candidate_iuse_and_use` already
+/// establish for an unreadable candidate, rather than real portage's own
+/// (differently-plumbed) `InvalidDependString` handling, which routes a
+/// malformed `LICENSE` to a wholly separate "invalid metadata" masking
+/// reason this pilot has no equivalent pathway for.
+fn license_accepted(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    candidate_str: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    if candidate.license.trim().is_empty() {
+        return true;
+    }
+
+    // Real use_reduce's own "if '?' in license_str" optimization: most
+    // packages' LICENSE has no USE-conditional at all, so most
+    // candidates never need their own effective USE resolved for this
+    // check.
+    let use_flags: HashSet<String> = if candidate.license.contains('?') {
+        effective_use_flags(
+            &config.use_flags,
+            &config.package_use,
+            &config.package_use_force,
+            &config.package_use_mask,
+            &config.use_stable_force,
+            &config.use_stable_mask,
+            &config.package_use_stable_force,
+            &config.package_use_stable_mask,
+            &candidate.keywords,
+            &config.accept_keywords,
+            &config.package_accept_keywords,
+            candidate_str,
+            category,
+            package,
+        )
+    } else {
+        HashSet::new()
+    };
+
+    let mut matching_package_license: Vec<&(String, Vec<String>)> = config
+        .package_license
+        .iter()
+        .filter(|(atom, _)| matches_config_entry(atom, candidate_str, category, package))
+        .collect();
+    matching_package_license.sort_by_key(|(atom, _)| atom_specificity(atom));
+
+    let mut accept_tokens = config.accept_license.clone();
+    for (_, tokens) in matching_package_license {
+        accept_tokens.extend(tokens.iter().cloned());
+    }
+
+    let license_tokens: Vec<String> = candidate
+        .license
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+    let Ok(all_mentioned) = portage_use_reduce::use_reduce_flat(
+        &license_tokens,
+        &HashSet::new(),
+        portage_use_reduce::MatchMode::All,
+    ) else {
+        return false;
+    };
+    let all_mentioned: HashSet<String> = all_mentioned.into_iter().filter(|t| t != "||").collect();
+
+    let mut acceptable: HashSet<String> = HashSet::new();
+    for token in &accept_tokens {
+        if token == "*" {
+            acceptable.extend(all_mentioned.iter().cloned());
+        } else if token == "-*" {
+            acceptable.clear();
+        } else if let Some(name) = token.strip_prefix('-') {
+            acceptable.remove(name);
+        } else {
+            acceptable.insert(token.clone());
+        }
+    }
+
+    match has_masked_license(&candidate.license, &use_flags, &acceptable) {
+        Ok(masked) => !masked,
+        Err(_) => false,
+    }
+}
+
 /// A candidate is visible if it isn't masked (matches a `package.mask`
-/// entry and no `package.unmask` entry) and its KEYWORDS intersect the
+/// entry and no `package.unmask` entry), its KEYWORDS intersect the
 /// accepted set -- the global `config.accept_keywords`, plus any extra
 /// keywords contributed by a matching `package.accept_keywords` entry,
 /// with a `"**"` token in such an entry meaning "accept unconditionally"
-/// for matching candidates (even ones with empty/no KEYWORDS).
+/// for matching candidates (even ones with empty/no KEYWORDS) -- and its
+/// own declared `LICENSE` is fully accepted (see `license_accepted`).
 pub fn is_visible(
     candidate: &Candidate,
     category: &str,
@@ -517,6 +840,10 @@ pub fn is_visible(
             .iter()
             .any(|u| matches_config_entry(u, &candidate_str, category, package));
     if masked {
+        return false;
+    }
+
+    if !license_accepted(candidate, category, package, &candidate_str, config) {
         return false;
     }
 
@@ -2608,6 +2935,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fixture_eula_style_license_is_masked_by_the_real_default_accept_license() {
+        // Neither the fixture profile chain nor make.conf sets
+        // ACCEPT_LICENSE at all -- real portage's own "* -@EULA"
+        // default applies, and profiles/base/license_groups defines
+        // EULA="SomeEula", so dev-libs/eulapkg's own LICENSE="SomeEula"
+        // is masked.
+        assert_eq!(
+            resolve_real("dev-libs", "eulapkg"),
+            PretendOutcome::NoVisibleCandidate
+        );
+    }
+
+    #[test]
+    fn fixture_any_of_license_group_is_visible_via_the_accepted_alternative() {
+        assert_eq!(
+            resolve_real("dev-libs", "anyoflicensepkg"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fixture_package_license_unmasks_an_otherwise_eula_masked_package() {
+        // fixtures/etc/portage/package.license accepts SomeEula for this
+        // one package specifically, despite the same global "* -@EULA"
+        // default that masks dev-libs/eulapkg above.
+        assert_eq!(
+            resolve_real("dev-libs", "packagelicensepkg"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fixture_use_conditional_license_is_visible_when_the_flag_is_off() {
+        assert_eq!(
+            resolve_real("dev-libs", "uselicensepkg"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn fixture_use_conditional_license_is_masked_once_package_use_forces_the_flag_on() {
+        // fixtures/etc/portage/package.use forces "nonfreeflag" on for
+        // this specific package, activating its own LICENSE's
+        // "nonfreeflag? ( SomeEula )" conditional -- masked by the same
+        // real "* -@EULA" default as dev-libs/eulapkg.
+        assert_eq!(
+            resolve_real("dev-libs", "uselicensepkgforced"),
+            PretendOutcome::NoVisibleCandidate
+        );
+    }
+
     /// Regression test: a sibling package sharing a name prefix
     /// ("foo-bar" installed) must not be misread as an installed version
     /// of "foo" when scanning the vdb category directory. Without the
@@ -3651,7 +4036,260 @@ mod tests {
             repo_location: PathBuf::new(),
             repo_priority: 0,
             repo_name: "test".to_string(),
+            license: String::new(),
+            iuse: String::new(),
         }
+    }
+
+    fn license_tokens(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn parse_license_tree_flattens_a_plain_group_at_top_level() {
+        // Verified directly against real portage.dep.use_reduce(...,
+        // opconvert=True): "GPL-2 MIT" -> ['GPL-2', 'MIT'] (a bare
+        // top-level list already has AND semantics, so a plain "(...)"
+        // there adds nothing structurally worth keeping).
+        let tree = parse_license_tree(&license_tokens("GPL-2 ( MIT )"), &HashSet::new()).unwrap();
+        assert_eq!(
+            tree,
+            vec![
+                LicenseNode::License("GPL-2".to_string()),
+                LicenseNode::License("MIT".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_license_tree_keeps_any_of_members_flat() {
+        // Verified: "GPL-2 || ( MIT BSD )" -> ['GPL-2', ['||', 'MIT', 'BSD']]
+        // -- the || group's own members sit directly in its own list,
+        // not double-nested.
+        let tree =
+            parse_license_tree(&license_tokens("GPL-2 || ( MIT BSD )"), &HashSet::new()).unwrap();
+        assert_eq!(
+            tree,
+            vec![
+                LicenseNode::License("GPL-2".to_string()),
+                LicenseNode::AnyOf(vec![
+                    LicenseNode::License("MIT".to_string()),
+                    LicenseNode::License("BSD".to_string()),
+                ]),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_license_tree_nests_a_plain_group_directly_inside_any_of() {
+        // Verified: "|| ( ( GPL-2 MIT ) BSD )" ->
+        // [['||', ['GPL-2', 'MIT'], 'BSD']] -- a plain sub-group sitting
+        // directly inside a || group's own member list stays a genuine
+        // nested "this whole bundle is one alternative" unit, unlike
+        // the top-level case above.
+        let tree = parse_license_tree(&license_tokens("|| ( ( GPL-2 MIT ) BSD )"), &HashSet::new())
+            .unwrap();
+        assert_eq!(
+            tree,
+            vec![LicenseNode::AnyOf(vec![
+                LicenseNode::AllOf(vec![
+                    LicenseNode::License("GPL-2".to_string()),
+                    LicenseNode::License("MIT".to_string()),
+                ]),
+                LicenseNode::License("BSD".to_string()),
+            ])]
+        );
+    }
+
+    #[test]
+    fn parse_license_tree_resolves_a_use_conditional() {
+        // Verified: "|| ( foo? ( GPL-2 MIT ) BSD )" with foo enabled ->
+        // [['||', ['GPL-2', 'MIT'], 'BSD']]; with foo disabled ->
+        // ['BSD'] (the conditional contributes nothing at all, and the
+        // now-single-alternative || itself collapses away too -- real
+        // use_reduce's own behavior, verified directly).
+        let enabled = HashSet::from(["foo".to_string()]);
+        let tree =
+            parse_license_tree(&license_tokens("|| ( foo? ( GPL-2 MIT ) BSD )"), &enabled).unwrap();
+        assert_eq!(
+            tree,
+            vec![LicenseNode::AnyOf(vec![
+                LicenseNode::AllOf(vec![
+                    LicenseNode::License("GPL-2".to_string()),
+                    LicenseNode::License("MIT".to_string()),
+                ]),
+                LicenseNode::License("BSD".to_string()),
+            ])]
+        );
+
+        let disabled = HashSet::new();
+        let tree_disabled =
+            parse_license_tree(&license_tokens("|| ( foo? ( GPL-2 MIT ) BSD )"), &disabled)
+                .unwrap();
+        // This pilot's own parser keeps the || wrapper (unlike real
+        // use_reduce's own further single-alternative collapse -- see
+        // the module doc comment on why that specific collapse isn't
+        // replicated); masking-wise this is equivalent either way,
+        // since an AnyOf of one alternative and that alternative alone
+        // make an identical accept/reject decision.
+        assert_eq!(
+            tree_disabled,
+            vec![LicenseNode::AnyOf(vec![LicenseNode::License(
+                "BSD".to_string()
+            )])]
+        );
+    }
+
+    #[test]
+    fn parse_license_tree_rejects_unbalanced_parens() {
+        assert!(parse_license_tree(&license_tokens("( GPL-2"), &HashSet::new()).is_err());
+        assert!(parse_license_tree(&license_tokens("GPL-2 )"), &HashSet::new()).is_err());
+    }
+
+    #[test]
+    fn parse_license_tree_rejects_a_dangling_double_pipe() {
+        assert!(parse_license_tree(&license_tokens("|| GPL-2"), &HashSet::new()).is_err());
+    }
+
+    #[test]
+    fn has_masked_license_empty_string_is_never_masked() {
+        assert!(!has_masked_license("", &HashSet::new(), &HashSet::new()).unwrap());
+    }
+
+    #[test]
+    fn has_masked_license_plain_and_semantics_needs_every_license_accepted() {
+        let acceptable = HashSet::from(["GPL-2".to_string()]);
+        assert!(has_masked_license("GPL-2 MIT", &HashSet::new(), &acceptable).unwrap());
+        let acceptable_both = HashSet::from(["GPL-2".to_string(), "MIT".to_string()]);
+        assert!(!has_masked_license("GPL-2 MIT", &HashSet::new(), &acceptable_both).unwrap());
+    }
+
+    #[test]
+    fn has_masked_license_any_of_needs_only_one_alternative_accepted() {
+        let acceptable = HashSet::from(["BSD".to_string()]);
+        assert!(!has_masked_license("|| ( GPL-2 BSD )", &HashSet::new(), &acceptable).unwrap());
+        let acceptable_neither = HashSet::from(["MIT".to_string()]);
+        assert!(
+            has_masked_license("|| ( GPL-2 BSD )", &HashSet::new(), &acceptable_neither).unwrap()
+        );
+    }
+
+    #[test]
+    fn has_masked_license_any_of_alternative_bundle_needs_the_whole_bundle_accepted() {
+        // "|| ( ( GPL-2 MIT ) BSD )": accepting only MIT (not GPL-2)
+        // must NOT satisfy the (GPL-2 AND MIT) bundle -- only accepting
+        // BSD, or both GPL-2 and MIT together, satisfies this.
+        let only_mit = HashSet::from(["MIT".to_string()]);
+        assert!(
+            has_masked_license("|| ( ( GPL-2 MIT ) BSD )", &HashSet::new(), &only_mit).unwrap()
+        );
+        let both = HashSet::from(["GPL-2".to_string(), "MIT".to_string()]);
+        assert!(!has_masked_license("|| ( ( GPL-2 MIT ) BSD )", &HashSet::new(), &both).unwrap());
+        let bsd_only = HashSet::from(["BSD".to_string()]);
+        assert!(
+            !has_masked_license("|| ( ( GPL-2 MIT ) BSD )", &HashSet::new(), &bsd_only).unwrap()
+        );
+    }
+
+    #[test]
+    fn license_default_accept_license_star_makes_any_declared_license_visible() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["*".to_string()],
+            ..Default::default()
+        };
+        let c = Candidate {
+            license: "GPL-2".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(is_visible(&c, "dev-libs", "foo", &config));
+    }
+
+    #[test]
+    fn license_not_in_the_acceptable_set_is_masked() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["MIT".to_string()],
+            ..Default::default()
+        };
+        let c = Candidate {
+            license: "GPL-2".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(!is_visible(&c, "dev-libs", "foo", &config));
+    }
+
+    #[test]
+    fn license_eula_style_negation_masks_a_matching_license() {
+        // accept_license here is the already-@group-expanded form
+        // portage-profile's own resolve_config would have produced from
+        // real "* -@EULA" with license_groups EULA="SomeEula" --
+        // portage-repo itself never expands groups, only consumes the
+        // already-expanded tokens (see accept_license's own doc
+        // comment, portage-profile).
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["*".to_string(), "-SomeEula".to_string()],
+            ..Default::default()
+        };
+        let c = Candidate {
+            license: "SomeEula".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(!is_visible(&c, "dev-libs", "foo", &config));
+    }
+
+    #[test]
+    fn license_package_license_override_unmasks_for_one_matching_package_only() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["*".to_string(), "-SomeEula".to_string()],
+            package_license: vec![("dev-libs/foo".to_string(), vec!["SomeEula".to_string()])],
+            ..Default::default()
+        };
+        let c = Candidate {
+            license: "SomeEula".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(is_visible(&c, "dev-libs", "foo", &config));
+        assert!(!is_visible(&c, "dev-libs", "bar", &config));
+    }
+
+    #[test]
+    fn license_any_of_group_is_satisfied_by_one_accepted_alternative() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["BSD".to_string()],
+            ..Default::default()
+        };
+        let c = Candidate {
+            license: "|| ( GPL-2 BSD )".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        assert!(is_visible(&c, "dev-libs", "foo", &config));
+    }
+
+    #[test]
+    fn license_use_conditional_only_masks_once_the_flag_is_actually_enabled() {
+        let c = Candidate {
+            license: "GPL-2 foo? ( MIT )".to_string(),
+            iuse: "foo".to_string(),
+            ..candidate("1.0", &["amd64"])
+        };
+        let config_foo_off = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["GPL-2".to_string()],
+            ..Default::default()
+        };
+        assert!(is_visible(&c, "dev-libs", "foo-pkg", &config_foo_off));
+
+        let config_foo_on = portage_profile::Config {
+            accept_keywords: HashSet::from(["amd64".to_string()]),
+            accept_license: vec!["GPL-2".to_string()],
+            use_flags: HashSet::from(["foo".to_string()]),
+            ..Default::default()
+        };
+        assert!(!is_visible(&c, "dev-libs", "foo-pkg", &config_foo_on));
     }
 
     #[test]

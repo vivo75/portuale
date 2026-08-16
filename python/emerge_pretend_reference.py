@@ -243,6 +243,82 @@ def _parse_package_accept_keywords_lines(lines):
     return result
 
 
+def _parse_package_license_lines(lines):
+    """package.license: each line is "<atom-or-wildcard> <license or
+    @group ...>". Same shape as package.accept_keywords -- kept as its
+    own function for documentation clarity per real file format, mirroring
+    portage-profile/src/lib.rs's parse_package_license_lines exactly."""
+    return _parse_package_accept_keywords_lines(lines)
+
+
+def _parse_license_groups_lines(lines):
+    """license_groups (real LicenseManager._read_license_groups): each
+    non-comment, non-blank line is "<group-name> <license or @group
+    ...>" (grabdict format -- no "-atom"/removal semantics at all).
+    Later sources *extend* (never replace) whatever the same group name
+    already has, matching real
+    self._license_groups.setdefault(k, []).extend(v) exactly. Mirrors
+    portage-profile/src/lib.rs's parse_license_groups_lines exactly."""
+    groups = {}
+    for line in lines:
+        parts = line.split()
+        if not parts:
+            continue
+        name, members = parts[0], parts[1:]
+        groups.setdefault(name, []).extend(members)
+    return groups
+
+
+def _expand_license_token(token, groups, traversed=None):
+    """Expands a single ACCEPT_LICENSE/package.license token against
+    `groups`: a plain license name (or "*"/"-*", real portage's own
+    symbolic wildcard tokens) passes through unchanged; an "@group-name"
+    token (optionally "-"-negated) expands to every one of that group's
+    own members, each recursively expanded the same way -- negation
+    applies to every expanded member, not just the group reference
+    itself. `traversed` guards against a circular group reference (a
+    group already being expanded higher up this same call stack is left
+    as its own literal "@group-name" text instead of recursing
+    infinitely), same for a genuinely undefined group name. Mirrors real
+    LicenseManager._expandLicenseToken and portage-profile/src/lib.rs's
+    expand_license_token exactly (deliberately silent here, unlike real
+    portage's own writemsg, same as every other real-portage-warning-only
+    path this pilot already skips silently)."""
+    if traversed is None:
+        traversed = set()
+    negate = token.startswith("-")
+    license_name = token[1:] if negate else token
+    if not license_name.startswith("@"):
+        return [token]
+    group_name = license_name[1:]
+    if group_name in traversed:
+        result = [f"@{group_name}"]
+    elif group_name in groups:
+        traversed.add(group_name)
+        result = []
+        for member in groups[group_name]:
+            # Real portage: a group's own member list is never itself
+            # allowed to contain a "-"-negated entry.
+            if not member.startswith("-"):
+                result.extend(_expand_license_token(member, groups, traversed))
+        traversed.discard(group_name)
+    else:
+        result = [f"@{group_name}"]
+    if negate:
+        result = [f"-{t}" for t in result]
+    return result
+
+
+def _expand_license_tokens(tokens, groups):
+    """Expands every token in `tokens` against `groups`, in order.
+    Mirrors real LicenseManager.expandLicenseTokens and
+    portage-profile/src/lib.rs's expand_license_tokens exactly."""
+    expanded = []
+    for t in tokens:
+        expanded.extend(_expand_license_token(t, groups))
+    return expanded
+
+
 def _parse_package_use_lines(lines, use_expand_shorthand=False):
     """A line with no tokens after the atom is a documented no-op,
     matching _parse_package_accept_keywords_lines. Purely additive across
@@ -348,6 +424,12 @@ def list_candidates(repos, category, package):
                     "repo_location": repo["location"],
                     "repo_priority": repo["priority"],
                     "repo_name": repo["name"],
+                    # Read alongside KEYWORDS/SLOT at zero extra I/O cost
+                    # (the same metadata dict) -- see is_visible's own
+                    # license-masking check. Mirrors portage-repo's own
+                    # Candidate.license/.iuse exactly.
+                    "license": metadata.get("LICENSE", ""),
+                    "iuse": metadata.get("IUSE", ""),
                 }
             )
     return candidates
@@ -365,13 +447,132 @@ def _matches_config_entry(entry, candidate_str, category, package):
     return bool(match_from_list(atom, [candidate_str]))
 
 
+def _license_struct_has_masked(struct, acceptable):
+    """Whether `struct` (real `use_reduce(license_str, uselist=use,
+    opconvert=True)` -- a `||` group's own members are flat, e.g.
+    `['||', 'MIT', 'BSD']`, not double-nested; a plain sub-group
+    directly inside a `||`'s own member list stays a genuine nested
+    list instead) has at least one required-but-unaccepted license.
+    Mirrors real `LicenseManager._getMaskedLicenses`, as a bool rather
+    than the full "list every masked license" diagnostic real portage's
+    own mask-display machinery uses (this pilot has no mask-reason
+    display to feed it). Mirrors portage-repo/src/lib.rs's
+    tree_has_masked_license/node_has_masked_license exactly (structural
+    difference only: this walks real use_reduce's own list-of-str-or-
+    list shape directly, since Python already has the real function to
+    call -- see the Rust side's own LicenseNode doc comment for why it
+    needed a bespoke parser instead)."""
+    if not struct:
+        return False
+    if struct[0] == "||":
+        for element in struct[1:]:
+            if isinstance(element, list):
+                if element and not _license_struct_has_masked(element, acceptable):
+                    return False
+            elif element in acceptable:
+                return False
+        return True
+    for element in struct:
+        if isinstance(element, list):
+            if element and _license_struct_has_masked(element, acceptable):
+                return True
+        elif element not in acceptable:
+            return True
+    return False
+
+
+def _license_accepted(candidate, category, package, candidate_str, config):
+    """Whether `candidate`'s own declared LICENSE is fully accepted --
+    real Package.py's own `settings._getMissingLicenses` check (via
+    LicenseManager.getMissingLicenses/_getPkgAcceptLicense).
+
+    config["accept_license"] (global, already @group-expanded but still
+    symbolic -- see that field's own doc comment, portage-profile's
+    resolve_config) is layered with every matching package.license
+    entry's own tokens, in atom-specificity order (mirrors
+    _specificity_ordered_flags's own established pattern for
+    package.use.mask/.force). The resulting symbolic token list is
+    resolved into a concrete per-candidate acceptable-license set via
+    the same "*"/"-*"/"-license"/"license" algorithm real
+    getMissingLicenses/get_pruned_accept_license both use -- "*" needs
+    "every license LICENSE could possibly mention" (real matchall=1),
+    computed here via real use_reduce's own matchall=True + flat=True.
+
+    A LICENSE string real use_reduce can't parse is treated as masked
+    (not visible) rather than accepted -- matching the "can't tell, so
+    exclude" precedent this pilot's own _reinstall_flags_for_use_change
+    already establishes for an unreadable candidate. Mirrors
+    portage-repo/src/lib.rs's license_accepted exactly."""
+    license_str = candidate.get("license", "")
+    if not license_str.strip():
+        return True
+
+    # Real use_reduce's own "if '?' in license_str" optimization: most
+    # packages' LICENSE has no USE-conditional at all.
+    if "?" in license_str:
+        use_flags = effective_use_flags(
+            config["use_flags"],
+            config["package_use"],
+            config["package_use_force"],
+            config["package_use_mask"],
+            config["use_stable_force"],
+            config["use_stable_mask"],
+            config["package_use_stable_force"],
+            config["package_use_stable_mask"],
+            candidate["keywords"],
+            config["accept_keywords"],
+            config["package_accept_keywords"],
+            candidate_str,
+            category,
+            package,
+        )
+    else:
+        use_flags = set()
+
+    matching_package_license = [
+        (atom, tokens)
+        for atom, tokens in config["package_license"]
+        if _matches_config_entry(atom, candidate_str, category, package)
+    ]
+    matching_package_license.sort(key=lambda et: _atom_specificity(et[0]))
+
+    accept_tokens = list(config["accept_license"])
+    for _atom, tokens in matching_package_license:
+        accept_tokens.extend(tokens)
+
+    try:
+        all_mentioned = {
+            t for t in use_reduce(license_str, matchall=True, flat=True) if t != "||"
+        }
+    except InvalidDependString:
+        return False
+
+    acceptable = set()
+    for token in accept_tokens:
+        if token == "*":
+            acceptable.update(all_mentioned)
+        elif token == "-*":
+            acceptable.clear()
+        elif token.startswith("-"):
+            acceptable.discard(token[1:])
+        else:
+            acceptable.add(token)
+
+    try:
+        struct = use_reduce(license_str, uselist=list(use_flags), opconvert=True)
+    except InvalidDependString:
+        return False
+    return not _license_struct_has_masked(struct, acceptable)
+
+
 def is_visible(candidate, category, package, config):
     """A candidate is visible if it isn't masked (matches a package.mask
-    entry and no package.unmask entry) and its KEYWORDS intersect the
+    entry and no package.unmask entry), its KEYWORDS intersect the
     accepted set -- the global config["accept_keywords"], plus any extra
     keywords contributed by a matching package.accept_keywords entry,
     with a "**" token in such an entry meaning "accept unconditionally"
-    for matching candidates (even ones with empty/no KEYWORDS)."""
+    for matching candidates (even ones with empty/no KEYWORDS) -- and its
+    own declared LICENSE is fully accepted (see _license_accepted)."""
     candidate_str = (
         f"{category}/{package}-{candidate['version']}:{candidate['slot']}"
         f"::{candidate['repo_name']}"
@@ -385,6 +586,9 @@ def is_visible(candidate, category, package, config):
         for u in config["package_unmask"]
     )
     if masked:
+        return False
+
+    if not _license_accepted(candidate, category, package, candidate_str, config):
         return False
 
     return _keywords_accepted(
@@ -1132,6 +1336,51 @@ def resolve_config(config_root, main_repo_location):
         line[1:] for line in _stack_mask_lines(packages_sources) if line.startswith("*")
     ]
 
+    # license_groups: every profile level's own file, in chain order,
+    # plus the user-level one -- see _parse_license_groups_lines's own
+    # docstring for the "extend, don't stack/replace" semantics. Read
+    # before ACCEPT_LICENSE/package.license below, both of which need
+    # the full, final group map to expand "@group" tokens against.
+    # Mirrors portage-profile/src/lib.rs's resolve_config exactly.
+    license_groups = {}
+    for level in chain:
+        for name, members in _parse_license_groups_lines(
+            _read_config_lines(os.path.join(level, "license_groups"))
+        ).items():
+            license_groups.setdefault(name, []).extend(members)
+    for name, members in _parse_license_groups_lines(
+        _read_config_lines(os.path.join(config_root, "etc", "portage", "license_groups"))
+    ).items():
+        license_groups.setdefault(name, []).extend(members)
+
+    # ACCEPT_LICENSE: last-level-wins scalar (see this pilot's own
+    # pre-existing "any variable other than USE/ACCEPT_KEYWORDS is a
+    # plain last-level-wins scalar" cut, extended here rather than
+    # inventing a new, ACCEPT_LICENSE-specific incremental mechanism) --
+    # scalars already holds whatever the profile chain + make.conf left
+    # it as. Real portage's own default when ACCEPT_LICENSE is never set
+    # anywhere at all -- "* -@EULA" -- is replicated exactly (real
+    # config.py's own accept_license_str = " ".join(mysplit) or
+    # "* -@EULA"). Mirrors portage-profile/src/lib.rs's resolve_config
+    # exactly.
+    accept_license_str = scalars.get("ACCEPT_LICENSE", "* -@EULA")
+    accept_license = _expand_license_tokens(accept_license_str.split(), license_groups)
+
+    # package.license: user-level only -- real portage's own rare,
+    # opt-in "profile-license" profile-format (a profile-level source)
+    # and its own "*/*"-line "extract into the global ACCEPT_LICENSE"
+    # quirk (extract_global_changes) are both deliberately NOT
+    # replicated (see portage-profile/src/lib.rs's own package_license
+    # doc comment). Mirrors portage-profile/src/lib.rs's resolve_config
+    # exactly.
+    package_license_lines = _read_config_lines(
+        os.path.join(config_root, "etc", "portage", "package.license")
+    )
+    package_license = [
+        (atom, _expand_license_tokens(tokens, license_groups))
+        for atom, tokens in _parse_package_license_lines(package_license_lines)
+    ]
+
     return {
         "use_flags": use_flags,
         "accept_keywords": accept_keywords,
@@ -1152,6 +1401,9 @@ def resolve_config(config_root, main_repo_location):
         "use_stable_mask": use_stable_mask,
         "package_use_stable_force": _parse_package_use_lines(use_stable_force_lines),
         "package_use_stable_mask": _parse_package_use_lines(use_stable_mask_lines),
+        "license_groups": license_groups,
+        "accept_license": accept_license,
+        "package_license": package_license,
     }
 
 

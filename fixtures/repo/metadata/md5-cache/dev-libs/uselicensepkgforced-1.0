@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: USE-conditional LICENSE -- nonfreeflag forced on via package.use, masking it
+EAPI=8
+IUSE=nonfreeflag
+KEYWORDS=amd64
+LICENSE=GPL-2 nonfreeflag? ( SomeEula )
+SLOT=0
+_md5_=0000000000000000000000000000000

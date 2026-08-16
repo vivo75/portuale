@@ -1,0 +1,6 @@
+# fixture license_groups: exercises real portage's own "* -@EULA" default
+# ACCEPT_LICENSE (applied when nothing else sets ACCEPT_LICENSE anywhere
+# in the profile chain/make.conf, which this fixture deliberately never
+# does) -- SomeEula stands in for a real proprietary-license package's
+# own EULA-grouped license.
+EULA SomeEula

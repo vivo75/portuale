@@ -40,7 +40,17 @@ fn useflag_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+_@-]*$").unwrap())
 }
 
-fn is_active(
+/// Whether a single `flag?`/`!flag?` USE-conditional token is active
+/// under `uselist`/`mode`. Exported (not just used internally by
+/// `use_reduce_flat`'s own bracket handling) so `portage-repo`'s own
+/// bespoke LICENSE-grammar parser can reuse the exact same conditional-
+/// resolution logic -- LICENSE (PMS 7.3.2) needs the real `||`-group
+/// structure `use_reduce_flat`'s own flattening deliberately discards
+/// (see that crate's own doc comment for why it needed a separate
+/// parser, not a reused one), but its USE-conditional semantics are
+/// identical to every other dependency-string-shaped value, so this one
+/// piece is shared rather than reimplemented a second time.
+pub fn is_active(
     conditional: &str,
     uselist: &HashSet<String>,
     mode: MatchMode,

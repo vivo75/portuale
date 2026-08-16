@@ -1494,6 +1494,59 @@ PORTING/
   everywhere else, verified to produce genuinely byte-for-byte identical
   output (not just structurally-equal-as-JSON) via the shared contract
   suite.
+  **`LICENSE`/`ACCEPT_LICENSE`/`package.license` masking** (PMS 7.3.2).
+  A new, real visibility-gating mechanism this pilot had zero handling
+  for before this slice -- grounded against real
+  `LicenseManager.getMissingLicenses`/`_getPkgAcceptLicense`
+  (`lib/portage/package/ebuild/_config/LicenseManager.py`) and
+  `Package.py`'s own `settings._getMissingLicenses` call, alongside
+  `package.mask` as another independent masking reason. The real
+  algorithm turned out to need genuine `||`-group *structure* (real
+  `use_reduce(..., opconvert=True)`) that this pilot's own existing
+  `use_reduce_flat` deliberately discards (the same DEPEND/RDEPEND `||`-
+  flattening simplification `resolve_pretend_graph` already documents),
+  so the Rust side needed a bespoke recursive-descent parser
+  (`portage-repo`'s own `LicenseNode`/`parse_license_tree`) -- the same
+  reasoning that already made `portage_required_use` its own separate
+  algorithm rather than a mode of `use_reduce_flat`, not a new kind of
+  exception. Verified directly against real `portage.dep.use_reduce`'s
+  own empirical output (not just its docstring) that a `||` group's own
+  members stay flat (`['||', 'MIT', 'BSD']`, not double-nested) while a
+  *plain* sub-group sitting directly inside that same `||`'s member list
+  stays a genuine nested "this whole bundle is one alternative" unit
+  (`['||', ['GPL-2', 'MIT'], 'BSD']` for `|| ( ( GPL-2 MIT ) BSD )`) --
+  a real, structurally-significant distinction a naive "always flatten"
+  parser would have gotten semantically wrong, caught by grounding
+  against real output before implementing rather than assumed. The
+  Python reference, unlike the Rust side, calls real `use_reduce`
+  directly (same "call the real function" approach `check_required_use`
+  already established for REQUIRED_USE) rather than needing its own
+  parser, and both sides' masking-decision walk (AND at the top level or
+  a plain nested group, satisfied-once-any-alternative-clean under
+  `||`) are verified to agree via the shared contract suite regardless.
+  `license_groups` (`@FREE`-style named groups, recursively expandable
+  with negation and a cycle guard -- e.g. `-@EULA` negates every
+  expanded member, not just the group reference) and `package.license`
+  (atom-specificity ordered, reusing the exact machinery already built
+  for `package.use.mask`/`.force`) round out the real mechanism.
+  `ACCEPT_LICENSE` itself is a deliberate, documented simplification:
+  real portage genuinely accumulates it incrementally across every
+  config source (`prune_incremental` over each source's own raw
+  tokens); this pilot instead extends its own pre-existing "any variable
+  other than USE/ACCEPT_KEYWORDS is a plain last-level-wins scalar" cut
+  to this one too, rather than inventing a new, single-variable-only
+  incremental mechanism -- real portage's own meaningful default when
+  `ACCEPT_LICENSE` is never set anywhere at all, `"* -@EULA"`, is still
+  replicated exactly. `dev-libs/eulapkg` (`LICENSE="SomeEula"`, masked
+  by the real default once `license_groups` defines `EULA="SomeEula"`),
+  `dev-libs/anyoflicensepkg` (`LICENSE="|| ( GPL-2 SomeEula )"`, visible
+  via the accepted `GPL-2` alternative), `dev-libs/packagelicensepkg`
+  (identical to `eulapkg`, but unmasked for that one package via
+  `package.license`), and `dev-libs/uselicensepkg`/
+  `uselicensepkgforced` (an identical USE-conditional `LICENSE`, visible
+  with the flag off by default, masked once `package.use` forces it on
+  for the `forced` sibling specifically) exercise the full mechanism end
+  to end through real `emerge --pretend`.
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -2338,6 +2391,30 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/newpkg
 # RDEPEND on it) -- required_by lists both owners, sorted
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/diamond | python3 -c 'import json,sys; print(next(e["required_by"] for e in json.load(sys.stdin)["entries"] if e["package"] == "common"))'
 # [{'category': 'dev-libs', 'package': 'shared-a'}, {'category': 'dev-libs', 'package': 'shared-b'}]
+
+# LICENSE/ACCEPT_LICENSE/package.license masking (PMS 7.3.2) is real and
+# implemented: neither the fixture profile chain nor make.conf sets
+# ACCEPT_LICENSE at all, so real portage's own "* -@EULA" default
+# applies -- profiles/base/license_groups defines EULA="SomeEula", so
+# this package's own LICENSE="SomeEula" is masked
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/eulapkg
+# emerge: there are no ebuilds to satisfy "dev-libs/eulapkg".  (exit 1)
+# a || any-of LICENSE group is visible via any one accepted alternative
+# -- GPL-2 is accepted by the real default's own "*" token
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/anyoflicensepkg
+# [ebuild  N] dev-libs/anyoflicensepkg-1.0
+# package.license unmasks an otherwise EULA-masked package for that one
+# package specifically (etc/portage/package.license accepts SomeEula
+# just for this atom)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packagelicensepkg
+# [ebuild  N] dev-libs/packagelicensepkg-1.0
+# a USE-conditional LICENSE is visible with the flag off (the default);
+# its sibling has package.use forcing the same flag on, activating the
+# conditional and masking it
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/uselicensepkg
+# [ebuild  N] dev-libs/uselicensepkg-1.0
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/uselicensepkgforced
+# emerge: there are no ebuilds to satisfy "dev-libs/uselicensepkgforced".  (exit 1)
 
 # package.use.mask/package.use.force are real and implemented, atom
 # specificity included: a repo-level package.use.force wildcard entry

@@ -319,6 +319,55 @@ pub struct Config {
     /// `package.use.stable.mask`. See `package_use_stable_force`'s own
     /// doc comment.
     pub package_use_stable_mask: Vec<(String, Vec<String>)>,
+    /// `license_groups` (PMS-adjacent; real `LicenseManager.
+    /// _read_license_groups`): every profile level's own file plus the
+    /// user-level `/etc/portage/license_groups`, each `<name> <license
+    /// or @group ...>` line's own value list *extended* (not stacked/
+    /// masked -- real code's own `setdefault(k, []).extend(v)`) onto
+    /// whatever the same group name already has from an earlier source.
+    /// Raw/unexpanded: a group's own value list may itself reference
+    /// another `@group` recursively, resolved by `expand_license_token`
+    /// (below) wherever a group is actually expanded -- once, here in
+    /// `resolve_config`, for both `accept_license` and `package_license`
+    /// (matching real portage's own `set_accept_license_str`/
+    /// `_read_user_config`, which both call `expandLicenseTokens` eagerly
+    /// at config-read time too, not per-candidate), not pre-flattened
+    /// into this map itself, matching real `_expandLicenseToken`'s own
+    /// recursive-with-cycle-guard shape exactly.
+    pub license_groups: HashMap<String, Vec<String>>,
+    /// `ACCEPT_LICENSE`, already `@group`-expanded (see `license_groups`)
+    /// but still symbolic -- `*`, `-*`, and `-license` tokens are kept
+    /// literally, not resolved into a concrete license set here, since
+    /// real portage's own `*`/`-*` resolution depends on a *specific
+    /// candidate's own* LICENSE string (PMS 7.3.2), not anything known
+    /// at config-resolution time (see `portage-repo`'s own per-candidate
+    /// application). Deliberately last-level-wins (profile chain, then
+    /// make.conf), not genuinely incremental across sources the way real
+    /// portage's own `ACCEPT_LICENSE` is (`prune_incremental` over every
+    /// source's own raw tokens) -- extends this pilot's own pre-existing
+    /// "any variable other than USE/ACCEPT_KEYWORDS is a plain last-
+    /// level-wins scalar" cut (see the module doc comment) to this one
+    /// too, rather than inventing a new, ACCEPT_LICENSE-specific
+    /// incremental mechanism only this one variable would use. Real
+    /// portage's own default when `ACCEPT_LICENSE` is never set *at all*
+    /// (not even as an explicit empty override) anywhere in the whole
+    /// chain -- `"* -@EULA"` -- is replicated exactly (`config.py`'s own
+    /// `accept_license_str = " ".join(mysplit) or "* -@EULA"`).
+    pub accept_license: Vec<String>,
+    /// (atom-or-wildcard string, `@group`-expanded tokens) pairs from
+    /// `package.license`, user-level only (real `LicenseManager.
+    /// _read_user_config`'s own dominant path -- a profile can opt into
+    /// also reading a profile-level `package.license` via its own
+    /// `profile-license` profile-format marker, a rare, opt-in newer
+    /// feature deliberately NOT replicated here, same "narrow, rare real
+    /// sourcing variant" cut this pilot already makes elsewhere).
+    /// Real portage's own `*/*`-line "extract into the global
+    /// `ACCEPT_LICENSE` instead of a real per-package entry" quirk
+    /// (`extract_global_changes`) is deliberately NOT replicated either
+    /// -- a `*/*` line here is just an ordinary (if unusual) per-package
+    /// entry, matched via the same wildcard-atom machinery every other
+    /// `*/*` entry in this pilot already uses.
+    pub package_license: Vec<(String, Vec<String>)>,
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -592,6 +641,108 @@ fn parse_package_accept_keywords_lines(lines: &[String]) -> Vec<(String, Vec<Str
         result.push((atom.to_string(), keywords));
     }
     result
+}
+
+/// `package.license`: each line is `<atom-or-wildcard> <license or
+/// @group ...>`. Same shape as `package.accept_keywords` (bare-atom
+/// lines are a documented no-op), kept as its own function rather than
+/// reused for documentation clarity per real file format, matching
+/// `parse_package_use_lines`'s own separateness from
+/// `parse_package_accept_keywords_lines` despite the identical shape
+/// when no shorthand applies.
+fn parse_package_license_lines(lines: &[String]) -> Vec<(String, Vec<String>)> {
+    parse_package_accept_keywords_lines(lines)
+}
+
+/// `license_groups` (real `LicenseManager._read_license_groups`): each
+/// non-comment, non-blank line is `<group-name> <license or @group
+/// ...>` (`grabdict` format -- no `-atom`/removal semantics at all,
+/// unlike `package.mask`'s own file format). Later sources *extend*
+/// (never replace or stack-remove) whatever the same group name already
+/// has, matching real `self._license_groups.setdefault(k, []).extend(v)`
+/// exactly.
+fn parse_license_groups_lines(lines: &[String]) -> HashMap<String, Vec<String>> {
+    let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+    for line in lines {
+        let mut parts = line.split_whitespace();
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        groups
+            .entry(name.to_string())
+            .or_default()
+            .extend(parts.map(String::from));
+    }
+    groups
+}
+
+/// Expands a single `ACCEPT_LICENSE`/`package.license` token against
+/// `groups`: a plain license name (or `*`/`-*`, real portage's own
+/// symbolic wildcard tokens) passes through unchanged; an `@group-name`
+/// token (optionally `-`-negated) expands to every one of that group's
+/// own members, each recursively expanded the same way (a member that's
+/// itself a nested `@group` reference, real portage's own
+/// `_expandLicenseToken` "elif license_group:" recursion) -- negation
+/// applies to every expanded member, not just the group reference
+/// itself (`-@EULA` with `EULA = "Eula1 Eula2"` expands to `-Eula1
+/// -Eula2`, matching real portage's own tail `if negate: rValue = ["-" +
+/// token for token in rValue]`). `traversed` guards against a circular
+/// group reference (matching real portage's own cycle guard): a group
+/// already being expanded higher up this same call stack is left as its
+/// own literal `@group-name` text instead of recursing infinitely, same
+/// for a genuinely undefined group name (never declared in any
+/// `license_groups` file at all) -- both deliberately silent here (no
+/// stderr warning), unlike real portage's own `writemsg`, since this
+/// pilot has no precedent for emitting warnings to stderr from deep
+/// inside config resolution (every other real portage warning-only path
+/// in this pilot is silently skipped the same way).
+fn expand_license_token(token: &str, groups: &HashMap<String, Vec<String>>) -> Vec<String> {
+    fn expand(
+        token: &str,
+        groups: &HashMap<String, Vec<String>>,
+        traversed: &mut HashSet<String>,
+    ) -> Vec<String> {
+        let (negate, license_name) = match token.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, token),
+        };
+        let Some(group_name) = license_name.strip_prefix('@') else {
+            return vec![token.to_string()];
+        };
+        let mut result: Vec<String> = if traversed.contains(group_name) {
+            vec![format!("@{group_name}")]
+        } else if let Some(members) = groups.get(group_name) {
+            traversed.insert(group_name.to_string());
+            let mut out = Vec::new();
+            for member in members {
+                // Real portage: "Skipping invalid element %s in license
+                // group '%s'" -- a group's own member list is never
+                // itself allowed to contain a "-"-negated entry.
+                if !member.starts_with('-') {
+                    out.extend(expand(member, groups, traversed));
+                }
+            }
+            traversed.remove(group_name);
+            out
+        } else {
+            vec![format!("@{group_name}")]
+        };
+        if negate {
+            result = result.iter().map(|t| format!("-{t}")).collect();
+        }
+        result
+    }
+    expand(token, groups, &mut HashSet::new())
+}
+
+/// Expands every token in `tokens` against `groups`, in order -- see
+/// `expand_license_token`'s own doc comment. Mirrors real
+/// `LicenseManager.expandLicenseTokens` exactly.
+fn expand_license_tokens(tokens: &[String], groups: &HashMap<String, Vec<String>>) -> Vec<String> {
+    tokens
+        .iter()
+        .flat_map(|t| expand_license_token(t, groups))
+        .collect()
 }
 
 /// `package.use`: each line is `<atom-or-wildcard> <use-token...>`. A line
@@ -948,6 +1099,53 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
         .filter_map(|line| line.strip_prefix('*').map(String::from))
         .collect();
 
+    // license_groups: every profile level's own file, in chain order,
+    // plus the user-level one -- see `parse_license_groups_lines`'s own
+    // doc comment for the "extend, don't stack/replace" semantics. Read
+    // before ACCEPT_LICENSE/package.license below, both of which need
+    // the full, final group map to expand `@group` tokens against.
+    let mut license_groups: HashMap<String, Vec<String>> = HashMap::new();
+    for level in &chain {
+        for (name, members) in
+            parse_license_groups_lines(&read_config_lines(&level.join("license_groups"))?)
+        {
+            license_groups.entry(name).or_default().extend(members);
+        }
+    }
+    for (name, members) in parse_license_groups_lines(&read_config_lines(
+        &config_root.join("etc/portage/license_groups"),
+    )?) {
+        license_groups.entry(name).or_default().extend(members);
+    }
+    config.license_groups = license_groups;
+
+    // ACCEPT_LICENSE: last-level-wins scalar (see `accept_license`'s own
+    // doc comment for why, and the real "* -@EULA" default this pilot
+    // replicates when it's never set anywhere at all) -- `scalars`
+    // already holds whatever the profile chain + make.conf left it as,
+    // via the same catch-all `scalars.insert` every other scalar
+    // variable already goes through in `process_lines`/
+    // `process_make_conf_file`.
+    let accept_license_str = scalars
+        .get("ACCEPT_LICENSE")
+        .cloned()
+        .unwrap_or_else(|| "* -@EULA".to_string());
+    let accept_license_tokens: Vec<String> = accept_license_str
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+    config.accept_license = expand_license_tokens(&accept_license_tokens, &config.license_groups);
+
+    // package.license: user-level only -- see `package_license`'s own
+    // doc comment for the deliberately-not-replicated `profile-license`
+    // profile-format and `*/*`-global-extraction real quirks.
+    let package_license_lines =
+        read_config_lines(&config_root.join("etc/portage/package.license"))?;
+    config.package_license = parse_package_license_lines(&package_license_lines)
+        .into_iter()
+        .map(|(atom, tokens)| (atom, expand_license_tokens(&tokens, &config.license_groups)))
+        .collect();
+
     Ok(config)
 }
 
@@ -960,6 +1158,84 @@ mod tests {
             .join("../../fixtures")
             .canonicalize()
             .expect("PORTING/fixtures must exist")
+    }
+
+    #[test]
+    fn expand_license_token_passes_through_a_plain_license_name() {
+        let groups = HashMap::new();
+        assert_eq!(expand_license_token("GPL-2", &groups), vec!["GPL-2"]);
+    }
+
+    #[test]
+    fn expand_license_token_passes_through_the_star_wildcard_tokens() {
+        let groups = HashMap::new();
+        assert_eq!(expand_license_token("*", &groups), vec!["*"]);
+        assert_eq!(expand_license_token("-*", &groups), vec!["-*"]);
+    }
+
+    #[test]
+    fn expand_license_token_expands_a_group_reference() {
+        let groups = HashMap::from([(
+            "FREE".to_string(),
+            vec!["GPL-2".to_string(), "MIT".to_string()],
+        )]);
+        assert_eq!(expand_license_token("@FREE", &groups), vec!["GPL-2", "MIT"]);
+    }
+
+    #[test]
+    fn expand_license_token_negates_every_expanded_member() {
+        let groups = HashMap::from([(
+            "EULA".to_string(),
+            vec!["Eula1".to_string(), "Eula2".to_string()],
+        )]);
+        assert_eq!(
+            expand_license_token("-@EULA", &groups),
+            vec!["-Eula1", "-Eula2"]
+        );
+    }
+
+    #[test]
+    fn expand_license_token_recurses_into_a_nested_group() {
+        let groups = HashMap::from([
+            ("FREE".to_string(), vec!["@FSF-APPROVED".to_string()]),
+            ("FSF-APPROVED".to_string(), vec!["GPL-2".to_string()]),
+        ]);
+        assert_eq!(expand_license_token("@FREE", &groups), vec!["GPL-2"]);
+    }
+
+    #[test]
+    fn expand_license_token_guards_against_a_circular_group_reference() {
+        // A -> B -> A: expanding "@A" recurses into B, which tries to
+        // re-expand "@A" while "A" is still on the traversal stack, so
+        // that innermost attempt falls back to the literal "@A" text
+        // (matching real portage's own writemsg-then-literal-fallback
+        // behavior) rather than looping forever.
+        let groups = HashMap::from([
+            ("A".to_string(), vec!["@B".to_string()]),
+            ("B".to_string(), vec!["@A".to_string()]),
+        ]);
+        assert_eq!(expand_license_token("@A", &groups), vec!["@A"]);
+    }
+
+    #[test]
+    fn expand_license_token_leaves_an_undefined_group_as_literal_text() {
+        let groups = HashMap::new();
+        assert_eq!(expand_license_token("@NOPE", &groups), vec!["@NOPE"]);
+    }
+
+    #[test]
+    fn parse_license_groups_lines_extends_a_repeated_group_name() {
+        let lines = vec![
+            "FREE GPL-2".to_string(),
+            "FREE MIT".to_string(),
+            "EULA MyEula".to_string(),
+        ];
+        let groups = parse_license_groups_lines(&lines);
+        assert_eq!(
+            groups.get("FREE"),
+            Some(&vec!["GPL-2".to_string(), "MIT".to_string()])
+        );
+        assert_eq!(groups.get("EULA"), Some(&vec!["MyEula".to_string()]));
     }
 
     /// End-to-end check against PORTING/fixtures/repo/profiles (base,
@@ -991,6 +1267,20 @@ mod tests {
             HashSet::from(["VIDEO_CARDS".to_string()])
         );
         assert_eq!(config.accept_keywords, HashSet::from(["amd64".to_string()]));
+        // Neither the fixture profile chain nor make.conf sets
+        // ACCEPT_LICENSE at all -- real portage's own "* -@EULA"
+        // default applies; profiles/base/license_groups defines
+        // EULA="SomeEula" (see the dedicated LICENSE-masking fixtures),
+        // so "@EULA" expands to that real member rather than staying
+        // literal.
+        assert_eq!(
+            config.accept_license,
+            vec!["*".to_string(), "-SomeEula".to_string()]
+        );
+        assert_eq!(
+            config.license_groups.get("EULA"),
+            Some(&vec!["SomeEula".to_string()])
+        );
     }
 
     #[test]
@@ -1001,6 +1291,10 @@ mod tests {
             .expect("missing profile/make.conf is not an error");
         assert_eq!(config.use_flags, HashSet::new());
         assert_eq!(config.accept_keywords, HashSet::new());
+        assert_eq!(
+            config.accept_license,
+            vec!["*".to_string(), "-@EULA".to_string()]
+        );
     }
 
     #[test]

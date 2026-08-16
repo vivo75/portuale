@@ -63,6 +63,11 @@ CASES = [
     ("--json: combined with --deep", ["--pretend", "--update", "--deep", "--json", "dev-libs/deeppkg"], 0),
     ("only ~keyword, not visible", ["--pretend", "dev-libs/maskedpkg"], 1),
     ("package does not exist", ["--pretend", "dev-libs/does-not-exist"], 1),
+    ("LICENSE in @EULA group, masked by the real default ACCEPT_LICENSE", ["--pretend", "dev-libs/eulapkg"], 1),
+    ("LICENSE || any-of group, visible via the accepted alternative", ["--pretend", "dev-libs/anyoflicensepkg"], 0),
+    ("package.license unmasks an otherwise EULA-masked package", ["--pretend", "dev-libs/packagelicensepkg"], 0),
+    ("USE-conditional LICENSE, visible with the flag off", ["--pretend", "dev-libs/uselicensepkg"], 0),
+    ("USE-conditional LICENSE, masked once package.use forces the flag on", ["--pretend", "dev-libs/uselicensepkgforced"], 1),
     ("sibling-prefix package: new", ["--pretend", "dev-libs/foo"], 0),
     ("sibling-prefix package: installed", ["--pretend", "dev-libs/foo-bar"], 0),
     ("versioned top-level atom: resolves New", ["--pretend", ">=dev-libs/foo-1.0"], 0),
@@ -785,6 +790,73 @@ def test_package_mask_minus_atom_removal_leaves_candidate_unaffected(
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/samepkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.strip() == "dev-libs/samepkg-1.0 is already installed; nothing to do"
+
+
+def test_license_eula_style_group_is_masked_by_the_real_default_accept_license(
+    emerge_binary, fixture_env
+):
+    """Neither the fixture profile chain nor make.conf sets
+    ACCEPT_LICENSE at all -- real portage's own "* -@EULA" default
+    applies, and PORTING/fixtures/repo/profiles/base/license_groups
+    defines EULA="SomeEula", so dev-libs/eulapkg's own
+    LICENSE="SomeEula" is masked, same "no ebuilds to satisfy" outcome
+    package.mask already produces."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/eulapkg"], fixture_env)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip() == 'emerge: there are no ebuilds to satisfy "dev-libs/eulapkg".'
+    )
+
+
+def test_license_any_of_group_is_visible_via_the_accepted_alternative(
+    emerge_binary, fixture_env
+):
+    """dev-libs/anyoflicensepkg's own LICENSE="|| ( GPL-2 SomeEula )" --
+    GPL-2 is accepted via the real default's own "*" token, so the ||
+    group is satisfied even though SomeEula alone would be masked."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/anyoflicensepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/anyoflicensepkg-1.0"
+
+
+def test_license_package_license_unmasks_an_otherwise_eula_masked_package(
+    emerge_binary, fixture_env
+):
+    """PORTING/fixtures/etc/portage/package.license accepts SomeEula for
+    dev-libs/packagelicensepkg specifically, despite the same global
+    "* -@EULA" default that masks dev-libs/eulapkg above."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/packagelicensepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/packagelicensepkg-1.0"
+
+
+def test_license_use_conditional_visible_when_flag_off_masked_when_forced_on(
+    emerge_binary, fixture_env
+):
+    """dev-libs/uselicensepkg's own LICENSE="GPL-2 nonfreeflag? (
+    SomeEula )" -- visible with nonfreeflag off (the default); its
+    sibling dev-libs/uselicensepkgforced has the identical LICENSE, but
+    PORTING/fixtures/etc/portage/package.use forces nonfreeflag on for
+    it specifically, activating the conditional and masking it via the
+    same real default that masks dev-libs/eulapkg."""
+    off = _run([str(emerge_binary)], ["--pretend", "dev-libs/uselicensepkg"], fixture_env)
+    assert off.returncode == 0
+    assert off.stdout.strip() == "[ebuild  N] dev-libs/uselicensepkg-1.0"
+
+    forced_on = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/uselicensepkgforced"], fixture_env
+    )
+    assert forced_on.returncode == 1
+    assert forced_on.stdout == ""
+    assert (
+        forced_on.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/uselicensepkgforced".'
+    )
 
 
 def test_repo_level_package_mask_hides_a_package(emerge_binary, fixture_env):
