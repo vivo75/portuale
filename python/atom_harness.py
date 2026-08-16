@@ -4,7 +4,7 @@ pilot -- see PORTING/PROMPT.md and PORTING/rust/portage-dep/src/lib.rs
 for the deliberately narrowed v1 grammar this exercises. Wraps the real
 portage.dep.Atom / portage.dep.match_from_list rather than reimplementing
 them, and rejects any atom that uses a feature outside the v1 subset
-(extended/wildcard syntax, build-ids, repo constraints) so both harnesses
+(extended/wildcard syntax, build-ids) so both harnesses
 agree on the same input language rather than Python silently accepting a
 wider one. Slot operators (":=", ":*",
 ":slot=") and USE deps ("foo[bar]", all 7 PMS 8.3.4 forms plus 4-style
@@ -19,7 +19,12 @@ the values themselves aren't enforced. The "=*" glob version operator
 on the boundary-aware prefix-match port this needed; unlike slot
 operators/USE deps, this one runs against real match_from_list's actual
 "=*" branch unmodified, so this file needed no new logic at all beyond
-letting "=*" through _SUPPORTED_OPERATORS.
+letting "=*" through _SUPPORTED_OPERATORS. The "::reponame" repo
+constraint (PMS 3.1.5) IS in the v1 subset too -- see portage-dep's own
+doc comment on the matching semantics (real match_from_list's own final
+post-pass filter, ported as `matches_repo`) and on why plain-string
+candidates never carried repo identity before this pilot's own
+portage-repo started appending "::reponame" to the strings it builds.
 
 Usage:
     atom_harness.py parse <atom>              -> tab-separated fields, or "INVALID"
@@ -53,7 +58,6 @@ def _parse_v1_atom(s):
     if (
         a.extended_syntax
         or a.build_id is not None
-        or a.repo is not None
         or a.operator not in _SUPPORTED_OPERATORS
     ):
         return None
@@ -87,6 +91,7 @@ def _format_parse(s):
         a.slot or "",
         a.sub_slot or "",
         a.slot_operator or "",
+        a.repo or "",
         ",".join(a.use.tokens) if a.use else "",
     ]
     return "\t".join(fields)

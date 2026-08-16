@@ -233,6 +233,15 @@ pub struct Candidate {
     /// two repos toward the higher-priority one (`resolve_pretend`).
     pub repo_location: PathBuf,
     pub repo_priority: i32,
+    /// The repo's own `repos.conf` section name (`RepoConfig::name`),
+    /// e.g. "gentoo" -- appended as a `::name` suffix to every candidate
+    /// string this crate builds for `portage_dep::match_from_list`
+    /// (except the two paths noted in the module doc comment's
+    /// `::reponame` bullet), so a `::repo`-constrained atom actually
+    /// filters. Real portage cross-checks this against each repo's own
+    /// `profiles/repo_name` file too; this pilot reuses the already-read
+    /// `repos.conf` name as-is rather than reading a second file.
+    pub repo_name: String,
 }
 
 /// A directory entry's name is only accepted as `<package>-<version>` if
@@ -302,6 +311,7 @@ pub fn list_candidates(
                 slot,
                 repo_location: repo.location.clone(),
                 repo_priority: repo.priority,
+                repo_name: repo.name.clone(),
             });
         }
     }
@@ -362,8 +372,8 @@ pub fn is_visible(
     config: &portage_profile::Config,
 ) -> bool {
     let candidate_str = format!(
-        "{category}/{package}-{}:{}",
-        candidate.version, candidate.slot
+        "{category}/{package}-{}:{}::{}",
+        candidate.version, candidate.slot, candidate.repo_name
     );
 
     let masked = config
@@ -540,7 +550,10 @@ fn reinstall_flags_for_use_change(
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect();
-    let candidate_str = format!("{category}/{package}-{version}:{}", candidate.slot);
+    let candidate_str = format!(
+        "{category}/{package}-{version}:{}::{}",
+        candidate.slot, candidate.repo_name
+    );
     let cur_use = effective_use_flags(
         &config.use_flags,
         &config.package_use,
@@ -612,8 +625,8 @@ pub fn resolve_pretend(
         .iter()
         .map(|c| {
             format!(
-                "{}/{}-{}:{}",
-                atom.category, atom.package, c.version, c.slot
+                "{}/{}-{}:{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.repo_name
             )
         })
         .collect();
@@ -1071,6 +1084,7 @@ pub fn resolve_pretend_graph(
         };
         let slot = resolved.slot.clone();
         let repo_location = resolved.repo_location.clone();
+        let repo_name = resolved.repo_name.clone();
 
         let slot_key = (key.0.clone(), key.1.clone(), slot.clone());
         if let Some(&existing_idx) = resolved_slots.get(&slot_key) {
@@ -1114,7 +1128,7 @@ pub fn resolve_pretend_graph(
         let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {
             continue;
         };
-        let candidate_str = format!("{}/{}-{version}:{slot}", key.0, key.1);
+        let candidate_str = format!("{}/{}-{version}:{slot}::{repo_name}", key.0, key.1);
         let use_flags = effective_use_flags(
             &config.use_flags,
             &config.package_use,
@@ -1461,6 +1475,46 @@ mod tests {
             PretendOutcome::New {
                 version: "1.0".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn fixture_repo_constrained_atom_finds_the_named_repo_only() {
+        // dev-libs/overlayonlypkg exists only in the fixture's overlay
+        // repo (named "overlay" in repos.conf) -- "::overlay" must
+        // resolve it, "::testrepo" (the main repo's own name) must not,
+        // proving portage-repo's own candidate strings really do carry
+        // "::reponame" end to end, not just that portage-dep can parse
+        // and match it in isolation.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
+        assert_eq!(
+            resolve_pretend(
+                &repos,
+                &root,
+                "dev-libs/overlayonlypkg::overlay",
+                &config,
+                false,
+                false,
+            )
+            .expect("resolve_pretend must succeed"),
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+        assert_eq!(
+            resolve_pretend(
+                &repos,
+                &root,
+                "dev-libs/overlayonlypkg::testrepo",
+                &config,
+                false,
+                false,
+            )
+            .expect("resolve_pretend must succeed"),
+            PretendOutcome::NoVisibleCandidate
         );
     }
 
@@ -2156,6 +2210,7 @@ mod tests {
             slot: "0".to_string(),
             repo_location: PathBuf::new(),
             repo_priority: 0,
+            repo_name: "test".to_string(),
         }
     }
 

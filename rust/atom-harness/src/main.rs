@@ -70,6 +70,7 @@ fn format_parse(s: &str) -> String {
         a.slot.as_deref().unwrap_or(""),
         a.sub_slot.as_deref().unwrap_or(""),
         slot_operator,
+        a.repo.as_deref().unwrap_or(""),
         &use_deps,
     ];
     fields.join("\t")

@@ -5,9 +5,8 @@
 //
 // KNOWN, DOCUMENTED SCOPE CUT vs. the real grammar (PMS chapter 8):
 // `Atom`/`parse_atom`/`match_from_list` support no extended/wildcard
-// atoms (`*/foo-1`), no build-ids (`foo-1.0@2`), no repo constraint
-// (`::gentoo`), and no EAPI parametrization (the real grammar changes
-// shape per-EAPI --
+// atoms (`*/foo-1`), no build-ids (`foo-1.0@2`), and no EAPI
+// parametrization (the real grammar changes shape per-EAPI --
 // slot-operator support itself is EAPI 5+, but since nothing here is
 // EAPI-parametrized in the first place, it's just always recognized, the
 // same way every other EAPI-gated feature already ported is). The Python
@@ -81,6 +80,23 @@
 // matching "foo-5.22.0") was the original EAPI 0-5 behavior, retroactively
 // dropped in October 2015, well before this repo's EAPI 5+ floor.
 //
+// `::reponame` (the repo constraint, PMS 3.1.5 "Repository names") IS
+// supported now too: see `Atom::repo`/`Candidate::repo` and
+// `matches_repo`'s own doc comment for the exact matching semantics
+// (ported from real `match_from_list`'s own final post-pass filter --
+// only ever rejects a candidate that carries a KNOWN, different repo; a
+// repo-less candidate string always passes, matching real
+// `dep_getrepo`'s own "unknown, not absent" semantics for a plain
+// string). This pilot's own candidate strings never carried repo
+// identity before this slice -- `portage-repo` now appends `::reponame`
+// (using each repo's own `repos.conf` section name -- already tracked
+// as `RepoConfig::name`, reused as-is rather than reading a second,
+// separate `profiles/repo_name` file real portage also cross-checks
+// against) to every candidate string it builds for `match_from_list`
+// EXCEPT the two paths noted in that crate's own doc comment (blocker
+// matching and slot-conflict re-verification), a deliberate, narrower
+// scope cut than the rest of this feature's wiring.
+//
 // One easy-to-miss PMS rule that IS ported: a bare (no-operator) atom
 // whose package name is followed by something that looks like a version
 // (e.g. "foo-bar-2", which could be read as package "foo-bar" version "2")
@@ -100,6 +116,11 @@ const CAT: &str = r"[A-Za-z0-9_][A-Za-z0-9+_.-]*";
 const PKG: &str = r"[A-Za-z0-9_][A-Za-z0-9+_-]*?";
 const VER: &str = r"\d+(?:\.\d+)*[a-z]?(?:_(?:pre|p|beta|alpha|rc)\d*)*";
 const SLOT: &str = r"[A-Za-z0-9][A-Za-z0-9+_.-]*";
+// Identical to real portage's own `_repo_name` (lib/portage/dep/__init__.py):
+// `[\w][\w-]*` -- `\w` is alnum-plus-underscore, so this is
+// `[A-Za-z0-9_][A-Za-z0-9_-]*`. Matches PMS 3.1.5's "Repository names"
+// prose ("may contain [A-Za-z0-9_-], must not begin with a hyphen").
+const REPO: &str = r"[A-Za-z0-9_][A-Za-z0-9_-]*";
 // Identical to real portage's own `_useflag_re` (lib/portage/dep/__init__.py)
 // and already mirrored once in `portage-use-reduce`'s own `useflag_re` --
 // duplicated here rather than added as a cross-crate dependency, since
@@ -223,6 +244,9 @@ pub struct Atom {
     /// original left-to-right order. Never consulted by matching -- see
     /// the module doc comment.
     pub use_deps: Option<Vec<UseDep>>,
+    /// `::reponame` (PMS 3.1.5 "Repository names"), `None` if absent --
+    /// see `matches_repo`'s own doc comment for the matching semantics.
+    pub repo: Option<String>,
 }
 
 impl Atom {
@@ -261,8 +285,12 @@ fn atom_regex() -> &'static Regex {
         // duplicating the whole op+cpv sequence into a second regex
         // alternative just to exclude 5 of 6 operators from one optional
         // trailing character.
+        // "repo" ("::reponame", PMS 3.1.5) sits between the slot part and
+        // usedeps, matching real _get_atom_re's own ordering exactly --
+        // shared by both the "op" and bare "simple" branches above it,
+        // same as slotpart/usedeps already are.
         Regex::new(&format!(
-            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?(?P<glob>\*)?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r\d+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?P<usedeps>\[.*\])?$"
+            r"^(?P<blocker>!!|!)?(?:(?P<op>=|>=|>|<=|<|~)(?P<vcat>{CAT})/(?P<vpkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?(?P<glob>\*)?|(?P<cat>{CAT})/(?P<pkg>{PKG})(?P<ambiguous>-{VER}(?:-r\d+)?)?)(?::(?P<slotpart>(?:(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?P<slotop>[*=])?))?(?:::(?P<repo>{REPO}))?(?P<usedeps>\[.*\])?$"
         ))
         .unwrap()
     })
@@ -416,6 +444,8 @@ pub fn parse_atom(s: &str) -> Option<Atom> {
         Some(m) => Some(parse_use_deps(m.as_str())?),
     };
 
+    let repo = caps.name("repo").map(|m| m.as_str().to_string());
+
     Some(Atom {
         blocker,
         operator,
@@ -427,6 +457,7 @@ pub fn parse_atom(s: &str) -> Option<Atom> {
         sub_slot,
         slot_operator,
         use_deps,
+        repo,
     })
 }
 
@@ -438,6 +469,10 @@ pub struct Candidate {
     pub revision: Option<String>,
     pub slot: Option<String>,
     pub sub_slot: Option<String>,
+    /// `::reponame` suffix, `None` if the string didn't have one --
+    /// mirrors real `dep_getrepo`'s own convention for plain-string
+    /// candidates. See `matches_repo`'s own doc comment.
+    pub repo: Option<String>,
 }
 
 impl Candidate {
@@ -453,7 +488,7 @@ fn candidate_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(&format!(
-            r"^(?P<cat>{CAT})/(?P<pkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?(?::(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?$"
+            r"^(?P<cat>{CAT})/(?P<pkg>{PKG})-(?P<ver>{VER})(?:-r(?P<rev>\d+))?(?::(?P<slot>{SLOT})(?:/(?P<subslot>{SLOT}))?)?(?:::(?P<repo>{REPO}))?$"
         ))
         .unwrap()
     })
@@ -468,6 +503,7 @@ pub fn parse_candidate(s: &str) -> Option<Candidate> {
         revision: caps.name("rev").map(|m| m.as_str().to_string()),
         slot: caps.name("slot").map(|m| m.as_str().to_string()),
         sub_slot: caps.name("subslot").map(|m| m.as_str().to_string()),
+        repo: caps.name("repo").map(|m| m.as_str().to_string()),
     })
 }
 
@@ -599,6 +635,27 @@ fn matches_slot(atom: &Atom, candidate: &Candidate) -> bool {
     }
 }
 
+/// Mirrors real `match_from_list`'s own final post-pass filter (only run
+/// `if mydep.repo:` -- an atom with no `::repo` constraint never filters
+/// on repo at all): a candidate is rejected only if it carries a KNOWN
+/// repo that differs from the atom's. A candidate with no repo info at
+/// all (`candidate.repo == None`, this pilot's default for any
+/// plain-string candidate that never had `::repo` appended -- see
+/// `dep_getrepo`'s own real semantics, which return `None` for a
+/// repo-less string) always passes, regardless of what the atom asks
+/// for -- real portage's own justification: a plain string generally
+/// means "repo unknown," not "no repo," so it can't positively fail a
+/// repo check.
+fn matches_repo(atom: &Atom, candidate: &Candidate) -> bool {
+    match &atom.repo {
+        None => true,
+        Some(want) => match &candidate.repo {
+            None => true,
+            Some(have) => have == want,
+        },
+    }
+}
+
 /// Mirrors `match_from_list`: given an atom string and a list of candidate
 /// strings, returns the subset (in input order) that match. `None` means
 /// the atom itself failed to parse under the v1 grammar. Unparseable
@@ -618,6 +675,7 @@ pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec
                     && candidate.package == atom.package
                     && matches_version(&atom, &candidate)
                     && matches_slot(&atom, &candidate)
+                    && matches_repo(&atom, &candidate)
             })
             .collect(),
     )

@@ -324,6 +324,7 @@ def list_candidates(repos, category, package):
                     "slot": slot,
                     "repo_location": repo["location"],
                     "repo_priority": repo["priority"],
+                    "repo_name": repo["name"],
                 }
             )
     return candidates
@@ -348,7 +349,10 @@ def is_visible(candidate, category, package, config):
     keywords contributed by a matching package.accept_keywords entry,
     with a "**" token in such an entry meaning "accept unconditionally"
     for matching candidates (even ones with empty/no KEYWORDS)."""
-    candidate_str = f"{category}/{package}-{candidate['version']}:{candidate['slot']}"
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}"
+        f"::{candidate['repo_name']}"
+    )
 
     masked = any(
         _matches_config_entry(m, candidate_str, category, package)
@@ -426,7 +430,7 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
     if not metadata.get("IUSE"):
         return None
     cur_iuse = {tok.lstrip("+-") for tok in metadata["IUSE"].split()}
-    candidate_str = f"{category}/{package}-{version}:{candidate['slot']}"
+    candidate_str = f"{category}/{package}-{version}:{candidate['slot']}::{candidate['repo_name']}"
     cur_use = effective_use_flags(
         config["use_flags"], config["package_use"], candidate_str, category, package
     )
@@ -792,7 +796,7 @@ def resolve_pretend(repos, root, atom_str, config, newuse=False, changed_use=Fal
     # version/slot matching rules here, mirroring portage-repo's Rust
     # side exactly.
     candidate_strs = [
-        f"{category}/{package}-{c['version']}:{c['slot']}" for c in visible
+        f"{category}/{package}-{c['version']}:{c['slot']}::{c['repo_name']}" for c in visible
     ]
     by_str = dict(zip(candidate_strs, visible))
     matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
@@ -1009,6 +1013,7 @@ def resolve_pretend_graph(
         resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
         slot = resolved["slot"]
         repo_location = resolved["repo_location"]
+        repo_name = resolved["repo_name"]
 
         slot_key = (category, package, slot)
         if slot_key in resolved_slots:
@@ -1046,7 +1051,7 @@ def resolve_pretend_graph(
             metadata = read_md5_cache(repo_location, category, pf)
         except OSError:
             continue
-        candidate_str = f"{category}/{package}-{version}:{slot}"
+        candidate_str = f"{category}/{package}-{version}:{slot}::{repo_name}"
         use_flags = effective_use_flags(
             config["use_flags"], config["package_use"], candidate_str, category, package
         )
@@ -1326,16 +1331,16 @@ def _lookup_option(token):
 def _has_unsupported_top_level_features(a):
     """Real portage.dep.Atom (used by _parse_atom, unlike Rust's own
     narrowed portage-dep crate) successfully parses grammar Rust's v1
-    subset doesn't at all -- repo constraints, wildcards, build-ids.
-    portage-dep's Atom struct (see its own source) has no fields for any
-    of these, so a Rust-side parse_atom call on the same text returns
-    None outright -- the same "invalid atom" outcome as genuinely
-    malformed input, not the "blocker, not a valid target" outcome
-    _is_blocker_atom below covers. Operator, plain slot, slot operator
-    (":=" / ":*" / ":slot=" ), AND USE deps ("[bar]" and every other PMS
-    8.3.4 form) are all representable on the Rust side, so none of them
-    are checked here."""
-    return a.repo is not None or a.extended_syntax or a.build_id is not None
+    subset doesn't at all -- wildcards, build-ids. portage-dep's Atom
+    struct (see its own source) has no fields for either, so a
+    Rust-side parse_atom call on the same text returns None outright --
+    the same "invalid atom" outcome as genuinely malformed input, not
+    the "blocker, not a valid target" outcome _is_blocker_atom below
+    covers. Operator, plain slot, slot operator (":=" / ":*" /
+    ":slot="), USE deps ("[bar]" and every other PMS 8.3.4 form), AND
+    the "::reponame" repo constraint (PMS 3.1.5) are all representable
+    on the Rust side, so none of them are checked here."""
+    return a.extended_syntax or a.build_id is not None
 
 
 def _report_option(token):

@@ -148,8 +148,9 @@ PORTING/
   .accept_keywords, without touching this grammar or contract at all.)
 
   **Slot operators** (`:=`, `:*`, `:slot=` -- PMS 8.3.3) were added to the
-  grammar later (wildcards, build-ids, repo constraints, and EAPI
-  parametrization remain out of scope; those are a fundamentally bigger
+  grammar later (wildcards, build-ids, and EAPI parametrization remain
+  out of scope -- see the `::reponame` paragraph further below for why
+  repo constraints no longer do; those are a fundamentally bigger
   undertaking each, slot operators were not). `SlotOperator` mirrors
   real portage's own two-stage parse (`_get_atom_re` captures the raw text
   after `:`, `_get_slot_dep_re` re-parses it), including its two rejection
@@ -234,6 +235,37 @@ PORTING/
   illegal" (e.g. `>=foo-1.2*`) -- ported as an explicit rejection, not a
   silent truncation to `>=foo-1.2` or a silent accept under the wrong
   operator.
+
+  **The `::reponame` repo constraint** (PMS 3.1.5) closes the last
+  remaining item in `portage-dep`'s own scope-cut list. Ported from real
+  `match_from_list`'s own final post-pass filter (only run `if
+  mydep.repo:`): a candidate is rejected only if it carries a *known*
+  repo that differs from the atom's -- a candidate with no repo info at
+  all always passes, matching real `dep_getrepo`'s own "unknown, not
+  absent" semantics for a plain string. This pilot's own candidate
+  strings never carried repo identity at all before this slice, so it
+  pairs a `portage-dep` grammar/matching addition (`Atom::repo`/
+  `Candidate::repo`, mirroring the existing `:slot` suffix convention)
+  with a `portage-repo` wiring change: every candidate string that crate
+  builds for `match_from_list` -- `resolve_pretend`'s own top-level *and*
+  dependency-atom matching, `is_visible`'s package.mask/.unmask/
+  .accept_keywords matching, and `effective_use_flags`'s package.use
+  matching -- now appends `::name` using each repo's own already-tracked
+  `RepoConfig::name` (its `repos.conf` section name, reused as-is rather
+  than reading a second, separate `profiles/repo_name` file real portage
+  also cross-checks against). Verified end to end against the fixture's
+  own two repos, not just parsed: `dev-libs/foo::testrepo` resolves the
+  main repo's copy, `dev-libs/foo::overlay` correctly finds none (`foo`
+  only exists in the main repo), and `dev-libs/overlayonlypkg::overlay`
+  vs. `::testrepo` prove the reverse. Two paths deliberately keep their
+  pre-existing, repo-less candidate strings, a narrower scope cut than
+  the rest of this feature's wiring: blocker matching (`resolve_blockers`,
+  which builds candidates from vdb/graph `(version, slot)` pairs that
+  never tracked repo identity to begin with) and a top-level atom's own
+  slot-conflict re-verification against an *already-resolved* candidate
+  from a different atom (the `GraphEntry` it's checked against doesn't
+  carry repo identity either) -- both real, if narrow, corners a
+  `::repo`-constrained atom could theoretically still get wrong.
 - **`use-reduce-harness`**: ports `use_reduce(flat=True)` -- USE-conditional
   (`flag? ( ... )`) and any-of (`|| ( ... )`) dependency-string flattening.
   Unlike `atom-harness`, this is *not* a narrowed grammar: flat mode's
@@ -591,11 +623,15 @@ PORTING/
   reference side, `_parse_atom` uses the *real* `portage.dep.Atom` (richer
   than Rust's own deliberately narrowed `portage-dep` crate), so an input
   using a grammar feature Rust's `Atom` struct has no field for at all
-  (USE deps, repo constraints, wildcards, build-ids, slot operators like
-  `:=`/`:*`) needs an explicit `_has_unsupported_top_level_features` check
-  to still produce the same "invalid atom" outcome Rust's own `parse_atom`
-  would (returning `None` outright for that input) -- verified empirically
-  atom-by-atom against `atom-harness parse` rather than assumed.
+  (at the time this paragraph was written: USE deps, repo constraints,
+  wildcards, build-ids, slot operators like `:=`/`:*` -- all but
+  wildcards/build-ids have since gained real fields and been removed
+  from `_has_unsupported_top_level_features`'s own check, see each
+  feature's own later paragraph) needs an explicit
+  `_has_unsupported_top_level_features` check to still produce the same
+  "invalid atom" outcome Rust's own `parse_atom` would (returning `None`
+  outright for that input) -- verified empirically atom-by-atom against
+  `atom-harness parse` rather than assumed.
 
   **USE flags in `--pretend -v` output**: `--verbose`/`-v` moves from
   "recognized, not implemented" to a second real, implemented flag
@@ -1019,17 +1055,18 @@ integers. See the comment at the top of
 
 Known scope cut: `atom-harness` ports a documented v1 subset of the real
 atom grammar (see above and the doc comment in
-`rust/portage-dep/src/lib.rs`) -- wildcards, build-ids, repo constraints,
-and EAPI parametrization are all deferred (slot operators `:=`/`:*`/`:slot=`,
-USE deps `[bar]`, and the `=*` glob version operator are now supported --
-see the "Slot operators", "USE deps", and "`=*` glob version operator"
+`rust/portage-dep/src/lib.rs`) -- wildcards, build-ids, and EAPI
+parametrization are all deferred (slot operators `:=`/`:*`/`:slot=`,
+USE deps `[bar]`, the `=*` glob version operator, and the `::reponame`
+repo constraint are now supported -- see the "Slot operators", "USE
+deps", "`=*` glob version operator", and "`::reponame` repo constraint"
 paragraphs in "What this proves" above; USE deps are parsed
 but not enforced by matching, a separately-noted, deliberate cut of their
 own). Candidates for matching are plain
-`category/package-version[-rN][:slot[/subslot]]` strings rather than full
-Package objects (no package-db/depgraph model exists yet in this pilot),
-which mirrors a fallback path the real `match_from_list` already
-supports.
+`category/package-version[-rN][:slot[/subslot]][::repo]` strings rather
+than full Package objects (no package-db/depgraph model exists yet in
+this pilot), which mirrors a fallback path the real `match_from_list`
+already supports.
 
 `PORTING/fixtures` is a small synthetic repo (not the vendored real tree
 used for benchmarking): `repos.conf`, a handful of ebuilds + matching
@@ -1272,6 +1309,12 @@ PORTING/rust/target/release/atom-harness match "dev-libs/foo[-bar]" \
 PORTING/rust/target/release/atom-harness match "=dev-libs/foo-1*" \
     dev-libs/foo-1.2 dev-libs/foo-10
 # dev-libs/foo-1.2
+
+# "::reponame" repo constraint: rejects a candidate only if it carries a
+# KNOWN, different repo -- the repo-less candidate always passes too
+PORTING/rust/target/release/atom-harness match "dev-libs/foo::gentoo" \
+    dev-libs/foo-1.0 dev-libs/foo-1.0::gentoo dev-libs/foo-1.0::other
+# dev-libs/foo-1.0,dev-libs/foo-1.0::gentoo
 ```
 
 Try the use_reduce harness:
@@ -1412,6 +1455,11 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/graphblockerp
 # PORTING/fixtures/etc/portage/repos.conf) is found
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayonlypkg
 # [ebuild  N] dev-libs/overlayonlypkg-1.0
+
+# "::reponame" repo constraint: the same package, constrained to the
+# repo it's NOT in, correctly finds nothing
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayonlypkg::testrepo
+# emerge: there are no ebuilds to satisfy "dev-libs/overlayonlypkg::testrepo".  (exit 1)
 
 # same version in both repos: the higher-priority overlay's own copy is
 # the one actually used, proven by its RDEPEND (not the main repo copy's)

@@ -53,6 +53,10 @@ PARSE_VALID_ATOMS = [
     "=dev-libs/foo-1.2.3*",  # "=*" glob version operator (PMS 8.3.1)
     "=dev-libs/foo-1.2.3-r1*",  # glob combined with an explicit revision
     "=dev-libs/foo-1*",  # single version component before the glob
+    "dev-libs/foo::gentoo",  # "::reponame" repo constraint (PMS 3.1.5)
+    "=dev-libs/foo-1.2.3:0::gentoo",  # combined with a version operator and slot
+    "dev-libs/foo::gentoo[bar]",  # combined with a USE dep
+    "dev-libs/foo:0=::gentoo",  # combined with a slot operator
 ]
 
 # Not valid at all, or valid PMS atoms that use a feature outside the v1
@@ -63,7 +67,8 @@ PARSE_INVALID_ATOMS = [
     "dev-libs/",
     "/foo",
     "dev-libs/foo-1.2.3",  # bare version with no operator: not a valid atom
-    "dev-libs/foo::gentoo",  # repo constraint: out of v1 scope
+    "dev-libs/foo::",  # empty repo name after "::": invalid
+    "dev-libs/foo::-gentoo",  # PMS 3.1.5: repo name must not begin with "-"
     ">=dev-libs/foo-1.2.3*",  # PMS 8.3.1: "*" is illegal with any operator
     "<dev-libs/foo-1.2.3*",   # other than "=" -- not silently truncated
     "~dev-libs/foo-1.2.3*",   # or accepted under the wrong operator
@@ -198,6 +203,31 @@ MATCH_CASES += [
     ("=dev-libs/foo-0.5*", ["dev-libs/foo-0.5", "dev-libs/foo-0.50", "dev-libs/foo-00.5"]),
 ]
 
+# "::reponame" repo constraint (PMS 3.1.5): real match_from_list's own
+# final post-pass filter -- only ever rejects a candidate that carries a
+# KNOWN, different repo; a repo-less candidate string always passes
+# regardless of what the atom asks for (real dep_getrepo's own
+# "unknown, not absent" semantics for a plain string).
+REPO_CANDIDATES = [
+    "dev-libs/foo-1.0",  # no "::repo" at all: must pass every repo-constrained
+                          # atom, not just a matching one
+    "dev-libs/foo-1.0::gentoo",
+    "dev-libs/foo-1.0::other-repo",
+    "dev-libs/foo-2.0:0::gentoo",  # combined with an explicit slot
+]
+
+MATCH_CASES += [
+    ("dev-libs/foo::gentoo", REPO_CANDIDATES),
+    ("dev-libs/foo::other-repo", REPO_CANDIDATES),
+    ("dev-libs/foo::nonexistent-repo", REPO_CANDIDATES),  # no repo-tagged
+                                                            # candidate matches;
+                                                            # the repo-less one still does
+    ("dev-libs/foo", REPO_CANDIDATES),  # no repo constraint at all: matches
+                                         # every candidate regardless of its own repo
+    ("dev-libs/foo:0::gentoo", REPO_CANDIDATES),  # repo constraint combined
+                                                    # with an explicit slot
+]
+
 
 @pytest.mark.parametrize("atom,candidates", MATCH_CASES)
 def test_match_matches_between_implementations(
@@ -212,10 +242,10 @@ def test_match_of_invalid_atom_is_invalid_in_both(
     atom_harness_python, atom_harness_rust
 ):
     python_result = _run(
-        atom_harness_python, "match", "dev-libs/foo::gentoo", *CANDIDATES
+        atom_harness_python, "match", "dev-libs/foo::-gentoo", *CANDIDATES
     )
     rust_result = _run(
-        [str(atom_harness_rust)], "match", "dev-libs/foo::gentoo", *CANDIDATES
+        [str(atom_harness_rust)], "match", "dev-libs/foo::-gentoo", *CANDIDATES
     )
     assert python_result == "INVALID"
     assert rust_result == python_result
