@@ -24,6 +24,13 @@ use crate::ebuild_phases;
 use crate::ebuild_unmerge;
 use std::process::ExitCode;
 
+/// Whether `--help`/`-h` appears anywhere in `args`. No short-flag
+/// bundle scanning: `bin/ebuild` declares no short aliases for its own
+/// options, so `-h` is never part of a bundle.
+fn wants_help(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--help" || arg == "-h")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
