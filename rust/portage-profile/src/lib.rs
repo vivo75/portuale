@@ -468,6 +468,18 @@ pub struct Config {
     /// `package.accept_restrict`, user-level only. See
     /// `package_properties`'s own doc comment.
     pub package_accept_restrict: Vec<(String, Vec<String>)>,
+    /// `PKGDIR` (`--usepkg`/`--usepkgonly`'s own binary-package
+    /// directory, real `lib/portage/dbapi/bintree.py`'s own `pkgdir`):
+    /// an ordinary, non-incremental `make.conf` scalar, read the same
+    /// "last-level-wins" way every other such variable already is (see
+    /// the module doc comment). Real default (`cnf/make.globals`,
+    /// `PKGDIR="/var/cache/binpkgs"`) is replicated as a hardcoded
+    /// fallback -- the same "real default, ported without modeling the
+    /// file it technically comes from" precedent `accept_properties`'s
+    /// own doc comment already established. `portage-repo`'s own
+    /// `list_binary_candidates` reads `<pkgdir>/Packages` when
+    /// `--usepkg`/`--usepkgonly` is given.
+    pub pkgdir: String,
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -1545,6 +1557,13 @@ pub fn resolve_config(
     config.package_accept_restrict = parse_package_license_lines(&read_config_lines(
         &config_root.join("etc/portage/package.accept_restrict"),
     )?);
+
+    // PKGDIR: last-level-wins scalar, real "/var/cache/binpkgs" default
+    // (see `pkgdir`'s own doc comment).
+    config.pkgdir = scalars
+        .get("PKGDIR")
+        .cloned()
+        .unwrap_or_else(|| "/var/cache/binpkgs".to_string());
 
     Ok(config)
 }

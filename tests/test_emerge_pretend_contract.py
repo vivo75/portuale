@@ -246,6 +246,26 @@ CASES = [
         ["--pretend", "--autounmask", "dev-libs/autounmaskkeywordpkg"],
         1,
     ),
+    (
+        "--usepkg: a binary-only package is invisible without it",
+        ["--pretend", "dev-libs/binaryonlypkg"],
+        1,
+    ),
+    (
+        "--usepkg: a binary-only package resolves once eligible",
+        ["--pretend", "--usepkg", "dev-libs/binaryonlypkg"],
+        0,
+    ),
+    (
+        "--binpkg-respect-use: a USE-mismatched binary falls back to the ebuild",
+        ["--pretend", "--usepkg", "dev-libs/binaryusemismatchpkg"],
+        0,
+    ),
+    (
+        "--usepkgonly: excludes ebuild-only packages entirely",
+        ["--pretend", "--usepkgonly", "dev-libs/newpkg"],
+        1,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -1150,6 +1170,57 @@ def test_unresolvable_dependency_is_reported_not_silently_dropped(
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"'
     )
+
+
+def test_usepkg_makes_a_binary_only_package_eligible(emerge_binary, fixture_env):
+    """dev-libs/binaryonlypkg exists only in PKGDIR's own Packages index
+    (see fixtures/pkgdir/Packages), no ebuild anywhere. Real depgraph.py's
+    own _dynamic_depgraph_config.__init__ only adds the "binary" db to the
+    candidate-pool list when --usepkg is True -- without it, the package
+    is entirely invisible, matching the ebuild-only-package "no visible
+    ebuild" failure mode."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--usepkg", "dev-libs/binaryonlypkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[binary  N] dev-libs/binaryonlypkg-1.0"]
+    assert result.stderr == ""
+
+
+def test_binpkg_respect_use_rejects_a_use_mismatched_binary_by_default(
+    emerge_binary, fixture_env
+):
+    """Real create_depgraph_params.py's own default-resolution: with
+    --usepkg alone (not --usepkgonly), --binpkg-respect-use defaults to
+    on. dev-libs/binaryusemismatchpkg's own binary entry has USE: (empty),
+    while the fixture profile's own global USE=confflag/foo would select
+    "foo" for its IUSE="foo" -- a mismatch, so the binary candidate is
+    rejected and the identical-version ebuild (also present) is used
+    instead."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--usepkg", "dev-libs/binaryusemismatchpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/binaryusemismatchpkg-1.0"]
+    assert result.stderr == ""
+
+
+def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
+    """The opposite asymmetry: create_depgraph_params.py:47-55 defaults
+    --binpkg-respect-use to off once --usepkgonly is given (no ebuild
+    fallback exists to reject *to*, so real portage doesn't bother
+    rejecting). The same USE-mismatched binary from the sibling test
+    above is accepted here."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--usepkgonly", "dev-libs/binaryusemismatchpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[binary  N] dev-libs/binaryusemismatchpkg-1.0"]
+    assert result.stderr == ""
 
 
 def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(

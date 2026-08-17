@@ -468,9 +468,100 @@ def list_candidates(repos, category, package):
                     "iuse": metadata.get("IUSE", ""),
                     "properties": metadata.get("PROPERTIES", ""),
                     "restrict": metadata.get("RESTRICT", ""),
+                    "source": "ebuild",
+                    "binary_use": None,
                 }
             )
     return candidates
+
+
+def _read_packages_index(pkgdir):
+    """Parses <pkgdir>/Packages (real bintree.py's own index file) into
+    one dict per package entry -- NOT read_md5_cache's "KEY=value"
+    format: real portage's own index format is "KEY: value"
+    (colon-space, confirmed against getbinpkg.py's own PackageIndex
+    writer and this machine's own real /var/cache/binpkgs/Packages),
+    blank-line-separated blocks, first block is a global header (always
+    skipped). Trusts the index outright (real "pkgdir-index-trusted"
+    behavior) rather than re-deriving fields from the actual binpkg
+    file. Missing file -> empty list, not an error. Mirrors
+    portage-repo/src/lib.rs's read_packages_index exactly."""
+    path = os.path.join(pkgdir, "Packages")
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return []
+    blocks = []
+    current = {}
+    for line in text.splitlines():
+        if not line.strip():
+            if current:
+                blocks.append(current)
+                current = {}
+            continue
+        if ": " in line:
+            key, value = line.split(": ", 1)
+            current[key] = value
+    if current:
+        blocks.append(current)
+    return blocks[1:]
+
+
+def list_binary_candidates(pkgdir, category, package):
+    """Lists every binary-package build of category/package recorded in
+    <pkgdir>/Packages -- real bindbapi, the "binary" half of depgraph's
+    own candidate dbs list. A binary candidate's own CPV field
+    (category/package-version) is matched the same way an ebuild
+    filename already is: filtered to this category/package, then
+    _strip_version_prefix peels the version off. Mirrors
+    portage-repo/src/lib.rs's list_binary_candidates exactly, including
+    its own deliberately-lower-than-any-real-repo repo_priority
+    (float("-inf") here, i32::MIN there) so an identical-version ebuild
+    naturally wins any tie via the existing repo_priority comparison,
+    with no special-casing needed anywhere else."""
+    candidates = []
+    for entry in _read_packages_index(pkgdir):
+        cpv = entry.get("CPV")
+        if cpv is None or not cpv.startswith(f"{category}/"):
+            continue
+        pf = cpv[len(category) + 1 :]
+        version = _strip_version_prefix(pf, package)
+        if version is None:
+            continue
+        keywords = entry.get("KEYWORDS", "").split()
+        slot, sub_slot = _split_slot(entry.get("SLOT", "0"))
+        candidates.append(
+            {
+                "version": version,
+                "keywords": keywords,
+                "slot": slot,
+                "sub_slot": sub_slot,
+                "repo_location": "",
+                "repo_priority": float("-inf"),
+                "repo_name": "__binary__",
+                "license": entry.get("LICENSE", ""),
+                "iuse": entry.get("IUSE", ""),
+                "properties": entry.get("PROPERTIES", ""),
+                "restrict": entry.get("RESTRICT", ""),
+                "source": "binary",
+                "binary_use": set(entry.get("USE", "").split()),
+            }
+        )
+    return candidates
+
+
+def read_binary_metadata(pkgdir, category, package, version):
+    """Re-reads <pkgdir>/Packages for category/package-version's own
+    entry -- the binary-candidate counterpart to read_md5_cache, giving
+    DEPEND/RDEPEND/etc once a binary candidate has actually been chosen.
+    None if not found. Mirrors portage-repo/src/lib.rs's
+    read_binary_metadata exactly."""
+    want = f"{category}/{package}-{version}"
+    for entry in _read_packages_index(pkgdir):
+        if entry.get("CPV") == want:
+            return entry
+    return None
 
 
 def _matches_config_entry(entry, candidate_str, category, package):
@@ -2197,6 +2288,11 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
         "package_properties": package_properties,
         "accept_restrict": accept_restrict,
         "package_accept_restrict": package_accept_restrict,
+        # PKGDIR (--usepkg/--usepkgonly's own binary-package directory,
+        # real bintree.py's own "pkgdir"): ordinary make.conf scalar,
+        # real default /var/cache/binpkgs (cnf/make.globals). Mirrors
+        # portage-profile/src/lib.rs's Config::pkgdir exactly.
+        "pkgdir": scalars.get("PKGDIR", "/var/cache/binpkgs"),
     }
 
 
@@ -2347,6 +2443,9 @@ def resolve_pretend(
     changed_slot=False,
     selective=False,
     is_top_level=False,
+    usepkg=False,
+    usepkgonly=False,
+    binpkg_respect_use=False,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -2488,7 +2587,14 @@ def resolve_pretend(
         raise ResolutionError(f'invalid atom "{atom_str}"')
     category, package = atom.cp.split("/", 1)
 
-    candidates = list_candidates(repos, category, package)
+    # --usepkg/--usepkgonly (real depgraph.py's own candidate-pool
+    # construction): --usepkgonly excludes ebuild candidates entirely;
+    # either flag alone makes binary candidates (PKGDIR/Packages)
+    # eligible alongside them. Mirrors portage-repo/src/lib.rs's
+    # resolve_pretend exactly.
+    candidates = [] if usepkgonly else list_candidates(repos, category, package)
+    if usepkg or usepkgonly:
+        candidates = candidates + list_binary_candidates(config["pkgdir"], category, package)
     visible = [c for c in candidates if is_visible(c, category, package, config)]
     if not visible:
         return ("no_visible_candidate",)
@@ -2515,6 +2621,48 @@ def resolve_pretend(
             for c in matched
             if _use_deps_satisfied(atom, *_candidate_iuse_and_use(c, category, package, config))
         ]
+
+    # --binpkg-respect-use (real default: "auto", effectively on, unless
+    # --usepkgonly is set -- see run()'s own default-resolution logic).
+    # For each matched *binary* candidate, computes what USE would
+    # currently be selected (the same effective_use_flags machinery an
+    # ebuild candidate's own display/dependency-walk already uses) and
+    # compares it, over this candidate's own declared IUSE flags only,
+    # against its own baked-in "binary_use" -- any mismatch rejects it.
+    # Mirrors portage-repo/src/lib.rs's resolve_pretend exactly.
+    if binpkg_respect_use:
+        new_matched = []
+        for c in matched:
+            if c["binary_use"] is None:
+                new_matched.append(c)
+                continue
+            candidate_str = (
+                f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}"
+                f"::{c['repo_name']}"
+            )
+            would_select = effective_use_flags(
+                c["iuse"],
+                config["use_tokens"],
+                config["package_use"],
+                config["package_use_force"],
+                config["package_use_mask"],
+                config["use_force"],
+                config["use_mask"],
+                config["use_stable_force"],
+                config["use_stable_mask"],
+                config["package_use_stable_force"],
+                config["package_use_stable_mask"],
+                c["keywords"],
+                config["accept_keywords"],
+                config["package_accept_keywords"],
+                candidate_str,
+                category,
+                package,
+            )
+            flags = [tok.lstrip("+-") for tok in c["iuse"].split()]
+            if all((flag in would_select) == (flag in c["binary_use"]) for flag in flags):
+                new_matched.append(c)
+        matched = new_matched
 
     if not matched:
         return ("no_visible_candidate",)
@@ -2648,7 +2796,7 @@ def resolve_blockers(root, pending, entries):
         candidates = list(
             installed_candidates(root, pb["target_category"], pb["target_package"])
         )
-        for category, package, outcome, _blockers, slot, _use_display, _required_by in entries:
+        for category, package, outcome, _blockers, slot, _use_display, _required_by, _source in entries:
             if (category, package) != target_key:
                 continue
             if outcome[0] == "new":
@@ -2733,6 +2881,9 @@ def resolve_pretend_graph(
     changed_deps_report=False,
     selective=False,
     autounmask_suggest_keywords=False,
+    usepkg=False,
+    usepkgonly=False,
+    binpkg_respect_use=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -2928,6 +3079,9 @@ def resolve_pretend_graph(
             changed_slot,
             selective,
             depth == 0,
+            usepkg,
+            usepkgonly,
+            binpkg_respect_use,
         )
 
         # --changed-deps-report: real portage stays "completely silent"
@@ -3040,16 +3194,26 @@ def resolve_pretend_graph(
                     outcome[1],
                     with_bdeps,
                 )
-            entries.append((category, package, outcome, [], None, [], []))
+            entries.append((category, package, outcome, [], None, [], [], "ebuild"))
             continue
 
-        # The resolved version may have come from any of `repos` (not
-        # necessarily the main one), so re-derive which repo it actually
-        # lives in -- reusing list_candidates rather than threading a
-        # repo location back out of resolve_pretend's outcome tuple,
-        # since more than one repo could in principle carry the identical
-        # version, tie-broken the same way resolve_pretend itself does.
-        repo_candidates = [c for c in list_candidates(repos, category, package) if c["version"] == version]
+        # The resolved version may have come from any of `repos`, or
+        # from PKGDIR (--usepkg/--usepkgonly), so re-derive which one it
+        # actually lives in -- reusing list_candidates/
+        # list_binary_candidates rather than threading a repo location
+        # back out of resolve_pretend's outcome tuple, since more than
+        # one source could in principle carry the identical version. The
+        # ordinary repo_priority tie-break already does the right thing
+        # with no special-casing: a binary candidate's own repo_priority
+        # (list_binary_candidates) is deliberately float("-inf"), lower
+        # than any real repo, so an identical-version ebuild naturally
+        # wins the tie. Mirrors portage-repo/src/lib.rs exactly.
+        repo_candidates = [] if usepkgonly else list_candidates(repos, category, package)
+        if usepkg or usepkgonly:
+            repo_candidates = repo_candidates + list_binary_candidates(
+                config["pkgdir"], category, package
+            )
+        repo_candidates = [c for c in repo_candidates if c["version"] == version]
         if not repo_candidates:
             continue
         resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
@@ -3057,6 +3221,7 @@ def resolve_pretend_graph(
         sub_slot = resolved["sub_slot"]
         repo_location = resolved["repo_location"]
         repo_name = resolved["repo_name"]
+        candidate_source = resolved["source"]
 
         slot_key = (category, package, slot)
         if slot_key in resolved_slots:
@@ -3087,13 +3252,18 @@ def resolve_pretend_graph(
             continue
         entry_idx = len(entries)
         resolved_slots[slot_key] = entry_idx
-        entries.append((category, package, outcome, [], slot, [], []))
+        entries.append((category, package, outcome, [], slot, [], [], candidate_source))
 
         pf = f"{package}-{version}"
-        try:
-            metadata = read_md5_cache(repo_location, category, pf)
-        except OSError:
-            continue
+        if candidate_source == "binary":
+            metadata = read_binary_metadata(config["pkgdir"], category, package, version)
+            if metadata is None:
+                continue
+        else:
+            try:
+                metadata = read_md5_cache(repo_location, category, pf)
+            except OSError:
+                continue
         candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
         use_flags = effective_use_flags(
             metadata.get("IUSE", ""),
@@ -3189,7 +3359,7 @@ def resolve_pretend_graph(
                 (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
                 for flag in metadata["IUSE"].split()
             )
-            entries[entry_idx] = (category, package, outcome, [], slot, display, [])
+            entries[entry_idx] = (category, package, outcome, [], slot, display, [], candidate_source)
 
         # --nodeps: skip this package's own DEPEND/RDEPEND/etc entirely --
         # see this function's own docstring.
@@ -3239,8 +3409,8 @@ def resolve_pretend_graph(
     # (immutable), so this rebuilds each one rather than mutating in
     # place.
     entries = [
-        (category, package, outcome, blockers, slot, use_display, sorted(required_by_map.get((category, package), ())))
-        for category, package, outcome, blockers, slot, use_display, _required_by in entries
+        (category, package, outcome, blockers, slot, use_display, sorted(required_by_map.get((category, package), ())), source)
+        for category, package, outcome, blockers, slot, use_display, _required_by, source in entries
     ]
 
     # setdefault (not a dict comprehension) so the *first* entry for a
@@ -3249,7 +3419,7 @@ def resolve_pretend_graph(
     # `entries.iter_mut().find(...)`, which also attaches to the first
     # match.
     blockers_by_owner = {}
-    for category, package, _o, blockers, _slot, _use_display, _required_by in entries:
+    for category, package, _o, blockers, _slot, _use_display, _required_by, _source in entries:
         blockers_by_owner.setdefault((category, package), blockers)
     for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
         blockers_by_owner[owner_key].append(conflict)
@@ -3720,7 +3890,7 @@ def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, ve
     own --json handling). Mirrors pretend.rs's own print_json exactly."""
     entries_json = ",".join(
         _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, top_level_pkgs, verbose)
-        for category, package, outcome, blockers, slot, use_display, required_by in entries
+        for category, package, outcome, blockers, slot, use_display, required_by, source in entries
     )
     conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)
     changed_deps_report_json = ",".join(
@@ -4128,6 +4298,9 @@ def run(args):
     # these are actually consumed, mirroring pretend.rs exactly.
     autounmask = None
     autounmask_keep_keywords = None
+    usepkg = False
+    usepkgonly = False
+    binpkg_respect_use = None
     noreplace = False
     # None until an explicit --selective/--selective=y/--selective=n is
     # given, so "n" can override whatever update/newuse/changed_use/
@@ -4521,6 +4694,57 @@ def run(args):
                     file=sys.stderr,
                 )
                 return 2
+        elif arg == "--usepkg" or arg == "-k":
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                usepkg = True
+                i += 2
+            elif nxt == "n":
+                usepkg = False
+                i += 2
+            else:
+                usepkg = True
+                i += 1
+        elif arg == "--usepkg=y":
+            usepkg = True
+            i += 1
+        elif arg == "--usepkg=n":
+            usepkg = False
+            i += 1
+        elif arg == "--usepkgonly" or arg == "-K":
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                usepkgonly = True
+                i += 2
+            elif nxt == "n":
+                usepkgonly = False
+                i += 2
+            else:
+                usepkgonly = True
+                i += 1
+        elif arg == "--usepkgonly=y":
+            usepkgonly = True
+            i += 1
+        elif arg == "--usepkgonly=n":
+            usepkgonly = False
+            i += 1
+        elif arg == "--binpkg-respect-use":
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                binpkg_respect_use = True
+                i += 2
+            elif nxt == "n":
+                binpkg_respect_use = False
+                i += 2
+            else:
+                binpkg_respect_use = True
+                i += 1
+        elif arg == "--binpkg-respect-use=y":
+            binpkg_respect_use = True
+            i += 1
+        elif arg == "--binpkg-respect-use=n":
+            binpkg_respect_use = False
+            i += 1
         elif not arg.startswith("-"):
             atom_args.append(arg)
             i += 1
@@ -4550,6 +4774,10 @@ def run(args):
                     noreplace = True
                 elif c == "D":
                     deep = True
+                elif c == "k":
+                    usepkg = True
+                elif c == "K":
+                    usepkgonly = True
                 elif c == "W":
                     deselect = True
                 elif c == "X":
@@ -4710,6 +4938,14 @@ def run(args):
     else:
         autounmask_suggest_keywords = autounmask_enabled and autounmask is not None
 
+    # --binpkg-respect-use: real default is "auto" (effectively on)
+    # whenever --usepkgonly is NOT given, left off (unset/falsy) when it
+    # IS -- create_depgraph_params.py:47-55. An explicit
+    # --binpkg-respect-use=y/=n always wins outright either way.
+    resolved_binpkg_respect_use = (
+        binpkg_respect_use if binpkg_respect_use is not None else not usepkgonly
+    )
+
     try:
         result = resolve_pretend_graph(
             _config_root(),
@@ -4729,6 +4965,9 @@ def run(args):
             changed_deps_report,
             selective,
             autounmask_suggest_keywords,
+            usepkg,
+            usepkgonly,
+            resolved_binpkg_respect_use,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -4770,7 +5009,7 @@ def run(args):
         )
         return 0
 
-    for category, package, outcome, blockers, _slot, use_display, _required_by in entries:
+    for category, package, outcome, blockers, _slot, use_display, _required_by, source in entries:
         tag = outcome[0]
         # --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
         # dependencies of the packages specified, not the packages
@@ -4779,14 +5018,18 @@ def run(args):
         # (reached the same as always, since resolve_pretend_graph's own
         # recursion is entirely unaffected by this flag) print normally.
         onlydeps_suppressed = onlydeps and (category, package) in top_level_pkgs
+        # Real --pretend's own bracket word: literally pkg.type_name
+        # ("ebuild"/"binary") -- a binary merge prints "[binary", never
+        # "[ebuild", regardless of outcome. Mirrors pretend.rs exactly.
+        bracket = "binary" if source == "binary" else "ebuild"
         if tag == "new":
             if not onlydeps_suppressed:
-                print(f"[ebuild  N] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
+                print(f"[{bracket}  N] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
             if not onlydeps_suppressed:
                 print(
-                    f"[ebuild  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})"
+                    f"[{bracket}  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})"
                     f"{use_suffix(use_display)}"
                 )
             print_blockers(category, package, outcome[2], blockers)
@@ -4797,10 +5040,10 @@ def run(args):
             if not onlydeps_suppressed:
                 reason = _reinstall_reason(changed_flags, deps_changed_flag, slot_changed_flag)
                 if reason is None:
-                    print(f"[ebuild  r] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
+                    print(f"[{bracket}  r] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
                 else:
                     print(
-                        f"[ebuild  r] {category}/{package}-{outcome[1]} "
+                        f"[{bracket}  r] {category}/{package}-{outcome[1]} "
                         f"(reinstall for {reason}){use_suffix(use_display)}"
                     )
             print_blockers(category, package, outcome[1], blockers)

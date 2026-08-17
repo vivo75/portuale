@@ -1,0 +1,22 @@
+TIMESTAMP: 0
+PACKAGES: 2
+
+CPV: dev-libs/binaryonlypkg-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture package: exists ONLY as a binary package, no ebuild anywhere -- --usepkg/--usepkgonly
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+SLOT: 0
+USE:
+BUILD_ID: 1
+
+CPV: dev-libs/binaryusemismatchpkg-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture package: binary build's own baked-in USE mismatches what would currently be selected -- --binpkg-respect-use
+EAPI: 8
+IUSE: foo
+KEYWORDS: amd64
+SLOT: 0
+USE:
+BUILD_ID: 1

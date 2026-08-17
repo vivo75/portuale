@@ -3076,6 +3076,38 @@ authority for parsing "pn-pv" ebuild filenames into package/version pairs
 python3 PORTING/bench/extract_snapshot.py /path/to/a/gentoo/tree
 ```
 
+`--usepkg`/`--usepkgonly`/`--binpkg-respect-use` add a second candidate
+source alongside ebuilds: prebuilt binary packages, read straight from
+`PKGDIR`'s own `Packages` index file (real `bintree.py`'s own format --
+`KEY: value` lines, blank-line-separated blocks, first block a global
+header) rather than a real xpak/gpkg archive parser, since the index
+alone already carries every field candidate-listing and dependency
+recursion need (`CPV`, `IUSE`, baked-in `USE`, `KEYWORDS`, `SLOT`,
+`*DEPEND`, `EAPI`, ...). Mirrors two real, non-obvious asymmetries from
+`depgraph.py`'s own `_dynamic_depgraph_config.__init__` and
+`create_depgraph_params.py:47-55`: `--usepkgonly` excludes ebuild
+candidates entirely (no fallback), while `--usepkg` alone just makes
+binaries additionally eligible alongside ebuilds; and
+`--binpkg-respect-use` (comparing a binary's own baked-in `USE` against
+what would currently be selected over its `IUSE`, rejecting mismatches)
+defaults *on* under `--usepkg` but defaults *off* under `--usepkgonly`,
+since there's no ebuild left to fall back to. Binary candidates get a
+deliberately low `repo_priority` (`i32::MIN`/`-inf`) so the existing
+`vercmp`-then-`repo_priority` tie-break naturally prefers an
+identical-version ebuild, matching real portage's own `dbs` list order
+(ebuild checked before binary). `dev-libs/binaryonlypkg` (in
+`fixtures/pkgdir/Packages` only, no ebuild anywhere) proves
+`--usepkg`/`--usepkgonly` eligibility; `dev-libs/binaryusemismatchpkg`
+(binary `USE:` empty, `IUSE="foo"`, but the fixture profile's own global
+USE would select `foo`) proves the `--binpkg-respect-use` rejection and
+its default asymmetry: `--usepkg` alone falls back to the identical-
+version ebuild, `--usepkgonly` accepts the mismatched binary since
+there's nowhere else to fall back to. The `[ebuild N]`/`[binary N]`
+bracket word itself mirrors real `RootConfig.py`'s own
+`pkg_tree_map`-driven `type_name` display. Real `--getbinpkg`/
+`--getbinpkgonly` (remote fetching) are out of scope -- local `PKGDIR`
+only.
+
 ## Running it
 
 Build both Rust binaries:
@@ -4070,6 +4102,25 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --with-test-deps dev-l
 # [ebuild  N] dev-libs/withtestdepconsumer-1.0
 # [ebuild  N] dev-libs/withtestdeppkg-1.0
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# --usepkg/--usepkgonly: binaryonlypkg exists only in fixtures/pkgdir's
+# own Packages index, no ebuild anywhere -- invisible without --usepkg
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/binaryonlypkg
+# emerge: there are no ebuilds to satisfy "dev-libs/binaryonlypkg".  (exit 1)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg dev-libs/binaryonlypkg
+# [binary  N] dev-libs/binaryonlypkg-1.0
+
+# --binpkg-respect-use defaults on under --usepkg: binaryusemismatchpkg's
+# own binary entry has USE: (empty) but the fixture profile's own global
+# USE would select "foo" over its IUSE="foo" -- mismatch, so the binary
+# is rejected and the identical-version ebuild is used instead
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg dev-libs/binaryusemismatchpkg
+# [ebuild  N] dev-libs/binaryusemismatchpkg-1.0
+
+# ...but --binpkg-respect-use defaults OFF under --usepkgonly (no ebuild
+# fallback to reject *to*) -- the same mismatched binary is now accepted
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkgonly dev-libs/binaryusemismatchpkg
+# [binary  N] dev-libs/binaryusemismatchpkg-1.0
 ```
 
 Try the `ebuild` stub (still a dry-run placeholder -- no real phase

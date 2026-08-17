@@ -221,6 +221,20 @@ pub fn read_md5_cache(
     Ok(map)
 }
 
+/// Which kind of package this `Candidate` actually is -- real portage's
+/// own `pkg.type_name` (`lib/_emerge/RootConfig.py`'s own
+/// `pkg_tree_map`, exactly the two strings `"ebuild"`/`"binary"` used
+/// here): an ebuild candidate's own USE gets computed dynamically (see
+/// `effective_use_flags`), while a binary candidate's USE was already
+/// baked in at build time (`Candidate::binary_use`) -- real `--pretend`
+/// also prints a different bracket word for each (`"[ebuild"` vs.
+/// `"[binary"`), see `GraphEntry::source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CandidateSource {
+    Ebuild,
+    Binary,
+}
+
 #[derive(Debug, Clone)]
 pub struct Candidate {
     pub version: String,
@@ -277,6 +291,21 @@ pub struct Candidate {
     /// The raw `RESTRICT` metadata string. See `properties`'s own doc
     /// comment.
     pub restrict: String,
+    /// Ebuild (a repo's own `metadata/md5-cache`) or binary (a
+    /// `PKGDIR/Packages` index entry) -- see `CandidateSource`'s own
+    /// doc comment.
+    pub source: CandidateSource,
+    /// The USE flags this specific build was compiled with, already
+    /// fully resolved (real `Packages` index's own `USE` field -- bare
+    /// flag names, presence means enabled, no `+`/`-` markers needed
+    /// since nothing is "still deciding" the way a fresh ebuild build's
+    /// own IUSE defaults are) -- `None` for an ebuild candidate, whose
+    /// USE gets computed dynamically instead (`effective_use_flags`).
+    /// `list_binary_candidates`'s own only consumer:
+    /// `resolve_pretend`'s own `--binpkg-respect-use` check compares
+    /// this against what would currently be selected, over this
+    /// candidate's own `iuse` flags.
+    pub binary_use: Option<HashSet<String>>,
 }
 
 /// A directory entry's name is only accepted as `<package>-<version>` if
@@ -350,10 +379,148 @@ pub fn list_candidates(
                 iuse: metadata.get("IUSE").cloned().unwrap_or_default(),
                 properties: metadata.get("PROPERTIES").cloned().unwrap_or_default(),
                 restrict: metadata.get("RESTRICT").cloned().unwrap_or_default(),
+                source: CandidateSource::Ebuild,
+                binary_use: None,
             });
         }
     }
     Ok(candidates)
+}
+
+/// Parses `<pkgdir>/Packages` (real `lib/portage/dbapi/bintree.py`'s own
+/// index file) into one `HashMap` per package entry -- NOT the same
+/// format `read_md5_cache` reads: real portage's own index format is
+/// `KEY: value` (colon-space, confirmed by reading `getbinpkg.py`'s own
+/// `PackageIndex` writer), blank-line-separated blocks, with the
+/// *first* block being a global header (`PROFILE`/`ACCEPT_KEYWORDS`/etc
+/// -- confirmed live against this machine's own real `/var/cache/
+/// binpkgs/Packages`) rather than a package entry at all, so it's
+/// always skipped here. Trusts the index outright rather than
+/// re-verifying each entry's own mtime/size against the real on-disk
+/// binpkg file (real portage's own `FEATURES="pkgdir-index-trusted"`
+/// behavior, not the real default -- but re-deriving IUSE/USE/SLOT/dep
+/// strings from an actual `.tbz2`/`.xpak`/`.gpkg.tar` file would need a
+/// real archive-format parser this pilot doesn't have and doesn't need:
+/// the `Packages` index alone already carries every field a candidate
+/// needs). A missing `Packages` file is an empty list, not an error --
+/// same "PKGDIR simply has nothing yet" tolerance a missing/empty repo
+/// directory already gets in `list_candidates`.
+fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
+    let path = pkgdir.join("Packages");
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut blocks: Vec<HashMap<String, String>> = Vec::new();
+    let mut current: HashMap<String, String> = HashMap::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                blocks.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        if let Some((key, value)) = line.split_once(": ") {
+            current.insert(key.to_string(), value.to_string());
+        }
+    }
+    if !current.is_empty() {
+        blocks.push(current);
+    }
+    // The first block is the index's own global header, never a real
+    // package entry -- see this function's own doc comment.
+    if blocks.is_empty() {
+        blocks
+    } else {
+        blocks.remove(0);
+        blocks
+    }
+}
+
+/// Lists every binary-package build of `category/package` recorded in
+/// `<pkgdir>/Packages` -- real portage's own `bindbapi`, the "binary"
+/// half of `_dynamic_depgraph_config`'s own candidate `dbs` list
+/// (`depgraph.py`'s own `if myopts.get("--usepkg") is True: dbs.append((
+/// bindb, "binary", ...))`, confirmed by reading it) -- added to the
+/// same candidate pool `list_candidates` already builds for ebuilds,
+/// only when `--usepkg`/`--usepkgonly` makes them eligible at all (see
+/// `resolve_pretend`'s own doc comment). A binary candidate's own
+/// `CPV` field (`category/package-version[-rN]`) is matched the exact
+/// same way an ebuild filename already is: filtered to this specific
+/// `category/package`, then `strip_version_prefix` peels the version
+/// off -- no general `pkgsplit` needed, since the target package name
+/// is already known here, same reasoning `list_candidates` itself
+/// already relies on. `repo_location`/`repo_priority`/`repo_name` are
+/// left as this candidate's own `PATH`/pseudo values (`""`/`0`/
+/// `"__binary__"`) -- a binary candidate is never re-read from a repo's
+/// own `metadata/md5-cache` the way an ebuild one is (`read_md5_cache`
+/// is never called for it anywhere), so those fields go unused for this
+/// source, not silently wrong.
+pub fn list_binary_candidates(pkgdir: &Path, category: &str, package: &str) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+    for entry in read_packages_index(pkgdir) {
+        let Some(cpv) = entry.get("CPV") else {
+            continue;
+        };
+        let Some(pf) = cpv.strip_prefix(&format!("{category}/")) else {
+            continue;
+        };
+        let Some(version) = strip_version_prefix(pf, package) else {
+            continue;
+        };
+        let keywords = entry
+            .get("KEYWORDS")
+            .map(|s| s.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        let (slot, sub_slot) = split_slot(entry.get("SLOT").map(String::as_str).unwrap_or("0"));
+        let binary_use: HashSet<String> = entry
+            .get("USE")
+            .map(|s| s.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        candidates.push(Candidate {
+            version: version.to_string(),
+            keywords,
+            slot,
+            sub_slot,
+            repo_location: PathBuf::new(),
+            // Deliberately lower than any real repo's own priority
+            // (main repo defaults to real portage's own -1000) -- so
+            // the existing, unmodified `vercmp` -> `repo_priority`
+            // tie-break every candidate-selection site already uses
+            // naturally prefers an identical-version ebuild over a
+            // binary candidate, matching real depgraph.py's own `dbs`
+            // list order (`"ebuild"` always checked before `"binary"`)
+            // with no special-casing needed anywhere else.
+            repo_priority: i32::MIN,
+            repo_name: "__binary__".to_string(),
+            license: entry.get("LICENSE").cloned().unwrap_or_default(),
+            iuse: entry.get("IUSE").cloned().unwrap_or_default(),
+            properties: entry.get("PROPERTIES").cloned().unwrap_or_default(),
+            restrict: entry.get("RESTRICT").cloned().unwrap_or_default(),
+            source: CandidateSource::Binary,
+            binary_use: Some(binary_use),
+        });
+    }
+    candidates
+}
+
+/// Re-reads `<pkgdir>/Packages` looking for `category/package-version`'s
+/// own entry -- the binary-candidate counterpart to `read_md5_cache`,
+/// used once a binary candidate has actually been chosen and its own
+/// DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND (same key names real
+/// `_pkgindex_aux_keys` uses, matching md5-cache's own) are needed for
+/// dependency recursion. `None` if the exact version can't be found
+/// (already-vanished binpkg, race with a concurrent build, etc.) --
+/// same tolerance a missing/unreadable md5-cache entry already gets.
+pub fn read_binary_metadata(
+    pkgdir: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<HashMap<String, String>> {
+    let want = format!("{category}/{package}-{version}");
+    read_packages_index(pkgdir)
+        .into_iter()
+        .find(|entry| entry.get("CPV").map(String::as_str) == Some(want.as_str()))
 }
 
 /// Whether `entry` (a `package.mask`/`.unmask`/`.accept_keywords` line)
@@ -2146,11 +2313,36 @@ pub fn resolve_pretend(
     changed_slot: bool,
     selective: bool,
     is_top_level: bool,
+    usepkg: bool,
+    usepkgonly: bool,
+    binpkg_respect_use: bool,
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
 
-    let candidates = list_candidates(repos, &atom.category, &atom.package)?;
+    // --usepkg/--usepkgonly (real depgraph.py's own `dbs` candidate-pool
+    // construction, `if "--usepkgonly" not in myopts: dbs.append(("ebuild"
+    // ...)); if myopts.get("--usepkg") is True: dbs.append(("binary"
+    // ...))`, confirmed by reading it -- see `list_binary_candidates`'s
+    // own doc comment): `--usepkgonly` excludes ebuild candidates from
+    // the pool entirely; either flag alone makes binary candidates
+    // (`<PKGDIR>/Packages`) eligible alongside them. Binary candidates
+    // reuse `is_visible` completely unchanged -- it only ever consults
+    // fields every `Candidate` carries regardless of `source`
+    // (package.mask/license/keywords/properties/restrict), never
+    // anything ebuild-specific.
+    let mut candidates = if usepkgonly {
+        Vec::new()
+    } else {
+        list_candidates(repos, &atom.category, &atom.package)?
+    };
+    if usepkg || usepkgonly {
+        candidates.extend(list_binary_candidates(
+            Path::new(&config.pkgdir),
+            &atom.category,
+            &atom.package,
+        ));
+    }
     let visible: Vec<&Candidate> = candidates
         .iter()
         .filter(|c| is_visible(c, &atom.category, &atom.package, config))
@@ -2207,6 +2399,73 @@ pub fn resolve_pretend(
             .collect(),
         _ => matched,
     };
+
+    // --binpkg-respect-use (real create_depgraph_params.py's own default:
+    // "auto", i.e. effectively on, whenever --usepkgonly is NOT set;
+    // left off when it IS -- ported as the caller's own already-resolved
+    // `binpkg_respect_use` bool, see pretend.rs). For each matched
+    // *binary* candidate, computes what USE would currently be selected
+    // (the exact same `effective_use_flags` machinery an ebuild
+    // candidate's own display/dependency-walk already uses) and
+    // compares it, over this candidate's own declared IUSE flags only,
+    // against its own baked-in `binary_use` -- any mismatch rejects it
+    // (falls through to another candidate, e.g. a same-version ebuild,
+    // if `matched` still has one), matching real `_reinstall_for_flags`'
+    // own rejection spirit inside `_wrapped_select_pkg_highest_available_
+    // imp`. Skipped entirely when `binpkg_respect_use` is false (either
+    // explicitly, or the real "off under --usepkgonly" default), same as
+    // real portage never bothering with this check in that case either.
+    let matched: Vec<&str> = if binpkg_respect_use {
+        matched
+            .into_iter()
+            .filter(|m| {
+                let Some(candidate) = by_str.get(m) else {
+                    return false;
+                };
+                let Some(binary_use) = &candidate.binary_use else {
+                    return true;
+                };
+                let candidate_str = format!(
+                    "{}/{}-{}:{}/{}::{}",
+                    atom.category,
+                    atom.package,
+                    candidate.version,
+                    candidate.slot,
+                    candidate.sub_slot,
+                    candidate.repo_name
+                );
+                let would_select = effective_use_flags(
+                    &candidate.iuse,
+                    &config.use_tokens,
+                    &config.package_use,
+                    &config.package_use_force,
+                    &config.package_use_mask,
+                    &config.use_force,
+                    &config.use_mask,
+                    &config.use_stable_force,
+                    &config.use_stable_mask,
+                    &config.package_use_stable_force,
+                    &config.package_use_stable_mask,
+                    &candidate.keywords,
+                    &config.accept_keywords,
+                    &config.package_accept_keywords,
+                    &candidate_str,
+                    &atom.category,
+                    &atom.package,
+                );
+                candidate
+                    .iuse
+                    .split_whitespace()
+                    .map(|tok| tok.trim_start_matches(['+', '-']))
+                    .all(|flag| would_select.contains(flag) == binary_use.contains(flag))
+            })
+            .collect()
+    } else {
+        matched
+    };
+    if matched.is_empty() {
+        return Ok(PretendOutcome::NoVisibleCandidate);
+    }
 
     let installed = installed_versions(root, &atom.category, &atom.package);
 
@@ -2439,6 +2698,13 @@ pub struct GraphEntry {
     /// an atom again, never whether to *record* who asked for it. See
     /// `resolve_pretend_graph`'s own doc comment.
     pub required_by: Vec<(String, String)>,
+    /// Ebuild or binary -- only meaningful for `New`/`Upgrade`/
+    /// `Reinstall` entries (defaults to `Ebuild` for everything else,
+    /// unobserved since `AlreadyInstalled`/`NoVisibleCandidate` never
+    /// print a bracket word distinguishing the two). See
+    /// `CandidateSource`'s own doc comment; `pretend.rs` uses this to
+    /// print `"[binary"` instead of `"[ebuild"`.
+    pub source: CandidateSource,
 }
 
 /// A blocker atom found while flattening one package's own dependency strings,
@@ -2979,6 +3245,9 @@ pub fn resolve_pretend_graph(
     changed_deps_report: bool,
     selective: bool,
     autounmask_suggest_keywords: bool,
+    usepkg: bool,
+    usepkgonly: bool,
+    binpkg_respect_use: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -3090,6 +3359,9 @@ pub fn resolve_pretend_graph(
             changed_slot,
             selective,
             depth == 0,
+            usepkg,
+            usepkgonly,
+            binpkg_respect_use,
         )?;
 
         // `--changed-deps-report`: real portage stays "completely
@@ -3230,22 +3502,49 @@ pub fn resolve_pretend_graph(
                 slot: None,
                 use_flags_display: Vec::new(),
                 required_by: Vec::new(),
+                source: CandidateSource::Ebuild,
             });
             continue;
         };
 
-        // The resolved version may have come from any of `repos` (not
-        // necessarily the main one), so re-derive which repo it actually
-        // lives in -- reusing `list_candidates` rather than threading a
-        // repo location back out of `PretendOutcome`, since more than one
-        // repo could in principle carry the identical version, tie-broken
-        // the same way `resolve_pretend` itself does.
-        let Ok(repo_candidates) = list_candidates(&repos, &key.0, &key.1) else {
-            continue;
+        // The resolved version may have come from any of `repos`, or
+        // from PKGDIR (`--usepkg`/`--usepkgonly`), so re-derive which
+        // one it actually lives in -- reusing `list_candidates`/
+        // `list_binary_candidates` rather than threading a repo
+        // location back out of `PretendOutcome`, since more than one
+        // source could in principle carry the identical version. The
+        // ordinary `repo_priority` tie-break already does the right
+        // thing with no special-casing here: a binary candidate's own
+        // `repo_priority` (`list_binary_candidates`) is deliberately
+        // `i32::MIN`, lower than any real repo, so an identical-version
+        // ebuild naturally wins the tie -- matching real depgraph.py's
+        // own `dbs` list order (`"ebuild"` always checked before
+        // `"binary"`, see `resolve_pretend`'s own doc comment).
+        // Mirrors `resolve_pretend`'s own pool construction exactly
+        // (`--usepkgonly` excludes ebuild candidates entirely) -- this
+        // step has to agree with what `resolve_pretend` itself actually
+        // chose from, or it can silently re-derive a *different*
+        // candidate than the one that really won (e.g. picking an
+        // ebuild back up here that `--usepkgonly` had already excluded
+        // from consideration).
+        let mut repo_candidates = if usepkgonly {
+            Vec::new()
+        } else {
+            let Ok(c) = list_candidates(&repos, &key.0, &key.1) else {
+                continue;
+            };
+            c
         };
+        if usepkg || usepkgonly {
+            repo_candidates.extend(list_binary_candidates(
+                Path::new(&config.pkgdir),
+                &key.0,
+                &key.1,
+            ));
+        }
         let Some(resolved) = repo_candidates
             .iter()
-            .filter(|c| c.version == version)
+            .filter(|c| c.version == *version)
             .max_by_key(|c| c.repo_priority)
         else {
             continue;
@@ -3285,6 +3584,7 @@ pub fn resolve_pretend_graph(
         }
         let entry_idx = entries.len();
         resolved_slots.insert(slot_key, entry_idx);
+        let candidate_source = resolved.source;
         entries.push(GraphEntry {
             category: key.0.clone(),
             package: key.1.clone(),
@@ -3293,11 +3593,22 @@ pub fn resolve_pretend_graph(
             slot: Some(slot.clone()),
             use_flags_display: Vec::new(),
             required_by: Vec::new(),
+            source: candidate_source,
         });
 
-        let pf = format!("{}-{version}", key.1);
-        let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {
-            continue;
+        let metadata = if candidate_source == CandidateSource::Binary {
+            let Some(metadata) =
+                read_binary_metadata(Path::new(&config.pkgdir), &key.0, &key.1, &version)
+            else {
+                continue;
+            };
+            metadata
+        } else {
+            let pf = format!("{}-{version}", key.1);
+            let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {
+                continue;
+            };
+            metadata
         };
         let candidate_str = format!(
             "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
@@ -3721,6 +4032,9 @@ mod tests {
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3747,6 +4061,9 @@ mod tests {
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3774,6 +4091,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3848,6 +4168,9 @@ mod tests {
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3924,6 +4247,9 @@ mod tests {
                 false,
                 true,
                 true,
+                false,
+                false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -4024,6 +4350,9 @@ mod tests {
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4055,6 +4384,9 @@ mod tests {
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4085,6 +4417,9 @@ mod tests {
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4180,6 +4515,9 @@ mod tests {
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4249,6 +4587,9 @@ mod tests {
             false,
             changed_deps_report,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -4356,6 +4697,9 @@ mod tests {
             true,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4415,6 +4759,9 @@ mod tests {
                 true,
                 true,
                 true,
+                false,
+                false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -4469,6 +4816,9 @@ mod tests {
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -4500,6 +4850,9 @@ mod tests {
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
@@ -4537,6 +4890,9 @@ mod tests {
                 true,
                 true,
                 true,
+                false,
+                false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::Reinstall {
@@ -4663,6 +5019,9 @@ mod tests {
                 false,
                 true,
                 true,
+                false,
+                false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -4684,6 +5043,9 @@ mod tests {
                 false,
                 true,
                 true,
+                false,
+                false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -5012,6 +5374,9 @@ mod tests {
             false,
             true,
             false,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5040,6 +5405,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -5071,6 +5439,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -5106,6 +5477,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
@@ -5158,6 +5532,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -5258,6 +5635,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -5360,6 +5740,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .expect("resolve_pretend_graph must succeed")
@@ -5499,6 +5882,9 @@ mod tests {
             false,
             true,
             false,
+            false,
+            false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -5574,6 +5960,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -5717,6 +6106,9 @@ mod tests {
             false,
             true,
             false,
+            false,
+            false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -5806,6 +6198,9 @@ mod tests {
             false,
             true,
             false,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5841,6 +6236,9 @@ mod tests {
             true,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -5937,6 +6335,9 @@ mod tests {
             false,
             true,
             false,
+            false,
+            false,
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -5970,6 +6371,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -6007,6 +6411,9 @@ mod tests {
             false,
             true,
             false,
+            false,
+            false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6042,6 +6449,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -6294,6 +6704,9 @@ mod tests {
             false,
             true,
             false,
+            false,
+            false,
+            false,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -6342,6 +6755,9 @@ mod tests {
             false,
             true,
             false,
+            false,
+            false,
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -6367,6 +6783,9 @@ mod tests {
             false,
             true,
             true,
+            false,
+            false,
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -6428,6 +6847,9 @@ mod tests {
             false,
             false,
             true,
+            false,
+            false,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -6510,6 +6932,8 @@ mod tests {
             iuse: String::new(),
             properties: String::new(),
             restrict: String::new(),
+            source: CandidateSource::Ebuild,
+            binary_use: None,
         }
     }
 
@@ -7584,6 +8008,7 @@ mod tests {
             slot: Some("0".to_string()),
             use_flags_display: Vec::new(),
             required_by: Vec::new(),
+            source: CandidateSource::Ebuild,
         }
     }
 

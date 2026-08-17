@@ -936,6 +936,15 @@ pub fn run(args: &[String]) -> ExitCode {
     // autounmask/autounmask_keep_keywords computation.
     let mut autounmask: Option<bool> = None;
     let mut autounmask_keep_keywords: Option<bool> = None;
+    // --usepkg/-k, --usepkgonly/-K, --binpkg-respect-use: all three real
+    // "true_y_or_n" (bare flag, "=y", or "=n"), same shape --autounmask
+    // already has. --binpkg-respect-use's own real default ("auto",
+    // effectively on, whenever --usepkgonly is NOT given -- see
+    // create_depgraph_params.py:47-55) is resolved below, once usepkgonly
+    // itself is known.
+    let mut usepkg = false;
+    let mut usepkgonly = false;
+    let mut binpkg_respect_use: Option<bool> = None;
     let mut noreplace = false;
     // `None` until an explicit `--selective`/`--selective=y`/`--selective=n`
     // is given, so `n` can override whatever `update`/`newuse`/
@@ -1382,6 +1391,69 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 }
             }
+        } else if arg == "--usepkg" || arg == "-k" {
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    usepkg = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    usepkg = false;
+                    i += 2;
+                }
+                _ => {
+                    usepkg = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--usepkg=y" {
+            usepkg = true;
+            i += 1;
+        } else if arg == "--usepkg=n" {
+            usepkg = false;
+            i += 1;
+        } else if arg == "--usepkgonly" || arg == "-K" {
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    usepkgonly = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    usepkgonly = false;
+                    i += 2;
+                }
+                _ => {
+                    usepkgonly = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--usepkgonly=y" {
+            usepkgonly = true;
+            i += 1;
+        } else if arg == "--usepkgonly=n" {
+            usepkgonly = false;
+            i += 1;
+        } else if arg == "--binpkg-respect-use" {
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    binpkg_respect_use = Some(true);
+                    i += 2;
+                }
+                Some("n") => {
+                    binpkg_respect_use = Some(false);
+                    i += 2;
+                }
+                _ => {
+                    binpkg_respect_use = Some(true);
+                    i += 1;
+                }
+            }
+        } else if arg == "--binpkg-respect-use=y" {
+            binpkg_respect_use = Some(true);
+            i += 1;
+        } else if arg == "--binpkg-respect-use=n" {
+            binpkg_respect_use = Some(false);
+            i += 1;
         } else if !arg.starts_with('-') {
             atom_args.push(arg);
             i += 1;
@@ -1402,6 +1474,8 @@ pub fn run(args: &[String]) -> ExitCode {
                     'u' => update = true,
                     'n' => noreplace = true,
                     'D' => deep = portage_repo::Deep::Unlimited,
+                    'k' => usepkg = true,
+                    'K' => usepkgonly = true,
                     'W' => deselect = true,
                     'X' => {
                         // Unlike every other bundle-compatible short flag
@@ -1605,6 +1679,12 @@ pub fn run(args: &[String]) -> ExitCode {
             None => autounmask.is_some(),
         };
 
+    // --binpkg-respect-use: real default is "auto" (effectively on)
+    // whenever --usepkgonly is NOT given, left off (unset/falsy) when it
+    // IS -- create_depgraph_params.py:47-55, confirmed by reading it. An
+    // explicit --binpkg-respect-use=y/=n always wins outright either way.
+    let binpkg_respect_use = binpkg_respect_use.unwrap_or(!usepkgonly);
+
     let result = match resolve_pretend_graph(
         &config_root,
         &root,
@@ -1623,6 +1703,9 @@ pub fn run(args: &[String]) -> ExitCode {
         changed_deps_report,
         selective,
         autounmask_suggest_keywords,
+        usepkg,
+        usepkgonly,
+        binpkg_respect_use,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -1666,11 +1749,20 @@ pub fn run(args: &[String]) -> ExitCode {
         // no-op for it either way.
         let onlydeps_suppressed =
             onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
+        // Real --pretend's own bracket word: literally `pkg.type_name`
+        // (`lib/_emerge/RootConfig.py`'s own `pkg_tree_map`, the exact
+        // two strings `"ebuild"`/`"binary"` this pilot's own
+        // `CandidateSource` mirrors) -- a binary merge prints
+        // `"[binary"`, never `"[ebuild"`, regardless of outcome.
+        let bracket = match entry.source {
+            portage_repo::CandidateSource::Binary => "binary",
+            portage_repo::CandidateSource::Ebuild => "ebuild",
+        };
         match &entry.outcome {
             PretendOutcome::New { version } => {
                 if !onlydeps_suppressed {
                     println!(
-                        "[ebuild  N] {}/{}-{version}{}",
+                        "[{bracket}  N] {}/{}-{version}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -1681,7 +1773,7 @@ pub fn run(args: &[String]) -> ExitCode {
             PretendOutcome::Upgrade { from, to } => {
                 if !onlydeps_suppressed {
                     println!(
-                        "[ebuild  U] {}/{}-{to} (upgrade from {from}){}",
+                        "[{bracket}  U] {}/{}-{to} (upgrade from {from}){}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -1698,13 +1790,13 @@ pub fn run(args: &[String]) -> ExitCode {
                 if !onlydeps_suppressed {
                     match reinstall_reason(changed_flags, *deps_changed, *slot_changed) {
                         Some(reason) => println!(
-                            "[ebuild  r] {}/{}-{version} (reinstall for {reason}){}",
+                            "[{bracket}  r] {}/{}-{version} (reinstall for {reason}){}",
                             entry.category,
                             entry.package,
                             use_suffix(entry, verbose)
                         ),
                         None => println!(
-                            "[ebuild  r] {}/{}-{version}{}",
+                            "[{bracket}  r] {}/{}-{version}{}",
                             entry.category,
                             entry.package,
                             use_suffix(entry, verbose)
