@@ -10,3 +10,14 @@ fn cfg_184() -> portage_profile::Config {
         ..Default::default()
     }
 }
+
+fn inst_184(version: &str, installed: bool) -> SlotConflictInstance {
+    SlotConflictInstance {
+        version: version.to_string(),
+        sub_slot: "0".to_string(),
+        repo_name: "testrepo".to_string(),
+        use_display: Vec::new(),
+        parents: Vec::new(),
+        installed,
+    }
+}

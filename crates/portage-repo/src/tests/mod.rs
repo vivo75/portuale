@@ -241,6 +241,63 @@ fn resolve_real_newrepo(category: &str, package: &str) -> PretendOutcome {
 /// entries in walk order for the `or_tuple` first-pulled rule.
 type S2Row<'x> = (&'x str, bool, Vec<(&'x str, &'x str, bool)>);
 
+fn s2_conflict(rows: Vec<S2Row<'_>>) -> SlotConflict {
+    SlotConflict {
+        category: "dev-libs".to_string(),
+        package: "slotconflicttarget".to_string(),
+        slot: "0".to_string(),
+        resolved_version: rows[0].0.to_string(),
+        conflicting_atom: rows
+            .get(1)
+            .map(|r| {
+                r.2.first()
+                    .map(|(_, a, _)| a.to_string())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default(),
+        instances: rows
+            .into_iter()
+            .map(|(v, installed, parents)| SlotConflictInstance {
+                version: v.to_string(),
+                sub_slot: "0".to_string(),
+                repo_name: "testrepo".to_string(),
+                use_display: Vec::new(),
+                parents: parents
+                    .into_iter()
+                    .map(|(cpv, atom, pinst)| SlotConflictParent {
+                        parent_cpv: cpv.to_string(),
+                        atom: atom.to_string(),
+                        use_display: Vec::new(),
+                        installed: pinst,
+                    })
+                    .collect(),
+                installed,
+            })
+            .collect(),
+    }
+}
+
+/// The `souprov` slot conflict for the solvable legs: 1.0 and 2.0
+/// pulled, 2.0 resolved.
+fn souprov_conflict_161() -> SlotConflict {
+    let inst = |version: &str, sub: &str| SlotConflictInstance {
+        version: version.to_string(),
+        sub_slot: sub.to_string(),
+        repo_name: "testrepo".to_string(),
+        use_display: Vec::new(),
+        parents: Vec::new(),
+        installed: false,
+    };
+    SlotConflict {
+        category: "dev-libs".to_string(),
+        package: "souprov".to_string(),
+        slot: "0".to_string(),
+        resolved_version: "2.0".to_string(),
+        conflicting_atom: ">=dev-libs/souprov-2.0".to_string(),
+        instances: vec![inst("2.0", "2"), inst("1.0", "1")],
+    }
+}
+
 /// Arguments of [`run_161`].
 struct Run161Args<'a> {
     dir: &'a Path,

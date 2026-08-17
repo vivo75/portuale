@@ -56,6 +56,15 @@ struct RpOpts163 {
     extra_constraints: Vec<String>,
 }
 
+impl RpOpts163 {
+    fn dep() -> Self {
+        RpOpts163 {
+            with_bdeps: true,
+            ..Default::default()
+        }
+    }
+}
+
 /// Direct `resolve_pretend` call over a scratch repo + scratch vdb;
 /// `binpkgs` stages `scanned_binpkgs` records like `ResolveCtx::new`.
 fn resolve_163(

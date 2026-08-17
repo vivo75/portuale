@@ -409,6 +409,102 @@ pub(crate) fn first_invalid_conditional(dep: &str, valid: &HashSet<String>) -> O
     None
 }
 
+/// Human reason strings for a candidate that is *not* [`is_visible`] -- the
+/// `(masked by: …)` text after each `- <cpv>` line. `package.mask`, the
+/// `KEYWORDS` string and the `LICENSE` string match Portage verbatim;
+/// `PROPERTIES`/`RESTRICT` render as the bare key name.
+// Portage: getmaskingstatus._getmaskingstatus, _get_masking_status
+pub(crate) fn candidate_masking_reasons(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Vec<String> {
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let mut reasons = Vec::new();
+
+    if any_config_entry_matches(&config.package_mask, &candidate_str, category, package)
+        && !any_config_entry_matches(&config.package_unmask, &candidate_str, category, package)
+    {
+        reasons.push("package.mask".to_string());
+    }
+
+    if !license_accepted(candidate, category, package, &candidate_str, config) {
+        let missing = missing_licenses(candidate, category, package, &candidate_str, config);
+        reasons.push(if missing.is_empty() {
+            "LICENSE".to_string()
+        } else {
+            format!("{} license(s)", missing.join(" "))
+        });
+    }
+
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.properties,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Properties,
+        global_accept: &config.accept_properties,
+        package_accept: &config.package_properties,
+    }) {
+        reasons.push("PROPERTIES".to_string());
+    }
+
+    if !metadata_key_accepted(MetadataKeyAcceptedArgs {
+        value_str: &candidate.restrict,
+        candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+        which: MetadataKey::Restrict,
+        global_accept: &config.accept_restrict,
+        package_accept: &config.package_accept_restrict,
+    }) {
+        reasons.push("RESTRICT".to_string());
+    }
+
+    if !keywords_accepted(KeywordsAcceptedArgs {
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
+        category,
+        package,
+        accept_keywords: &config.accept_keywords,
+        package_accept_keywords: &config.package_accept_keywords,
+    }) {
+        let kmask = candidate
+            .keywords
+            .iter()
+            .find_map(|k| {
+                k.strip_prefix('~')
+                    .filter(|a| config.accept_keywords.contains(*a))
+                    .map(|a| format!("~{a}"))
+                    .or_else(|| {
+                        k.strip_prefix('-')
+                            .filter(|a| config.accept_keywords.contains(*a))
+                            .map(|a| format!("-{a}"))
+                    })
+            })
+            .unwrap_or_else(|| "missing".to_string());
+        reasons.push(format!("{kmask} keyword"));
+    }
+
+    // `invalid` reasons go last, after the masking-status ones.
+    reasons.extend(invalid_use_conditional_reasons(
+        candidate, category, package, config,
+    ));
+
+    if reasons.is_empty() {
+        reasons.push("masked".to_string());
+    }
+    reasons
+}
+
 /// One dependency atom's masked-only disclosure: the "All ebuilds that could
 /// satisfy … have been masked" block for a *dependency*. Rendered in place of
 /// the bare `!!! no visible ebuild for dependency` line, with the

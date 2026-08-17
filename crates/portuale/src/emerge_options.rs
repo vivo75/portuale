@@ -300,6 +300,12 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_noreplace_or_selective_either() {
+        assert!(lookup("--noreplace").is_none());
+        assert!(lookup("--selective").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }

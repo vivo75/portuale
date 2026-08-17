@@ -41,6 +41,29 @@ fn cfg_166() -> portage_profile::Config {
     }
 }
 
+/// One conflict over `(version, installed)` instances (parents are
+/// irrelevant to the arg-mode verdict).
+fn conflict_166(versions: Vec<(&str, bool)>) -> SlotConflict {
+    SlotConflict {
+        category: "dev-libs".to_string(),
+        package: "argpkg".to_string(),
+        slot: "0".to_string(),
+        resolved_version: versions[0].0.to_string(),
+        conflicting_atom: "dev-libs/argpkg".to_string(),
+        instances: versions
+            .into_iter()
+            .map(|(v, installed)| SlotConflictInstance {
+                version: v.to_string(),
+                sub_slot: "0".to_string(),
+                repo_name: "testrepo".to_string(),
+                use_display: Vec::new(),
+                parents: Vec::new(),
+                installed,
+            })
+            .collect(),
+    }
+}
+
 fn inst_166(version: &str, installed: bool) -> SlotConflictInstance {
     SlotConflictInstance {
         version: version.to_string(),
