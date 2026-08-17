@@ -77,3 +77,20 @@ fn parse_license_groups_lines_extends_a_repeated_group_name() {
     );
     assert_eq!(groups.get("EULA"), Some(&vec!["MyEula".to_string()]));
 }
+
+#[test]
+fn scope_repo_mask_lines_adds_reponame_only_when_no_repo_part_is_present() {
+    let lines = vec![
+        "dev-libs/a".to_string(),
+        "-dev-libs/b".to_string(),
+        "dev-libs/c::already-scoped".to_string(),
+    ];
+    assert_eq!(
+        scope_repo_mask_lines(&lines, "overlay"),
+        vec![
+            "dev-libs/a::overlay".to_string(),
+            "-dev-libs/b::overlay".to_string(),
+            "dev-libs/c::already-scoped".to_string(),
+        ]
+    );
+}

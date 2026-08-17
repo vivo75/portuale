@@ -16,6 +16,7 @@
 mod commands;
 mod depend_phase;
 mod environment;
+mod fetch_sources;
 mod package_env;
 mod post_install_meta;
 mod runtime_paths;
@@ -28,6 +29,7 @@ mod tests;
 pub use commands::*;
 pub(crate) use depend_phase::*;
 pub(crate) use environment::*;
+pub(crate) use fetch_sources::*;
 pub(crate) use package_env::*;
 pub(crate) use post_install_meta::*;
 pub(crate) use runtime_paths::*;
