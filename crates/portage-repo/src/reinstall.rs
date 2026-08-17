@@ -378,6 +378,64 @@ pub fn ebuild_visible_at(
         .unwrap_or(false)
 }
 
+/// Arguments of [`binary_reinstall_warranted`].
+pub(crate) struct BinaryReinstallWarrantedArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) binary_build_time: Option<i64>,
+    pub(crate) rebuilt_binaries: bool,
+    pub(crate) rebuilt_binaries_timestamp: Option<u64>,
+    pub(crate) update: bool,
+}
+
+/// Whether a binary at the installed `version` warrants a reinstall:
+///   - `--rebuilt-binaries`: any `BUILD_TIME` difference (or a strictly-
+///     newer one past `--rebuilt-binaries-timestamp`), ebuild-visibility
+///     notwithstanding.
+///   - without it (gated on `update`): a binary whose `BUILD_TIME` differs
+///     *and* whose ebuild is no longer visible is merged over the
+///     installed package.
+///
+/// Portage: depgraph.py's two `rebuilt_binary` triggers folded into one.
+pub(crate) fn binary_reinstall_warranted(args: BinaryReinstallWarrantedArgs<'_>) -> bool {
+    let BinaryReinstallWarrantedArgs {
+        root,
+        repos,
+        config,
+        category,
+        package,
+        version,
+        binary_build_time,
+        rebuilt_binaries,
+        rebuilt_binaries_timestamp,
+        update,
+    } = args;
+    if rebuilt_binaries {
+        return rebuilt_binary_changed(RebuiltBinaryChangedArgs {
+            root,
+            binary_build_time,
+            category,
+            package,
+            version,
+            rebuilt_binaries_timestamp,
+        });
+    }
+    update
+        && !ebuild_visible_at(repos, category, package, version, config)
+        && rebuilt_binary_changed(RebuiltBinaryChangedArgs {
+            root,
+            binary_build_time,
+            category,
+            package,
+            version,
+            rebuilt_binaries_timestamp: None,
+        })
+}
+
 /// A candidate's own `is_valid_flag` domain: its declared `IUSE` unioned
 /// with the profile's EAPI 5+ `IUSE_EFFECTIVE` (`config.iuse_effective`).
 /// Used only for a USE-dep's `.required`/`(+)`/`(-)` check -- deliberately

@@ -14,6 +14,143 @@ pub(crate) struct BinpkgRespectUseOkArgs<'a> {
     pub(crate) respect_use: bool,
 }
 
+/// Should this *binary* candidate be rejected for the same-version ebuild?
+/// Ports Portage's binary-eligibility check (`in_usepkg_exclude`/`include`),
+/// its `--usepkg-exclude`/`--usepkg-include` lists, and
+/// `_wrapped_select_pkg_highest_available_imp`'s rejection block with
+/// `_reinstall_for_flags`'s arms. Binary candidates only. The caller opens
+/// Portage's gate; Portage compares the baked `IUSE`/`USE` against the
+/// **same-version ebuild's** profile-computed sets.
+/// Without an ebuild at that version the `cur_*` side is Portage's own
+/// `else` arm (Portage depgraph no-ebuild arm):
+///
+/// ```python
+///             if myeb:
+///                 now_use = self._pkg_use_enabled(myeb)
+///                 forced_flags = set(chain(myeb.use.force, myeb.use.mask))
+///             else:
+///                 pkgsettings.setcpv(pkg)
+///                 now_use = pkgsettings["PORTAGE_USE"].split()
+///                 forced_flags = set(
+///                     chain(pkgsettings.useforce, pkgsettings.usemask)
+///                 )
+///             cur_iuse = iuses
+/// ```
+///
+/// `pkgsettings.setcpv(pkg)` is the *profile's* selection for the binary's cpv,
+/// not the baked USE. The respect-use half of the gate is off under
+/// `--usepkgonly` (modelled by `pretend.rs`'s `unwrap_or(!usepkgonly)`).
+///
+/// Arms: `newuse || (respect_use && !changed_use)` compares IUSE difference
+/// plus enabled-within-IUSE; `changed_use || respect_use` enabled-only;
+/// neither (non-`changed-use` `--reinstall` only) compares nothing.
+///
+/// `forced_flags` (via [`forced_or_masked_flags_unfiltered`]) leaves only the
+/// IUSE difference (Portage depgraph): forced/masked flags never reject
+/// by *presence*, but can via the enabled term. Not intersected with the
+/// ebuild's IUSE (audit D1): a dropped masked flag stays forgiven.
+pub(crate) fn binpkg_respect_use_ok(args: BinpkgRespectUseOkArgs<'_>) -> bool {
+    let BinpkgRespectUseOkArgs {
+        candidate,
+        ebuild_at_version,
+        category,
+        package,
+        config,
+        newuse,
+        changed_use,
+        respect_use,
+    } = args;
+    let Some(binary_use) = &candidate.binary_use else {
+        return true;
+    };
+    // Memoised per (config USE context, both candidates' metadata, the three
+    // flags): the top named cost, pure in its arguments.
+    // Thread-local so the lookup stays lock-free (`EUF_CACHE`'s shape).
+    type BruCache = HashMap<(u64, String, Option<String>, bool, bool, bool), bool>;
+    thread_local! {
+        static BRU_CACHE: RefCell<BruCache> = RefCell::new(HashMap::new());
+    }
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let ebuild_str = ebuild_at_version.map(|e| {
+        format!(
+            "{category}/{package}-{}:{}/{}::{}",
+            e.version, e.slot, e.sub_slot, e.repo_name
+        )
+    });
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        use_context_fingerprint(config).hash(&mut h);
+        category.hash(&mut h);
+        package.hash(&mut h);
+        candidate.version.hash(&mut h);
+        candidate.slot.hash(&mut h);
+        candidate.sub_slot.hash(&mut h);
+        candidate.repo_name.hash(&mut h);
+        candidate.iuse.hash(&mut h);
+        candidate.keywords.hash(&mut h);
+        // The baked USE set: a `Some(BUILD_ID)` names the
+        // build, so the id is an exact O(1) stand-in for the set. A `None`
+        // `build_id` names no build, so those keep the order-independent
+        // xor-fold (same cost as before, never a wrong key).
+        match &candidate.build_id {
+            Some(id) => id.hash(&mut h),
+            None => {
+                binary_use.len().hash(&mut h);
+                let mut acc: u64 = 0;
+                for v in binary_use {
+                    let mut e = std::collections::hash_map::DefaultHasher::new();
+                    v.hash(&mut e);
+                    acc ^= e.finish();
+                }
+                acc.hash(&mut h);
+            }
+        }
+        match ebuild_at_version {
+            Some(e) => {
+                1u8.hash(&mut h);
+                e.version.hash(&mut h);
+                e.slot.hash(&mut h);
+                e.sub_slot.hash(&mut h);
+                e.repo_name.hash(&mut h);
+                e.repo_location.hash(&mut h);
+                e.iuse.hash(&mut h);
+                e.keywords.hash(&mut h);
+                (e.source == CandidateSource::Binary).hash(&mut h);
+            }
+            None => 0u8.hash(&mut h),
+        }
+        (
+            h.finish(),
+            candidate_str.clone(),
+            ebuild_str.clone(),
+            newuse,
+            changed_use,
+            respect_use,
+        )
+    };
+    if let Some(hit) = BRU_CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let result = binpkg_respect_use_ok_uncached(BinpkgRespectUseOkUncachedArgs {
+        candidate,
+        ebuild_at_version,
+        category,
+        package,
+        config,
+        newuse,
+        changed_use,
+        respect_use,
+    });
+    BRU_CACHE.with(|c| {
+        c.borrow_mut().insert(key, result);
+    });
+    result
+}
+
 #[cfg(test)]
 thread_local! {
     pub(crate) static BRU_UNCACHED_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
