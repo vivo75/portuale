@@ -1057,6 +1057,76 @@ def _deps_changed(root, repos, category, package, version, with_bdeps):
     return vdb_atoms != repo_atoms
 
 
+def _split_slot(raw):
+    """Splits a raw SLOT string into (slot, sub_slot) -- real portage:
+    SLOT="main/sub", sub_slot defaulting to the slot itself when no "/"
+    is present (real portage.versions._pkg_str's own slot-parsing
+    branch). An empty string (missing SLOT file/key) defaults to
+    ("0", "0"), matching the same "0" fallback list_candidates/
+    installed_candidates already use for a missing SLOT. Mirrors
+    portage-repo/src/lib.rs's split_slot exactly."""
+    if not raw:
+        return ("0", "0")
+    if "/" in raw:
+        slot, sub_slot = raw.split("/", 1)
+        return (slot, sub_slot)
+    return (raw, raw)
+
+
+def _read_vdb_slot(root, category, package, version):
+    """Reads <root>/var/db/pkg/<category>/<package>-<version>/SLOT and
+    splits it via _split_slot -- real vardbapi's own SLOT file is
+    written verbatim from the same SLOT variable a repo's own ebuild
+    declares, so this is the identical format list_candidates's own
+    (main-slot-only) parsing already reads from the repo side, just with
+    the sub-slot component kept too instead of discarded. Mirrors
+    portage-repo/src/lib.rs's read_vdb_slot exactly."""
+    return _split_slot(_read_vdb_string(root, category, package, version, "SLOT").strip())
+
+
+def _slot_changed(root, repos, category, package, version):
+    """--changed-slot: whether `version`'s own vdb-recorded SLOT
+    (main+sub) differs from the repo's own *current* ebuild for that
+    exact version. Real depgraph.py's own _changed_slot: "ebuild =
+    self._equiv_ebuild(pkg); return ebuild is not None and (ebuild.slot,
+    ebuild.sub_slot) != (pkg.slot, pkg.sub_slot)".
+
+    KNOWN, DOCUMENTED SCOPE CUT: real portage's own consumers of
+    _changed_slot live deep inside binary-package/slot-operator-rebuild
+    scheduling this pilot has none of -- rejecting a matched installed
+    candidate and, depending on context, either aborting the search or
+    continuing to look for a binary package with the right SLOT. Ported
+    here as simply another independent reinstall trigger instead, the
+    same "report a reinstall" simplification --changed-deps already
+    established -- captures the dominant real-world effect (a package
+    whose SLOT metadata changed upstream, e.g. an ABI-bump SLOT="0" ->
+    SLOT="0/2", gets flagged for reinstall) without replicating real
+    portage's own considerably messier, binpkg-entangled control flow.
+    Deliberately does not reuse a candidate's own already-parsed slot
+    (list_candidates already truncates that to the main component only)
+    -- re-reads the repo's own raw SLOT value directly instead, the same
+    "re-read metadata this pilot's general candidate model doesn't
+    carry" approach _deps_changed already uses for DEPEND/RDEPEND. A
+    repo-side lookup that fails (version no longer in the tree,
+    unreadable metadata) reports "unchanged" (False), the same tolerant
+    fallback _deps_changed already uses, matching real
+    "_equiv_ebuild(pkg) is None" -> False exactly. Mirrors
+    portage-repo/src/lib.rs's slot_changed exactly."""
+    vdb_slot = _read_vdb_slot(root, category, package, version)
+
+    repo_candidates = [c for c in list_candidates(repos, category, package) if c["version"] == version]
+    if not repo_candidates:
+        return False
+    resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
+    try:
+        metadata = read_md5_cache(resolved["repo_location"], category, f"{package}-{version}")
+    except OSError:
+        return False
+    repo_slot = _split_slot((metadata.get("SLOT") or "").strip())
+
+    return vdb_slot != repo_slot
+
+
 def _use_deps_satisfied(atom, iuse, enabled):
     """Ports real match_from_list's own USE-dep post-pass (its
     "if mydep.unevaluated_atom.use:" block, lib/portage/dep/__init__.py
@@ -1692,6 +1762,7 @@ def resolve_pretend(
     excluded=(),
     changed_deps=False,
     with_bdeps=True,
+    changed_slot=False,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -1745,12 +1816,14 @@ def resolve_pretend(
     use ("pin an installed package so --update/--deep never touch it")
     and the new/upgrade selection case, not every real edge case.
 
-    `changed_deps` (--changed-deps) is an independent, freely-combinable
-    reinstall trigger alongside newuse/changed_use -- see _deps_changed's
-    own docstring for the real depgraph.py::_changed_deps behavior it
-    ports. `with_bdeps` (--with-bdeps) only affects which dependency keys
-    _deps_changed itself compares; see resolve_pretend_graph's own
-    docstring for the full with_bdeps grounding.
+    `changed_deps` (--changed-deps) and `changed_slot` (--changed-slot)
+    are each an independent, freely-combinable reinstall trigger
+    alongside newuse/changed_use -- see _deps_changed's/_slot_changed's
+    own docstrings for the real depgraph.py::_changed_deps/_changed_slot
+    behavior they port. `with_bdeps` (--with-bdeps) only affects which
+    dependency keys _deps_changed itself compares; see
+    resolve_pretend_graph's own docstring for the full with_bdeps
+    grounding.
     Mirrors portage-repo/src/lib.rs's resolve_pretend exactly."""
     atom = _parse_atom(atom_str)
     if atom is None:
@@ -1819,12 +1892,16 @@ def resolve_pretend(
             deps_changed_flag = changed_deps and _deps_changed(
                 root, repos, category, package, installed_best["version"], with_bdeps
             )
-            if changed_flags or deps_changed_flag:
+            slot_changed_flag = changed_slot and _slot_changed(
+                root, repos, category, package, installed_best["version"]
+            )
+            if changed_flags or deps_changed_flag or slot_changed_flag:
                 return (
                     "reinstall",
                     installed_best["version"],
                     changed_flags,
                     deps_changed_flag,
+                    slot_changed_flag,
                 )
             return ("already_installed", installed_best["version"])
 
@@ -1862,8 +1939,17 @@ def resolve_pretend(
         deps_changed_flag = changed_deps and _deps_changed(
             root, repos, category, package, best["version"], with_bdeps
         )
-        if changed_flags or deps_changed_flag:
-            return ("reinstall", best["version"], changed_flags, deps_changed_flag)
+        slot_changed_flag = changed_slot and _slot_changed(
+            root, repos, category, package, best["version"]
+        )
+        if changed_flags or deps_changed_flag or slot_changed_flag:
+            return (
+                "reinstall",
+                best["version"],
+                changed_flags,
+                deps_changed_flag,
+                slot_changed_flag,
+            )
         return ("already_installed", best["version"])
     if installed:
         return ("upgrade", _max_version(installed), best["version"])
@@ -1942,6 +2028,7 @@ def resolve_pretend_graph(
     excluded=(),
     with_bdeps=True,
     changed_deps=False,
+    changed_slot=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -2101,6 +2188,7 @@ def resolve_pretend_graph(
             excluded,
             changed_deps,
             with_bdeps,
+            changed_slot,
         )
 
         # A top-level atom (as opposed to a dependency reached while
@@ -2464,8 +2552,9 @@ def _parse_atom(atom_str):
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
 # --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o,
 # --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps,
-# --changed-deps, and --help/-h are actually implemented (see run()
-# below); every table here exists purely for recognition, not behavior.
+# --changed-deps, --changed-slot, and --help/-h are actually implemented
+# (see run() below); every table here exists purely for recognition, not
+# behavior.
 # Mirrors
 # PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
 # three tables exactly, so both sides report identical text for
@@ -2528,7 +2617,6 @@ _VALUE_OPTIONS = [
     ("--buildpkg", "-b"),
     ("--buildpkg-exclude", None),
     ("--changed-deps-report", None),
-    ("--changed-slot", None),
     ("--config-root", None),
     ("--color", None),
     ("--complete-graph", None),
@@ -2731,6 +2819,7 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
         changed_use = ",".join(_json_string(f) for f in outcome[2])
         fields.append(f'"changed_use":[{changed_use}]')
         fields.append(f'"changed_deps":{_json_bool(outcome[3])}')
+        fields.append(f'"changed_slot":{_json_bool(outcome[4])}')
     fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
     if tag != "no_visible_candidate":
         fields.append('"source":"ebuild"')
@@ -2791,8 +2880,8 @@ def _report_option(token):
             "but is not implemented in this pilot (only --pretend/-p, "
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
-            "--deselect/-W, --with-bdeps, --changed-deps, and --help/-h "
-            "are implemented so far; see PROMPT.md)",
+            "--deselect/-W, --with-bdeps, --changed-deps, --changed-slot, "
+            "and --help/-h are implemented so far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -2848,6 +2937,9 @@ def _print_help():
     )
     print(
         "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's"
+    )
+    print(
+        "       --changed-slot[=y|n]  reinstall an already-installed package whose own vdb-recorded SLOT differs from the current ebuild's"
     )
     print("   -h, --help      show this message and exit")
     print(
@@ -3035,26 +3127,30 @@ def _run_deselect(targets, root):
     return 0
 
 
-def _reinstall_reason(changed_flags, deps_changed):
+def _reinstall_reason(changed_flags, deps_changed, slot_changed):
     """The "(reinstall for ...)" note's own reason text, real portage
-    treating --newuse/--changed-use and --changed-deps as independent,
-    freely-combinable triggers. `changed_flags` is only ever empty when
-    `deps_changed` alone triggered this outcome (resolve_pretend's own
-    construction guarantees at least one is non-trivial). Pilot-invented
+    treating --newuse/--changed-use, --changed-deps, and --changed-slot
+    as independent, freely-combinable triggers. `changed_flags` is only
+    ever empty when neither `deps_changed` nor `slot_changed` alone
+    triggered this outcome (resolve_pretend's own construction
+    guarantees at least one of the three is non-trivial). Pilot-invented
     wording either way, same as the pre-existing "changed USE: ..." text
     -- real portage's own default --pretend output shows no such
     itemized reason at all. Mirrors pretend.rs's own reinstall_reason
     exactly."""
-    if changed_flags and not deps_changed:
-        return f"changed USE: {', '.join(changed_flags)}"
-    if not changed_flags and deps_changed:
-        return "changed dependencies"
-    if changed_flags and deps_changed:
-        return f"changed USE: {', '.join(changed_flags)}; changed dependencies"
-    raise AssertionError(
-        "resolve_pretend only ever constructs a reinstall outcome with a "
-        "non-empty changed_flags or deps_changed=True"
-    )
+    reasons = []
+    if changed_flags:
+        reasons.append(f"changed USE: {', '.join(changed_flags)}")
+    if deps_changed:
+        reasons.append("changed dependencies")
+    if slot_changed:
+        reasons.append("changed slot")
+    if not reasons:
+        raise AssertionError(
+            "resolve_pretend only ever constructs a reinstall outcome with a "
+            "non-empty changed_flags, deps_changed=True, or slot_changed=True"
+        )
+    return "; ".join(reasons)
 
 
 def run(args):
@@ -3076,6 +3172,7 @@ def run(args):
     deselect = False
     with_bdeps = True
     changed_deps = False
+    changed_slot = False
 
     i = 0
     while i < len(args):
@@ -3262,6 +3359,26 @@ def run(args):
         elif arg == "--changed-deps=n":
             changed_deps = False
             i += 1
+        elif arg == "--changed-slot":
+            # Real "--changed-slot": y_or_n (default_arg_opts), the
+            # identical optional-value shape "--changed-deps" already
+            # has -- no short alias (real main.py declares none).
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                changed_slot = True
+                i += 2
+            elif nxt == "n":
+                changed_slot = False
+                i += 2
+            else:
+                changed_slot = True
+                i += 1
+        elif arg == "--changed-slot=y":
+            changed_slot = True
+            i += 1
+        elif arg == "--changed-slot=n":
+            changed_slot = False
+            i += 1
         elif not arg.startswith("-"):
             atom_args.append(arg)
             i += 1
@@ -3407,6 +3524,7 @@ def run(args):
             excluded,
             with_bdeps,
             changed_deps,
+            changed_slot,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -3465,8 +3583,9 @@ def run(args):
         elif tag == "reinstall":
             changed_flags = outcome[2]
             deps_changed_flag = outcome[3]
+            slot_changed_flag = outcome[4]
             if not onlydeps_suppressed:
-                reason = _reinstall_reason(changed_flags, deps_changed_flag)
+                reason = _reinstall_reason(changed_flags, deps_changed_flag, slot_changed_flag)
                 print(
                     f"[ebuild  r] {category}/{package}-{outcome[1]} "
                     f"(reinstall for {reason}){use_suffix(use_display)}"

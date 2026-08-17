@@ -394,6 +394,36 @@ CASES = [
         ["--pretend", "--changed-deps-report", "n", "dev-libs/newpkg"],
         2,
     ),
+    (
+        "without --changed-slot, a SLOT change is never detected",
+        ["--pretend", "dev-libs/changedslotpkg"],
+        0,
+    ),
+    (
+        "--changed-slot: reinstalls a package whose vdb-recorded SLOT differs from the current ebuild",
+        ["--pretend", "--changed-slot", "dev-libs/changedslotpkg"],
+        0,
+    ),
+    (
+        "--changed-slot=y inline form",
+        ["--pretend", "--changed-slot=y", "dev-libs/changedslotpkg"],
+        0,
+    ),
+    (
+        "--changed-slot n explicitly disables it",
+        ["--pretend", "--changed-slot", "n", "dev-libs/changedslotpkg"],
+        0,
+    ),
+    (
+        "--changed-slot: --json includes the changed_slot field",
+        ["--pretend", "--changed-slot", "--json", "dev-libs/changedslotpkg"],
+        0,
+    ),
+    (
+        "--changed-deps and --changed-slot combine in one reinstall reason",
+        ["--pretend", "--changed-deps", "--changed-slot", "dev-libs/changedslotpkg"],
+        0,
+    ),
 ]
 
 
@@ -1585,7 +1615,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -1642,6 +1672,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)\n"
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies\n"
         "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's\n"
+        "       --changed-slot[=y|n]  reinstall an already-installed package whose own vdb-recorded SLOT differs from the current ebuild's\n"
         "   -h, --help      show this message and exit\n"
         "       --json      dump the whole resolved graph as one line of JSON instead "
         "of the lines above (pilot-specific, not a real emerge option)\n"
@@ -2234,6 +2265,73 @@ def test_without_changed_deps_a_dependency_change_is_never_detected(emerge_binar
     assert result.stdout.strip() == "dev-libs/changeddepspkg-1.0 is already installed; nothing to do"
 
 
+def test_changed_slot_reinstalls_a_package_whose_vdb_slot_differs_from_the_current_ebuild(
+    emerge_binary, fixture_env
+):
+    """dev-libs/changedslotpkg is installed with a vdb-recorded SLOT="0",
+    but the repo's current ebuild for that exact version now has
+    SLOT="0/2" instead (an ABI-bump sub-slot change) -- real
+    depgraph.py's own _changed_slot compares these and, once
+    --changed-slot is given, this pilot reports a reinstall. Without
+    --changed-deps, only the slot reason appears even though this same
+    fixture package's own RDEPEND also differs (see the combined-reason
+    test below)."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--changed-slot", "dev-libs/changedslotpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  r] dev-libs/changedslotpkg-1.0 (reinstall for changed slot)",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_changed_deps_and_changed_slot_combine_in_one_reinstall_line(
+    emerge_binary, fixture_env
+):
+    """dev-libs/changedslotpkg has both a stale vdb RDEPEND and a stale
+    vdb SLOT relative to its current ebuild -- real portage treats
+    --changed-deps/--changed-slot as independent, freely-combinable
+    reinstall triggers, so giving both prints both reasons on the same
+    line, deps first."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--changed-deps", "--changed-slot", "dev-libs/changedslotpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  r] dev-libs/changedslotpkg-1.0 (reinstall for changed dependencies; changed slot)",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_changed_slot_json_includes_the_changed_slot_field(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--changed-slot", "--json", "dev-libs/changedslotpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+    changedslotpkg_entry = next(
+        e for e in parsed["entries"] if e["package"] == "changedslotpkg"
+    )
+    assert changedslotpkg_entry["outcome"] == "reinstall"
+    assert changedslotpkg_entry["changed_slot"] is True
+    assert changedslotpkg_entry["changed_deps"] is False
+
+
+def test_without_changed_slot_a_slot_change_is_never_detected(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/changedslotpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "dev-libs/changedslotpkg-1.0 is already installed; nothing to do"
+
+
 def test_nodeps_disables_recursion_entirely(emerge_binary, fixture_env):
     """dev-libs/withdeps RDEPENDs on dev-libs/newpkg and
     dev-libs/upgradepkg -- see the plain recursion contract test above.
@@ -2813,7 +2911,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -2827,7 +2925,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -2841,7 +2939,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 

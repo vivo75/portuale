@@ -767,6 +767,44 @@ PORTING/
   the same "current tree wins" precedent `enqueue_dependencies` already
   established for `--deep`'s own `AlreadyInstalled` walk.
 
+  **`--changed-slot[=y|n]`: reinstall a package whose own recorded `SLOT`
+  changed.** Grounded against real `depgraph.py`'s own `_changed_slot`:
+  `ebuild = self._equiv_ebuild(pkg); return ebuild is not None and
+  (ebuild.slot, ebuild.sub_slot) != (pkg.slot, pkg.sub_slot)` --
+  reinstalls an already-installed package once its own vdb-recorded
+  `SLOT` (main *and* sub-slot, e.g. an ABI-bump `SLOT="0"` ->
+  `SLOT="0/2"`) differs from the repo's *current* ebuild for that exact
+  version. The first slice in this pilot to model sub-slots at all: real
+  `SLOT="main/sub"` splits on `/`, defaulting `sub_slot` to the slot
+  itself when no `/` is present (`split_slot`, shared by both the vdb
+  and repo sides) -- deliberately narrow, though, not the general
+  `Candidate.sub_slot` threading a full port of real slot-operator
+  (`:=`) rebuild tracking would eventually need: this reuses the exact
+  same "dedicated, narrow re-read of metadata this pilot's general
+  `Candidate` model doesn't carry" approach `--changed-deps` already
+  established for `DEPEND`/`RDEPEND`, rather than growing `Candidate`
+  itself and touching the whole matching/visibility pipeline for a
+  single new flag. Implemented as a third independent,
+  freely-combinable `PretendOutcome::Reinstall` trigger alongside the
+  USE- and deps-based ones -- confirmed real: `_changed_slot`'s own real
+  callers (`_slot_operator_replace_installed`, and the main
+  package-selection loop's own `built`/`useoldpkg` branches) live deep
+  inside binary-package/slot-operator-rebuild scheduling this pilot has
+  none of, so this ports the *effect* (a package whose `SLOT` changed
+  upstream gets flagged) via the same "report a reinstall" pattern
+  `--changed-deps` already used, rather than replicating real portage's
+  own considerably messier, binpkg-entangled control flow -- a
+  documented, confirmed scope cut, not a guess. The `(reinstall for
+  ...)` reason line now combines up to three independent phrases
+  (`reinstall_reason`/`_reinstall_reason` refactored from a fixed
+  2-case match into a list of active reasons, joined with `; `, in the
+  same push order both languages already agreed on), proven by
+  extending the existing `changedslotpkg` fixture with its own stale
+  vdb `RDEPEND` too: `--changed-slot` alone reports "changed slot",
+  `--changed-deps` alone reports "changed dependencies" for the *same*
+  package, and both together report "changed dependencies; changed
+  slot" on one line.
+
   **Nested `@set` references.** Closes the `@world` slice's own
   documented gap (see the correction on that paragraph above), grounded
   by reading real `WorldSelectedSet`/`WorldSelectedSetsSet`/
@@ -2808,8 +2846,9 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): option "--debug" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
 # --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h
-# are implemented so far; see PROMPT.md)  (exit 2)
+# --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps,
+# --changed-slot, and --help/-h are implemented so far; see PROMPT.md)
+# (exit 2)
 
 # --help/-h is real and implemented: a short, honest, pilot-specific
 # summary, not a port of real emerge's own (157-line, colorized,
@@ -2828,8 +2867,9 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 # emerge (pilot v1): option "--jobs" is a real emerge option, but is not
 # implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N,
 # --changed-use/-U, --nodeps/-O, --onlydeps/-o, --update/-u, --deep/-D,
-# --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, and --help/-h
-# are implemented so far; see PROMPT.md)  (exit 2)
+# --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps,
+# --changed-slot, and --help/-h are implemented so far; see PROMPT.md)
+# (exit 2)
 
 # a token that isn't a real emerge option/action at all gets a
 # different message
@@ -2874,6 +2914,19 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep --with-bdeps n 
 # and recurses into the CURRENT ebuild's own dependency, not the vdb's
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-libs/changeddepspkg
 # [ebuild  r] dev-libs/changeddepspkg-1.0 (reinstall for changed dependencies)
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# --changed-slot: changedslotpkg's own vdb-recorded SLOT ("0") differs
+# from its current ebuild's own SLOT ("0/2", an ABI-bump sub-slot change)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-slot dev-libs/changedslotpkg
+# [ebuild  r] dev-libs/changedslotpkg-1.0 (reinstall for changed slot)
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# --changed-deps/--changed-slot are independent, freely-combinable
+# reinstall triggers -- changedslotpkg's own vdb RDEPEND is *also* stale,
+# so giving both prints both reasons on the same line
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps --changed-slot dev-libs/changedslotpkg
+# [ebuild  r] dev-libs/changedslotpkg-1.0 (reinstall for changed dependencies; changed slot)
 # [ebuild  N] dev-libs/newpkg-1.0
 ```
 

@@ -1249,24 +1249,27 @@ pub enum PretendOutcome {
     AlreadyInstalled {
         version: String,
     },
-    /// `--newuse`/`--changed-use` and/or `--changed-deps`: already
-    /// installed at this exact version, but either this package's
-    /// currently-effective USE differs from what the vdb recorded at
-    /// merge time (see `reinstall_flags_for_use_change`), or its own
-    /// vdb-recorded dependency strings differ from the repo's current
-    /// ebuild (see `deps_changed`), or both -- real portage treats these
-    /// as independent, freely-combinable reinstall reasons, not
-    /// mutually exclusive ones. `changed_flags` is the sorted set of
-    /// flag names that triggered the USE-based reason (real depgraph's
-    /// own `_reinstall_for_flags` return value, kept here purely for
-    /// display, matching `Upgrade`'s own `from`/`to` pattern) -- empty
-    /// when only `deps_changed` triggered this outcome. At least one of
-    /// `changed_flags`/`deps_changed` is always non-empty/`true`; a
-    /// `Reinstall` with neither is never constructed.
+    /// `--newuse`/`--changed-use` and/or `--changed-deps` and/or
+    /// `--changed-slot`: already installed at this exact version, but
+    /// this package's currently-effective USE differs from what the vdb
+    /// recorded at merge time (see `reinstall_flags_for_use_change`),
+    /// and/or its own vdb-recorded dependency strings differ from the
+    /// repo's current ebuild (see `deps_changed`), and/or its own
+    /// vdb-recorded `SLOT` differs from the repo's current ebuild (see
+    /// `slot_changed`) -- real portage treats these as independent,
+    /// freely-combinable reinstall reasons, not mutually exclusive ones.
+    /// `changed_flags` is the sorted set of flag names that triggered
+    /// the USE-based reason (real depgraph's own `_reinstall_for_flags`
+    /// return value, kept here purely for display, matching `Upgrade`'s
+    /// own `from`/`to` pattern) -- empty when it didn't trigger this
+    /// outcome. At least one of `changed_flags`/`deps_changed`/
+    /// `slot_changed` is always non-empty/`true`; a `Reinstall` with
+    /// none of the three is never constructed.
     Reinstall {
         version: String,
         changed_flags: Vec<String>,
         deps_changed: bool,
+        slot_changed: bool,
     },
 }
 
@@ -1432,6 +1435,95 @@ fn deps_changed(
         Some(vdb_atoms) => vdb_atoms != repo_atoms,
         None => true,
     }
+}
+
+/// Splits a raw `SLOT` string into `(slot, sub_slot)` -- real portage:
+/// `SLOT="main/sub"`, `sub_slot` defaulting to the slot itself when no
+/// `/` is present (real `portage.versions._pkg_str`'s own slot-parsing
+/// branch). An empty string (missing `SLOT` file/key) defaults to
+/// `("0", "0")`, matching the same `"0"` fallback `list_candidates`/
+/// `installed_candidates` already use for a missing `SLOT`.
+fn split_slot(raw: &str) -> (String, String) {
+    if raw.is_empty() {
+        return ("0".to_string(), "0".to_string());
+    }
+    match raw.split_once('/') {
+        Some((slot, sub_slot)) => (slot.to_string(), sub_slot.to_string()),
+        None => (raw.to_string(), raw.to_string()),
+    }
+}
+
+/// Reads `<root>/var/db/pkg/<category>/<package>-<version>/SLOT` and
+/// splits it via `split_slot` -- real `vardbapi`'s own `SLOT` file is
+/// written verbatim from the same `SLOT` variable a repo's own ebuild
+/// declares, so this is the identical format `list_candidates`'s own
+/// (main-slot-only) parsing already reads from the repo side, just with
+/// the sub-slot component kept too instead of discarded.
+fn read_vdb_slot(root: &Path, category: &str, package: &str, version: &str) -> (String, String) {
+    split_slot(read_vdb_string(root, category, package, version, "SLOT").trim())
+}
+
+/// `--changed-slot`: whether `version`'s own vdb-recorded `SLOT`
+/// (main+sub) differs from the repo's own *current* ebuild for that
+/// exact version. Real `depgraph.py`'s own `_changed_slot`: `ebuild =
+/// self._equiv_ebuild(pkg); return ebuild is not None and (ebuild.slot,
+/// ebuild.sub_slot) != (pkg.slot, pkg.sub_slot)`.
+///
+/// KNOWN, DOCUMENTED SCOPE CUT: real portage's own consumers of
+/// `_changed_slot` live deep inside binary-package/slot-operator-rebuild
+/// scheduling this pilot has none of
+/// (`_slot_operator_replace_installed`, `built`/`useoldpkg` branches in
+/// `_privileged_size_fetch`/candidate selection) -- rejecting a matched
+/// installed candidate and, depending on context, either aborting the
+/// search or continuing to look for a binary package with the right
+/// `SLOT`. Ported here as simply another independent
+/// `PretendOutcome::Reinstall` trigger instead, the same "report a
+/// reinstall" simplification `--changed-deps` already established --
+/// captures the dominant real-world effect (a package whose `SLOT`
+/// metadata changed upstream, e.g. an ABI-bump `SLOT="0"` ->
+/// `SLOT="0/2"`, gets flagged for reinstall) without replicating real
+/// portage's own considerably messier, binpkg-entangled control flow.
+/// Deliberately does *not* reuse `Candidate::slot` (which
+/// `list_candidates` already truncates to the main component only, see
+/// its own doc comment) -- re-reads the repo's own raw `SLOT` value
+/// directly instead, the same "re-read metadata this pilot's general
+/// `Candidate` model doesn't carry" approach `deps_changed` already uses
+/// for `DEPEND`/`RDEPEND`. A repo-side lookup that fails (version no
+/// longer in the tree, unreadable metadata) reports "unchanged" (`false`),
+/// the same tolerant fallback `deps_changed` already uses, matching real
+/// `_equiv_ebuild(pkg) is None` -> `False` exactly.
+fn slot_changed(
+    root: &Path,
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    version: &str,
+) -> bool {
+    let vdb_slot = read_vdb_slot(root, category, package, version);
+
+    let Ok(repo_candidates) = list_candidates(repos, category, package) else {
+        return false;
+    };
+    let Some(resolved) = repo_candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)
+    else {
+        return false;
+    };
+    let pf = format!("{package}-{version}");
+    let Ok(metadata) = read_md5_cache(&resolved.repo_location, category, &pf) else {
+        return false;
+    };
+    let repo_slot = split_slot(
+        metadata
+            .get("SLOT")
+            .map(String::as_str)
+            .unwrap_or("")
+            .trim(),
+    );
+
+    vdb_slot != repo_slot
 }
 
 /// `candidate`'s own current IUSE (read fresh from its own md5-cache
@@ -1615,10 +1707,10 @@ fn reinstall_flags_for_use_change(
 /// dominant real-world use ("pin an installed package so `--update`/
 /// `--deep` never touch it") and the New/Upgrade selection case, not
 /// every real edge case.
-// 10 args trips clippy::too_many_arguments; a bundled options struct
+// 11 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
-// alongside five already threaded the same way -- not worth it, same
+// alongside six already threaded the same way -- not worth it, same
 // reasoning as resolve_pretend_graph's own identical allow below.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_pretend(
@@ -1632,6 +1724,7 @@ pub fn resolve_pretend(
     excluded: &[String],
     changed_deps: bool,
     with_bdeps: bool,
+    changed_slot: bool,
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
@@ -1760,11 +1853,20 @@ pub fn resolve_pretend(
                     &installed_best.version,
                     with_bdeps,
                 );
-            if !changed_flags.is_empty() || deps_changed_flag {
+            let slot_changed_flag = changed_slot
+                && slot_changed(
+                    root,
+                    repos,
+                    &atom.category,
+                    &atom.package,
+                    &installed_best.version,
+                );
+            if !changed_flags.is_empty() || deps_changed_flag || slot_changed_flag {
                 return Ok(PretendOutcome::Reinstall {
                     version: installed_best.version.clone(),
                     changed_flags,
                     deps_changed: deps_changed_flag,
+                    slot_changed: slot_changed_flag,
                 });
             }
             return Ok(PretendOutcome::AlreadyInstalled {
@@ -1825,11 +1927,14 @@ pub fn resolve_pretend(
                 &best.version,
                 with_bdeps,
             );
-        if !changed_flags.is_empty() || deps_changed_flag {
+        let slot_changed_flag =
+            changed_slot && slot_changed(root, repos, &atom.category, &atom.package, &best.version);
+        if !changed_flags.is_empty() || deps_changed_flag || slot_changed_flag {
             return Ok(PretendOutcome::Reinstall {
                 version: best.version.clone(),
                 changed_flags,
                 deps_changed: deps_changed_flag,
+                slot_changed: slot_changed_flag,
             });
         }
         return Ok(PretendOutcome::AlreadyInstalled {
@@ -2261,10 +2366,10 @@ type QueueItem = (String, u32, Option<(String, String)>);
 ///     `visited_atoms`/`resolved_slots`/`other_outcomes`'s own dedup
 ///     decisions, so a diamond dependency's second (deduped) owner is
 ///     still recorded even though it never triggers a new resolution.
-// 11 args trips clippy::too_many_arguments; a bundled options struct
+// 12 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
-// alongside six already threaded the same way -- not worth it.
+// alongside seven already threaded the same way -- not worth it.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_pretend_graph(
     config_root: &Path,
@@ -2279,6 +2384,7 @@ pub fn resolve_pretend_graph(
     excluded: &[String],
     with_bdeps: bool,
     changed_deps: bool,
+    changed_slot: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -2364,6 +2470,7 @@ pub fn resolve_pretend_graph(
             excluded,
             changed_deps,
             with_bdeps,
+            changed_slot,
         )?;
 
         // A top-level atom (as opposed to a dependency reached while
@@ -2818,6 +2925,7 @@ mod tests {
             &[],
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -2841,6 +2949,7 @@ mod tests {
             &[],
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -2867,6 +2976,7 @@ mod tests {
             excluded,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -2940,6 +3050,7 @@ mod tests {
                 &["dev-libs/newpkg".to_string()],
                 false,
                 true,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -3032,6 +3143,7 @@ mod tests {
             &[],
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3055,6 +3167,7 @@ mod tests {
             &[],
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3077,6 +3190,7 @@ mod tests {
             &[],
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3093,6 +3207,7 @@ mod tests {
                 version: "1.0".to_string(),
                 changed_flags: vec!["foo".to_string()],
                 deps_changed: false,
+                slot_changed: false,
             }
         );
     }
@@ -3163,6 +3278,7 @@ mod tests {
             &[],
             true,
             with_bdeps,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3178,6 +3294,7 @@ mod tests {
                 version: "1.0".to_string(),
                 changed_flags: Vec::new(),
                 deps_changed: true,
+                slot_changed: false,
             }
         );
     }
@@ -3203,6 +3320,7 @@ mod tests {
                 version: "1.0".to_string(),
                 changed_flags: Vec::new(),
                 deps_changed: true,
+                slot_changed: false,
             }
         );
     }
@@ -3217,6 +3335,127 @@ mod tests {
             resolve_real_changed_deps("dev-libs", "samepkg", true),
             PretendOutcome::AlreadyInstalled {
                 version: "1.0".to_string()
+            }
+        );
+    }
+
+    fn resolve_real_changed_slot(category: &str, package: &str) -> PretendOutcome {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &config,
+            false,
+            false,
+            false,
+            &[],
+            false,
+            true,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn changed_slot_reinstalls_when_vdb_slot_differs_from_the_current_ebuild() {
+        // dev-libs/changedslotpkg is installed with a vdb-recorded
+        // SLOT="0", but its current ebuild's own SLOT is "0/2" instead
+        // (an ABI-bump sub-slot change).
+        assert_eq!(
+            resolve_real_changed_slot("dev-libs", "changedslotpkg"),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: true,
+            }
+        );
+    }
+
+    #[test]
+    fn without_changed_slot_the_same_package_stays_already_installed() {
+        assert_eq!(
+            resolve_real("dev-libs", "changedslotpkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn changed_slot_does_not_fire_for_a_package_with_no_recorded_difference() {
+        // dev-libs/samepkg's own vdb SLOT ("0") matches its current
+        // ebuild's own SLOT exactly -- no reinstall even with
+        // --changed-slot enabled.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
+        assert_eq!(
+            resolve_pretend(
+                &repos,
+                &root,
+                "dev-libs/samepkg",
+                &config,
+                false,
+                false,
+                false,
+                &[],
+                false,
+                true,
+                true,
+            )
+            .expect("resolve_pretend must succeed"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn split_slot_defaults_sub_slot_to_the_slot_itself_when_no_slash_is_present() {
+        assert_eq!(split_slot("0"), ("0".to_string(), "0".to_string()));
+        assert_eq!(split_slot("0/2"), ("0".to_string(), "2".to_string()));
+        assert_eq!(split_slot(""), ("0".to_string(), "0".to_string()));
+    }
+
+    #[test]
+    fn changed_deps_and_changed_slot_combine_in_one_reinstall_outcome() {
+        // dev-libs/changedslotpkg's own vdb has BOTH a stale RDEPEND
+        // (samepkg, vs. the current ebuild's newpkg) and a stale SLOT
+        // ("0" vs. the current ebuild's "0/2") -- real portage treats
+        // --changed-deps and --changed-slot as independent, freely
+        // combinable triggers, so giving both must set both fields on
+        // the same Reinstall outcome, not just whichever fires first.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = portage_profile::resolve_config(&root, &root.join("repo"))
+            .expect("fixture config resolves");
+        assert_eq!(
+            resolve_pretend(
+                &repos,
+                &root,
+                "dev-libs/changedslotpkg",
+                &config,
+                false,
+                false,
+                false,
+                &[],
+                true,
+                true,
+                true,
+            )
+            .expect("resolve_pretend must succeed"),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: true,
+                slot_changed: true,
             }
         );
     }
@@ -3237,6 +3476,7 @@ mod tests {
                 version: "1.0".to_string(),
                 changed_flags: vec!["brandnewflag".to_string()],
                 deps_changed: false,
+                slot_changed: false,
             }
         );
         assert_eq!(
@@ -3258,6 +3498,7 @@ mod tests {
                 version: "1.0".to_string(),
                 changed_flags: vec!["foo".to_string()],
                 deps_changed: false,
+                slot_changed: false,
             }
         );
     }
@@ -3275,6 +3516,7 @@ mod tests {
                         version: "1.0".to_string(),
                         changed_flags: vec!["foo".to_string()],
                         deps_changed: false,
+                        slot_changed: false,
                     }
                 ),
                 (
@@ -3325,6 +3567,7 @@ mod tests {
                 &[],
                 false,
                 true,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -3343,6 +3586,7 @@ mod tests {
                 &[],
                 false,
                 true,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -3666,6 +3910,7 @@ mod tests {
             &[],
             true,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3689,6 +3934,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -3715,6 +3961,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -3745,6 +3992,7 @@ mod tests {
             Deep::NotRequested,
             &["dev-libs/upgradepkg".to_string()],
             true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
@@ -3792,6 +4040,7 @@ mod tests {
             deep,
             &[],
             true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -3887,6 +4136,7 @@ mod tests {
             Deep::Unlimited,
             &[],
             with_bdeps,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -3984,6 +4234,7 @@ mod tests {
             Deep::Unlimited,
             &[],
             true,
+            false,
             false,
         )
         .expect("resolve_pretend_graph must succeed")
@@ -4113,6 +4364,7 @@ mod tests {
             &[],
             true,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -4183,6 +4435,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -4312,6 +4565,7 @@ mod tests {
             &[],
             true,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -4391,6 +4645,7 @@ mod tests {
             &[],
             true,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4418,6 +4673,7 @@ mod tests {
             &[],
             true,
             false,
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -4441,6 +4697,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -4468,6 +4725,7 @@ mod tests {
             &[],
             true,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4494,6 +4752,7 @@ mod tests {
             &[],
             true,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4517,6 +4776,7 @@ mod tests {
                         version: "1.0".to_string(),
                         changed_flags: vec!["foo".to_string()],
                         deps_changed: false,
+                        slot_changed: false,
                     }
                 ),
                 (
@@ -4719,6 +4979,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
