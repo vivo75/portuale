@@ -3023,13 +3023,35 @@ pub fn resolve_pretend_graph(
         // own NoVisibleCandidate (report, don't fail the whole call).
         if let Some(required_use) = metadata.get("REQUIRED_USE") {
             if !required_use.trim().is_empty() {
-                let iuse_set: HashSet<String> = metadata
+                // Real `check_required_use` validates a referenced flag
+                // against `pkg.iuse.is_valid_flag`, not a package's own
+                // literal IUSE alone -- real config.py's own
+                // `_get_implicit_iuse()` folds `PORTAGE_ARCHLIST`
+                // (profiles/arch.list), `use.mask ∪ use.force`, and
+                // literal `build`/`bootstrap` into every package's
+                // effective IUSE regardless of what that package's own
+                // IUSE declares. Without this, a REQUIRED_USE referencing
+                // an implicit flag never mentioned in a package's own
+                // IUSE (e.g. real media-libs/mesa's own REQUIRED_USE
+                // referencing "x86", a valid arch.list entry that isn't
+                // the profile's own active arch) spuriously fails with
+                // "USE flag ... is not in IUSE" -- confirmed live against
+                // the real, installed system. See `portage_profile::
+                // Config::archlist`'s own doc comment for the full
+                // grounding and the deliberate USE_EXPAND_HIDDEN
+                // (elibc_*/kernel_*/userland_*) simplification.
+                let mut iuse_set: HashSet<String> = metadata
                     .get("IUSE")
                     .map(String::as_str)
                     .unwrap_or_default()
                     .split_whitespace()
                     .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
                     .collect();
+                iuse_set.extend(config.archlist.iter().cloned());
+                iuse_set.extend(config.use_mask.iter().cloned());
+                iuse_set.extend(config.use_force.iter().cloned());
+                iuse_set.insert("build".to_string());
+                iuse_set.insert("bootstrap".to_string());
                 match portage_required_use::check_required_use(required_use, &use_flags, &iuse_set)
                 {
                     Ok(true) => {}
@@ -5856,6 +5878,30 @@ mod tests {
         assert_eq!(
             err,
             "REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: \"foo? ( bar )\""
+        );
+    }
+
+    #[test]
+    fn required_use_referencing_an_implicit_arch_list_flag_is_valid() {
+        // dev-libs/archiuseimplicitpkg's own IUSE is empty and its own
+        // REQUIRED_USE is "!x86" -- "x86" is never declared by this
+        // package's own IUSE at all, but IS a real, valid flag via
+        // PORTAGE_ARCHLIST (fixtures/repo/profiles/base/arch.list),
+        // exactly like real media-libs/mesa's own REQUIRED_USE
+        // referencing "x86" without declaring it in IUSE -- confirmed
+        // live against the real, installed system. Before this fix,
+        // this pilot's own iuse_set never consulted PORTAGE_ARCHLIST at
+        // all, so this would fail with "USE flag 'x86' is not in IUSE"
+        // instead of resolving (x86 isn't the active profile's own arch,
+        // so it stays disabled, and "!x86" is satisfied).
+        assert_eq!(
+            graph_real("dev-libs/archiuseimplicitpkg"),
+            vec![(
+                "dev-libs/archiuseimplicitpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )]
         );
     }
 

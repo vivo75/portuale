@@ -1791,6 +1791,12 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     use_flags |= use_force
     use_flags -= use_mask
 
+    # PORTAGE_ARCHLIST: same chain, same stacking semantics as
+    # use.mask/use.force just above -- mirrors portage-profile/src/
+    # lib.rs's own "archlist" doc comment for the full grounding.
+    archlist_sources = [_read_config_lines(os.path.join(level, "arch.list")) for level in chain]
+    archlist = set(_stack_mask_lines(archlist_sources))
+
     main_repo_mask_lines = _read_config_lines(
         os.path.join(main_repo_location, "profiles", "package.mask")
     )
@@ -2045,6 +2051,7 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
         "system_packages": system_packages,
         "use_force": use_force,
         "use_mask": use_mask,
+        "archlist": archlist,
         "package_use_force": _parse_package_use_lines(use_force_lines),
         "package_use_mask": _parse_package_use_lines(use_mask_lines),
         "use_expand": use_expand,
@@ -2832,7 +2839,20 @@ def resolve_pretend_graph(
         # to agree via the shared required-use-harness contract suite.
         required_use = metadata.get("REQUIRED_USE", "").strip()
         if required_use:
+            # Real check_required_use validates a referenced flag against
+            # pkg.iuse.is_valid_flag, not a package's own literal IUSE
+            # alone -- real config.py's own _get_implicit_iuse() folds
+            # PORTAGE_ARCHLIST (profiles/arch.list), use.mask ∪
+            # use.force, and literal "build"/"bootstrap" into every
+            # package's effective IUSE regardless of what that package's
+            # own IUSE declares. Mirrors portage-repo/src/lib.rs's own
+            # resolve_pretend_graph exactly -- see portage_profile::
+            # Config::archlist's own doc comment for the full grounding.
             iuse_set = {tok.lstrip("+-") for tok in metadata.get("IUSE", "").split()}
+            iuse_set |= config["archlist"]
+            iuse_set |= config["use_mask"]
+            iuse_set |= config["use_force"]
+            iuse_set |= {"build", "bootstrap"}
             try:
                 satisfied = bool(
                     check_required_use(

@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: REQUIRED_USE referencing an implicit (arch.list-only) IUSE flag
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+REQUIRED_USE=!x86
+SLOT=0
+_md5_=0000000000000000000000000000000

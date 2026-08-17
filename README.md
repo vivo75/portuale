@@ -2089,8 +2089,51 @@ PORTING/
   IUSE defaults exist in isolation. (A second, related finding from the
   same investigation -- a *different* real package's REQUIRED_USE
   referencing a profile-injected implicit USE flag this pilot doesn't
-  model at all -- is deliberately out of scope here; noted for a future
-  slice, not chased down alongside this one.)
+  model at all -- is closed by the next paragraph.)
+
+  **Implicit IUSE: `PORTAGE_ARCHLIST`/`use.mask`/`use.force`/`build`/
+  `bootstrap`, closing the second finding deferred above.** Resolving
+  `media-video/ffmpeg`'s full dependency graph (not just the package in
+  isolation) hit a *different* real failure one level down: real
+  `media-libs/mesa-26.1.6`'s own `REQUIRED_USE` references `x86`, which
+  `mesa`'s own `IUSE` never declares at all -- `REQUIRED_USE for
+  media-libs/mesa-26.1.6 is invalid: USE flag 'x86' is not in IUSE`.
+  Real `check_required_use` doesn't validate a referenced flag against a
+  package's own literal `IUSE` string -- it's called with
+  `pkg.iuse.is_valid_flag` (`lib/_emerge/depgraph.py`), backed by real
+  `config.py`'s own `_calc_iuse_effective()`/`_get_implicit_iuse()`
+  (~line 2338): every package's *effective* IUSE additionally includes
+  `PORTAGE_ARCHLIST` (`profiles/arch.list`, stacked across the whole
+  profile chain with the same `-entry` removal semantics `package.mask`
+  uses -- confirmed by reading `config.py`'s own `grabfile` +
+  `stack_lists(archlist, incremental=1)` call, ~line 962), the profile's
+  own `ARCH`, every masked/forced flag (`use.mask ∪ use.force`), and the
+  literal `build`/`bootstrap` flags used by `bootstrap.sh`. `x86` is a
+  real, valid entry in real Gentoo's own `arch.list` even on an `amd64`
+  profile -- just not the *active* arch, so it stays disabled, and
+  `mesa`'s `REQUIRED_USE` (which only *references* `x86`, doesn't
+  require it enabled) is satisfied once the flag is merely recognized as
+  valid. This pilot's own `iuse_set` (`portage-repo`'s
+  `resolve_pretend_graph`, the single call site feeding
+  `check_required_use`) was built purely from a package's own literal
+  `IUSE` metadata, with no implicit-IUSE concept at all. Fixed by adding
+  a new `portage_profile::Config::archlist` field (read the exact same
+  chain-stacking way `use.mask`/`use.force` already are, reusing the
+  existing `stack_mask_lines` helper unmodified) and unioning
+  `archlist ∪ use_mask ∪ use_force ∪ {"build", "bootstrap"}` into the
+  `iuse_set` right before the `check_required_use` call -- ported in
+  lockstep to the Python reference (which calls the *real*
+  `portage.dep.check_required_use` directly, so this union is the only
+  change needed there). Deliberately out of scope: `USE_EXPAND_HIDDEN`-
+  derived regex-pattern implicit flags (`elibc_.*`/`kernel_.*`/
+  `userland_.*`) -- a bigger, separate feature this pilot doesn't
+  otherwise model at all (no `ELIBC`/`KERNEL`/`USERLAND` support). New
+  fixture `dev-libs/archiuseimplicitpkg` (`IUSE=""`,
+  `REQUIRED_USE="!x86"`, with a new `profiles/base/arch.list` declaring
+  `amd64`/`x86`/`arm64`) mirrors `mesa`'s exact shape and was confirmed,
+  by temporarily reverting the fix, to reproduce the identical
+  `"USE flag 'x86' is not in IUSE"` failure -- and confirmed live that
+  `mesa` itself now resolves cleanly against the real, installed system.
 
   **`USE_EXPAND` support** (PMS 7.3.4). Closes a gap named explicitly in
   `portage-profile`'s own doc comment since the original profile-chain
@@ -3028,6 +3071,13 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requireduseba
 # package.use entry, proving IUSE defaults and package.use coexist
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/iusedefaultpkg
 # [ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"
+
+# "x86" is never in this package's own IUSE, but IS a real, valid
+# profiles/arch.list entry -- implicitly valid for REQUIRED_USE even
+# though it's not the active profile's own arch (stays disabled), the
+# same shape real media-libs/mesa's own REQUIRED_USE hits
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/archiuseimplicitpkg
+# [ebuild  N] dev-libs/archiuseimplicitpkg-1.0
 
 # real profile/make.conf resolution: "foo" is enabled by the fixture's
 # profile chain, so this package's foo?-gated dependency is pulled in

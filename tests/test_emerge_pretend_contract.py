@@ -207,6 +207,11 @@ CASES = [
         ["--pretend", "dev-libs/requiredusebadparentpkg"],
         1,
     ),
+    (
+        "REQUIRED_USE referencing an implicit (arch.list-only) IUSE flag resolves normally",
+        ["--pretend", "-v", "dev-libs/archiuseimplicitpkg"],
+        0,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -882,6 +887,33 @@ def test_iuse_plus_minus_defaults_apply_when_nothing_else_says_otherwise(
     assert result.stdout == (
         '[ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"\n'
     )
+
+
+def test_required_use_referencing_an_implicit_arch_flag_resolves_normally(
+    emerge_binary, fixture_env
+):
+    """A second, related gap from the same ffmpeg investigation -- this
+    one surfaced on a downstream dependency, real media-libs/mesa, whose
+    own REQUIRED_USE references "x86" without ever declaring it in its
+    own IUSE. Real portage validates a REQUIRED_USE-referenced flag
+    against pkg.iuse.is_valid_flag, which real config.py's own
+    _get_implicit_iuse() extends with PORTAGE_ARCHLIST (profiles/
+    arch.list) among other things -- "x86" is a real, valid arch.list
+    entry even on an amd64 profile, just not the active arch, so it's
+    implicitly valid (and stays disabled). Before this slice, this
+    pilot's own iuse_set was built purely from a package's own literal
+    IUSE, so this fixture (mirroring mesa's shape: empty IUSE,
+    REQUIRED_USE="!x86") would abort with "USE flag 'x86' is not in
+    IUSE" instead of resolving -- confirmed live against the real,
+    installed system, both before this fix (reproduced the failure) and
+    after (mesa resolves)."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "dev-libs/archiuseimplicitpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == '[ebuild  N] dev-libs/archiuseimplicitpkg-1.0\n'
 
 
 def test_required_use_violated_top_level_aborts_the_whole_run(emerge_binary, fixture_env):

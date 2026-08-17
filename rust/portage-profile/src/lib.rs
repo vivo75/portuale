@@ -324,6 +324,23 @@ pub struct Config {
     pub use_stable_force: HashSet<String>,
     /// `use.stable.mask`. See `use_stable_force`'s own doc comment.
     pub use_stable_mask: HashSet<String>,
+    /// `PORTAGE_ARCHLIST`: every profile level's own `arch.list` file,
+    /// stacked in chain order with the same `-entry` removal semantics
+    /// `package.mask` uses (real `config.py`'s own `grabfile` +
+    /// `stack_lists(archlist, incremental=1)`, confirmed by reading it
+    /// directly). Real `config.py`'s own `_get_implicit_iuse()` feeds
+    /// this (plus the profile's own `ARCH`, `use.mask`/`use.force`, and
+    /// literal `build`/`bootstrap`) into `IUSE_IMPLICIT`, which makes a
+    /// flag like `x86` a *valid* (if not necessarily enabled) REQUIRED_USE
+    /// reference even when a specific package's own `IUSE` never
+    /// mentions it -- `portage-repo`'s own `resolve_pretend_graph` unions
+    /// this into the `iuse_set` it hands `check_required_use`. See the
+    /// module doc comment's own "implicit IUSE" bullet for the full scope
+    /// writeup, including the deliberate simplification of not also
+    /// modeling `USE_EXPAND_HIDDEN`-derived regex flags (`elibc_.*` etc.)
+    /// -- a bigger, separate feature this pilot doesn't otherwise model
+    /// (no ELIBC/KERNEL/USERLAND support at all).
+    pub archlist: HashSet<String>,
     /// (atom-or-wildcard string, flag tokens) pairs from
     /// `package.use.stable.force` -- repo-level (main repo only) and
     /// every profile level's own file, flat-concatenated exactly like
@@ -1195,6 +1212,14 @@ pub fn resolve_config(
         config.use_flags.remove(flag);
     }
 
+    // PORTAGE_ARCHLIST: same chain, same stacking semantics as
+    // use.mask/use.force just above -- see `archlist`'s own doc comment.
+    let mut archlist_sources: Vec<Vec<String>> = Vec::new();
+    for level in &chain {
+        archlist_sources.push(read_config_lines(&level.join("arch.list"))?);
+    }
+    config.archlist = stack_mask_lines(&archlist_sources).into_iter().collect();
+
     let main_repo_mask_lines =
         read_config_lines(&main_repo_location.join("profiles/package.mask"))?;
     let mut mask_sources: Vec<Vec<String>> = vec![main_repo_mask_lines.clone()];
@@ -2057,6 +2082,39 @@ mod tests {
         assert_eq!(
             config.use_mask,
             HashSet::from(["maskflag".to_string(), "bothflag".to_string()])
+        );
+    }
+
+    #[test]
+    fn archlist_stacks_across_profile_levels_with_removal_semantics() {
+        // base: arch.list declares "amd64" and "x86". leaf (its own
+        // parent -> base): arch.list removes "x86" (a "-x86" line) and
+        // adds "arm64" -- proving the same chain-order, "-entry"-removal
+        // stacking use.mask/use.force already get (real config.py's own
+        // stack_lists(archlist, incremental=1)).
+        let root = std::env::temp_dir().join("portage-profile-test-archlist");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let base = repo_profiles.join("base");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(base.join("arch.list"), "amd64\nx86\n").unwrap();
+        fs::write(leaf.join("parent"), "../repo/profiles/base\n").unwrap();
+        fs::write(leaf.join("arch.list"), "-x86\narm64\n").unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        assert_eq!(
+            config.archlist,
+            HashSet::from(["amd64".to_string(), "arm64".to_string()])
         );
     }
 
