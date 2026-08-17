@@ -614,6 +614,87 @@ pub fn use_reduce_flat_subset(
     use_reduce_flat(&reserialized, uselist, mode)
 }
 
+/// How much a caller prefers one `"||"` alternative -- port of Portage
+/// `dep_zapdeps`'s `choice_bins`: nine bins, first atom of the first
+/// *selectable* choice in bin order.
+// Portage: lib/portage/dep/dep_check.py, dep_zapdeps
+///
+/// ```text
+/// for allow_masked in (False, True):
+///     for choices in choice_bins:
+///         for choice in choices:
+///             if choice.all_available or allow_masked:
+///                 return choice.atoms
+/// ```
+///
+/// ```text
+/// 0  preferred_in_graph          ( = preferred_installed = preferred_any_slot )
+/// 1  preferred_non_installed
+/// 2  unsat_use_in_graph
+/// 3  unsat_use_installed
+/// 4  unsat_use_non_installed
+/// 5  other_installed
+/// 6  other_installed_some
+/// 7  other_installed_any_slot
+/// 8  other
+/// ```
+///
+/// Selection is two passes: only `is_selectable` ranks first, then the
+/// `other_*` bins. The guard is portuale's own and stays `Unsatisfiable`.
+///
+/// The enum is ordered by bin ordinal (higher discriminant = more
+/// preferred), with one extra lowest sentinel [`AltPreference::Unsatisfiable`].
+/// Deriving `Ord` gives selection exactly the bin-order in either pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum AltPreference {
+    /// No atom in this alternative resolves at all (portuale's guard only).
+    /// Never selected, in either pass.
+    #[default]
+    Unsatisfiable,
+    /// Bin 8: every atom resolves to *something*, but at least one only
+    /// via a masked/forced USE change. Second-pass-only.
+    Other,
+    /// Bin 7: no full match exists, but some bare `cat/pkg` is installed.
+    /// Second-pass-only.
+    OtherInstalledAnySlot,
+    /// Bin 6: like above, but at least one full vdb match succeeds.
+    /// Second-pass-only.
+    OtherInstalledSome,
+    /// Bin 5: every full vdb match succeeds, yet not `all_available`.
+    /// Second-pass-only.
+    OtherInstalled,
+    /// Bin 4: resolvable with unmasked USE-deps, but no single candidate
+    /// satisfies them all. Selectable.
+    UnsatUseNonInstalled,
+    /// Bin 3: like `UnsatUseNonInstalled` but every atom's `cat/pkg` is
+    /// already installed. Selectable.
+    UnsatUseInstalled,
+    /// Bin 2: like `UnsatUseNonInstalled` but every atom is already in
+    /// the merge graph. Selectable.
+    UnsatUseInGraph,
+    /// Bin 1: resolvable, but at least one `cat/pkg` is not installed.
+    /// Selectable.
+    Available,
+    /// Bin 0: every `cat/pkg` installed or in the graph. The top bin.
+    /// Selectable.
+    Installed,
+}
+
+impl AltPreference {
+    /// Whether Portage's loop would pick this rank on its first pass.
+    /// The `other_*` bins are only considered when nothing is selectable.
+    pub fn is_selectable(self) -> bool {
+        matches!(
+            self,
+            AltPreference::Installed
+                | AltPreference::Available
+                | AltPreference::UnsatUseInGraph
+                | AltPreference::UnsatUseInstalled
+                | AltPreference::UnsatUseNonInstalled
+        )
+    }
+}
+
 /// Portage's `_add_pkg_dep_string` `"||"` resolution, simplified: of every
 /// alternative, picks the **first one with the highest [`AltPreference`]**
 /// the probe reports. An alternative an inactive conditional emptied is
@@ -647,6 +728,16 @@ mod tests {
 
     fn set(items: &[&str]) -> HashSet<String> {
         items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Tests map the old `bool` probe onto `Available` / `Unsatisfiable`;
+    /// `Installed` is covered by portage-repo and the contract suite.
+    fn pref(satisfiable: bool) -> AltPreference {
+        if satisfiable {
+            AltPreference::Available
+        } else {
+            AltPreference::Unsatisfiable
+        }
     }
 
     #[test]
