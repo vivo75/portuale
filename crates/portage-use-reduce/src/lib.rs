@@ -644,4 +644,92 @@ mod tests {
     fn toks(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
     }
+
+    fn set(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn subset_extracts_only_the_gated_atoms() {
+        let result = use_reduce_flat_subset(
+            &toks("foobar test? ( dev-libs/a dev-libs/b )"),
+            &set(&["test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn subset_excludes_deps_gated_by_a_different_conditional() {
+        let result = use_reduce_flat_subset(
+            &toks("foo? ( dev-libs/a ) test? ( dev-libs/b )"),
+            &set(&["foo", "test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn subset_still_honors_a_nested_non_subset_conditional_normally() {
+        // "bar" isn't in the subset, so it is evaluated normally.
+        let result_bar_on = use_reduce_flat_subset(
+            &toks("test? ( bar? ( dev-libs/a ) )"),
+            &set(&["test", "bar"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result_bar_on, vec!["dev-libs/a"]);
+
+        let result_bar_off = use_reduce_flat_subset(
+            &toks("test? ( bar? ( dev-libs/a ) )"),
+            &set(&["test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert!(result_bar_off.is_empty());
+    }
+
+    #[test]
+    fn subset_negated_conditional_never_contributes() {
+        // "!test?" never matches "test" in the subset.
+        let result = use_reduce_flat_subset(
+            &toks("!test? ( dev-libs/a )"),
+            &set(&[]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn subset_preserves_an_any_of_group_that_survives_filtering() {
+        // Only the test-gated alternative survives; the "||" marker stays.
+        let result = use_reduce_flat_subset(
+            &toks("|| ( foo? ( dev-libs/a ) test? ( dev-libs/b ) )"),
+            &set(&["test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["||", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn subset_of_an_unconditional_dep_string_yields_nothing() {
+        let result = use_reduce_flat_subset(
+            &toks("dev-libs/a dev-libs/b"),
+            &set(&[]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
 }

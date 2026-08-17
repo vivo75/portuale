@@ -254,6 +254,11 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_with_test_deps_itself() {
+        assert!(lookup("--with-test-deps").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_onlydeps_itself() {
         assert!(lookup("--onlydeps").is_none());
         assert!(lookup("-o").is_none());
