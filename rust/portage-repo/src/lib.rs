@@ -1344,6 +1344,57 @@ fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Option<HashSet<S
     Some(flat.into_iter().filter(|t| t != "||").collect())
 }
 
+/// Real `find_libc_deps(vardb, realized=False)` (`portage.dep.libc`): the
+/// `(category, package)` identity of every atom `virtual/libc`'s own
+/// installed (vdb) `RDEPEND` names, once flattened against its own
+/// installed `USE` -- empty if `virtual/libc` isn't installed at all,
+/// same as real `vardb.match("virtual/libc")` finding nothing. A
+/// simplified, one-level port of real `expand_new_virt`: real Gentoo's
+/// own `virtual/libc` `RDEPEND` is always a flat `|| ( sys-libs/glibc
+/// sys-libs/musl ... )` of real (non-virtual) packages, so this doesn't
+/// replicate `expand_new_virt`'s own further case of recursing into a
+/// *second* virtual reached this way, which real `virtual/libc` never
+/// actually needs. Used by `deps_changed` to strip libc atoms out of
+/// both sides of its own comparison before comparing -- real
+/// `strip_libc_deps`'s whole purpose: practically every ebuild silently
+/// gains/loses an implicit libc dependency across revisions, and that's
+/// noise, not a real dependency change worth reporting.
+fn libc_provider_cps(root: &Path) -> HashSet<(String, String)> {
+    let mut result = HashSet::new();
+    for version in installed_versions(root, "virtual", "libc") {
+        let use_flags = read_vdb_flag_set(root, "virtual", "libc", &version, "USE");
+        let rdepend = read_vdb_string(root, "virtual", "libc", &version, "RDEPEND");
+        let Some(atoms) = flat_dep_atoms(&rdepend, &use_flags) else {
+            continue;
+        };
+        for atom_str in atoms {
+            if let Some(atom) = portage_dep::parse_atom(&atom_str) {
+                result.insert((atom.category, atom.package));
+            }
+        }
+    }
+    result
+}
+
+/// Removes any atom in `atoms` whose own `(category, package)` is in
+/// `libc_cps` -- see `libc_provider_cps`'s own doc comment.
+fn strip_libc_atoms(
+    atoms: HashSet<String>,
+    libc_cps: &HashSet<(String, String)>,
+) -> HashSet<String> {
+    if libc_cps.is_empty() {
+        return atoms;
+    }
+    atoms
+        .into_iter()
+        .filter(|a| {
+            portage_dep::parse_atom(a)
+                .map(|atom| !libc_cps.contains(&(atom.category, atom.package)))
+                .unwrap_or(true)
+        })
+        .collect()
+}
+
 /// `--changed-deps`: whether `version`'s own vdb-recorded dependency
 /// strings differ from the repo's own *current* ebuild for that exact
 /// version, once both are flattened against the *same* input -- the
@@ -1369,11 +1420,7 @@ fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Option<HashSet<S
 /// comment on `resolve_pretend_graph`), so this reuses that same flat
 /// comparison rather than building bespoke structured-tree machinery
 /// just for this one feature -- consistent with, not a new exception to,
-/// the rest of this pilot's own dependency handling. Also unaddressed:
-/// real `strip_libc_deps` (a libc-specific special case needing its own
-/// "what package provides libc" lookup this pilot has nowhere else) --
-/// no fixture in this pilot's own tree represents a libc package, so
-/// this has no observable effect here.
+/// the rest of this pilot's own dependency handling.
 ///
 /// A vdb-side dependency string that fails to parse counts as
 /// "changed" unconditionally, matching real portage's own `except
@@ -1383,6 +1430,10 @@ fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Option<HashSet<S
 /// uses for its own unreadable-metadata cases, since real portage has
 /// no equivalent fallback to mirror there (the repo side is assumed
 /// always well-formed).
+///
+/// Both atom sets are filtered through `libc_provider_cps` first (see
+/// its own doc comment) -- real `strip_libc_deps`, closing the gap this
+/// function's own doc comment used to name explicitly as unaddressed.
 fn deps_changed(
     root: &Path,
     repos: &[RepoConfig],
@@ -1433,8 +1484,10 @@ fn deps_changed(
     let Some(repo_atoms) = flat_dep_atoms(&repo_depstr, &installed_use) else {
         return false;
     };
+    let libc_cps = libc_provider_cps(root);
+    let repo_atoms = strip_libc_atoms(repo_atoms, &libc_cps);
     match flat_dep_atoms(&vdb_depstr, &installed_use) {
-        Some(vdb_atoms) => vdb_atoms != repo_atoms,
+        Some(vdb_atoms) => strip_libc_atoms(vdb_atoms, &libc_cps) != repo_atoms,
         None => true,
     }
 }
@@ -3432,6 +3485,23 @@ mod tests {
                 changed_flags: Vec::new(),
                 deps_changed: true,
                 slot_changed: false,
+            }
+        );
+    }
+
+    #[test]
+    fn changed_deps_ignores_a_libc_only_dependency_change() {
+        // dev-libs/libcnoisepkg's own vdb RDEPEND names sys-libs/glibc,
+        // its current ebuild names sys-libs/musl instead -- both are
+        // real virtual/libc providers (the fixture vdb's own
+        // virtual/libc entry RDEPENDs on "|| ( sys-libs/glibc
+        // sys-libs/musl )"), so real strip_libc_deps must strip both
+        // before comparing, leaving only the identical
+        // "dev-libs/samepkg" on each side -- no reinstall.
+        assert_eq!(
+            resolve_real_changed_deps("dev-libs", "libcnoisepkg", true),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
             }
         );
     }

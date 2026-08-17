@@ -1028,6 +1028,51 @@ def _flat_dep_atoms(depstr, use_flags):
     return {tok for tok in flat if tok != "||"}
 
 
+def _libc_provider_cps(root):
+    """Real find_libc_deps(vardb, realized=False) (portage.dep.libc): the
+    "cp" (category/package) identity of every atom virtual/libc's own
+    installed (vdb) RDEPEND names, once flattened against its own
+    installed USE -- empty if virtual/libc isn't installed at all, same
+    as real vardb.match("virtual/libc") finding nothing. A simplified,
+    one-level port of real expand_new_virt: real Gentoo's own
+    virtual/libc RDEPEND is always a flat "|| ( sys-libs/glibc
+    sys-libs/musl ... )" of real (non-virtual) packages, so this doesn't
+    replicate expand_new_virt's own further case of recursing into a
+    *second* virtual reached this way, which real virtual/libc never
+    actually needs. Used by _deps_changed to strip libc atoms out of
+    both sides of its own comparison before comparing -- real
+    strip_libc_deps's whole purpose: practically every ebuild silently
+    gains/loses an implicit libc dependency across revisions, and that's
+    noise, not a real dependency change worth reporting. Mirrors
+    portage-repo/src/lib.rs's libc_provider_cps exactly."""
+    result = set()
+    for version in installed_versions(root, "virtual", "libc"):
+        use_flags = _read_vdb_flag_set(root, "virtual", "libc", version, "USE")
+        rdepend = _read_vdb_string(root, "virtual", "libc", version, "RDEPEND")
+        atoms = _flat_dep_atoms(rdepend, use_flags)
+        if atoms is None:
+            continue
+        for atom_str in atoms:
+            atom = _parse_atom(atom_str)
+            if atom is not None:
+                result.add(atom.cp)
+    return result
+
+
+def _strip_libc_atoms(atoms, libc_cps):
+    """Removes any atom in `atoms` whose own "cp" is in `libc_cps` -- see
+    _libc_provider_cps's own docstring. Mirrors
+    portage-repo/src/lib.rs's strip_libc_atoms exactly."""
+    if not libc_cps:
+        return atoms
+    result = set()
+    for a in atoms:
+        atom = _parse_atom(a)
+        if atom is None or atom.cp not in libc_cps:
+            result.add(a)
+    return result
+
+
 def _deps_changed(root, repos, category, package, version, with_bdeps):
     """--changed-deps: whether `version`'s own vdb-recorded dependency
     strings differ from the repo's own *current* ebuild for that exact
@@ -1048,10 +1093,11 @@ def _deps_changed(root, repos, category, package, version, with_bdeps):
     pilot's own dependency-recursion machinery is flat-only everywhere
     else too (use_reduce(..., flat=True)), so this reuses that same flat
     comparison rather than building bespoke structured-tree machinery
-    just for this one feature. Also unaddressed: real strip_libc_deps (a
-    libc-specific special case this pilot has no fixture or machinery
-    for anywhere else) -- no observable effect in this pilot's own
-    fixture tree.
+    just for this one feature.
+
+    Both atom sets are filtered through _libc_provider_cps first (see
+    its own docstring) -- real strip_libc_deps, closing the gap this
+    docstring used to name explicitly as unaddressed.
 
     A vdb-side dependency string that fails to parse counts as "changed"
     unconditionally, matching real portage's own "except
@@ -1087,10 +1133,12 @@ def _deps_changed(root, repos, category, package, version, with_bdeps):
     repo_atoms = _flat_dep_atoms(repo_depstr, installed_use)
     if repo_atoms is None:
         return False
+    libc_cps = _libc_provider_cps(root)
+    repo_atoms = _strip_libc_atoms(repo_atoms, libc_cps)
     vdb_atoms = _flat_dep_atoms(vdb_depstr, installed_use)
     if vdb_atoms is None:
         return True
-    return vdb_atoms != repo_atoms
+    return _strip_libc_atoms(vdb_atoms, libc_cps) != repo_atoms
 
 
 def _split_slot(raw):

@@ -393,6 +393,11 @@ CASES = [
         0,
     ),
     (
+        "--changed-deps: a libc-only dependency change is ignored (strip_libc_deps)",
+        ["--pretend", "--changed-deps", "dev-libs/libcnoisepkg"],
+        0,
+    ),
+    (
         "--changed-deps: --json includes the changed_deps field",
         ["--pretend", "--changed-deps", "--json", "dev-libs/changeddepspkg"],
         0,
@@ -2407,6 +2412,25 @@ def test_changed_deps_reinstalls_and_recurses_into_the_current_ebuilds_own_depen
         '[ebuild  r] dev-libs/changeddepspkg-1.0 (reinstall for changed dependencies)',
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
+
+
+def test_changed_deps_ignores_a_libc_only_dependency_change(emerge_binary, fixture_env):
+    """dev-libs/libcnoisepkg's own vdb-recorded RDEPEND names
+    sys-libs/glibc; its current ebuild names sys-libs/musl instead --
+    both are real virtual/libc providers (the fixture vdb's own
+    virtual/libc entry RDEPENDs on "|| ( sys-libs/glibc sys-libs/musl
+    )"), so real strip_libc_deps strips both out before comparing,
+    leaving only the identical dev-libs/samepkg on each side -- no
+    reinstall, even with --changed-deps given."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--changed-deps", "dev-libs/libcnoisepkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert (
+        result.stdout.strip() == "dev-libs/libcnoisepkg-1.0 is already installed; nothing to do"
+    )
 
 
 def test_changed_deps_json_includes_the_changed_deps_field(emerge_binary, fixture_env):

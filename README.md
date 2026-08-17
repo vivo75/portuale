@@ -767,6 +767,41 @@ PORTING/
   the same "current tree wins" precedent `enqueue_dependencies` already
   established for `--deep`'s own `AlreadyInstalled` walk.
 
+  **`--changed-deps` ignores a libc-only dependency change
+  (`strip_libc_deps`).** A later, independent follow-up to `--changed-deps`
+  above, grounded against real `portage.dep.libc.find_libc_deps`/
+  `strip_libc_deps`: practically every ebuild silently gains or loses an
+  implicit dependency on whichever package provides `virtual/libc`
+  across revisions, and real portage strips that noise out of both sides
+  of its own `_changed_deps` comparison before comparing, rather than
+  reporting a reinstall for it. `find_libc_deps(vardb, realized=False)`
+  is itself a call into real `expand_new_virt` -- this pilot ports a
+  simplified, one-level version of it (`libc_provider_cps`): find the
+  installed `virtual/libc` package in the vdb (if any), read *its own*
+  vdb-recorded `RDEPEND`, flatten it against its own installed `USE`,
+  and collect the `category/package` identity of every resulting atom.
+  Real `virtual/libc`'s own `RDEPEND` is always a flat `|| (
+  sys-libs/glibc sys-libs/musl ... )` of real, non-virtual packages, so
+  this doesn't replicate `expand_new_virt`'s own further case of
+  recursing into a *second* virtual reached this way -- a case real
+  `virtual/libc` never actually needs, the same "ported faithfully where
+  it matters, simplified where the simplification is provably safe"
+  judgment this pilot already applies elsewhere. This was a real,
+  previously-named gap, not a new discovery: both this pilot's own
+  `deps_changed`/`_deps_changed` doc comments already flagged
+  `strip_libc_deps` explicitly as "unaddressed... no fixture in this
+  pilot's own tree represents a libc package" -- closing it needed a new
+  fixture-side `virtual/libc` vdb entry (`RDEPEND="|| ( sys-libs/glibc
+  sys-libs/musl )"`, no repo ebuild needed at all, since `find_libc_deps`
+  only ever reads the vdb) plus `dev-libs/libcnoisepkg` (vdb-recorded
+  `RDEPEND="sys-libs/glibc dev-libs/samepkg"`, current ebuild's own
+  `RDEPEND="sys-libs/musl dev-libs/samepkg"` -- different libc atom text
+  on each side, but both are real libc providers, so once stripped both
+  sides reduce to the identical `{dev-libs/samepkg}` and no reinstall
+  fires even with `--changed-deps` given), proving the stripping engages
+  without disturbing `changeddepspkg`'s own already-tested genuine
+  dependency-change detection.
+
   **`--changed-slot[=y|n]`: reinstall a package whose own recorded `SLOT`
   changed.** Grounded against real `depgraph.py`'s own `_changed_slot`:
   `ebuild = self._equiv_ebuild(pkg); return ebuild is not None and
@@ -3163,6 +3198,13 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep --with-bdeps n 
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-libs/changeddepspkg
 # [ebuild  r] dev-libs/changeddepspkg-1.0 (reinstall for changed dependencies)
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# --changed-deps ignores a libc-only dependency change (strip_libc_deps):
+# libcnoisepkg's own vdb RDEPEND names sys-libs/glibc, its current
+# ebuild names sys-libs/musl -- both are real virtual/libc providers per
+# the fixture vdb's own virtual/libc entry, so no reinstall fires
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-libs/libcnoisepkg
+# dev-libs/libcnoisepkg-1.0 is already installed; nothing to do
 
 # --changed-slot: changedslotpkg's own vdb-recorded SLOT ("0") differs
 # from its current ebuild's own SLOT ("0/2", an ABI-bump sub-slot change)
