@@ -1619,6 +1619,19 @@ pub enum PretendOutcome {
         from: String,
         to: String,
     },
+    /// Real `output.py`'s own in-slot `best()` check (around line 750):
+    /// the resolved candidate's version is *not* `best([to, from])` --
+    /// i.e. `to` is actually older than what's installed, typically
+    /// because a newer version got masked/removed from the tree since
+    /// `from` was merged. Real portage flags this with a distinct
+    /// `attr_display.downgrade` column alongside its own `U` column
+    /// (both set together); this pilot's simplified one-letter-per-
+    /// outcome scheme (see `Upgrade`/`Reinstall`'s own `r`/`U`) uses a
+    /// single dedicated `D` instead of stacking two.
+    Downgrade {
+        from: String,
+        to: String,
+    },
     AlreadyInstalled {
         version: String,
     },
@@ -2637,10 +2650,19 @@ pub fn resolve_pretend(
     }
 
     match installed.iter().max_by(|a, b| vercmp_ordering(a, b)) {
-        Some(current) => Ok(PretendOutcome::Upgrade {
-            from: current.clone(),
-            to: best.version.clone(),
-        }),
+        Some(current) => {
+            if vercmp_ordering(&best.version, current) == Ordering::Less {
+                Ok(PretendOutcome::Downgrade {
+                    from: current.clone(),
+                    to: best.version.clone(),
+                })
+            } else {
+                Ok(PretendOutcome::Upgrade {
+                    from: current.clone(),
+                    to: best.version.clone(),
+                })
+            }
+        }
         None => Ok(PretendOutcome::New {
             version: best.version.clone(),
         }),
@@ -2761,6 +2783,7 @@ fn resolve_blockers(
             let version = match &entry.outcome {
                 PretendOutcome::New { version } => Some(version.clone()),
                 PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+                PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
                 PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
                 _ => None,
             };
@@ -3459,6 +3482,7 @@ pub fn resolve_pretend_graph(
         let resolved_version = match &outcome {
             PretendOutcome::New { version } => Some(version.clone()),
             PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+            PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
             PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
             _ => None,
         };
@@ -3565,8 +3589,11 @@ pub fn resolve_pretend_graph(
             let existing_version = match &entries[existing_idx].outcome {
                 PretendOutcome::New { version } => version.clone(),
                 PretendOutcome::Upgrade { to, .. } => to.clone(),
+                PretendOutcome::Downgrade { to, .. } => to.clone(),
                 PretendOutcome::Reinstall { version, .. } => version.clone(),
-                _ => unreachable!("resolved_slots only ever indexes New/Upgrade/Reinstall entries"),
+                _ => unreachable!(
+                    "resolved_slots only ever indexes New/Upgrade/Downgrade/Reinstall entries"
+                ),
             };
             let existing_str = format!("{}/{}-{existing_version}:{slot}", key.0, key.1);
             let satisfied = portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
@@ -4302,6 +4329,26 @@ mod tests {
             PretendOutcome::Upgrade {
                 from: "1.0".to_string(),
                 to: "2.0".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn downgrade() {
+        // dev-libs/downgradepkg is installed at 2.0, but only 1.0 is
+        // visible in the tree (2.0's own ebuild is gone) -- real
+        // output.py's own in-slot `best()` check (see PretendOutcome::
+        // Downgrade's own doc comment) flags this as a genuine downgrade,
+        // not an "upgrade" to an older version. The installed version
+        // (2.0) has no visible candidate of its own, so avoid_update's
+        // shortcut doesn't apply here even without --update -- see
+        // resolve_pretend's own doc comment on requiring a *visible*
+        // candidate.
+        assert_eq!(
+            resolve("dev-libs", "downgradepkg"),
+            PretendOutcome::Downgrade {
+                from: "2.0".to_string(),
+                to: "1.0".to_string(),
             }
         );
     }

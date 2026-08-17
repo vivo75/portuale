@@ -2452,7 +2452,7 @@ def resolve_pretend(
     supports -- operator, slot, not just a bare category/package) across
     all of `repos` (the main repo and any overlays -- see find_repos),
     compare it against what's installed. Returns a tuple whose first
-    element is the outcome tag: "new", "upgrade", "reinstall",
+    element is the outcome tag: "new", "upgrade", "downgrade", "reinstall",
     "already_installed", or "no_visible_candidate". `newuse`/
     `changed_use` each enable their own reinstall check (see
     _reinstall_flags_for_use_change) for an already-installed match,
@@ -2764,7 +2764,10 @@ def resolve_pretend(
             )
         return ("already_installed", best["version"])
     if installed:
-        return ("upgrade", _max_version(installed), best["version"])
+        current = _max_version(installed)
+        if vercmp(best["version"], current) < 0:
+            return ("downgrade", current, best["version"])
+        return ("upgrade", current, best["version"])
     return ("new", best["version"])
 
 
@@ -2801,7 +2804,7 @@ def resolve_blockers(root, pending, entries):
                 continue
             if outcome[0] == "new":
                 version = outcome[1]
-            elif outcome[0] == "upgrade":
+            elif outcome[0] in ("upgrade", "downgrade"):
                 version = outcome[2]
             elif outcome[0] == "reinstall":
                 version = outcome[1]
@@ -3162,7 +3165,7 @@ def resolve_pretend_graph(
 
         if outcome[0] == "new":
             version = outcome[1]
-        elif outcome[0] == "upgrade":
+        elif outcome[0] in ("upgrade", "downgrade"):
             version = outcome[2]
         elif outcome[0] == "reinstall":
             version = outcome[1]
@@ -3837,7 +3840,7 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
     fields.append(f'"outcome":{_json_string(tag)}')
     if tag in ("new", "already_installed"):
         fields.append(f'"version":{_json_string(outcome[1])}')
-    elif tag == "upgrade":
+    elif tag in ("upgrade", "downgrade"):
         fields.append(f'"version":{_json_string(outcome[2])}')
         fields.append(f'"from_version":{_json_string(outcome[1])}')
     elif tag == "reinstall":
@@ -5030,6 +5033,13 @@ def run(args):
             if not onlydeps_suppressed:
                 print(
                     f"[{bracket}  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})"
+                    f"{use_suffix(use_display)}"
+                )
+            print_blockers(category, package, outcome[2], blockers)
+        elif tag == "downgrade":
+            if not onlydeps_suppressed:
+                print(
+                    f"[{bracket}  D] {category}/{package}-{outcome[2]} (downgrade from {outcome[1]})"
                     f"{use_suffix(use_display)}"
                 )
             print_blockers(category, package, outcome[2], blockers)

@@ -266,6 +266,11 @@ CASES = [
         ["--pretend", "--usepkgonly", "dev-libs/newpkg"],
         1,
     ),
+    (
+        "downgrade: installed version has no visible candidate of its own",
+        ["--pretend", "dev-libs/downgradepkg"],
+        0,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -1220,6 +1225,25 @@ def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == ["[binary  N] dev-libs/binaryusemismatchpkg-1.0"]
+    assert result.stderr == ""
+
+
+def test_downgrade_is_distinguished_from_upgrade(emerge_binary, fixture_env):
+    """dev-libs/downgradepkg is installed at 2.0, but only 1.0 is visible
+    in the tree (its own 2.0 ebuild is gone) -- real output.py's own
+    in-slot best() check (around line 750) flags this as a genuine
+    downgrade, not an "upgrade" to an older version; before this slice,
+    resolve_pretend labeled ANY version change for an installed package
+    as Upgrade without ever comparing versions. The installed version
+    (2.0) has no visible candidate of its own, so real avoid_update's
+    shortcut doesn't apply even without --update -- see resolve_pretend's
+    own doc comment on requiring a *visible* candidate, not just a vdb
+    entry."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/downgradepkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  D] dev-libs/downgradepkg-1.0 (downgrade from 2.0)"
+    ]
     assert result.stderr == ""
 
 

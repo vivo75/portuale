@@ -3108,6 +3108,29 @@ bracket word itself mirrors real `RootConfig.py`'s own
 `--getbinpkgonly` (remote fetching) are out of scope -- local `PKGDIR`
 only.
 
+A real bug fix, found by grounding against real `output.py`'s own
+`PkgAttrDisplay` logic (around line 750): before this slice, any version
+change for an already-installed package was unconditionally labeled
+`Upgrade`, even when the resolved candidate is actually *older* than
+what's installed -- real portage distinguishes this with its own
+`downgrade` attr, set precisely when the resolved cpv isn't `best()` of
+itself plus the installed in-slot version (typically because a newer
+version got masked or removed from the tree since the older one was
+merged). `PretendOutcome::Downgrade` now exists as its own variant
+(`vercmp(to, from) < 0` gates it, right where `Upgrade` used to be
+constructed unconditionally), printing `(downgrade from X)` instead of
+`(upgrade from X)`, with its own dedicated `D` bracket letter --
+deliberately a single letter, not real portage's own stacked `U`+`D`
+columns, matching this pilot's established one-letter-per-outcome
+scheme. `dev-libs/downgradepkg` (installed at `2.0`, only `1.0` visible
+in the tree) proves it live -- and does so even *without* `--update`,
+since the installed `2.0` has no visible candidate of its own to satisfy
+real `avoid_update`'s own shortcut (see `resolve_pretend`'s own doc
+comment), so resolution falls through to the ordinary best-visible-
+candidate path unchanged, exactly matching real portage's own comment
+about enabling "upgrade or downgrade to a version with visible KEYWORDS
+when the installed version is masked."
+
 ## Running it
 
 Build both Rust binaries:
@@ -4121,6 +4144,13 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg dev-libs/bina
 # fallback to reject *to*) -- the same mismatched binary is now accepted
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkgonly dev-libs/binaryusemismatchpkg
 # [binary  N] dev-libs/binaryusemismatchpkg-1.0
+
+# downgrade vs upgrade: downgradepkg is installed at 2.0, but only 1.0 is
+# visible in the tree -- a genuine downgrade, distinct from an upgrade,
+# and shown even without --update since the installed 2.0 has no visible
+# candidate of its own to satisfy real avoid_update's own shortcut
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/downgradepkg
+# [ebuild  D] dev-libs/downgradepkg-1.0 (downgrade from 2.0)
 ```
 
 Try the `ebuild` stub (still a dry-run placeholder -- no real phase

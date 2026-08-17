@@ -352,6 +352,7 @@ fn entry_to_json(
     let outcome_tag = match &entry.outcome {
         PretendOutcome::New { .. } => "new",
         PretendOutcome::Upgrade { .. } => "upgrade",
+        PretendOutcome::Downgrade { .. } => "downgrade",
         PretendOutcome::Reinstall { .. } => "reinstall",
         PretendOutcome::AlreadyInstalled { .. } => "already_installed",
         PretendOutcome::NoVisibleCandidate => "no_visible_candidate",
@@ -361,7 +362,7 @@ fn entry_to_json(
         PretendOutcome::New { version } | PretendOutcome::AlreadyInstalled { version } => {
             fields.push(format!("\"version\":{}", json_string(version)));
         }
-        PretendOutcome::Upgrade { from, to } => {
+        PretendOutcome::Upgrade { from, to } | PretendOutcome::Downgrade { from, to } => {
             fields.push(format!("\"version\":{}", json_string(to)));
             fields.push(format!("\"from_version\":{}", json_string(from)));
         }
@@ -1774,6 +1775,17 @@ pub fn run(args: &[String]) -> ExitCode {
                 if !onlydeps_suppressed {
                     println!(
                         "[{bracket}  U] {}/{}-{to} (upgrade from {from}){}",
+                        entry.category,
+                        entry.package,
+                        use_suffix(entry, verbose)
+                    );
+                }
+                print_blockers(entry, to);
+            }
+            PretendOutcome::Downgrade { from, to } => {
+                if !onlydeps_suppressed {
+                    println!(
+                        "[{bracket}  D] {}/{}-{to} (downgrade from {from}){}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
