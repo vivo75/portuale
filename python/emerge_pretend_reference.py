@@ -719,14 +719,46 @@ def _keywords_accepted(
     package.accept_keywords atom with no keyword list at all stays a
     documented no-op (real accept_keywords_defaults substitution is a
     separate mechanism, not negation, and was already out of scope
-    before this). Mirrors portage-repo/src/lib.rs's keywords_accepted
-    exactly."""
+    before this).
+
+    A second real mechanism, previously unhandled: a literal "*"/"~*"
+    token in the accepted set means "accept any stable keyword"/"accept
+    any testing keyword" respectively -- distinct from "**" (accept even
+    an *empty* KEYWORDS) and from a plain keyword name, which
+    _apply_incremental would otherwise insert as an inert string that
+    can never equal a real KEYWORDS entry. Ported from real
+    _getMissingKeywords's own per-candidate-keyword loop
+    (lib/portage/package/ebuild/_config/KeywordsManager.py, lines
+    ~273-300): each of the candidate's own `keywords` is checked for a
+    direct match first (short-circuiting immediately, same as real
+    "match = True; break"); a "-"-prefixed one (explicit "not supported
+    here", distinct from simply absent) never matches and is excluded
+    from classification entirely, matching real portage's own elif
+    chain; anything else is classified stable or testing ("~"-prefixed)
+    for the final fallback -- "*" grants acceptance if *any* declared
+    keyword was stable-classified, "~*" if any was testing-classified,
+    matching real "(hastesting and '~*' in pgroups) or (hasstable and
+    '*' in pgroups)" exactly (the third real disjunct, '"**" in
+    pgroups', is the unconditional check already handled above). Mirrors
+    portage-repo/src/lib.rs's keywords_accepted exactly."""
     accepted = _specificity_ordered_flags(
         package_accept_keywords, candidate_str, category, package, seed=accept_keywords
     )
     if "**" in accepted:
         return True
-    return bool(accepted & set(keywords))
+
+    has_stable = False
+    has_testing = False
+    for k in keywords:
+        if k.startswith("-"):
+            continue
+        if k in accepted:
+            return True
+        if k.startswith("~"):
+            has_testing = True
+        else:
+            has_stable = True
+    return (has_testing and "~*" in accepted) or (has_stable and "*" in accepted)
 
 
 def _is_stable(keywords, candidate_str, category, package, accept_keywords, package_accept_keywords):

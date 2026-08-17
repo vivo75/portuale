@@ -1079,6 +1079,26 @@ pub fn is_visible(
 /// mechanism, not negation, and was already out of scope before this;
 /// see `parse_package_accept_keywords_lines`'s own doc comment,
 /// portage-profile).
+///
+/// A second real mechanism, previously unhandled: a literal `"*"`/`"~*"`
+/// token in the accepted set means "accept any stable keyword"/"accept
+/// any testing keyword" respectively -- distinct from `"**"` (accept
+/// even an *empty* `KEYWORDS`) and from a plain keyword name, which
+/// `apply_incremental` would otherwise insert as an inert string that
+/// can never equal a real `KEYWORDS` entry. Ported from real
+/// `_getMissingKeywords`'s own per-candidate-keyword loop
+/// (`lib/portage/package/ebuild/_config/KeywordsManager.py`, lines
+/// ~273-300): each of the candidate's own `keywords` is checked for a
+/// direct match first (short-circuiting immediately, same as real
+/// `match = True; break`); a `-`-prefixed one (explicit "not supported
+/// here", distinct from simply absent) never matches and is excluded
+/// from classification entirely, matching real portage's own elif
+/// chain; anything else is classified stable or testing (`~`-prefixed)
+/// for the final fallback -- `"*"` grants acceptance if *any* declared
+/// keyword was stable-classified, `"~*"` if any was testing-classified,
+/// matching real `(hastesting and "~*" in pgroups) or (hasstable and
+/// "*" in pgroups)` exactly (the third real disjunct, `"**" in pgroups`,
+/// is the unconditional check already handled above).
 fn keywords_accepted(
     keywords: &[String],
     candidate_str: &str,
@@ -1097,7 +1117,31 @@ fn keywords_accepted(
     if accepted.contains("**") {
         return true;
     }
-    keywords.iter().any(|k| accepted.contains(k))
+
+    // Real _getMissingKeywords's own per-keyword loop: a "-"-prefixed
+    // KEYWORDS token (explicit "not supported here", distinct from
+    // simply absent) never itself matches and never counts toward
+    // has_stable/has_testing either -- it's excluded from every branch
+    // of real portage's own elif chain the same way. A direct match
+    // (the accepted set literally contains this exact keyword) wins
+    // immediately; otherwise this keyword only contributes to the
+    // has_stable/has_testing tally used by the "*"/"~*" fallback below.
+    let mut has_stable = false;
+    let mut has_testing = false;
+    for k in keywords {
+        if k.starts_with('-') {
+            continue;
+        }
+        if accepted.contains(k) {
+            return true;
+        }
+        if k.starts_with('~') {
+            has_testing = true;
+        } else {
+            has_stable = true;
+        }
+    }
+    (has_testing && accepted.contains("~*")) || (has_stable && accepted.contains("*"))
 }
 
 /// Whether `keywords` (a candidate's own KEYWORDS) count as "stable"
@@ -5309,6 +5353,86 @@ mod tests {
             &candidate("9999", &[]),
             "dev-libs",
             "live",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_accept_keywords_star_accepts_any_stable_keyword() {
+        // Global ACCEPT_KEYWORDS "*" accepts any stable-classified
+        // keyword the candidate declares, even one never otherwise
+        // mentioned anywhere.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["*".to_string()]),
+            ..Default::default()
+        };
+        assert!(is_visible(
+            &candidate("1.0", &["arm64"]),
+            "dev-libs",
+            "starpkg",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_accept_keywords_star_does_not_accept_a_testing_only_candidate() {
+        // "*" only ever covers stable-classified keywords -- a
+        // testing-only ("~"-prefixed) candidate still needs "~*"
+        // specifically.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["*".to_string()]),
+            ..Default::default()
+        };
+        assert!(!is_visible(
+            &candidate("1.0", &["~arm64"]),
+            "dev-libs",
+            "starpkg",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_accept_keywords_tilde_star_accepts_any_testing_keyword() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["~*".to_string()]),
+            ..Default::default()
+        };
+        assert!(is_visible(
+            &candidate("1.0", &["~arm64"]),
+            "dev-libs",
+            "starpkg",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_accept_keywords_tilde_star_does_not_accept_a_stable_only_candidate() {
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["~*".to_string()]),
+            ..Default::default()
+        };
+        assert!(!is_visible(
+            &candidate("1.0", &["arm64"]),
+            "dev-libs",
+            "starpkg",
+            &config
+        ));
+    }
+
+    #[test]
+    fn package_accept_keywords_negative_keyword_never_counts_toward_star() {
+        // A "-arm64" KEYWORDS token (explicit "not supported here") is
+        // excluded from classification entirely -- with no other real
+        // keyword declared, "*" has nothing stable-classified to grant
+        // acceptance for.
+        let config = portage_profile::Config {
+            accept_keywords: HashSet::from(["*".to_string()]),
+            ..Default::default()
+        };
+        assert!(!is_visible(
+            &candidate("1.0", &["-arm64"]),
+            "dev-libs",
+            "starpkg",
             &config
         ));
     }

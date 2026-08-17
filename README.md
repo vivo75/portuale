@@ -1033,6 +1033,35 @@ PORTING/
   every one of these masking mechanisms, not something specific to
   keywords -- reopening it would be its own, separately-scoped slice.
 
+  **`ACCEPT_KEYWORDS`/`package.accept_keywords` `"*"`/`"~*"` wildcard
+  tokens.** A second correctness fix to the exact same function the
+  negation slice above just touched, found by re-reading real
+  `_getMissingKeywords`'s own per-candidate-keyword loop (lines
+  ~273-300) more carefully: a literal `"*"` in the accepted set means
+  "accept any stable keyword," `"~*"` means "accept any testing
+  keyword" -- both distinct from `"**"` (accept even an *empty*
+  `KEYWORDS`), which was already ported. Before this fix, `"*"`/`"~*"`
+  had no special meaning at all in this pilot's own `keywords_accepted`
+  -- `apply_incremental` would just insert the literal string `"*"` (or
+  `"~*"`) into the accepted set, an inert token that can never equal a
+  real `KEYWORDS` entry, so `ACCEPT_KEYWORDS="*"` (real portage's own
+  documented "all arches allowed") or a `package.accept_keywords "~*"`
+  entry would silently grant nothing at all. Ported directly from real
+  portage's own per-keyword classification: each of the candidate's own
+  declared keywords is checked for a direct match first (short-
+  circuiting immediately); a `-`-prefixed one (explicit "not supported
+  here") never matches and is excluded from classification entirely;
+  anything else is classified stable or testing (`~`-prefixed) for a
+  final fallback -- `"*"` grants acceptance if *any* declared keyword
+  was stable-classified, `"~*"` if any was testing-classified. New
+  fixture packages `starkeywordpkg` (`KEYWORDS="arm64"`, otherwise
+  unmentioned anywhere, visible only via a `package.accept_keywords "*"`
+  entry) and `tildestarkeywordpkg` (`KEYWORDS="~arm64"`, visible only
+  via a `"~*"` entry -- deliberately proving `"*"` alone would *not*
+  have covered it, since it only ever covers stable-classified
+  keywords) exercise both wildcards end to end, distinctly from each
+  other and from `"**"`.
+
   **Real `-v` value semantics + short-flag bundling**: closes two related
   CLI gaps at once, both grounded in `lib/_emerge/main.py`'s
   `insert_optional_args` (traced by hand, then verified against real
@@ -2383,6 +2412,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/livekeywordpk
 # genuinely stable package specifically
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/keywordrevokedpkg
 # emerge: there are no ebuilds to satisfy "dev-libs/keywordrevokedpkg".  (exit 1)
+
+# package.accept_keywords "*"/"~*" wildcards: accept any stable/testing
+# keyword respectively, distinct from "**" -- "*" alone would NOT have
+# covered the second package below, since it's testing-only (~arm64)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/starkeywordpkg
+# [ebuild  N] dev-libs/starkeywordpkg-1.0
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/tildestarkeywordpkg
+# [ebuild  N] dev-libs/tildestarkeywordpkg-1.0
 
 # package.accept_keywords is now also stacked from the profile chain, not
 # just /etc/portage -- this package has no user-level entry at all, only

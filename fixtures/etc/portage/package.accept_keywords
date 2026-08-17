@@ -10,3 +10,7 @@ dev-libs/unstableusepkg ~amd64
 # this one stable package specifically (real KeywordsManager._getEgroups
 # folds "-token" removals, not just additions).
 dev-libs/keywordrevokedpkg -amd64
+# "*"/"~*" wildcard tokens: accept any stable/testing keyword
+# respectively, distinct from "**" (accept even an empty KEYWORDS).
+dev-libs/starkeywordpkg *
+dev-libs/tildestarkeywordpkg ~*

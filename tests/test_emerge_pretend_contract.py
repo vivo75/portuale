@@ -198,6 +198,8 @@ CASES = [
     ("package.accept_keywords: profile-level entry extends visibility", ["--pretend", "dev-libs/profileacceptkeywordspkg"], 0),
     ("package.accept_keywords: ** accepts no-keywords package", ["--pretend", "dev-libs/livekeywordpkg"], 0),
     ("package.accept_keywords: -amd64 revokes a globally-accepted keyword", ["--pretend", "dev-libs/keywordrevokedpkg"], 1),
+    ("package.accept_keywords: \"*\" accepts any stable keyword", ["--pretend", "dev-libs/starkeywordpkg"], 0),
+    ("package.accept_keywords: \"~*\" accepts any testing keyword", ["--pretend", "dev-libs/tildestarkeywordpkg"], 0),
     ("package.use: wildcard entry enables a flag not on globally", ["--pretend", "dev-libs/packageuseenablepkg"], 0),
     ("package.use: entry disables a flag that is on globally", ["--pretend", "dev-libs/packageusedisablepkg"], 0),
     ("package.use: repo-level entry enables a flag not on globally", ["--pretend", "dev-libs/repouseenablepkg"], 0),
@@ -1077,6 +1079,34 @@ def test_package_accept_keywords_negation_revokes_a_globally_accepted_keyword(
         result.stderr.strip()
         == 'emerge: there are no ebuilds to satisfy "dev-libs/keywordrevokedpkg".'
     )
+
+
+def test_package_accept_keywords_star_accepts_any_stable_keyword(emerge_binary, fixture_env):
+    """dev-libs/starkeywordpkg is KEYWORDS="arm64" -- not globally
+    accepted, and not otherwise mentioned anywhere -- but
+    PORTING/fixtures/etc/portage/package.accept_keywords has a
+    "dev-libs/starkeywordpkg *" entry, real portage's own "accept any
+    stable keyword" wildcard (distinct from "**", which additionally
+    accepts an empty KEYWORDS)."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/starkeywordpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/starkeywordpkg-1.0"
+
+
+def test_package_accept_keywords_tilde_star_accepts_any_testing_keyword(
+    emerge_binary, fixture_env
+):
+    """dev-libs/tildestarkeywordpkg is KEYWORDS="~arm64" (testing-only),
+    made visible by a "dev-libs/tildestarkeywordpkg ~*" entry -- real
+    portage's own "accept any testing keyword" wildcard. "*" alone
+    would NOT have accepted this (it only ever covers stable-classified
+    keywords), proving the two wildcards are genuinely distinct, not
+    just differently-spelled synonyms."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/tildestarkeywordpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/tildestarkeywordpkg-1.0"
 
 
 def test_package_accept_keywords_profile_level_entry_extends_visibility(
