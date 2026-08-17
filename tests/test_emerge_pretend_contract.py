@@ -36,8 +36,37 @@ CASES = [
     ("new install", ["--pretend", "dev-libs/newpkg"], 0),
     ("already installed", ["--pretend", "dev-libs/samepkg"], 0),
     (
-        "without --update, a newer visible version is not offered",
+        "without --update, a bare top-level atom still offers a newer visible version",
         ["--pretend", "dev-libs/upgradepkg"],
+        0,
+    ),
+    (
+        "--noreplace restores the real avoid_update shortcut without --update",
+        ["--pretend", "--noreplace", "dev-libs/upgradepkg"],
+        0,
+    ),
+    ("-n short alias for --noreplace", ["--pretend", "-n", "dev-libs/samepkg"], 0),
+    ("-n bundled with -p", ["-pn", "dev-libs/samepkg"], 0),
+    ("--selective bare form, same as --noreplace", ["--pretend", "--selective", "dev-libs/samepkg"], 0),
+    ("--selective=y inline form", ["--pretend", "--selective=y", "dev-libs/samepkg"], 0),
+    (
+        "--selective n explicitly cancels it even with --update also given",
+        ["--pretend", "--update", "--selective", "n", "dev-libs/upgradepkg"],
+        0,
+    ),
+    (
+        "--update alone still lets a no-newer-version package stay already installed",
+        ["--pretend", "--update", "dev-libs/samepkg"],
+        0,
+    ),
+    (
+        "--update --selective=n forces a bare reinstall even with nothing newer available",
+        ["--pretend", "--update", "--selective=n", "dev-libs/samepkg"],
+        0,
+    ),
+    (
+        "--selective=n inline form cancels --noreplace too",
+        ["--pretend", "--noreplace", "--selective=n", "dev-libs/samepkg"],
         0,
     ),
     ("--update: upgrade available", ["--pretend", "--update", "dev-libs/upgradepkg"], 0),
@@ -1027,12 +1056,14 @@ def test_package_mask_minus_atom_removal_leaves_candidate_unaffected(
 ):
     """PORTING/fixtures/etc/portage/package.mask masks dev-libs/samepkg and
     then immediately un-masks it again via "-dev-libs/samepkg" within the
-    same file -- it must resolve completely normally (already installed),
+    same file -- it must resolve completely normally (visible, matched),
     proving -atom removal actually took effect rather than the mask
-    lingering."""
+    lingering. A bare top-level atom with no other flags reports a plain
+    reinstall (real portage's own "selective" gap -- see resolve_pretend's
+    own doc comment, portage-repo), not "already installed"."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/samepkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout.strip() == "dev-libs/samepkg-1.0 is already installed; nothing to do"
+    assert result.stdout.strip() == "[ebuild  r] dev-libs/samepkg-1.0"
 
 
 def test_license_eula_style_group_is_masked_by_the_real_default_accept_license(
@@ -1702,9 +1733,15 @@ def test_multiple_top_level_atoms_all_already_installed(emerge_binary, fixture_e
     """Generalizes the old single-atom "already installed; nothing to do"
     shortcut: every requested top-level atom that resolves
     AlreadyInstalled gets its own such line (there's no longer a
-    len(entries) == 1 special case)."""
+    len(entries) == 1 special case). --noreplace restores "already
+    installed" for a bare top-level atom (see resolve_pretend's own
+    doc comment, portage-repo, on real portage's own "selective" gap --
+    without it, a bare top-level atom reports a plain reinstall
+    instead)."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "dev-libs/samepkg", "dev-libs/samepkg"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--noreplace", "dev-libs/samepkg", "dev-libs/samepkg"],
+        fixture_env,
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == ["dev-libs/samepkg-1.0 is already installed; nothing to do"]
@@ -1886,7 +1923,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -1947,6 +1984,8 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "       --changed-deps-report[=y|n]  report (without reinstalling) an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's; silent if --changed-deps is also given\n"
         "       --changed-slot[=y|n]  reinstall an already-installed package whose own vdb-recorded SLOT differs from the current ebuild's\n"
         '       --with-test-deps[=y|n]  also pull in a top-level atom\'s own test?-gated dependencies, if it has a "test" USE flag not already enabled\n'
+        "   -n, --noreplace  a directly-named, already-installed, still-satisfying atom is left as-is (real portage's own default without this needs --update/--newuse/--changed-use/--changed-deps/--changed-slot/--selective to get the same result)\n"
+        '       --selective[=y|n]  identical to --noreplace; "n" explicitly cancels it even if another flag above would otherwise set it\n'
         "   -h, --help      show this message and exit\n"
         "       --json      dump the whole resolved graph as one line of JSON instead "
         "of the lines above (pilot-specific, not a real emerge option)\n"
@@ -2433,15 +2472,17 @@ def test_deselect_n_does_not_trigger_deselect_mode(emerge_binary, fixture_env, t
     check), so "dev-libs/foo" here is treated as a normal target atom,
     not a deselect argument -- and resolves the ordinary way: it's
     already installed (in this throwaway ROOT's own vdb) and satisfies
-    the atom, so it's reported as "nothing to do" rather than as a
-    deselect-mode "Would remove" line."""
+    the atom, so it's reported as a plain reinstall (real portage's own
+    "selective" gap for a bare top-level atom -- see resolve_pretend's
+    own doc comment, portage-repo) rather than as a deselect-mode "Would
+    remove" line."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--deselect", "n", "dev-libs/foo"],
         _deselect_env(fixture_env, tmp_path),
     )
     assert result.returncode == 0
-    assert result.stdout == "dev-libs/foo-1.0 is already installed; nothing to do\n"
+    assert result.stdout == "[ebuild  r] dev-libs/foo-1.0\n"
 
 
 def test_deselect_matches_between_implementations(
@@ -2580,9 +2621,15 @@ def test_without_newuse_a_use_changed_package_stays_already_installed(
     """The exact same fixture as the Reinstall test above, but without
     --newuse: the USE mismatch is real, but nothing checks for it unless
     --newuse is given, so this must stay the pre-existing
-    AlreadyInstalled outcome -- not a Reinstall, and not a NEW dependency
-    recursion into dev-libs/newpkg either."""
-    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/reinstallpkg"], fixture_env)
+    AlreadyInstalled outcome -- not a Reinstall for that reason, and not
+    a NEW dependency recursion into dev-libs/newpkg either. --noreplace
+    isolates this from the unrelated "bare top-level atom" reinstall a
+    plain invocation would otherwise also trigger (see resolve_pretend's
+    own doc comment, portage-repo, on real portage's own "selective"
+    gap) -- this test is about --newuse specifically, not that."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--noreplace", "dev-libs/reinstallpkg"], fixture_env
+    )
     assert result.returncode == 0
     assert result.stdout == "dev-libs/reinstallpkg-1.0 is already installed; nothing to do\n"
 
@@ -2735,8 +2782,15 @@ def test_changed_deps_json_includes_the_changed_deps_field(emerge_binary, fixtur
 
 
 def test_without_changed_deps_a_dependency_change_is_never_detected(emerge_binary, fixture_env):
+    """--noreplace isolates this from the unrelated "bare top-level
+    atom" reinstall a plain invocation would otherwise also trigger --
+    see resolve_pretend's own doc comment (portage-repo) on real
+    portage's own "selective" gap; this test is about --changed-deps
+    specifically, not that."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "dev-libs/changeddepspkg"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--noreplace", "dev-libs/changeddepspkg"],
+        fixture_env,
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "dev-libs/changeddepspkg-1.0 is already installed; nothing to do"
@@ -2802,8 +2856,15 @@ def test_changed_slot_json_includes_the_changed_slot_field(emerge_binary, fixtur
 
 
 def test_without_changed_slot_a_slot_change_is_never_detected(emerge_binary, fixture_env):
+    """--noreplace isolates this from the unrelated "bare top-level
+    atom" reinstall a plain invocation would otherwise also trigger --
+    see resolve_pretend's own doc comment (portage-repo) on real
+    portage's own "selective" gap; this test is about --changed-slot
+    specifically, not that."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "dev-libs/changedslotpkg"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--noreplace", "dev-libs/changedslotpkg"],
+        fixture_env,
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "dev-libs/changedslotpkg-1.0 is already installed; nothing to do"
@@ -2962,21 +3023,72 @@ def test_onlydeps_on_an_already_installed_atom_prints_nothing(emerge_binary, fix
     assert result.stdout == ""
 
 
-def test_without_update_an_installed_version_that_satisfies_the_atom_is_kept(
+def test_without_update_a_bare_top_level_atom_still_offers_a_newer_version(
     emerge_binary, fixture_env
 ):
     """dev-libs/upgradepkg is installed at 1.0; a newer 2.0 is visible in
     the tree too. Real depgraph.py's own `avoid_update` (lines 7814 and
-    8448 of lib/_emerge/depgraph.py) means plain `emerge
-    dev-libs/upgradepkg`, with no --update, never even looks for a
-    better version -- real emerge does NOT offer an upgrade just because
-    a newer version exists. Before this slice, this pilot's own default
-    behavior always searched for and offered the best available version,
-    which -- while a real, working piece of dependency resolution -- was
-    not actually what real emerge does by default."""
+    8448) means an already-installed version that's still a *matched
+    candidate* is kept as-is without searching further -- but for a
+    directly-requested (top-level) atom without `selective`
+    (--update/--newuse/--changed-use/--changed-deps/--changed-slot/
+    --noreplace/--selective), the installed version is never even a
+    matched candidate to begin with (real `want_reinstall =
+    found_available_arg and not selective`, see resolve_pretend's own
+    doc comment, portage-repo) -- so `avoid_update`'s own shortcut never
+    gets a chance to fire, and the ordinary "best visible candidate"
+    search proceeds, finding 2.0. Confirmed live against the real,
+    installed system `emerge` (not just read from source) during this
+    slice's own research. This directly reverses what an earlier version
+    of this pilot's own test suite asserted here, before this real
+    behavior was discovered."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/upgradepkg"], fixture_env)
     assert result.returncode == 0
+    assert result.stdout == "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)\n"
+
+
+def test_noreplace_restores_the_real_avoid_update_shortcut(emerge_binary, fixture_env):
+    """The mirror case: with `selective` restored via --noreplace, the
+    installed version (1.0) IS still a matched candidate (real
+    `want_reinstall` no longer forces it out), so real `avoid_update`'s
+    own shortcut fires normally and 2.0 is never even considered --
+    matching this pilot's own pre-existing behavior for every case
+    other than a bare top-level atom."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--noreplace", "dev-libs/upgradepkg"], fixture_env
+    )
+    assert result.returncode == 0
     assert result.stdout == "dev-libs/upgradepkg-1.0 is already installed; nothing to do\n"
+
+
+def test_selective_n_cancels_selective_even_when_update_would_have_set_it(
+    emerge_binary, fixture_env
+):
+    """Real create_depgraph_params.py's own unconditional `if myopts.get(
+    "--selective") == "n": myparams.pop("selective", None)`, checked
+    last: an explicit --selective=n wins even over --update, which would
+    otherwise set selective on its own. dev-libs/samepkg has no newer
+    version available, so --update alone still resolves its own "best
+    across everything" search right back to the installed version --
+    but that comparison is where `is_top_level and not selective` gets
+    checked too (see resolve_pretend's own doc comment, portage-repo:
+    it's not just the early `not update` shortcut that consults
+    selective), so cancelling selective here still forces a bare
+    reinstall even though --update genuinely ran its own search and
+    found nothing better."""
+    with_update_alone = _run(
+        [str(emerge_binary)], ["--pretend", "--update", "dev-libs/samepkg"], fixture_env
+    )
+    assert with_update_alone.returncode == 0
+    assert with_update_alone.stdout == "dev-libs/samepkg-1.0 is already installed; nothing to do\n"
+
+    with_selective_cancelled = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--selective=n", "dev-libs/samepkg"],
+        fixture_env,
+    )
+    assert with_selective_cancelled.returncode == 0
+    assert with_selective_cancelled.stdout == "[ebuild  r] dev-libs/samepkg-1.0\n"
 
 
 def test_update_upgrades_to_the_newer_visible_version(emerge_binary, fixture_env):
@@ -3027,8 +3139,16 @@ def test_without_deep_an_already_installed_packages_own_deps_stay_unwalked(
     dev-libs/newpkg (New) -- without --deep, real portage's own default
     (deep=0) never walks an already-installed package's own further
     dependencies, at any depth, so neither deeppkg2 nor newpkg ever
-    appears here, only deeppkg's own top-level "nothing to do" line."""
-    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/deeppkg"], fixture_env)
+    appears here, only deeppkg's own top-level "nothing to do" line.
+    --noreplace keeps deeppkg itself AlreadyInstalled (see
+    resolve_pretend's own doc comment, portage-repo, on real portage's
+    own "selective" gap for a bare top-level atom) -- --deep's own
+    walk only ever applies to an AlreadyInstalled entry in the first
+    place, so this isolates --deep's own gating from that unrelated
+    default."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--noreplace", "dev-libs/deeppkg"], fixture_env
+    )
     assert result.returncode == 0
     assert result.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
 
@@ -3039,8 +3159,15 @@ def test_deep_walks_the_whole_already_installed_chain(emerge_binary, fixture_env
     (deeppkg -> deeppkg2) get walked, reaching deeppkg2's own RDEPEND on
     newpkg (New) -- deeppkg2 itself stays silent (AlreadyInstalled, not
     a top-level atom, same "don't clutter the list" rule as ever), but
-    newpkg's own [ebuild N] line now appears."""
-    result = _run([str(emerge_binary)], ["--pretend", "--deep", "dev-libs/deeppkg"], fixture_env)
+    newpkg's own [ebuild N] line now appears. --noreplace keeps deeppkg
+    itself AlreadyInstalled (see resolve_pretend's own doc comment,
+    portage-repo, on real portage's own "selective" gap for a bare
+    top-level atom) -- --deep's own walk only ever applies to an
+    AlreadyInstalled entry in the first place, so this isolates --deep's
+    own gating from that unrelated default."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--noreplace", "--deep", "dev-libs/deeppkg"], fixture_env
+    )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         "dev-libs/deeppkg-1.0 is already installed; nothing to do",
@@ -3053,8 +3180,10 @@ def test_deep_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
     shortmapping); bundled with -p ("-pD") it must behave identically to
     the long-flag invocation above, never consuming a following token as
     its own value -- same "no ambiguity with another bundled flag
-    character" rule already established for a bundled -v."""
-    result = _run([str(emerge_binary)], ["-pD", "dev-libs/deeppkg"], fixture_env)
+    character" rule already established for a bundled -v. -n (bundled
+    too) keeps deeppkg itself AlreadyInstalled, same isolation reasoning
+    as the long-flag test above."""
+    result = _run([str(emerge_binary)], ["-pnD", "dev-libs/deeppkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         "dev-libs/deeppkg-1.0 is already installed; nothing to do",
@@ -3068,15 +3197,23 @@ def test_deep_bounded_depth_stops_short_of_the_full_chain(emerge_binary, fixture
     is false), so newpkg is never reached, and the output is identical
     to not passing --deep at all. --deep=2 (one level deeper) reaches
     all the way to newpkg, same as unlimited -- proving the bound is
-    real and not silently ignored in either direction."""
+    real and not silently ignored in either direction. --noreplace keeps
+    deeppkg itself AlreadyInstalled (see resolve_pretend's own doc
+    comment, portage-repo, on real portage's own "selective" gap for a
+    bare top-level atom), isolating --deep's own gating from that
+    unrelated default."""
     bounded_one = _run(
-        [str(emerge_binary)], ["--pretend", "--deep=1", "dev-libs/deeppkg"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--noreplace", "--deep=1", "dev-libs/deeppkg"],
+        fixture_env,
     )
     assert bounded_one.returncode == 0
     assert bounded_one.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
 
     bounded_two = _run(
-        [str(emerge_binary)], ["--pretend", "--deep=2", "dev-libs/deeppkg"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--noreplace", "--deep=2", "dev-libs/deeppkg"],
+        fixture_env,
     )
     assert bounded_two.returncode == 0
     assert bounded_two.stdout.splitlines() == [
@@ -3089,9 +3226,15 @@ def test_deep_equals_zero_matches_not_passing_deep_at_all(emerge_binary, fixture
     """--deep=0 parses fine (unlike a negative value) but is
     indistinguishable from --deep never being given at all, matching
     real create_depgraph_params.py's own `!= 0` check that excludes it
-    from myparams either way."""
+    from myparams either way. --noreplace keeps deeppkg itself
+    AlreadyInstalled (see resolve_pretend's own doc comment,
+    portage-repo, on real portage's own "selective" gap for a bare
+    top-level atom), isolating --deep's own gating from that unrelated
+    default."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "--deep=0", "dev-libs/deeppkg"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--noreplace", "--deep=0", "dev-libs/deeppkg"],
+        fixture_env,
     )
     assert result.returncode == 0
     assert result.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
@@ -3117,10 +3260,14 @@ def test_deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely(
 ):
     """--nodeps trumps --deep -- real create_depgraph_params.py pops
     "recurse" out of myparams outright, which the dependency walk itself
-    checks for before `deep` is ever consulted."""
+    checks for before `deep` is ever consulted. --noreplace keeps
+    deeppkg itself AlreadyInstalled (see resolve_pretend's own doc
+    comment, portage-repo, on real portage's own "selective" gap for a
+    bare top-level atom), isolating --deep/--nodeps's own gating from
+    that unrelated default."""
     result = _run(
         [str(emerge_binary)],
-        ["--pretend", "--deep", "--nodeps", "dev-libs/deeppkg"],
+        ["--pretend", "--noreplace", "--deep", "--nodeps", "dev-libs/deeppkg"],
         fixture_env,
     )
     assert result.returncode == 0
@@ -3457,7 +3604,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -3471,7 +3618,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -3485,7 +3632,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 

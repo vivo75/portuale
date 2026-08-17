@@ -251,13 +251,20 @@ fn use_suffix(entry: &GraphEntry, verbose: bool) -> String {
 /// The `(reinstall for ...)` note's own reason text, real portage
 /// treating `--newuse`/`--changed-use` and `--changed-deps` as
 /// independent, freely-combinable triggers (see `PretendOutcome::
-/// Reinstall`'s own doc comment, portage-repo) -- `changed_flags` is
-/// only ever empty when `deps_changed` alone triggered this outcome
-/// (`resolve_pretend`'s own construction guarantees at least one is
-/// non-trivial). Pilot-invented wording either way, same as the
-/// pre-existing "changed USE: ..." text -- real portage's own default
-/// `--pretend` output shows no such itemized reason at all.
-fn reinstall_reason(changed_flags: &[String], deps_changed: bool, slot_changed: bool) -> String {
+/// Reinstall`'s own doc comment, portage-repo). Pilot-invented wording,
+/// same as the pre-existing "changed USE: ..." text -- real portage's
+/// own default `--pretend` output shows no such itemized reason at all.
+/// Returns `None` when all three fields are empty/false -- real
+/// portage's own bare, reasonless `[ebuild R]` (see `resolve_pretend`'s
+/// own `selective`/`is_top_level` doc comment paragraph, portage-repo):
+/// unlike every other `Reinstall`, this one genuinely has no tracked
+/// reason to report at all, so the caller omits the whole `(reinstall
+/// for ...)` parenthetical rather than printing an empty one.
+fn reinstall_reason(
+    changed_flags: &[String],
+    deps_changed: bool,
+    slot_changed: bool,
+) -> Option<String> {
     let mut reasons = Vec::new();
     if !changed_flags.is_empty() {
         reasons.push(format!("changed USE: {}", changed_flags.join(", ")));
@@ -268,11 +275,10 @@ fn reinstall_reason(changed_flags: &[String], deps_changed: bool, slot_changed: 
     if slot_changed {
         reasons.push("changed slot".to_string());
     }
-    assert!(
-        !reasons.is_empty(),
-        "Reinstall is only ever constructed with a non-empty changed_flags, deps_changed=true, or slot_changed=true"
-    );
-    reasons.join("; ")
+    if reasons.is_empty() {
+        return None;
+    }
+    Some(reasons.join("; "))
 }
 
 fn print_blockers(entry: &GraphEntry, owner_version: &str) {
@@ -496,7 +502,8 @@ fn report_option(token: &str) -> ExitCode {
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
              --changed-deps-report, --changed-slot, --with-test-deps, \
-             and --help/-h are implemented so far; see PROMPT.md)",
+             --noreplace/-n, --selective, and --help/-h are implemented \
+             so far; see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -563,6 +570,12 @@ fn print_help() {
     );
     println!(
         "       --with-test-deps[=y|n]  also pull in a top-level atom's own test?-gated dependencies, if it has a \"test\" USE flag not already enabled"
+    );
+    println!(
+        "   -n, --noreplace  a directly-named, already-installed, still-satisfying atom is left as-is (real portage's own default without this needs --update/--newuse/--changed-use/--changed-deps/--changed-slot/--selective to get the same result)"
+    );
+    println!(
+        "       --selective[=y|n]  identical to --noreplace; \"n\" explicitly cancels it even if another flag above would otherwise set it"
     );
     println!("   -h, --help      show this message and exit");
     println!(
@@ -915,6 +928,15 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut changed_slot = false;
     let mut with_test_deps = false;
     let mut changed_deps_report = false;
+    let mut noreplace = false;
+    // `None` until an explicit `--selective`/`--selective=y`/`--selective=n`
+    // is given, so `n` can override whatever `update`/`newuse`/
+    // `changed_use`/`changed_deps`/`changed_slot`/`noreplace` computed --
+    // matching real `create_depgraph_params.py`'s own unconditional
+    // `if myopts.get("--selective") == "n": myparams.pop("selective",
+    // None)`, checked after every other trigger. See `selective`'s own
+    // computation just before the `resolve_pretend_graph` call below.
+    let mut selective_flag: Option<bool> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -936,6 +958,15 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--update" || arg == "-u" {
             update = true;
+            i += 1;
+        } else if arg == "--noreplace" || arg == "-n" {
+            // Real "--noreplace"/"-n": a plain boolean, no value at all
+            // (real main.py's own boolean-options list) -- unlike
+            // "--selective" below, which has the same name/meaning but a
+            // real optional y_or_n value. Its entire real effect is
+            // setting `selective` -- see `resolve_pretend`'s own doc
+            // comment (portage-repo).
+            noreplace = true;
             i += 1;
         } else if arg == "--deep" || arg == "-D" {
             // Peeks at the next token, consuming it only if it parses as
@@ -1200,6 +1231,36 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--changed-deps-report=n" {
             changed_deps_report = false;
             i += 1;
+        } else if arg == "--selective" {
+            // Real "--selective": y_or_n (default_arg_opts), the same
+            // optional-value shape "--changed-deps" already has -- no
+            // short alias for this exact spelling (real main.py declares
+            // none; "-n" is "--noreplace" above, real portage's own
+            // separate, bare-boolean spelling of the identical meaning).
+            // "n" here explicitly CANCELS `selective` even if some other
+            // flag already set it -- see `resolve_pretend`'s own doc
+            // comment (portage-repo) and this override's own application
+            // just before the `resolve_pretend_graph` call below.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    selective_flag = Some(true);
+                    i += 2;
+                }
+                Some("n") => {
+                    selective_flag = Some(false);
+                    i += 2;
+                }
+                _ => {
+                    selective_flag = Some(true);
+                    i += 1;
+                }
+            }
+        } else if arg == "--selective=y" {
+            selective_flag = Some(true);
+            i += 1;
+        } else if arg == "--selective=n" {
+            selective_flag = Some(false);
+            i += 1;
         } else if arg == "--changed-slot" {
             // Real "--changed-slot": y_or_n (default_arg_opts), the
             // identical optional-value shape "--changed-deps" already
@@ -1267,6 +1328,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'O' => nodeps = true,
                     'o' => onlydeps = true,
                     'u' => update = true,
+                    'n' => noreplace = true,
                     'D' => deep = portage_repo::Deep::Unlimited,
                     'W' => deselect = true,
                     'X' => {
@@ -1430,6 +1492,19 @@ pub fn run(args: &[String]) -> ExitCode {
         with_bdeps = with_bdeps_auto;
     }
 
+    // Real create_depgraph_params.py's own `selective` condition,
+    // computed from whichever of its real trigger flags this pilot
+    // implements -- see `resolve_pretend`'s own doc comment
+    // (portage-repo) for the full grounding, including why
+    // `--changed-use` alone covers this pilot's whole share of real
+    // `--reinstall`'s own contribution. An explicit `--selective=n`
+    // unconditionally cancels it regardless of what the other flags
+    // computed, matching real `create_depgraph_params.py`'s own
+    // unconditional `if myopts.get("--selective") == "n": pop`, checked
+    // last, after every other trigger.
+    let selective = selective_flag
+        .unwrap_or(update || newuse || changed_use || changed_deps || changed_slot || noreplace);
+
     let result = match resolve_pretend_graph(
         &config_root,
         &root,
@@ -1446,6 +1521,7 @@ pub fn run(args: &[String]) -> ExitCode {
         changed_slot,
         with_test_deps,
         changed_deps_report,
+        selective,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -1519,13 +1595,20 @@ pub fn run(args: &[String]) -> ExitCode {
                 slot_changed,
             } => {
                 if !onlydeps_suppressed {
-                    let reason = reinstall_reason(changed_flags, *deps_changed, *slot_changed);
-                    println!(
-                        "[ebuild  r] {}/{}-{version} (reinstall for {reason}){}",
-                        entry.category,
-                        entry.package,
-                        use_suffix(entry, verbose)
-                    );
+                    match reinstall_reason(changed_flags, *deps_changed, *slot_changed) {
+                        Some(reason) => println!(
+                            "[ebuild  r] {}/{}-{version} (reinstall for {reason}){}",
+                            entry.category,
+                            entry.package,
+                            use_suffix(entry, verbose)
+                        ),
+                        None => println!(
+                            "[ebuild  r] {}/{}-{version}{}",
+                            entry.category,
+                            entry.package,
+                            use_suffix(entry, verbose)
+                        ),
+                    }
                 }
                 print_blockers(entry, version);
             }

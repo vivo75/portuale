@@ -182,6 +182,31 @@
 //     `use_reduce_flat_subset`'s own doc comment (portage-use-reduce)
 //     for the real `use_reduce(..., subset={"test"})` extraction it's
 //     built on.
+//   - `--noreplace`/`-n` and `--selective` ARE implemented now too,
+//     found and grounded by comparing this pilot's own output against
+//     the real, installed system `emerge` on a real package
+//     (`sys-apps/portage`) and tracing real portage's own decision
+//     live: a bare `emerge <atom>` with no other flags does NOT keep an
+//     already-installed, already-satisfying package as-is in real
+//     portage -- it's reinstalled anyway, unless real `myparams[
+//     "selective"]` is set, which `--update`/`--newuse`/`--changed-use`/
+//     `--changed-deps`/`--changed-slot`/`--noreplace`/`--selective`/
+//     `--newrepo` all independently do (`create_depgraph_params.py`).
+//     `--noreplace` is a plain boolean, hence bundle-compatible
+//     (`-pn`, alongside the other bundle-compatible booleans);
+//     `--selective` has the identical *meaning* but a real `y_or_n`
+//     *optional* value instead (the same shape `--changed-deps` already
+//     has, deliberately excluded from `VALUE_OPTIONS` for the same
+//     reason, no short alias of its own -- "n" explicitly cancels
+//     `selective` even if another flag already set it, real
+//     `create_depgraph_params.py`'s own unconditional `if myopts.get(
+//     "--selective") == "n": pop`). See `resolve_pretend`'s own doc
+//     comment (portage-repo) for the full grounding, including why this
+//     pilot's own `selective` computation needs no separate
+//     `--reinstall` flag (`--changed-use` already covers its whole real
+//     contribution) and the documented, narrower scope cut around real
+//     `--newrepo` (needs a vdb `REPOSITORY` reader this pilot doesn't
+//     have).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -218,7 +243,6 @@ pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--noconfmem", None),
     ("--newrepo", None),
     ("--nobindeps", None),
-    ("--noreplace", Some("-n")),
     ("--nospinner", None),
     ("--oneshot", Some("-1")),
     ("--quiet-repo-display", None),
@@ -306,7 +330,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--search-index", None),
     ("--search-similarity", None),
     ("--select", Some("-w")),
-    ("--selective", None),
     ("--sync-submodule", None),
     ("--sysroot", None),
     ("--use-ebuild-visibility", None),
@@ -520,6 +543,14 @@ mod tests {
         // --with-test-deps is handled directly by the caller (it's
         // implemented), not through this "not implemented" table.
         assert!(lookup("--with-test-deps").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_noreplace_or_selective_either() {
+        // Both are handled directly by the caller now (both
+        // implemented), not through this "not implemented" table.
+        assert!(lookup("--noreplace").is_none());
+        assert!(lookup("--selective").is_none());
     }
 
     #[test]

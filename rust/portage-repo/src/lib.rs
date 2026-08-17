@@ -1753,6 +1753,86 @@ fn reinstall_flags_for_use_change(
 /// When `update` is true, or no installed version qualifies this way,
 /// behavior is exactly as before this parameter existed.
 ///
+/// `selective`/`is_top_level`: a real, previously-undiscovered gap this
+/// pilot's own `update` handling above didn't capture, found by
+/// comparing this pilot's own output against the real, installed system
+/// `emerge` on a real package (`sys-apps/portage`) and tracing real
+/// portage's own decision live. Real portage's `avoid_update` shortcut
+/// above (`!update`, ported as `update` here) is NOT sufficient on its
+/// own for a **directly-requested (top-level) atom**: real
+/// `_wrapped_select_pkg_highest_available_imp`'s own per-candidate loop
+/// (`lib/_emerge/depgraph.py`) computes `want_reinstall = reinstall or
+/// empty or (found_available_arg and not selective)`, and `if
+/// want_reinstall and matched_packages: continue` -- for a "found via an
+/// atom on the command line" (`found_available_arg`, real
+/// `_iter_atoms_for_pkg`) candidate, this SKIPS ever re-adding the
+/// already-installed `Package` object as a further candidate at all
+/// whenever `selective` is absent, so the later `if avoid_update: ...
+/// return pkg` shortcut (`lib/_emerge/depgraph.py` line ~8447) finds
+/// nothing installed to return and falls through to picking the best
+/// *available* (ebuild) candidate instead -- even when its version is
+/// identical to what's already installed. The net real effect: a bare
+/// `emerge <atom>` with no other flags, on an atom named directly (not
+/// reached via a dependency string), always resolves against the best
+/// *available* version (searching for a newer one exactly as `--update`
+/// would), and even when nothing newer exists, still reports a bare
+/// reinstall (real `[ebuild R] cat/pkg-ver`, no parenthetical reason at
+/// all) rather than treating the identical installed version as
+/// satisfying -- confirmed live: `--noreplace`/`--selective` (both of
+/// which set real `myparams["selective"]`) restore the "nothing to do"
+/// result. `selective` here mirrors real `create_depgraph_params.py`'s
+/// own `myparams["selective"] = True` condition, computed from
+/// whichever of its own real trigger flags this pilot actually
+/// implements: `update`, `newuse`, `changed_use` (real portage's own
+/// `--changed-use`/`-U` rewrites to `--reinstall=changed-use` before
+/// `create_depgraph_params` ever runs, `lib/_emerge/main.py`, and
+/// `--reinstall` is itself constrained to that one literal choice in
+/// real portage -- so `changed_use` alone covers this pilot's whole
+/// share of that real condition, no separate `--reinstall` flag
+/// needed), `changed_deps` (any non-`"n"` value), `changed_slot`, plus
+/// the two flags whose *entire* real effect is exactly this (see
+/// `pretend.rs`'s own CLI parsing): `--noreplace`/`-n` and
+/// `--selective[=y|n]` (`n` explicitly cancels `selective` even if one
+/// of the other conditions set it, matching real `create_depgraph_
+/// params.py`'s own `if myopts.get("--selective") == "n"`: pop
+/// unconditionally). Real `--newrepo` (forces reinstall specifically on
+/// an installed-vs-current repo mismatch, and separately contributes to
+/// `selective`) is a documented, narrower scope cut, deliberately not
+/// modeled: this pilot has no vdb `REPOSITORY` reader (confirmed absent
+/// during this same investigation -- the real vdb file is even
+/// lowercase `repository`, unlike every other metadata key), the same
+/// "no vdb-metadata reader" simplification already documented elsewhere
+/// in this crate (e.g. `enqueue_dependencies`'s own doc comment).
+///
+/// `is_top_level` is this pilot's own existing "argument" equivalent --
+/// `resolve_pretend_graph`'s own `depth == 0`, the identical
+/// equivalence already established for `--with-test-deps`'s own
+/// `pkg.depth == 0 and self._is_argument(pkg)` gating -- since every
+/// depth-0 atom here already came from `atoms` itself or a `@world`/
+/// `@system` expansion of it, both of which real portage's own
+/// `_iter_atoms_for_pkg` also counts as an "argument" for this exact
+/// purpose. A dependency atom (`is_top_level = false`) is NEVER affected
+/// by `selective` at all -- real `found_available_arg` is only ever set
+/// for an argument-derived candidate in the first place, so a
+/// dependency atom's own already-installed, still-satisfying version
+/// keeps exactly its pre-existing `AlreadyInstalled` treatment,
+/// unconditionally, matching real `_want_installed_pkg`'s own `return
+/// not arg` fallback (empty `arg` for a non-argument package).
+///
+/// Applied at both places this function can otherwise decide an
+/// installed version satisfies the atom "as is": the `!update`
+/// shortcut immediately below (skipped entirely -- not just its
+/// outcome adjusted -- whenever `is_top_level && !selective`, so
+/// version selection also falls through to the ordinary "best across
+/// everything visible" comparison below, exactly reproducing real
+/// portage's own "searches for a newer version even without `--update`"
+/// effect for this case) and the final "best visible candidate happens
+/// to already be installed" comparison further down (where, instead,
+/// the outcome is forced to `Reinstall` -- with whatever
+/// `changed_flags`/`deps_changed`/`slot_changed` were independently
+/// computed, all three possibly still empty/false, exactly matching
+/// real portage's own bare, reasonless `[ebuild R]`).
+///
 /// `excluded` (`--exclude`/`-X`) is a list of raw atom/wildcard-atom
 /// strings (real `WildcardPackageSet`, ported here as the same "try
 /// `match_from_list`, fall back to `parse_wildcard_atom`" two-tier
@@ -1799,6 +1879,8 @@ pub fn resolve_pretend(
     changed_deps: bool,
     with_bdeps: bool,
     changed_slot: bool,
+    selective: bool,
+    is_top_level: bool,
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
@@ -1896,8 +1978,12 @@ pub fn resolve_pretend(
         }
     }
 
-    // --update/-u: see this function's own doc comment.
-    if !update {
+    // --update/-u: see this function's own doc comment. Skipped
+    // entirely (not just its outcome adjusted) for a top-level atom
+    // without `selective` -- see the doc comment's own `selective`/
+    // `is_top_level` paragraph -- so version selection falls through to
+    // the ordinary best-visible-candidate comparison below too.
+    if !update && (!is_top_level || selective) {
         if let Some(installed_best) = matched
             .iter()
             .filter_map(|m| by_str.get(m).copied())
@@ -2004,7 +2090,16 @@ pub fn resolve_pretend(
             );
         let slot_changed_flag =
             changed_slot && slot_changed(root, repos, &atom.category, &atom.package, &best.version);
-        if !changed_flags.is_empty() || deps_changed_flag || slot_changed_flag {
+        // `is_top_level && !selective`: real portage's own bare,
+        // reasonless `[ebuild R]` -- see this function's own doc
+        // comment's `selective`/`is_top_level` paragraph. `changed_flags`/
+        // `deps_changed_flag`/`slot_changed_flag` may all still be
+        // empty/false here; that's the whole point of this case.
+        if !changed_flags.is_empty()
+            || deps_changed_flag
+            || slot_changed_flag
+            || (is_top_level && !selective)
+        {
             return Ok(PretendOutcome::Reinstall {
                 version: best.version.clone(),
                 changed_flags,
@@ -2529,7 +2624,15 @@ fn enqueue_flat_deps(
 ///     `visited_atoms`/`resolved_slots`/`other_outcomes`'s own dedup
 ///     decisions, so a diamond dependency's second (deduped) owner is
 ///     still recorded even though it never triggers a new resolution.
-// 13 args trips clippy::too_many_arguments; a bundled options struct
+///   - `selective` (see `resolve_pretend`'s own doc comment for the full
+///     real `selective`/`is_top_level` grounding) is threaded uniformly
+///     to every atom this BFS resolves, but its own effect only ever
+///     reaches `resolve_pretend` for a top-level one: `is_top_level`
+///     (`resolve_pretend`'s own new parameter) is this BFS's own
+///     pre-existing `depth == 0`, passed at the one call site below --
+///     the same equivalence `--with-test-deps` already established
+///     between real "argument" and this pilot's own `depth == 0`.
+// 14 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
 // alongside eight already threaded the same way -- not worth it.
@@ -2550,6 +2653,7 @@ pub fn resolve_pretend_graph(
     changed_slot: bool,
     with_test_deps: bool,
     changed_deps_report: bool,
+    selective: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -2646,6 +2750,8 @@ pub fn resolve_pretend_graph(
             changed_deps,
             with_bdeps,
             changed_slot,
+            selective,
+            depth == 0,
         )?;
 
         // `--changed-deps-report`: real portage stays "completely
@@ -3182,6 +3288,8 @@ mod tests {
             false,
             true,
             false,
+            true,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3206,8 +3314,82 @@ mod tests {
             false,
             true,
             false,
+            true,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    /// Like `resolve`, but with `selective=false` -- real portage's own
+    /// default for a bare top-level atom with no other flags given (see
+    /// `resolve_pretend`'s own `selective`/`is_top_level` doc comment
+    /// paragraph). `is_top_level=true` throughout, matching a
+    /// directly-requested atom.
+    fn resolve_not_selective(category: &str, package: &str) -> PretendOutcome {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &test_config(),
+            false,
+            false,
+            false,
+            &[],
+            false,
+            true,
+            false,
+            false,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn not_selective_top_level_atom_reinstalls_with_no_reason_when_nothing_else_changed() {
+        assert_eq!(
+            resolve_not_selective("dev-libs", "samepkg"),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+            }
+        );
+    }
+
+    #[test]
+    fn not_selective_top_level_atom_still_offers_a_newer_visible_version() {
+        // dev-libs/upgradepkg is installed at 1.0, 2.0 is visible --
+        // without `update`, real avoid_update's own shortcut never gets
+        // a chance to fire for a not-selective top-level atom (the
+        // installed version is never even a matched candidate to begin
+        // with), so the ordinary "best across everything visible"
+        // search proceeds and finds 2.0, exactly as if `update` were
+        // true.
+        assert_eq!(
+            resolve_not_selective("dev-libs", "upgradepkg"),
+            PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn selective_true_preserves_the_pre_existing_already_installed_outcome() {
+        // Same fixture as the reinstall test above, but selective=true
+        // (via the pre-existing `resolve` helper) -- must still be
+        // AlreadyInstalled, matching every test written before this
+        // slice.
+        assert_eq!(
+            resolve("dev-libs", "samepkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
     }
 
     /// Like `resolve_update`, but with `excluded` too -- for exercising
@@ -3233,6 +3415,8 @@ mod tests {
             false,
             true,
             false,
+            true,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3307,6 +3491,8 @@ mod tests {
                 false,
                 true,
                 false,
+                true,
+                true,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -3405,6 +3591,8 @@ mod tests {
             false,
             true,
             false,
+            true,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3434,6 +3622,8 @@ mod tests {
             false,
             true,
             false,
+            true,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3462,6 +3652,8 @@ mod tests {
             false,
             true,
             false,
+            true,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3555,6 +3747,8 @@ mod tests {
             true,
             with_bdeps,
             false,
+            true,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3623,6 +3817,7 @@ mod tests {
             false,
             false,
             changed_deps_report,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -3727,6 +3922,8 @@ mod tests {
             false,
             true,
             true,
+            true,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -3784,6 +3981,8 @@ mod tests {
                 false,
                 true,
                 true,
+                true,
+                true,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -3836,6 +4035,8 @@ mod tests {
             false,
             true,
             false,
+            true,
+            true,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -3865,6 +4066,8 @@ mod tests {
             false,
             true,
             false,
+            true,
+            true,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
@@ -3897,6 +4100,8 @@ mod tests {
                 false,
                 false,
                 &[],
+                true,
+                true,
                 true,
                 true,
                 true,
@@ -4024,6 +4229,8 @@ mod tests {
                 false,
                 true,
                 false,
+                true,
+                true,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -4043,6 +4250,8 @@ mod tests {
                 false,
                 true,
                 false,
+                true,
+                true,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -4369,6 +4578,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4396,6 +4606,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4425,6 +4636,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4458,6 +4670,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -4508,6 +4721,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4606,6 +4820,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4706,6 +4921,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -4842,6 +5058,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -4916,6 +5133,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5052,6 +5270,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -5139,6 +5358,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5173,6 +5393,7 @@ mod tests {
             false,
             true,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5266,6 +5487,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -5298,6 +5520,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5332,6 +5555,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5366,6 +5590,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5601,6 +5826,7 @@ mod tests {
             false,
             false,
             false,
+            true,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

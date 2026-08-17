@@ -2037,6 +2037,8 @@ def resolve_pretend(
     changed_deps=False,
     with_bdeps=True,
     changed_slot=False,
+    selective=False,
+    is_top_level=False,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -2098,6 +2100,80 @@ def resolve_pretend(
     dependency keys _deps_changed itself compares; see
     resolve_pretend_graph's own docstring for the full with_bdeps
     grounding.
+
+    `selective`/`is_top_level`: a real, previously-undiscovered gap in
+    the `update` handling above, found by comparing this pilot's own
+    output against the real, installed system emerge on a real package
+    (sys-apps/portage) and tracing real portage's own decision live.
+    Real portage's own avoid_update shortcut (`not update`, ported as
+    `update` here) is NOT sufficient on its own for a
+    **directly-requested (top-level) atom**: real
+    _wrapped_select_pkg_highest_available_imp's own per-candidate loop
+    (lib/_emerge/depgraph.py) computes `want_reinstall = reinstall or
+    empty or (found_available_arg and not selective)`, and `if
+    want_reinstall and matched_packages: continue` -- for a "found via
+    an atom on the command line" (found_available_arg, real
+    _iter_atoms_for_pkg) candidate, this SKIPS ever re-adding the
+    already-installed Package object as a further candidate at all
+    whenever `selective` is absent, so the later `if avoid_update: ...
+    return pkg` shortcut (lib/_emerge/depgraph.py line ~8447) finds
+    nothing installed to return and falls through to picking the best
+    *available* (ebuild) candidate instead -- even when its version is
+    identical to what's already installed. The net real effect: a bare
+    `emerge <atom>` with no other flags, on an atom named directly (not
+    reached via a dependency string), always resolves against the best
+    *available* version (searching for a newer one exactly as --update
+    would), and even when nothing newer exists, still reports a bare
+    reinstall (real "[ebuild R] cat/pkg-ver", no parenthetical reason at
+    all) rather than treating the identical installed version as
+    satisfying -- confirmed live: --noreplace/--selective (both of which
+    set real myparams["selective"]) restore the "nothing to do" result.
+    `selective` here mirrors real create_depgraph_params.py's own
+    myparams["selective"] = True condition, computed from whichever of
+    its own real trigger flags this pilot actually implements: update,
+    newuse, changed_use (real portage's own --changed-use/-U rewrites to
+    --reinstall=changed-use before create_depgraph_params ever runs,
+    lib/_emerge/main.py, and --reinstall is itself constrained to that
+    one literal choice in real portage -- so changed_use alone covers
+    this pilot's whole share of that real condition, no separate
+    --reinstall flag needed), changed_deps (any non-"n" value),
+    changed_slot, plus the two flags whose entire real effect is exactly
+    this (see run()'s own CLI parsing): --noreplace/-n and
+    --selective[=y|n] ("n" explicitly cancels selective even if one of
+    the other conditions set it, matching real create_depgraph_
+    params.py's own `if myopts.get("--selective") == "n"`: pop
+    unconditionally). Real --newrepo (forces reinstall specifically on
+    an installed-vs-current repo mismatch, and separately contributes to
+    selective) is a documented, narrower scope cut, deliberately not
+    modeled: this pilot has no vdb REPOSITORY reader (confirmed absent
+    during this same investigation -- the real vdb file is even
+    lowercase "repository", unlike every other metadata key).
+
+    `is_top_level` is this pilot's own existing "argument" equivalent --
+    resolve_pretend_graph's own `depth == 0`, the identical equivalence
+    already established for --with-test-deps's own `pkg.depth == 0 and
+    self._is_argument(pkg)` gating. A dependency atom (is_top_level =
+    False) is NEVER affected by selective at all -- real
+    found_available_arg is only ever set for an argument-derived
+    candidate in the first place, so a dependency atom's own
+    already-installed, still-satisfying version keeps exactly its
+    pre-existing already_installed treatment, unconditionally, matching
+    real _want_installed_pkg's own `return not arg` fallback (empty arg
+    for a non-argument package).
+
+    Applied at both places this function can otherwise decide an
+    installed version satisfies the atom "as is": the `not update`
+    shortcut immediately below (skipped entirely -- not just its outcome
+    adjusted -- whenever `is_top_level and not selective`, so version
+    selection also falls through to the ordinary "best across
+    everything visible" comparison below, exactly reproducing real
+    portage's own "searches for a newer version even without --update"
+    effect for this case) and the final "best visible candidate happens
+    to already be installed" comparison further down (where, instead,
+    the outcome is forced to "reinstall" -- with whatever changed_flags/
+    deps_changed_flag/slot_changed_flag were independently computed, all
+    three possibly still empty/false, exactly matching real portage's
+    own bare, reasonless "[ebuild R]").
     Mirrors portage-repo/src/lib.rs's resolve_pretend exactly."""
     atom = _parse_atom(atom_str)
     if atom is None:
@@ -2153,7 +2229,7 @@ def resolve_pretend(
             ):
                 return ("already_installed", installed_best["version"])
 
-    if not update:
+    if not update and (not is_top_level or selective):
         installed_matched = [c for c in matched if c["version"] in installed]
         if installed_matched:
             installed_best = _best_candidate(installed_matched)
@@ -2217,7 +2293,12 @@ def resolve_pretend(
         slot_changed_flag = changed_slot and _slot_changed(
             root, repos, category, package, best["version"]
         )
-        if changed_flags or deps_changed_flag or slot_changed_flag:
+        # is_top_level and not selective: real portage's own bare,
+        # reasonless "[ebuild R]" -- see this function's own docstring's
+        # selective/is_top_level paragraph. changed_flags/
+        # deps_changed_flag/slot_changed_flag may all still be
+        # empty/false here; that's the whole point of this case.
+        if changed_flags or deps_changed_flag or slot_changed_flag or (is_top_level and not selective):
             return (
                 "reinstall",
                 best["version"],
@@ -2342,6 +2423,7 @@ def resolve_pretend_graph(
     changed_slot=False,
     with_test_deps=False,
     changed_deps_report=False,
+    selective=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -2428,8 +2510,17 @@ def resolve_pretend_graph(
     all -- see above). Purely informational, same "report, don't enforce"
     spirit as blockers: real portage's own depgraph treats an unresolved
     slot conflict as fatal; this pilot instead reports it and keeps
-    going, using whichever version was resolved first. Mirrors
-    portage-repo/src/lib.rs's resolve_pretend_graph exactly."""
+    going, using whichever version was resolved first.
+
+    `selective` (see resolve_pretend's own docstring for the full real
+    selective/is_top_level grounding) is threaded uniformly to every
+    atom this BFS resolves, but its own effect only ever reaches
+    resolve_pretend for a top-level one: is_top_level
+    (resolve_pretend's own parameter) is this BFS's own pre-existing
+    `depth == 0`, passed at the one call site below -- the same
+    equivalence --with-test-deps already established between real
+    "argument" and this pilot's own `depth == 0`.
+    Mirrors portage-repo/src/lib.rs's resolve_pretend_graph exactly."""
     repos = find_repos(config_root)
     top_level = set(atoms)
 
@@ -2512,6 +2603,8 @@ def resolve_pretend_graph(
             changed_deps,
             with_bdeps,
             changed_slot,
+            selective,
+            depth == 0,
         )
 
         # --changed-deps-report: real portage stays "completely silent"
@@ -2925,7 +3018,8 @@ def _parse_atom(atom_str):
 # --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o,
 # --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps,
 # --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot,
-# --with-test-deps, and --help/-h are actually implemented (see run()
+# --with-test-deps, --noreplace/-n, --selective, and --help/-h are
+# actually implemented (see run()
 # below); every table
 # here exists purely for recognition, not behavior.
 # Mirrors
@@ -2955,7 +3049,6 @@ _BOOLEAN_OPTIONS = [
     ("--noconfmem", None),
     ("--newrepo", None),
     ("--nobindeps", None),
-    ("--noreplace", "-n"),
     ("--nospinner", None),
     ("--oneshot", "-1"),
     ("--quiet-repo-display", None),
@@ -3041,7 +3134,6 @@ _VALUE_OPTIONS = [
     ("--search-index", None),
     ("--search-similarity", None),
     ("--select", "-w"),
-    ("--selective", None),
     ("--sync-submodule", None),
     ("--sysroot", None),
     ("--use-ebuild-visibility", None),
@@ -3264,8 +3356,9 @@ def _report_option(token):
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
             "--deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, "
-            "--changed-deps-report, --changed-slot, --with-test-deps, and "
-            "--help/-h are implemented so far; see PROMPT.md)",
+            "--changed-deps-report, --changed-slot, --with-test-deps, "
+            "--noreplace/-n, --selective, and --help/-h are implemented so "
+            "far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -3333,6 +3426,12 @@ def _print_help():
     )
     print(
         "       --with-test-deps[=y|n]  also pull in a top-level atom's own test?-gated dependencies, if it has a \"test\" USE flag not already enabled"
+    )
+    print(
+        "   -n, --noreplace  a directly-named, already-installed, still-satisfying atom is left as-is (real portage's own default without this needs --update/--newuse/--changed-use/--changed-deps/--changed-slot/--selective to get the same result)"
+    )
+    print(
+        "       --selective[=y|n]  identical to --noreplace; \"n\" explicitly cancels it even if another flag above would otherwise set it"
     )
     print("   -h, --help      show this message and exit")
     print(
@@ -3584,14 +3683,16 @@ def _run_deselect(targets, root):
 def _reinstall_reason(changed_flags, deps_changed, slot_changed):
     """The "(reinstall for ...)" note's own reason text, real portage
     treating --newuse/--changed-use, --changed-deps, and --changed-slot
-    as independent, freely-combinable triggers. `changed_flags` is only
-    ever empty when neither `deps_changed` nor `slot_changed` alone
-    triggered this outcome (resolve_pretend's own construction
-    guarantees at least one of the three is non-trivial). Pilot-invented
-    wording either way, same as the pre-existing "changed USE: ..." text
-    -- real portage's own default --pretend output shows no such
-    itemized reason at all. Mirrors pretend.rs's own reinstall_reason
-    exactly."""
+    as independent, freely-combinable triggers. Pilot-invented wording,
+    same as the pre-existing "changed USE: ..." text -- real portage's
+    own default --pretend output shows no such itemized reason at all.
+    Returns None when all three are empty/False -- real portage's own
+    bare, reasonless "[ebuild R]" (see resolve_pretend's own selective/
+    is_top_level docstring paragraph): unlike every other reinstall,
+    this one genuinely has no tracked reason to report at all, so the
+    caller omits the whole "(reinstall for ...)" parenthetical rather
+    than printing an empty one. Mirrors pretend.rs's own
+    reinstall_reason exactly."""
     reasons = []
     if changed_flags:
         reasons.append(f"changed USE: {', '.join(changed_flags)}")
@@ -3600,10 +3701,7 @@ def _reinstall_reason(changed_flags, deps_changed, slot_changed):
     if slot_changed:
         reasons.append("changed slot")
     if not reasons:
-        raise AssertionError(
-            "resolve_pretend only ever constructs a reinstall outcome with a "
-            "non-empty changed_flags, deps_changed=True, or slot_changed=True"
-        )
+        return None
     return "; ".join(reasons)
 
 
@@ -3631,6 +3729,15 @@ def run(args):
     changed_slot = False
     with_test_deps = False
     changed_deps_report = False
+    noreplace = False
+    # None until an explicit --selective/--selective=y/--selective=n is
+    # given, so "n" can override whatever update/newuse/changed_use/
+    # changed_deps/changed_slot/noreplace computed -- matching real
+    # create_depgraph_params.py's own unconditional `if myopts.get(
+    # "--selective") == "n": myparams.pop("selective", None)`, checked
+    # after every other trigger. See selective's own computation just
+    # before the resolve_pretend_graph call below.
+    selective_flag = None
 
     i = 0
     while i < len(args):
@@ -3652,6 +3759,14 @@ def run(args):
             i += 1
         elif arg in ("--update", "-u"):
             update = True
+            i += 1
+        elif arg in ("--noreplace", "-n"):
+            # Real "--noreplace"/"-n": a plain boolean, no value at all
+            # (real main.py's own boolean-options list) -- unlike
+            # "--selective" below, which has the same name/meaning but a
+            # real optional y_or_n value. Its entire real effect is
+            # setting `selective` -- see resolve_pretend's own docstring.
+            noreplace = True
             i += 1
         elif arg in ("--deep", "-D"):
             # Peeks at the next token, consuming it only if it parses as
@@ -3881,6 +3996,32 @@ def run(args):
         elif arg == "--changed-deps-report=n":
             changed_deps_report = False
             i += 1
+        elif arg == "--selective":
+            # Real "--selective": y_or_n (default_arg_opts), the same
+            # optional-value shape "--changed-deps" already has -- no
+            # short alias for this exact spelling (real main.py declares
+            # none; "-n" is "--noreplace" above, real portage's own
+            # separate, bare-boolean spelling of the identical meaning).
+            # "n" here explicitly CANCELS selective even if some other
+            # flag already set it -- see resolve_pretend's own docstring
+            # and this override's own application just before the
+            # resolve_pretend_graph call below.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                selective_flag = True
+                i += 2
+            elif nxt == "n":
+                selective_flag = False
+                i += 2
+            else:
+                selective_flag = True
+                i += 1
+        elif arg == "--selective=y":
+            selective_flag = True
+            i += 1
+        elif arg == "--selective=n":
+            selective_flag = False
+            i += 1
         elif arg == "--changed-slot":
             # Real "--changed-slot": y_or_n (default_arg_opts), the
             # identical optional-value shape "--changed-deps" already
@@ -3947,6 +4088,8 @@ def run(args):
                     onlydeps = True
                 elif c == "u":
                     update = True
+                elif c == "n":
+                    noreplace = True
                 elif c == "D":
                     deep = True
                 elif c == "W":
@@ -4073,6 +4216,20 @@ def run(args):
     if not with_bdeps_given:
         with_bdeps = with_bdeps_auto
 
+    # Real create_depgraph_params.py's own `selective` condition,
+    # computed from whichever of its real trigger flags this pilot
+    # implements -- see resolve_pretend's own docstring for the full
+    # grounding, including why --changed-use alone covers this pilot's
+    # whole share of real --reinstall's own contribution. An explicit
+    # --selective=n unconditionally cancels it regardless of what the
+    # other flags computed, matching real create_depgraph_params.py's
+    # own unconditional `if myopts.get("--selective") == "n": pop`,
+    # checked last, after every other trigger.
+    if selective_flag is None:
+        selective = update or newuse or changed_use or changed_deps or changed_slot or noreplace
+    else:
+        selective = selective_flag
+
     try:
         result = resolve_pretend_graph(
             _config_root(),
@@ -4090,6 +4247,7 @@ def run(args):
             changed_slot,
             with_test_deps,
             changed_deps_report,
+            selective,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -4157,10 +4315,13 @@ def run(args):
             slot_changed_flag = outcome[4]
             if not onlydeps_suppressed:
                 reason = _reinstall_reason(changed_flags, deps_changed_flag, slot_changed_flag)
-                print(
-                    f"[ebuild  r] {category}/{package}-{outcome[1]} "
-                    f"(reinstall for {reason}){use_suffix(use_display)}"
-                )
+                if reason is None:
+                    print(f"[ebuild  r] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
+                else:
+                    print(
+                        f"[ebuild  r] {category}/{package}-{outcome[1]} "
+                        f"(reinstall for {reason}){use_suffix(use_display)}"
+                    )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "already_installed":
             # Already-satisfied dependencies aren't shown, matching real

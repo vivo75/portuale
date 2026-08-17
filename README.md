@@ -1806,11 +1806,18 @@ PORTING/
   against real `depgraph.py`'s own `_wrapped_select_pkg_highest_available_imp`
   (`lib/_emerge/depgraph.py`, lines 7814 and 8448): `avoid_update =
   "--update" not in myopts` is real portage's *default*, and when it
-  holds, an already-installed version that itself still satisfies the
-  requested atom is returned immediately, without ever searching for a
-  newer one -- real `emerge cat/pkg`, with no other flags, does NOT
-  offer to upgrade a package just because a newer version exists; that's
-  what `--update`/`-u` is for. This was a genuine, discovered inaccuracy
+  holds *and the installed version is still a real matched candidate at
+  all*, it's returned immediately, without ever searching for a newer
+  one. (The italicized qualifier is a later correction, not part of the
+  original claim here: a follow-up below found that for a directly-named
+  top-level atom specifically, `avoid_update` alone isn't sufficient --
+  real portage's own `selective` gap means the installed version often
+  isn't even a candidate to begin with, so this early return is skipped
+  entirely in that case. `emerge cat/pkg` with no other flags does NOT
+  offer to upgrade *because it's already installed and would otherwise
+  stay that way*; it can still end up offering one for a different, less
+  obvious reason -- see `--noreplace`/`--selective` below.) This was a
+  genuine, discovered inaccuracy
   in this pilot's own prior default behavior: every prior slice's
   New/Upgrade/AlreadyInstalled decision unconditionally searched for the
   single best visible version first, with no way to prefer "stay
@@ -1845,6 +1852,78 @@ PORTING/
   but happened to lean on `upgradepkg`'s old default-upgrades-unconditionally
   behavior for its expected output now passes `--update` explicitly,
   noted inline in each case.
+
+  **`--noreplace`/`-n` and `--selective`: real portage's own `selective`
+  gap, closing a genuine correctness bug the `--update` slice above
+  didn't catch.** Found by comparing this pilot's own output against
+  the real, installed system `emerge` on a real package
+  (`sys-apps/portage`) and tracing real portage's own decision live,
+  via monkeypatched instrumentation of the actual installed
+  `_emerge.depgraph` module -- not read from source alone. Real
+  portage's `avoid_update` shortcut above (`!update`) turns out to NOT
+  be sufficient on its own for a **directly-requested (top-level)
+  atom**: real `_wrapped_select_pkg_highest_available_imp`'s own
+  per-candidate loop computes `want_reinstall = reinstall or empty or
+  (found_available_arg and not selective)`, and `if want_reinstall and
+  matched_packages: continue` -- for a candidate found via an atom on
+  the command line, this skips ever re-adding the already-installed
+  `Package` object as a candidate at all whenever real `myparams[
+  "selective"]` is absent, so `avoid_update`'s own later shortcut (`if
+  avoid_update: ... return pkg`) finds nothing installed to return and
+  falls through to picking the best *available* (ebuild) candidate
+  instead -- even when its version is identical to what's installed.
+  The net real effect, confirmed live: a bare `emerge <atom>` with no
+  other flags, on a directly-named atom, always searches for a newer
+  version exactly as `--update` would, and even when nothing newer
+  exists, still reports a bare reinstall (real `[ebuild R] cat/pkg-ver`,
+  no parenthetical reason at all) rather than treating the identical
+  installed version as satisfying -- `--noreplace`/`--selective`
+  restore the "nothing to do" result, confirmed against the real system
+  both ways. `selective` mirrors real `create_depgraph_params.py`'s own
+  `myparams["selective"] = True` condition, computed from whichever of
+  its eight real trigger flags this pilot implements: `--update`,
+  `--newuse`, `--changed-use` (real portage's own `-U` rewrites to
+  `--reinstall=changed-use` before `create_depgraph_params` ever runs,
+  and `--reinstall` is itself constrained to that one literal choice in
+  real portage -- so `--changed-use` alone covers this pilot's whole
+  share of that real condition, no separate `--reinstall` flag needed),
+  `--changed-deps`, `--changed-slot`, plus the two flags whose *entire*
+  real effect is exactly this: `--noreplace`/`-n` (a plain boolean,
+  bundle-compatible) and `--selective[=y|n]` (the identical meaning, a
+  real optional value instead -- `n` explicitly cancels `selective`
+  even if another flag already set it, matching real
+  `create_depgraph_params.py`'s own unconditional `if myopts.get(
+  "--selective") == "n": pop`, checked last). Real `--newrepo` (forces
+  reinstall specifically on an installed-vs-current repo mismatch, and
+  separately contributes to `selective`) is a documented, narrower
+  scope cut: this pilot has no vdb `REPOSITORY` reader (confirmed
+  absent from the real system during this same investigation -- the
+  real vdb file is even lowercase `repository`, unlike every other
+  metadata key). A dependency atom (not top-level) is never affected at
+  all -- real `found_available_arg` is only ever set for an
+  argument-derived candidate, matching real `_want_installed_pkg`'s own
+  `return not arg` fallback for everything else. Threading this
+  required a genuinely new `resolve_pretend` parameter,
+  `is_top_level`, since the function previously had no way to tell a
+  directly-requested atom apart from a dependency reached by
+  recursion -- reused this pilot's own pre-existing `depth == 0` from
+  `resolve_pretend_graph`'s BFS, the identical equivalence
+  `--with-test-deps` already established between real "argument" and
+  `depth == 0`. `PretendOutcome::Reinstall` gained a new, genuinely
+  reasonless shape (`changed_flags` empty, `deps_changed`/`slot_changed`
+  both false) for this specific trigger -- real portage prints no
+  `(reinstall for ...)` parenthetical at all here, so `reinstall_reason`/
+  `_reinstall_reason` now return `None`/an option rather than asserting
+  at least one reason is always present, and the caller omits the
+  parenthetical entirely for that case. This was the largest blast-radius
+  fix in this pilot's own history: roughly two dozen pre-existing pinned
+  tests whose own point was something else entirely (`--deep`,
+  `--changed-deps`, `--changed-slot`, `--newuse`, package.mask, multiple
+  top-level atoms) happened to lean on the old, incorrect "bare
+  top-level atom stays AlreadyInstalled by default" behavior for their
+  expected output -- each now passes `--noreplace` explicitly to isolate
+  what it actually tests, noted inline in each case, rather than being
+  silently right for the wrong reason.
 
   **USE-dep enforcement** (`dev-libs/foo[bar]`/`[-bar]`, `(+)`/`(-)`
   defaults -- PMS 8.3.4). `portage-dep` has parsed the full 7-form USE-dep
@@ -3206,8 +3285,10 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/rein
 # [ebuild  N] dev-libs/newpkg-1.0
 
 # without --newuse, the exact same package stays AlreadyInstalled -- the
-# USE mismatch is real, but nothing checks for it unless --newuse is given
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/reinstallpkg
+# USE mismatch is real, but nothing checks for it unless --newuse is given.
+# --noreplace isolates this from real portage's own separate "selective"
+# default for a bare top-level atom (see --noreplace/--selective below)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/reinstallpkg
 # dev-libs/reinstallpkg-1.0 is already installed; nothing to do
 
 # --newuse is a no-op when USE hasn't changed -- samepkg has no IUSE at
@@ -3238,12 +3319,13 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs
 # [ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)
 # [ebuild  N] dev-libs/newpkg-1.0
 
-# --update/-u is real and implemented: without it, real emerge does NOT
-# offer to upgrade a package just because a newer version exists --
-# upgradepkg is installed at 1.0, a newer 2.0 is visible in the tree, but
-# plain "emerge dev-libs/upgradepkg" leaves it alone (real depgraph.py's
-# own avoid_update, lines 7814/8448)
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/upgradepkg
+# --update/-u is real and implemented: with `selective` restored via
+# --noreplace, real emerge does NOT offer to upgrade a package just
+# because a newer version exists -- upgradepkg is installed at 1.0, a
+# newer 2.0 is visible in the tree, but "emerge --noreplace
+# dev-libs/upgradepkg" leaves it alone (real depgraph.py's own
+# avoid_update, lines 7814/8448)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/upgradepkg
 # dev-libs/upgradepkg-1.0 is already installed; nothing to do
 # --update (or its short alias -u) is what makes the newer version show up
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg
@@ -3256,24 +3338,53 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/with
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
 
+# without --update AND without --noreplace/--selective, a bare top-level
+# atom still finds the newer version on its own -- real portage's own
+# "selective" gap (see --noreplace/--selective further down)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/upgradepkg
+# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+
+# --noreplace/-n and --selective are real and implemented: samepkg has no
+# newer version and nothing else about it changed, yet a bare top-level
+# atom still reports a plain reinstall, no reason given at all -- real
+# portage's own "selective" gap (see the paragraph above)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg
+# [ebuild  r] dev-libs/samepkg-1.0
+# --noreplace (or its real synonym --selective) restores "nothing to do"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/samepkg
+# dev-libs/samepkg-1.0 is already installed; nothing to do
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective dev-libs/samepkg
+# dev-libs/samepkg-1.0 is already installed; nothing to do
+# --selective=n explicitly cancels selective even if another flag (here,
+# --update) would otherwise have set it -- unlike the upgradepkg example
+# above, samepkg has nothing newer, so --update alone still leaves it
+# alone; --selective=n forces the bare reinstall anyway
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/samepkg
+# dev-libs/samepkg-1.0 is already installed; nothing to do
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --selective=n dev-libs/samepkg
+# [ebuild  r] dev-libs/samepkg-1.0
+
 # --deep/-D is real and implemented: without it, real emerge never walks
 # an already-installed package's own further dependencies, no matter how
 # deep the graph goes -- deeppkg is installed and RDEPENDs on deeppkg2
 # (also installed), which itself RDEPENDs on newpkg (New), but neither
-# ever shows up here
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/deeppkg
+# ever shows up here. --noreplace keeps deeppkg itself AlreadyInstalled
+# (see --noreplace/--selective further down), isolating --deep's own
+# gating from real portage's own separate "selective" default for a bare
+# top-level atom
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/deeppkg
 # dev-libs/deeppkg-1.0 is already installed; nothing to do
 # a bare --deep (unlimited depth) walks the whole already-installed
 # chain -- deeppkg2 itself stays silent (already installed, not a
 # top-level atom), but newpkg's own [ebuild N] line now appears
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep dev-libs/deeppkg
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep dev-libs/deeppkg
 # dev-libs/deeppkg-1.0 is already installed; nothing to do
 # [ebuild  N] dev-libs/newpkg-1.0
 # --deep=N bounds the depth: 1 level reaches deeppkg2 but not newpkg
 # (identical output to no --deep at all); 2 levels reaches all the way
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep=1 dev-libs/deeppkg
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep=1 dev-libs/deeppkg
 # dev-libs/deeppkg-1.0 is already installed; nothing to do
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep=2 dev-libs/deeppkg
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep=2 dev-libs/deeppkg
 # dev-libs/deeppkg-1.0 is already installed; nothing to do
 # [ebuild  N] dev-libs/newpkg-1.0
 
@@ -3486,27 +3597,33 @@ ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/foo @my
 
 # --with-bdeps: withbdepspkg is already installed, DEPENDs on
 # builddeponlypkg, BDEPENDs on hostdeponlypkg, RDEPENDs on newpkg --
-# --deep's default (--with-bdeps=y/auto) walks all three
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep dev-libs/withbdepspkg
+# --deep's default (--with-bdeps=y/auto) walks all three. --noreplace
+# keeps withbdepspkg itself AlreadyInstalled (see --noreplace/--selective
+# further down) -- without it, a bare top-level atom recurses into its
+# own dependencies regardless of --deep at all (real portage's own
+# "selective" gap turns it into a plain reinstall, and any New/Upgrade/
+# Reinstall entry's own dependencies are always walked), so --deep's own
+# gating couldn't be demonstrated otherwise
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep dev-libs/withbdepspkg
 # dev-libs/withbdepspkg-1.0 is already installed; nothing to do
 # [ebuild  N] dev-libs/builddeponlypkg-1.0
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  N] dev-libs/hostdeponlypkg-1.0
 
 # --with-bdeps=n: DEPEND/BDEPEND are skipped, but RDEPEND is unaffected
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep --with-bdeps n dev-libs/withbdepspkg
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep --with-bdeps n dev-libs/withbdepspkg
 # dev-libs/withbdepspkg-1.0 is already installed; nothing to do
 # [ebuild  N] dev-libs/newpkg-1.0
 
 # --with-bdeps-auto n: with no explicit --with-bdeps given, changes the
 # *default* from "auto" (walk all three) down to "n" -- same effect as
 # --with-bdeps n above, but via the default instead of an explicit value
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep --with-bdeps-auto n dev-libs/withbdepspkg
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep --with-bdeps-auto n dev-libs/withbdepspkg
 # dev-libs/withbdepspkg-1.0 is already installed; nothing to do
 # [ebuild  N] dev-libs/newpkg-1.0
 
 # an explicit --with-bdeps always wins over --with-bdeps-auto regardless
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep --with-bdeps y --with-bdeps-auto n dev-libs/withbdepspkg
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep --with-bdeps y --with-bdeps-auto n dev-libs/withbdepspkg
 # dev-libs/withbdepspkg-1.0 is already installed; nothing to do
 # [ebuild  N] dev-libs/builddeponlypkg-1.0
 # [ebuild  N] dev-libs/newpkg-1.0
@@ -3528,10 +3645,15 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-lib
 
 # --changed-deps-report: same stale RDEPEND as the --changed-deps example
 # above, but reported (to stderr) instead of reinstalled -- stdout still
-# shows the ordinary "already installed" line. The " for $FX" suffix
-# below only appears because ROOT isn't "/" here, like every other
-# example in this section -- real portage's own condition exactly
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps-report dev-libs/changeddepspkg
+# shows the ordinary "already installed" line. --noreplace keeps
+# changeddepspkg itself AlreadyInstalled -- --changed-deps-report is NOT
+# one of real portage's own eight "selective" triggers (unlike
+# --changed-deps itself), so without --noreplace a bare top-level atom
+# would report a plain reinstall instead (see --noreplace/--selective
+# further down), muddying this specific demonstration. The " for $FX"
+# suffix below only appears because ROOT isn't "/" here, like every
+# other example in this section -- real portage's own condition exactly
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --changed-deps-report dev-libs/changeddepspkg
 # dev-libs/changeddepspkg-1.0 is already installed; nothing to do
 #
 # !!! Detected ebuild dependency change(s) without revision bump:
