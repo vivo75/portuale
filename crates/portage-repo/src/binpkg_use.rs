@@ -12,6 +12,35 @@ pub(crate) fn binpkg_respect_use_ok_uncached_calls() -> u64 {
     BRU_UNCACHED_CALLS.with(std::cell::Cell::get)
 }
 
+pub(crate) fn filter_usepkg_exclude_include(
+    binary_candidates: Vec<Candidate>,
+    category: &str,
+    package: &str,
+    usepkg_exclude: &[String],
+    usepkg_include: &[String],
+) -> Vec<Candidate> {
+    if usepkg_exclude.is_empty() && usepkg_include.is_empty() {
+        return binary_candidates;
+    }
+    binary_candidates
+        .into_iter()
+        .filter(|c| {
+            let candidate_str = format!(
+                "{category}/{package}-{}:{}/{}::{}",
+                c.version, c.slot, c.sub_slot, c.repo_name
+            );
+            let is_excluded = usepkg_exclude
+                .iter()
+                .any(|ex| matches_config_entry(ex, &candidate_str, category, package));
+            let is_included = usepkg_include.is_empty()
+                || usepkg_include
+                    .iter()
+                    .any(|inc| matches_config_entry(inc, &candidate_str, category, package));
+            !is_excluded && is_included
+        })
+        .collect()
+}
+
 /// Reads `<pkgdir>/Packages` for `category/package-version`'s entry -- the
 /// binary-candidate counterpart to `read_md5_cache`, for dependency recursion
 /// once a binary candidate is chosen. `None` if the version is gone (same

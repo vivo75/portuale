@@ -349,6 +349,16 @@ pub(crate) fn rebuilt_binary_changed(args: RebuiltBinaryChangedArgs<'_>) -> bool
     }
 }
 
+/// The highest `BUILD_TIME` among binary candidates at exactly `version`.
+/// `None` if there's no binary candidate for that version.
+pub(crate) fn best_binary_build_time(candidates: &[Candidate], version: &str) -> Option<i64> {
+    candidates
+        .iter()
+        .filter(|c| c.source == CandidateSource::Binary && c.version == version)
+        .filter_map(|c| c.build_time)
+        .max()
+}
+
 /// Whether a *visible* ebuild still exists in the tree at `version`
 /// (no slot comparison). Queried from the tree independently of the
 /// resolver's candidate pool, so it stays meaningful under `--usepkgonly`.

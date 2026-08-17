@@ -2,6 +2,22 @@
 
 use crate::*;
 
+/// One `emerge --info <atom>` per-package result -- see `resolve_info_candidate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoCandidate {
+    /// `category/package-version` of the best visible ebuild candidate.
+    pub cpv: String,
+    pub repo_name: String,
+    /// `USE="…"` + one `VAR="…"` per non-hidden `USE_EXPAND` group, same pairs `pretend.rs`
+    /// renders for a `New` entry under `-pv`.
+    pub use_expand_display: Vec<(String, String)>,
+    /// Whether this candidate defines `pkg_info()` (EAPI 4+ + `info` in
+    /// `DEFINED_PHASES`); only then is the per-package block printed.
+    pub defines_pkg_info: bool,
+    /// `<repo>/<cat>/<pkg>/<pf>.ebuild`, for the `pkg_info()` phase run.
+    pub ebuild_path: PathBuf,
+}
+
 /// One `emerge --usepkg --info <atom>` result for a non-installed binary
 /// package -- see `resolve_info_binary_candidate`.
 #[derive(Debug, Clone, PartialEq, Eq)]

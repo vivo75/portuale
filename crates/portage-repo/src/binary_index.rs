@@ -292,6 +292,116 @@ pub(crate) fn binary_candidates_from_index(
     candidates
 }
 
+/// Collapses binpkg-multi-instance duplicates (several entries, different
+/// `BUILD_ID`s, per `cat/pkg-ver:slot/sub_slot::repo`): keeps the highest-
+/// `(BUILD_TIME, BUILD_ID)` instance satisfying the atom's `[use]` deps -- or
+/// the newest anyway, preserving the `NoVisibleCandidate`/ebuild-fallback path.
+/// Portage `_iter_match_pkgs` yields newest first and `break`s on the first pass.
+pub(crate) fn dedup_binary_instances(
+    candidates: Vec<Candidate>,
+    atom: &portage_dep::Atom,
+    config: &portage_profile::Config,
+) -> Vec<Candidate> {
+    let use_deps = atom.use_deps.as_deref().filter(|d| !d.is_empty());
+    let use_ok = |c: &Candidate| -> bool {
+        let Some(use_deps) = use_deps else {
+            return true;
+        };
+        candidate_iuse_and_use(c, &atom.category, &atom.package, config).is_some_and(
+            |(iuse, use_flags)| {
+                portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
+            },
+        )
+    };
+    // key -> index into `out` of the currently-kept instance.
+    let mut kept: HashMap<(String, String, String, String), usize> = HashMap::new();
+    let mut out: Vec<Candidate> = Vec::with_capacity(candidates.len());
+    // Ranks an instance: satisfying the atom's use-deps outranks not, then
+    // `(BUILD_TIME, BUILD_ID)`.
+    let rank = |x: &Candidate| {
+        (
+            use_ok(x),
+            x.build_time.unwrap_or(i64::MIN),
+            x.build_id
+                .as_deref()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(i64::MIN),
+        )
+    };
+    for c in candidates {
+        if c.source != CandidateSource::Binary {
+            out.push(c);
+            continue;
+        }
+        let key = (
+            c.version.clone(),
+            c.slot.clone(),
+            c.sub_slot.clone(),
+            c.repo_name.clone(),
+        );
+        match kept.get(&key).copied() {
+            Some(idx) => {
+                if rank(&c) > rank(&out[idx]) {
+                    out[idx] = c;
+                }
+            }
+            None => {
+                kept.insert(key, out.len());
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// `--getbinpkg`/`-g`: binary candidates from every `config.binrepos` binrepo's
+/// `Packages` index -- the live refresh's in-memory copy when it ran (Portage
+/// `bintree._populate_remote`; `--pretend` refreshes like a
+/// merge), else the on-disk index. A remote instance the local `$PKGDIR` also
+/// carries is dropped (Portage `bintree.isremote`); binrepos resolve in order
+/// with the same `vercmp` -> `repo_priority` tie-break (all binaries share
+/// `repo_priority = i32::MIN`, so ties fall to first-seen).
+pub fn list_remote_binary_candidates(
+    binrepos: &[portage_profile::BinRepo],
+    root: &Path,
+    local: &BinaryIndex,
+    category: &str,
+    package: &str,
+) -> Vec<Candidate> {
+    if binrepos.is_empty() {
+        return Vec::new();
+    }
+    // Instances are `(version, BUILD_ID)`: under binpkg-multi-instance a local
+    // build 6 must not hide a remote build 7. A `BUILD_ID`-less
+    // entry is its own `None` key, keeping the version-level shadowing.
+    let local_instances: HashSet<(String, Option<String>)> =
+        binary_candidates_from_index(local, category, package, false)
+            .into_iter()
+            .map(|c| (c.version, c.build_id))
+            .collect();
+
+    // An instance the local `$PKGDIR` or an earlier-priority binrepo carries
+    // shadows a later binrepo's identical instance -- but one binrepo can list
+    // several builds of one version, so the shadow set grows a whole binrepo
+    // at a time (`dedup_binary_instances` collapses them later).
+    let mut out: Vec<Candidate> = Vec::new();
+    let mut shadowed: HashSet<(String, Option<String>)> = local_instances;
+    for binrepo in binrepos {
+        let binrepo_index = cached_binary_index(&binrepo.packages_dir(root));
+        let mut this_repo: HashSet<(String, Option<String>)> = HashSet::new();
+        for cand in binary_candidates_from_index(&binrepo_index, category, package, true) {
+            let key = (cand.version.clone(), cand.build_id.clone());
+            if shadowed.contains(&key) {
+                continue;
+            }
+            this_repo.insert(key);
+            out.push(cand);
+        }
+        shadowed.extend(this_repo);
+    }
+    out
+}
+
 /// Picks one `Packages` entry of `cat/pkg-version` (binpkg-multi-instance
 /// aware). `Some(id)` selects exactly that `BUILD_ID`;
 /// `None` the newest build -- highest `(BUILD_TIME, BUILD_ID)`, Portage

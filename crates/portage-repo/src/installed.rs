@@ -300,6 +300,31 @@ pub(crate) fn indexed_reverse_dependents(
     Some(out.into_iter().collect())
 }
 
+/// The highest installed version of `category/package` satisfying `atom_str`, or
+/// `None`. The graph-or-installed fallback complete mode uses this so its deep
+/// re-walk of the required sets never merges a new package.
+// Portage: depgraph.py, _select_pkg_from_installed
+pub(crate) fn best_installed_for_atom(
+    root: &Path,
+    atom_str: &str,
+    category: &str,
+    package: &str,
+) -> Option<String> {
+    let cands = installed_candidates(root, category, package);
+    let strs: Vec<String> = cands
+        .iter()
+        .map(|(v, s, ss)| format!("{category}/{package}-{v}:{s}/{ss}::__installed__"))
+        .collect();
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    let matched = portage_dep::match_from_list(atom_str, &refs)?;
+    cands
+        .iter()
+        .zip(strs.iter())
+        .filter(|(_, s)| matched.contains(&s.as_str()))
+        .map(|((v, _, _), _)| v.clone())
+        .max_by(|a, b| vercmp_ordering(a, b))
+}
+
 /// The installed version a complete-mode withhold keeps: the highest installed
 /// version satisfying the requesting atom and every positive pin, or `None`
 /// when no installed instance satisfies everything (a genuine absence).
