@@ -63,8 +63,249 @@ fn best_binary_build_time_is_the_newest_binary_of_the_version() {
 }
 
 #[test]
+fn newuse_reinstalls_when_vdb_use_differs_from_current_use() {
+    // reinstallpkg installed with foo off; the profile enables foo now,
+    // so --newuse reports a Reinstall for the changed flag.
+    assert_eq!(
+        resolve_real_newuse("dev-libs", "reinstallpkg"),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: vec!["foo".to_string()],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+}
+
+#[test]
+fn newuse_does_not_reinstall_when_use_has_not_changed() {
+    // samepkg has no IUSE at all, so --newuse has nothing to detect.
+    assert_eq!(
+        resolve_real_newuse("dev-libs", "samepkg"),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn newuse_forced_flags_suppresses_a_spurious_reinstall() {
+    // A newly added IUSE flag that use.mask forces off is never
+    // enabled before or after, so no Reinstall (the forced-flags cut).
+    // Portage: depgraph.py, reinstall_flags_for_use_change
+    assert_eq!(
+        resolve_real_newuse("dev-libs", "usemaskreinstallpkg"),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn changed_deps_reinstalls_when_vdb_rdepend_differs_from_the_current_ebuild() {
+    // changeddepspkg's vdb RDEPEND names samepkg; its ebuild names newpkg.
+    assert_eq!(
+        resolve_real_changed_deps("dev-libs", "changeddepspkg", true),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: true,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+}
+
+#[test]
+fn changed_deps_still_fires_when_with_bdeps_is_false() {
+    // RDEPEND survives --with-bdeps=n (only DEPEND/BDEPEND drop).
+    assert_eq!(
+        resolve_real_changed_deps("dev-libs", "changeddepspkg", false),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: true,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+}
+
+#[test]
+fn changed_deps_detects_an_atom_moved_between_two_dep_keys() {
+    // The same atom moved from RDEPEND to PDEPEND: the net set is
+    // identical, but the per-key comparison catches it (Portage `_changed_deps`).
+    assert_eq!(
+        resolve_real_changed_deps("dev-libs", "movedkeydepspkg", false),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: true,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+}
+
+#[test]
+fn changed_deps_ignores_a_built_slot_operator_deps_resolved_slot() {
+    // The vdb's built `:2=` normalizes back to `:=` before comparing
+    // (Portage `strip_slots`), so this is NOT a changed dependency.
+    assert_eq!(
+        resolve_real_changed_deps("dev-libs", "slotopdepspkg", true),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn changed_deps_detects_an_any_of_group_reorder() {
+    // Swapped `||` alternatives count: order is significant in
+    // Portage's structured `_changed_deps` comparison.
+    assert_eq!(
+        resolve_real_changed_deps("dev-libs", "anyofreorderdepspkg", false),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: true,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+}
+
+#[test]
+fn changed_deps_detects_a_plain_atom_reorder_but_not_a_redundant_bracket() {
+    // Order is significant even in AND context (Portage's list `!=`)...
+    assert_eq!(
+        resolve_real_changed_deps("dev-libs", "orderchangeddepspkg", false),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: true,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+    // ...but redundant brackets are not (Portage `use_reduce` collapses them).
+    assert_eq!(
+        resolve_real_changed_deps("dev-libs", "redundantbracketdepspkg", false),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn changed_deps_ignores_a_libc_only_dependency_change() {
+    // glibc-vs-musl is libc noise both sides strip (Portage
+    // `strip_libc_deps`), leaving identical deps: no reinstall.
+    assert_eq!(
+        resolve_real_changed_deps("dev-libs", "libcnoisepkg", true),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn changed_deps_does_not_fire_for_a_package_with_no_recorded_difference() {
+    // No RDEPEND on either side flattens to an empty set: no reinstall.
+    assert_eq!(
+        resolve_real_changed_deps("dev-libs", "samepkg", true),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn newrepo_reinstalls_when_vdb_repository_differs_from_the_repo_currently_providing_it() {
+    // newrepopkg's vdb records "oldrepo"; the candidate lives in "testrepo".
+    assert_eq!(
+        resolve_real_newrepo("dev-libs", "newrepopkg"),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: true,
+            slot_operator_rebuild: false,
+        }
+    );
+}
+
+#[test]
+fn newrepo_does_not_fire_when_vdb_repository_matches() {
+    // samerepopkg's vdb records "testrepo", matching the provider: no fire.
+    assert_eq!(
+        resolve_real_newrepo("dev-libs", "samerepopkg"),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
+#[test]
+fn newrepo_fires_via_the_unknown_repo_sentinel_when_no_repository_file_was_ever_recorded() {
+    // No vdb "repository" file: the `__unknown__` sentinel never
+    // equals a repo name, so --newrepo fires (Portage `_unknown_repo`).
+    assert_eq!(
+        resolve_real_newrepo("dev-libs", "samepkg"),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: true,
+            slot_operator_rebuild: false,
+        }
+    );
+}
+
+#[test]
 fn split_slot_defaults_sub_slot_to_the_slot_itself_when_no_slash_is_present() {
     assert_eq!(split_slot("0"), ("0".to_string(), "0".to_string()));
     assert_eq!(split_slot("0/2"), ("0".to_string(), "2".to_string()));
     assert_eq!(split_slot(""), ("0".to_string(), "0".to_string()));
+}
+
+#[test]
+fn newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag() {
+    // --newuse reacts to a flag merely existing in IUSE now;
+    // --changed-use only looks at enablement of shared flags.
+    assert_eq!(
+        resolve_real_newuse("dev-libs", "changedusepkg"),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: vec!["brandnewflag".to_string()],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+    assert_eq!(
+        resolve_real_changed_use("dev-libs", "changedusepkg"),
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
 }

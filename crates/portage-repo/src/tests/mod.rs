@@ -20,6 +20,221 @@ fn test_config() -> portage_profile::Config {
     }
 }
 
+/// Like `resolve_update`, but with `excluded` too (`--exclude` beats `--update`).
+fn resolve_update_excluded(category: &str, package: &str, excluded: &[String]) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &test_config(),
+            local_binpkg: &build_local_binpkg_index(&test_config()),
+        },
+        &atom_str,
+        &SelectOptions {
+            update: true,
+            excluded,
+            is_top_level: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
+/// Unlike `resolve()`, uses the fixture's fully resolved config
+/// (package.mask/.unmask/.accept_keywords included), not the
+/// synthetic `test_config()`.
+fn resolve_real(category: &str, package: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &config,
+            local_binpkg: &build_local_binpkg_index(&config),
+        },
+        &atom_str,
+        &SelectOptions {
+            is_top_level: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
+/// Like `resolve_real`, but with `--newuse` enabled -- for the
+/// `PretendOutcome::Reinstall` tests below.
+fn resolve_real_newuse(category: &str, package: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &config,
+            local_binpkg: &build_local_binpkg_index(&config),
+        },
+        &atom_str,
+        &SelectOptions {
+            newuse: true,
+            is_top_level: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
+/// Like `resolve_real`, but with `--changed-use` enabled.
+fn resolve_real_changed_use(category: &str, package: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &config,
+            local_binpkg: &build_local_binpkg_index(&config),
+        },
+        &atom_str,
+        &SelectOptions {
+            changed_use: true,
+            is_top_level: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
+fn resolve_real_changed_deps(category: &str, package: &str, with_bdeps: bool) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &config,
+            local_binpkg: &build_local_binpkg_index(&config),
+        },
+        &atom_str,
+        &SelectOptions {
+            changed_deps: true,
+            with_bdeps,
+            is_top_level: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
+fn resolve_real_changed_slot(category: &str, package: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &config,
+            local_binpkg: &build_local_binpkg_index(&config),
+        },
+        &atom_str,
+        &SelectOptions {
+            changed_slot: true,
+            is_top_level: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
+fn resolve_real_newrepo(category: &str, package: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let atom_str = format!("{category}/{package}");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &config,
+            local_binpkg: &build_local_binpkg_index(&config),
+        },
+        &atom_str,
+        &SelectOptions {
+            is_top_level: true,
+            newrepo: true,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
 /// Arguments of [`run_161`].
 struct Run161Args<'a> {
     dir: &'a Path,
@@ -483,8 +698,11 @@ mod tests_166;
 
 mod blockers;
 mod candidates;
+mod graph;
 mod license;
 mod masked_deps;
+mod pretend;
+mod queue;
 mod reinstall;
 mod tests_184;
 mod use_flags;
