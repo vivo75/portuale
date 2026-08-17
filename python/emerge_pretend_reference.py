@@ -2341,6 +2341,7 @@ def resolve_pretend_graph(
     changed_deps=False,
     changed_slot=False,
     with_test_deps=False,
+    changed_deps_report=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -2452,6 +2453,16 @@ def resolve_pretend_graph(
 
     entries = []
     slot_conflicts = []
+    # --changed-deps-report: real _changed_deps_pkgs is a dict keyed by
+    # the installed Package object, so a repeat visit to the same
+    # installed category/package/version (e.g. via both a bare
+    # "dev-libs/foo" and an explicit "dev-libs/foo:0" atom text, or a
+    # diamond dependency) naturally collapses to one entry -- mirrored
+    # here with an explicit dedup set, keyed the same way, preserving
+    # first-encountered order (real dict iteration order) rather than
+    # sorting.
+    changed_deps_report_seen = set()
+    changed_deps_report_entries = []
     # Each queued atom carries its own depth (0 for a directly-requested
     # top-level atom, parent's depth + 1 for anything reached only via a
     # dependency string) -- only consulted by _deep_recurses_at below,
@@ -2502,6 +2513,49 @@ def resolve_pretend_graph(
             with_bdeps,
             changed_slot,
         )
+
+        # --changed-deps-report: real portage stays "completely silent"
+        # whenever --changed-deps itself is also given (its own
+        # collected _changed_deps_pkgs dict is discarded unread by
+        # _changed_deps_report's own early return in that case) -- so,
+        # rather than collecting anything now and discarding it at print
+        # time, this simply never bothers computing deps_changed at all
+        # when changed_deps is true, an equivalent, simpler
+        # no-op-preserving shortcut. Only already_installed/reinstall
+        # outcomes name a version that's genuinely installed right now
+        # (the only case _deps_changed -- a vdb-vs-current-ebuild
+        # comparison for one specific version -- is meaningful for); a
+        # reinstall here can only be for newuse/changed_use/changed_slot
+        # (never for changed_deps itself, since that's false in this
+        # branch), so this still fires independently of those other
+        # reasons, matching real portage's own freely-combinable
+        # reinstall triggers.
+        if changed_deps_report and not changed_deps:
+            installed_version = None
+            if outcome[0] in ("already_installed", "reinstall"):
+                installed_version = outcome[1]
+            if installed_version is not None:
+                dedup_key = (category, package, installed_version)
+                if dedup_key not in changed_deps_report_seen:
+                    changed_deps_report_seen.add(dedup_key)
+                    if _deps_changed(
+                        root, repos, category, package, installed_version, with_bdeps
+                    ):
+                        repo_candidates = [
+                            c
+                            for c in list_candidates(repos, category, package)
+                            if c["version"] == installed_version
+                        ]
+                        if repo_candidates:
+                            resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
+                            changed_deps_report_entries.append(
+                                {
+                                    "category": category,
+                                    "package": package,
+                                    "version": installed_version,
+                                    "repo_name": resolved["repo_name"],
+                                }
+                            )
 
         # A top-level atom (as opposed to a dependency reached while
         # recursing) with no visible candidate aborts the whole call --
@@ -2723,7 +2777,11 @@ def resolve_pretend_graph(
     for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
         blockers_by_owner[owner_key].append(conflict)
 
-    return {"entries": entries, "slot_conflicts": slot_conflicts}
+    return {
+        "entries": entries,
+        "slot_conflicts": slot_conflicts,
+        "changed_deps_report": changed_deps_report_entries,
+    }
 
 
 def _deep_recurses_at(deep, depth):
@@ -2866,8 +2924,9 @@ def _parse_atom(atom_str):
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
 # --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o,
 # --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps,
-# --with-bdeps-auto, --changed-deps, --changed-slot, --with-test-deps,
-# and --help/-h are actually implemented (see run() below); every table
+# --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot,
+# --with-test-deps, and --help/-h are actually implemented (see run()
+# below); every table
 # here exists purely for recognition, not behavior.
 # Mirrors
 # PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
@@ -2930,7 +2989,6 @@ _VALUE_OPTIONS = [
     ("--binpkg-changed-deps", None),
     ("--buildpkg", "-b"),
     ("--buildpkg-exclude", None),
-    ("--changed-deps-report", None),
     ("--config-root", None),
     ("--color", None),
     ("--complete-graph", None),
@@ -3162,17 +3220,30 @@ def _slot_conflict_to_json(c):
     )
 
 
-def _print_json(entries, slot_conflicts, top_level_pkgs, verbose):
-    """The whole --json output: {"entries": [...], "slot_conflicts": [...]},
-    one line, no pretty-printing (a pilot-specific convenience format,
-    not a stable schema -- see run()'s own --json handling). Mirrors
-    pretend.rs's own print_json exactly."""
+def _changed_deps_report_entry_to_json(c):
+    return (
+        f'{{"category":{_json_string(c["category"])},"package":{_json_string(c["package"])},'
+        f'"version":{_json_string(c["version"])},"repo_name":{_json_string(c["repo_name"])}}}'
+    )
+
+
+def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, verbose):
+    """The whole --json output: {"entries": [...], "slot_conflicts": [...],
+    "changed_deps_report": [...]}, one line, no pretty-printing (a
+    pilot-specific convenience format, not a stable schema -- see run()'s
+    own --json handling). Mirrors pretend.rs's own print_json exactly."""
     entries_json = ",".join(
         _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, top_level_pkgs, verbose)
         for category, package, outcome, blockers, slot, use_display, required_by in entries
     )
     conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)
-    print(f'{{"entries":[{entries_json}],"slot_conflicts":[{conflicts_json}]}}')
+    changed_deps_report_json = ",".join(
+        _changed_deps_report_entry_to_json(c) for c in changed_deps_report
+    )
+    print(
+        f'{{"entries":[{entries_json}],"slot_conflicts":[{conflicts_json}],'
+        f'"changed_deps_report":[{changed_deps_report_json}]}}'
+    )
 
 
 def _report_option(token):
@@ -3193,8 +3264,8 @@ def _report_option(token):
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
             "--deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, "
-            "--changed-slot, --with-test-deps, and --help/-h are implemented "
-            "so far; see PROMPT.md)",
+            "--changed-deps-report, --changed-slot, --with-test-deps, and "
+            "--help/-h are implemented so far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -3253,6 +3324,9 @@ def _print_help():
     )
     print(
         "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's"
+    )
+    print(
+        "       --changed-deps-report[=y|n]  report (without reinstalling) an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's; silent if --changed-deps is also given"
     )
     print(
         "       --changed-slot[=y|n]  reinstall an already-installed package whose own vdb-recorded SLOT differs from the current ebuild's"
@@ -3556,6 +3630,7 @@ def run(args):
     changed_deps = False
     changed_slot = False
     with_test_deps = False
+    changed_deps_report = False
 
     i = 0
     while i < len(args):
@@ -3783,6 +3858,29 @@ def run(args):
         elif arg == "--changed-deps=n":
             changed_deps = False
             i += 1
+        elif arg == "--changed-deps-report":
+            # Real "--changed-deps-report": y_or_n (default_arg_opts),
+            # the identical optional-value shape "--changed-deps"
+            # already has -- no short alias (real main.py declares
+            # none). Unlike --changed-deps, this never changes what
+            # gets reinstalled -- see resolve_pretend_graph's own
+            # docstring.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                changed_deps_report = True
+                i += 2
+            elif nxt == "n":
+                changed_deps_report = False
+                i += 2
+            else:
+                changed_deps_report = True
+                i += 1
+        elif arg == "--changed-deps-report=y":
+            changed_deps_report = True
+            i += 1
+        elif arg == "--changed-deps-report=n":
+            changed_deps_report = False
+            i += 1
         elif arg == "--changed-slot":
             # Real "--changed-slot": y_or_n (default_arg_opts), the
             # identical optional-value shape "--changed-deps" already
@@ -3991,6 +4089,7 @@ def run(args):
             changed_deps,
             changed_slot,
             with_test_deps,
+            changed_deps_report,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -4023,7 +4122,13 @@ def run(args):
         return '  USE="{}"'.format(" ".join(flags))
 
     if json_output:
-        _print_json(entries, result["slot_conflicts"], top_level_pkgs, verbose)
+        _print_json(
+            entries,
+            result["slot_conflicts"],
+            result["changed_deps_report"],
+            top_level_pkgs,
+            verbose,
+        )
         return 0
 
     for category, package, outcome, blockers, _slot, use_display, _required_by in entries:
@@ -4080,6 +4185,42 @@ def run(args):
             f"{c['category']}/{c['package']}-{c['resolved_version']}, which does not "
             f'satisfy "{c["conflicting_atom"]}"'
         )
+
+    # --changed-deps-report: real _changed_deps_report's own WARN block,
+    # ported verbatim (real portage colorizes it when the terminal
+    # supports it; this pilot, like every other message it prints, stays
+    # plain text). Already empty unless changed_deps_report was given
+    # AND changed_deps was NOT (see resolve_pretend_graph's own
+    # docstring for that gating), so no extra condition needed here
+    # beyond "is there anything to report at all".
+    if result["changed_deps_report"]:
+        root = _root()
+        print(file=sys.stderr)
+        print("!!! Detected ebuild dependency change(s) without revision bump:", file=sys.stderr)
+        print(file=sys.stderr)
+        for c in result["changed_deps_report"]:
+            if root == "/":
+                print(f"    {c['category']}/{c['package']}-{c['version']}::{c['repo_name']}", file=sys.stderr)
+            else:
+                print(
+                    f"    {c['category']}/{c['package']}-{c['version']}::{c['repo_name']} for {root}",
+                    file=sys.stderr,
+                )
+        print(file=sys.stderr)
+        print("NOTE: Refer to the following page for more information about dependency", file=sys.stderr)
+        print("      change(s) without revision bump:", file=sys.stderr)
+        print(file=sys.stderr)
+        print("          https://wiki.gentoo.org/wiki/Project:Portage/Changed_dependencies", file=sys.stderr)
+        print(file=sys.stderr)
+        print("      In order to suppress reports about dependency changes, add", file=sys.stderr)
+        print("      --changed-deps-report=n to the EMERGE_DEFAULT_OPTS variable in", file=sys.stderr)
+        print("      '/etc/portage/make.conf'.", file=sys.stderr)
+        print(file=sys.stderr)
+        print("HINT: In order to avoid problems involving changed dependencies, use the", file=sys.stderr)
+        print("      --changed-deps option to automatically trigger rebuilds when changed", file=sys.stderr)
+        print("      dependencies are detected. Refer to the emerge man page for more", file=sys.stderr)
+        print("      information about this option.", file=sys.stderr)
+
     return 0
 
 

@@ -2212,10 +2212,32 @@ pub struct SlotConflict {
     pub conflicting_atom: String,
 }
 
+/// `--changed-deps-report`: an installed package, still in the graph at
+/// `version`, whose vdb-recorded dependency strings differ from the
+/// repo's current ebuild for that exact version (`deps_changed`) -- but
+/// reported, not reinstalled (see `resolve_pretend_graph`'s own doc
+/// comment). `repo_name` is the repo that currently provides `version`,
+/// standing in for real `pkg.repo` (this pilot has no vdb `REPOSITORY`
+/// reader to know what the *installed* copy's own repo was) -- real
+/// `_changed_deps_report`'s own `if pkg.repo != ebuild.repo: continue`
+/// filter requires the two to already be equal before a package is even
+/// collected, so using the ebuild's repo here loses no real cases,
+/// consistent with every other "no vdb-metadata reader" simplification
+/// already documented in this crate (e.g. `enqueue_dependencies`'s own
+/// doc comment).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedDepsReportEntry {
+    pub category: String,
+    pub package: String,
+    pub version: String,
+    pub repo_name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphResult {
     pub entries: Vec<GraphEntry>,
     pub slot_conflicts: Vec<SlotConflict>,
+    pub changed_deps_report: Vec<ChangedDepsReportEntry>,
 }
 
 /// `--deep`/`-D` (real `lib/_emerge/main.py`'s own `"--deep": valid_integers`
@@ -2527,6 +2549,7 @@ pub fn resolve_pretend_graph(
     changed_deps: bool,
     changed_slot: bool,
     with_test_deps: bool,
+    changed_deps_report: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -2558,6 +2581,16 @@ pub fn resolve_pretend_graph(
 
     let mut entries: Vec<GraphEntry> = Vec::new();
     let mut slot_conflicts: Vec<SlotConflict> = Vec::new();
+    // `--changed-deps-report`: real `_changed_deps_pkgs` is a dict keyed
+    // by the installed `Package` object, so a repeat visit to the same
+    // installed category/package/version (e.g. via both a bare
+    // "dev-libs/foo" and an explicit "dev-libs/foo:0" atom text, or a
+    // diamond dependency) naturally collapses to one entry -- mirrored
+    // here with an explicit dedup set, keyed the same way, preserving
+    // first-encountered order (real dict iteration order) rather than
+    // sorting.
+    let mut changed_deps_report_seen: HashSet<(String, String, String)> = HashSet::new();
+    let mut changed_deps_report_entries: Vec<ChangedDepsReportEntry> = Vec::new();
     // Each queued atom carries its own depth (0 for a directly-requested
     // top-level atom, parent's depth + 1 for anything reached only via a
     // dependency string) -- only consulted by `deep.recurses_at` below,
@@ -2614,6 +2647,47 @@ pub fn resolve_pretend_graph(
             with_bdeps,
             changed_slot,
         )?;
+
+        // `--changed-deps-report`: real portage stays "completely
+        // silent" whenever `--changed-deps` itself is also given (its
+        // own collected `_changed_deps_pkgs` dict is discarded unread by
+        // `_changed_deps_report`'s own early return in that case) -- so,
+        // rather than collecting anything now and discarding it at print
+        // time, this simply never bothers computing `deps_changed` at
+        // all when `changed_deps` is true, an equivalent, simpler
+        // no-op-preserving shortcut. Only AlreadyInstalled/Reinstall
+        // outcomes name a version that's genuinely installed right now
+        // (the only case `deps_changed` -- a vdb-vs-current-ebuild
+        // comparison for one specific version -- is meaningful for); a
+        // Reinstall here can only be for `newuse`/`changed_use`/
+        // `changed_slot` (never for `changed_deps` itself, since that's
+        // false in this branch), so this still fires independently of
+        // those other reasons, matching real portage's own
+        // freely-combinable reinstall triggers.
+        if changed_deps_report && !changed_deps {
+            let installed_version = match &outcome {
+                PretendOutcome::AlreadyInstalled { version }
+                | PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
+                _ => None,
+            };
+            if let Some(version) = installed_version {
+                let dedup_key = (key.0.clone(), key.1.clone(), version.clone());
+                if changed_deps_report_seen.insert(dedup_key)
+                    && deps_changed(root, &repos, &key.0, &key.1, &version, with_bdeps)
+                {
+                    if let Ok(repo_candidates) = list_candidates(&repos, &key.0, &key.1) {
+                        if let Some(c) = repo_candidates.iter().find(|c| c.version == version) {
+                            changed_deps_report_entries.push(ChangedDepsReportEntry {
+                                category: key.0.clone(),
+                                package: key.1.clone(),
+                                version,
+                                repo_name: c.repo_name.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
 
         // A top-level atom (as opposed to a dependency reached while
         // recursing) with no visible candidate aborts the whole call --
@@ -2935,6 +3009,7 @@ pub fn resolve_pretend_graph(
     Ok(GraphResult {
         entries,
         slot_conflicts,
+        changed_deps_report: changed_deps_report_entries,
     })
 }
 
@@ -3524,6 +3599,78 @@ mod tests {
                 slot_changed: false,
             }
         );
+    }
+
+    fn graph_changed_deps_report(
+        atom_str: &str,
+        changed_deps: bool,
+        changed_deps_report: bool,
+    ) -> GraphResult {
+        let root = fixtures_root();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            changed_deps,
+            false,
+            false,
+            changed_deps_report,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn changed_deps_report_reports_without_reinstalling() {
+        let result = graph_changed_deps_report("dev-libs/changeddepspkg", false, true);
+        assert_eq!(
+            result.changed_deps_report,
+            vec![ChangedDepsReportEntry {
+                category: "dev-libs".to_string(),
+                package: "changeddepspkg".to_string(),
+                version: "1.0".to_string(),
+                repo_name: "testrepo".to_string(),
+            }]
+        );
+        // Report-only: still AlreadyInstalled, never reinstalled.
+        assert_eq!(
+            result.entries[0].outcome,
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn changed_deps_report_is_silent_when_changed_deps_is_also_given() {
+        // Real portage: "This is completely silent... if --changed-deps
+        // ... is enabled" -- the Vec must stay empty even though the
+        // underlying dependency change is real (changed_deps=true here
+        // actually reinstalls it, proven by the second assertion).
+        let result = graph_changed_deps_report("dev-libs/changeddepspkg", true, true);
+        assert!(result.changed_deps_report.is_empty());
+        assert_eq!(
+            result.entries[0].outcome,
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: true,
+                slot_changed: false,
+            }
+        );
+    }
+
+    #[test]
+    fn changed_deps_report_is_empty_without_the_flag() {
+        let result = graph_changed_deps_report("dev-libs/changeddepspkg", false, false);
+        assert!(result.changed_deps_report.is_empty());
     }
 
     #[test]
@@ -4221,6 +4368,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4244,6 +4392,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
             false,
@@ -4272,6 +4421,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
             false,
@@ -4304,6 +4454,7 @@ mod tests {
             Deep::NotRequested,
             &["dev-libs/upgradepkg".to_string()],
             true,
+            false,
             false,
             false,
             false,
@@ -4353,6 +4504,7 @@ mod tests {
             deep,
             &[],
             true,
+            false,
             false,
             false,
             false,
@@ -4453,6 +4605,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4549,6 +4702,7 @@ mod tests {
             Deep::Unlimited,
             &[],
             true,
+            false,
             false,
             false,
             false,
@@ -4687,6 +4841,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -4757,6 +4912,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
             false,
@@ -4895,6 +5051,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -4981,6 +5138,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5014,6 +5172,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5106,6 +5265,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -5134,6 +5294,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
             false,
@@ -5170,6 +5331,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5200,6 +5362,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
             false,
@@ -5434,6 +5597,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
             false,

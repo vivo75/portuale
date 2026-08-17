@@ -429,9 +429,19 @@ CASES = [
         0,
     ),
     (
-        "--changed-deps-report is real but stays recognized-not-implemented",
-        ["--pretend", "--changed-deps-report", "n", "dev-libs/newpkg"],
-        2,
+        "--changed-deps-report=n: silent, same as not giving it at all",
+        ["--pretend", "--changed-deps-report=n", "dev-libs/changeddepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps-report: reports without reinstalling",
+        ["--pretend", "--changed-deps-report", "dev-libs/changeddepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps-report combined with --changed-deps: silenced, --changed-deps still reinstalls",
+        ["--pretend", "--changed-deps-report", "--changed-deps", "dev-libs/changeddepspkg"],
+        0,
     ),
     (
         "without --changed-slot, a SLOT change is never detected",
@@ -1876,7 +1886,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -1934,6 +1944,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies\n"
         '       --with-bdeps-auto y|n  changes the *default* --with-bdeps value (only when --with-bdeps itself isn\'t given) -- n makes it default to n instead of the real "auto" (y here)\n'
         "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's\n"
+        "       --changed-deps-report[=y|n]  report (without reinstalling) an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's; silent if --changed-deps is also given\n"
         "       --changed-slot[=y|n]  reinstall an already-installed package whose own vdb-recorded SLOT differs from the current ebuild's\n"
         '       --with-test-deps[=y|n]  also pull in a top-level atom\'s own test?-gated dependencies, if it has a "test" USE flag not already enabled\n'
         "   -h, --help      show this message and exit\n"
@@ -3288,7 +3299,7 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
     assert result.stdout == (
         '{"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new",'
         '"version":"1.0","slot":"0","source":"ebuild","requested":true,'
-        '"required_by":[],"blockers":[]}],"slot_conflicts":[]}\n'
+        '"required_by":[],"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[]}\n'
     )
 
 
@@ -3302,7 +3313,8 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
     assert result.stdout == (
         '{"entries":[{"category":"dev-libs","package":"upgradepkg","outcome":"upgrade",'
         '"version":"2.0","from_version":"1.0","slot":"0","source":"ebuild",'
-        '"requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[]}\n'
+        '"requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[],'
+        '"changed_deps_report":[]}\n'
     )
 
 
@@ -3445,7 +3457,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -3459,7 +3471,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -3473,7 +3485,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 

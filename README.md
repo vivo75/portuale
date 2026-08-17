@@ -781,10 +781,10 @@ PORTING/
   mechanism) -- so this reuses the same flat comparison every other
   dependency-recursion path in this pilot already uses, consistent with,
   not a new exception to, the rest of this pilot's own dependency
-  handling. A narrower, real-but-out-of-scope sibling,
-  `--changed-deps-report` (a cosmetic-only "you might want
-  `--changed-deps`" notice, no reinstall of its own), stays
-  recognized-but-unimplemented. New fixture package `changeddepspkg`
+  handling. (A narrower, real sibling, `--changed-deps-report` -- a
+  report-only "you might want `--changed-deps`" notice, no reinstall of
+  its own -- was deferred at the time, closed by a later follow-up
+  below.) New fixture package `changeddepspkg`
   (installed, vdb-recorded `RDEPEND="dev-libs/samepkg"`, but its current
   ebuild's own `RDEPEND="dev-libs/newpkg"`) proves the whole path end to
   end, including that the reinstalled package's own recursion walks the
@@ -826,6 +826,51 @@ PORTING/
   fires even with `--changed-deps` given), proving the stripping engages
   without disturbing `changeddepspkg`'s own already-tested genuine
   dependency-change detection.
+
+  **`--changed-deps-report[=y|n]`: report, don't reinstall.** Closes the
+  deferral named two paragraphs up. Grounded against real
+  `depgraph.py::_changed_deps_report`: a `!!! Detected ebuild dependency
+  change(s) without revision bump:` WARN, listing every installed
+  package still in the graph whose deps differ from the current ebuild
+  -- purely informational, never a resolution change, reusing
+  `deps_changed` completely unmodified for the comparison itself (the
+  same shared function `--changed-deps` already established, not a
+  parallel implementation). Real portage's own gating -- "This is
+  completely silent... if `--changed-deps` or `--dynamic-deps` is
+  enabled" -- is ported as simply never bothering to call `deps_changed`
+  at all once `changed_deps` is already true, rather than collecting
+  into a dict and discarding it unread at print time: real portage's own
+  `_changed_deps_pkgs` dict has no other reader, so the two are
+  behaviorally identical, a documented simplification, not a guess.
+  (`--dynamic-deps` itself stays unrecognized in this pilot -- real
+  portage's own now-defunct alternate resolver strategy -- so only the
+  `--changed-deps` half of that real silencing condition is reachable
+  here at all.) Detection happens inline in `resolve_pretend_graph`'s own
+  BFS loop, right after each atom's `resolve_pretend` call: an
+  `AlreadyInstalled` or `Reinstall` outcome (the only two that name a
+  genuinely-installed version) triggers an independent `deps_changed`
+  check for that exact version, deduplicated by `(category, package,
+  version)` the same way real portage's own dict (keyed by the installed
+  `Package` object) naturally collapses repeat visits -- so a `Reinstall`
+  already triggered by `--newuse`/`--changed-slot` for unrelated reasons
+  still gets checked and reported independently, matching real portage's
+  own freely-combinable reinstall/report triggers. `repo_name` in each
+  report entry stands in for real `pkg.repo` (this pilot has no vdb
+  `REPOSITORY` reader) -- a safe substitution, since real
+  `_changed_deps_report`'s own `if pkg.repo != ebuild.repo: continue`
+  filter requires the two to already match before a package is even
+  collected. Extended this pilot's own `--json` schema with a new
+  `"changed_deps_report"` array too (a pilot-specific convenience format,
+  not real portage's own concern -- real `--json` doesn't exist -- but
+  keeping every out-of-band signal representable in both output modes,
+  the same way `slot_conflicts` already is, avoids a silently lossy
+  gap). New CASES exercise the report firing (bare
+  `--changed-deps-report`, no reinstall), the silencing (combined with
+  `--changed-deps`, which still reinstalls normally), and the `=n`
+  explicit-disable form, all against the pre-existing `changeddepspkg`
+  fixture -- no new fixture needed, since this reuses the exact same
+  vdb-vs-ebuild `RDEPEND` mismatch `--changed-deps` itself already relies
+  on.
 
   **`--changed-slot[=y|n]`: reinstall a package whose own recorded `SLOT`
   changed.** Grounded against real `depgraph.py`'s own `_changed_slot`:
@@ -3480,6 +3525,38 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-lib
 # the fixture vdb's own virtual/libc entry, so no reinstall fires
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-libs/libcnoisepkg
 # dev-libs/libcnoisepkg-1.0 is already installed; nothing to do
+
+# --changed-deps-report: same stale RDEPEND as the --changed-deps example
+# above, but reported (to stderr) instead of reinstalled -- stdout still
+# shows the ordinary "already installed" line. The " for $FX" suffix
+# below only appears because ROOT isn't "/" here, like every other
+# example in this section -- real portage's own condition exactly
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps-report dev-libs/changeddepspkg
+# dev-libs/changeddepspkg-1.0 is already installed; nothing to do
+#
+# !!! Detected ebuild dependency change(s) without revision bump:
+#
+#     dev-libs/changeddepspkg-1.0::testrepo for $FX
+#
+# NOTE: Refer to the following page for more information about dependency
+#       change(s) without revision bump:
+#
+#           https://wiki.gentoo.org/wiki/Project:Portage/Changed_dependencies
+#
+#       In order to suppress reports about dependency changes, add
+#       --changed-deps-report=n to the EMERGE_DEFAULT_OPTS variable in
+#       '/etc/portage/make.conf'.
+#
+# HINT: In order to avoid problems involving changed dependencies, use the
+#       --changed-deps option to automatically trigger rebuilds when changed
+#       dependencies are detected. Refer to the emerge man page for more
+#       information about this option.
+
+# --changed-deps-report is silent once --changed-deps is also given --
+# --changed-deps reinstalls normally, exactly as its own example above
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps-report --changed-deps dev-libs/changeddepspkg
+# [ebuild  r] dev-libs/changeddepspkg-1.0 (reinstall for changed dependencies)
+# [ebuild  N] dev-libs/newpkg-1.0
 
 # --changed-slot: changedslotpkg's own vdb-recorded SLOT ("0") differs
 # from its current ebuild's own SLOT ("0/2", an ABI-bump sub-slot change)

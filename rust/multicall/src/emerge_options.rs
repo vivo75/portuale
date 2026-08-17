@@ -140,10 +140,24 @@
 //     dependency moved between two dep-string keys with the same net
 //     atom set, or a pure `||`-restructuring, isn't detected as
 //     "changed" here the way real portage's own structured comparison
-//     would). `--changed-deps-report` (a separate, cosmetic-only "you
-//     might want --changed-deps" notice, real `changed_deps_report`
-//     param) is a deliberate, documented out-of-scope cut -- stays
-//     recognized-but-unimplemented via this same table.
+//     would). `--changed-deps-report` IS implemented now too,
+//     deliberately excluded from `VALUE_OPTIONS` for the same reason --
+//     the identical `y_or_n` optional-value shape `--changed-deps`
+//     itself already has (no short alias for this one either; real
+//     `main.py` declares none). See `resolve_pretend_graph`'s own doc
+//     comment (portage-repo) for the real `depgraph.py::
+//     _changed_deps_report` behavior this ports: a report-only WARN,
+//     never a resolution change, reusing `deps_changed` unmodified for
+//     the comparison itself. Real portage: "This is completely silent...
+//     if --changed-deps or --dynamic-deps is enabled" -- ported as
+//     simply never bothering to compute anything at all when
+//     `changed_deps` is true, since real portage's own
+//     `_changed_deps_pkgs` collection is discarded unread in that case
+//     anyway (a documented, behavior-preserving simplification, not a
+//     guess). `--dynamic-deps` itself stays unimplemented/unrecognized
+//     in this pilot (real portage's own now-defunct alternate resolver
+//     strategy), so only the `--changed-deps` half of that real
+//     silencing condition is reachable here at all.
 //   - `--changed-slot` IS implemented now too, deliberately excluded
 //     from `VALUE_OPTIONS` for the same reason -- real `default_arg_opts`
 //     with a `y_or_n` *optional* value, the identical shape
@@ -240,7 +254,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--binpkg-changed-deps", None),
     ("--buildpkg", Some("-b")),
     ("--buildpkg-exclude", None),
-    ("--changed-deps-report", None),
     ("--config-root", None),
     ("--color", None),
     ("--complete-graph", None),
@@ -488,13 +501,11 @@ mod tests {
     }
 
     #[test]
-    fn does_not_recognize_changed_deps_itself_but_still_recognizes_changed_deps_report() {
-        // --changed-deps is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table --
-        // --changed-deps-report is a real, separate option that stays
-        // unimplemented, so it must still be found.
+    fn does_not_recognize_changed_deps_or_changed_deps_report_either() {
+        // Both are handled directly by the caller now (both
+        // implemented), not through this "not implemented" table.
         assert!(lookup("--changed-deps").is_none());
-        assert!(lookup("--changed-deps-report").is_some());
+        assert!(lookup("--changed-deps-report").is_none());
     }
 
     #[test]

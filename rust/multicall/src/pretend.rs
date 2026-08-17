@@ -209,8 +209,8 @@
 use crate::emerge_options;
 use portage_dep::{match_from_list, parse_atom, Atom, Blocker};
 use portage_repo::{
-    config_root_from_env, resolve_pretend_graph, root_from_env, GraphEntry, PretendOutcome,
-    SlotConflict,
+    config_root_from_env, resolve_pretend_graph, root_from_env, ChangedDepsReportEntry, GraphEntry,
+    PretendOutcome, SlotConflict,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -434,12 +434,23 @@ fn slot_conflict_to_json(c: &SlotConflict) -> String {
     )
 }
 
+fn changed_deps_report_entry_to_json(c: &ChangedDepsReportEntry) -> String {
+    format!(
+        "{{\"category\":{},\"package\":{},\"version\":{},\"repo_name\":{}}}",
+        json_string(&c.category),
+        json_string(&c.package),
+        json_string(&c.version),
+        json_string(&c.repo_name)
+    )
+}
+
 /// The whole `--json` output: `{"entries": [...], "slot_conflicts": [...]}`,
 /// one line, no pretty-printing (a pilot-specific convenience format, not
 /// a stable schema -- see the module doc comment).
 fn print_json(
     entries: &[GraphEntry],
     slot_conflicts: &[SlotConflict],
+    changed_deps_report: &[ChangedDepsReportEntry],
     top_level_pkgs: &HashSet<(String, String)>,
     verbose: bool,
 ) {
@@ -448,10 +459,15 @@ fn print_json(
         .map(|e| entry_to_json(e, top_level_pkgs, verbose))
         .collect();
     let conflicts_json: Vec<String> = slot_conflicts.iter().map(slot_conflict_to_json).collect();
+    let changed_deps_report_json: Vec<String> = changed_deps_report
+        .iter()
+        .map(changed_deps_report_entry_to_json)
+        .collect();
     println!(
-        "{{\"entries\":[{}],\"slot_conflicts\":[{}]}}",
+        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}]}}",
         entries_json.join(","),
-        conflicts_json.join(",")
+        conflicts_json.join(","),
+        changed_deps_report_json.join(",")
     );
 }
 
@@ -479,8 +495,8 @@ fn report_option(token: &str) -> ExitCode {
              --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
-             --changed-slot, --with-test-deps, and --help/-h are \
-             implemented so far; see PROMPT.md)",
+             --changed-deps-report, --changed-slot, --with-test-deps, \
+             and --help/-h are implemented so far; see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -538,6 +554,9 @@ fn print_help() {
     );
     println!(
         "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's"
+    );
+    println!(
+        "       --changed-deps-report[=y|n]  report (without reinstalling) an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's; silent if --changed-deps is also given"
     );
     println!(
         "       --changed-slot[=y|n]  reinstall an already-installed package whose own vdb-recorded SLOT differs from the current ebuild's"
@@ -895,6 +914,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut changed_deps = false;
     let mut changed_slot = false;
     let mut with_test_deps = false;
+    let mut changed_deps_report = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -1153,6 +1173,33 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--changed-deps=n" {
             changed_deps = false;
             i += 1;
+        } else if arg == "--changed-deps-report" {
+            // Real "--changed-deps-report": y_or_n (default_arg_opts),
+            // the identical optional-value shape "--changed-deps"
+            // already has -- no short alias (real main.py declares
+            // none). Unlike --changed-deps, this never changes what
+            // gets reinstalled -- see resolve_pretend_graph's own doc
+            // comment.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    changed_deps_report = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    changed_deps_report = false;
+                    i += 2;
+                }
+                _ => {
+                    changed_deps_report = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--changed-deps-report=y" {
+            changed_deps_report = true;
+            i += 1;
+        } else if arg == "--changed-deps-report=n" {
+            changed_deps_report = false;
+            i += 1;
         } else if arg == "--changed-slot" {
             // Real "--changed-slot": y_or_n (default_arg_opts), the
             // identical optional-value shape "--changed-deps" already
@@ -1398,6 +1445,7 @@ pub fn run(args: &[String]) -> ExitCode {
         changed_deps,
         changed_slot,
         with_test_deps,
+        changed_deps_report,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -1420,7 +1468,13 @@ pub fn run(args: &[String]) -> ExitCode {
         .collect();
 
     if json {
-        print_json(entries, &result.slot_conflicts, &top_level_pkgs, verbose);
+        print_json(
+            entries,
+            &result.slot_conflicts,
+            &result.changed_deps_report,
+            &top_level_pkgs,
+            verbose,
+        );
         return ExitCode::SUCCESS;
     }
 
@@ -1515,5 +1569,50 @@ pub fn run(args: &[String]) -> ExitCode {
             c.conflicting_atom
         );
     }
+
+    // `--changed-deps-report`: real `_changed_deps_report`'s own WARN
+    // block, ported verbatim (real portage colorizes it when the
+    // terminal supports it; this pilot, like every other message it
+    // prints, stays plain text). Already empty unless `changed_deps_report`
+    // was given AND `changed_deps` was NOT (see `resolve_pretend_graph`'s
+    // own doc comment for that gating), so no extra condition needed
+    // here beyond "is there anything to report at all".
+    if !result.changed_deps_report.is_empty() {
+        eprintln!();
+        eprintln!("!!! Detected ebuild dependency change(s) without revision bump:");
+        eprintln!();
+        for c in &result.changed_deps_report {
+            if root == Path::new("/") {
+                eprintln!(
+                    "    {}/{}-{}::{}",
+                    c.category, c.package, c.version, c.repo_name
+                );
+            } else {
+                eprintln!(
+                    "    {}/{}-{}::{} for {}",
+                    c.category,
+                    c.package,
+                    c.version,
+                    c.repo_name,
+                    root.display()
+                );
+            }
+        }
+        eprintln!();
+        eprintln!("NOTE: Refer to the following page for more information about dependency");
+        eprintln!("      change(s) without revision bump:");
+        eprintln!();
+        eprintln!("          https://wiki.gentoo.org/wiki/Project:Portage/Changed_dependencies");
+        eprintln!();
+        eprintln!("      In order to suppress reports about dependency changes, add");
+        eprintln!("      --changed-deps-report=n to the EMERGE_DEFAULT_OPTS variable in");
+        eprintln!("      '/etc/portage/make.conf'.");
+        eprintln!();
+        eprintln!("HINT: In order to avoid problems involving changed dependencies, use the");
+        eprintln!("      --changed-deps option to automatically trigger rebuilds when changed");
+        eprintln!("      dependencies are detected. Refer to the emerge man page for more");
+        eprintln!("      information about this option.");
+    }
+
     ExitCode::SUCCESS
 }
