@@ -34,6 +34,17 @@ pub(crate) struct FiledBlocker {
     pub conflict: BlockerConflict,
 }
 
+/// An unresolved blocker row whose owner has no display entry anywhere --
+/// filed on `GraphResult::orphan_blockers` and printed in the trailing
+/// blocker group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanBlocker {
+    pub owner_category: String,
+    pub owner_package: String,
+    pub owner_version: String,
+    pub conflict: BlockerConflict,
+}
+
 /// Arguments of [`set_seed_holds_instance`].
 pub(crate) struct SetSeedHoldsInstanceArgs<'a> {
     pub(crate) set_seed_atoms: &'a [String],

@@ -235,6 +235,12 @@ fn resolve_real_newrepo(category: &str, package: &str) -> PretendOutcome {
     .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
 }
 
+/// Shared builders: a synthetic `SlotConflict` over
+/// `dev-libs/slotconflicttarget:0` from `(version, installed,
+/// [(parent_cpv, atom, parent_installed)])` rows, plus merge `New`
+/// entries in walk order for the `or_tuple` first-pulled rule.
+type S2Row<'x> = (&'x str, bool, Vec<(&'x str, &'x str, bool)>);
+
 /// Arguments of [`run_161`].
 struct Run161Args<'a> {
     dir: &'a Path,

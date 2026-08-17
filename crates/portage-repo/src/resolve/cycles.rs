@@ -68,6 +68,37 @@ pub(crate) fn owner_self_loop(
     })
 }
 
+/// One label per edge of a `find_hard_cycles` cycle: `labels[i]` is the edge
+/// `cycle[i] -> cycle[(i + 1) % len]`, rendered from the hardest `deps`
+/// priority the owner carries toward the dep's cp.
+// Portage: resolver/circular_dependency.py, _prepare_circular_dep_message
+pub fn cycle_edge_labels(entries: &[GraphEntry], cycle: &[String]) -> Vec<String> {
+    if cycle.is_empty() {
+        return Vec::new();
+    }
+    cycle
+        .iter()
+        .enumerate()
+        .map(|(i, owner_cpv)| {
+            let dep_cpv = &cycle[(i + 1) % cycle.len()];
+            let hardest = entries
+                .iter()
+                .find(|e| merge_bound_cpv(e).as_deref() == Some(owner_cpv.as_str()))
+                .into_iter()
+                .flat_map(|e| e.deps.iter())
+                .filter_map(|d| {
+                    split_cpv(dep_cpv).and_then(|(cat, pkg, _)| {
+                        (d.category == cat && d.package == pkg).then_some(d.priority)
+                    })
+                })
+                .max_by_key(crate::resolver_trace::dep_priority_rank);
+            hardest
+                .map(|p| crate::resolver_trace::dep_priority_str(&p).to_string())
+                .unwrap_or_else(|| "buildtime".to_string())
+        })
+        .collect()
+}
+
 /// Splits `category/package-version` into its three parts (the last `-`
 /// boundary whose right half verifies as a version).
 pub fn split_cpv(cpv: &str) -> Option<(String, String, String)> {
