@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: --with-test-deps pulls in its own test?-gated RDEPEND, only for a top-level atom
+EAPI=8
+IUSE=test
+KEYWORDS=amd64
+RDEPEND=dev-libs/newpkg test? ( dev-libs/testonlydep )
+SLOT=0
+_md5_=0000000000000000000000000000000

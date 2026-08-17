@@ -2190,6 +2190,33 @@ def resolve_blockers(root, pending, entries):
     return conflicts
 
 
+def _enqueue_flat_deps(flat_deps, key, version, depth, queue, pending_blockers):
+    """Queues every atom in `flat_deps` (a use_reduce(flat=True) result,
+    with or without `subset`) onto `queue` at `depth + 1`, owned by
+    `key`/`version`, splitting off a blocker atom into `pending_blockers`
+    instead -- shared by resolve_pretend_graph's own normal-deps queueing
+    and its --with-test-deps follow-up, so the two can't drift apart on
+    blocker handling or depth/owner bookkeeping. Mirrors
+    portage-repo/src/lib.rs's enqueue_flat_deps exactly."""
+    for tok in flat_deps:
+        if tok == "||":
+            continue
+        dep_atom = _parse_atom(tok)
+        if dep_atom is not None and dep_atom.blocker:
+            pending_blockers.append(
+                {
+                    "atom_str": tok,
+                    "strong": bool(dep_atom.blocker.overlap.forbid),
+                    "target_category": dep_atom.cp.split("/", 1)[0],
+                    "target_package": dep_atom.cp.split("/", 1)[1],
+                    "owner_key": key,
+                    "owner_version": version,
+                }
+            )
+            continue
+        queue.append((tok, depth + 1, key))
+
+
 def resolve_pretend_graph(
     config_root,
     root,
@@ -2204,6 +2231,7 @@ def resolve_pretend_graph(
     with_bdeps=True,
     changed_deps=False,
     changed_slot=False,
+    with_test_deps=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -2542,27 +2570,27 @@ def resolve_pretend_graph(
             flat_deps = use_reduce(depstr, flat=True, uselist=use_flags)
         except InvalidDependString:
             continue
-        for tok in flat_deps:
-            if tok == "||":
-                continue
-            dep_atom = _parse_atom(tok)
-            if dep_atom is not None and dep_atom.blocker:
-                pending_blockers.append(
-                    {
-                        "atom_str": tok,
-                        # blocker.overlap.forbid is real portage's own
-                        # strong-vs-weak signal (see
-                        # lib/_emerge/resolver/output.py's "hard blocking"
-                        # vs "soft blocking"), not the "!!" prefix text.
-                        "strong": bool(dep_atom.blocker.overlap.forbid),
-                        "target_category": dep_atom.cp.split("/", 1)[0],
-                        "target_package": dep_atom.cp.split("/", 1)[1],
-                        "owner_key": key,
-                        "owner_version": version,
-                    }
-                )
-                continue
-            queue.append((tok, depth + 1, key))
+        _enqueue_flat_deps(flat_deps, key, version, depth, queue, pending_blockers)
+
+        # --with-test-deps: additive on top of the normal deps just
+        # queued above, never a replacement for them -- see this
+        # function's own docstring for the full gating (depth == 0,
+        # "test" a valid, not-already-enabled, not-masked IUSE flag).
+        if with_test_deps and depth == 0 and "test" not in use_flags:
+            iuse_flags = {
+                tok.lstrip("+-") for tok in metadata.get("IUSE", "").split()
+            }
+            test_masked = "test" in config["use_mask"] or "test" in _specificity_ordered_flags(
+                config["package_use_mask"], candidate_str, category, package
+            )
+            if "test" in iuse_flags and not test_masked:
+                try:
+                    test_deps = use_reduce(
+                        depstr, flat=True, uselist=use_flags | {"test"}, subset={"test"}
+                    )
+                except InvalidDependString:
+                    test_deps = []
+                _enqueue_flat_deps(test_deps, key, version, depth, queue, pending_blockers)
 
     # Merge required_by_map into entries in a single post-pass, mirroring
     # portage-repo/src/lib.rs's own identical final loop (run before
@@ -2855,7 +2883,6 @@ _VALUE_OPTIONS = [
     ("--usepkg-exclude-live", None),
     ("--verbose-missing-ebuilds", None),
     ("--verbose-slot-rebuilds", None),
-    ("--with-test-deps", None),
 ]
 
 _ACTIONS = [
@@ -3056,7 +3083,8 @@ def _report_option(token):
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
             "--deselect/-W, --with-bdeps, --changed-deps, --changed-slot, "
-            "and --help/-h are implemented so far; see PROMPT.md)",
+            "--with-test-deps, and --help/-h are implemented so far; see "
+            "PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -3115,6 +3143,9 @@ def _print_help():
     )
     print(
         "       --changed-slot[=y|n]  reinstall an already-installed package whose own vdb-recorded SLOT differs from the current ebuild's"
+    )
+    print(
+        "       --with-test-deps[=y|n]  also pull in a top-level atom's own test?-gated dependencies, if it has a \"test\" USE flag not already enabled"
     )
     print("   -h, --help      show this message and exit")
     print(
@@ -3348,6 +3379,7 @@ def run(args):
     with_bdeps = True
     changed_deps = False
     changed_slot = False
+    with_test_deps = False
 
     i = 0
     while i < len(args):
@@ -3554,6 +3586,27 @@ def run(args):
         elif arg == "--changed-slot=n":
             changed_slot = False
             i += 1
+        elif arg == "--with-test-deps":
+            # Real "--with-test-deps": y_or_n (default_arg_opts), the
+            # identical optional-value shape "--changed-deps"/
+            # "--changed-slot" already have -- no short alias (real
+            # main.py declares none).
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                with_test_deps = True
+                i += 2
+            elif nxt == "n":
+                with_test_deps = False
+                i += 2
+            else:
+                with_test_deps = True
+                i += 1
+        elif arg == "--with-test-deps=y":
+            with_test_deps = True
+            i += 1
+        elif arg == "--with-test-deps=n":
+            with_test_deps = False
+            i += 1
         elif not arg.startswith("-"):
             atom_args.append(arg)
             i += 1
@@ -3713,6 +3766,7 @@ def run(args):
             with_bdeps,
             changed_deps,
             changed_slot,
+            with_test_deps,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

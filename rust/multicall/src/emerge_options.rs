@@ -13,8 +13,9 @@
 // three tables, so both sides report identical text for identical input
 // (verified by the shared contract suite). `--deep`/`-D`,
 // `--exclude`/`-X`, `--deselect`/`-W`, `--with-bdeps`, `--changed-deps`,
-// and `--changed-slot` are ALSO implemented now (see below) -- all
-// excluded from `VALUE_OPTIONS` too, not just `BOOLEAN_OPTIONS`.
+// `--changed-slot`, and `--with-test-deps` are ALSO implemented now (see
+// below) -- all excluded from `VALUE_OPTIONS` too, not just
+// `BOOLEAN_OPTIONS`.
 //
 // KNOWN, DOCUMENTED SCOPE CUTS:
 //   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own
@@ -148,6 +149,16 @@
 //     none of, so this is ported as simply another independent
 //     `Reinstall` trigger instead of replicating that considerably
 //     messier real control flow.
+//   - `--with-test-deps` IS implemented now too, deliberately excluded
+//     from `VALUE_OPTIONS` for the same reason -- the identical
+//     `y_or_n` optional-value shape `--changed-slot` already has (no
+//     short alias for this one either). See `resolve_pretend_graph`'s
+//     own doc comment (portage-repo) for the real `depgraph.py::
+//     _add_pkg` gating it ports (top-level atoms only, "test" a valid,
+//     not-already-enabled, not-use-masked IUSE flag) and
+//     `use_reduce_flat_subset`'s own doc comment (portage-use-reduce)
+//     for the real `use_reduce(..., subset={"test"})` extraction it's
+//     built on.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Category {
@@ -284,7 +295,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--usepkg-exclude-live", None),
     ("--verbose-missing-ebuilds", None),
     ("--verbose-slot-rebuilds", None),
-    ("--with-test-deps", None),
 ];
 
 /// Real actions (things that replace, not augment, "calculate and show a
@@ -486,6 +496,13 @@ mod tests {
         // --changed-slot is handled directly by the caller (it's
         // implemented), not through this "not implemented" table.
         assert!(lookup("--changed-slot").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_with_test_deps_itself() {
+        // --with-test-deps is handled directly by the caller (it's
+        // implemented), not through this "not implemented" table.
+        assert!(lookup("--with-test-deps").is_none());
     }
 
     #[test]

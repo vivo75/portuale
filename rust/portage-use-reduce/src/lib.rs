@@ -10,10 +10,19 @@
 // (rare flag-override sets), `is_src_uri`/the "->" SRC_URI arrow token
 // (fetch-restriction syntax), `opconvert` and non-flat structured output
 // (`flat=False`'s nested-list bracket-optimization logic is considerably
-// more involved and not needed for a flat token list), `subset`, and
+// more involved and not needed for a flat token list), and
 // `token_class`/`is_valid_flag` (tokens stay opaque strings here, matching
 // how config.py itself calls use_reduce for RESTRICT/PROPERTIES/IUSE-like
 // values -- see the grep in PORTING/README.md).
+//
+// `subset` (the `--with-test-deps` follow-up) IS now ported too --
+// `use_reduce_flat_subset`, grounded against real `select_subset`, which
+// needs the *full* nested `paren_reduce` structure (not `flat=True`'s
+// own eagerly-flattened one) to know where a `"||"` group's own
+// boundaries are before subset-filtering happens, so it gets its own
+// tree type (`DepNode`) and its own build/filter/reserialize pipeline
+// feeding into the *unmodified* `use_reduce_flat` below for the actual
+// final flattening -- see `use_reduce_flat_subset`'s own doc comment.
 //
 // `flat=True` is a real, heavily-used invocation mode (not a convenience
 // fiction): lib/portage/package/ebuild/config.py, _emerge/resolver/, and
@@ -157,4 +166,322 @@ pub fn use_reduce_flat(
     }
 
     Ok(stack.pop().unwrap())
+}
+
+/// A single node of the nested-list shape real `paren_reduce` builds
+/// (`['foobar', 'foo?', ['bar', 'baz']]` -- a flag/`"||"` marker stays a
+/// sibling *string* immediately before its own nested group, never
+/// merged into it at parse time). Unlike real `paren_reduce`, this
+/// builder does none of its redundant-bracket-collapsing optimizations
+/// (`is_single`/`special_append`/etc.) -- those only ever change how
+/// *minimally* the tree is represented, never its semantics, and
+/// `select_subset` below (the only consumer) doesn't care either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DepNode {
+    Str(String),
+    Group(Vec<DepNode>),
+}
+
+/// Builds the nested `DepNode` tree from `tokens` -- same bracket/`"||"`/
+/// SRC_URI-arrow validation as `use_reduce_flat`'s own tokenizer (same
+/// error messages too), just building a tree instead of eagerly
+/// flattening, so a `subset` filter (`select_subset` below) has real
+/// group boundaries to walk before flattening happens at all.
+fn build_dep_tree(tokens: &[String]) -> Result<Vec<DepNode>, String> {
+    let mut stack: Vec<Vec<DepNode>> = vec![Vec::new()];
+    let mut need_bracket = false;
+
+    for (pos, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => {
+                if tokens.get(pos + 1).map(String::as_str) == Some(")") {
+                    return Err(format!(
+                        "expected: dependency string, got: ')', token {}",
+                        pos + 2
+                    ));
+                }
+                need_bracket = false;
+                stack.push(Vec::new());
+            }
+            ")" => {
+                if need_bracket {
+                    return Err(format!("expected: '(', got: ')', token {}", pos + 1));
+                }
+                if stack.len() <= 1 {
+                    return Err(format!("no matching '(' for ')', token {}", pos + 1));
+                }
+                let l = stack.pop().unwrap();
+                stack.last_mut().unwrap().push(DepNode::Group(l));
+            }
+            "||" => {
+                if need_bracket {
+                    return Err(format!("expected: '(', got: '||', token {}", pos + 1));
+                }
+                need_bracket = true;
+                stack
+                    .last_mut()
+                    .unwrap()
+                    .push(DepNode::Str("||".to_string()));
+            }
+            "->" => {
+                return Err(format!(
+                    "SRC_URI arrow are only allowed in SRC_URI: token {}",
+                    pos + 1
+                ));
+            }
+            _ => {
+                if need_bracket {
+                    return Err(format!("expected: '(', got: '{token}', token {}", pos + 1));
+                }
+                if token.ends_with('?') {
+                    need_bracket = true;
+                }
+                stack.last_mut().unwrap().push(DepNode::Str(token.clone()));
+            }
+        }
+    }
+
+    if stack.len() != 1 {
+        return Err("Missing ')' at end of string".to_string());
+    }
+    if need_bracket {
+        return Err("Missing '(' at end of string".to_string());
+    }
+
+    Ok(stack.pop().unwrap())
+}
+
+/// Real `use_reduce`'s own `select_subset` (invoked whenever `subset` is
+/// given): walks the parsed tree keeping only atoms reachable through a
+/// conditional whose own flag is in `subset` -- `disjunction` is true
+/// while directly inside a `"||"` group's own member list (each member
+/// becomes its own list in the result rather than being spliced flat,
+/// mirroring real portage's own "one result entry per alternative"
+/// shape), `selected` is true once already inside a subset-matching
+/// conditional (inherited into every descendant, so a plain, non-`?`
+/// atom nested two levels under `test?` still gets kept). Every OTHER
+/// conditional (not in `subset`) is still evaluated normally via
+/// `is_active` -- `subset` only decides which already-active branch's
+/// atoms make it into the *output*, never which branches are active in
+/// the first place.
+fn select_subset(
+    nodes: &[DepNode],
+    disjunction: bool,
+    selected: bool,
+    subset: &HashSet<String>,
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+) -> Result<Vec<DepNode>, String> {
+    let mut result: Vec<DepNode> = Vec::new();
+    let mut iter = nodes.iter();
+    while let Some(node) = iter.next() {
+        match node {
+            DepNode::Group(children) => {
+                // A bare "( ... )" grouping with no preceding flag?/"||"
+                // marker at all -- selection state just passes through
+                // unchanged, same as real select_subset's own
+                // AttributeError ("token has no .endswith") branch.
+                let sub = select_subset(children, false, selected, subset, uselist, mode)?;
+                if disjunction {
+                    if !sub.is_empty() {
+                        result.push(DepNode::Group(sub));
+                    }
+                } else {
+                    result.extend(sub);
+                }
+            }
+            DepNode::Str(s) if s.ends_with('?') => {
+                let Some(DepNode::Group(children)) = iter.next() else {
+                    return Err(format!("conditional '{s}' not followed by a group"));
+                };
+                if is_active(s, uselist, mode)? {
+                    let flag = &s[..s.len() - 1];
+                    let now_selected = selected || subset.contains(flag);
+                    let sub = select_subset(children, false, now_selected, subset, uselist, mode)?;
+                    if disjunction {
+                        if !sub.is_empty() {
+                            result.push(DepNode::Group(sub));
+                        }
+                    } else {
+                        result.extend(sub);
+                    }
+                }
+            }
+            DepNode::Str(s) if s == "||" => {
+                let Some(DepNode::Group(children)) = iter.next() else {
+                    return Err("'||' not followed by a group".to_string());
+                };
+                let sub = select_subset(children, true, selected, subset, uselist, mode)?;
+                if !sub.is_empty() {
+                    if disjunction {
+                        result.extend(sub);
+                    } else {
+                        result.push(DepNode::Str("||".to_string()));
+                        result.push(DepNode::Group(sub));
+                    }
+                }
+            }
+            DepNode::Str(s) => {
+                if selected {
+                    result.push(DepNode::Str(s.clone()));
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// `paren_enclose` equivalent: re-serializes a `DepNode` tree back into
+/// a flat token stream (`Group` becomes a literal `"("`/`")"` pair
+/// around its own contents), so the already subset-filtered result can
+/// be fed straight into the ordinary (unmodified) `use_reduce_flat`
+/// bracket/conditional handling below for its own final flattening.
+fn serialize_dep_tree(nodes: &[DepNode], out: &mut Vec<String>) {
+    for node in nodes {
+        match node {
+            DepNode::Str(s) => out.push(s.clone()),
+            DepNode::Group(children) => {
+                out.push("(".to_string());
+                serialize_dep_tree(children, out);
+                out.push(")".to_string());
+            }
+        }
+    }
+}
+
+/// Real `use_reduce`'s own `subset` parameter (`lib/portage/dep/
+/// __init__.py`): real portage handles this as a genuine two-pass
+/// operation even when `flat=True` is also given -- `subset` filtering
+/// (`select_subset`, over the full nested `paren_reduce` structure) runs
+/// *first*, producing an already-filtered dependency string, which is
+/// *then* reduced normally (`flat=True`'s own bracket/conditional
+/// handling). This mirrors that exactly: `build_dep_tree` (this crate's
+/// own `paren_reduce` equivalent) -> `select_subset` -> `serialize_dep_tree`
+/// (this crate's own `paren_enclose` equivalent) -> the ordinary
+/// `use_reduce_flat`, completely unmodified. Grounded against real
+/// portage's own `--with-test-deps` call site in `depgraph.py`:
+/// `use_reduce(dep_string, uselist=use_enabled | {"test"}, ...,
+/// subset={"test"})` extracts exactly the *additional* deps a `test?`
+/// conditional (anywhere in the string, at any nesting depth)
+/// contributes once `"test"` is forced on, discarding every
+/// unconditional dep and every dep gated only by some *other*
+/// conditional -- see `select_subset`'s own doc comment for the exact
+/// walk.
+pub fn use_reduce_flat_subset(
+    tokens: &[String],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+    subset: &HashSet<String>,
+) -> Result<Vec<String>, String> {
+    let tree = build_dep_tree(tokens)?;
+    let filtered = select_subset(&tree, false, false, subset, uselist, mode)?;
+    let mut reserialized = Vec::new();
+    serialize_dep_tree(&filtered, &mut reserialized);
+    use_reduce_flat(&reserialized, uselist, mode)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toks(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
+
+    fn set(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn subset_extracts_only_the_gated_atoms() {
+        let result = use_reduce_flat_subset(
+            &toks("foobar test? ( dev-libs/a dev-libs/b )"),
+            &set(&["test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn subset_excludes_deps_gated_by_a_different_conditional() {
+        let result = use_reduce_flat_subset(
+            &toks("foo? ( dev-libs/a ) test? ( dev-libs/b )"),
+            &set(&["foo", "test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn subset_still_honors_a_nested_non_subset_conditional_normally() {
+        // test? ( bar? ( dev-libs/a ) ) -- "bar" isn't in the subset, so
+        // it's still evaluated normally (is_active) rather than being
+        // treated as always-selected; only actually-active branches
+        // contribute, exactly like without subset filtering at all.
+        let result_bar_on = use_reduce_flat_subset(
+            &toks("test? ( bar? ( dev-libs/a ) )"),
+            &set(&["test", "bar"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result_bar_on, vec!["dev-libs/a"]);
+
+        let result_bar_off = use_reduce_flat_subset(
+            &toks("test? ( bar? ( dev-libs/a ) )"),
+            &set(&["test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert!(result_bar_off.is_empty());
+    }
+
+    #[test]
+    fn subset_negated_conditional_never_contributes() {
+        // "!test?" never matches "test" in the subset (real portage's
+        // own `token[:-1] in subset` check keeps the leading "!"), so
+        // this stays excluded even though "!test?" is itself active
+        // (test is NOT in uselist here).
+        let result = use_reduce_flat_subset(
+            &toks("!test? ( dev-libs/a )"),
+            &set(&[]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn subset_preserves_an_any_of_group_that_survives_filtering() {
+        // || ( foo? ( dev-libs/a ) test? ( dev-libs/b ) ) -- "foo" is
+        // off, so only the test-gated alternative survives; the "||"
+        // marker itself is preserved (matching use_reduce_flat's own
+        // existing flat convention) since something inside it did.
+        let result = use_reduce_flat_subset(
+            &toks("|| ( foo? ( dev-libs/a ) test? ( dev-libs/b ) )"),
+            &set(&["test"]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["||", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn subset_of_an_unconditional_dep_string_yields_nothing() {
+        let result = use_reduce_flat_subset(
+            &toks("dev-libs/a dev-libs/b"),
+            &set(&[]),
+            MatchMode::Normal,
+            &set(&["test"]),
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
 }

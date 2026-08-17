@@ -2185,6 +2185,41 @@ impl Deep {
 /// `GraphEntry::required_by`.
 type QueueItem = (String, u32, Option<(String, String)>);
 
+/// Queues every atom in `flat_deps` (a `use_reduce_flat`/
+/// `use_reduce_flat_subset` result) onto `queue` at `depth + 1`, owned by
+/// `key`/`version`, splitting off a blocker atom into `pending_blockers`
+/// instead -- shared by `resolve_pretend_graph`'s own normal-deps queueing
+/// and its `--with-test-deps` follow-up below, so the two can't drift
+/// apart on blocker handling or `depth`/`owner` bookkeeping.
+fn enqueue_flat_deps(
+    flat_deps: Vec<String>,
+    key: &(String, String),
+    version: &str,
+    depth: u32,
+    queue: &mut VecDeque<QueueItem>,
+    pending_blockers: &mut Vec<PendingBlocker>,
+) {
+    for tok in flat_deps {
+        if tok == "||" {
+            continue;
+        }
+        if let Some(dep_atom) = portage_dep::parse_atom(&tok) {
+            if dep_atom.blocker != portage_dep::Blocker::None {
+                pending_blockers.push(PendingBlocker {
+                    atom_str: tok,
+                    strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                    target_category: dep_atom.category,
+                    target_package: dep_atom.package,
+                    owner_key: key.clone(),
+                    owner_version: version.to_string(),
+                });
+                continue;
+            }
+        }
+        queue.push_back((tok, depth + 1, Some(key.clone())));
+    }
+}
+
 /// Recursively resolves every atom in `atoms` and -- for packages that
 /// would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
 /// IDEPEND atoms, breadth-first. Returns one `GraphEntry` per distinct
@@ -2302,6 +2337,25 @@ type QueueItem = (String, u32, Option<(String, String)>);
 ///     same as before `--deep` existed. See
 ///     `reinstall_flags_for_use_change`'s own doc comment for how
 ///     `newuse`/`changed_use` combine.
+///   - `with_test_deps` (`--with-test-deps`, real `depgraph.py`'s own
+///     `_add_pkg`) additionally pulls in `test?`-gated deps for a
+///     top-level atom (`depth == 0` -- this pilot's own equivalent of
+///     real `pkg.depth == 0 and self._is_argument(pkg)`, since every
+///     depth-0 atom here already came from `atoms` itself or a `@world`/
+///     `@system` expansion of it, both of which real portage also
+///     treats as "arguments" for this exact purpose) whose own IUSE
+///     declares a `"test"` flag not already enabled and not use-masked
+///     (global `use_mask` or a matching `package_use_mask` entry --
+///     mirrors real `"test" not in pkg.use.mask"` exactly, reusing the
+///     same `specificity_ordered_flags` fold `effective_use_flags`
+///     itself already applies for masking). Extracted via
+///     `use_reduce_flat_subset(dep_string, use_flags ∪ {"test"}, ...,
+///     subset={"test"})` -- see that function's own doc comment
+///     (`portage-use-reduce`) for why this needs a real nested-structure
+///     `subset` filter, not just another flat pass -- and queued exactly
+///     like any other dependency (same blocker extraction, same `depth +
+///     1`), additive on top of the package's own normal (non-test) deps,
+///     never replacing them.
 ///   - `nodeps` (`--nodeps`/`-O`) disables the dependency walk entirely,
 ///     for every entry, not just top-level atoms: only `atoms` themselves
 ///     are ever resolved, ported from real `create_depgraph_params.py`
@@ -2368,10 +2422,10 @@ type QueueItem = (String, u32, Option<(String, String)>);
 ///     `visited_atoms`/`resolved_slots`/`other_outcomes`'s own dedup
 ///     decisions, so a diamond dependency's second (deduped) owner is
 ///     still recorded even though it never triggers a new resolution.
-// 12 args trips clippy::too_many_arguments; a bundled options struct
+// 13 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
-// alongside seven already threaded the same way -- not worth it.
+// alongside eight already threaded the same way -- not worth it.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_pretend_graph(
     config_root: &Path,
@@ -2387,6 +2441,7 @@ pub fn resolve_pretend_graph(
     with_bdeps: bool,
     changed_deps: bool,
     changed_slot: bool,
+    with_test_deps: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -2712,24 +2767,58 @@ pub fn resolve_pretend_graph(
         ) else {
             continue;
         };
-        for tok in flat_deps {
-            if tok == "||" {
-                continue;
-            }
-            if let Some(dep_atom) = portage_dep::parse_atom(&tok) {
-                if dep_atom.blocker != portage_dep::Blocker::None {
-                    pending_blockers.push(PendingBlocker {
-                        atom_str: tok,
-                        strong: dep_atom.blocker == portage_dep::Blocker::Strong,
-                        target_category: dep_atom.category,
-                        target_package: dep_atom.package,
-                        owner_key: key.clone(),
-                        owner_version: version.clone(),
-                    });
-                    continue;
+        enqueue_flat_deps(
+            flat_deps,
+            &key,
+            &version,
+            depth,
+            &mut queue,
+            &mut pending_blockers,
+        );
+
+        // --with-test-deps: additive on top of the normal deps just
+        // queued above, never a replacement for them -- see
+        // resolve_pretend_graph's own doc comment for the full gating
+        // (depth == 0, "test" a valid, not-already-enabled, not-masked
+        // IUSE flag) and why this needs use_reduce_flat_subset rather
+        // than another plain use_reduce_flat pass.
+        if with_test_deps && depth == 0 && !use_flags.contains("test") {
+            let iuse_flags: HashSet<String> = metadata
+                .get("IUSE")
+                .map(String::as_str)
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+                .collect();
+            let test_masked = config.use_mask.contains("test")
+                || specificity_ordered_flags(
+                    &config.package_use_mask,
+                    &candidate_str,
+                    &key.0,
+                    &key.1,
+                    HashSet::new(),
+                )
+                .contains("test");
+            if iuse_flags.contains("test") && !test_masked {
+                let mut test_uselist = use_flags.clone();
+                test_uselist.insert("test".to_string());
+                let subset: HashSet<String> = ["test".to_string()].into_iter().collect();
+                if let Ok(test_deps) = portage_use_reduce::use_reduce_flat_subset(
+                    &tokens,
+                    &test_uselist,
+                    portage_use_reduce::MatchMode::Normal,
+                    &subset,
+                ) {
+                    enqueue_flat_deps(
+                        test_deps,
+                        &key,
+                        &version,
+                        depth,
+                        &mut queue,
+                        &mut pending_blockers,
+                    );
                 }
             }
-            queue.push_back((tok, depth + 1, Some(key.clone())));
         }
     }
 
@@ -3953,6 +4042,7 @@ mod tests {
             true,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -3976,6 +4066,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
         )
@@ -4003,6 +4094,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
         )
@@ -4034,6 +4126,7 @@ mod tests {
             Deep::NotRequested,
             &["dev-libs/upgradepkg".to_string()],
             true,
+            false,
             false,
             false,
         )
@@ -4082,6 +4175,7 @@ mod tests {
             deep,
             &[],
             true,
+            false,
             false,
             false,
         )
@@ -4180,6 +4274,7 @@ mod tests {
             with_bdeps,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4276,6 +4371,7 @@ mod tests {
             Deep::Unlimited,
             &[],
             true,
+            false,
             false,
             false,
         )
@@ -4412,6 +4508,7 @@ mod tests {
             true,
             false,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -4482,6 +4579,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
         )
@@ -4618,6 +4716,7 @@ mod tests {
             true,
             false,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -4703,12 +4802,104 @@ mod tests {
             true,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
         .collect()
+    }
+
+    /// Like `graph_real`, but with `--with-test-deps` enabled.
+    fn graph_real_with_test_deps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+    }
+
+    #[test]
+    fn with_test_deps_pulls_in_a_top_level_atoms_own_test_gated_dependency() {
+        let full_names: Vec<String> = graph_real_with_test_deps("dev-libs/withtestdeppkg")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            full_names,
+            vec![
+                "dev-libs/withtestdeppkg",
+                "dev-libs/newpkg",
+                "dev-libs/testonlydep",
+            ]
+        );
+    }
+
+    #[test]
+    fn without_with_test_deps_the_test_gated_dependency_is_absent() {
+        let full_names: Vec<String> = graph_real("dev-libs/withtestdeppkg")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            full_names,
+            vec!["dev-libs/withtestdeppkg", "dev-libs/newpkg"]
+        );
+    }
+
+    #[test]
+    fn with_test_deps_does_not_apply_beyond_a_top_level_atom() {
+        // dev-libs/withtestdepconsumer RDEPENDs on dev-libs/withtestdeppkg,
+        // reached at depth 1, not depth 0 -- testonlydep must stay absent
+        // even though --with-test-deps is given.
+        let full_names: Vec<String> = graph_real_with_test_deps("dev-libs/withtestdepconsumer")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            full_names,
+            vec![
+                "dev-libs/withtestdepconsumer",
+                "dev-libs/withtestdeppkg",
+                "dev-libs/newpkg",
+            ]
+        );
+    }
+
+    #[test]
+    fn with_test_deps_is_a_no_op_for_a_package_with_no_test_iuse_flag_at_all() {
+        // dev-libs/newpkg has no "test" IUSE flag declared at all -- real
+        // portage's own "pkg.iuse.is_valid_flag(\"test\")" guard means
+        // --with-test-deps changes nothing for it.
+        assert_eq!(
+            graph_real_with_test_deps("dev-libs/newpkg"),
+            graph_real("dev-libs/newpkg")
+        );
     }
 
     /// Like `graph_real`, but for a call expected to fail outright --
@@ -4734,6 +4925,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
         )
@@ -4764,6 +4956,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
         )
@@ -4798,6 +4991,7 @@ mod tests {
             true,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4828,6 +5022,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
         )
@@ -5061,6 +5256,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
         )

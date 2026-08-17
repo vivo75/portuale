@@ -478,8 +478,9 @@ fn report_option(token: &str) -> ExitCode {
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
              --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
-             --with-bdeps, --changed-deps, --changed-slot, and --help/-h \
-             are implemented so far; see PROMPT.md)",
+             --with-bdeps, --changed-deps, --changed-slot, \
+             --with-test-deps, and --help/-h are implemented so far; see \
+             PROMPT.md)",
             found.canonical
         );
     } else {
@@ -537,6 +538,9 @@ fn print_help() {
     );
     println!(
         "       --changed-slot[=y|n]  reinstall an already-installed package whose own vdb-recorded SLOT differs from the current ebuild's"
+    );
+    println!(
+        "       --with-test-deps[=y|n]  also pull in a top-level atom's own test?-gated dependencies, if it has a \"test\" USE flag not already enabled"
     );
     println!("   -h, --help      show this message and exit");
     println!(
@@ -813,6 +817,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut with_bdeps = true;
     let mut changed_deps = false;
     let mut changed_slot = false;
+    let mut with_test_deps = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -1052,6 +1057,31 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--changed-slot=n" {
             changed_slot = false;
             i += 1;
+        } else if arg == "--with-test-deps" {
+            // Real "--with-test-deps": y_or_n (default_arg_opts), the
+            // identical optional-value shape "--changed-deps"/
+            // "--changed-slot" already have -- no short alias (real
+            // main.py declares none).
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    with_test_deps = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    with_test_deps = false;
+                    i += 2;
+                }
+                _ => {
+                    with_test_deps = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--with-test-deps=y" {
+            with_test_deps = true;
+            i += 1;
+        } else if arg == "--with-test-deps=n" {
+            with_test_deps = false;
+            i += 1;
         } else if !arg.starts_with('-') {
             atom_args.push(arg);
             i += 1;
@@ -1239,6 +1269,7 @@ pub fn run(args: &[String]) -> ExitCode {
         with_bdeps,
         changed_deps,
         changed_slot,
+        with_test_deps,
     ) {
         Ok(result) => result,
         Err(e) => {

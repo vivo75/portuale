@@ -432,6 +432,31 @@ CASES = [
         ["--pretend", "--changed-deps", "--changed-slot", "dev-libs/changedslotpkg"],
         0,
     ),
+    (
+        "without --with-test-deps, a test?-gated dep is never pulled in",
+        ["--pretend", "dev-libs/withtestdeppkg"],
+        0,
+    ),
+    (
+        "--with-test-deps pulls in a top-level atom's own test?-gated dep",
+        ["--pretend", "--with-test-deps", "dev-libs/withtestdeppkg"],
+        0,
+    ),
+    (
+        "--with-test-deps=y inline form",
+        ["--pretend", "--with-test-deps=y", "dev-libs/withtestdeppkg"],
+        0,
+    ),
+    (
+        "--with-test-deps n explicitly disables it",
+        ["--pretend", "--with-test-deps", "n", "dev-libs/withtestdeppkg"],
+        0,
+    ),
+    (
+        "--with-test-deps does not apply beyond a top-level (depth 0) atom",
+        ["--pretend", "--with-test-deps", "dev-libs/withtestdepconsumer"],
+        0,
+    ),
 ]
 
 
@@ -1757,7 +1782,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -1815,6 +1840,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies\n"
         "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's\n"
         "       --changed-slot[=y|n]  reinstall an already-installed package whose own vdb-recorded SLOT differs from the current ebuild's\n"
+        '       --with-test-deps[=y|n]  also pull in a top-level atom\'s own test?-gated dependencies, if it has a "test" USE flag not already enabled\n'
         "   -h, --help      show this message and exit\n"
         "       --json      dump the whole resolved graph as one line of JSON instead "
         "of the lines above (pilot-specific, not a real emerge option)\n"
@@ -2474,6 +2500,74 @@ def test_without_changed_slot_a_slot_change_is_never_detected(emerge_binary, fix
     assert result.stdout.strip() == "dev-libs/changedslotpkg-1.0 is already installed; nothing to do"
 
 
+def test_without_with_test_deps_a_test_gated_dependency_is_never_pulled_in(
+    emerge_binary, fixture_env
+):
+    """dev-libs/withtestdeppkg's own RDEPEND is "dev-libs/newpkg test?
+    ( dev-libs/testonlydep )" -- without --with-test-deps, only the
+    unconditional dev-libs/newpkg is ever pulled in."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/withtestdeppkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/withtestdeppkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_with_test_deps_pulls_in_a_top_level_atoms_own_test_gated_dependency(
+    emerge_binary, fixture_env
+):
+    """Same fixture as above, but with --with-test-deps: real
+    accept_keywords_defaults-style extraction (use_reduce_flat_subset,
+    subset={"test"}) additionally pulls in dev-libs/testonlydep, on top
+    of -- not instead of -- the unconditional dev-libs/newpkg."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--with-test-deps", "dev-libs/withtestdeppkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/withtestdeppkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+        "[ebuild  N] dev-libs/testonlydep-1.0",
+    ]
+
+
+def test_with_test_deps_n_explicitly_disables_it(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--with-test-deps", "n", "dev-libs/withtestdeppkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/withtestdeppkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_with_test_deps_does_not_apply_beyond_a_top_level_atom(emerge_binary, fixture_env):
+    """dev-libs/withtestdepconsumer RDEPENDs on dev-libs/withtestdeppkg,
+    reaching it at depth 1, not depth 0 -- real depgraph.py's own
+    "pkg.depth == 0" gate (this pilot's own equivalent) means
+    dev-libs/testonlydep must NOT be pulled in even with --with-test-deps
+    given, since withtestdeppkg itself isn't the top-level atom here."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--with-test-deps", "dev-libs/withtestdepconsumer"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/withtestdepconsumer-1.0",
+        "[ebuild  N] dev-libs/withtestdeppkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
 def test_nodeps_disables_recursion_entirely(emerge_binary, fixture_env):
     """dev-libs/withdeps RDEPENDs on dev-libs/newpkg and
     dev-libs/upgradepkg -- see the plain recursion contract test above.
@@ -3053,7 +3147,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -3067,7 +3161,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -3081,7 +3175,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     expected = (
         'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --changed-deps, --changed-slot, --with-test-deps, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 

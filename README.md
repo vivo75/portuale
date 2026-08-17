@@ -2018,6 +2018,47 @@ PORTING/
   top of the otherwise-permissive global `"*"` -- a real, meaningful
   per-package narrowing mechanism, not just an additive one) exercise
   the mechanism end to end.
+
+  **`--with-test-deps[=y|n]`**: grounded against real `depgraph.py`'s own
+  `_add_pkg`, which additionally pulls in a package's own `test?`-gated
+  dependencies -- but only for a top-level atom (`pkg.depth == 0` --
+  this pilot's own `depth == 0`, since every depth-0 atom here already
+  came from `atoms` itself or a `@world`/`@system` expansion of it, both
+  of which real portage also counts as an "argument" for this exact
+  purpose), only when its own IUSE declares a `"test"` flag not already
+  enabled and not use-masked (global `use_mask` or a matching
+  `package_use_mask` entry, mirroring real `"test" not in
+  pkg.use.mask"` exactly). The extraction itself -- real `use_reduce(dep_
+  string, uselist=use_enabled | {"test"}, ..., subset={"test"})` -- is
+  the first real use of `use_reduce`'s own `subset` parameter in this
+  pilot, previously an explicit, documented cut on the Rust side
+  (`use_reduce_flat`'s own module doc comment) -- the Python side needed
+  no new code at all, since it already calls real `portage.dep.
+  use_reduce` directly and real `use_reduce` already implements `subset`
+  as a genuine two-pass operation (`select_subset` over the *full*
+  nested `paren_reduce` structure runs first, *then* `flat=True`'s own
+  ordinary reduction on the result) rather than something that composes
+  naturally into a single flat pass. The Rust side ports that same
+  two-pass shape as `use_reduce_flat_subset` (`portage-use-reduce`): a
+  new `DepNode` tree type plus its own `build_dep_tree`/`select_subset`/
+  `serialize_dep_tree` pipeline, feeding into the *unmodified*
+  `use_reduce_flat` for the final flattening -- verified to agree with
+  real `portage.dep.use_reduce(..., subset=...)` directly (not just
+  against the Python side's own mirror) on seven hand-picked cases,
+  including one with a `test?`-gated alternative nested inside an `||`
+  group, before relying on the Rust-side unit tests or the shared
+  contract suite. Additive on top of a package's own normal dependency
+  walk, never a replacement for it, and queued exactly like any other
+  dependency (same blocker extraction, same `depth + 1`) via a small
+  shared `enqueue_flat_deps` helper factored out of the pre-existing
+  normal-deps queueing so the two code paths can't drift apart. New
+  fixture packages: `withtestdeppkg` (`IUSE="test"`,
+  `RDEPEND="dev-libs/newpkg test? ( dev-libs/testonlydep )"` --
+  `testonlydep` only ever appears with `--with-test-deps` given) and
+  `withtestdepconsumer` (`RDEPEND="dev-libs/withtestdeppkg"`, proving the
+  depth-0-only gate: even with `--with-test-deps`, resolving
+  `withtestdepconsumer` reaches `withtestdeppkg` at depth 1, so
+  `testonlydep` still doesn't appear).
 - **`PORTING/tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
@@ -3134,6 +3175,27 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-slot dev-lib
 # so giving both prints both reasons on the same line
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps --changed-slot dev-libs/changedslotpkg
 # [ebuild  r] dev-libs/changedslotpkg-1.0 (reinstall for changed dependencies; changed slot)
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# --with-test-deps: withtestdeppkg's own RDEPEND is "dev-libs/newpkg
+# test? ( dev-libs/testonlydep )" -- without the flag, only the
+# unconditional dev-libs/newpkg is pulled in
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/withtestdeppkg
+# [ebuild  N] dev-libs/withtestdeppkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# --with-test-deps additionally pulls in the test?-gated dep too
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --with-test-deps dev-libs/withtestdeppkg
+# [ebuild  N] dev-libs/withtestdeppkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N] dev-libs/testonlydep-1.0
+
+# ...but only for a top-level (depth 0) atom -- withtestdepconsumer's own
+# RDEPEND reaches withtestdeppkg at depth 1, so testonlydep stays absent
+# even with --with-test-deps given
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --with-test-deps dev-libs/withtestdepconsumer
+# [ebuild  N] dev-libs/withtestdepconsumer-1.0
+# [ebuild  N] dev-libs/withtestdeppkg-1.0
 # [ebuild  N] dev-libs/newpkg-1.0
 ```
 
