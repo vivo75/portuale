@@ -14,3 +14,7 @@ dev-libs/keywordrevokedpkg -amd64
 # respectively, distinct from "**" (accept even an empty KEYWORDS).
 dev-libs/starkeywordpkg *
 dev-libs/tildestarkeywordpkg ~*
+# a bare atom (no keyword tokens at all): real accept_keywords_defaults
+# gives this an implicit "~amd64" (the global ACCEPT_KEYWORDS="amd64"
+# arch, "~"-prefixed), not a no-op.
+dev-libs/bareacceptkeywordspkg

@@ -1179,6 +1179,38 @@ PORTING/
   keywords) exercise both wildcards end to end, distinctly from each
   other and from `"**"`.
 
+  **`package.accept_keywords` bare-atom `accept_keywords_defaults`.** A
+  third correctness fix to the same file, this time to how a bare
+  entry (an atom with *no* keyword tokens at all) is parsed, not how a
+  matching entry's tokens are folded. Grounded against real
+  `KeywordsManager.__init__`/`getPKeywords`: a bare atom means "~" plus
+  every plain (non-`~`/`-`-prefixed) token in the *current* global
+  `ACCEPT_KEYWORDS` -- e.g. `ACCEPT_KEYWORDS="amd64"` turns a bare
+  `dev-libs/foo` entry into the same thing as `dev-libs/foo ~amd64`
+  written by hand. This pilot's own doc comments previously claimed real
+  portage only applies this at the *profile*-level source and a bare
+  *user*-level entry "never gets" it -- re-reading `__init__` itself
+  while investigating this slice showed that's wrong: the user-level
+  source gets the identical substitution too, just baked in at
+  config-load time (`self.pkeywordsdict`) rather than read time
+  (`getPKeywords`'s own per-entry check) -- a real behavior gap, not
+  just a stale comment, since this pilot's own bare atom previously
+  stayed a true no-op at both levels. Fixed by computing the derived
+  `~arch` default list once, right after `config.accept_keywords` is
+  fully resolved, and substituting it into every bare `package.
+  accept_keywords` entry's own (now-preserved-rather-than-dropped) empty
+  token list -- `keywords_accepted` itself needed no change at all,
+  since a substituted entry folds through `specificity_ordered_flags`
+  exactly like an explicitly-written one would. `parse_package_
+  accept_keywords_lines` now keeps a bare atom instead of dropping it;
+  since it's shared with `package.license`/`.properties`/
+  `.accept_restrict` (none of which get this treatment in real portage),
+  `parse_package_license_lines` gained one filter step to keep dropping
+  bare atoms for those three specifically. New fixture package
+  `bareacceptkeywordspkg` (`KEYWORDS="~amd64"`, testing-only) is visible
+  only via a bare `package.accept_keywords` entry naming it, with no
+  explicit `~amd64` token anywhere in the fixture tree.
+
   **Real `-v` value semantics + short-flag bundling**: closes two related
   CLI gaps at once, both grounded in `lib/_emerge/main.py`'s
   `insert_optional_args` (traced by hand, then verified against real
@@ -2550,6 +2582,12 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/starkeywordpk
 # [ebuild  N] dev-libs/starkeywordpkg-1.0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/tildestarkeywordpkg
 # [ebuild  N] dev-libs/tildestarkeywordpkg-1.0
+
+# package.accept_keywords bare atom: no keyword tokens at all, real
+# accept_keywords_defaults still grants an implicit "~amd64" (global
+# ACCEPT_KEYWORDS="amd64", "~"-prefixed) -- not a no-op
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/bareacceptkeywordspkg
+# [ebuild  N] dev-libs/bareacceptkeywordspkg-1.0
 
 # package.accept_keywords is now also stacked from the profile chain, not
 # just /etc/portage -- this package has no user-level entry at all, only

@@ -250,19 +250,20 @@ def _stack_mask_lines(sources):
 
 
 def _parse_package_accept_keywords_lines(lines):
-    """A line with no keyword tokens after the atom is a documented v1
-    no-op -- see portage-profile/src/lib.rs's
-    parse_package_accept_keywords_lines for why this is a simplification
-    only for the profile-level source (real portage gives a bare
-    profile-level entry an implicit derived "~arch" meaning a bare
-    user-level entry never gets), kept simple and symmetric between the
-    two here rather than adding a profile-only special case."""
+    """A line with no keyword tokens after the atom is kept here with an
+    *empty* token list, not dropped -- real portage gives a bare atom an
+    implicit "~arch" meaning at *both* levels (confirmed by reading
+    KeywordsManager.__init__ and getPKeywords -- the same
+    accept_keywords_defaults formula either way: "~" + keyword for each
+    plain, non-"~"/"-"-prefixed token in the current global
+    ACCEPT_KEYWORDS). resolve_config fills in the actual defaults once
+    config["accept_keywords"] is final; this function only preserves the
+    bare atom itself. Mirrors portage-profile/src/lib.rs's
+    parse_package_accept_keywords_lines exactly."""
     result = []
     for line in lines:
         parts = line.split()
         atom, keywords = parts[0], parts[1:]
-        if not keywords:
-            continue
         result.append((atom, keywords))
     return result
 
@@ -270,10 +271,17 @@ def _parse_package_accept_keywords_lines(lines):
 def _parse_package_license_lines(lines):
     """package.license/package.properties/package.accept_restrict: each
     line is "<atom-or-wildcard> <token...>". Same shape as
-    package.accept_keywords, reused directly for all three real files.
-    Mirrors portage-profile/src/lib.rs's parse_package_license_lines
+    package.accept_keywords, reused directly for all three real files --
+    except for a bare atom's own meaning: none of these three files gets
+    package.accept_keywords's own implicit "~arch"-default treatment in
+    real portage, so a bare atom is filtered back out here as a genuine
+    no-op. Mirrors portage-profile/src/lib.rs's parse_package_license_lines
     exactly."""
-    return _parse_package_accept_keywords_lines(lines)
+    return [
+        (atom, keywords)
+        for atom, keywords in _parse_package_accept_keywords_lines(lines)
+        if keywords
+    ]
 
 
 def _parse_license_groups_lines(lines):
@@ -345,12 +353,14 @@ def _expand_license_tokens(tokens, groups):
 
 
 def _parse_package_use_lines(lines, use_expand_shorthand=False):
-    """A line with no tokens after the atom is a documented no-op,
-    matching _parse_package_accept_keywords_lines. Purely additive across
-    sources, like package.accept_keywords and unlike package.mask/
-    .unmask: real portage's own package.use consumption only ever
-    .extend()s a growing token list per source, never removes a previous
-    entry.
+    """A line with no tokens after the atom is a documented no-op --
+    unlike package.accept_keywords, package.use has no
+    accept_keywords_defaults-style implicit meaning for a bare atom in
+    real portage either, so this one stays a genuine no-op. Purely
+    additive across sources, like package.accept_keywords and unlike
+    package.mask/.unmask: real portage's own package.use consumption
+    only ever .extend()s a growing token list per source, never removes
+    a previous entry.
 
     use_expand_shorthand, when True, ports real
     UseManager._parse_user_files_to_extatomdict's own "VIDEO_CARDS:
@@ -739,11 +749,13 @@ def _keywords_accepted(
     that ignored fold order entirely -- once folded, its presence in the
     final accepted set still means "accept any KEYWORDS state, even
     empty," the same real '"**" in pgroups' unconditional-match rule
-    this pilot already documented. Deliberately unchanged: a bare
-    package.accept_keywords atom with no keyword list at all stays a
-    documented no-op (real accept_keywords_defaults substitution is a
-    separate mechanism, not negation, and was already out of scope
-    before this).
+    this pilot already documented. A bare package.accept_keywords atom
+    with no keyword list at all no longer reaches this function empty:
+    resolve_config already substitutes real accept_keywords_defaults's
+    own implicit meaning -- the "~"-prefixed unstable form of every
+    currently-accepted keyword -- before this function ever sees it, so
+    it folds in through _specificity_ordered_flags exactly like any
+    other entry's own explicit tokens would.
 
     A second real mechanism, previously unhandled: a literal "*"/"~*"
     token in the accepted set means "accept any stable keyword"/"accept
@@ -1837,12 +1849,31 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
         )
     )
 
+    # A bare atom (empty token list, preserved by the parser above) gets
+    # real accept_keywords_defaults's own implicit meaning: "~" plus
+    # every plain (non-"~"/"-"-prefixed) token in the final global
+    # ACCEPT_KEYWORDS -- computed once here, against accept_keywords as
+    # already fully resolved by this point, exactly matching what real
+    # portage computes it from at both of its own two call sites
+    # (KeywordsManager.__init__'s own global_accept_keywords parameter,
+    # getPKeywords's own pgroups -- both already-resolved global
+    # ACCEPT_KEYWORDS by the time either runs). Sorted only for
+    # deterministic output; downstream consumption folds these into a
+    # set, so order was never semantically significant.
+    accept_keywords_defaults = sorted(
+        "~" + keyword for keyword in accept_keywords if keyword[:1] not in "~-"
+    )
+    package_accept_keywords = [
+        (atom, keywords if keywords else accept_keywords_defaults)
+        for atom, keywords in _parse_package_accept_keywords_lines(accept_keywords_lines)
+    ]
+
     return {
         "use_flags": use_flags,
         "accept_keywords": accept_keywords,
         "package_mask": _stack_mask_lines(mask_sources),
         "package_unmask": _stack_mask_lines(unmask_sources),
-        "package_accept_keywords": _parse_package_accept_keywords_lines(accept_keywords_lines),
+        "package_accept_keywords": package_accept_keywords,
         "package_use": (
             _parse_package_use_lines(repo_and_profile_use_lines)
             + _parse_package_use_lines(user_use_lines, use_expand_shorthand=True)

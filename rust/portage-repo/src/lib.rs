@@ -1071,13 +1071,15 @@ pub fn is_visible(
 /// unconditional-accept pre-scan that ignored fold order entirely --
 /// once folded, its presence in the final accepted set still means
 /// "accept any KEYWORDS state, even empty," the same real `"**" in
-/// pgroups` unconditional-match rule this pilot already documented.
-/// Deliberately unchanged: a bare `package.accept_keywords` atom with no
-/// keyword list at all stays a documented no-op (real `accept_keywords_
-/// defaults` substitution -- implicitly accepting the `~`-prefixed
-/// unstable form of every currently-accepted keyword -- is a separate
-/// mechanism, not negation, and was already out of scope before this;
-/// see `parse_package_accept_keywords_lines`'s own doc comment,
+/// pgroups` unconditional-match rule this pilot already documented. A
+/// bare `package.accept_keywords` atom with no keyword list at all no
+/// longer reaches this function empty: `resolve_config`
+/// (`portage-profile`) already substitutes real `accept_keywords_
+/// defaults`'s own implicit meaning -- the `~`-prefixed unstable form of
+/// every currently-accepted keyword -- before this function ever sees
+/// it, so it folds in through `specificity_ordered_flags` exactly like
+/// any other entry's own explicit tokens would (see
+/// `parse_package_accept_keywords_lines`'s own doc comment,
 /// portage-profile).
 ///
 /// A second real mechanism, previously unhandled: a literal `"*"`/`"~*"`

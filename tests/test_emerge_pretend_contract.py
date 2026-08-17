@@ -201,6 +201,7 @@ CASES = [
     ("package.accept_keywords: -amd64 revokes a globally-accepted keyword", ["--pretend", "dev-libs/keywordrevokedpkg"], 1),
     ("package.accept_keywords: \"*\" accepts any stable keyword", ["--pretend", "dev-libs/starkeywordpkg"], 0),
     ("package.accept_keywords: \"~*\" accepts any testing keyword", ["--pretend", "dev-libs/tildestarkeywordpkg"], 0),
+    ("package.accept_keywords: bare atom implicitly grants ~arch", ["--pretend", "dev-libs/bareacceptkeywordspkg"], 0),
     ("package.use: wildcard entry enables a flag not on globally", ["--pretend", "dev-libs/packageuseenablepkg"], 0),
     ("package.use: entry disables a flag that is on globally", ["--pretend", "dev-libs/packageusedisablepkg"], 0),
     ("package.use: repo-level entry enables a flag not on globally", ["--pretend", "dev-libs/repouseenablepkg"], 0),
@@ -1168,6 +1169,24 @@ def test_package_accept_keywords_tilde_star_accepts_any_testing_keyword(
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "[ebuild  N] dev-libs/tildestarkeywordpkg-1.0"
+
+
+def test_package_accept_keywords_bare_atom_implicitly_grants_tilde_arch(
+    emerge_binary, fixture_env
+):
+    """dev-libs/bareacceptkeywordspkg is KEYWORDS="~amd64" (testing-only,
+    not covered by the global ACCEPT_KEYWORDS="amd64"), made visible by
+    a bare "dev-libs/bareacceptkeywordspkg" package.accept_keywords entry
+    -- no keyword tokens at all. Real accept_keywords_defaults
+    (KeywordsManager.__init__/getPKeywords) gives a bare atom an
+    implicit "~" + every plain global ACCEPT_KEYWORDS token, i.e.
+    "~amd64" here -- not a no-op, the same outcome as if the user had
+    written "dev-libs/bareacceptkeywordspkg ~amd64" by hand."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/bareacceptkeywordspkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/bareacceptkeywordspkg-1.0"
 
 
 def test_package_accept_keywords_profile_level_entry_extends_visibility(

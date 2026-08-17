@@ -59,13 +59,14 @@
 //     handling always was: no `-atom` removal exists for this file in
 //     real portage either, so every matching source's keyword tokens are
 //     just unioned together (see `is_visible`). A bare atom with no
-//     keyword tokens is a no-op at *both* levels here, which is only a
-//     simplification for the profile-level source -- real portage gives
-//     a bare *profile*-level entry an implicit derived `~arch` meaning
-//     (`accept_keywords_defaults` in `getPKeywords`) that a bare
-//     *user*-level entry never gets, so kept simple and symmetric
-//     between the two rather than adding a profile-only special case
-//     (see `parse_package_accept_keywords_lines`'s own doc comment).
+//     keyword tokens now gets real `accept_keywords_defaults`'s own
+//     implicit `~arch` meaning at *both* levels (see
+//     `parse_package_accept_keywords_lines`'s own doc comment) --
+//     confirmed by reading `KeywordsManager.__init__` itself: contrary
+//     to this pilot's own earlier assumption, the *user*-level source
+//     gets the identical substitution too (baked in at load time,
+//     `self.pkeywordsdict`), not just the profile-level one
+//     (`getPKeywords`'s own read-time substitution).
 //   - `package.use` is stacked from all three real sources -- repo-level
 //     (`<main_repo_location>/profiles/package.use`), every profile
 //     level's own `package.use` (in chain order), and user-level -- the
@@ -749,17 +750,22 @@ fn stack_mask_lines(sources: &[Vec<String>]) -> Vec<String> {
 }
 
 /// `package.accept_keywords`: each line is `<atom-or-wildcard>
-/// <keyword...>`. A line with no keyword tokens after the atom is a
-/// documented no-op for v1 -- real portage gives a bare profile-level
-/// entry EAPI/ARCH-dependent implicit meaning (see `KeywordsManager.
-/// getPKeywords`'s `accept_keywords_defaults`, which derives an implicit
-/// `~arch` set from the *current* global `ACCEPT_KEYWORDS`); a bare
-/// user-level entry is already a no-op in real portage too (no
-/// `accept_keywords_defaults` substitution happens for
-/// `self.pkeywordsdict`), so this v1 simplification only actually
-/// changes behavior for the profile-level source, kept deliberately
-/// simple and consistent between the two rather than adding a
-/// profile-only special case.
+/// <keyword...>`. A line with no keyword tokens after the atom is kept
+/// here with an *empty* token list, not dropped -- real portage gives a
+/// bare atom an implicit `~arch` meaning at *both* levels, confirmed by
+/// reading `KeywordsManager.__init__` (the user-level source: a bare
+/// `pkgdict` entry's value is replaced with `accept_keywords_defaults`
+/// right there, before it's ever stored in `self.pkeywordsdict`) and
+/// `getPKeywords` (the profile-level source: the identical substitution
+/// happens at read time instead, per matching entry) -- the same
+/// `accept_keywords_defaults` formula either way: `"~" + keyword` for
+/// each *plain* (non-`~`/`-`-prefixed) token in the *current* global
+/// `ACCEPT_KEYWORDS`. `resolve_config` fills in the actual defaults
+/// once `config.accept_keywords` is final (see its own call site) --
+/// this function only preserves the bare atom itself so that
+/// substitution has something to act on; every other caller of this
+/// shape (`parse_package_license_lines` below) filters bare atoms back
+/// out immediately after, since no other file gets this treatment.
 fn parse_package_accept_keywords_lines(lines: &[String]) -> Vec<(String, Vec<String>)> {
     let mut result = Vec::new();
     for line in lines {
@@ -768,9 +774,6 @@ fn parse_package_accept_keywords_lines(lines: &[String]) -> Vec<(String, Vec<Str
             continue;
         };
         let keywords: Vec<String> = parts.map(String::from).collect();
-        if keywords.is_empty() {
-            continue;
-        }
         result.push((atom.to_string(), keywords));
     }
     result
@@ -778,15 +781,21 @@ fn parse_package_accept_keywords_lines(lines: &[String]) -> Vec<(String, Vec<Str
 
 /// `package.license`/`package.properties`/`package.accept_restrict`:
 /// each line is `<atom-or-wildcard> <token...>`. Same shape as
-/// `package.accept_keywords` (bare-atom lines are a documented no-op),
-/// reused directly for all three real files (unlike
-/// `parse_package_use_lines`'s own deliberate separateness from
+/// `package.accept_keywords`, reused directly for all three real files
+/// (unlike `parse_package_use_lines`'s own deliberate separateness from
 /// `parse_package_accept_keywords_lines`, which exists only because of
 /// `package.use`'s own `USE_EXPAND`-shorthand parameter -- these three
 /// have no such per-file divergence to justify three near-identical
-/// wrapper functions).
+/// wrapper functions) -- except for a bare atom's own meaning: none of
+/// these three files gets `package.accept_keywords`'s own implicit
+/// `~arch`-default treatment in real portage, so a bare atom is filtered
+/// back out here as a genuine no-op, unlike the shared parser's own
+/// bare-atom-preserving behavior.
 fn parse_package_license_lines(lines: &[String]) -> Vec<(String, Vec<String>)> {
     parse_package_accept_keywords_lines(lines)
+        .into_iter()
+        .filter(|(_, tokens)| !tokens.is_empty())
+        .collect()
 }
 
 /// `license_groups` (real `LicenseManager._read_license_groups`): each
@@ -1190,6 +1199,31 @@ pub fn resolve_config(
         &config_root.join("etc/portage/package.accept_keywords"),
     )?);
     config.package_accept_keywords = parse_package_accept_keywords_lines(&accept_keywords_lines);
+    // A bare atom (empty token list, preserved by the parser above) gets
+    // real `accept_keywords_defaults`'s own implicit meaning: "~" plus
+    // every *plain* (non-`~`/`-`-prefixed) token in the *final* global
+    // ACCEPT_KEYWORDS -- computed once here, against `config.
+    // accept_keywords` as already fully resolved by this point (every
+    // profile-level/make.conf ACCEPT_KEYWORDS contribution above already
+    // folded in), exactly matching what real portage computes it from at
+    // both of its own two call sites (`KeywordsManager.__init__`'s own
+    // `global_accept_keywords` parameter, `getPKeywords`'s own `pgroups`
+    // -- both already-resolved global ACCEPT_KEYWORDS by the time either
+    // runs). Sorted only for deterministic test assertions; downstream
+    // consumption (`specificity_ordered_flags`) folds these into a
+    // `HashSet`, so fold order was never semantically significant.
+    let mut accept_keywords_defaults: Vec<String> = config
+        .accept_keywords
+        .iter()
+        .filter(|k| !k.starts_with('~') && !k.starts_with('-'))
+        .map(|k| format!("~{k}"))
+        .collect();
+    accept_keywords_defaults.sort();
+    for (_, tokens) in &mut config.package_accept_keywords {
+        if tokens.is_empty() {
+            *tokens = accept_keywords_defaults.clone();
+        }
+    }
 
     // package.use: repo-level (<main_repo_location>/profiles/package.use),
     // then every profile level's own package.use (in chain order), then
@@ -1695,7 +1729,12 @@ mod tests {
         // separate list, checked per-candidate by the caller.
         fs::write(portage_dir.join("package.unmask"), "dev-libs/baz\n").unwrap();
         // package.accept_keywords: a normal entry, a "**" entry, and a
-        // bare-atom (no keywords) line that must be a no-op.
+        // bare-atom (no keywords) line -- this fixture sets no global
+        // ACCEPT_KEYWORDS at all, so the bare atom's own real
+        // accept_keywords_defaults substitution has nothing to derive a
+        // "~arch" set from and it stays present with an empty token
+        // list (see the dedicated accept_keywords_defaults tests below
+        // for the substitution actually producing tokens).
         fs::write(
             portage_dir.join("package.accept_keywords"),
             "dev-qt/* ~amd64\nsci-misc/live-thing **\ndev-libs/bare-no-op\n",
@@ -1711,6 +1750,7 @@ mod tests {
             vec![
                 ("dev-qt/*".to_string(), vec!["~amd64".to_string()]),
                 ("sci-misc/live-thing".to_string(), vec!["**".to_string()]),
+                ("dev-libs/bare-no-op".to_string(), Vec::new()),
             ]
         );
     }
@@ -2013,7 +2053,82 @@ mod tests {
             vec![
                 ("dev-libs/a".to_string(), vec!["~amd64".to_string()]),
                 ("dev-libs/b".to_string(), vec!["~amd64".to_string()]),
+                // No global ACCEPT_KEYWORDS is set anywhere in this
+                // fixture, so the bare atom's own accept_keywords_defaults
+                // substitution has nothing to derive from and it stays
+                // present with an empty token list.
+                ("dev-libs/bare-no-op".to_string(), Vec::new()),
             ]
+        );
+    }
+
+    #[test]
+    fn accept_keywords_defaults_substitutes_tilde_arch_for_a_bare_atom() {
+        // Real accept_keywords_defaults: a bare package.accept_keywords
+        // atom means "~" + every plain token in the *current* global
+        // ACCEPT_KEYWORDS -- here just "amd64", so "dev-libs/foo" gets
+        // an implicit "~amd64", the same as if the user had written
+        // "dev-libs/foo ~amd64" themselves.
+        let root = std::env::temp_dir().join("portage-profile-test-accept-keywords-defaults");
+        let repo = root.join("repo");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&leaf).unwrap();
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+
+        fs::write(leaf.join("make.defaults"), "ACCEPT_KEYWORDS=\"amd64\"\n").unwrap();
+        fs::write(
+            portage_dir.join("package.accept_keywords"),
+            "dev-libs/foo\n",
+        )
+        .unwrap();
+
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        assert_eq!(
+            config.package_accept_keywords,
+            vec![("dev-libs/foo".to_string(), vec!["~amd64".to_string()])]
+        );
+    }
+
+    #[test]
+    fn accept_keywords_defaults_excludes_already_prefixed_tokens() {
+        // Real accept_keywords_defaults only derives from *plain* global
+        // ACCEPT_KEYWORDS tokens (keyword[:1] not in "~-") -- an
+        // already-"~"-prefixed or "-"-prefixed global token is excluded
+        // entirely, not doubly-prefixed or left bare.
+        let root =
+            std::env::temp_dir().join("portage-profile-test-accept-keywords-defaults-filter");
+        let repo = root.join("repo");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&leaf).unwrap();
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+
+        fs::write(
+            leaf.join("make.defaults"),
+            "ACCEPT_KEYWORDS=\"amd64 ~x86 -arm\"\n",
+        )
+        .unwrap();
+        fs::write(
+            portage_dir.join("package.accept_keywords"),
+            "dev-libs/foo\n",
+        )
+        .unwrap();
+
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        assert_eq!(
+            config.package_accept_keywords,
+            vec![("dev-libs/foo".to_string(), vec!["~amd64".to_string()])]
         );
     }
 
