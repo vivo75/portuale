@@ -222,6 +222,11 @@ CASES = [
         ["--pretend", "-v", "dev-libs/cancelledpkg"],
         0,
     ),
+    (
+        "REQUIRED_USE: two independent top-level violations both get reported, not just the first",
+        ["--pretend", "dev-libs/requiredusebadpkg", "dev-libs/requiredusebadpkg2"],
+        1,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -1025,6 +1030,36 @@ def test_required_use_violated_dependency_still_aborts_the_whole_run(
         result.stderr.strip()
         == 'emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: '
         '"foo? ( bar )"'
+    )
+
+
+def test_required_use_violations_are_collected_across_the_whole_walk_not_just_the_first(
+    emerge_binary, fixture_env
+):
+    """Real depgraph.py's own _add_pkg sets
+    _dynamic_config._required_use_unsatisfied = True and returns 0 on a
+    violation -- it does NOT abort the whole graph walk (unlike a
+    top-level atom's own NoVisibleCandidate). Before this slice, this
+    pilot's own resolve_pretend_graph returned Err(...) immediately on
+    the first REQUIRED_USE violation, meaning a SECOND, independent
+    top-level atom passed on the same command line (here,
+    dev-libs/requiredusebadpkg2's own "baz? ( qux )", unrelated to
+    dev-libs/requiredusebadpkg's own "foo? ( bar )") would never even be
+    attempted, let alone reported -- exactly the same failure mode real
+    portage doesn't have. Both violations now show up together, in
+    argument order."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/requiredusebadpkg", "dev-libs/requiredusebadpkg2"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == (
+        'emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: '
+        '"foo? ( bar )"\n'
+        'REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg2-1.0: '
+        '"baz? ( qux )"'
     )
 
 

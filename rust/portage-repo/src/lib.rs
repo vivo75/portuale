@@ -2775,6 +2775,19 @@ pub fn resolve_pretend_graph(
     let mut other_outcomes: HashSet<(String, String)> = HashSet::new();
 
     let mut entries: Vec<GraphEntry> = Vec::new();
+    // REQUIRED_USE (see the check further below, in the main BFS loop):
+    // real depgraph.py's own `_add_pkg` sets
+    // `_dynamic_config._required_use_unsatisfied = True` and returns 0
+    // on a violation -- it does NOT abort the whole graph walk, unlike a
+    // top-level atom's own `NoVisibleCandidate`. Every violation
+    // encountered anywhere in the walk is collected here and the BFS
+    // keeps going; the whole call only fails at the very end, once every
+    // reachable candidate has had a chance to resolve (or fail) on its
+    // own terms -- matching real portage's own `_unsatisfied_deps_for_
+    // display` list (checked once, at the very end of the real resolve)
+    // rather than this pilot's own previous "abort on the first hit"
+    // shortcut.
+    let mut required_use_violations: Vec<String> = Vec::new();
     let mut slot_conflicts: Vec<SlotConflict> = Vec::new();
     // `--changed-deps-report`: real `_changed_deps_pkgs` is a dict keyed
     // by the installed `Package` object, so a repeat visit to the same
@@ -3052,12 +3065,25 @@ pub fn resolve_pretend_graph(
         // REQUIRED_USE checks are delayed until after package selection"
         // (it's a genuine *post*-selection check, no part of matching/
         // visibility at all, unlike package.use/package.mask). A
-        // violation is FATAL to the whole run regardless of whether this
-        // candidate was reached as a top-level atom or a dependency deep
-        // in the graph -- real portage's own severity for this (see
-        // portage-required-use's own module doc comment for the ported
-        // algorithm and where this is grounded), unlike a dependency's
-        // own NoVisibleCandidate (report, don't fail the whole call).
+        // violation eventually fails the whole run regardless of whether
+        // this candidate was reached as a top-level atom or a dependency
+        // deep in the graph -- but NOT immediately: real depgraph.py's
+        // own `_add_pkg` (~line 3600) sets
+        // `_dynamic_config._required_use_unsatisfied = True` and returns
+        // 0 on a violation, which does NOT stop the rest of the graph
+        // walk (unlike a top-level atom's own `NoVisibleCandidate`,
+        // which genuinely does abort immediately). Every violation
+        // anywhere in the walk is collected into
+        // `required_use_violations` and the BFS keeps going -- see that
+        // variable's own doc comment, near the top of this function, for
+        // the full grounding and where the collected violations actually
+        // get turned into this call's own `Err`. An genuinely *invalid*
+        // REQUIRED_USE (the `Err(e)` branch below, e.g. referencing a
+        // flag that isn't even valid IUSE) is different: real
+        // `check_required_use` itself raises for that case, outside the
+        // explicit `if not required_use_is_sat:` branch that the delayed
+        // collection above lives in -- so this pilot keeps that one
+        // immediately fatal, same as before.
         if let Some(required_use) = metadata.get("REQUIRED_USE") {
             if !required_use.trim().is_empty() {
                 // Real `check_required_use` validates a referenced flag
@@ -3097,10 +3123,11 @@ pub fn resolve_pretend_graph(
                             .split_whitespace()
                             .collect::<Vec<_>>()
                             .join(" ");
-                        return Err(format!(
+                        required_use_violations.push(format!(
                             "REQUIRED_USE not satisfied for {}/{}-{version}: \"{normalized}\"",
                             key.0, key.1
                         ));
+                        continue;
                     }
                     Err(e) => {
                         return Err(format!(
@@ -3227,6 +3254,10 @@ pub fn resolve_pretend_graph(
                 entry.blockers.push(conflict);
             }
         });
+
+    if !required_use_violations.is_empty() {
+        return Err(required_use_violations.join("\n"));
+    }
 
     Ok(GraphResult {
         entries,
@@ -5917,6 +5948,55 @@ mod tests {
         assert_eq!(
             err,
             "REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: \"foo? ( bar )\""
+        );
+    }
+
+    #[test]
+    fn required_use_violations_are_collected_across_the_whole_walk_not_just_the_first() {
+        // Real depgraph.py's own _add_pkg sets
+        // _dynamic_config._required_use_unsatisfied = True and returns 0
+        // on a violation -- it does NOT abort the whole graph walk, so a
+        // SECOND, independent top-level atom's own violation (here,
+        // dev-libs/requiredusebadpkg2's own "baz? ( qux )", unrelated to
+        // dev-libs/requiredusebadpkg's own "foo? ( bar )") still gets
+        // reached, resolved, and reported too -- not silently skipped
+        // because the first atom already failed. Confirmed live against
+        // both this pilot's own Rust and Python implementations
+        // (byte-identical joined output) before this test was written.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
+        let err = resolve_pretend_graph(
+            &root,
+            &root,
+            &[
+                "dev-libs/requiredusebadpkg".to_string(),
+                "dev-libs/requiredusebadpkg2".to_string(),
+            ],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+        )
+        .expect_err("both atoms should fail their own REQUIRED_USE");
+        assert_eq!(
+            err,
+            "REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: \"foo? ( bar )\"\n\
+             REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg2-1.0: \"baz? ( qux )\""
         );
     }
 

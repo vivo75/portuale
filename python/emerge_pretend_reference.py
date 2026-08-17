@@ -2655,6 +2655,20 @@ def resolve_pretend_graph(
     other_outcomes = set()
 
     entries = []
+    # REQUIRED_USE (see the check further below, in the main BFS loop):
+    # real depgraph.py's own _add_pkg sets
+    # _dynamic_config._required_use_unsatisfied = True and returns 0 on
+    # a violation -- it does NOT abort the whole graph walk, unlike a
+    # top-level atom's own NoVisibleCandidate. Every violation
+    # encountered anywhere in the walk is collected here and the BFS
+    # keeps going; the whole call only fails at the very end, once every
+    # reachable candidate has had a chance to resolve (or fail) on its
+    # own terms -- matching real portage's own _unsatisfied_deps_for_
+    # display list (checked once, at the very end of the real resolve)
+    # rather than this pilot's own previous "abort on the first hit"
+    # shortcut. Mirrors portage-repo/src/lib.rs's own
+    # required_use_violations exactly.
+    required_use_violations = []
     slot_conflicts = []
     # --changed-deps-report: real _changed_deps_pkgs is a dict keyed by
     # the installed Package object, so a repeat visit to the same
@@ -2882,11 +2896,24 @@ def resolve_pretend_graph(
         # candidate is newly resolved -- real depgraph.py's own "NOTE:
         # REQUIRED_USE checks are delayed until after package selection"
         # (a genuine *post*-selection check, no part of matching/
-        # visibility at all). A violation is FATAL to the whole run
+        # visibility at all). A violation eventually fails the whole run
         # regardless of whether this candidate was reached as a
-        # top-level atom or a dependency deep in the graph -- real
-        # portage's own severity for this -- unlike a dependency's own
-        # NoVisibleCandidate (report, don't fail). Calls the real
+        # top-level atom or a dependency deep in the graph -- but NOT
+        # immediately: real depgraph.py's own _add_pkg (~line 3600) sets
+        # _dynamic_config._required_use_unsatisfied = True and returns 0
+        # on a violation, which does NOT stop the rest of the graph walk
+        # (unlike a top-level atom's own NoVisibleCandidate, which
+        # genuinely does abort immediately). Every violation anywhere in
+        # the walk is collected into required_use_violations and the BFS
+        # keeps going -- see that variable's own doc comment, near the
+        # top of this function, for the full grounding and where the
+        # collected violations actually get turned into this call's own
+        # ResolutionError. A genuinely *invalid* REQUIRED_USE (the
+        # "except InvalidDependString" branch below) is different: real
+        # check_required_use itself raises for that case, outside the
+        # explicit "if not required_use_is_sat:" branch the delayed
+        # collection above lives in -- so this pilot keeps that one
+        # immediately fatal, same as before. Calls the real
         # portage.dep.check_required_use directly (pinned to eapi="8",
         # same reasoning as required_use_harness.py's own docstring) --
         # mirrors portage-repo/src/lib.rs's own ported algorithm
@@ -2920,10 +2947,11 @@ def resolve_pretend_graph(
                 ) from e
             if not satisfied:
                 normalized = " ".join(required_use.split())
-                raise ResolutionError(
+                required_use_violations.append(
                     f'REQUIRED_USE not satisfied for {category}/{package}-{version}: '
                     f'"{normalized}"'
                 )
+                continue
 
         # IUSE's own "+flag"/"-flag" default markers only matter for
         # resolving a flag's default when nothing else decides it --
@@ -2997,6 +3025,9 @@ def resolve_pretend_graph(
         blockers_by_owner.setdefault((category, package), blockers)
     for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
         blockers_by_owner[owner_key].append(conflict)
+
+    if required_use_violations:
+        raise ResolutionError("\n".join(required_use_violations))
 
     return {
         "entries": entries,

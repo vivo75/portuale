@@ -2032,6 +2032,45 @@ PORTING/
   fatal-abort severity really does apply regardless of graph position,
   not just to a top-level atom's own REQUIRED_USE.
 
+  **REQUIRED_USE severity, corrected: collect every violation, don't
+  abort the walk on the first one.** The paragraph above's own "Ported
+  as a `Result::Err` returned straight out of the BFS loop" is no longer
+  quite accurate -- found while re-grounding the same severity claim by
+  reading real `depgraph.py`'s own `_add_pkg` end to end (~line 3600):
+  on a violation, it sets `_dynamic_config._required_use_unsatisfied =
+  True` and `return`s `0` -- it does **not** raise, and does **not**
+  stop the rest of the graph walk. Real portage keeps resolving every
+  other reachable branch (other top-level atoms, other dependencies),
+  collecting every violation into `_unsatisfied_deps_for_display`, and
+  only fails the whole run at the very end, once nothing more is left to
+  attempt. This pilot's own previous "return `Err` immediately, right
+  there in the BFS loop" shortcut meant a second, wholly independent
+  top-level atom passed on the same command line -- one with its own,
+  unrelated REQUIRED_USE violation -- would never even be attempted,
+  let alone reported, once the first one failed: a real completeness gap
+  a user would notice fixing one violation only to hit a second one on
+  the next run, when real portage would have reported both up front.
+  Fixed by collecting violation messages into a `Vec<String>`
+  (`required_use_violations`) instead of returning immediately, letting
+  the BFS `continue` past a violating candidate exactly like a
+  dependency's own `NoVisibleCandidate` already does (report, don't
+  recurse further into it), and checking the collected list once, at the
+  very end of `resolve_pretend_graph`, right before its own success
+  return -- joining every message with `\n` if any were collected,
+  matching the "single global severity, whole-run scope" the original
+  paragraph above already got right (only the *timing* was wrong, not
+  the ultimate outcome). A genuinely *invalid* REQUIRED_USE (referencing
+  a flag that isn't even valid IUSE) stays immediately fatal, deliberately
+  -- real `check_required_use` raises for that case from outside the
+  explicit "not satisfied" branch the delayed collection lives in, so
+  this remains the one case this pilot's own architecture can't delay.
+  New fixture `dev-libs/requiredusebadpkg2` (a second, independent
+  REQUIRED_USE violation, `"baz? ( qux )"`, unrelated to the original
+  `dev-libs/requiredusebadpkg`'s own `"foo? ( bar )"`) proves both
+  violations now surface together when both atoms are requested in one
+  call, in argument order, instead of the second one going silently
+  unattempted.
+
   **`IUSE`'s own `+`/`-` default markers, closing a real, comprehensive
   gap this pilot's own REQUIRED_USE reporting (paragraph above) helped
   surface.** Found the same way the `selective` gap above was: comparing
@@ -3121,6 +3160,16 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requireduseba
 # dependency, not just as a top-level atom
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requiredusebadparentpkg
 # emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: "foo? ( bar )"  (exit 1)
+
+# ...and the whole walk keeps going past the first violation: a SECOND,
+# independent top-level atom's own unrelated REQUIRED_USE violation
+# still gets attempted and reported too, not silently skipped once the
+# first one failed -- matching real depgraph.py's own "collect every
+# violation, only fail at the very end" severity, not "abort on the
+# first hit"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requiredusebadpkg dev-libs/requiredusebadpkg2
+# emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: "foo? ( bar )"
+# REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg2-1.0: "baz? ( qux )"  (exit 1)
 
 # IUSE's own "+"/"-" default markers are honored now: "+enableddefault"
 # defaults on, "-disableddefault" stays off (own REQUIRED_USE requires
