@@ -226,6 +226,19 @@ pub struct Candidate {
     pub version: String,
     pub keywords: Vec<String>,
     pub slot: String,
+    /// The sub-slot half of this candidate's own `SLOT` metadata (real
+    /// `SLOT="main/sub"`), read via `split_slot` alongside `slot` --
+    /// defaults to `slot` itself when the ebuild's own `SLOT` carries no
+    /// `/` at all, matching real `_pkg_str`'s own slot-parsing fallback.
+    /// Folded into every candidate string this crate builds for
+    /// `portage_dep::match_from_list` as a `slot/sub_slot` suffix (see
+    /// `portage_dep::Candidate`'s own regex, which already parses this
+    /// shape) -- closes a real, previously-silent gap: any dependency
+    /// atom restricted on sub-slot (`dev-libs/foo:0/2`, PMS 8.3.3) could
+    /// never actually match anything here before, since every candidate
+    /// string omitted the sub-slot half entirely, no matter what a
+    /// candidate's real `SLOT` metadata said.
+    pub sub_slot: String,
     /// Which repo this candidate's ebuild/metadata actually lives in --
     /// needed once there's more than one (see `list_candidates`), both to
     /// re-read this exact package's own DEPEND/RDEPEND later
@@ -323,14 +336,13 @@ pub fn list_candidates(
                 .get("KEYWORDS")
                 .map(|s| s.split_whitespace().map(String::from).collect())
                 .unwrap_or_default();
-            let slot = metadata
-                .get("SLOT")
-                .map(|s| s.split('/').next().unwrap_or("0").to_string())
-                .unwrap_or_else(|| "0".to_string());
+            let (slot, sub_slot) =
+                split_slot(metadata.get("SLOT").map(String::as_str).unwrap_or(""));
             candidates.push(Candidate {
                 version: version.to_string(),
                 keywords,
                 slot,
+                sub_slot,
                 repo_location: repo.location.clone(),
                 repo_priority: repo.priority,
                 repo_name: repo.name.clone(),
@@ -984,8 +996,8 @@ pub fn is_visible(
     config: &portage_profile::Config,
 ) -> bool {
     let candidate_str = format!(
-        "{category}/{package}-{}:{}::{}",
-        candidate.version, candidate.slot, candidate.repo_name
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
 
     let masked = config
@@ -1196,20 +1208,29 @@ fn vercmp_ordering(a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Lists every installed `(version, slot)` pair for `category/package`
-/// found in the vdb under `root`
+/// Lists every installed `(version, slot, sub_slot)` triple for
+/// `category/package` found in the vdb under `root`
 /// (`<root>/var/db/pkg/<category>/<package>-<version>/`), reading each
-/// entry's `SLOT` file (defaulting to `"0"` if missing, same fallback as
-/// `list_candidates`). Used for blocker matching, which needs slots to
-/// support slotted blocker atoms -- `installed_versions` below doesn't
-/// need this and stays a plain version list for its existing callers.
-/// `pub` (unlike most of this crate's own internal helpers) so
+/// entry's `SLOT` file via `split_slot` (defaulting to `("0", "0")` if
+/// missing, same fallback as `list_candidates`). Used for blocker
+/// matching, which needs slots (sub-slot included, same "closes a real
+/// gap" reasoning as `Candidate::sub_slot`'s own doc comment) to support
+/// slotted blocker atoms -- `installed_versions` below doesn't need this
+/// and stays a plain version list for its existing callers. `pub`
+/// (unlike most of this crate's own internal helpers) so
 /// `multicall/src/pretend.rs`'s own `--deselect`/`-W` implementation can
 /// reuse it directly -- real `action_deselect` (`lib/_emerge/actions.py`)
 /// only ever consults `vardb`/the world file, never repos/config at
 /// all, so this is the one real feature in this pilot with no need for
-/// `portage-repo`'s own repo/config-resolution machinery.
-pub fn installed_candidates(root: &Path, category: &str, package: &str) -> Vec<(String, String)> {
+/// `portage-repo`'s own repo/config-resolution machinery. `run_deselect`
+/// itself only ever uses `version`/`slot` from this (real
+/// `Atom(f"{pkg.cp}:{pkg.slot}")` never includes sub-slot either), so
+/// adding `sub_slot` here doesn't change its behavior at all.
+pub fn installed_candidates(
+    root: &Path,
+    category: &str,
+    package: &str,
+) -> Vec<(String, String, String)> {
     let cat_dir = root.join("var/db/pkg").join(category);
     let Ok(entries) = fs::read_dir(&cat_dir) else {
         return Vec::new();
@@ -1220,11 +1241,9 @@ pub fn installed_candidates(root: &Path, category: &str, package: &str) -> Vec<(
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
             let version = strip_version_prefix(&name, package)?.to_string();
-            let slot = fs::read_to_string(e.path().join("SLOT"))
-                .ok()
-                .map(|s| s.trim().split('/').next().unwrap_or("0").to_string())
-                .unwrap_or_else(|| "0".to_string());
-            Some((version, slot))
+            let raw_slot = fs::read_to_string(e.path().join("SLOT")).unwrap_or_default();
+            let (slot, sub_slot) = split_slot(raw_slot.trim());
+            Some((version, slot, sub_slot))
         })
         .collect()
 }
@@ -1234,7 +1253,7 @@ pub fn installed_candidates(root: &Path, category: &str, package: &str) -> Vec<(
 pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<String> {
     installed_candidates(root, category, package)
         .into_iter()
-        .map(|(version, _slot)| version)
+        .map(|(version, _slot, _sub_slot)| version)
         .collect()
 }
 
@@ -1613,8 +1632,8 @@ fn candidate_iuse_and_use(
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect();
     let candidate_str = format!(
-        "{category}/{package}-{}:{}::{}",
-        candidate.version, candidate.slot, candidate.repo_name
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
     let use_flags = effective_use_flags(
         &config.use_flags,
@@ -1800,8 +1819,8 @@ pub fn resolve_pretend(
         .iter()
         .map(|c| {
             format!(
-                "{}/{}-{}:{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.repo_name
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
             )
         })
         .collect();
@@ -1858,11 +1877,12 @@ pub fn resolve_pretend(
             })
         {
             let installed_str = format!(
-                "{}/{}-{}:{}::{}",
+                "{}/{}-{}:{}/{}::{}",
                 atom.category,
                 atom.package,
                 installed_best.version,
                 installed_best.slot,
+                installed_best.sub_slot,
                 installed_best.repo_name
             );
             if excluded
@@ -1945,8 +1965,8 @@ pub fn resolve_pretend(
         .filter_map(|m| by_str.get(m).copied())
         .filter(|c| {
             let candidate_str = format!(
-                "{}/{}-{}:{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.repo_name
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
             );
             !excluded
                 .iter()
@@ -2077,7 +2097,8 @@ struct PendingBlocker {
 }
 
 /// Matches each `pending` blocker's target `category/package` against
-/// both currently-installed candidates (`installed_candidates`) and this
+/// both currently-installed candidates (`installed_candidates`, sub-slot
+/// included -- see `Candidate::sub_slot`'s own doc comment) and this
 /// graph's own resolved New/Upgrade set (`entries`, which may now hold
 /// more than one slot for the same category/package -- every one of them
 /// is a real candidate, not just the first), reusing
@@ -2090,6 +2111,14 @@ struct PendingBlocker {
 /// guard against). Returns `(owner_key, conflict)` pairs rather than
 /// mutating `entries` directly, since `entries` is still needed
 /// immutably to build the graph-resolved candidate list here.
+///
+/// `entries`' own contribution has no real sub-slot data at all --
+/// `GraphEntry::slot` deliberately stays main-slot-only for now (a
+/// documented, narrower scope cut than `Candidate::sub_slot`'s own repo/
+/// vdb-backed fix), so it defaults sub-slot to the main slot itself,
+/// the same fallback `split_slot` already uses for a plain (no `/`)
+/// `SLOT` value -- "unknown" and "not yet split from an unslashed SLOT"
+/// look identical here, and both mean "assume it matches the slot".
 fn resolve_blockers(
     root: &Path,
     pending: &[PendingBlocker],
@@ -2112,25 +2141,28 @@ fn resolve_blockers(
             let (Some(version), Some(slot)) = (version, entry.slot.clone()) else {
                 continue;
             };
-            if !candidates.iter().any(|(v, s)| *v == version && *s == slot) {
-                candidates.push((version, slot));
+            if !candidates
+                .iter()
+                .any(|(v, s, _ss)| *v == version && *s == slot)
+            {
+                candidates.push((version, slot.clone(), slot));
             }
         }
         let candidate_strs: Vec<String> = candidates
             .iter()
-            .map(|(v, s)| format!("{}/{}-{v}:{s}", pb.target_category, pb.target_package))
+            .map(|(v, s, ss)| format!("{}/{}-{v}:{s}/{ss}", pb.target_category, pb.target_package))
             .collect();
         let refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
         let Some(matched) = portage_dep::match_from_list(&pb.atom_str, &refs) else {
             continue;
         };
-        let by_str: HashMap<&str, &(String, String)> = candidate_strs
+        let by_str: HashMap<&str, &(String, String, String)> = candidate_strs
             .iter()
             .map(String::as_str)
             .zip(candidates.iter())
             .collect();
         for m in matched {
-            let Some((version, _slot)) = by_str.get(m).copied() else {
+            let Some((version, _slot, _sub_slot)) = by_str.get(m).copied() else {
                 continue;
             };
             if target_key == pb.owner_key && *version == pb.owner_version {
@@ -2664,6 +2696,7 @@ pub fn resolve_pretend_graph(
             continue;
         };
         let slot = resolved.slot.clone();
+        let sub_slot = resolved.sub_slot.clone();
         let repo_location = resolved.repo_location.clone();
         let repo_name = resolved.repo_name.clone();
         let keywords = resolved.keywords.clone();
@@ -2711,7 +2744,10 @@ pub fn resolve_pretend_graph(
         let Ok(metadata) = read_md5_cache(&repo_location, &key.0, &pf) else {
             continue;
         };
-        let candidate_str = format!("{}/{}-{version}:{slot}::{repo_name}", key.0, key.1);
+        let candidate_str = format!(
+            "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
+            key.0, key.1
+        );
         let use_flags = effective_use_flags(
             &config.use_flags,
             &config.package_use,
@@ -2960,6 +2996,7 @@ fn enqueue_dependencies(
         return;
     };
     let slot = resolved.slot.clone();
+    let sub_slot = resolved.sub_slot.clone();
     let repo_location = resolved.repo_location.clone();
     let repo_name = resolved.repo_name.clone();
     let keywords = resolved.keywords.clone();
@@ -2968,7 +3005,7 @@ fn enqueue_dependencies(
     let Ok(metadata) = read_md5_cache(&repo_location, category, &pf) else {
         return;
     };
-    let candidate_str = format!("{category}/{package}-{version}:{slot}::{repo_name}");
+    let candidate_str = format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}");
     let use_flags = effective_use_flags(
         &config.use_flags,
         &config.package_use,
@@ -3613,6 +3650,77 @@ mod tests {
         assert_eq!(split_slot("0"), ("0".to_string(), "0".to_string()));
         assert_eq!(split_slot("0/2"), ("0".to_string(), "2".to_string()));
         assert_eq!(split_slot(""), ("0".to_string(), "0".to_string()));
+    }
+
+    #[test]
+    fn list_candidates_reads_the_real_sub_slot_not_just_the_main_slot() {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let candidates =
+            list_candidates(&repos, "dev-libs", "subslotpkg").expect("list_candidates");
+        let c = candidates
+            .iter()
+            .find(|c| c.version == "1.0")
+            .expect("subslotpkg-1.0 must be listed");
+        assert_eq!(c.slot, "0");
+        assert_eq!(c.sub_slot, "2");
+    }
+
+    #[test]
+    fn resolve_pretend_matches_a_sub_slot_restricted_atom_against_the_real_sub_slot() {
+        // dev-libs/subslotpkg's own SLOT is "0/2" -- an exact sub-slot
+        // match, unlike a slot-operator atom (":="/"pkg:slot="), which
+        // `matches_slot`'s own doc comment already established needs no
+        // candidate-side sub-slot data at all to match correctly. This
+        // is the plain PMS 8.3.3 "cat/pkg:slot/sub-slot" restriction
+        // form instead, which DOES need it -- see `Candidate::sub_slot`'s
+        // own doc comment for the bug this closes.
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let outcome = resolve_pretend(
+            &repos,
+            &root,
+            "dev-libs/subslotpkg:0/2",
+            &test_config(),
+            false,
+            false,
+            false,
+            &[],
+            false,
+            true,
+            false,
+        )
+        .expect("resolve_pretend must succeed");
+        assert_eq!(
+            outcome,
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_pretend_rejects_a_sub_slot_restricted_atom_that_does_not_match() {
+        // Same candidate (SLOT "0/2"), but the atom itself asks for
+        // sub-slot "3" -- a genuine mismatch, proving this is real
+        // matching and not just "always accept regardless of sub-slot".
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let outcome = resolve_pretend(
+            &repos,
+            &root,
+            "dev-libs/subslotpkg:0/3",
+            &test_config(),
+            false,
+            false,
+            false,
+            &[],
+            false,
+            true,
+            false,
+        )
+        .expect("resolve_pretend must succeed");
+        assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
     }
 
     #[test]
@@ -5402,6 +5510,7 @@ mod tests {
             version: version.to_string(),
             keywords: keywords.iter().map(|s| s.to_string()).collect(),
             slot: "0".to_string(),
+            sub_slot: "0".to_string(),
             repo_location: PathBuf::new(),
             repo_priority: 0,
             repo_name: "test".to_string(),

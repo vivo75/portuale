@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: RDEPEND restricted on a real sub-slot (:0/2), matching dev-libs/subslotpkg's own SLOT exactly
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/subslotpkg:0/2
+SLOT=0
+_md5_=0000000000000000000000000000000

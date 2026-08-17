@@ -116,6 +116,12 @@ CASES = [
     ("recursion: PDEPEND is walked", ["--pretend", "dev-libs/pdependpkg"], 0),
     ("recursion: IDEPEND is walked", ["--pretend", "dev-libs/idependpkg"], 0),
     ("recursion: slot-operator dependency atoms are resolved, not dropped", ["--pretend", "dev-libs/slotoperatorpkg"], 0),
+    ("recursion: a sub-slot-restricted dependency atom actually matches", ["--pretend", "dev-libs/subslotconsumer"], 0),
+    (
+        "recursion: a sub-slot-restricted dependency atom genuinely rejects a mismatch",
+        ["--pretend", "dev-libs/subslotmismatchconsumer"],
+        0,
+    ),
     ("recursion: USE-dep dependency atoms are resolved, not dropped", ["--pretend", "dev-libs/usedeppkg"], 0),
     (
         "recursion: a genuinely unsatisfied USE-dep dependency atom is rejected",
@@ -601,6 +607,49 @@ def test_slot_operator_dependency_atoms_resolve_both_forms(emerge_binary, fixtur
         "[ebuild  N] dev-libs/newpkg-1.0",
         "[ebuild  N] dev-libs/multislotpkg-2.0",
     ]
+
+
+def test_sub_slot_restricted_dependency_atom_matches_the_real_sub_slot(
+    emerge_binary, fixture_env
+):
+    """dev-libs/subslotconsumer's own RDEPEND is
+    "dev-libs/subslotpkg:0/2" -- a real sub-slot restriction (PMS 8.3.3),
+    not a slot-operator (":="/"slot=") atom. Prior to this slice,
+    portage-repo's own Candidate struct (and every candidate string built
+    from it for match_from_list) discarded the sub-slot half of a real
+    "SLOT=main/sub" value entirely (`.split('/').next()`), so this atom
+    could never match anything -- silently, the same "no entry, no
+    error" outcome the slot-operator bug had, just one layer deeper (the
+    atom parsed and reached match_from_list fine; the *candidate* was
+    the one missing data). dev-libs/subslotpkg's own SLOT is "0/2", an
+    exact match for the restriction, so this must resolve normally."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/subslotconsumer"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/subslotconsumer-1.0",
+        "[ebuild  N] dev-libs/subslotpkg-1.0",
+    ]
+
+
+def test_sub_slot_restricted_dependency_atom_rejects_a_real_mismatch(
+    emerge_binary, fixture_env
+):
+    """The mirror case: dev-libs/subslotmismatchconsumer's own RDEPEND is
+    "dev-libs/subslotpkg:0/3", but dev-libs/subslotpkg's own SLOT is
+    "0/2" -- a genuine sub-slot mismatch. Proves the fix is real matching
+    (rejects an incompatible sub-slot), not just "always accept" (which
+    an implementation that dropped the sub-slot restriction from the
+    *atom* side, rather than the candidate side, could still pass the
+    companion test above with)."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/subslotmismatchconsumer"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/subslotmismatchconsumer-1.0"]
+    assert (
+        result.stderr.splitlines()
+        == ['!!! no visible ebuild for dependency "dev-libs/subslotpkg"']
+    )
 
 
 def test_use_dep_dependency_atoms_are_resolved_not_dropped(emerge_binary, fixture_env):

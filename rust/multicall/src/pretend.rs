@@ -807,7 +807,7 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
             // version/operator at all, regardless of the real installed
             // one.
             expanded.push(atom.clone());
-            for (version, slot) in
+            for (version, slot, _sub_slot) in
                 portage_repo::installed_candidates(root, &atom.category, &atom.package)
             {
                 let candidate_str = format!("{}/{}-{version}:{slot}", atom.category, atom.package);

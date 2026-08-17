@@ -837,14 +837,16 @@ PORTING/
   version. The first slice in this pilot to model sub-slots at all: real
   `SLOT="main/sub"` splits on `/`, defaulting `sub_slot` to the slot
   itself when no `/` is present (`split_slot`, shared by both the vdb
-  and repo sides) -- deliberately narrow, though, not the general
-  `Candidate.sub_slot` threading a full port of real slot-operator
-  (`:=`) rebuild tracking would eventually need: this reuses the exact
-  same "dedicated, narrow re-read of metadata this pilot's general
+  and repo sides) -- deliberately narrow at the time, though, not the
+  general `Candidate.sub_slot` threading real dependency-atom sub-slot
+  matching would eventually need: this reuses the exact same
+  "dedicated, narrow re-read of metadata this pilot's general
   `Candidate` model doesn't carry" approach `--changed-deps` already
   established for `DEPEND`/`RDEPEND`, rather than growing `Candidate`
   itself and touching the whole matching/visibility pipeline for a
-  single new flag. Implemented as a third independent,
+  single new flag. (That deferred `Candidate.sub_slot` threading is its
+  own later follow-up below -- see "Sub-slot modeling".) Implemented as
+  a third independent,
   freely-combinable `PretendOutcome::Reinstall` trigger alongside the
   USE- and deps-based ones -- confirmed real: `_changed_slot`'s own real
   callers (`_slot_operator_replace_installed`, and the main
@@ -864,6 +866,53 @@ PORTING/
   `--changed-deps` alone reports "changed dependencies" for the *same*
   package, and both together report "changed dependencies; changed
   slot" on one line.
+
+  **Sub-slot modeling: `Candidate.sub_slot`, and a real, previously-silent
+  dependency-matching bug it closes.** Closes the deferral named in the
+  `--changed-slot` paragraph just above. `portage-repo`'s own `Candidate`
+  struct (repo-sourced) discarded the sub-slot half of a real
+  `SLOT="main/sub"` value entirely -- `metadata.get("SLOT").split('/')
+  .next()` -- for every candidate it ever built, in both `list_candidates`
+  (repo/ebuild side) and `installed_candidates` (vdb side); every
+  candidate string this crate builds for `portage_dep::match_from_list`
+  (whose own `Candidate` regex already parses a `slot/sub_slot` suffix
+  correctly -- it was only ever fed incomplete data) inherited the same
+  gap. The practical effect: a real dependency atom restricted on
+  sub-slot (`dev-libs/foo:0/2`, PMS 8.3.3, not the `:=`/`:slot=`
+  slot-operator forms -- `matches_slot`'s own doc comment already
+  established those need no candidate-side sub-slot data at all to match
+  correctly) could **never** match anything here, no matter what a
+  candidate's real `SLOT` metadata said -- the same "silently drops the
+  dependency, no entry, no error" failure mode the slot-operator-grammar
+  bug had, just one layer deeper: that earlier bug was in the *atom*
+  parser, this one was in the *candidate* data feeding it. Fixed by
+  giving `Candidate` a `sub_slot: String` field (populated via the
+  already-existing `split_slot` helper, the same one `--changed-slot`
+  introduced, reused rather than re-derived) and embedding
+  `slot/sub_slot` in every candidate string built from repo/vdb data
+  across `is_visible`, `_candidate_iuse_and_use`-equivalent USE lookups,
+  `resolve_pretend`'s own atom-vs-candidate matching and `--exclude`
+  checks, `resolve_pretend_graph`'s per-entry config re-lookup,
+  `enqueue_dependencies`, and `resolve_blockers`' vdb-derived
+  contribution -- seven call sites total across the two languages'
+  mirrored implementations. `resolve_blockers`' *other* contribution
+  (already-resolved New/Upgrade graph entries) is a deliberate, narrower
+  scope cut: `GraphEntry`'s own `slot` field stays main-slot-only for
+  now, defaulting sub-slot to the main slot itself (the same fallback
+  `split_slot` already uses for an unslashed `SLOT`) rather than growing
+  `GraphEntry` and its own construction sites too -- a real dependency
+  atom blocking a same-run New/Upgrade candidate on a specific sub-slot
+  is a narrow enough case to defer honestly rather than half-implement.
+  `run_deselect`'s own use of `installed_candidates` is unaffected by
+  construction: real `Atom(f"{pkg.cp}:{pkg.slot}")` never included
+  sub-slot either, so the added tuple element is simply never consulted
+  there. Proven with three new fixtures -- `subslotpkg` (`SLOT="0/2"`),
+  `subslotconsumer` (`RDEPEND="dev-libs/subslotpkg:0/2"`, an exact
+  match) and `subslotmismatchconsumer` (`RDEPEND=
+  "dev-libs/subslotpkg:0/3"`, a genuine mismatch) -- the second pair
+  deliberately proving this is real matching, not "always accept
+  regardless of sub-slot": before this fix, *both* would have silently
+  failed to resolve their own dependency at all.
 
   **Nested `@set` references.** Closes the `@world` slice's own
   documented gap (see the correction on that paragraph above), grounded
@@ -2725,6 +2774,18 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/slotoperatorp
 # [ebuild  N] dev-libs/slotoperatorpkg-1.0
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  N] dev-libs/multislotpkg-2.0
+
+# a real sub-slot restriction (":0/2", PMS 8.3.3, not a slot-operator) now
+# actually matches -- dev-libs/subslotpkg's own SLOT is "0/2"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/subslotconsumer
+# [ebuild  N] dev-libs/subslotconsumer-1.0
+# [ebuild  N] dev-libs/subslotpkg-1.0
+
+# ...and a genuine sub-slot mismatch (":0/3" against the same "0/2"
+# candidate) is genuinely rejected, not just always accepted
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/subslotmismatchconsumer
+# [ebuild  N] dev-libs/subslotmismatchconsumer-1.0
+# !!! no visible ebuild for dependency "dev-libs/subslotpkg"
 
 # real USE-dep dependency atoms are resolved AND enforced now: both
 # "[bar(+)]"/"[baz(+)?]" are (+)-defaulted flags missing from their own

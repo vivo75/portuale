@@ -450,12 +450,13 @@ def list_candidates(repos, category, package):
             except OSError:
                 continue
             keywords = metadata.get("KEYWORDS", "").split()
-            slot = metadata.get("SLOT", "0").split("/")[0]
+            slot, sub_slot = _split_slot(metadata.get("SLOT", "0"))
             candidates.append(
                 {
                     "version": version,
                     "keywords": keywords,
                     "slot": slot,
+                    "sub_slot": sub_slot,
                     "repo_location": repo["location"],
                     "repo_priority": repo["priority"],
                     "repo_name": repo["name"],
@@ -670,7 +671,7 @@ def is_visible(candidate, category, package, config):
     _masks dict collects package.mask, LICENSE, PROPERTIES, and RESTRICT
     as four independent masking reasons the same way."""
     candidate_str = (
-        f"{category}/{package}-{candidate['version']}:{candidate['slot']}"
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}/{candidate['sub_slot']}"
         f"::{candidate['repo_name']}"
     )
 
@@ -966,7 +967,10 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
     if not metadata.get("IUSE"):
         return None
     cur_iuse = {tok.lstrip("+-") for tok in metadata["IUSE"].split()}
-    candidate_str = f"{category}/{package}-{version}:{candidate['slot']}::{candidate['repo_name']}"
+    candidate_str = (
+        f"{category}/{package}-{version}:{candidate['slot']}/{candidate['sub_slot']}"
+        f"::{candidate['repo_name']}"
+    )
     cur_use = effective_use_flags(
         config["use_flags"],
         config["package_use"],
@@ -1293,7 +1297,7 @@ def _candidate_iuse_and_use(candidate, category, package, config):
         return (set(), set())
     iuse = {tok.lstrip("+-") for tok in metadata.get("IUSE", "").split()}
     candidate_str = (
-        f"{category}/{package}-{candidate['version']}:{candidate['slot']}::"
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}/{candidate['sub_slot']}::"
         f"{candidate['repo_name']}"
     )
     use_flags = effective_use_flags(
@@ -1324,12 +1328,17 @@ def _max_version(versions):
 
 
 def installed_candidates(root, category, package):
-    """Lists every installed (version, slot) pair for category/package,
-    reading each entry's SLOT file (defaulting to "0" if missing, same
-    fallback as list_candidates). Used for blocker matching, which needs
-    slots to support slotted blocker atoms -- installed_versions below
-    doesn't need this and stays a plain version list for its existing
-    callers. Mirrors portage-repo/src/lib.rs's installed_candidates."""
+    """Lists every installed (version, slot, sub_slot) triple for
+    category/package, reading each entry's SLOT file via _split_slot
+    (defaulting to ("0", "0") if missing, same fallback as
+    list_candidates). Used for blocker matching, which needs slots
+    (sub-slot included) to support slotted blocker atoms --
+    installed_versions below doesn't need this and stays a plain version
+    list for its existing callers. run_deselect itself only ever uses
+    version/slot from this (real Atom(f"{pkg.cp}:{pkg.slot}") never
+    includes sub-slot either), so adding sub_slot here doesn't change its
+    behavior at all. Mirrors portage-repo/src/lib.rs's
+    installed_candidates."""
     cat_dir = os.path.join(root, "var", "db", "pkg", category)
     if not os.path.isdir(cat_dir):
         return []
@@ -1343,15 +1352,16 @@ def installed_candidates(root, category, package):
             continue
         try:
             with open(os.path.join(entry_dir, "SLOT")) as f:
-                slot = f.read().strip().split("/")[0] or "0"
+                raw_slot = f.read().strip()
         except OSError:
-            slot = "0"
-        candidates.append((version, slot))
+            raw_slot = ""
+        slot, sub_slot = _split_slot(raw_slot)
+        candidates.append((version, slot, sub_slot))
     return candidates
 
 
 def installed_versions(root, category, package):
-    return [version for version, _slot in installed_candidates(root, category, package)]
+    return [version for version, _slot, _sub_slot in installed_candidates(root, category, package)]
 
 
 _VAR_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
@@ -2103,7 +2113,8 @@ def resolve_pretend(
     # version/slot matching rules here, mirroring portage-repo's Rust
     # side exactly.
     candidate_strs = [
-        f"{category}/{package}-{c['version']}:{c['slot']}::{c['repo_name']}" for c in visible
+        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+        for c in visible
     ]
     by_str = dict(zip(candidate_strs, visible))
     matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
@@ -2135,7 +2146,7 @@ def resolve_pretend(
             installed_best = _best_candidate(installed_matched)
             installed_str = (
                 f"{category}/{package}-{installed_best['version']}:"
-                f"{installed_best['slot']}::{installed_best['repo_name']}"
+                f"{installed_best['slot']}/{installed_best['sub_slot']}::{installed_best['repo_name']}"
             )
             if any(
                 _matches_config_entry(ex, installed_str, category, package) for ex in excluded
@@ -2182,7 +2193,7 @@ def resolve_pretend(
             if not any(
                 _matches_config_entry(
                     ex,
-                    f"{category}/{package}-{c['version']}:{c['slot']}::{c['repo_name']}",
+                    f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}",
                     category,
                     package,
                 )
@@ -2222,18 +2233,26 @@ def resolve_pretend(
 
 def resolve_blockers(root, pending, entries):
     """Matches each `pending` blocker's target category/package against
-    both currently-installed candidates (installed_candidates) and this
-    graph's own resolved New/Upgrade set (entries, which may now hold
-    more than one slot for the same category/package -- every one of
-    them is a real candidate, not just the first), reusing the real
-    match_from_list exactly as every other atom-vs-candidate check in
-    this module does (it ignores an atom's blocker marker entirely --
-    verified empirically -- so a "!"/"!!"-prefixed atom string matches
-    candidates by category/package/version/slot exactly like a normal
-    one). A match against the owner package's own resolved version is
-    dropped defensively (a package blocking itself is nonsensical, but
-    cheap to guard against). Returns (owner_key, conflict_dict) pairs.
-    Mirrors portage-repo/src/lib.rs's resolve_blockers exactly."""
+    both currently-installed candidates (installed_candidates, sub-slot
+    included) and this graph's own resolved New/Upgrade set (entries,
+    which may now hold more than one slot for the same category/package
+    -- every one of them is a real candidate, not just the first),
+    reusing the real match_from_list exactly as every other atom-vs-
+    candidate check in this module does (it ignores an atom's blocker
+    marker entirely -- verified empirically -- so a "!"/"!!"-prefixed
+    atom string matches candidates by category/package/version/slot
+    exactly like a normal one). A match against the owner package's own
+    resolved version is dropped defensively (a package blocking itself
+    is nonsensical, but cheap to guard against). Returns (owner_key,
+    conflict_dict) pairs.
+
+    `entries`' own contribution has no real sub-slot data at all -- its
+    own "slot" field deliberately stays main-slot-only for now (a
+    documented, narrower scope cut than installed_candidates's own repo/
+    vdb-backed fix), so it defaults sub-slot to the main slot itself,
+    the same fallback _split_slot already uses for a plain (no "/")
+    SLOT value. Mirrors portage-repo/src/lib.rs's resolve_blockers
+    exactly."""
     conflicts = []
     for pb in pending:
         target_key = (pb["target_category"], pb["target_package"])
@@ -2253,15 +2272,16 @@ def resolve_blockers(root, pending, entries):
                 continue
             if slot is None:
                 continue
-            if (version, slot) not in candidates:
-                candidates.append((version, slot))
+            if not any(v == version and s == slot for v, s, _ss in candidates):
+                candidates.append((version, slot, slot))
         candidate_strs = [
-            f"{pb['target_category']}/{pb['target_package']}-{v}:{s}" for v, s in candidates
+            f"{pb['target_category']}/{pb['target_package']}-{v}:{s}/{ss}"
+            for v, s, ss in candidates
         ]
         matched = match_from_list(pb["atom_str"], candidate_strs)
         by_str = dict(zip(candidate_strs, candidates))
         for m in matched:
-            matched_version, _matched_slot = by_str[m]
+            matched_version, _matched_slot, _matched_sub_slot = by_str[m]
             if target_key == pb["owner_key"] and matched_version == pb["owner_version"]:
                 continue
             conflicts.append(
@@ -2539,6 +2559,7 @@ def resolve_pretend_graph(
             continue
         resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
         slot = resolved["slot"]
+        sub_slot = resolved["sub_slot"]
         repo_location = resolved["repo_location"]
         repo_name = resolved["repo_name"]
 
@@ -2578,7 +2599,7 @@ def resolve_pretend_graph(
             metadata = read_md5_cache(repo_location, category, pf)
         except OSError:
             continue
-        candidate_str = f"{category}/{package}-{version}:{slot}::{repo_name}"
+        candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
         use_flags = effective_use_flags(
             config["use_flags"],
             config["package_use"],
@@ -2767,6 +2788,7 @@ def _enqueue_dependencies(
         return
     resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
     slot = resolved["slot"]
+    sub_slot = resolved["sub_slot"]
     repo_location = resolved["repo_location"]
     repo_name = resolved["repo_name"]
 
@@ -2775,7 +2797,7 @@ def _enqueue_dependencies(
         metadata = read_md5_cache(repo_location, category, pf)
     except OSError:
         return
-    candidate_str = f"{category}/{package}-{version}:{slot}::{repo_name}"
+    candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
     use_flags = effective_use_flags(
         config["use_flags"],
         config["package_use"],
@@ -3449,7 +3471,7 @@ def _run_deselect(targets, root):
                 return 1
             expanded.append(atom)
             category, package = atom.cp.split("/", 1)
-            for version, slot in installed_candidates(root, category, package):
+            for version, slot, _sub_slot in installed_candidates(root, category, package):
                 candidate_str = f"{category}/{package}-{version}:{slot}"
                 if match_from_list(target, [candidate_str]):
                     vardb_atom = _parse_atom(f"{category}/{package}:{slot}")
