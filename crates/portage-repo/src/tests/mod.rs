@@ -482,6 +482,7 @@ mod tests_165;
 mod tests_166;
 
 mod blockers;
+mod candidates;
 mod license;
 mod masked_deps;
 mod reinstall;

@@ -2,6 +2,65 @@
 
 use crate::*;
 
+pub(crate) struct FlagIsSettableArgs<'a> {
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) flag: &'a str,
+    pub(crate) desired: bool,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
+/// Whether `flag` can actually be forced to `desired` via a
+/// `package.use` entry: mask/force always override `package.use`, so a
+/// masked/forced flag is never settable. Probed by recomputing
+/// `effective_use_flags` with a synthetic maximally-specific entry and
+/// checking the result reflects `desired`.
+/// Portage: _wrapped_select_pkg_highest_available_imp, can_adjust_use
+pub(crate) fn flag_is_settable(args: FlagIsSettableArgs<'_>) -> bool {
+    let FlagIsSettableArgs {
+        candidate,
+        category,
+        package,
+        flag,
+        desired,
+        config,
+    } = args;
+    let pf = format!("{package}-{}", candidate.version);
+    let Ok(metadata) = repo_aux_metadata(&candidate.repo_location, category, &pf) else {
+        return false;
+    };
+    let iuse = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let synthetic_token = if desired {
+        flag.to_string()
+    } else {
+        format!("-{flag}")
+    };
+    // A plain `=category/package-version` atom: `candidate_str` itself
+    // carries a `:slot/subslot::repo` suffix no atom pattern parses.
+    let synthetic_atom = format!("={category}/{package}-{}", candidate.version);
+    // The synthetic entry joins the `autounmask_use` tier (top): a
+    // mask/force override discards it, which is what makes the flag
+    // "not settable".
+    let mut probe = config.clone();
+    probe
+        .autounmask_use
+        .push((synthetic_atom, vec![synthetic_token]));
+    let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
+        config: &probe,
+        iuse,
+        keywords: &candidate.keywords,
+        candidate_str: &candidate_str,
+        category,
+        package,
+    });
+    use_flags.contains(flag) == desired
+}
+
 /// A package's declared `IUSE` (markers stripped) folded together with
 /// the arch list, `use.mask ∪ use.force`, the literal
 /// `build`/`bootstrap` flags and `iuse_effective`: the full domain for
