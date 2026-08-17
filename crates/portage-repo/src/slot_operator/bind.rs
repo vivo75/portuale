@@ -31,3 +31,18 @@ pub(crate) fn built_equals_shifted_slot(
     built_equals_binding(root, repos, category, package)
         .is_some_and(|(_, bound_sub)| bound_sub != existing_sub)
 }
+
+/// Removes every atom on an installed libc provider from a flattened set.
+// Portage: dep/libc.py, strip_libc_deps
+pub(crate) fn strip_libc_atoms(
+    mut atoms: HashSet<String>,
+    libc_cps: &HashSet<(String, String)>,
+) -> HashSet<String> {
+    if libc_cps.is_empty() {
+        return atoms;
+    }
+    atoms.retain(|t| {
+        portage_dep::parse_atom(t).is_none_or(|a| !libc_cps.contains(&(a.category, a.package)))
+    });
+    atoms
+}
