@@ -996,6 +996,119 @@ fn parse_toggle_opts<'a>(
     }
 }
 
+/// Build-output flags. Returns whether the token was consumed.
+fn parse_build_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--changed-slot" {
+        // Same shape as `--changed-deps`.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.changed_slot = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.changed_slot = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.changed_slot = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--changed-slot=y" || arg == "--changed-slot=True" {
+        opts.changed_slot = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--changed-slot=n" {
+        opts.changed_slot = false;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--newrepo" {
+        opts.newrepo = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--emptytree" || arg == "-e" {
+        opts.emptytree = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--buildpkgonly" || arg == "-B" {
+        opts.buildpkgonly = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--buildpkg" || arg == "-b" {
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.buildpkg_opt = Some(true);
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.buildpkg_opt = Some(false);
+                *idx += 2;
+            }
+            _ => {
+                opts.buildpkg_opt = Some(true);
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--buildpkg=y" {
+        opts.buildpkg_opt = Some(true);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--buildpkg=n" {
+        opts.buildpkg_opt = Some(false);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--quiet-build" {
+        // Bare / `y` -> redirect build output to `${T}/build.log`.
+        // (`n` still captures under `-j` > 1.)
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.quiet_build = Some(true);
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.quiet_build = Some(false);
+                *idx += 2;
+            }
+            _ => {
+                opts.quiet_build = Some(true);
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--quiet-build=y" || arg == "--quiet-build=True" {
+        opts.quiet_build = Some(true);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--quiet-build=n" {
+        opts.quiet_build = Some(false);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--keep-going" {
+        opts.keep_going = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--debug" || arg == "-d" {
+        // Sets `PORTAGE_DEBUG=1` in the phase env for a build; a no-op
+        // for `--pretend`.
+        opts.debug = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--resume" || arg == "-r" {
+        opts.resume = true;
+        *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Autounmask scope flags. Returns whether the token was consumed.
 fn parse_autounmask_scope_opts<'a>(
     opts: &mut EmergeOpts<'a>,

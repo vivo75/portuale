@@ -30,3 +30,10 @@ fn candidate_iuse_and_use_reads_a_binarys_own_baked_use() {
     );
     assert_eq!(*use_flags, HashSet::from(["feat".to_string()]));
 }
+
+#[test]
+fn split_slot_defaults_sub_slot_to_the_slot_itself_when_no_slash_is_present() {
+    assert_eq!(split_slot("0"), ("0".to_string(), "0".to_string()));
+    assert_eq!(split_slot("0/2"), ("0".to_string(), "2".to_string()));
+    assert_eq!(split_slot(""), ("0".to_string(), "0".to_string()));
+}

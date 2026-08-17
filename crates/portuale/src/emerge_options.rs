@@ -290,6 +290,11 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_changed_slot_itself() {
+        assert!(lookup("--changed-slot").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }
