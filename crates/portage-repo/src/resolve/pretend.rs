@@ -2,6 +2,86 @@
 
 use crate::*;
 
+/// Arguments of [`dependency_avoid_update_candidate`].
+pub(crate) struct DependencyAvoidUpdateCandidateArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) atom: &'a portage_dep::Atom,
+    pub(crate) atom_str: &'a str,
+    pub(crate) candidates: &'a [Candidate],
+    pub(crate) installed: &'a [(String, String, String)],
+    pub(crate) config: &'a portage_profile::Config,
+}
+
+/// Portage's early `avoid_update` return for a DEPENDENCY atom: the highest installed
+/// version of `category/package` matching `atom_str` (version/slot/repo, via the FULL
+/// `candidates` list, deliberately NOT `is_visible`-filtered) that also satisfies the
+/// atom's USE-deps against that version's own installed vdb `USE`/`IUSE` (not the
+/// current tree's). `None` when no installed version qualifies.
+///
+/// `installed` is the vdb's `(version, slot, sub_slot)` triples: a repo candidate only
+/// counts when that *exact `(version, slot)` pair* is installed (Portage's
+/// `vardb.match(atom)` matches the slot too).
+///
+/// Called twice in `resolve_pretend`: once *before* tree visibility filtering (so a
+/// dependency satisfied only by a masked-but-installed version never spuriously hits
+/// `NoVisibleCandidate`), and once more from the ordinary `!update` shortcut (the only
+/// place still reachable with `--exclude`).
+// Portage: lib/_emerge/depgraph.py, _select_pkg_highest_available_imp;
+// _want_update_pkg; _iter_match_pkgs; dbapi._iuse_implicit_cnstr
+pub(crate) fn dependency_avoid_update_candidate<'a>(
+    args: DependencyAvoidUpdateCandidateArgs<'a>,
+) -> Option<&'a Candidate> {
+    let DependencyAvoidUpdateCandidateArgs {
+        root,
+        atom,
+        atom_str,
+        candidates,
+        installed,
+        config,
+    } = args;
+    let all_candidates_by_str: HashMap<String, &Candidate> = candidates
+        .iter()
+        .map(|c| {
+            (
+                format!(
+                    "{}/{}-{}:{}/{}::{}",
+                    atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+                ),
+                c,
+            )
+        })
+        .collect();
+    let all_refs: Vec<&str> = all_candidates_by_str.keys().map(String::as_str).collect();
+    portage_dep::match_from_list(atom_str, &all_refs)?
+        .into_iter()
+        .filter_map(|m| all_candidates_by_str.get(m).copied())
+        .filter(|c| {
+            installed
+                .iter()
+                .any(|(v, s, _sub)| v == &c.version && s == &c.slot)
+        })
+        .filter(|c| match &atom.use_deps {
+            Some(use_deps) if !use_deps.is_empty() => {
+                let vdb_iuse =
+                    read_vdb_flag_set(root, &atom.category, &atom.package, &c.version, "IUSE");
+                let vdb_use =
+                    read_vdb_flag_set(root, &atom.category, &atom.package, &c.version, "USE");
+                // Portage's `dbapi._iuse_implicit_cnstr` domain for a *built* package: recorded
+                // `IUSE` ∪ profile `IUSE_EFFECTIVE` (via `valid_iuse`) ∪ the package's own
+                // recorded `USE` (a built package's own `USE` is authoritative,
+                // e.g. an ebuild that has since dropped a flag from `IUSE`). Portuale
+                // recomputes rather than reading a persisted `IUSE_EFFECTIVE` file.
+                let mut valid = valid_iuse(&vdb_iuse, config);
+                valid.extend(vdb_use.iter().cloned());
+                portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
+            }
+            _ => true,
+        })
+        .max_by(|a, b| {
+            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+        })
+}
+
 /// Shared by both of `resolve_pretend`'s `!update` shortcut call sites: once an
 /// installed version is chosen to keep, decides between `AlreadyInstalled` and
 /// `Reinstall`. Each of `newuse`/`changed_use`/`changed_deps`/`changed_slot`/
