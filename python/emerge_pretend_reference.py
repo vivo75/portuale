@@ -3814,17 +3814,17 @@ def _json_bool(b):
     return "true" if b else "false"
 
 
-def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, top_level_pkgs, verbose):
+def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, top_level_pkgs, verbose):
     """One JSON object per entry -- a structured mirror of the plain-text
-    "[ebuild ...]"/"already installed"/blocker lines in run(), plus two
-    fields no plain-text line carries at all: "requested" (was this
-    exact category/package one of the atoms given directly, as opposed
-    to reached only via a dependency string) and "required_by" (which
-    package(s), if any, pulled it in that way). "source" is always
-    "ebuild": this pilot has no binary-package support anywhere (no
-    --usepkg/--getbinpkg, no binpkg reading at all), so nothing else is
-    ever possible -- included so a consumer doesn't have to assume it,
-    not because this pilot actually distinguishes binary from source.
+    "[ebuild ...]"/"[binary ...]"/"already installed"/blocker lines in
+    run(), plus two fields no plain-text line carries at all: "requested"
+    (was this exact category/package one of the atoms given directly, as
+    opposed to reached only via a dependency string) and "required_by"
+    (which package(s), if any, pulled it in that way). "source" mirrors
+    the plain-text loop's own "bracket" variable in run()
+    ("binary"/"ebuild", real RootConfig.py's own pkg_tree_map-driven
+    type_name) -- until the binary-package slice (--usepkg/--usepkgonly)
+    this was always "ebuild" unconditionally; it no longer is.
     Deliberately NOT affected by --onlydeps's own suppression (a
     display-only concern for the plain-text loop in run()): --json
     always dumps the whole resolved graph, letting a consumer filter on
@@ -3851,7 +3851,7 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
         fields.append(f'"changed_slot":{_json_bool(outcome[4])}')
     fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
     if tag != "no_visible_candidate":
-        fields.append('"source":"ebuild"')
+        fields.append(f'"source":{_json_string(source)}')
     fields.append(f'"requested":{_json_bool(requested)}')
     required_by_json = ",".join(
         f'{{"category":{_json_string(c)},"package":{_json_string(p)}}}' for c, p in required_by
@@ -3892,7 +3892,9 @@ def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, ve
     pilot-specific convenience format, not a stable schema -- see run()'s
     own --json handling). Mirrors pretend.rs's own print_json exactly."""
     entries_json = ",".join(
-        _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, top_level_pkgs, verbose)
+        _entry_to_json(
+            category, package, outcome, blockers, slot, use_display, required_by, source, top_level_pkgs, verbose
+        )
         for category, package, outcome, blockers, slot, use_display, required_by, source in entries
     )
     conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)

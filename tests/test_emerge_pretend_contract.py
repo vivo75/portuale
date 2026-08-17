@@ -3873,21 +3873,28 @@ def test_json_without_verbose_omits_use_flags(emerge_binary, fixture_env):
     assert "use_flags" not in useflagpkg
 
 
-def test_json_source_is_always_ebuild_except_for_no_visible_candidate(
+def test_json_source_reflects_ebuild_vs_binary_and_is_omitted_for_no_visible_candidate(
     emerge_binary, fixture_env
 ):
-    """This pilot has no binary-package support anywhere -- "source" is
-    always "ebuild" for anything actually resolved, and omitted
-    entirely (nothing was resolved at all) for a dependency-level
-    no_visible_candidate."""
+    """"source" mirrors the plain-text loop's own bracket word ("ebuild"/
+    "binary", real RootConfig.py's own pkg_tree_map-driven type_name),
+    not a hardcoded constant -- entry_to_json used to emit a literal
+    "ebuild" regardless of entry.source, a real bug left over from
+    before binary-package support (--usepkg/--usepkgonly) existed at
+    all, only caught once a binary candidate could actually resolve.
+    "source" is omitted entirely for a dependency-level
+    no_visible_candidate (nothing was resolved at all)."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "--json", "dev-libs/missingdep"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--json", "--usepkg", "dev-libs/missingdep", "dev-libs/binaryonlypkg"],
+        fixture_env,
     )
     assert result.returncode == 0
     payload = json.loads(result.stdout)
-    by_outcome = {e["outcome"]: e for e in payload["entries"]}
-    assert by_outcome["new"]["source"] == "ebuild"
-    assert "source" not in by_outcome["no_visible_candidate"]
+    by_package = {e["package"]: e for e in payload["entries"]}
+    assert by_package["missingdep"]["source"] == "ebuild"
+    assert by_package["binaryonlypkg"]["source"] == "binary"
+    assert "source" not in by_package["doesnotexist-anywhere"]
 
 
 def test_json_dumps_the_whole_graph_unaffected_by_onlydeps(emerge_binary, fixture_env):

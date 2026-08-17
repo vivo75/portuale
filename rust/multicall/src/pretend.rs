@@ -325,16 +325,17 @@ fn json_string(s: &str) -> String {
 }
 
 /// One JSON object per `GraphEntry` -- a structured mirror of the plain-
-/// text `[ebuild ...]`/"already installed"/blocker lines above, plus
-/// two fields no plain-text line carries at all: `requested` (was this
-/// exact category/package one of `atoms` directly, as opposed to reached
-/// only via a dependency string) and `required_by` (which package(s), if
-/// any, pulled it in that way -- see `GraphEntry::required_by`'s own doc
-/// comment, portage-repo). `source` is always `"ebuild"`: this pilot has
-/// no binary-package support anywhere (no `--usepkg`/`--getbinpkg`, no
-/// binpkg reading in `portage-repo` at all), so nothing else is ever
-/// possible -- included so a consumer doesn't have to assume it, not
-/// because this pilot actually distinguishes binary from source.
+/// text `[ebuild ...]`/`[binary ...]`/"already installed"/blocker lines
+/// above, plus two fields no plain-text line carries at all: `requested`
+/// (was this exact category/package one of `atoms` directly, as opposed
+/// to reached only via a dependency string) and `required_by` (which
+/// package(s), if any, pulled it in that way -- see
+/// `GraphEntry::required_by`'s own doc comment, portage-repo). `source`
+/// mirrors `entry.source`/the plain-text loop's own `bracket` variable
+/// below (`"binary"`/`"ebuild"`, real `RootConfig.py`'s own
+/// `pkg_tree_map`-driven `type_name`) -- until the binary-package slice
+/// (`--usepkg`/`--usepkgonly`, `portage-repo`) this was always
+/// `"ebuild"` unconditionally; it no longer is.
 /// Deliberately NOT affected by `--onlydeps`'s own suppression (a
 /// display-only concern for the plain-text loop below): `--json` always
 /// dumps the whole resolved graph, letting a consumer filter on
@@ -389,7 +390,11 @@ fn entry_to_json(
             .unwrap_or_else(|| "null".to_string())
     ));
     if !matches!(entry.outcome, PretendOutcome::NoVisibleCandidate) {
-        fields.push("\"source\":\"ebuild\"".to_string());
+        let source_tag = match entry.source {
+            portage_repo::CandidateSource::Binary => "binary",
+            portage_repo::CandidateSource::Ebuild => "ebuild",
+        };
+        fields.push(format!("\"source\":{}", json_string(source_tag)));
     }
     fields.push(format!("\"requested\":{requested}"));
     let required_by: Vec<String> = entry

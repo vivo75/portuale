@@ -2571,13 +2571,18 @@ PORTING/
   resolution -- verified against the existing `dev-libs/diamond` fixture
   (`shared-a`/`shared-b` both RDEPEND on `dev-libs/common`): `common`'s
   own `required_by` lists both, sorted, not just whichever branch the
-  BFS happened to resolve first. `source` is always `"ebuild"` -- this
-  pilot has no binary-package support anywhere (no `--usepkg`/
-  `--getbinpkg`, no binpkg reading in `portage-repo` at all), so nothing
-  else is ever possible; included so a JSON consumer doesn't have to
-  assume it, not because this pilot actually distinguishes binary from
-  source (confirmed with the user directly, choosing this over omitting
-  the field entirely). Output is deliberately unaffected by `--onlydeps`
+  BFS happened to resolve first. `source` mirrors the plain-text loop's
+  own bracket word (`"ebuild"`/`"binary"`, real `RootConfig.py`'s own
+  `pkg_tree_map`-driven `type_name`) -- included since binary-package
+  support (`--usepkg`/`--usepkgonly`) was added so a JSON consumer
+  doesn't have to assume it's always `"ebuild"` (confirmed with the user
+  directly, choosing this over omitting the field entirely, back when it
+  genuinely always was). `entry_to_json` originally hardcoded the
+  literal `"ebuild"` regardless of the entry's own actual source, a real
+  bug left over from before binary-package support existed at all that
+  only surfaced once a binary candidate could actually resolve --
+  fixed to read the entry's own `source`/`candidate_source` instead.
+  Output is deliberately unaffected by `--onlydeps`
   (a display-only concern for the plain-text loop): `--json` always
   dumps the *whole* resolved graph, so a consumer can filter on
   `requested` themselves instead. Hand-rolled JSON on both sides
@@ -3824,7 +3829,12 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --exclude "de
 # above, including "requested" and "required_by" -- two fields no
 # plain-text line has ever carried
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/newpkg
-# {"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new","version":"1.0","slot":"0","source":"ebuild","requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[]}
+# {"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new","version":"1.0","slot":"0","source":"ebuild","requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[]}
+# a binary candidate's own "source" is "binary", not "ebuild" -- entry_to_json
+# used to hardcode the literal "ebuild" regardless of the entry's actual
+# source, a real bug only caught once a binary candidate could resolve at all
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json --usepkg dev-libs/binaryonlypkg
+# {"entries":[{"category":"dev-libs","package":"binaryonlypkg","outcome":"new","version":"1.0","slot":"0","source":"binary","requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[]}
 # dev-libs/common is a diamond dependency (both shared-a and shared-b
 # RDEPEND on it) -- required_by lists both owners, sorted
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/diamond | python3 -c 'import json,sys; print(next(e["required_by"] for e in json.load(sys.stdin)["entries"] if e["package"] == "common"))'
