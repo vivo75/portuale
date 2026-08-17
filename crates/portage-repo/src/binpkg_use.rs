@@ -324,6 +324,31 @@ pub struct ReadBinaryMetadataAnyArgs<'a> {
     pub version: &'a str,
 }
 
+/// `read_binary_metadata` extended to a `--getbinpkg` resolution: the local
+/// `$PKGDIR/Packages` first, then each binrepo's cached index. Used once a
+/// local *or* remote binary candidate is chosen.
+pub fn read_binary_metadata_any(
+    args: ReadBinaryMetadataAnyArgs<'_>,
+) -> Option<HashMap<String, String>> {
+    let ReadBinaryMetadataAnyArgs {
+        config,
+        root,
+        local,
+        category,
+        package,
+        version,
+    } = args;
+    read_binary_metadata_any_instance(ReadBinaryMetadataAnyInstanceArgs {
+        config,
+        root,
+        local,
+        category,
+        package,
+        version,
+        build_id: None,
+    })
+}
+
 /// Arguments of [`read_binary_metadata_any_instance`].
 pub struct ReadBinaryMetadataAnyInstanceArgs<'a> {
     pub config: &'a portage_profile::Config,

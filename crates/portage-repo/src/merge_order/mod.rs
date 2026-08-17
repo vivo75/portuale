@@ -14,11 +14,13 @@
 //! is pure plumbing, identical with it on or off (pinned by unit tests).
 
 use std::cmp::Reverse;
+mod installed_closure;
 mod prelude;
 mod priority;
 
 #[cfg(test)]
 mod tests;
+pub use installed_closure::*;
 pub(crate) use prelude::*;
 pub use priority::*;
 

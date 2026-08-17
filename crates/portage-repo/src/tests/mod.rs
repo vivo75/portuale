@@ -277,6 +277,36 @@ fn s2_conflict(rows: Vec<S2Row<'_>>) -> SlotConflict {
     }
 }
 
+#[derive(Default)]
+struct CtxOpts161 {
+    reachable: HashSet<(String, String)>,
+    backtrack_max: u32,
+    excluded: Vec<String>,
+    atoms: Vec<String>,
+    update: bool,
+    newuse: bool,
+    usepkg: bool,
+    binpkg_respect_use: bool,
+    usepkgonly: bool,
+    nodeps: bool,
+    selective: bool,
+    with_test_deps: bool,
+    deep: Deep,
+    with_bdeps: bool,
+    // `--buildpkgonly` blanks the run-time keys for a non-binary candidate;
+    // default off like every other option flag.
+    buildpkgonly: bool,
+    complete: bool,
+    locked: HashSet<(String, String)>,
+    blocker_closure: HashSet<(String, String)>,
+    /// The request's top-level atom texts (empty here unless a test needs the
+    /// fatal top-level miss or the set-member drop).
+    top_level: Vec<String>,
+    /// Request atoms expanded from `@world`/`@selected`
+    /// (see [`ResolveRequest::set_args`]).
+    set_args: HashSet<String>,
+}
+
 /// The `souprov` slot conflict for the solvable legs: 1.0 and 2.0
 /// pulled, 2.0 resolved.
 fn souprov_conflict_161() -> SlotConflict {
@@ -755,6 +785,57 @@ mod tests_164 {
                 ),
                 ("=dev-libs/ruparent-1.0".to_string(), "argument".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn required_use_dep_chain_164_upgrade_parent_reports_the_to_version() {
+        let entries = vec![entry_164(Entry164Args {
+            category: "dev-libs",
+            package: "ruup",
+            outcome: PretendOutcome::Upgrade {
+                from: "1.0".to_string(),
+                to: "2.0".to_string(),
+            },
+            required_by: Vec::new(),
+            repo: Some("testrepo"),
+            source: CandidateSource::Ebuild,
+        })];
+        let owner = Some(("dev-libs".to_string(), "ruup".to_string()));
+        let top: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
+        let got = required_use_dep_chain(&owner, &top, &entries);
+        assert_eq!(
+            got,
+            vec![(
+                "dev-libs/ruup-2.0::testrepo".to_string(),
+                "ebuild".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn required_use_dep_chain_164_argument_needs_the_same_package() {
+        // A same-category other-package atom is not this parent's
+        // argument line.
+        let entries = vec![entry_164(Entry164Args {
+            category: "dev-libs",
+            package: "rusib",
+            outcome: PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            required_by: Vec::new(),
+            repo: Some("testrepo"),
+            source: CandidateSource::Ebuild,
+        })];
+        let owner = Some(("dev-libs".to_string(), "rusib".to_string()));
+        let top: HashSet<&str> = ["dev-libs/rusibling"].into_iter().collect();
+        let got = required_use_dep_chain(&owner, &top, &entries);
+        assert_eq!(
+            got,
+            vec![(
+                "dev-libs/rusib-1.0::testrepo".to_string(),
+                "ebuild".to_string()
+            )]
         );
     }
 
