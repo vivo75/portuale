@@ -896,21 +896,59 @@ PORTING/
   no matching file is a real, immediate error (real `PackageSetNotFound`,
   which every real call site treats as fatal) -- a genuine configuration
   inconsistency, not an implicitly-optional file that simply might not
-  exist yet. Deliberately still out of scope, confirmed as a *separate*
-  mechanism rather than folded in here: `--deselect`'s own world-atom
-  matching (`run_deselect`) is not integrated with `world_sets`/custom
-  sets at all -- real `action_deselect` operates against the identical
-  combined `world_set` `@world` itself now fully resolves, but
-  deselect's own removal semantics (matching installed candidates,
-  discarding matched world *entries*) are a genuinely different
-  operation from simply resolving `@world` for a dependency walk, not a
-  trivial extension of the same code -- see `run_deselect`'s own doc
-  comment. New fixture packages `nestedsetpkg`/`innernestedsetpkg`
-  (reached only via `PORTING/fixtures/var/lib/portage/world_sets`'s own
-  `@nestedtestset`, whose own `etc/portage/sets/nestedtestset` nests a
-  further `@innernestedset` reference, which itself references back to
+  exist yet. Deliberately still out of scope at the time, confirmed as a
+  *separate* mechanism rather than folded in here: `--deselect`'s own
+  world-atom matching (`run_deselect`) was not integrated with
+  `world_sets`/custom sets at all -- closed by a later follow-up below,
+  which turned out to need neither `resolve_custom_set` nor any nested
+  expansion at all, once real `action_deselect` was read directly rather
+  than assumed to reuse `@world`'s own machinery. New fixture packages
+  `nestedsetpkg`/`innernestedsetpkg` (reached only via
+  `PORTING/fixtures/var/lib/portage/world_sets`'s own `@nestedtestset`,
+  whose own `etc/portage/sets/nestedtestset` nests a further
+  `@innernestedset` reference, which itself references back to
   `@nestedtestset` to exercise the cycle guard) prove the whole path end
   to end.
+
+  **`--deselect`'s own `world_sets` integration**: closes the cut named
+  just above. Grounded against real `action_deselect` itself
+  (`lib/_emerge/actions.py`, lines 1740-1835), read directly rather than
+  assumed from `@world`'s own already-ported `world_sets`/nested-set
+  machinery -- and the two turn out to be genuinely different real
+  mechanisms, not a shared one. Real `action_deselect`'s own combined
+  `world_set` (`WorldSelectedSet`) iterates BOTH `world`'s own plain
+  atoms AND `world_sets`'s own literal `@name` reference *strings* --
+  confirmed by reading `WorldSelectedSet.load`'s own `self._setAtoms(
+  chain(self._pkgset, self._setset))`: a `@name` string fails real
+  `Atom(...)` parsing and lands in the aggregate's own `_nonatoms`, so
+  it's carried through **unexpanded** the whole time, never resolved
+  into its own member atoms at all. `action_deselect`'s own matching
+  loop confirms this directly: a `@`-prefixed CLI target can only ever
+  discard a `@`-prefixed `world_set` entry via *exact string equality*
+  -- there is no installed-candidate matching, no member-atom expansion,
+  for either side. So despite `resolve_custom_set`'s own real, working
+  nested-set expansion (built for -- and still only used by -- `@world`'s
+  own dependency-resolution walk, `SetConfig.getSetAtoms`, a genuinely
+  different real mechanism), it plays no role here at all: this pilot's
+  own equivalent of real `action_deselect`'s own `@`-target handling is
+  a plain membership check against `read_world_sets`'s own already-read
+  list, nothing more. Each discarded entry is now reported against its
+  own real source file (`"world"` for a plain atom, `"world_sets"` for a
+  `@name` reference, matching real `filename = "world_sets" if
+  str(atom).startswith(SETPREFIX) else "world"` exactly) -- and, since
+  real `action_deselect` sorts its *whole* combined `discard_atoms` set
+  together (`sorted(discard_atoms, key=str)`), a plain-atom and a
+  `@name` discard from the same run are interleaved into one sorted
+  list, not printed as two separate "world" then "world_sets" blocks.
+  The `_deselect_root` test fixture (isolated from the shared
+  `PORTING/fixtures` tree, same reasoning `--deselect`'s own original
+  slice already established) gained its own `world_sets` file,
+  `@myselectedset` (matchable) alongside `@anotherselectedset` (present
+  but never targeted, proving only an actually-requested name is ever
+  discarded) -- `--deselect @myselectedset` alone, `--deselect
+  @nosuchset` (no match), and `--deselect dev-libs/foo @myselectedset`
+  together (proving the combined-sort interleaving) all verified to
+  agree between the Rust and Python implementations.
 
   **Multiple top-level atoms**: `emerge --pretend foo bar` -- real
   emerge's most common invocation shape -- was, until this slice,
@@ -3238,6 +3276,19 @@ ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/foo
 # all) never becomes an expanded atom, so nothing is reported for it
 ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/bar
 # >>> No matching atoms found in "world" favorites file...
+
+# --deselect "@name" matches the separate world_sets file by exact name
+# (never expanded against its own set members) -- reported against
+# "world_sets", not "world"
+echo "@mytools" > /tmp/deselect-demo-root/var/lib/portage/world_sets
+ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect @mytools
+# >>> Would remove @mytools from "world_sets" favorites file...
+
+# a plain atom and a "@name" target discarded together are sorted into
+# one combined list, not two separate "world" then "world_sets" blocks
+ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/foo @mytools
+# >>> Would remove @mytools from "world_sets" favorites file...
+# >>> Would remove dev-libs/foo from "world" favorites file...
 
 # --with-bdeps: withbdepspkg is already installed, DEPENDs on
 # builddeponlypkg, BDEPENDs on hostdeponlypkg, RDEPENDs on newpkg --

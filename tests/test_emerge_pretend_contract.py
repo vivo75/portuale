@@ -2031,7 +2031,12 @@ def _deselect_root(tmp_path):
     but never installed; "dev-libs/notinworld" is installed but never
     world-listed; "@some-nested-set-reference" proves a "@"-prefixed
     world line is still silently skipped here too, same as @world
-    expansion already does."""
+    expansion already does. The separate world_sets file (real
+    portage's own WORLD_SETS_FILE, genuinely distinct from the world
+    file above) lists "@myselectedset" (matchable by
+    "--deselect @myselectedset") and "@anotherselectedset" (present but
+    never targeted by any test, so it must never appear in a "Would
+    remove" line on its own)."""
     world = tmp_path / "var" / "lib" / "portage" / "world"
     world.parent.mkdir(parents=True)
     world.write_text(
@@ -2041,6 +2046,8 @@ def _deselect_root(tmp_path):
         "dev-libs/qux\n"
         "@some-nested-set-reference\n"
     )
+    world_sets = tmp_path / "var" / "lib" / "portage" / "world_sets"
+    world_sets.write_text("@myselectedset\n@anotherselectedset\n")
 
     def install(category, package, version, slot="0"):
         pkg_dir = tmp_path / "var" / "db" / "pkg" / category / f"{package}-{version}"
@@ -2156,6 +2163,59 @@ def test_deselect_multiple_targets_discard_sorted_alphabetically(
     ]
 
 
+def test_deselect_at_target_matches_a_world_sets_entry_by_exact_name(
+    emerge_binary, fixture_env, tmp_path
+):
+    """"--deselect @myselectedset" matches the "@myselectedset" line in
+    the separate world_sets file (real portage's own WORLD_SETS_FILE) --
+    real action_deselect never expands a "@name" target's own set
+    members at all, only exact-matches it against a world_set entry
+    that's itself a literal "@name" string, so this needs no vdb/atom
+    matching whatsoever, unlike every other --deselect target. Reported
+    against "world_sets", not "world" -- its own real source file."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "@myselectedset"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> Would remove @myselectedset from "world_sets" favorites file...\n'
+
+
+def test_deselect_at_target_with_no_matching_world_sets_entry_reports_no_match(
+    emerge_binary, fixture_env, tmp_path
+):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "@nosuchset"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> No matching atoms found in "world" favorites file...\n'
+
+
+def test_deselect_combines_a_world_atom_and_a_world_sets_entry_sorted_together(
+    emerge_binary, fixture_env, tmp_path
+):
+    """A plain atom target and a "@name" target discarded in the same
+    run are sorted into ONE combined list (real "sorted(discard_atoms,
+    key=str)"), not printed as two separate "world" then "world_sets"
+    blocks -- "@myselectedset" sorts before "dev-libs/foo" (real Python
+    "@" < "d" and canonical str.sort() ordering, which this pilot's own
+    plain string sort already matches)."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "dev-libs/foo", "@myselectedset"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '>>> Would remove @myselectedset from "world_sets" favorites file...',
+        '>>> Would remove dev-libs/foo from "world" favorites file...',
+    ]
+    assert "anotherselectedset" not in result.stdout
+
+
 def test_deselect_with_no_targets_at_all_reports_no_match(emerge_binary, fixture_env, tmp_path):
     result = _run(
         [str(emerge_binary)], ["--pretend", "--deselect"], _deselect_env(fixture_env, tmp_path)
@@ -2220,6 +2280,9 @@ def test_deselect_matches_between_implementations(
         ["--pretend", "--deselect", "foo"],
         ["--pretend", "--deselect", "dev-libs/baz"],
         ["--pretend", "--deselect", "dev-libs/foo", "dev-libs/bar"],
+        ["--pretend", "--deselect", "@myselectedset"],
+        ["--pretend", "--deselect", "@nosuchset"],
+        ["--pretend", "--deselect", "dev-libs/foo", "@myselectedset"],
         ["--pretend", "--deselect"],
         ["--deselect", "dev-libs/foo"],
     ):

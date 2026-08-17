@@ -3381,11 +3381,37 @@ def _run_deselect(targets, root):
     since neither exercises the version-range/USE-dep territory where
     the two would actually diverge. A "@"-prefixed world entry is never
     matched, consistent with _read_world_atoms's own pre-existing cut for
-    @world itself. Mirrors pretend.rs's run_deselect exactly."""
+    @world itself.
+
+    A "@name" target: real action_deselect's own combined world_set
+    (WorldSelectedSet) iterates BOTH the world file's own plain atoms AND
+    the world_sets file's own literal "@name" reference *strings* --
+    confirmed by reading WorldSelectedSet.load's own
+    "self._setAtoms(chain(self._pkgset, self._setset))": a "@name"
+    string fails real Atom(...) parsing and lands in _nonatoms, so it's
+    carried through *unexpanded*, never resolved into its own member
+    atoms at all. action_deselect's own matching loop confirms this: a
+    "@"-prefixed CLI target can only ever discard a "@"-prefixed
+    world_set entry via *exact string equality* -- there is no
+    installed-candidate matching, no member-atom expansion, for either
+    side. So despite _resolve_custom_set's own real, working nested-set
+    expansion (built for -- and still only used by -- @world's own
+    dependency-resolution walk, a genuinely different real mechanism),
+    it has no role here at all: this pilot's own equivalent is a plain
+    membership check against _read_world_sets, nothing more. Each
+    discarded entry is reported against its own real source file
+    ("world" for a plain atom, "world_sets" for a "@name" reference),
+    sorted together into one combined list, not two separate blocks.
+    Mirrors pretend.rs's run_deselect exactly."""
     world_atoms = _read_world_atoms(root)
+    world_sets = _read_world_sets(root)
 
     expanded = set()
+    set_targets = set()
     for target in targets:
+        if target.startswith("@"):
+            set_targets.add(target[1:])
+            continue
         if "/" in target:
             candidate_atom_strs = [target]
         else:
@@ -3413,14 +3439,17 @@ def _run_deselect(targets, root):
             continue
         for cat, pkg, slot in expanded:
             if w.cp == f"{cat}/{pkg}" and (w.slot is None or w.slot == slot):
-                discard.append(world_atom_str)
+                discard.append((world_atom_str, "world"))
                 break
+    for name in world_sets:
+        if name in set_targets:
+            discard.append((f"@{name}", "world_sets"))
 
     if not discard:
         print('>>> No matching atoms found in "world" favorites file...')
     else:
-        for atom in sorted(discard):
-            print(f'>>> Would remove {atom} from "world" favorites file...')
+        for entry, filename in sorted(discard):
+            print(f'>>> Would remove {entry} from "{filename}" favorites file...')
     return 0
 
 

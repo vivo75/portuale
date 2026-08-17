@@ -716,21 +716,31 @@ fn resolve_custom_set(
 /// grammar has no `intersects()` equivalent, and the dominant real-world
 /// `--deselect` usage (a plain, unversioned target against a plain,
 /// unversioned or slot-qualified world entry) is fully captured by this
-/// narrower category/package(+slot) check. Deliberately, still
-/// out-of-scope here (unlike `@world`'s own expansion, which now does
-/// resolve `world_sets`/nested custom sets -- see `read_world_sets`'s
-/// own doc comment): a `--deselect @some-set` target, or a world-set
-/// member being considered for removal, is never expanded against
-/// `world_sets`/custom sets at all -- `read_world_atoms` above only
-/// ever returns the plain world *file*'s own atoms. Real
-/// `action_deselect` operates against the same combined `world_set`
-/// (`WorldSelectedSet`, atoms + sets together) `@world` itself uses, so
-/// this is a real, narrower scope than real portage's own -- confirmed
-/// deliberate rather than fixed alongside `@world`'s own expansion,
-/// since deselect's own removal semantics (matching installed
-/// candidates, discarding matched world *entries*) are a genuinely
-/// separate mechanism from simply resolving `@world` for a dependency
-/// walk, not a trivial extension of the same code.
+/// narrower category/package(+slot) check.
+///
+/// `--deselect @some-set`: real `action_deselect`'s own combined
+/// `world_set` (`WorldSelectedSet`) iterates BOTH `world`'s own plain
+/// atoms AND `world_sets`'s own literal `@name` reference *strings* --
+/// confirmed by reading `WorldSelectedSet.load`'s own `self._setAtoms(
+/// chain(self._pkgset, self._setset))`: a `@name` string fails real
+/// `Atom(...)` parsing and lands in `_nonatoms`, so it's carried through
+/// *unexpanded*, never resolved into its own member atoms at all.
+/// `action_deselect`'s own matching loop confirms this: a `@`-prefixed
+/// CLI target can only ever discard a `@`-prefixed `world_set` entry via
+/// *exact string equality* (`arg_atom == atom`) -- there is no
+/// installed-candidate matching, no member-atom expansion, for either
+/// side. So despite `resolve_custom_set`'s own real, working nested-set
+/// expansion (built for -- and still only used by -- `@world`'s own
+/// dependency-resolution walk, a genuinely different real mechanism,
+/// `SetConfig.getSetAtoms`), it has no role here at all: this pilot's
+/// own equivalent is a plain membership check against `read_world_sets`
+/// (`@name` stripped of its own leading `@` for the comparison), nothing
+/// more. Each discarded entry is reported against its own real source
+/// file (`"world"` for a plain atom, `"world_sets"` for a `@name`
+/// reference), matching real `action_deselect`'s own `filename =
+/// "world_sets" if str(atom).startswith(SETPREFIX) else "world"` --
+/// sorted together into one combined list, not two separate blocks,
+/// mirroring real `sorted(discard_atoms, key=str)` exactly.
 ///
 /// Real `action_deselect` always returns `os.EX_OK` on every reachable
 /// path here (found matches, no matches, even no targets at all) --
@@ -743,9 +753,25 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let world_sets = match read_world_sets(root) {
+        Ok(sets) => sets,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
 
     let mut expanded: HashSet<(String, String, String)> = HashSet::new();
+    // A `@name` target only ever matches a `world_sets` entry by exact
+    // name -- see this function's own doc comment -- so it's collected
+    // separately, never fed through the atom-expansion/vardb-matching
+    // path below at all.
+    let mut set_targets: HashSet<&str> = HashSet::new();
     for target in targets {
+        if let Some(name) = target.strip_prefix('@') {
+            set_targets.insert(name);
+            continue;
+        }
         let candidate_atom_strs: Vec<String> = if target.contains('/') {
             vec![(*target).to_string()]
         } else {
@@ -774,7 +800,10 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
         }
     }
 
-    let mut discard: Vec<&String> = world_atoms
+    // (entry text, source file) pairs -- combined and sorted together as
+    // one list, matching real `sorted(discard_atoms, key=str)` (not two
+    // separate "world" then "world_sets" blocks).
+    let mut discard: Vec<(String, &'static str)> = world_atoms
         .iter()
         .filter(|world_atom_str| {
             let Some(w) = parse_atom(world_atom_str) else {
@@ -786,14 +815,21 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
                     && w.slot.as_deref().is_none_or(|ws| ws == slot)
             })
         })
+        .map(|s| (s.clone(), "world"))
         .collect();
+    discard.extend(
+        world_sets
+            .iter()
+            .filter(|name| set_targets.contains(name.as_str()))
+            .map(|name| (format!("@{name}"), "world_sets")),
+    );
 
     if discard.is_empty() {
         println!(">>> No matching atoms found in \"world\" favorites file...");
     } else {
-        discard.sort();
-        for atom in discard {
-            println!(">>> Would remove {atom} from \"world\" favorites file...");
+        discard.sort_by(|a, b| a.0.cmp(&b.0));
+        for (entry, filename) in discard {
+            println!(">>> Would remove {entry} from \"{filename}\" favorites file...");
         }
     }
     ExitCode::SUCCESS
