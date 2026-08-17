@@ -313,3 +313,54 @@ pub fn read_binary_metadata_instance(
     let want = format!("{category}/{package}-{version}");
     pick_binary_instance(index.entries(), &want, build_id).cloned()
 }
+
+/// Arguments of [`read_binary_metadata_any`].
+pub struct ReadBinaryMetadataAnyArgs<'a> {
+    pub config: &'a portage_profile::Config,
+    pub root: &'a Path,
+    pub local: &'a BinaryIndex,
+    pub category: &'a str,
+    pub package: &'a str,
+    pub version: &'a str,
+}
+
+/// Arguments of [`read_binary_metadata_any_instance`].
+pub struct ReadBinaryMetadataAnyInstanceArgs<'a> {
+    pub config: &'a portage_profile::Config,
+    pub root: &'a Path,
+    pub local: &'a BinaryIndex,
+    pub category: &'a str,
+    pub package: &'a str,
+    pub version: &'a str,
+    pub build_id: Option<&'a str>,
+}
+
+/// [`read_binary_metadata_any`] for the build the resolver selected:
+/// `Some(build_id)` searches every index for exactly that build first,
+/// so a chosen instance never walks another's dep strings.
+pub fn read_binary_metadata_any_instance(
+    args: ReadBinaryMetadataAnyInstanceArgs<'_>,
+) -> Option<HashMap<String, String>> {
+    let ReadBinaryMetadataAnyInstanceArgs {
+        config,
+        root,
+        local,
+        category,
+        package,
+        version,
+        build_id,
+    } = args;
+    let lookup = |build_id: Option<&str>| {
+        if let Some(m) = read_binary_metadata_instance(local, category, package, version, build_id)
+        {
+            return Some(m);
+        }
+        config.binrepos.iter().find_map(|binrepo| {
+            let index = cached_binary_index(&binrepo.packages_dir(root));
+            read_binary_metadata_instance(&index, category, package, version, build_id)
+        })
+    };
+    build_id
+        .and_then(|id| lookup(Some(id)))
+        .or_else(|| lookup(None))
+}
