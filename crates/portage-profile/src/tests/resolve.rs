@@ -82,3 +82,31 @@ fn resolves_fixture_profile_chain_and_make_conf() {
         ])
     );
 }
+
+#[test]
+fn license_groups_come_from_each_repo_profiles_dir_not_the_profile_chain() {
+    // A `license_groups` file in a profile-chain directory must be IGNORED:
+    // Portage reads it only from `<repo>/profiles/license_groups`.
+    let root = fixtures_root();
+    let stray = root.join("repo/profiles/base/license_groups");
+    std::fs::write(&stray, "EULA StrayShouldBeIgnored\n").unwrap();
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    });
+    std::fs::remove_file(&stray).ok();
+    let config = config.expect("fixture config must resolve");
+    // Only the two repo-level members, in repo-then-overlay order.
+    assert_eq!(
+        config.license_groups.get("EULA"),
+        Some(&vec![
+            "SomeEula".to_string(),
+            "CrossRepoNonfree".to_string()
+        ])
+    );
+}
