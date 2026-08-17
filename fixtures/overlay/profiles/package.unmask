@@ -1,0 +1,3 @@
+# fixture overlay package.unmask: cancels this same overlay's own
+# repo-level package.mask entry for overlaymaskedthenunmaskedpkg.
+dev-libs/overlaymaskedthenunmaskedpkg

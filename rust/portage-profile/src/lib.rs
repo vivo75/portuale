@@ -622,6 +622,34 @@ fn read_config_lines(path: &Path) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
+/// Scopes each of `lines` (raw `package.mask`/`.unmask` entries, a
+/// leading `-` meaning removal) to `repo_name` by appending a `::name`
+/// suffix to the atom portion -- real `append_repo`'s own "atoms
+/// without an explicit repo part get one; atoms that already have one
+/// are left alone" rule (`lib/portage/util/__init__.py`), applied here
+/// to an overlay's own repo-level entries so they can never silently
+/// mask/unmask a same-named package in a *different* repo. A leading
+/// `-` (removal) is preserved ahead of the atom, not swallowed into it
+/// -- `-cat/pkg` scopes to `-cat/pkg::name`, matching real portage's own
+/// behavior of scoping a removal atom exactly like an addition one, so
+/// it can only ever cancel a same-repo-scoped entry.
+fn scope_repo_mask_lines(lines: &[String], repo_name: &str) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            let (prefix, atom) = match line.strip_prefix('-') {
+                Some(rest) => ("-", rest),
+                None => ("", line.as_str()),
+            };
+            if atom.contains("::") {
+                line.clone()
+            } else {
+                format!("{prefix}{atom}::{repo_name}")
+            }
+        })
+        .collect()
+}
+
 /// Stacks ordered `package.mask`/`.unmask` lines from multiple sources
 /// (earlier sources first) with real portage's own `-atom` removal
 /// semantics -- see `MaskManager.py`'s `stack_lists(incremental=1)`: a
@@ -860,11 +888,48 @@ fn parse_package_use_lines(
 /// chain order) and the user-level `/etc/portage` files, exactly
 /// matching real `MaskManager.py`'s three-source stack (see
 /// `stack_mask_lines`'s doc comment for the `-atom`-removal semantics).
-/// An overlay repo's own repo-level `package.mask`/`.unmask` stays
-/// deliberately out of scope, same as the rest of overlays' per-repo
-/// config (see `resolve_pretend_graph`'s doc comment on that follow-up)
-/// -- only the one main repo's is read here.
-pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<Config, String> {
+///
+/// `overlay_repos` (each overlay's own `(name, location)`, e.g. every
+/// non-main entry from `portage_repo::find_repos` -- this crate can't
+/// depend on `portage-repo` itself, hence the plain pair instead of
+/// reusing `RepoConfig`) supplies each overlay's own repo-level
+/// `package.mask`/`.unmask` too, real `MaskManager.py`'s own
+/// `repositories.repos_with_profiles()` loop -- confirmed by reading it
+/// directly: it iterates *every* configured repo unconditionally, not
+/// just the main one. Each overlay's own lines are scoped with a
+/// `::reponame` suffix first (`scope_repo_mask_lines`, real
+/// `append_repo`'s own "atoms without an explicit repo part get one;
+/// atoms that already have one are left alone" rule, applied to a
+/// `-atom` removal line's own atom portion too, preserving the leading
+/// `-`) before being folded into the same stack -- otherwise an
+/// overlay's own mask entry would silently also mask a same-named
+/// package in the main repo or another overlay, which real portage's
+/// own scoping specifically prevents. Deliberately asymmetric,
+/// confirmed while implementing this: the main repo's own entries above
+/// stay unscoped, matching this pilot's own pre-existing (unchanged)
+/// behavior -- real portage scopes *every* repo's own repo-level
+/// entries this same way, including the main repo's, so a `package.mask`
+/// entry from main only masking main's own packages (not an
+/// identically-named overlay package) is a separate, distinct
+/// correctness question this slice doesn't also take on. Real
+/// `masters` (layout.conf repo inheritance -- each repo's own
+/// package.mask stacks with its declared masters' before repo-scoping)
+/// stays a separate, not-yet-implemented mechanism; with no repo in
+/// this pilot's own fixtures declaring any, every repo's own entries
+/// here are read standalone, which is exactly what real portage would
+/// also do for a masters-less repo. `profiles/`
+/// (an overlay's own profile directory joining the active chain) and
+/// `license_groups` from an overlay are NOT part of this same "every
+/// repo, unconditionally" mechanism -- real `LicenseManager`'s own
+/// `profile_locations` and the profile chain itself only ever include
+/// an overlay's own directories if the active chain's `parent` file
+/// uses `reponame:path` syntax to reach into it, a different,
+/// still-out-of-scope mechanism (cross-repo profile parents).
+pub fn resolve_config(
+    config_root: &Path,
+    main_repo_location: &Path,
+    overlay_repos: &[(String, PathBuf)],
+) -> Result<Config, String> {
     let mut config = Config::default();
     let mut scalars: HashMap<String, String> = HashMap::new();
 
@@ -986,6 +1051,16 @@ pub fn resolve_config(config_root: &Path, main_repo_location: &Path) -> Result<C
     let mut unmask_sources: Vec<Vec<String>> = vec![read_config_lines(
         &main_repo_location.join("profiles/package.unmask"),
     )?];
+    for (repo_name, repo_location) in overlay_repos {
+        mask_sources.push(scope_repo_mask_lines(
+            &read_config_lines(&repo_location.join("profiles/package.mask"))?,
+            repo_name,
+        ));
+        unmask_sources.push(scope_repo_mask_lines(
+            &read_config_lines(&repo_location.join("profiles/package.unmask"))?,
+            repo_name,
+        ));
+    }
     for level in &chain {
         mask_sources.push(read_config_lines(&level.join("package.mask"))?);
         unmask_sources.push(read_config_lines(&level.join("package.unmask"))?);
@@ -1307,7 +1382,7 @@ mod tests {
     fn resolves_fixture_profile_chain_and_make_conf() {
         let root = fixtures_root();
         let config =
-            resolve_config(&root, &root.join("repo")).expect("fixture config must resolve");
+            resolve_config(&root, &root.join("repo"), &[]).expect("fixture config must resolve");
         assert_eq!(
             config.use_flags,
             HashSet::from([
@@ -1343,7 +1418,7 @@ mod tests {
     fn missing_profile_and_make_conf_yield_empty_config() {
         let empty_root = std::env::temp_dir().join("portage-profile-test-empty-root");
         let _ = fs::create_dir_all(&empty_root);
-        let config = resolve_config(&empty_root, &empty_root.join("repo"))
+        let config = resolve_config(&empty_root, &empty_root.join("repo"), &[])
             .expect("missing profile/make.conf is not an error");
         assert_eq!(config.use_flags, HashSet::new());
         assert_eq!(config.accept_keywords, HashSet::new());
@@ -1368,7 +1443,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let err = resolve_config(&root, &root.join("repo"))
+        let err = resolve_config(&root, &root.join("repo"), &[])
             .expect_err("cross-repo parent must be rejected");
         assert!(err.contains("out of v1 scope"), "unexpected error: {err}");
     }
@@ -1398,8 +1473,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("top"), &make_profile).unwrap();
 
-        let config =
-            resolve_config(&root, &root.join("repo")).expect("diamond inheritance must resolve");
+        let config = resolve_config(&root, &root.join("repo"), &[])
+            .expect("diamond inheritance must resolve");
         assert_eq!(
             config.use_flags,
             HashSet::from(["sharedflag".to_string(), "topflag".to_string()])
@@ -1430,7 +1505,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"))
+        let config = resolve_config(&root, &root.join("repo"), &[])
             .expect("config with package.* files must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/foo".to_string()]);
         assert_eq!(config.package_unmask, vec!["dev-libs/baz".to_string()]);
@@ -1479,10 +1554,72 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.package_mask,
             vec!["dev-libs/b".to_string(), "dev-libs/d".to_string()]
+        );
+    }
+
+    #[test]
+    fn scope_repo_mask_lines_adds_reponame_only_when_no_repo_part_is_present() {
+        let lines = vec![
+            "dev-libs/a".to_string(),
+            "-dev-libs/b".to_string(),
+            "dev-libs/c::already-scoped".to_string(),
+        ];
+        assert_eq!(
+            scope_repo_mask_lines(&lines, "overlay"),
+            vec![
+                "dev-libs/a::overlay".to_string(),
+                "-dev-libs/b::overlay".to_string(),
+                "dev-libs/c::already-scoped".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn overlay_package_mask_is_scoped_to_its_own_repo_only() {
+        // Main repo has no mask at all; the overlay masks dev-libs/a
+        // with a bare atom (no "::repo" part) -- resolve_config must
+        // auto-scope it to "::overlay" via scope_repo_mask_lines, so it
+        // never also masks a same-named package in the main repo.
+        let root = std::env::temp_dir().join("portage-profile-test-overlay-mask");
+        let repo = root.join("repo");
+        let overlay = root.join("overlay");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(overlay.join("profiles")).unwrap();
+
+        fs::write(overlay.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
+
+        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let config = resolve_config(&root, &repo, &overlay_repos).expect("config must resolve");
+        assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
+    }
+
+    #[test]
+    fn overlay_package_unmask_gets_the_same_scoping_as_overlay_package_mask() {
+        // Both files live in the same overlay, so both entries get the
+        // identical "::overlay" auto-scoping -- the actual mask/unmask
+        // cancellation happens downstream in portage-repo's is_visible,
+        // which matches both against the same "::overlay"-suffixed
+        // candidate string; this test only checks that resolve_config
+        // itself scopes both sources consistently.
+        let root = std::env::temp_dir().join("portage-profile-test-overlay-mask-unmask");
+        let repo = root.join("repo");
+        let overlay = root.join("overlay");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(overlay.join("profiles")).unwrap();
+
+        fs::write(overlay.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
+        fs::write(overlay.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
+
+        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let config = resolve_config(&root, &repo, &overlay_repos).expect("config must resolve");
+        assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
+        assert_eq!(
+            config.package_unmask,
+            vec!["dev-libs/a::overlay".to_string()]
         );
     }
 
@@ -1515,7 +1652,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(config.system_packages, vec!["dev-libs/b".to_string()]);
     }
 
@@ -1550,7 +1687,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.use_flags,
             HashSet::from(["normalflag".to_string(), "forceflag".to_string()])
@@ -1600,7 +1737,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.use_expand,
             HashSet::from(["VIDEO_CARDS".to_string(), "PYTHON_TARGETS".to_string()])
@@ -1638,7 +1775,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert!(!config.use_flags.contains("video_cards_nvidia"));
         assert!(config.use_flags.contains("video_cards_intel"));
         assert!(!config.use_flags.contains("+video_cards_intel"));
@@ -1671,7 +1808,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
             vec![
@@ -1706,7 +1843,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![
@@ -1735,7 +1872,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![(
@@ -1765,7 +1902,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![
@@ -1796,7 +1933,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![(
@@ -1839,7 +1976,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.package_use_mask,
             vec![
@@ -1880,7 +2017,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.use_stable_mask,
             HashSet::from(["stablemaskflag".to_string()])
@@ -1937,7 +2074,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
         assert_eq!(
             config.package_use_stable_mask,
             vec![
@@ -1965,7 +2102,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"))
+        let config = resolve_config(&root, &root.join("repo"), &[])
             .expect("config with package.use must resolve");
         assert_eq!(
             config.package_use,

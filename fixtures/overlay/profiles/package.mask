@@ -1,0 +1,10 @@
+# fixture overlay package.mask: masks dev-libs/overlaymaskedpkg, but
+# ONLY the overlay's own copy -- this line has no explicit "::repo"
+# constraint, so it must be scoped to "::overlay" automatically (real
+# append_repo), never masking the identically-named package in the main
+# repo too.
+dev-libs/overlaymaskedpkg
+# also masks overlaymaskedthenunmaskedpkg, cancelled below by this same
+# overlay's own package.unmask -- proving mask+unmask still stack
+# correctly once both get the identical "::overlay" auto-scoping.
+dev-libs/overlaymaskedthenunmaskedpkg

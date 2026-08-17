@@ -1136,13 +1136,27 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     };
 
-    let config = match portage_profile::resolve_config(&config_root, &main_repo.location) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("emerge: {e}");
-            return ExitCode::from(1);
-        }
-    };
+    // Every non-main repo's own (name, location) -- portage-profile's
+    // own package.mask/.unmask reading needs each overlay's own name to
+    // scope its repo-level entries via "::name" (see resolve_config's
+    // own doc comment); ascending-priority order, same as find_repos'
+    // own order, which only matters if two overlays' own entries could
+    // otherwise interfere, and the "::name" scoping already rules that
+    // out regardless.
+    let overlay_repos: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+
+    let config =
+        match portage_profile::resolve_config(&config_root, &main_repo.location, &overlay_repos) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("emerge: {e}");
+                return ExitCode::from(1);
+            }
+        };
 
     // "@world"/"@system" each expand to their own real atom list, in
     // place, at whichever position they appear -- see read_world_atoms's

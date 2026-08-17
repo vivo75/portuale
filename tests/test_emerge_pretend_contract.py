@@ -209,6 +209,10 @@ CASES = [
     ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
     ("overlay: best version wins across repos", ["--pretend", "dev-libs/overlaynewerpkg"], 0),
     ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
+    ("overlay: repo-level package.mask scoped to the overlay only", ["--pretend", "dev-libs/overlaymaskedpkg"], 0),
+    ("overlay: explicit ::overlay atom still hits the overlay's own mask", ["--pretend", "dev-libs/overlaymaskedpkg::overlay"], 1),
+    ("overlay: explicit ::testrepo atom bypasses the overlay's own mask", ["--pretend", "dev-libs/overlaymaskedpkg::testrepo"], 0),
+    ("overlay: repo-level package.unmask cancels the same overlay's own mask", ["--pretend", "dev-libs/overlaymaskedthenunmaskedpkg"], 0),
     ("slot conflict: two incompatible version constraints on one slot", ["--pretend", "dev-libs/slotconflictparent"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
@@ -1331,6 +1335,61 @@ def test_same_version_tie_across_repos_is_broken_toward_higher_priority(
         "[ebuild  N] dev-libs/overlaytiepkg-1.0",
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
+
+
+def test_overlay_own_package_mask_hides_only_the_overlay_copy(emerge_binary, fixture_env):
+    """dev-libs/overlaymaskedpkg exists in both the main repo and the
+    overlay; only the overlay's own profiles/package.mask masks it, with
+    no explicit "::repo" constraint on the entry -- proving real
+    append_repo's own auto-scoping ("::overlay") keeps the mask from
+    also hiding the identically-named main-repo package."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/overlaymaskedpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/overlaymaskedpkg-1.0"
+
+
+def test_overlay_own_package_mask_still_hides_the_explicit_overlay_atom(
+    emerge_binary, fixture_env
+):
+    """An explicit "::overlay" atom constraint must still hit the
+    overlay's own auto-scoped mask entry."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/overlaymaskedpkg::overlay"], fixture_env
+    )
+    assert result.returncode == 1
+    assert (
+        result.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/overlaymaskedpkg::overlay".'
+    )
+
+
+def test_overlay_own_package_mask_does_not_affect_the_explicit_main_repo_atom(
+    emerge_binary, fixture_env
+):
+    """An explicit "::testrepo" atom constraint is unaffected by the
+    overlay's own mask -- it was auto-scoped to "::overlay", not
+    "::testrepo"."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/overlaymaskedpkg::testrepo"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/overlaymaskedpkg-1.0"
+
+
+def test_overlay_own_package_unmask_cancels_the_same_overlay_own_package_mask(
+    emerge_binary, fixture_env
+):
+    """dev-libs/overlaymaskedthenunmaskedpkg is masked and then unmasked
+    by two entries in the overlay's own profiles/package.mask and
+    profiles/package.unmask -- both entries get the identical "::overlay"
+    auto-scoping, so they must still cancel each other out."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/overlaymaskedthenunmaskedpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/overlaymaskedthenunmaskedpkg-1.0"
 
 
 def test_slot_conflict_is_reported_between_two_incompatible_version_constraints(

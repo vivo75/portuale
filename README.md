@@ -989,15 +989,54 @@ PORTING/
   dependency can't run the other way) -- it now takes the main repo's
   own location as a parameter, discovered by the CLI layer via
   `find_repos` (which gained an `is_main` field for exactly this) before
-  `resolve_config` is even called. Deliberately still out of scope,
-  matching the overlays follow-up's own already-confirmed cut: an
-  *overlay* repo's own repo-level `package.mask`/`.unmask` (only the one
-  main repo's is read), and `masters` (eclass/mask inheritance across
-  repos). `package.accept_keywords`/`.use` remained user-level only for
+  `resolve_config` is even called. Deliberately still out of scope at the
+  time: an *overlay* repo's own repo-level `package.mask`/`.unmask`
+  (only the one main repo's was read -- closed by a later follow-up
+  below), and `masters` (eclass/mask inheritance across repos, still
+  open). `package.accept_keywords`/`.use` remained user-level only for
   now -- real portage has repo/profile-level equivalents for both too,
   but stacking those was a separate, still-open cut this slice didn't
   claim to close (`package.accept_keywords` closed in the follow-up
   below; `package.use` remains open).
+
+  **Overlay repos' own `package.mask`/`.unmask`**: closes the cut named
+  just above, grounded against real `MaskManager.py`'s
+  `repositories.repos_with_profiles()`, which reads every configured
+  repo's own `profiles/package.mask`/`.unmask` *unconditionally* -- not
+  just the main one -- each repo's own lines scoped via real
+  `append_repo` (`lib/portage/util/__init__.py`) before being folded
+  into the combined stack: "atoms without an explicit repo part get one,
+  atoms that already have one are left alone", so an overlay's own bare
+  `dev-libs/foo` mask entry becomes `dev-libs/foo::overlay`, never
+  masking a same-named package in a *different* repo. `-atom` removals
+  get the identical scoping (`-cat/pkg` -> `-cat/pkg::overlay`), so an
+  overlay's own `package.unmask` can only ever cancel that same overlay's
+  own `package.mask` entry, not another repo's. `resolve_config` gained
+  a third parameter, `overlay_repos: &[(String, PathBuf)]` in Rust /
+  `overlay_repos=()` in Python -- a plain local pair type rather than
+  `portage_repo::RepoConfig`, since `portage-profile` can't depend on
+  `portage-repo` (the dependency only runs the other way). Digging into
+  the real mechanism turned up a genuine scope-narrowing discovery
+  before any code was written: an overlay's own `profiles/`/
+  `license_groups` are *not* part of this same "every repo,
+  unconditionally" mechanism -- real `LicenseManager.__init__`'s own
+  `license_group_locations` is tied to `locations_manager.
+  profile_locations`, i.e. the profile *chain's* own directories, which
+  only reach into an overlay once cross-repo profile parents
+  (`reponame:path` syntax) exist -- a separate, still-unimplemented
+  mechanism this follow-up doesn't also take on. Also deliberately not
+  done: retroactively scoping the *main* repo's own, already-shipped
+  `package.mask`/`.unmask` entries with their own `::reponame` (real
+  portage does this too, for consistency) -- an unrequested behavior
+  change to already-tested main-repo behavior, and a distinct
+  correctness question from "add overlay support". Two new overlay
+  fixture packages exercise it end to end: `overlaymaskedpkg` (masked
+  only in the overlay's own `package.mask`, with an identically-named,
+  unaffected copy in the main repo -- an unconstrained atom still
+  resolves via the main repo's copy, `::overlay` hits the mask,
+  `::testrepo` bypasses it) and `overlaymaskedthenunmaskedpkg` (masked
+  and unmasked by two entries in that same overlay's own files, proving
+  both get the identical auto-scoping and still cancel out).
 
   **`package.accept_keywords` profile-chain stacking**: extends this
   same file from user-level-only to profile-chain (in chain order) +
@@ -2178,7 +2217,12 @@ version), and `overlaytiepkg` (identically-versioned `1.0` in both
 repos, but only the overlay's copy `RDEPEND`s on `dev-libs/newpkg` --
 resolving it pulls `newpkg` in, proving the higher-priority overlay's
 copy, not the main repo's, is the one whose own metadata actually got
-read).
+read). The overlay also has its own `profiles/package.mask`/`.unmask`
+(the main repo has none), exercising overlay repo-level masking:
+`overlaymaskedpkg` (masked only by the overlay's own bare-atom
+`package.mask` entry, auto-scoped to `::overlay` -- an identically-named
+main-repo copy stays unaffected) and `overlaymaskedthenunmaskedpkg`
+(masked and unmasked by two entries in that same overlay's own files).
 
 Six more fixture packages exercise slot conflicts: `slotconflicttarget`
 (two versions, `1.0` and `2.0`, both `SLOT="0"`), `slotconflictnewconsumer`
@@ -2516,6 +2560,22 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayonlypk
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaytiepkg
 # [ebuild  N] dev-libs/overlaytiepkg-1.0
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# overlay repos' own package.mask: overlaymaskedpkg is masked only in the
+# overlay's own profiles/package.mask (a bare atom, auto-scoped to
+# "::overlay" by real append_repo) -- an unconstrained atom still
+# resolves via the main repo's own, unaffected copy
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaymaskedpkg
+# [ebuild  N] dev-libs/overlaymaskedpkg-1.0
+
+# an explicit "::overlay" atom does hit that same auto-scoped mask
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaymaskedpkg::overlay
+# emerge: there are no ebuilds to satisfy "dev-libs/overlaymaskedpkg::overlay".  (exit 1)
+
+# the overlay's own package.unmask cancels that same overlay's own
+# package.mask entry (both get the identical "::overlay" auto-scoping)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaymaskedthenunmaskedpkg
+# [ebuild  N] dev-libs/overlaymaskedthenunmaskedpkg-1.0
 
 # slot conflict: slotconflictnewconsumer resolves slotconflicttarget to
 # 2.0 first; slotconflictoldconsumer's own "<...-2.0" constraint rejects

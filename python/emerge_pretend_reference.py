@@ -201,6 +201,32 @@ def _read_config_lines(path):
     return lines
 
 
+def _scope_repo_mask_lines(lines, repo_name):
+    """Scopes each of `lines` (raw package.mask/.unmask entries, a
+    leading "-" meaning removal) to `repo_name` by appending a "::name"
+    suffix to the atom portion -- real append_repo's own "atoms without
+    an explicit repo part get one; atoms that already have one are left
+    alone" rule (lib/portage/util/__init__.py), applied here to an
+    overlay's own repo-level entries so they can never silently
+    mask/unmask a same-named package in a *different* repo. A leading
+    "-" (removal) is preserved ahead of the atom, not swallowed into it
+    -- "-cat/pkg" scopes to "-cat/pkg::name", matching real portage's own
+    behavior of scoping a removal atom exactly like an addition one, so
+    it can only ever cancel a same-repo-scoped entry. Mirrors
+    portage-repo/src/lib.rs's scope_repo_mask_lines exactly."""
+    result = []
+    for line in lines:
+        if line.startswith("-"):
+            prefix, atom = "-", line[1:]
+        else:
+            prefix, atom = "", line
+        if "::" in atom:
+            result.append(line)
+        else:
+            result.append(f"{prefix}{atom}::{repo_name}")
+    return result
+
+
 def _stack_mask_lines(sources):
     """Stacks ordered package.mask/.unmask lines from multiple sources
     (earlier sources first) with real portage's own -atom removal
@@ -1408,7 +1434,7 @@ def _process_make_conf_file(
         scalars[key] = value
 
 
-def resolve_config(config_root, main_repo_location):
+def resolve_config(config_root, main_repo_location, overlay_repos=()):
     """Computes real USE/ACCEPT_KEYWORDS/package.mask/.unmask/
     .accept_keywords: the profile chain rooted at
     <config_root>/etc/portage/make.profile (if it exists), then
@@ -1429,10 +1455,38 @@ def resolve_config(config_root, main_repo_location):
     most common real-world masking source. It's stacked together with
     every profile level's own package.mask/.unmask (in chain order) and
     the user-level /etc/portage files, exactly matching real
-    MaskManager.py's three-source stack (see _stack_mask_lines). An
-    overlay repo's own repo-level package.mask/.unmask stays deliberately
-    out of scope, same as the rest of overlays' per-repo config -- only
-    the one main repo's is read here."""
+    MaskManager.py's three-source stack (see _stack_mask_lines).
+
+    overlay_repos (each overlay's own (name, location) pairs, e.g. every
+    non-main entry from find_repos) supplies each overlay's own
+    repo-level package.mask/.unmask too, real MaskManager.py's own
+    repositories.repos_with_profiles() loop -- confirmed by reading it
+    directly: it iterates every configured repo unconditionally, not
+    just the main one. Each overlay's own lines are scoped with a
+    "::reponame" suffix first (_scope_repo_mask_lines, real
+    append_repo's own "atoms without an explicit repo part get one;
+    atoms that already have one are left alone" rule, applied to a
+    "-atom" removal line's own atom portion too) before being folded
+    into the same stack -- otherwise an overlay's own mask entry would
+    silently also mask a same-named package in the main repo or another
+    overlay, which real portage's own scoping specifically prevents.
+    Deliberately asymmetric, confirmed while implementing this: the main
+    repo's own entries above stay unscoped, matching this pilot's own
+    pre-existing (unchanged) behavior -- real portage scopes every
+    repo's own repo-level entries this same way, including the main
+    repo's, so a package.mask entry from main only masking main's own
+    packages is a separate, distinct correctness question this slice
+    doesn't also take on. Real masters (layout.conf repo inheritance)
+    stays a separate, not-yet-implemented mechanism; with no repo in
+    this pilot's own fixtures declaring any, every repo's own entries
+    here are read standalone. profiles/ (an overlay's own profile
+    directory joining the active chain) and license_groups from an
+    overlay are NOT part of this same "every repo, unconditionally"
+    mechanism -- real LicenseManager's own profile_locations and the
+    profile chain itself only ever include an overlay's own directories
+    if the active chain's parent file uses reponame:path syntax to reach
+    into it, a different, still-out-of-scope mechanism (cross-repo
+    profile parents)."""
     use_flags = set()
     accept_keywords = set()
     use_expand = set()
@@ -1512,6 +1566,19 @@ def resolve_config(config_root, main_repo_location):
     unmask_sources = [
         _read_config_lines(os.path.join(main_repo_location, "profiles", "package.unmask"))
     ]
+    for repo_name, repo_location in overlay_repos:
+        mask_sources.append(
+            _scope_repo_mask_lines(
+                _read_config_lines(os.path.join(repo_location, "profiles", "package.mask")),
+                repo_name,
+            )
+        )
+        unmask_sources.append(
+            _scope_repo_mask_lines(
+                _read_config_lines(os.path.join(repo_location, "profiles", "package.unmask")),
+                repo_name,
+            )
+        )
     for level in chain:
         mask_sources.append(_read_config_lines(os.path.join(level, "package.mask")))
         unmask_sources.append(_read_config_lines(os.path.join(level, "package.unmask")))
@@ -3456,8 +3523,17 @@ def run(args):
         # expansion below: @system's own atom list lives in config's
         # "system_packages" key, so config must already exist by the
         # time a "@system" token is seen.
-        main_repo = next(r for r in find_repos(_config_root()) if r["is_main"])
-        config = resolve_config(_config_root(), main_repo["location"])
+        all_repos = find_repos(_config_root())
+        main_repo = next(r for r in all_repos if r["is_main"])
+        # Every non-main repo's own (name, location) -- resolve_config's
+        # own package.mask/.unmask reading needs each overlay's own name
+        # to scope its repo-level entries via "::name" (see its own
+        # docstring); ascending-priority order, same as find_repos' own
+        # order, which only matters if two overlays' own entries could
+        # otherwise interfere, and the "::name" scoping already rules
+        # that out regardless.
+        overlay_repos = [(r["name"], r["location"]) for r in all_repos if not r["is_main"]]
+        config = resolve_config(_config_root(), main_repo["location"], overlay_repos)
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
