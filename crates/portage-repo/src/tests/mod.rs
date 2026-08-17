@@ -714,6 +714,84 @@ mod tests_164 {
             source: CandidateSource::Ebuild,
         })
     }
+
+    /// `required_use_dep_chain` reports the failing package's direct parent
+    /// plus its command-line argument (Portage's `_show_unsatisfied_dep` tail).
+    #[test]
+    fn required_use_dep_chain_164_reports_parent_then_argument() {
+        let entries = vec![
+            // Decoy: same category, wrong package -- must not win
+            // the parent lookup.
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "rudecoy",
+                outcome: PretendOutcome::New {
+                    version: "9.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+            entry_164(Entry164Args {
+                category: "dev-libs",
+                package: "ruparent",
+                outcome: PretendOutcome::New {
+                    version: "1.0".to_string(),
+                },
+                required_by: Vec::new(),
+                repo: Some("testrepo"),
+                source: CandidateSource::Ebuild,
+            }),
+        ];
+        let owner = Some(("dev-libs".to_string(), "ruparent".to_string()));
+        let top: HashSet<&str> = ["=dev-libs/ruparent-1.0"].into_iter().collect();
+        let got = required_use_dep_chain(&owner, &top, &entries);
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "dev-libs/ruparent-1.0::testrepo".to_string(),
+                    "ebuild".to_string()
+                ),
+                ("=dev-libs/ruparent-1.0".to_string(), "argument".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn required_use_dep_chain_164_no_owner_and_installed_parent_yield_nothing() {
+        // No owner: the failing package IS the top-level atom, and Portage
+        // skips the block.
+        let entries = vec![entry_164(Entry164Args {
+            category: "dev-libs",
+            package: "rux",
+            outcome: PretendOutcome::New {
+                version: "1.0".to_string(),
+            },
+            required_by: Vec::new(),
+            repo: Some("testrepo"),
+            source: CandidateSource::Ebuild,
+        })];
+        let top: HashSet<&str> = ["dev-libs/rux"].into_iter().collect();
+        assert_eq!(required_use_dep_chain(&None, &top, &entries), Vec::new());
+        // An `AlreadyInstalled` parent has no merge version to name.
+        let installed = vec![entry_164(Entry164Args {
+            category: "dev-libs",
+            package: "ruinst",
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string(),
+            },
+            required_by: Vec::new(),
+            repo: None,
+            source: CandidateSource::Ebuild,
+        })];
+        let owner = Some(("dev-libs".to_string(), "ruinst".to_string()));
+        let empty: HashSet<&str> = HashSet::new();
+        assert_eq!(
+            required_use_dep_chain(&owner, &empty, &installed),
+            Vec::new()
+        );
+    }
 }
 
 fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {

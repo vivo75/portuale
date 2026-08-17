@@ -1,6 +1,90 @@
 use super::*;
 
 #[test]
+fn effective_use_flags_applies_a_plus_iuse_default_when_nothing_else_says_otherwise() {
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "+foo -bar baz",
+        use_tokens: &[],
+        package_use: &[],
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/pkg-1.0:0",
+        category: "dev-libs",
+        package: "pkg",
+    });
+    // "+foo" defaults on; "-bar" stays off (same as omission, but a
+    // real, explicit marker); "baz" (no marker at all) is genuinely
+    // undecided by IUSE itself and stays off too.
+    assert_eq!(use_flags, HashSet::from(["foo".to_string()]));
+}
+
+#[test]
+fn effective_use_flags_lets_use_tokens_add_alongside_a_plus_iuse_default() {
+    // `use_tokens` mentioning an entirely different flag doesn't
+    // suppress "+foo"'s own default -- the additive half.
+    let base = ["other".to_string()].to_vec();
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "+foo",
+        use_tokens: &base,
+        package_use: &[],
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/pkg-1.0:0",
+        category: "dev-libs",
+        package: "pkg",
+    });
+    assert_eq!(
+        use_flags,
+        HashSet::from(["foo".to_string(), "other".to_string()])
+    );
+}
+
+#[test]
+fn effective_use_flags_lets_use_tokens_explicitly_cancel_a_plus_iuse_default() {
+    // A genuine `-foo` in profile/make.conf cancels an earlier
+    // `+foo` IUSE default: one continuous incremental walk.
+    let use_tokens = vec!["foo".to_string(), "-foo bar".to_string()];
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "+foo",
+        use_tokens: &use_tokens,
+        package_use: &[],
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/pkg-1.0:0",
+        category: "dev-libs",
+        package: "pkg",
+    });
+    assert_eq!(use_flags, HashSet::from(["bar".to_string()]));
+}
+
+#[test]
 fn effective_use_flags_lets_package_use_override_a_plus_iuse_default() {
     let package_use = vec![("dev-libs/pkg".to_string(), vec!["-foo".to_string()])];
     let use_flags = euf_flat(EufFlatArgs {
@@ -160,6 +244,61 @@ fn effective_use_flags_package_use_mask_wins_over_force_on_conflict() {
         package: "bar",
     });
     assert!(!use_flags.contains("bothflag"));
+}
+
+#[test]
+fn effective_use_flags_global_use_force_wins_over_a_package_use_disable() {
+    // Global use.force applies last in the walk, so a package.use
+    // `-flag` can never turn off a globally forced flag.
+    let use_force = HashSet::from(["forceflag".to_string()]);
+    let package_use = vec![("dev-libs/bar".to_string(), vec!["-forceflag".to_string()])];
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &[],
+        package_use: &package_use,
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &use_force,
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/bar-1.0:0",
+        category: "dev-libs",
+        package: "bar",
+    });
+    assert!(use_flags.contains("forceflag"));
+}
+
+#[test]
+fn effective_use_flags_global_use_mask_wins_over_a_package_use_enable() {
+    // Mirror: global use.mask beats a package.use `+flag`.
+    let use_mask = HashSet::from(["maskflag".to_string()]);
+    let package_use = vec![("dev-libs/bar".to_string(), vec!["maskflag".to_string()])];
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "",
+        use_tokens: &[],
+        package_use: &package_use,
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &use_mask,
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &[],
+        accept_keywords: &HashSet::new(),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/bar-1.0:0",
+        category: "dev-libs",
+        package: "bar",
+    });
+    assert!(!use_flags.contains("maskflag"));
 }
 
 #[test]
