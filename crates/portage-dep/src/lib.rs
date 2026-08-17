@@ -728,6 +728,22 @@ pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec
     )
 }
 
+/// A deliberately narrow check, as in Portage's `Atom.intersects`: cp,
+/// use-deps, operator and full version must all be equal, and slots must be
+/// compatible (either `None`, or equal). `repo` is not checked; the caller
+/// adds its own.
+pub fn atom_intersects(a: &Atom, b: &Atom) -> bool {
+    if a.category != b.category
+        || a.package != b.package
+        || a.use_deps != b.use_deps
+        || a.operator != b.operator
+        || a.full_version() != b.full_version()
+    {
+        return false;
+    }
+    a.slot.is_none() || b.slot.is_none() || a.slot == b.slot
+}
+
 // --- Bounded wildcard atoms (package.mask/.unmask/.accept_keywords) ---
 //
 // Separate from `Atom`/`parse_atom`, which still reject wildcards. Only
@@ -1045,5 +1061,63 @@ mod use_dep_satisfaction_tests {
             &iuse,
             &HashSet::from(["bar".to_string(), "baz".to_string()])
         ));
+    }
+
+    #[test]
+    fn atom_intersects_matches_identical_atoms() {
+        let a = parse_atom("dev-libs/foo").unwrap();
+        let b = parse_atom("dev-libs/foo").unwrap();
+        assert!(atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_rejects_a_different_package() {
+        let a = parse_atom("dev-libs/foo").unwrap();
+        let b = parse_atom("dev-libs/bar").unwrap();
+        assert!(!atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_rejects_a_different_version_under_the_same_operator() {
+        let a = parse_atom("=dev-libs/foo-1.0").unwrap();
+        let b = parse_atom("=dev-libs/foo-2.0").unwrap();
+        assert!(!atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_rejects_a_different_operator_even_when_the_version_would_satisfy_it() {
+        // Portage's Atom.intersects is deliberately narrow: a differing operator never intersects, even when the ranges overlap.
+        let a = parse_atom(">=dev-libs/foo-1.0").unwrap();
+        let b = parse_atom("=dev-libs/foo-1.0").unwrap();
+        assert!(!atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_allows_a_slot_on_only_one_side() {
+        let a = parse_atom("dev-libs/foo").unwrap();
+        let b = parse_atom("dev-libs/foo:1").unwrap();
+        assert!(atom_intersects(&a, &b));
+        assert!(atom_intersects(&b, &a));
+    }
+
+    #[test]
+    fn atom_intersects_rejects_conflicting_slots() {
+        let a = parse_atom("dev-libs/foo:1").unwrap();
+        let b = parse_atom("dev-libs/foo:2").unwrap();
+        assert!(!atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_matches_identical_slots() {
+        let a = parse_atom("dev-libs/foo:1").unwrap();
+        let b = parse_atom("dev-libs/foo:1").unwrap();
+        assert!(atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_rejects_different_use_deps() {
+        let a = parse_atom("dev-libs/foo[bar]").unwrap();
+        let b = parse_atom("dev-libs/foo[-bar]").unwrap();
+        assert!(!atom_intersects(&a, &b));
     }
 }
