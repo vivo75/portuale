@@ -530,10 +530,12 @@ def _use_flags_if_conditional(value_str, candidate, category, package, candidate
         return set()
     return effective_use_flags(
         candidate["iuse"],
-        config["use_flags"],
+        config["use_tokens"],
         config["package_use"],
         config["package_use_force"],
         config["package_use_mask"],
+        config["use_force"],
+        config["use_mask"],
         config["use_stable_force"],
         config["use_stable_mask"],
         config["package_use_stable_force"],
@@ -820,10 +822,12 @@ def _is_stable(keywords, candidate_str, category, package, accept_keywords, pack
 
 def effective_use_flags(
     iuse,
-    base,
+    use_tokens,
     package_use,
     package_use_force,
     package_use_mask,
+    use_force,
+    use_mask,
     use_stable_force,
     use_stable_mask,
     package_use_stable_force,
@@ -837,8 +841,12 @@ def effective_use_flags(
 ):
     """The USE flags in effect for one specific package: `iuse`'s own
     +flag/-flag default markers (real "pkginternal", see below) seeded
-    first, then `base` with every matching package.use entry's tokens
-    layered on top, in file order, via the same incremental
+    first, then `use_tokens` (the *ordered raw* USE= value strings from
+    every profile level's own make.defaults plus make.conf, replayed via
+    _apply_incremental directly -- not a pre-flattened set unioned on
+    top, see the `iuse`'s own defaults paragraph below for why that
+    distinction matters) with every matching package.use entry's tokens
+    layered on top after that, in file order, via the same incremental
     -flag/flag/+flag semantics USE itself uses (see _apply_incremental),
     THEN package.use.force/package.use.mask layered on top of that (force
     winning first, then mask -- see _specificity_ordered_flags for how a
@@ -876,18 +884,34 @@ def effective_use_flags(
     own actual precedence has every one of those three able to override
     an IUSE default; only env/env.d (real per-invocation/stacked-profile-
     env overrides, positions 8 and 1) sit even lower/higher than this
-    pilot models at all. Ported here as simply the seed use_flags starts
-    from, with base (this pilot's own already-flattened profile+make.conf
-    result) layered on top via plain set union: base can only ever *add*
-    a flag here, never force one off that IUSE defaulted on, since this
-    pilot's own base is a plain set of enabled names with no "explicitly
-    disabled by a lower-precedence layer" information surviving that far
-    -- a documented, narrower scope cut (the same kind of information
-    loss this function's own pre-existing package.use.mask/.force
-    handling above already accepts for the global tier), not a new kind
-    of imprecision. The dominant real-world case -- an ebuild author sets
-    a sensible IUSE default, and nothing else ever mentions the flag at
-    all -- is unaffected and now correct."""
+    pilot models at all. Ported here as the seed use_flags starts from,
+    with use_tokens (defaults/conf) replayed directly on top via
+    _apply_incremental -- NOT a plain set union of the already-flattened
+    use_flags. An earlier version of this pilot did union a flattened
+    base here, which meant base could only ever *add* a flag, never
+    explicitly cancel an IUSE +default the way real defaults/conf
+    genuinely can (real regenerate() runs one continuous incremental walk
+    across the whole reversed uvlist -- pkginternal then defaults then
+    conf then pkg -- so a -flag token in defaults/conf really does cancel
+    an earlier pkginternal +flag, exactly like any other incremental
+    variable). Replaying the ordered raw tokens instead of the flattened
+    set closes that gap: resolve_config exposes both use_flags (the
+    flattened result, still used elsewhere for e.g. --newuse comparisons)
+    and use_tokens (the ordered raw values that produced it). The
+    dominant real-world case -- an ebuild author sets a sensible IUSE
+    default, and nothing else ever mentions the flag at all -- was
+    already correct either way; this closes the narrower case where a
+    profile or make.conf genuinely does mention it.
+
+    use_force/use_mask (global use.force/use.mask): applied at the exact
+    same position package_use_force/package_use_mask already are (below),
+    NOT folded into use_tokens/use_flags early -- real regenerate()'s own
+    self.useforce/self.usemask (which setcpv() sets to the *per-package*
+    getUseForce(pkg)/getUseMask(pkg), i.e. global force/mask combined
+    with the atom-scoped variant) is applied as the literal *last* step
+    of its incremental USE walk, strictly after the "pkg" (package.use)
+    tier -- so a package.use entry can never override a global
+    use.force/use.mask decision, matching real portage."""
     # real pkginternal: only a token with an explicit "+"/"-" marker
     # contributes anything at all -- a markerless IUSE token (no declared
     # default) is a real, deliberate no-op here, matching real config.py's
@@ -898,7 +922,8 @@ def effective_use_flags(
     )
     use_flags = set()
     _apply_incremental(iuse_defaults, use_flags)
-    use_flags |= set(base)
+    for token in use_tokens:
+        _apply_incremental(token, use_flags)
     for entry, tokens in package_use:
         if _matches_config_entry(entry, candidate_str, category, package):
             _apply_incremental(" ".join(tokens), use_flags)
@@ -907,6 +932,7 @@ def effective_use_flags(
         keywords, candidate_str, category, package, accept_keywords, package_accept_keywords
     )
 
+    use_flags |= use_force
     use_flags |= _specificity_ordered_flags(
         package_use_force, candidate_str, category, package
     )
@@ -915,6 +941,7 @@ def effective_use_flags(
         use_flags |= _specificity_ordered_flags(
             package_use_stable_force, candidate_str, category, package
         )
+    use_flags -= use_mask
     use_flags -= _specificity_ordered_flags(
         package_use_mask, candidate_str, category, package
     )
@@ -1023,10 +1050,12 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
     )
     cur_use = effective_use_flags(
         metadata["IUSE"],
-        config["use_flags"],
+        config["use_tokens"],
         config["package_use"],
         config["package_use_force"],
         config["package_use_mask"],
+        config["use_force"],
+        config["use_mask"],
         config["use_stable_force"],
         config["use_stable_mask"],
         config["package_use_stable_force"],
@@ -1353,10 +1382,12 @@ def _candidate_iuse_and_use(candidate, category, package, config):
     )
     use_flags = effective_use_flags(
         metadata.get("IUSE", ""),
-        config["use_flags"],
+        config["use_tokens"],
         config["package_use"],
         config["package_use_force"],
         config["package_use_mask"],
+        config["use_force"],
+        config["use_mask"],
         config["use_stable_force"],
         config["use_stable_mask"],
         config["package_use_stable_force"],
@@ -1461,7 +1492,7 @@ def _apply_incremental(tokens, target_set):
 
 
 def _process_config_lines(
-    text, scalars, use_flags, accept_keywords, use_expand, use_expand_unprefixed
+    text, scalars, use_flags, use_tokens, accept_keywords, use_expand, use_expand_unprefixed
 ):
     for line in text.splitlines():
         parsed = _parse_kv_line(line)
@@ -1471,6 +1502,7 @@ def _process_config_lines(
         value = _substitute(raw_value, scalars)
         if key == "USE":
             _apply_incremental(value, use_flags)
+            use_tokens.append(value)
         elif key == "ACCEPT_KEYWORDS":
             _apply_incremental(value, accept_keywords)
         elif key == "USE_EXPAND":
@@ -1565,6 +1597,7 @@ def _process_make_conf_file(
     config_root,
     scalars,
     use_flags,
+    use_tokens,
     accept_keywords,
     use_expand,
     use_expand_unprefixed,
@@ -1594,6 +1627,7 @@ def _process_make_conf_file(
                 config_root,
                 scalars,
                 use_flags,
+                use_tokens,
                 accept_keywords,
                 use_expand,
                 use_expand_unprefixed,
@@ -1607,6 +1641,7 @@ def _process_make_conf_file(
         value = _substitute(raw_value, scalars)
         if key == "USE":
             _apply_incremental(value, use_flags)
+            use_tokens.append(value)
         elif key == "ACCEPT_KEYWORDS":
             _apply_incremental(value, accept_keywords)
         elif key == "USE_EXPAND":
@@ -1692,6 +1727,7 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     means a different, named repo. Both expand to
     "<repo_location>/profiles/some/path"."""
     use_flags = set()
+    use_tokens = []
     accept_keywords = set()
     use_expand = set()
     use_expand_unprefixed = set()
@@ -1711,7 +1747,13 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
         with open(make_defaults) as f:
             text = f.read()
         _process_config_lines(
-            text, scalars, use_flags, accept_keywords, use_expand, use_expand_unprefixed
+            text,
+            scalars,
+            use_flags,
+            use_tokens,
+            accept_keywords,
+            use_expand,
+            use_expand_unprefixed,
         )
 
     make_conf = os.path.join(config_root, "etc", "portage", "make.conf")
@@ -1721,6 +1763,7 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
             config_root,
             scalars,
             use_flags,
+            use_tokens,
             accept_keywords,
             use_expand,
             use_expand_unprefixed,
@@ -1760,7 +1803,9 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
                 prefixed_tokens.append(f"{prefix}_{tok[1:]}")
             else:
                 prefixed_tokens.append(f"{prefix}_{tok}")
-        _apply_incremental(" ".join(prefixed_tokens), use_flags)
+        prefixed = " ".join(prefixed_tokens)
+        _apply_incremental(prefixed, use_flags)
+        use_tokens.append(prefixed)
 
     # USE_EXPAND_UNPREFIXED: real config.py's own companion to
     # USE_EXPAND -- the exact same mechanism, except the value is folded
@@ -1775,21 +1820,28 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
         if value is None:
             continue
         _apply_incremental(value, use_flags)
+        use_tokens.append(value)
 
     # use.mask/use.force: every profile level's own file (in chain
     # order), stacked with the same "-atom" removal semantics
     # package.mask uses (see _stack_mask_lines) -- mirrors
-    # portage-profile/src/lib.rs's resolve_config exactly, including its
-    # own "use.mask"/"use.force" doc comment: applied last, after every
-    # other real accumulation source above -- force-add every use.force
-    # flag, THEN force-remove every use.mask flag, so a flag in both
-    # ends up masked, not forced.
+    # portage-profile/src/lib.rs's resolve_config exactly. Deliberately
+    # NOT folded into use_flags here (an earlier version of this pilot
+    # did, which was wrong): real regenerate() applies self.useforce/
+    # self.usemask (which setcpv() sets to the *per-package*
+    # getUseForce(pkg)/getUseMask(pkg) -- global use.force/use.mask
+    # combined with the atom-scoped package.use.force/.mask this pilot
+    # already applies per-candidate) as the literal *last* step of its
+    # own incremental USE walk, strictly *after* the "pkg" (package.use)
+    # tier -- see effective_use_flags's own doc comment for where
+    # use_force/use_mask actually get applied now, alongside the atom-
+    # scoped package_use_force/package_use_mask it already positions
+    # correctly (force-add first, then force-remove, so a flag in both
+    # ends up masked, not forced).
     usemask_sources = [_read_config_lines(os.path.join(level, "use.mask")) for level in chain]
     useforce_sources = [_read_config_lines(os.path.join(level, "use.force")) for level in chain]
     use_force = set(_stack_mask_lines(useforce_sources))
     use_mask = set(_stack_mask_lines(usemask_sources))
-    use_flags |= use_force
-    use_flags -= use_mask
 
     # PORTAGE_ARCHLIST: same chain, same stacking semantics as
     # use.mask/use.force just above -- mirrors portage-profile/src/
@@ -2040,6 +2092,7 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
 
     return {
         "use_flags": use_flags,
+        "use_tokens": use_tokens,
         "accept_keywords": accept_keywords,
         "package_mask": _stack_mask_lines(mask_sources),
         "package_unmask": _stack_mask_lines(unmask_sources),
@@ -2808,10 +2861,12 @@ def resolve_pretend_graph(
         candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
         use_flags = effective_use_flags(
             metadata.get("IUSE", ""),
-            config["use_flags"],
+            config["use_tokens"],
             config["package_use"],
             config["package_use_force"],
             config["package_use_mask"],
+            config["use_force"],
+            config["use_mask"],
             config["use_stable_force"],
             config["use_stable_mask"],
             config["package_use_stable_force"],
@@ -3024,10 +3079,12 @@ def _enqueue_dependencies(
     candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
     use_flags = effective_use_flags(
         metadata.get("IUSE", ""),
-        config["use_flags"],
+        config["use_tokens"],
         config["package_use"],
         config["package_use_force"],
         config["package_use_mask"],
+        config["use_force"],
+        config["use_mask"],
         config["use_stable_force"],
         config["use_stable_mask"],
         config["package_use_stable_force"],

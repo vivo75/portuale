@@ -212,6 +212,16 @@ CASES = [
         ["--pretend", "-v", "dev-libs/archiuseimplicitpkg"],
         0,
     ),
+    (
+        "global use.force/use.mask win over a contradicting package.use entry",
+        ["--pretend", "-v", "dev-libs/globalprecedencepkg"],
+        0,
+    ),
+    (
+        "a profile-level -flag genuinely cancels an IUSE +default",
+        ["--pretend", "-v", "dev-libs/cancelledpkg"],
+        0,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -914,6 +924,64 @@ def test_required_use_referencing_an_implicit_arch_flag_resolves_normally(
     )
     assert result.returncode == 0
     assert result.stdout == '[ebuild  N] dev-libs/archiuseimplicitpkg-1.0\n'
+
+
+def test_global_use_force_and_use_mask_win_over_a_contradicting_package_use_entry(
+    emerge_binary, fixture_env
+):
+    """Found by reading real config.py's own regenerate() end to end
+    (lib/portage/package/ebuild/config.py, ~line 3024):
+    myflags.update(self.useforce) followed by
+    myflags.difference_update(self.usemask) runs as the literal *last*
+    step of the incremental USE walk, strictly *after* the "pkg"
+    (package.use) tier -- and setcpv() confirms self.useforce/
+    self.usemask are themselves getUseForce(pkg)/getUseMask(pkg), i.e.
+    *global* use.force/use.mask combined with the atom-scoped
+    package.use.force/.mask this pilot already applies last. Before this
+    slice, this pilot folded global use_force/use_mask into `base` early
+    (inside portage_profile::resolve_config), before package.use ever
+    ran in effective_use_flags -- so a package.use entry could
+    previously override a global force/mask decision real portage never
+    lets it override. dev-libs/globalprecedencepkg's own IUSE is
+    "globalforceflag globalmaskflag" (both markerless, genuinely
+    undecided by IUSE itself); its own package.use entry is
+    "-globalforceflag globalmaskflag" (an attempt to invert both); the
+    fixture profile's own use.force declares "globalforceflag" and
+    use.mask declares "globalmaskflag". If package.use won, the result
+    would invert to "-globalforceflag globalmaskflag" -- instead, global
+    force/mask should win on both, leaving the flags exactly as the
+    profile forced/masked them regardless of what package.use tried."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "dev-libs/globalprecedencepkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == (
+        '[ebuild  N] dev-libs/globalprecedencepkg-1.0  USE="globalforceflag -globalmaskflag"\n'
+    )
+
+
+def test_profile_level_minus_flag_genuinely_cancels_an_iuse_plus_default(
+    emerge_binary, fixture_env
+):
+    """The gap this pilot's own IUSE-defaults slice originally left open,
+    now closed: real regenerate() runs ONE continuous incremental walk
+    (pkginternal -> defaults -> conf -> pkg), so a genuine "-flag" in
+    profile/make.conf really does cancel an earlier IUSE "+flag" default
+    -- not just fail to add on top of it. Before this slice, this
+    pilot's own effective_use_flags union-ed the already-flattened
+    profile+make.conf result on top of the IUSE-defaults seed, which
+    could only ever *add* a flag, never explicitly cancel one --
+    dev-libs/cancelledpkg's own IUSE is "+cancelme" (defaults on), and
+    fixtures/repo/profiles/default/make.defaults declares a profile-level
+    "-cancelme" -- under the old behavior this would have stayed enabled
+    (the union could never see the "-"); now it's correctly cancelled."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/cancelledpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == '[ebuild  N] dev-libs/cancelledpkg-1.0  USE="-cancelme"\n'
 
 
 def test_required_use_violated_top_level_aborts_the_whole_run(emerge_binary, fixture_env):

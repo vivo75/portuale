@@ -2135,6 +2135,64 @@ PORTING/
   `"USE flag 'x86' is not in IUSE"` failure -- and confirmed live that
   `mesa` itself now resolves cleanly against the real, installed system.
 
+  **Global `use.force`/`use.mask` must win over `package.use`.** Found
+  by reading real `config.py`'s own `regenerate()` end to end while
+  scoping a broader "real per-source `USE_ORDER` precedence" slice:
+  `myflags.update(self.useforce)` followed by
+  `myflags.difference_update(self.usemask)` (~line 3024) runs as the
+  literal *last* step of the incremental USE walk, strictly *after* the
+  `pkg` (`package.use`) tier -- and `setcpv()` confirms
+  `self.useforce`/`self.usemask` are themselves
+  `getUseForce(pkg)`/`getUseMask(pkg)`: *global* `use.force`/`use.mask`
+  combined with the atom-scoped `package.use.force`/`.force` this pilot
+  already applies last. This pilot previously folded global
+  `use_force`/`use_mask` into `base` early, inside
+  `portage_profile::resolve_config` (alongside `defaults`/`conf`), well
+  *before* `package.use` ever ran in `effective_use_flags` -- so a
+  `package.use` entry could incorrectly override a global force/mask
+  decision real portage never lets it override. Fixed by no longer
+  folding `use_force`/`use_mask` into `use_flags` in `resolve_config`
+  (they stay exposed as their own `Config` fields, unchanged for other
+  consumers like `--newuse`'s `forced_flags`) and applying them in
+  `effective_use_flags`'s existing final force/mask block instead,
+  alongside the already-correctly-positioned atom-scoped
+  `package_use_force`/`package_use_mask` -- force-add first, then
+  force-remove, so a flag in both ends up masked, not forced, exactly
+  like real portage. New fixture `dev-libs/globalprecedencepkg`
+  (`IUSE="globalforceflag globalmaskflag"`, its own `package.use` entry
+  `-globalforceflag globalmaskflag` -- an attempted inversion of both)
+  resolves to `USE="globalforceflag -globalmaskflag"`: the profile's own
+  `use.force`/`use.mask` win on both flags regardless of what
+  `package.use` tried.
+
+  **A profile-level `-flag` must genuinely cancel an IUSE `+default`.**
+  The second, larger half of the same "real per-source `USE_ORDER`
+  precedence" slice: real `regenerate()` runs *one continuous*
+  incremental walk across the whole reversed `uvlist`
+  (`pkginternal` -> `defaults` -> `conf` -> `pkg` -> ...), so a genuine
+  `-flag` token in a profile's own `make.defaults` or `make.conf` really
+  does cancel an earlier `pkginternal` `+flag` -- exactly like any other
+  incremental variable. The IUSE-defaults slice earlier in this README
+  documented a narrower scope cut here: `effective_use_flags` union-ed
+  the already-*flattened* `defaults`/`conf` result (`base`) on top of
+  the IUSE-defaults seed, so `base` could only ever *add* a flag, never
+  explicitly cancel one real portage's own walk could. Closed by
+  exposing `portage_profile::Config::use_tokens` -- the *ordered raw*
+  `USE=` value strings that produced `use_flags` (every profile level's
+  own `make.defaults`, in chain order, then `make.conf`, then every
+  `USE_EXPAND`/`USE_EXPAND_UNPREFIXED` variable's own value), not yet
+  collapsed into a flat set -- and having `effective_use_flags` replay
+  `use_tokens` directly via `apply_incremental` on top of the
+  IUSE-defaults seed, instead of union-ing the pre-flattened
+  `use_flags`. `resolve_config` keeps both in sync (same calls populate
+  both); `use_flags` itself is untouched and still used elsewhere (e.g.
+  `--newuse` comparisons). New fixture `dev-libs/cancelledpkg`
+  (`IUSE="+cancelme"`, with a new profile-level `-cancelme` in
+  `profiles/default/make.defaults`, chosen so it's a pure no-op for
+  every *other* fixture) resolves to `USE="-cancelme"` -- under the old
+  union-based behavior this would have stayed enabled, since a flat
+  union can never see a `-flag` that was already collapsed away.
+
   **`USE_EXPAND` support** (PMS 7.3.4). Closes a gap named explicitly in
   `portage-profile`'s own doc comment since the original profile-chain
   slice. Grounded against real `config.py`'s own `regenerate()` --
@@ -3078,6 +3136,22 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/iusedefaul
 # same shape real media-libs/mesa's own REQUIRED_USE hits
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/archiuseimplicitpkg
 # [ebuild  N] dev-libs/archiuseimplicitpkg-1.0
+
+# Global use.force/use.mask win over a contradicting package.use entry:
+# this package's own package.use entry tries to invert both flags
+# ("-globalforceflag globalmaskflag"), but the profile's own use.force/
+# use.mask (applied strictly after package.use, matching real
+# regenerate()'s own literal-last-step ordering) win on both
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/globalprecedencepkg
+# [ebuild  N] dev-libs/globalprecedencepkg-1.0  USE="globalforceflag -globalmaskflag"
+
+# A profile-level "-flag" genuinely cancels an IUSE "+default": this
+# package's own IUSE is "+cancelme" (defaults on), but
+# profiles/default/make.defaults declares "-cancelme" -- real portage's
+# own single continuous incremental walk lets it reach back and cancel
+# the earlier IUSE default, not just fail to add on top of it
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/cancelledpkg
+# [ebuild  N] dev-libs/cancelledpkg-1.0  USE="-cancelme"
 
 # real profile/make.conf resolution: "foo" is enabled by the fixture's
 # profile chain, so this package's foo?-gated dependency is pulled in

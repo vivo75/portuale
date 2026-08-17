@@ -6,3 +6,4 @@ dev-libs/stableusepkg maskflag
 dev-libs/unstableusepkg maskflag
 dev-libs/uselicensepkgforced nonfreeflag
 dev-libs/iusedefaultpkg plainflag
+dev-libs/globalprecedencepkg -globalforceflag globalmaskflag

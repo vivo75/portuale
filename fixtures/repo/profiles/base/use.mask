@@ -4,3 +4,10 @@
 # dev-libs/usemaskreinstallpkg and reinstall_flags_for_newuse's own doc
 # comment).
 masked_newly_added_flag
+
+# fixture use.mask: masks a flag no other fixture package's IUSE
+# declares by default, so this has zero effect on any other test --
+# exercises the fact that global use.mask must win over a package.use
+# entry trying to enable it, mirroring use.force's own doc comment (see
+# dev-libs/globalprecedencepkg).
+globalmaskflag

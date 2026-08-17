@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: global use.force/use.mask must win over package.use
+EAPI=8
+IUSE=globalforceflag globalmaskflag
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

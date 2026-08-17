@@ -134,14 +134,21 @@
 //     per-package source at all here -- those only exist on the
 //     *per-package* path (`pkg` not `None`), see the
 //     `package.use.mask`/`.force` bullet further below for that follow-up.
-//     Applied last, after every other real accumulation source (profile
-//     chain, make.conf): every `use.force` flag is force-added, THEN
-//     every `use.mask` flag is force-removed, exactly matching real
-//     `regenerate()`'s own `myflags.update(useforce)` followed by
-//     `myflags.difference_update(usemask)` -- so a flag listed in both
-//     ends up masked, not forced. `use_force`/`use_mask` are also
-//     exposed on `Config` directly (not just folded into `use_flags`),
-//     since real portage's own `forced_flags` (consumed by
+//     Deliberately NOT folded into `use_flags` here at all (an earlier
+//     version of this pilot did, which was wrong): real `regenerate()`
+//     applies `self.useforce`/`self.usemask` (which `setcpv()` sets to
+//     the *per-package* `getUseForce(pkg)`/`getUseMask(pkg)` -- global
+//     `use.force`/`use.mask` combined with the atom-scoped
+//     `package.use.force`/`.force`) as the literal *last* step of its
+//     own incremental USE walk (`myflags.update(useforce)` followed by
+//     `myflags.difference_update(usemask)`), strictly *after* the `pkg`
+//     (`package.use`) tier -- so `portage-repo`'s own
+//     `effective_use_flags` applies `use_force`/`use_mask` at that same
+//     relative position instead, alongside the atom-scoped
+//     `package_use_force`/`package_use_mask` it already positions
+//     correctly (force-add first, THEN force-remove, so a flag listed in
+//     both ends up masked, not forced). Exposed on `Config` directly
+//     either way, since real portage's own `forced_flags` (consumed by
 //     `--newuse`'s `reinstall_flags_for_newuse` in `portage-repo`,
 //     previously always empty -- see that function's own doc comment)
 //     is `use.force ∪ use.mask`, not either alone.
@@ -236,6 +243,27 @@ use std::sync::OnceLock;
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub use_flags: HashSet<String>,
+    /// The raw `USE=` value strings that *produced* `use_flags`, in real
+    /// accumulation order: every profile level's own `make.defaults`
+    /// (chain order), then `make.conf` (plus any `source`d files), then
+    /// every `USE_EXPAND` variable's own value (already `varname_`-
+    /// prefixed), then every `USE_EXPAND_UNPREFIXED` variable's own raw
+    /// value -- exactly the sequence of `apply_incremental` calls that
+    /// built `use_flags` itself, just not yet collapsed into a flat set.
+    /// `portage-repo`'s own `effective_use_flags` replays this directly
+    /// (via `apply_incremental`) on top of a package's own IUSE-defaults
+    /// seed, instead of union-ing the already-flattened `use_flags` on
+    /// top of it -- a flat union can only ever *add* a flag, so it could
+    /// never let `defaults`/`conf` explicitly *cancel* an IUSE `+default`
+    /// the way real portage's own single continuous incremental walk
+    /// (`pkginternal` -> `defaults` -> `conf` -> ...) does. See
+    /// `effective_use_flags`'s own doc comment for the full grounding.
+    /// **Consistency note**: `resolve_config` always keeps this and
+    /// `use_flags` in sync (both grow from the same calls); a `Config`
+    /// literal built by hand (as several test modules do) must set both
+    /// together too, or `effective_use_flags` will silently see an empty
+    /// (or stale) `use_tokens` regardless of what `use_flags` says.
+    pub use_tokens: Vec<String>,
     pub accept_keywords: HashSet<String>,
     /// Raw atom or bounded-wildcard-atom strings (see
     /// `portage_dep::parse_wildcard_atom`) from `package.mask`, with
@@ -256,16 +284,22 @@ pub struct Config {
     /// (the `*` stripped) -- see the module doc comment's `packages`
     /// bullet and `PackagesSystemSet.load`.
     pub system_packages: Vec<String>,
-    /// Flags forced on by every profile level's own `use.force` file,
-    /// already folded into `use_flags` -- exposed separately too since
-    /// real portage's own `forced_flags` (e.g. `--newuse`'s
+    /// Flags forced on by every profile level's own `use.force` file.
+    /// Deliberately *not* folded into `use_flags` -- real config.py's
+    /// own `regenerate()` applies this (combined with the atom-scoped
+    /// `package.use.force`, via `setcpv()`'s own per-package
+    /// `getUseForce(pkg)`) as the literal *last* step of its incremental
+    /// USE walk, strictly after `package.use` -- so `portage-repo`'s own
+    /// `effective_use_flags` applies this at that same relative
+    /// position instead, alongside `package_use_force`. Exposed here too
+    /// since real portage's own `forced_flags` (e.g. `--newuse`'s
     /// `reinstall_flags_for_newuse`) is `use.force ∪ use.mask`, not
     /// either one alone. See the module doc comment's `use.mask`/
     /// `use.force` bullet.
     pub use_force: HashSet<String>,
-    /// Flags forced off by every profile level's own `use.mask` file,
-    /// already folded out of `use_flags`. See `use_force`'s own doc
-    /// comment.
+    /// Flags forced off by every profile level's own `use.mask` file.
+    /// See `use_force`'s own doc comment for why this is deliberately
+    /// *not* folded into `use_flags` either.
     pub use_mask: HashSet<String>,
     /// (atom-or-wildcard string, flag tokens) pairs from `package.use.force`
     /// -- repo-level (main repo only) and every profile level's own file,
@@ -512,7 +546,10 @@ fn process_lines(text: &str, scalars: &mut HashMap<String, String>, config: &mut
         };
         let value = substitute(raw_value, scalars);
         match key {
-            "USE" => apply_incremental(&value, &mut config.use_flags),
+            "USE" => {
+                apply_incremental(&value, &mut config.use_flags);
+                config.use_tokens.push(value.clone());
+            }
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
             "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
             "USE_EXPAND_UNPREFIXED" => apply_incremental(&value, &mut config.use_expand_unprefixed),
@@ -688,7 +725,10 @@ fn process_make_conf_file(
         };
         let value = substitute(raw_value, scalars);
         match key {
-            "USE" => apply_incremental(&value, &mut config.use_flags),
+            "USE" => {
+                apply_incremental(&value, &mut config.use_flags);
+                config.use_tokens.push(value.clone());
+            }
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
             "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
             "USE_EXPAND_UNPREFIXED" => apply_incremental(&value, &mut config.use_expand_unprefixed),
@@ -1162,6 +1202,7 @@ pub fn resolve_config(
             .collect::<Vec<_>>()
             .join(" ");
         apply_incremental(&prefixed, &mut config.use_flags);
+        config.use_tokens.push(prefixed);
     }
 
     // USE_EXPAND_UNPREFIXED: real config.py's own companion to
@@ -1182,6 +1223,7 @@ pub fn resolve_config(
             continue;
         };
         apply_incremental(value, &mut config.use_flags);
+        config.use_tokens.push(value.clone());
     }
 
     // use.mask/use.force: every profile level's own file (in chain
@@ -1193,10 +1235,24 @@ pub fn resolve_config(
     // per-package source at all (those only exist on the *per-package*
     // path, out of scope for this pilot's flat/global USE model, same
     // as package.use's own repo/profile/user-only sourcing already is).
-    // Applied last, after every other real accumulation source above,
-    // matching config.py's own regenerate(): force-add every useforce
-    // flag, THEN force-remove every usemask flag -- so a flag in both
-    // ends up masked, not forced, exactly like real portage.
+    // NOT folded into `use_flags` here -- real config.py's own
+    // `regenerate()` applies `self.useforce`/`self.usemask` (which
+    // `setcpv()` sets to the *per-package* `getUseForce(pkg)`/
+    // `getUseMask(pkg)` -- global use.force/use.mask combined with the
+    // atom-scoped package.use.force/.mask this pilot already applies
+    // per-candidate) as the literal *last* step of its own incremental
+    // USE walk (`lib/portage/package/ebuild/config.py`, ~line 3024:
+    // `myflags.update(self.useforce); ...;
+    // myflags.difference_update(self.usemask)`), strictly *after* the
+    // `pkg` (`package.use`) tier -- not folded in early alongside
+    // `defaults`/`conf` the way this pilot previously (incorrectly) did,
+    // which let a `package.use` entry override a global force/mask
+    // decision real portage never lets it override. See
+    // `portage-repo`'s own `effective_use_flags` doc comment for where
+    // `use_force`/`use_mask` actually get applied now -- alongside the
+    // atom-scoped `package_use_force`/`package_use_mask` it already
+    // positions correctly, force-add first then force-remove, so a flag
+    // in both ends up masked, not forced, exactly like real portage.
     let mut usemask_sources: Vec<Vec<String>> = Vec::new();
     let mut useforce_sources: Vec<Vec<String>> = Vec::new();
     for level in &chain {
@@ -1205,12 +1261,6 @@ pub fn resolve_config(
     }
     config.use_force = stack_mask_lines(&useforce_sources).into_iter().collect();
     config.use_mask = stack_mask_lines(&usemask_sources).into_iter().collect();
-    for flag in &config.use_force {
-        config.use_flags.insert(flag.clone());
-    }
-    for flag in &config.use_mask {
-        config.use_flags.remove(flag);
-    }
 
     // PORTAGE_ARCHLIST: same chain, same stacking semantics as
     // use.mask/use.force just above -- see `archlist`'s own doc comment.
@@ -2040,16 +2090,23 @@ mod tests {
     }
 
     #[test]
-    fn use_mask_and_use_force_stack_across_levels_and_mask_wins_over_force() {
+    fn use_mask_and_use_force_stack_across_levels_but_stay_out_of_use_flags() {
         // base: make.defaults enables "normalflag" and "maskflag"
         // normally; use.force forces on "forceflag" and "bothflag".
         // leaf (its own parent -> base): use.mask masks "maskflag" (an
-        // otherwise-normal USE flag -- proving use.mask overrides plain
-        // USE accumulation, not just use.force) and "bothflag" (proving
-        // mask wins when a flag is both forced AND masked, matching real
+        // otherwise-normal USE flag) and "bothflag" (proving mask wins
+        // when a flag is both forced AND masked, matching real
         // regenerate()'s update-then-difference_update order).
-        // Final use_flags: {normalflag, forceflag} -- maskflag and
-        // bothflag are both gone despite being enabled/forced upstream.
+        // use_force/use_mask stack correctly across levels -- but,
+        // unlike an earlier version of this pilot, are deliberately NOT
+        // folded into use_flags at all: real regenerate() applies them
+        // as the literal last step of its own incremental USE walk,
+        // strictly after package.use, so `use_flags` here stays exactly
+        // what make.defaults/make.conf alone produced (see
+        // `use_force`'s own doc comment for the full grounding);
+        // `portage-repo`'s own `effective_use_flags` applies
+        // `use_force`/`use_mask` at that later, correct position
+        // instead.
         let root = std::env::temp_dir().join("portage-profile-test-use-mask-force");
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
@@ -2073,7 +2130,7 @@ mod tests {
         let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.use_flags,
-            HashSet::from(["normalflag".to_string(), "forceflag".to_string()])
+            HashSet::from(["normalflag".to_string(), "maskflag".to_string()])
         );
         assert_eq!(
             config.use_force,
@@ -2116,6 +2173,51 @@ mod tests {
             config.archlist,
             HashSet::from(["amd64".to_string(), "arm64".to_string()])
         );
+    }
+
+    #[test]
+    fn use_tokens_capture_the_ordered_raw_use_values_that_produced_use_flags() {
+        // base: make.defaults sets USE="foo". leaf (its own parent ->
+        // base): make.defaults sets USE="-foo bar". make.conf: USE="baz".
+        // use_flags ends up {bar, baz} either way -- but use_tokens
+        // must retain each raw contribution *separately*, in real
+        // accumulation order (profile chain, then make.conf), so
+        // replaying them via apply_incremental from an empty set
+        // reproduces use_flags exactly. This is what lets
+        // portage-repo's own effective_use_flags replay them on top of
+        // a *different* seed (a package's own IUSE defaults) instead of
+        // just union-ing the pre-flattened use_flags on top, which could
+        // never let "-foo" cancel an IUSE "+foo" default.
+        let root = std::env::temp_dir().join("portage-profile-test-use-tokens");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let base = repo_profiles.join("base");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(base.join("make.defaults"), "USE=\"foo\"\n").unwrap();
+        fs::write(leaf.join("parent"), "../repo/profiles/base\n").unwrap();
+        fs::write(leaf.join("make.defaults"), "USE=\"-foo bar\"\n").unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+        fs::write(portage_dir.join("make.conf"), "USE=\"baz\"\n").unwrap();
+
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        assert_eq!(
+            config.use_tokens,
+            vec!["foo".to_string(), "-foo bar".to_string(), "baz".to_string()]
+        );
+        let mut replayed = HashSet::new();
+        for token in &config.use_tokens {
+            apply_incremental(token, &mut replayed);
+        }
+        assert_eq!(replayed, config.use_flags);
     }
 
     #[test]

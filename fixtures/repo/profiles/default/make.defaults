@@ -3,4 +3,11 @@
 # Exercises incremental removal ("-bar") across profile levels: "bar" was
 # added by ../base and must be gone from the final set, while "foo" (also
 # from ../base) survives untouched.
-USE="-bar baz"
+# "-cancelme" is a no-op here (no other fixture source ever adds
+# "cancelme" to the global USE accumulation) -- it exercises a *different*
+# thing entirely: dev-libs/cancelledpkg's own IUSE default ("+cancelme")
+# gets genuinely cancelled by this profile-level "-cancelme", proving
+# use_tokens (the ordered raw USE= values) are replayed on top of a
+# package's own IUSE-defaults seed, not just union-ed as an already-
+# flattened set that could only ever add.
+USE="-bar baz -cancelme"

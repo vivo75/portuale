@@ -1,0 +1,8 @@
+# fixture use.force: forces a flag no other fixture package's IUSE
+# declares by default, so this has zero effect on any other test --
+# exercises the fact that global use.force must win over a package.use
+# entry trying to disable it (real regenerate() applies self.useforce as
+# the literal last step of its own incremental USE walk, strictly after
+# the "pkg"/package.use tier -- see dev-libs/globalprecedencepkg and
+# portage-repo's own effective_use_flags doc comment).
+globalforceflag
