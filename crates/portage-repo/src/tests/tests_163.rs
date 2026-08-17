@@ -55,3 +55,50 @@ struct RpOpts163 {
     autounmask_masks: bool,
     extra_constraints: Vec<String>,
 }
+
+/// Direct `resolve_pretend` call over a scratch repo + scratch vdb;
+/// `binpkgs` stages `scanned_binpkgs` records like `ResolveCtx::new`.
+fn resolve_163(
+    repos: &[RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    atom: &str,
+    o: &RpOpts163,
+) -> PretendOutcome {
+    resolve_pretend(
+        &SelectSource {
+            repos,
+            root,
+            config,
+            local_binpkg: &build_local_binpkg_index(config),
+        },
+        atom,
+        &SelectOptions {
+            newuse: o.newuse,
+            changed_use: o.changed_use,
+            update: o.update,
+            excluded: &o.excluded,
+            changed_deps: o.changed_deps,
+            with_bdeps: o.with_bdeps,
+            changed_slot: o.changed_slot,
+            selective: o.selective,
+            is_top_level: o.is_top_level,
+            usepkg: o.usepkg,
+            usepkgonly: o.usepkgonly,
+            binpkg_respect_use: o.binpkg_respect_use,
+            usepkg_exclude: &o.usepkg_exclude,
+            usepkg_include: &o.usepkg_include,
+            rebuilt_binaries: o.rebuilt_binaries,
+            rebuilt_binaries_timestamp: o.rebuilt_binaries_timestamp,
+            newrepo: o.newrepo,
+            empty: o.empty,
+            getbinpkg: o.getbinpkg,
+            autounmask_keywords: o.autounmask_keywords,
+            autounmask_use: o.autounmask_use,
+            autounmask_license: o.autounmask_license,
+            autounmask_masks: o.autounmask_masks,
+            extra_constraints: &o.extra_constraints,
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_163({atom}) failed: {e}"))
+}

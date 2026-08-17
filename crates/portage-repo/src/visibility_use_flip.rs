@@ -123,6 +123,29 @@ pub(crate) fn suggested_use_flip(
     Some(changes)
 }
 
+/// The best `--autounmask-use` suggestion for `category/package`
+/// against `use_deps`, if any: among the candidates mismatched on plain
+/// USE-deps alone, the highest-versioned one with its `suggested_use_flip`.
+/// Mirrors `suggested_keyword_candidate`'s "best near-miss" shape.
+pub(crate) fn suggested_use_candidate(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    use_deps: Option<&[portage_dep::UseDep]>,
+    config: &portage_profile::Config,
+) -> Option<(String, Vec<(String, bool)>)> {
+    let use_deps = use_deps.filter(|ud| !ud.is_empty())?;
+    let candidates = list_candidates(repos, category, package).ok()?;
+    candidates
+        .iter()
+        .filter(|c| use_masked_only(c, category, package, use_deps, config))
+        .filter_map(|c| suggested_use_flip(c, category, package, use_deps, config).map(|f| (c, f)))
+        .max_by(|(a, _), (b, _)| {
+            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+        })
+        .map(|(c, flip)| (c.version.clone(), flip))
+}
+
 /// A package's declared `IUSE` (markers stripped) folded together with
 /// the arch list, `use.mask ∪ use.force`, the literal
 /// `build`/`bootstrap` flags and `iuse_effective`: the full domain for
