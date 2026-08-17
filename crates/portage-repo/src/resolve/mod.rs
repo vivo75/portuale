@@ -1,3 +1,4 @@
+mod autounmask;
 mod backtrack_params;
 mod blockers;
 mod complete_graph;
@@ -20,6 +21,7 @@ mod rev_dep;
 mod root_deps;
 mod skipped;
 mod slot_conflict;
+pub(crate) use autounmask::*;
 pub use backtrack_params::*;
 pub use blockers::*;
 pub use complete_graph::*;
