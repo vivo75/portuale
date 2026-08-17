@@ -23,3 +23,18 @@ struct Filed165Args<'a> {
     unsolvable: bool,
     satisfied_by: Option<BlockerSatisfiedBy>,
 }
+
+// ---- `enqueue_dependencies` (`--deep` AlreadyInstalled recursion). ----
+/// Arguments of [`enqueue_165`].
+struct Enqueue165Args<'a> {
+    repos: &'a [RepoConfig],
+    root: &'a Path,
+    config: &'a portage_profile::Config,
+    cat: &'a str,
+    pkg: &'a str,
+    ver: &'a str,
+    with_bdeps: bool,
+    entries: &'a mut Vec<GraphEntry>,
+    queue: &'a mut std::collections::VecDeque<QueueItem>,
+    pending: &'a mut Vec<PendingBlocker>,
+}
