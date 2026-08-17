@@ -207,7 +207,7 @@
 // PORTING/README.md and PORTING/PROMPT.md for the rest.
 
 use crate::emerge_options;
-use portage_dep::{match_from_list, parse_atom, Blocker};
+use portage_dep::{match_from_list, parse_atom, Atom, Blocker};
 use portage_repo::{
     config_root_from_env, resolve_pretend_graph, root_from_env, GraphEntry, PretendOutcome,
     SlotConflict,
@@ -693,30 +693,53 @@ fn resolve_custom_set(
 /// other real feature in this pilot.
 ///
 /// For each target in `targets`: a bare package name (no `/` at all) is
-/// expanded via real portage's own "null category" mechanism -- scan
-/// the world file's own atoms for one sharing that package name, and
+/// expanded via real portage's own "null category" mechanism -- scan the
+/// world file's own atoms for one sharing that package name, and
 /// substitute in its category (real `Atom(..., category="null")`
 /// handling; this pilot's own atom parser has no equivalent, so this is
-/// a dedicated lookup instead). Every resulting atom (bare-name-expanded
-/// or given with an explicit category already) is then matched against
-/// every installed version of that category/package
-/// (`portage_repo::installed_candidates`, this pilot's own vdb scan) via
-/// `match_from_list`, mirroring real `vardb.match(atom)` -- only a
-/// target that's *actually installed* can ever match anything in the
-/// world file at all, matching real portage's own behavior exactly (the
-/// world file's own text alone is never enough; an unresolvable bare
-/// name simply contributes nothing, not an error, same as real
-/// portage's own empty `vardb.match()` result).
+/// a dedicated lookup instead), added to the candidate set directly,
+/// **unconditionally, no installed check at all**: confirmed by reading
+/// `action_deselect`'s own null-category-substitution loop, which adds
+/// the substituted atom to `expanded_atoms` before ever touching the
+/// vardb. Real `action_deselect` *does* separately call
+/// `vardb.match(atom)` for this same original (still-null-category)
+/// atom, but that call can never match a real vardb entry -- no package
+/// is ever catalogued under category "null" -- so it's dead code for
+/// this branch specifically, and correctly contributes nothing here.
 ///
-/// A world-file entry is discarded once it shares category/package with
-/// one of these installed matches, and (if the world entry itself
-/// carries an explicit slot) that slot matches too -- a deliberate,
-/// documented simplification of real `Atom.intersects()`'s own full
-/// version/slot/USE-dep compatibility algebra: this pilot's own atom
-/// grammar has no `intersects()` equivalent, and the dominant real-world
-/// `--deselect` usage (a plain, unversioned target against a plain,
-/// unversioned or slot-qualified world entry) is fully captured by this
-/// narrower category/package(+slot) check.
+/// An *explicit*-category target (already has a `/`) is likewise added
+/// to the candidate set directly, with **no installed check at all** --
+/// confirmed by reading real portage's own call chain feeding
+/// `action_deselect`'s own `atoms` parameter: `action_uninstall`'s own
+/// `dep_expand(x, mydb=vardb, ...)` (`lib/portage/dbapi/dep_expand.py`)
+/// returns an explicit-category atom completely unchanged, `if
+/// mydep.category != "virtual": return mydep`, *before* it ever reaches
+/// `cpv_expand` (the vardb-dependent part, only reached for a bare
+/// name); `action_deselect` itself then seeds `expanded_atoms =
+/// set(atoms)` with that same atom, unconditionally. So `--deselect
+/// cat/pkg` (or a bare `pkg` resolvable via the world file) genuinely
+/// discards a matching world entry even if never installed -- this
+/// pilot's own earlier doc comment (and test) claimed installation was
+/// always required, an incorrect generalization: real portage's own
+/// vardb-derived narrowing (`vardb.match`) is a *separate, additional*
+/// contribution on top of the unconditional substitution/literal-target
+/// candidate, for BOTH the bare-name and explicit-category cases -- not
+/// a gate on it. For an explicit-category target specifically, that
+/// separate vardb contribution (`portage_repo::installed_candidates`,
+/// this pilot's own vdb scan, via `match_from_list`) still runs and adds
+/// a further bare `category/package:slot` candidate (real
+/// `Atom(f"{pkg.cp}:{pkg.slot}")`, no version/operator at all) for
+/// whatever version(s) are actually installed; for a bare name it's
+/// correctly omitted, per the dead-code reasoning above.
+///
+/// Every candidate atom collected this way -- installed-derived (bare
+/// `category/package:slot`) or the literal target/substituted atom
+/// (version/operator intact, if given) -- is compared against every
+/// world-file entry via real `Atom.intersects()` (`portage_dep::
+/// atom_intersects`, see its own doc comment) plus real
+/// `action_deselect`'s own separate repo check (`not (arg_atom.repo and
+/// not atom.repo)`), replacing this pilot's own previous narrower
+/// category/package(+slot)-only equality check.
 ///
 /// `--deselect @some-set`: real `action_deselect`'s own combined
 /// `world_set` (`WorldSelectedSet`) iterates BOTH `world`'s own plain
@@ -761,7 +784,7 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
         }
     };
 
-    let mut expanded: HashSet<(String, String, String)> = HashSet::new();
+    let mut expanded: Vec<Atom> = Vec::new();
     // A `@name` target only ever matches a `world_sets` entry by exact
     // name -- see this function's own doc comment -- so it's collected
     // separately, never fed through the atom-expansion/vardb-matching
@@ -772,31 +795,45 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
             set_targets.insert(name);
             continue;
         }
-        let candidate_atom_strs: Vec<String> = if target.contains('/') {
-            vec![(*target).to_string()]
-        } else {
-            world_atoms
-                .iter()
-                .filter_map(|w| parse_atom(w))
-                .filter(|a| a.package == *target)
-                .map(|a| format!("{}/{}", a.category, target))
-                .collect()
-        };
-        for atom_str in candidate_atom_strs {
-            let Some(atom) = parse_atom(&atom_str) else {
-                eprintln!("emerge: invalid atom {atom_str:?}");
-                return ExitCode::from(1);
-            };
+        if let Some(atom) = parse_atom(target).filter(|_| target.contains('/')) {
+            // Explicit-category target: real `expanded_atoms =
+            // set(atoms)` seeds with the literal target atom itself,
+            // version/operator intact, no installed check at all -- see
+            // this function's own doc comment. `vardb.match(atom)`
+            // (real `installed_candidates` + `match_from_list` here)
+            // separately contributes a bare `category/package:slot`
+            // candidate for whatever version(s) are *actually*
+            // installed, real `Atom(f"{pkg.cp}:{pkg.slot}")` -- no
+            // version/operator at all, regardless of the real installed
+            // one.
+            expanded.push(atom.clone());
             for (version, slot) in
                 portage_repo::installed_candidates(root, &atom.category, &atom.package)
             {
                 let candidate_str = format!("{}/{}-{version}:{slot}", atom.category, atom.package);
-                if match_from_list(&atom_str, &[candidate_str.as_str()])
-                    .is_some_and(|m| !m.is_empty())
+                if match_from_list(target, &[candidate_str.as_str()]).is_some_and(|m| !m.is_empty())
                 {
-                    expanded.insert((atom.category.clone(), atom.package.clone(), slot));
+                    if let Some(vardb_atom) =
+                        parse_atom(&format!("{}/{}:{slot}", atom.category, atom.package))
+                    {
+                        expanded.push(vardb_atom);
+                    }
                 }
             }
+        } else if !target.contains('/') {
+            // Bare name: null-category substitution, unconditional, no
+            // installed check -- see this function's own doc comment.
+            for w in world_atoms.iter().filter_map(|w| parse_atom(w)) {
+                if w.package != *target {
+                    continue;
+                }
+                if let Some(substituted) = parse_atom(&format!("{}/{}", w.category, target)) {
+                    expanded.push(substituted);
+                }
+            }
+        } else {
+            eprintln!("emerge: invalid atom {target:?}");
+            return ExitCode::from(1);
         }
     }
 
@@ -809,10 +846,9 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
             let Some(w) = parse_atom(world_atom_str) else {
                 return false;
             };
-            expanded.iter().any(|(cat, pkg, slot)| {
-                w.category == *cat
-                    && w.package == *pkg
-                    && w.slot.as_deref().is_none_or(|ws| ws == slot)
+            expanded.iter().any(|arg_atom| {
+                portage_dep::atom_intersects(arg_atom, &w)
+                    && !(arg_atom.repo.is_some() && w.repo.is_none())
             })
         })
         .map(|s| (s.clone(), "world"))

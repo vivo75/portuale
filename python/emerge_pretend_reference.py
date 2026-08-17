@@ -3366,22 +3366,52 @@ def _resolve_custom_set(config_root, name, seen):
 def _run_deselect(targets, root):
     """Ports real action_deselect (lib/_emerge/actions.py, lines
     1740-1835) exactly: needs no repo/config resolution at all, only the
-    world file and the vdb. Each target is expanded into its own
-    actually-installed category/package:slot form(s) -- a bare package
-    name (no "/") via real portage's own "null category" mechanism,
-    scanning the world file for a same-named atom to borrow its category
-    from, then an installed_candidates (vardb.match-equivalent) lookup
-    either way -- and each expanded form is matched against every
-    world-file atom. Unlike pretend.rs's own run_deselect, which hand-
-    rolls a narrower category/package(+slot) equality check as a
-    documented scope cut, this reuses the real match_from_list directly
+    world file and the vdb.
+
+    A bare package name (no "/") is expanded via real portage's own
+    "null category" mechanism -- scan the world file for a same-named
+    atom and substitute in its category -- added to the candidate set
+    *unconditionally*, no installed check at all: real action_deselect
+    adds the substituted atom to expanded_atoms before ever touching the
+    vardb. Real action_deselect does separately call vardb.match(atom)
+    for this same original (still-null-category) atom, but that call can
+    never match a real vardb entry (no package is ever catalogued under
+    category "null"), so it's dead code for this branch and correctly
+    contributes nothing here.
+
+    An *explicit*-category target (already has a "/") is likewise added
+    directly, with no installed check at all -- confirmed by reading
+    real portage's own call chain feeding action_deselect's own atoms
+    parameter: action_uninstall's own dep_expand(x, mydb=vardb, ...)
+    (lib/portage/dbapi/dep_expand.py) returns an explicit-category atom
+    completely unchanged, "if mydep.category != 'virtual': return
+    mydep", before it ever reaches cpv_expand (the vardb-dependent part,
+    only reached for a bare name); action_deselect itself then seeds
+    expanded_atoms = set(atoms) with that same atom, unconditionally. So
+    "--deselect cat/pkg" (or a bare "pkg" resolvable via the world file)
+    genuinely discards a matching world entry even if never installed --
+    this pilot's own earlier doc comment (and test) claimed installation
+    was always required, an incorrect generalization: real portage's own
+    vardb-derived narrowing (vardb.match) is a *separate, additional*
+    contribution on top of the unconditional substitution/literal-target
+    candidate, for BOTH the bare-name and explicit-category cases -- not
+    a gate on it. For an explicit-category target specifically, that
+    separate vardb contribution (installed_candidates, via
+    match_from_list) still runs and adds a further bare
+    category/package:slot candidate (real Atom(f"{pkg.cp}:{pkg.slot}"),
+    no version/operator at all) for whatever version(s) are actually
+    installed; for a bare name it's correctly omitted, per the dead-code
+    reasoning above.
+
+    Every candidate atom collected this way is compared against every
+    world-file entry via the real Atom.intersects() method directly
     (the same "why re-derive it" reasoning as _matches_config_entry
-    above) -- both give identical results across every case this pilot's
-    own contract suite exercises (plain atoms, slot-restricted atoms),
-    since neither exercises the version-range/USE-dep territory where
-    the two would actually diverge. A "@"-prefixed world entry is never
-    matched, consistent with _read_world_atoms's own pre-existing cut for
-    @world itself.
+    above -- this is the oracle, so it uses real portage's own method,
+    unlike pretend.rs's own hand-ported portage_dep::atom_intersects)
+    plus real action_deselect's own separate repo check ("not
+    (arg_atom.repo and not atom.repo)"). A "@"-prefixed world entry is
+    never matched this way, consistent with _read_world_atoms's own
+    pre-existing cut for @world itself.
 
     A "@name" target: real action_deselect's own combined world_set
     (WorldSelectedSet) iterates BOTH the world file's own plain atoms AND
@@ -3406,39 +3436,41 @@ def _run_deselect(targets, root):
     world_atoms = _read_world_atoms(root)
     world_sets = _read_world_sets(root)
 
-    expanded = set()
+    expanded = []
     set_targets = set()
     for target in targets:
         if target.startswith("@"):
             set_targets.add(target[1:])
             continue
         if "/" in target:
-            candidate_atom_strs = [target]
-        else:
-            candidate_atom_strs = []
-            for w in world_atoms:
-                a = _parse_atom(w)
-                if a is not None and a.cp.split("/", 1)[1] == target:
-                    candidate_atom_strs.append(f"{a.cp.split('/', 1)[0]}/{target}")
-
-        for atom_str in candidate_atom_strs:
-            atom = _parse_atom(atom_str)
+            atom = _parse_atom(target)
             if atom is None:
-                print(f"emerge: invalid atom {atom_str!r}", file=sys.stderr)
+                print(f"emerge: invalid atom {target!r}", file=sys.stderr)
                 return 1
+            expanded.append(atom)
             category, package = atom.cp.split("/", 1)
             for version, slot in installed_candidates(root, category, package):
                 candidate_str = f"{category}/{package}-{version}:{slot}"
-                if match_from_list(atom_str, [candidate_str]):
-                    expanded.add((category, package, slot))
+                if match_from_list(target, [candidate_str]):
+                    vardb_atom = _parse_atom(f"{category}/{package}:{slot}")
+                    if vardb_atom is not None:
+                        expanded.append(vardb_atom)
+        else:
+            for w in world_atoms:
+                a = _parse_atom(w)
+                if a is not None and a.cp.split("/", 1)[1] == target:
+                    category = a.cp.split("/", 1)[0]
+                    substituted = _parse_atom(f"{category}/{target}")
+                    if substituted is not None:
+                        expanded.append(substituted)
 
     discard = []
     for world_atom_str in world_atoms:
         w = _parse_atom(world_atom_str)
         if w is None:
             continue
-        for cat, pkg, slot in expanded:
-            if w.cp == f"{cat}/{pkg}" and (w.slot is None or w.slot == slot):
+        for arg_atom in expanded:
+            if arg_atom.intersects(w) and not (arg_atom.repo and not w.repo):
                 discard.append((world_atom_str, "world"))
                 break
     for name in world_sets:

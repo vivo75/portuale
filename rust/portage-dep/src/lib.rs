@@ -799,6 +799,36 @@ pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec
     )
 }
 
+/// Real `Atom.intersects()` (`lib/portage/dep/__init__.py`): despite the
+/// name, a real, deliberately NARROW check -- real portage's own
+/// docstring says so directly ("atoms with different cpv, operator or
+/// use attributes cause this method to return False even though there
+/// may actually be some intersection... TODO: Detect more forms of
+/// intersection"). Ported field-for-field, skipping real portage's own
+/// `self == other` fast-path shortcut (redundant, not a simplification
+/// -- two textually-identical atoms already satisfy every check below
+/// and fall through to `true` the same way): `cp` (category+package),
+/// `use` (use-deps), `operator`, and `cpv` (category+package+version --
+/// `operator` plus the full version/revision together, compared here as
+/// `full_version()`) must ALL match exactly, not overlap and not
+/// satisfy a range, before slot compatibility (`None` on either side,
+/// or an identical value) decides the result. `repo` is deliberately
+/// NOT checked here, matching real `intersects()` itself -- real
+/// `action_deselect`'s own caller adds its own separate repo check
+/// afterward (`and not (arg_atom.repo and not atom.repo)`, ported at
+/// `run_deselect`'s own call site in `pretend.rs`, not folded in here).
+pub fn atom_intersects(a: &Atom, b: &Atom) -> bool {
+    if a.category != b.category
+        || a.package != b.package
+        || a.use_deps != b.use_deps
+        || a.operator != b.operator
+        || a.full_version() != b.full_version()
+    {
+        return false;
+    }
+    a.slot.is_none() || b.slot.is_none() || a.slot == b.slot
+}
+
 // --- Bounded wildcard atoms (package.mask/.unmask/.accept_keywords) ---
 //
 // A separate, additional API from everything above: `Atom`/`parse_atom`/
@@ -1146,5 +1176,68 @@ mod use_dep_satisfaction_tests {
             &iuse,
             &HashSet::from(["bar".to_string(), "baz".to_string()])
         ));
+    }
+
+    #[test]
+    fn atom_intersects_matches_identical_atoms() {
+        let a = parse_atom("dev-libs/foo").unwrap();
+        let b = parse_atom("dev-libs/foo").unwrap();
+        assert!(atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_rejects_a_different_package() {
+        let a = parse_atom("dev-libs/foo").unwrap();
+        let b = parse_atom("dev-libs/bar").unwrap();
+        assert!(!atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_rejects_a_different_version_under_the_same_operator() {
+        let a = parse_atom("=dev-libs/foo-1.0").unwrap();
+        let b = parse_atom("=dev-libs/foo-2.0").unwrap();
+        assert!(!atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_rejects_a_different_operator_even_when_the_version_would_satisfy_it() {
+        // Real Atom.intersects()'s own docstring: deliberately narrow,
+        // "atoms with different cpv, operator or use attributes cause
+        // this method to return False even though there may actually be
+        // some intersection". `>=dev-libs/foo-1.0` would genuinely be
+        // satisfied by version 1.0, but the operator itself must match
+        // exactly here, not just range-satisfaction.
+        let a = parse_atom(">=dev-libs/foo-1.0").unwrap();
+        let b = parse_atom("=dev-libs/foo-1.0").unwrap();
+        assert!(!atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_allows_a_slot_on_only_one_side() {
+        let a = parse_atom("dev-libs/foo").unwrap();
+        let b = parse_atom("dev-libs/foo:1").unwrap();
+        assert!(atom_intersects(&a, &b));
+        assert!(atom_intersects(&b, &a));
+    }
+
+    #[test]
+    fn atom_intersects_rejects_conflicting_slots() {
+        let a = parse_atom("dev-libs/foo:1").unwrap();
+        let b = parse_atom("dev-libs/foo:2").unwrap();
+        assert!(!atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_matches_identical_slots() {
+        let a = parse_atom("dev-libs/foo:1").unwrap();
+        let b = parse_atom("dev-libs/foo:1").unwrap();
+        assert!(atom_intersects(&a, &b));
+    }
+
+    #[test]
+    fn atom_intersects_rejects_different_use_deps() {
+        let a = parse_atom("dev-libs/foo[bar]").unwrap();
+        let b = parse_atom("dev-libs/foo[-bar]").unwrap();
+        assert!(!atom_intersects(&a, &b));
     }
 }

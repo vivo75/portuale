@@ -2031,7 +2031,18 @@ def _deselect_root(tmp_path):
     but never installed; "dev-libs/notinworld" is installed but never
     world-listed; "@some-nested-set-reference" proves a "@"-prefixed
     world line is still silently skipped here too, same as @world
-    expansion already does. The separate world_sets file (real
+    expansion already does. "=dev-libs/vers-1.0" is an explicit-version
+    world entry, never installed either -- since an explicit-category
+    target needs no installed check at all (see run_deselect's own doc
+    comment), this exercises real Atom.intersects()'s own deliberately
+    narrow cpv/operator matching directly, without an installed-status
+    confound: an exact "=dev-libs/vers-1.0" target matches, but neither
+    a different version ("=dev-libs/vers-2.0") nor even the same
+    version under a different operator (">=dev-libs/vers-1.0", which
+    would actually be *satisfied* by 1.0 under a real range check) does
+    -- real Atom.intersects() requires the operator itself to match
+    exactly, not just range-satisfaction, per its own docstring's "TODO:
+    Detect more forms of intersection". The separate world_sets file (real
     portage's own WORLD_SETS_FILE, genuinely distinct from the world
     file above) lists "@myselectedset" (matchable by
     "--deselect @myselectedset") and "@anotherselectedset" (present but
@@ -2044,6 +2055,7 @@ def _deselect_root(tmp_path):
         "dev-libs/bar:1\n"
         "dev-libs/baz:2\n"
         "dev-libs/qux\n"
+        "=dev-libs/vers-1.0\n"
         "@some-nested-set-reference\n"
     )
     world_sets = tmp_path / "var" / "lib" / "portage" / "world_sets"
@@ -2092,20 +2104,59 @@ def test_deselect_matches_via_a_bare_package_name(emerge_binary, fixture_env, tm
     assert result.stdout == '>>> Would remove dev-libs/foo from "world" favorites file...\n'
 
 
-def test_deselect_respects_the_world_atoms_own_slot_restriction(
+def test_deselect_matches_regardless_of_installed_slot_when_target_is_unslotted(
     emerge_binary, fixture_env, tmp_path
 ):
-    """dev-libs/baz is installed at slot 1, but the world file's own
-    entry restricts it to slot 2 -- no match, proving this pilot's own
-    documented simplification of real Atom.intersects() still checks
-    slot compatibility, not just category/package."""
+    """dev-libs/baz is installed at slot 1, and the world file's own
+    entry restricts it to slot 2 -- yet an *unslotted* "dev-libs/baz"
+    CLI target still matches: real Atom.intersects() only rejects a
+    slot mismatch when BOTH sides carry a slot restriction ("if
+    self.slot is None or other.slot is None or self.slot==other.slot:
+    return True"), and dep_expand() never adds one to an explicit-
+    category target on its own. So the actually-installed slot is
+    irrelevant here, same as the explicit-category target itself never
+    needing to be installed at all (see run_deselect's own doc
+    comment)."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--deselect", "dev-libs/baz"],
         _deselect_env(fixture_env, tmp_path),
     )
     assert result.returncode == 0
+    assert result.stdout == '>>> Would remove dev-libs/baz:2 from "world" favorites file...\n'
+
+
+def test_deselect_respects_the_world_atoms_own_slot_restriction_when_target_is_slotted(
+    emerge_binary, fixture_env, tmp_path
+):
+    """Unlike the unslotted case above, a CLI target that itself carries
+    an explicit slot restriction ("dev-libs/baz:1") DOES get rejected by
+    real Atom.intersects() against a world entry restricted to a
+    different slot ("dev-libs/baz:2") -- both sides now have a slot to
+    compare, and they disagree."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "dev-libs/baz:1"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
     assert result.stdout == '>>> No matching atoms found in "world" favorites file...\n'
+
+
+def test_deselect_matches_a_slotted_target_against_the_matching_world_slot(
+    emerge_binary, fixture_env, tmp_path
+):
+    """"dev-libs/baz:2" (never installed at slot 2, only at slot 1) still
+    matches the world file's own "dev-libs/baz:2" entry -- an explicit-
+    category target needs no installed check at all, slot restriction
+    included."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "dev-libs/baz:2"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> Would remove dev-libs/baz:2 from "world" favorites file...\n'
 
 
 def test_deselect_matches_a_slot_restricted_world_atom_at_the_right_slot(
@@ -2120,20 +2171,42 @@ def test_deselect_matches_a_slot_restricted_world_atom_at_the_right_slot(
     assert result.stdout == '>>> Would remove dev-libs/bar:1 from "world" favorites file...\n'
 
 
-def test_deselect_reports_no_match_for_a_world_listed_but_not_installed_target(
+def test_deselect_matches_an_explicit_category_target_never_installed(
     emerge_binary, fixture_env, tmp_path
 ):
     """dev-libs/qux is listed in the world file but was never actually
-    installed -- real portage's own vardb.match() finds nothing, so it
-    never becomes an expanded atom at all; the world file's own text is
-    never enough by itself."""
+    installed -- yet real dep_expand() returns an explicit-category atom
+    completely unchanged, with no vardb check at all, before
+    action_deselect ever seeds expanded_atoms with it unconditionally.
+    So installation is NOT required here: the world file's own text is
+    enough by itself for an explicit-category target. (An earlier
+    version of this pilot got this backwards -- see run_deselect's own
+    doc comment in pretend.rs for the full correction.)"""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--deselect", "dev-libs/qux"],
         _deselect_env(fixture_env, tmp_path),
     )
     assert result.returncode == 0
-    assert result.stdout == '>>> No matching atoms found in "world" favorites file...\n'
+    assert result.stdout == '>>> Would remove dev-libs/qux from "world" favorites file...\n'
+
+
+def test_deselect_matches_a_bare_name_target_never_installed(
+    emerge_binary, fixture_env, tmp_path
+):
+    """Same correction as the explicit-category case above, but via the
+    bare-name/null-category path: "qux" substitutes in "dev-libs" from
+    the world file's own "dev-libs/qux" entry unconditionally, no
+    installed check at all -- real vardb.match() on the still-null-
+    category atom can never match a real vdb entry, so it's dead code
+    for this branch and correctly contributes nothing."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "qux"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> Would remove dev-libs/qux from "world" favorites file...\n'
 
 
 def test_deselect_reports_no_match_for_an_installed_but_not_world_listed_target(
@@ -2142,6 +2215,46 @@ def test_deselect_reports_no_match_for_an_installed_but_not_world_listed_target(
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--deselect", "dev-libs/notinworld"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> No matching atoms found in "world" favorites file...\n'
+
+
+def test_deselect_matches_an_exact_version_world_atom(emerge_binary, fixture_env, tmp_path):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "=dev-libs/vers-1.0"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> Would remove =dev-libs/vers-1.0 from "world" favorites file...\n'
+
+
+def test_deselect_rejects_a_different_version(emerge_binary, fixture_env, tmp_path):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", "=dev-libs/vers-2.0"],
+        _deselect_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    assert result.stdout == '>>> No matching atoms found in "world" favorites file...\n'
+
+
+def test_deselect_rejects_a_range_operator_even_when_satisfied(
+    emerge_binary, fixture_env, tmp_path
+):
+    """">=dev-libs/vers-1.0" would actually be *satisfied* by the world
+    file's own "=dev-libs/vers-1.0" entry under a real version-range
+    check, but real Atom.intersects() is deliberately narrower than
+    that: it requires the operator itself to match exactly (its own
+    docstring: "atoms with different cpv, operator or use attributes
+    cause this method to return False even though there may actually be
+    some intersection... TODO: Detect more forms of intersection"), so
+    this reports no match."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--deselect", ">=dev-libs/vers-1.0"],
         _deselect_env(fixture_env, tmp_path),
     )
     assert result.returncode == 0
@@ -2285,6 +2398,14 @@ def test_deselect_matches_between_implementations(
         ["--pretend", "--deselect", "dev-libs/foo", "@myselectedset"],
         ["--pretend", "--deselect"],
         ["--deselect", "dev-libs/foo"],
+        ["--pretend", "--deselect", "dev-libs/qux"],
+        ["--pretend", "--deselect", "qux"],
+        ["--pretend", "--deselect", "dev-libs/notinworld"],
+        ["--pretend", "--deselect", "dev-libs/baz:1"],
+        ["--pretend", "--deselect", "dev-libs/baz:2"],
+        ["--pretend", "--deselect", "=dev-libs/vers-1.0"],
+        ["--pretend", "--deselect", "=dev-libs/vers-2.0"],
+        ["--pretend", "--deselect", ">=dev-libs/vers-1.0"],
     ):
         rust_result = _run([str(emerge_binary)], args, env)
         python_result = _run(emerge_pretend_python, args, env)

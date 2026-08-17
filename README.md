@@ -662,14 +662,14 @@ PORTING/
   each one discarded (pretend mode; real portage only writes the world
   file outside of `--pretend`, so this pilot's own "never merges"
   invariant holds here unchanged), or `>>> No matching atoms found in
-  "world" favorites file...` if none matched at all. A documented scope
-  cut versus real `Atom.intersects()`: `pretend.rs`'s own `run_deselect`
-  uses a narrower category/package(+slot) equality check rather than the
-  full version-range/USE-dep algebra, sufficient for the dominant plain-
-  atom case; the Python reference, by contrast, reuses the real
-  `match_from_list` directly (the same "why re-derive it" reasoning
-  `_matches_config_entry` already established), and both are verified to
-  agree on every case this pilot's own contract suite exercises. A
+  "world" favorites file...` if none matched at all. (At the time of
+  this original slice, `pretend.rs`'s own `run_deselect` used a narrower
+  category/package(+slot) equality check versus real `Atom.intersects()`
+  as a documented scope cut, and additionally required every target to
+  be actually installed; both were closed by a later follow-up below --
+  the equality check replaced with a real, field-for-field
+  `Atom.intersects()` port, and the installed-check requirement removed
+  entirely as a genuine correctness fix, not a scope change.) A
   `@`-prefixed world entry is never matched, consistent with
   `read_world_atoms`'s own pre-existing cut for `@world` itself, not a
   new gap. CLI-wise, real `--deselect` is `argument_options` with an
@@ -949,6 +949,75 @@ PORTING/
   @nosuchset` (no match), and `--deselect dev-libs/foo @myselectedset`
   together (proving the combined-sort interleaving) all verified to
   agree between the Rust and Python implementations.
+
+  **`--deselect`'s own real `Atom.intersects()` algebra, and a
+  correctness fix uncovered along the way.** Real `Atom.intersects()`
+  (`lib/portage/dep/__init__.py`, lines 2213-2240) turned out to be a
+  smaller port than its name suggests -- its own docstring says so
+  directly: "atoms with different cpv, operator or use attributes cause
+  this method to return False even though there may actually be some
+  intersection... TODO: Detect more forms of intersection". It's a
+  deliberately narrow equality-style check, not a version-range algebra:
+  `cp` (category+package), `use` (use-deps), `operator`, and `cpv`
+  (effectively `operator`+version+revision together) must ALL match
+  exactly -- not overlap, not satisfy a range -- before slot
+  compatibility (`None` on either side, or an identical value) decides
+  the result; ported field-for-field as `portage_dep::atom_intersects`,
+  skipping only real portage's own redundant `self == other` fast path
+  (two textually-identical atoms already fall through to `true` the same
+  way regardless). This replaces `run_deselect`'s own previous narrower
+  category/package(+slot)-only equality check, and closes the Python
+  reference's own previously-documented divergence (it now calls real
+  `Atom.intersects()` directly, the oracle's usual "why re-derive it"
+  reasoning, rather than reusing `match_from_list`).
+
+  Re-deriving the exact match ordering surfaced a genuine correctness
+  bug in this pilot's own **pre-existing** `--deselect` port, present
+  since its very first slice: both `pretend.rs` and its own doc comments
+  assumed every `--deselect` target -- bare name or explicit-category
+  alike -- had to be actually installed before it could match anything,
+  narrowing candidates through `installed_candidates`/`vardb.match`
+  first. Reading real portage's own call chain directly disproves this.
+  `action_uninstall`'s own `dep_expand(x, mydb=vardb, ...)`
+  (`lib/portage/dbapi/dep_expand.py`) returns an explicit-category atom
+  **completely unchanged** -- `if mydep.category != "virtual": return
+  mydep` -- before ever reaching `cpv_expand` (the vardb-dependent part,
+  only reached for a bare name); `action_deselect` itself then seeds
+  `expanded_atoms = set(atoms)` with that same atom, unconditionally, no
+  installed check anywhere in the path. The bare-name path fares the
+  same: its own null-category-to-real-category substitution is *also*
+  unconditional in real `action_deselect`; the accompanying
+  `vardb.match(atom)` call real `action_deselect` does make is a
+  *separate*, additional contribution (a further bare `category/
+  package:slot` candidate for whatever's genuinely installed) -- not a
+  gate on the substituted atom, and for a bare name specifically it's
+  dead code (real `vardb.match()` can never match anything against the
+  still-null-category original atom, since no package is ever
+  catalogued under category `"null"`). So `--deselect cat/pkg` (or a
+  bare name resolvable via the world file) genuinely discards a matching
+  world entry even if that package was never installed at all -- this
+  pilot's own earlier tests asserted the opposite, an incorrect
+  generalization from "a bare name with *no* matching world entry
+  contributes nothing" to "every target needs to be installed",
+  conflated two genuinely different real code paths. A further, related
+  consequence: since `dep_expand` never adds a slot restriction to an
+  explicit-category target on its own, an *unslotted* `--deselect
+  dev-libs/pkg` now matches a world entry at any slot at all --
+  `Atom.intersects()` only rejects a slot mismatch when *both* sides
+  carry one -- while a CLI target that itself specifies a slot
+  (`--deselect dev-libs/pkg:1`) still gets narrowed correctly, since both
+  sides now have something to compare. All fixed in lockstep across both
+  implementations, with the previously-inverted test
+  (`dev-libs/qux`, world-listed but never installed) flipped and a
+  matching bare-name case (`qux`) added, four new slot-interaction tests
+  covering both the unslotted and slotted target forms, and three new
+  version/operator tests (`PORTING/fixtures`-independent `_deselect_root`
+  entries) exercising the narrow-`intersects()` behavior directly: an
+  exact-version target matches, a different version doesn't, and even
+  the *same* version under a different operator (`>=dev-libs/vers-1.0`
+  against a world `=dev-libs/vers-1.0` entry -- which a real range check
+  would actually satisfy) doesn't either, since `Atom.intersects()`
+  requires the operator itself to match exactly.
 
   **Multiple top-level atoms**: `emerge --pretend foo bar` -- real
   emerge's most common invocation shape -- was, until this slice,
@@ -3272,10 +3341,29 @@ echo "0" > /tmp/deselect-demo-root/var/db/pkg/dev-libs/foo-1.0/SLOT
 ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/foo
 # >>> Would remove dev-libs/foo from "world" favorites file...
 
-# a target that isn't actually installed (or isn't in the world file at
-# all) never becomes an expanded atom, so nothing is reported for it
+# a target with no matching world-file entry at all reports nothing,
+# regardless of installed status
 ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/bar
 # >>> No matching atoms found in "world" favorites file...
+
+# an explicit-category target needs NO installed check at all -- real
+# dep_expand() returns it unchanged, and action_deselect seeds
+# expanded_atoms with it unconditionally -- so a world-listed but never-
+# installed package is still discarded
+echo "dev-libs/nevermerged" >> /tmp/deselect-demo-root/var/lib/portage/world
+ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/nevermerged
+# >>> Would remove dev-libs/nevermerged from "world" favorites file...
+
+# real Atom.intersects() is deliberately narrower than a real version-
+# range check: an exact-version target matches an identical world entry,
+# but ">=" against that same version doesn't, even though 1.0 would
+# actually satisfy ">=dev-libs/versioned-1.0" under real dependency
+# resolution -- the operator itself must match exactly here
+echo "=dev-libs/versioned-1.0" >> /tmp/deselect-demo-root/var/lib/portage/world
+ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect ">=dev-libs/versioned-1.0"
+# >>> No matching atoms found in "world" favorites file...
+ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect "=dev-libs/versioned-1.0"
+# >>> Would remove =dev-libs/versioned-1.0 from "world" favorites file...
 
 # --deselect "@name" matches the separate world_sets file by exact name
 # (never expanded against its own set members) -- reported against
