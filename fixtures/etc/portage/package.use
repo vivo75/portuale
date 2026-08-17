@@ -5,3 +5,4 @@ dev-libs/packageuseexpandpkg PYTHON_TARGETS: python3_12
 dev-libs/stableusepkg maskflag
 dev-libs/unstableusepkg maskflag
 dev-libs/uselicensepkgforced nonfreeflag
+dev-libs/iusedefaultpkg plainflag

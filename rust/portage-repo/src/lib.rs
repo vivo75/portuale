@@ -373,14 +373,55 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
     }
 }
 
-/// The USE flags in effect for one specific package: `base` (the global,
-/// profile/make.conf-derived set) with every matching `package.use` entry's
-/// tokens layered on top, in file order, via the same incremental
-/// `-flag`/`flag`/`+flag` semantics `USE` itself uses (see
-/// `portage_profile::apply_incremental`). Unlike `is_visible`'s mask/
-/// keywords checks (which only ever add to an accepted set), this can both
-/// add and remove flags relative to `base`, and does so per package -- a
-/// `package.use` entry never affects any other package's own resolution.
+/// The USE flags in effect for one specific package: `iuse`'s own
+/// `+flag`/`-flag` default markers (real `pkginternal`, see below) seeded
+/// first, then `base` (the global, profile/make.conf-derived set) with
+/// every matching `package.use` entry's tokens layered on top, in file
+/// order, via the same incremental `-flag`/`flag`/`+flag` semantics `USE`
+/// itself uses (see `portage_profile::apply_incremental`). Unlike
+/// `is_visible`'s mask/keywords checks (which only ever add to an accepted
+/// set), this can both add and remove flags relative to `base`, and does
+/// so per package -- a `package.use` entry never affects any other
+/// package's own resolution.
+///
+/// **`iuse`'s own defaults**: found and grounded by comparing this
+/// pilot's own output against the real, installed system `emerge` on a
+/// real package (`media-video/ffmpeg`) -- REQUIRED_USE reported violated
+/// for a USE combination that's actually fully satisfied once IUSE's own
+/// `+`/`-` markers are honored (`ffmpeg`'s own real IUSE declares
+/// `+gpl`/`+dav1d`/`+drm`/etc., none of which this pilot's prior
+/// `effective_use_flags` ever enabled, silently defaulting every one of
+/// them to disabled instead). Real `config.py`'s own `_setup_pkg_iuse`
+/// (`lib/portage/package/ebuild/config.py`, ~line 1878) builds exactly
+/// this from a package's raw `IUSE` string -- `+flag` contributes a bare
+/// `flag` (enable) token, `-flag` contributes itself unchanged (disable),
+/// a markerless `flag` contributes nothing at all -- and stores it under
+/// `self.configdict["pkginternal"]["USE"]`, a real, named `USE_ORDER`
+/// component (`lib/_emerge/actions.py`'s own default,
+/// `"env:pkg:conf:defaults:pkginternal:features:repo:env.d"`) --
+/// confirmed by reading `config.py`'s own `self.uvlist` construction
+/// (`for x in self["USE_ORDER"].split(":"): ...; self.uvlist.reverse()`):
+/// incremental application walks `uvlist` in *reversed* `USE_ORDER`, so
+/// `pkginternal` (position 5 of 8) is applied well *before* `defaults`
+/// (profile), `conf` (`make.conf`), and `pkg` (`package.use`) -- real
+/// portage's own actual precedence has every one of those three able to
+/// override an IUSE default; only `env`/`env.d` (real per-invocation/
+/// stacked-profile-env overrides, positions 8 and 1) sit even lower/
+/// higher than this pilot models at all. Ported here as simply the seed
+/// `use_flags` starts from, with `base` (this pilot's own already-
+/// flattened profile+make.conf result, see this doc comment's own
+/// `package.use.mask`/`.force` paragraph below for the established
+/// "flat global accumulation" precedent this extends) layered on top via
+/// plain set union: `base` can only ever *add* a flag here, never
+/// force one off that IUSE defaulted on, since this pilot's own `base`
+/// is a plain `HashSet` of enabled names with no "explicitly disabled by
+/// a lower-precedence layer" information surviving that far -- a
+/// documented, narrower scope cut (the same kind of information loss
+/// this function's own pre-existing `package.use.mask`/`.force`
+/// paragraph below already accepts for the global tier), not a new kind
+/// of imprecision. The dominant real-world case -- an ebuild author sets
+/// a sensible IUSE default, and nothing else ever mentions the flag at
+/// all -- is unaffected and now correct.
 ///
 /// `use_stable_force`/`use_stable_mask`/`package_use_stable_force`/
 /// `package_use_stable_mask` (`keywords`/`candidate_str` decide, via
@@ -400,6 +441,7 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// here rather than re-litigated).
 #[allow(clippy::too_many_arguments)]
 fn effective_use_flags(
+    iuse: &str,
     base: &HashSet<String>,
     package_use: &[(String, Vec<String>)],
     package_use_force: &[(String, Vec<String>)],
@@ -415,7 +457,19 @@ fn effective_use_flags(
     category: &str,
     package: &str,
 ) -> HashSet<String> {
-    let mut use_flags = base.clone();
+    // real pkginternal: only a token with an explicit "+"/"-" marker
+    // contributes anything at all -- a markerless IUSE token (no
+    // declared default) is a real, deliberate no-op here, matching real
+    // config.py's own `if x.startswith("+"): ... elif x.startswith("-"):
+    // ...` (no `else` branch at all).
+    let iuse_defaults: String = iuse
+        .split_whitespace()
+        .filter(|tok| tok.starts_with('+') || tok.starts_with('-'))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut use_flags: HashSet<String> = HashSet::new();
+    portage_profile::apply_incremental(&iuse_defaults, &mut use_flags);
+    use_flags.extend(base.iter().cloned());
     for (entry, tokens) in package_use {
         if matches_config_entry(entry, candidate_str, category, package) {
             portage_profile::apply_incremental(&tokens.join(" "), &mut use_flags);
@@ -799,6 +853,7 @@ fn use_flags_if_conditional(
         return HashSet::new();
     }
     effective_use_flags(
+        &candidate.iuse,
         &config.use_flags,
         &config.package_use,
         &config.package_use_force,
@@ -1636,6 +1691,7 @@ fn candidate_iuse_and_use(
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
     let use_flags = effective_use_flags(
+        metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
         &config.use_flags,
         &config.package_use,
         &config.package_use_force,
@@ -2929,6 +2985,7 @@ pub fn resolve_pretend_graph(
             key.0, key.1
         );
         let use_flags = effective_use_flags(
+            metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
             &config.use_flags,
             &config.package_use,
             &config.package_use_force,
@@ -3188,6 +3245,7 @@ fn enqueue_dependencies(
     };
     let candidate_str = format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}");
     let use_flags = effective_use_flags(
+        metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
         &config.use_flags,
         &config.package_use,
         &config.package_use_force,
@@ -6546,6 +6604,87 @@ mod tests {
     }
 
     #[test]
+    fn effective_use_flags_applies_a_plus_iuse_default_when_nothing_else_says_otherwise() {
+        let use_flags = effective_use_flags(
+            "+foo -bar baz",
+            &HashSet::new(),
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &[],
+            "dev-libs/pkg-1.0:0",
+            "dev-libs",
+            "pkg",
+        );
+        // "+foo" defaults on; "-bar" stays off (same as omission, but a
+        // real, explicit marker); "baz" (no marker at all) is genuinely
+        // undecided by IUSE itself and stays off too.
+        assert_eq!(use_flags, HashSet::from(["foo".to_string()]));
+    }
+
+    #[test]
+    fn effective_use_flags_lets_base_override_a_plus_iuse_default() {
+        // real portage: make.conf/profile/package.use can all still turn
+        // an IUSE-defaulted-on flag back off -- `base` here stands in for
+        // "explicitly enabled elsewhere", not "explicitly disabled"
+        // (this pilot's own documented, narrower scope cut, see this
+        // function's own doc comment), so this proves the *additive*
+        // half: `base` mentioning an entirely different flag doesn't
+        // suppress "+foo"'s own default.
+        let base = HashSet::from(["other".to_string()]);
+        let use_flags = effective_use_flags(
+            "+foo",
+            &base,
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &[],
+            "dev-libs/pkg-1.0:0",
+            "dev-libs",
+            "pkg",
+        );
+        assert_eq!(
+            use_flags,
+            HashSet::from(["foo".to_string(), "other".to_string()])
+        );
+    }
+
+    #[test]
+    fn effective_use_flags_lets_package_use_override_a_plus_iuse_default() {
+        let package_use = vec![("dev-libs/pkg".to_string(), vec!["-foo".to_string()])];
+        let use_flags = effective_use_flags(
+            "+foo",
+            &HashSet::new(),
+            &package_use,
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &[],
+            &HashSet::new(),
+            &[],
+            "dev-libs/pkg-1.0:0",
+            "dev-libs",
+            "pkg",
+        );
+        assert!(use_flags.is_empty());
+    }
+
+    #[test]
     fn effective_use_flags_layers_a_matching_package_use_entry_on_top_of_base() {
         let base = HashSet::from(["foo".to_string()]);
         let package_use = vec![(
@@ -6553,6 +6692,7 @@ mod tests {
             vec!["baz".to_string(), "-foo".to_string()],
         )];
         let use_flags = effective_use_flags(
+            "",
             &base,
             &package_use,
             &[],
@@ -6576,6 +6716,7 @@ mod tests {
         let base = HashSet::from(["foo".to_string()]);
         let package_use = vec![("dev-libs/bar".to_string(), vec!["baz".to_string()])];
         let use_flags = effective_use_flags(
+            "",
             &base,
             &package_use,
             &[],
@@ -6599,6 +6740,7 @@ mod tests {
         let base = HashSet::new();
         let package_use = vec![("*/bar".to_string(), vec!["baz".to_string()])];
         let use_flags = effective_use_flags(
+            "",
             &base,
             &package_use,
             &[],
@@ -6623,6 +6765,7 @@ mod tests {
         let package_use_force = vec![("dev-libs/bar".to_string(), vec!["forceflag".to_string()])];
         let package_use_mask = vec![("dev-libs/bar".to_string(), vec!["maskflag".to_string()])];
         let use_flags = effective_use_flags(
+            "",
             &base,
             &[],
             &package_use_force,
@@ -6651,6 +6794,7 @@ mod tests {
         let package_use_force = vec![("dev-libs/bar".to_string(), vec!["bothflag".to_string()])];
         let package_use_mask = vec![("dev-libs/bar".to_string(), vec!["bothflag".to_string()])];
         let use_flags = effective_use_flags(
+            "",
             &base,
             &[],
             &package_use_force,
@@ -6689,6 +6833,7 @@ mod tests {
         )];
         let accept_keywords = HashSet::from(["amd64".to_string()]);
         let use_flags = effective_use_flags(
+            "",
             &base,
             &[],
             &[],
@@ -6723,6 +6868,7 @@ mod tests {
         let use_stable_force = HashSet::from(["globalstableforce".to_string()]);
         let accept_keywords = HashSet::from(["~amd64".to_string()]);
         let use_flags = effective_use_flags(
+            "",
             &base,
             &[],
             &[],

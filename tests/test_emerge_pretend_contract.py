@@ -198,6 +198,11 @@ CASES = [
         1,
     ),
     (
+        "IUSE +/- defaults: satisfy REQUIRED_USE and show correctly in -v, unmentioned by any other USE source",
+        ["--pretend", "-v", "dev-libs/iusedefaultpkg"],
+        0,
+    ),
+    (
         "REQUIRED_USE: violated on a dependency, still aborts the whole run",
         ["--pretend", "dev-libs/requiredusebadparentpkg"],
         1,
@@ -849,6 +854,34 @@ def test_required_use_satisfied_resolves_normally(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout == "[ebuild  N] dev-libs/requireduseokpkg-1.0\n"
+
+
+def test_iuse_plus_minus_defaults_apply_when_nothing_else_says_otherwise(
+    emerge_binary, fixture_env
+):
+    """A real, previously-undetected gap, found by comparing this pilot's
+    own output against the real, installed system emerge on a real
+    package (media-video/ffmpeg) -- REQUIRED_USE reported violated for a
+    USE combination that's actually fully satisfied once IUSE's own
+    "+"/"-" markers are honored. dev-libs/iusedefaultpkg's own IUSE is
+    "+enableddefault -disableddefault plainflag": before this slice,
+    this pilot's own effective_use_flags never consulted IUSE's own
+    default markers at all, so "enableddefault" would have defaulted to
+    disabled -- violating this fixture's own REQUIRED_USE
+    ("enableddefault !disableddefault") and aborting the whole run with a
+    spurious REQUIRED_USE error, the same failure mode discovered live
+    against ffmpeg. "plainflag" (no default marker at all) is genuinely
+    undecided by IUSE itself, but forced on by this package's own
+    package.use entry -- proving IUSE defaults and package.use coexist
+    and layer correctly (package.use still wins), not just that IUSE
+    defaults exist in isolation."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/iusedefaultpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == (
+        '[ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"\n'
+    )
 
 
 def test_required_use_violated_top_level_aborts_the_whole_run(emerge_binary, fixture_env):

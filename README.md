@@ -2032,6 +2032,66 @@ PORTING/
   fatal-abort severity really does apply regardless of graph position,
   not just to a top-level atom's own REQUIRED_USE.
 
+  **`IUSE`'s own `+`/`-` default markers, closing a real, comprehensive
+  gap this pilot's own REQUIRED_USE reporting (paragraph above) helped
+  surface.** Found the same way the `selective` gap above was: comparing
+  this pilot's own output against the real, installed system `emerge` on
+  a real package (`media-video/ffmpeg`) -- a bare `--noreplace --newuse
+  media-video/ffmpeg` reported `REQUIRED_USE not satisfied`, aborting the
+  whole run, for a USE combination hand-verified (and confirmed via a
+  standalone harness feeding the exact real, live-captured inputs
+  straight to `check_required_use` in isolation -- the algorithm itself
+  was correct) to be fully satisfied by real portage's own resolved USE.
+  The actual bug: `effective_use_flags` never once consulted a package's
+  own `IUSE` string for its `+`/`-` default markers at all -- confirmed
+  by grepping every place `portage-repo` touches an IUSE token
+  (`trim_start_matches(['+', '-'])`, four call sites): all of them strip
+  the marker to get the bare flag name and then discard it, never
+  branching on which one was there. Real `ffmpeg-8.1.2`'s own IUSE
+  declares `+gpl`/`+dav1d`/`+drm`/`+gnutls`/`+libass`/`+truetype`/`+xml`/
+  `+zlib` (among others) -- every one of them silently defaulted to
+  *disabled* by this pilot instead of real portage's own *enabled*,
+  which is what actually violated the (otherwise satisfied)
+  `REQUIRED_USE`. Grounded precisely against real `config.py`'s own
+  `_setup_pkg_iuse` (`lib/portage/package/ebuild/config.py`, ~line
+  1878): `+flag` contributes a bare `flag` (enable) token, `-flag`
+  contributes itself unchanged (disable), a markerless `flag`
+  contributes nothing at all -- stored under `self.configdict[
+  "pkginternal"]["USE"]`, a real, *named* `USE_ORDER` component (real
+  default `"env:pkg:conf:defaults:pkginternal:features:repo:env.d"`).
+  Confirmed via `config.py`'s own `self.uvlist` construction (`for x in
+  self["USE_ORDER"].split(":"): ...; self.uvlist.reverse()`) that
+  `pkginternal` (position 5 of 8) is applied well *before* `defaults`
+  (profile), `conf` (`make.conf`), and `pkg` (`package.use`) in real
+  incremental precedence -- i.e. all three of those real sources can
+  still override an IUSE default; it only wins when none of them
+  mentions the flag at all. Ported as simply the seed `effective_use_flags`'s
+  own `use_flags` now starts from (a new `iuse` parameter, threaded
+  through all four of its real call sites), with `base` (this pilot's
+  own already-flattened profile+`make.conf` result) unioned on top --
+  `base` can only ever *add* a flag here, never force one off that IUSE
+  defaulted on, since it's a plain enabled-name set with no "explicitly
+  disabled by a lower layer" information surviving that far. A
+  documented, narrower scope cut, not a new kind of imprecision: it's
+  the exact same information loss this function's own pre-existing
+  `package.use.mask`/`.force` handling (see the "flat global
+  accumulation" paragraph in this function's own doc comment,
+  `portage-repo`) already accepted for the global tier -- and it leaves
+  the dominant real-world case (an ebuild author sets a sensible IUSE
+  default, nothing else ever mentions the flag) fully correct, which is
+  exactly what was broken. New fixture `dev-libs/iusedefaultpkg`
+  (`IUSE="+enableddefault -disableddefault plainflag"`,
+  `REQUIRED_USE="enableddefault !disableddefault"`) resolves successfully
+  only once the fix is in place -- under the old behavior it would have
+  hit the exact same spurious-abort failure mode `ffmpeg` did -- and its
+  own `package.use` entry (`plainflag`, a flag with no IUSE default at
+  all) proves package.use still layers normally on top, not just that
+  IUSE defaults exist in isolation. (A second, related finding from the
+  same investigation -- a *different* real package's REQUIRED_USE
+  referencing a profile-injected implicit USE flag this pilot doesn't
+  model at all -- is deliberately out of scope here; noted for a future
+  slice, not chased down alongside this one.)
+
   **`USE_EXPAND` support** (PMS 7.3.4). Closes a gap named explicitly in
   `portage-profile`'s own doc comment since the original profile-chain
   slice. Grounded against real `config.py`'s own `regenerate()` --
@@ -2960,6 +3020,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requireduseba
 # dependency, not just as a top-level atom
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requiredusebadparentpkg
 # emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: "foo? ( bar )"  (exit 1)
+
+# IUSE's own "+"/"-" default markers are honored now: "+enableddefault"
+# defaults on, "-disableddefault" stays off (own REQUIRED_USE requires
+# exactly this), and "plainflag" (no default marker at all) is
+# genuinely undecided by IUSE -- but forced on by this package's own
+# package.use entry, proving IUSE defaults and package.use coexist
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/iusedefaultpkg
+# [ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"
 
 # real profile/make.conf resolution: "foo" is enabled by the fixture's
 # profile chain, so this package's foo?-gated dependency is pulled in

@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: real IUSE +/- default markers, unmentioned by any other USE source
+EAPI=8
+IUSE=+enableddefault -disableddefault plainflag
+KEYWORDS=amd64
+REQUIRED_USE=enableddefault !disableddefault
+SLOT=0
+_md5_=0000000000000000000000000000000

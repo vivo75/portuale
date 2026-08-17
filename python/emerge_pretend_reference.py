@@ -529,6 +529,7 @@ def _use_flags_if_conditional(value_str, candidate, category, package, candidate
     if "?" not in value_str:
         return set()
     return effective_use_flags(
+        candidate["iuse"],
         config["use_flags"],
         config["package_use"],
         config["package_use_force"],
@@ -818,6 +819,7 @@ def _is_stable(keywords, candidate_str, category, package, accept_keywords, pack
 
 
 def effective_use_flags(
+    iuse,
     base,
     package_use,
     package_use_force,
@@ -833,22 +835,70 @@ def effective_use_flags(
     category,
     package,
 ):
-    """The USE flags in effect for one specific package: `base` with every
-    matching package.use entry's tokens layered on top, in file order, via
-    the same incremental -flag/flag/+flag semantics USE itself uses (see
-    _apply_incremental), THEN package.use.force/package.use.mask layered
-    on top of that (force winning first, then mask -- see
-    _specificity_ordered_flags for how a conflict between multiple
-    matching mask/force entries is resolved), THEN, only if this candidate
-    counts as "stable" (_is_stable), use_stable_force/package_use_stable_force
-    and use_stable_mask/package_use_stable_mask -- the .stable. variants of
-    the sources already applied above, ported from real getUseMask/
-    getUseForce's own per-package branch (which appends the stable variant
-    right alongside the ordinary one at each accumulation step, but only
-    when stable). Applied per package, mirroring
-    portage-repo/src/lib.rs's effective_use_flags exactly -- a package.use
-    entry never affects any other package's own resolution."""
-    use_flags = set(base)
+    """The USE flags in effect for one specific package: `iuse`'s own
+    +flag/-flag default markers (real "pkginternal", see below) seeded
+    first, then `base` with every matching package.use entry's tokens
+    layered on top, in file order, via the same incremental
+    -flag/flag/+flag semantics USE itself uses (see _apply_incremental),
+    THEN package.use.force/package.use.mask layered on top of that (force
+    winning first, then mask -- see _specificity_ordered_flags for how a
+    conflict between multiple matching mask/force entries is resolved),
+    THEN, only if this candidate counts as "stable" (_is_stable),
+    use_stable_force/package_use_stable_force and use_stable_mask/
+    package_use_stable_mask -- the .stable. variants of the sources
+    already applied above, ported from real getUseMask/getUseForce's own
+    per-package branch (which appends the stable variant right alongside
+    the ordinary one at each accumulation step, but only when stable).
+    Applied per package, mirroring portage-repo/src/lib.rs's
+    effective_use_flags exactly -- a package.use entry never affects any
+    other package's own resolution.
+
+    `iuse`'s own defaults: found and grounded by comparing this pilot's
+    own output against the real, installed system emerge on a real
+    package (media-video/ffmpeg) -- REQUIRED_USE reported violated for a
+    USE combination that's actually fully satisfied once IUSE's own +/-
+    markers are honored (ffmpeg's own real IUSE declares
+    +gpl/+dav1d/+drm/etc., none of which this pilot's prior
+    effective_use_flags ever enabled, silently defaulting every one of
+    them to disabled instead). Real config.py's own _setup_pkg_iuse
+    (lib/portage/package/ebuild/config.py, ~line 1878) builds exactly
+    this from a package's raw IUSE string -- "+flag" contributes a bare
+    "flag" (enable) token, "-flag" contributes itself unchanged
+    (disable), a markerless "flag" contributes nothing at all -- and
+    stores it under self.configdict["pkginternal"]["USE"], a real, named
+    USE_ORDER component (lib/_emerge/actions.py's own default,
+    "env:pkg:conf:defaults:pkginternal:features:repo:env.d") -- confirmed
+    by reading config.py's own self.uvlist construction (`for x in
+    self["USE_ORDER"].split(":"): ...; self.uvlist.reverse()`):
+    incremental application walks uvlist in *reversed* USE_ORDER, so
+    pkginternal (position 5 of 8) is applied well *before* defaults
+    (profile), conf (make.conf), and pkg (package.use) -- real portage's
+    own actual precedence has every one of those three able to override
+    an IUSE default; only env/env.d (real per-invocation/stacked-profile-
+    env overrides, positions 8 and 1) sit even lower/higher than this
+    pilot models at all. Ported here as simply the seed use_flags starts
+    from, with base (this pilot's own already-flattened profile+make.conf
+    result) layered on top via plain set union: base can only ever *add*
+    a flag here, never force one off that IUSE defaulted on, since this
+    pilot's own base is a plain set of enabled names with no "explicitly
+    disabled by a lower-precedence layer" information surviving that far
+    -- a documented, narrower scope cut (the same kind of information
+    loss this function's own pre-existing package.use.mask/.force
+    handling above already accepts for the global tier), not a new kind
+    of imprecision. The dominant real-world case -- an ebuild author sets
+    a sensible IUSE default, and nothing else ever mentions the flag at
+    all -- is unaffected and now correct."""
+    # real pkginternal: only a token with an explicit "+"/"-" marker
+    # contributes anything at all -- a markerless IUSE token (no declared
+    # default) is a real, deliberate no-op here, matching real config.py's
+    # own "if x.startswith('+'): ... elif x.startswith('-'): ..." (no
+    # else branch at all).
+    iuse_defaults = " ".join(
+        tok for tok in iuse.split() if tok.startswith("+") or tok.startswith("-")
+    )
+    use_flags = set()
+    _apply_incremental(iuse_defaults, use_flags)
+    use_flags |= set(base)
     for entry, tokens in package_use:
         if _matches_config_entry(entry, candidate_str, category, package):
             _apply_incremental(" ".join(tokens), use_flags)
@@ -972,6 +1022,7 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
         f"::{candidate['repo_name']}"
     )
     cur_use = effective_use_flags(
+        metadata["IUSE"],
         config["use_flags"],
         config["package_use"],
         config["package_use_force"],
@@ -1301,6 +1352,7 @@ def _candidate_iuse_and_use(candidate, category, package, config):
         f"{candidate['repo_name']}"
     )
     use_flags = effective_use_flags(
+        metadata.get("IUSE", ""),
         config["use_flags"],
         config["package_use"],
         config["package_use_force"],
@@ -2748,6 +2800,7 @@ def resolve_pretend_graph(
             continue
         candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
         use_flags = effective_use_flags(
+            metadata.get("IUSE", ""),
             config["use_flags"],
             config["package_use"],
             config["package_use_force"],
@@ -2950,6 +3003,7 @@ def _enqueue_dependencies(
         return
     candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
     use_flags = effective_use_flags(
+        metadata.get("IUSE", ""),
         config["use_flags"],
         config["package_use"],
         config["package_use_force"],
