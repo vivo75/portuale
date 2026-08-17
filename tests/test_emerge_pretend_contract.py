@@ -179,6 +179,11 @@ CASES = [
         0,
     ),
     (
+        "USE_EXPAND_UNPREFIXED: ARCH=amd64 contributes the bare flag amd64, gates a dependency",
+        ["--pretend", "-v", "dev-libs/archusepkg"],
+        0,
+    ),
+    (
         "use.stable.force/package.use.stable.mask apply to a genuinely stable candidate",
         ["--pretend", "-v", "dev-libs/stableusepkg"],
         0,
@@ -874,6 +879,26 @@ def test_package_use_expand_prefix_shorthand_drives_a_dependency(emerge_binary, 
         '[ebuild  N] dev-libs/packageuseexpandpkg-1.0  USE="python_targets_python3_12"',
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
+
+
+def test_use_expand_unprefixed_variable_drives_a_dependency(emerge_binary, fixture_env):
+    """PORTING/fixtures/repo/profiles/arch/amd64/make.defaults declares
+    USE_EXPAND_UNPREFIXED="ARCH" and ARCH="amd64" -- real config.py's own
+    USE_EXPAND_UNPREFIXED mechanism (the same one that makes "amd64"
+    exist as a real USE flag in actual Gentoo at all) contributes the
+    bare pseudo-USE flag "amd64" directly, with no "arch_" prefix at all
+    (unlike an ordinary USE_EXPAND variable). dev-libs/archusepkg's own
+    "amd64? ( dev-libs/newpkg )" proves the flag genuinely drives
+    dependency recursion, not just USE display; "riscv" (never set by
+    anything) stays off, so its own "? ( dev-libs/hiddendep )" clause is
+    never pulled in."""
+    result = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/archusepkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '[ebuild  N] dev-libs/archusepkg-1.0  USE="amd64 -riscv"',
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+    assert "hiddendep" not in result.stdout
 
 
 def test_use_stable_force_and_package_use_stable_mask_apply_when_stable(

@@ -1775,11 +1775,13 @@ PORTING/
   the same flat `use_flags` set every other USE source already
   populates -- no separate per-variable breakdown is kept, since nothing
   in this pilot (no `--info` action) needs one. Deliberately out of
-  scope, all confirmed real, named corners: `USE_EXPAND_UNPREFIXED`,
+  scope at the time, all confirmed real, named corners: `USE_EXPAND_UNPREFIXED`
+  (closed by a later follow-up below),
   IUSE-aware wildcard expansion (needs a specific package's own IUSE,
-  which global config resolution has no access to), and
+  which global config resolution has no access to, still open), and
   `USE_EXPAND_HIDDEN`/`_IMPLICIT` (real `emerge --info` display-only
-  concerns). **Now stale**: `package.use`'s own `USE_EXPAND`-prefix
+  concerns, irrelevant to a `--pretend`-only pilot with no `--info`
+  action at all -- not worth ever closing). **Now stale**: `package.use`'s own `USE_EXPAND`-prefix
   shorthand (`VIDEO_CARDS: nvidia` lines) used to be listed here as a
   separate, not-yet-ported follow-up -- see the dedicated paragraph
   further below for the follow-up that closed it. `dev-libs/useexpandpkg` (`IUSE="video_cards_nvidia
@@ -1788,6 +1790,31 @@ PORTING/
   `video_cards_nvidia` (declared by `profiles/base/make.defaults`) pulls
   in its dependency, `video_cards_amdgpu` (never declared anywhere)
   doesn't.
+
+  **`USE_EXPAND_UNPREFIXED`**: closes the cut named just above, grounded
+  against real `config.py`'s own companion mechanism to `USE_EXPAND`:
+  the exact same variable-NAME accumulation (`apply_incremental` on the
+  `USE_EXPAND_UNPREFIXED` key itself, across the profile chain and
+  `make.conf`) and the exact same "last-level-wins" scalar read for each
+  named variable's own value this pilot's own `USE_EXPAND` already uses
+  -- the *only* difference is that the value's own tokens fold into
+  `use_flags` with **no prefix at all**, not `lowercase(varname)_`.
+  This is a real, load-bearing mechanism, not an edge case: real
+  Gentoo's own `profiles/arch/amd64/make.defaults` sets
+  `USE_EXPAND_UNPREFIXED="ARCH"`, which is literally how `amd64`/`x86`/
+  `arm64`/etc. exist as ordinary USE flags at all (there is no other
+  mechanism that defines them). The fixture's own `profiles/arch/amd64/
+  make.defaults` (which already declared `ARCH="amd64"`, feeding
+  `ACCEPT_KEYWORDS` via `${ARCH}` substitution, since the very first
+  profile-chain slice) now also declares `USE_EXPAND_UNPREFIXED="ARCH"`,
+  completing a mirror of the real tree its own comment already claimed
+  to be -- verified this doesn't collide with any existing fixture
+  package's own `IUSE` first (none declares `amd64` as a flag). New
+  fixture package `dev-libs/archusepkg` (`IUSE="amd64 riscv"`, RDEPEND
+  gated on each) proves the unprefixed flag genuinely drives dependency
+  recursion the same way `useexpandpkg` above already proves for the
+  prefixed case: `amd64` (now a real global USE flag) pulls in its
+  dependency, `riscv` (never set by anything) doesn't.
 
   **`package.use`'s own `USE_EXPAND`-prefix shorthand**. The
   explicitly-deferred follow-up to the base `USE_EXPAND` slice above.
@@ -2654,6 +2681,15 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useflagpkg
 # display
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/useexpandpkg
 # [ebuild  N] dev-libs/useexpandpkg-1.0  USE="-video_cards_amdgpu video_cards_nvidia"
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# USE_EXPAND_UNPREFIXED is real and implemented too: profiles/arch/amd64/
+# make.defaults' own ARCH="amd64" contributes the bare pseudo-USE flag
+# "amd64" (no "arch_" prefix at all, unlike an ordinary USE_EXPAND
+# variable) -- this is literally how "amd64" exists as a real USE flag
+# in actual Gentoo, and it genuinely gates a dependency here too
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/archusepkg
+# [ebuild  N] dev-libs/archusepkg-1.0  USE="amd64 -riscv"
 # [ebuild  N] dev-libs/newpkg-1.0
 
 # package.use's own USE_EXPAND-prefix shorthand is real and implemented

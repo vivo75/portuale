@@ -293,6 +293,17 @@ pub struct Config {
     /// documentation/testability, same reasoning `use_force`/`use_mask`
     /// already have for being separately visible.
     pub use_expand: HashSet<String>,
+    /// `USE_EXPAND_UNPREFIXED` (real `config.py`'s own companion to
+    /// `USE_EXPAND`): the set of variable NAMES (e.g. `ARCH` -- real
+    /// Gentoo's own profile sets `USE_EXPAND_UNPREFIXED="ARCH"`, which is
+    /// literally how `amd64`/`x86`/`arm64` etc. exist as plain USE flags
+    /// at all) accumulated incrementally the same way `USE_EXPAND` is.
+    /// Each named variable's own VALUE is folded into `use_flags`
+    /// *without* any prefix at all (unlike `USE_EXPAND`'s own
+    /// `lowercase(name)_` prefixing) -- see the module doc comment's own
+    /// `USE_EXPAND_UNPREFIXED` bullet for the full scope writeup.
+    /// Exposed here too, same reasoning `use_expand` already has.
+    pub use_expand_unprefixed: HashSet<String>,
     /// `use.stable.force`: every profile level's own file (in chain
     /// order), stacked the same `-atom`-removal way `use_force` already
     /// is -- but, unlike `use_force`, deliberately NOT folded into
@@ -487,6 +498,7 @@ fn process_lines(text: &str, scalars: &mut HashMap<String, String>, config: &mut
             "USE" => apply_incremental(&value, &mut config.use_flags),
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
             "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
+            "USE_EXPAND_UNPREFIXED" => apply_incremental(&value, &mut config.use_expand_unprefixed),
             _ => {}
         }
         scalars.insert(key.to_string(), value);
@@ -662,6 +674,7 @@ fn process_make_conf_file(
             "USE" => apply_incremental(&value, &mut config.use_flags),
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
             "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
+            "USE_EXPAND_UNPREFIXED" => apply_incremental(&value, &mut config.use_expand_unprefixed),
             _ => {}
         }
         scalars.insert(key.to_string(), value);
@@ -1093,9 +1106,11 @@ pub fn resolve_config(
     // variables too, not a new one) -- is expanded into
     // lowercase-prefixed pseudo-USE-flags via the exact same
     // apply_incremental token semantics (`-flag`/`flag`/`+flag`/`-*`)
-    // USE itself already uses, folded directly into `use_flags`. Out of
-    // scope, all deliberately: `USE_EXPAND_UNPREFIXED` (a separate,
-    // rarer unprefixed-expansion mode), IUSE-aware wildcard expansion
+    // USE itself already uses, folded directly into `use_flags`.
+    // `USE_EXPAND_UNPREFIXED` (real `config.py`'s own companion
+    // mechanism -- no prefix at all, applied in the loop right below
+    // this one) IS now read too. Still out of scope, deliberately:
+    // IUSE-aware wildcard expansion
     // (`linguas_*`, which needs a specific package's own IUSE -- global
     // config resolution has no such per-package context at all), and
     // `USE_EXPAND_HIDDEN`/`USE_EXPAND_IMPLICIT` (real `emerge --info`
@@ -1130,6 +1145,26 @@ pub fn resolve_config(
             .collect::<Vec<_>>()
             .join(" ");
         apply_incremental(&prefixed, &mut config.use_flags);
+    }
+
+    // USE_EXPAND_UNPREFIXED: real config.py's own companion to
+    // USE_EXPAND -- the exact same mechanism (variable NAMES
+    // incrementally stacked into `config.use_expand_unprefixed` via
+    // "USE_EXPAND_UNPREFIXED" during make.defaults/make.conf processing
+    // above, each named variable's own current VALUE read from
+    // `scalars`), except the value is folded into `use_flags` via
+    // `apply_incremental` *directly*, with no `lowercase(name)_` prefix
+    // at all -- real Gentoo's own profile sets
+    // `USE_EXPAND_UNPREFIXED="ARCH"`, so `ARCH="amd64"` contributes the
+    // bare `amd64` flag, not `arch_amd64` (this is literally how
+    // `amd64`/`x86`/`arm64` etc. exist as real USE flags at all).
+    let use_expand_unprefixed_vars: Vec<String> =
+        config.use_expand_unprefixed.iter().cloned().collect();
+    for var in use_expand_unprefixed_vars {
+        let Some(value) = scalars.get(&var) else {
+            continue;
+        };
+        apply_incremental(value, &mut config.use_flags);
     }
 
     // use.mask/use.force: every profile level's own file (in chain
@@ -1556,6 +1591,10 @@ mod tests {
                 "localflag".to_string(),
                 "confflag".to_string(),
                 "video_cards_nvidia".to_string(),
+                // USE_EXPAND_UNPREFIXED="ARCH" in profiles/arch/amd64/
+                // make.defaults, real Gentoo's own mechanism for how
+                // "amd64" exists as a plain USE flag at all.
+                "amd64".to_string(),
             ])
         );
         assert_eq!(
@@ -2098,6 +2137,74 @@ mod tests {
         assert!(!config.use_flags.contains("video_cards_nvidia"));
         assert!(config.use_flags.contains("video_cards_intel"));
         assert!(!config.use_flags.contains("+video_cards_intel"));
+    }
+
+    #[test]
+    fn use_expand_unprefixed_variable_contributes_a_bare_flag_no_prefix() {
+        // Real Gentoo's own USE_EXPAND_UNPREFIXED="ARCH" mechanism:
+        // ARCH="amd64" must contribute the bare flag "amd64" directly,
+        // NOT "arch_amd64" -- the defining difference from an ordinary
+        // USE_EXPAND variable, which use_expand_variable_names_stack_
+        // incrementally_across_profile_levels above already covers.
+        let root = std::env::temp_dir().join("portage-profile-test-use-expand-unprefixed");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let base = repo_profiles.join("base");
+        fs::create_dir_all(&base).unwrap();
+
+        fs::write(
+            base.join("make.defaults"),
+            "USE_EXPAND_UNPREFIXED=\"ARCH\"\nARCH=\"amd64\"\n",
+        )
+        .unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&base, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        assert_eq!(
+            config.use_expand_unprefixed,
+            HashSet::from(["ARCH".to_string()])
+        );
+        assert!(config.use_flags.contains("amd64"));
+        assert!(!config.use_flags.contains("arch_amd64"));
+    }
+
+    #[test]
+    fn use_expand_unprefixed_variable_value_expands_with_negation_and_plus_stripped() {
+        // Same three ordinary incremental token forms
+        // use_expand_variable_value_expands_with_negation_and_plus_stripped
+        // above already covers for a prefixed USE_EXPAND variable, but
+        // for an unprefixed one: "foo" adds, "+bar" adds ("+" stripped),
+        // "-foo" then removes "foo" itself, added earlier in the same
+        // value list -- final: only "bar" remains, no prefix on either.
+        let root = std::env::temp_dir().join("portage-profile-test-use-expand-unprefixed-negation");
+        let repo = root.join("repo");
+        let repo_profiles = repo.join("profiles");
+        let base = repo_profiles.join("base");
+        fs::create_dir_all(&base).unwrap();
+
+        fs::write(
+            base.join("make.defaults"),
+            "USE_EXPAND_UNPREFIXED=\"ARCH\"\nARCH=\"foo +bar -foo\"\n",
+        )
+        .unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&base, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        assert!(!config.use_flags.contains("foo"));
+        assert!(config.use_flags.contains("bar"));
+        assert!(!config.use_flags.contains("+bar"));
     }
 
     #[test]

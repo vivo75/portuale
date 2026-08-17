@@ -1398,7 +1398,9 @@ def _apply_incremental(tokens, target_set):
             target_set.add(tok)
 
 
-def _process_config_lines(text, scalars, use_flags, accept_keywords, use_expand):
+def _process_config_lines(
+    text, scalars, use_flags, accept_keywords, use_expand, use_expand_unprefixed
+):
     for line in text.splitlines():
         parsed = _parse_kv_line(line)
         if parsed is None:
@@ -1411,6 +1413,8 @@ def _process_config_lines(text, scalars, use_flags, accept_keywords, use_expand)
             _apply_incremental(value, accept_keywords)
         elif key == "USE_EXPAND":
             _apply_incremental(value, use_expand)
+        elif key == "USE_EXPAND_UNPREFIXED":
+            _apply_incremental(value, use_expand_unprefixed)
         scalars[key] = value
 
 
@@ -1495,7 +1499,14 @@ def _resolve_profile_chain(leaf, repos):
 
 
 def _process_make_conf_file(
-    path, config_root, scalars, use_flags, accept_keywords, use_expand, visited_sources
+    path,
+    config_root,
+    scalars,
+    use_flags,
+    accept_keywords,
+    use_expand,
+    use_expand_unprefixed,
+    visited_sources,
 ):
     """Resolves "source <path>" against config_root as if it were "/"
     (chroot-style), matching PORTAGE_CONFIGROOT/ROOT semantics elsewhere
@@ -1523,6 +1534,7 @@ def _process_make_conf_file(
                 use_flags,
                 accept_keywords,
                 use_expand,
+                use_expand_unprefixed,
                 visited_sources,
             )
             continue
@@ -1537,6 +1549,8 @@ def _process_make_conf_file(
             _apply_incremental(value, accept_keywords)
         elif key == "USE_EXPAND":
             _apply_incremental(value, use_expand)
+        elif key == "USE_EXPAND_UNPREFIXED":
+            _apply_incremental(value, use_expand_unprefixed)
         scalars[key] = value
 
 
@@ -1552,7 +1566,8 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     cuts. Returns a dict with keys "use_flags", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
     "package_use", "system_packages", "use_force", "use_mask",
-    "package_use_force", "package_use_mask", "use_expand", "use_stable_force",
+    "package_use_force", "package_use_mask", "use_expand",
+    "use_expand_unprefixed", "use_stable_force",
     "use_stable_mask", "package_use_stable_force", "package_use_stable_mask".
 
     main_repo_location (the main repo's own tree root -- see
@@ -1617,6 +1632,7 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     use_flags = set()
     accept_keywords = set()
     use_expand = set()
+    use_expand_unprefixed = set()
     scalars = {}
 
     all_repos = [(main_repo_name, main_repo_location)] + list(overlay_repos)
@@ -1632,12 +1648,21 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
         scalars.pop("USE", None)
         with open(make_defaults) as f:
             text = f.read()
-        _process_config_lines(text, scalars, use_flags, accept_keywords, use_expand)
+        _process_config_lines(
+            text, scalars, use_flags, accept_keywords, use_expand, use_expand_unprefixed
+        )
 
     make_conf = os.path.join(config_root, "etc", "portage", "make.conf")
     if os.path.isfile(make_conf):
         _process_make_conf_file(
-            make_conf, config_root, scalars, use_flags, accept_keywords, use_expand, set()
+            make_conf,
+            config_root,
+            scalars,
+            use_flags,
+            accept_keywords,
+            use_expand,
+            use_expand_unprefixed,
+            set(),
         )
 
     # USE_EXPAND (PMS 7.3.4; real config.py's own regenerate(), "Do the
@@ -1653,12 +1678,13 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     # outside USE/ACCEPT_KEYWORDS" cut to these variables too, not a new
     # one) -- is expanded into lowercase-prefixed pseudo-USE-flags via
     # the exact same _apply_incremental token semantics USE itself
-    # already uses, folded directly into use_flags. Mirrors
-    # portage-profile/src/lib.rs's resolve_config exactly, including its
-    # own doc comment's list of deliberately out-of-scope USE_EXPAND
-    # corners (USE_EXPAND_UNPREFIXED, IUSE-aware wildcard expansion,
+    # already uses, folded directly into use_flags. USE_EXPAND_UNPREFIXED
+    # (real config.py's own companion mechanism -- no prefix at all,
+    # applied in the loop right below this one) IS now read too. Still
+    # out of scope, deliberately: IUSE-aware wildcard expansion,
     # USE_EXPAND_HIDDEN/_IMPLICIT, and package.use's own USE_EXPAND-prefix
-    # shorthand, a separate, not-yet-ported follow-up).
+    # shorthand (a separate, not-yet-ported follow-up). Mirrors
+    # portage-profile/src/lib.rs's resolve_config exactly.
     for var in use_expand:
         value = scalars.get(var)
         if value is None:
@@ -1673,6 +1699,20 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
             else:
                 prefixed_tokens.append(f"{prefix}_{tok}")
         _apply_incremental(" ".join(prefixed_tokens), use_flags)
+
+    # USE_EXPAND_UNPREFIXED: real config.py's own companion to
+    # USE_EXPAND -- the exact same mechanism, except the value is folded
+    # into use_flags directly, with no "lowercase(name)_" prefix at all
+    # -- real Gentoo's own profile sets
+    # USE_EXPAND_UNPREFIXED="ARCH", so ARCH="amd64" contributes the bare
+    # "amd64" flag, not "arch_amd64" (this is literally how
+    # amd64/x86/arm64 etc. exist as real USE flags at all). Mirrors
+    # portage-profile/src/lib.rs's resolve_config exactly.
+    for var in use_expand_unprefixed:
+        value = scalars.get(var)
+        if value is None:
+            continue
+        _apply_incremental(value, use_flags)
 
     # use.mask/use.force: every profile level's own file (in chain
     # order), stacked with the same "-atom" removal semantics
@@ -1946,6 +1986,7 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
         "package_use_force": _parse_package_use_lines(use_force_lines),
         "package_use_mask": _parse_package_use_lines(use_mask_lines),
         "use_expand": use_expand,
+        "use_expand_unprefixed": use_expand_unprefixed,
         "use_stable_force": use_stable_force,
         "use_stable_mask": use_stable_mask,
         "package_use_stable_force": _parse_package_use_lines(use_stable_force_lines),
