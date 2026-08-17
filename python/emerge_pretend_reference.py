@@ -92,7 +92,7 @@ from collections import deque
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "lib"))
 
-from portage.dep import Atom, check_required_use, match_from_list, use_reduce
+from portage.dep import Atom, check_required_use, match_from_list, paren_enclose, use_reduce
 from portage.exception import InvalidAtom, InvalidDependString
 from portage.versions import vercmp
 
@@ -2214,6 +2214,125 @@ def _best_candidate(candidates):
     return best
 
 
+def _resolve_disjunctions(nodes, uselist, alternative_satisfiable):
+    """Walks `nodes` (real use_reduce(flat=False, uselist=uselist)'s own
+    nested-list shape), picking the first alternative of every "||"
+    group whose own flattened atoms `alternative_satisfiable` accepts --
+    see _use_reduce_flat_disjunctive's own docstring for the full
+    grounding. Real use_reduce(flat=False) already fully resolves every
+    USE conditional against `uselist` before this ever sees the tree
+    (an inactive flag?'s own group vanishes entirely, an active one
+    splices its own contents in with no marker left) -- so, unlike
+    portage-repo/src/lib.rs's own DepNode-based walk (which has to
+    handle "flag?" pairing itself, since its own tree mirrors real
+    paren_reduce's pre-conditional-resolution shape instead), this only
+    ever needs to handle two node shapes at all: a bare atom string, and
+    a nested list (a plain bracketed group, or one member of a "||"
+    alternatives list). Mirrors portage-repo/src/lib.rs's own
+    resolve_disjunctions in observable behavior, not literal structure."""
+    result = []
+    i = 0
+    while i < len(nodes):
+        node = nodes[i]
+        if node == "||":
+            alternatives = nodes[i + 1]
+            chosen = None
+            for alt in alternatives:
+                alt_nodes = alt if isinstance(alt, list) else [alt]
+                try:
+                    flat_atoms = use_reduce(paren_enclose(alt_nodes), flat=True, uselist=uselist)
+                except InvalidDependString:
+                    continue
+                if alternative_satisfiable(flat_atoms):
+                    chosen = _resolve_disjunctions(alt_nodes, uselist, alternative_satisfiable)
+                    break
+            if chosen is not None:
+                result.extend(chosen)
+            else:
+                result.append("||")
+                result.append(alternatives)
+            i += 2
+        elif isinstance(node, list):
+            result.append(_resolve_disjunctions(node, uselist, alternative_satisfiable))
+            i += 1
+        else:
+            result.append(node)
+            i += 1
+    return result
+
+
+def _use_reduce_flat_disjunctive(depstr, uselist, alternative_satisfiable):
+    """Real _add_pkg_dep_string's own "||" resolution, considerably
+    simplified: picks the first alternative every one of whose own
+    atoms `alternative_satisfiable` accepts, instead of flattening
+    every alternative into the result the way plain
+    use_reduce(flat=True) always has. An alternative that resolves to
+    zero atoms at all (every token inside it gated by an inactive
+    conditional) counts as trivially satisfiable -- `alternative_
+    satisfiable` is expected to return True for an empty list, the
+    same vacuous-truth real portage itself gives a no-cost alternative.
+
+    Falls back to keeping the *whole* "||" group exactly as
+    use_reduce(flat=True) would have flattened it (literal "||" marker,
+    every alternative's own atoms, no selection at all) whenever *no*
+    alternative is currently satisfiable -- so a dependency this pilot
+    can't currently resolve is never silently dropped, preserving the
+    exact "never silently wrong about whether a dependency exists"
+    invariant resolve_pretend_graph's own docstring already established
+    for the unconditional-flatten v1 this replaces. Real portage's own
+    considerably richer preference order (installed packages first,
+    backtracking on a later constraint failure, etc.) isn't ported --
+    this pilot has no backtracking architecture at all -- just the
+    single "first currently-resolvable alternative wins" rule. Mirrors
+    portage-repo/src/lib.rs's use_reduce_flat_disjunctive exactly."""
+    tree = use_reduce(depstr, flat=False, uselist=uselist)
+    resolved = _resolve_disjunctions(tree, uselist, alternative_satisfiable)
+    return use_reduce(paren_enclose(resolved), flat=True, uselist=uselist)
+
+
+def _atom_currently_satisfiable(repos, atom_str, config):
+    """Whether every atom in `atoms` currently has a satisfying
+    candidate -- the probe _use_reduce_flat_disjunctive needs to pick a
+    "||" group's own first currently-resolvable alternative. A blocker
+    atom is always satisfiable here, vacuously -- it isn't a dependency
+    to *resolve* at all, just a conflict to report (_enqueue_flat_deps
+    handles that separately, unaffected by which "||" alternative was
+    chosen), so it never disqualifies an otherwise-fine alternative.
+
+    Deliberately the *early* half of resolve_pretend's own logic only
+    (list_candidates -> filter is_visible -> match_from_list -> USE-dep
+    post-filter) -- not a call to resolve_pretend itself, which also
+    applies --update/--newuse/--exclude/reinstall refinements that only
+    matter once an alternative has already been chosen and is actually
+    being resolved. Mirrors portage-repo/src/lib.rs's
+    atom_currently_satisfiable exactly."""
+    atom = _parse_atom(atom_str)
+    if atom is None:
+        return False
+    if atom.blocker:
+        return True
+    category, package = atom.cp.split("/", 1)
+    candidates = list_candidates(repos, category, package)
+    visible = [c for c in candidates if is_visible(c, category, package, config)]
+    if not visible:
+        return False
+
+    candidate_strs = [
+        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+        for c in visible
+    ]
+    by_str = dict(zip(candidate_strs, visible))
+    matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
+
+    if atom.use:
+        matched = [
+            c
+            for c in matched
+            if _use_deps_satisfied(atom, *_candidate_iuse_and_use(c, category, package, config))
+        ]
+    return bool(matched)
+
+
 def resolve_pretend(
     repos,
     root,
@@ -3083,7 +3202,13 @@ def resolve_pretend_graph(
             if metadata.get(k)
         )
         try:
-            flat_deps = use_reduce(depstr, flat=True, uselist=use_flags)
+            flat_deps = _use_reduce_flat_disjunctive(
+                depstr,
+                use_flags,
+                lambda atoms: all(
+                    _atom_currently_satisfiable(repos, a, config) for a in atoms
+                ),
+            )
         except InvalidDependString:
             continue
         _enqueue_flat_deps(flat_deps, key, version, depth, queue, pending_blockers)
@@ -3238,7 +3363,11 @@ def _enqueue_dependencies(
     )
     depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
     try:
-        flat_deps = use_reduce(depstr, flat=True, uselist=use_flags)
+        flat_deps = _use_reduce_flat_disjunctive(
+            depstr,
+            use_flags,
+            lambda atoms: all(_atom_currently_satisfiable(repos, a, config) for a in atoms),
+        )
     except InvalidDependString:
         return
     for tok in flat_deps:

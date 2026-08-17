@@ -138,7 +138,16 @@ CASES = [
     ("recursion: basic dependency chain", ["--pretend", "dev-libs/withdeps"], 0),
     ("recursion: diamond dependency dedup", ["--pretend", "dev-libs/diamond"], 0),
     ("recursion: dependency cycle terminates", ["--pretend", "dev-libs/cycle-a"], 0),
-    ("recursion: any-of group resolves every alternative", ["--pretend", "dev-libs/anyof"], 0),
+    (
+        "recursion: any-of group resolves only the first satisfiable alternative",
+        ["--pretend", "dev-libs/anyof"],
+        0,
+    ),
+    (
+        "recursion: any-of group falls back to every alternative when none is satisfiable",
+        ["--pretend", "dev-libs/anyofunresolvable"],
+        0,
+    ),
     ("recursion: unresolvable dep doesn't fail the graph", ["--pretend", "dev-libs/missingdep"], 0),
     ("recursion: dedup across DEPEND and RDEPEND", ["--pretend", "dev-libs/dualdep"], 0),
     ("recursion: BDEPEND is walked", ["--pretend", "dev-libs/bdependpkg"], 0),
@@ -623,11 +632,18 @@ def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
     ]
 
 
-def test_any_of_group_resolves_every_alternative(emerge_binary, fixture_env):
-    """Pins the documented v1 any-of simplification: both alternatives of
-    `|| ( dev-libs/newpkg dev-libs/samepkg )` are considered, but only the
-    one that would newly merge (newpkg) is printed -- samepkg is already
-    installed and stays silent, same as any other already-satisfied dep."""
+def test_any_of_group_resolves_only_the_first_satisfiable_alternative(
+    emerge_binary, fixture_env
+):
+    """Real "||" semantics (see use_reduce_flat_disjunctive's own doc
+    comment, portage-use-reduce): of `|| ( dev-libs/newpkg
+    dev-libs/samepkg )`, only dev-libs/newpkg (listed first, and
+    visible) is even enqueued -- dev-libs/samepkg (already installed,
+    also satisfiable, but never reached) doesn't show up at all. Same
+    displayed stdout either way samepkg would have been silent anyway
+    (an AlreadyInstalled dependency never prints under plain --pretend),
+    but the underlying resolution now genuinely stops at the first
+    satisfiable alternative instead of walking every one."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/anyof"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
@@ -1134,6 +1150,29 @@ def test_unresolvable_dependency_is_reported_not_silently_dropped(
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"'
     )
+
+
+def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(
+    emerge_binary, fixture_env
+):
+    """dev-libs/anyofunresolvable's own RDEPEND is
+    "|| ( dev-libs/doesnotexist-anywhere dev-libs/alsodoesnotexist-anywhere )"
+    -- NEITHER alternative has a visible candidate anywhere, so real
+    "||" resolution (use_reduce_flat_disjunctive, portage-use-reduce)
+    falls back to keeping every alternative exactly like plain
+    use_reduce(flat=True) always did, matching this pilot's own
+    pre-existing "never silently wrong about whether a dependency
+    exists" invariant -- both get reported on stderr, neither silently
+    dropped just because they're inside an unresolvable || group."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/anyofunresolvable"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/anyofunresolvable-1.0"]
+    assert result.stderr.strip().splitlines() == [
+        '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"',
+        '!!! no visible ebuild for dependency "dev-libs/alsodoesnotexist-anywhere"',
+    ]
 
 
 def test_real_use_flags_from_profile_gate_a_dependency(emerge_binary, fixture_env):
@@ -3790,10 +3829,9 @@ def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
     ordinary ebuild whose RDEPEND is a "|| ( ... )" any-of group of real
     providers, no PROVIDE mechanism or special resolution involved. It
     must resolve through the exact same category + any-of-group
-    machinery as any other package -- v1's documented any-of behavior
-    (resolve every alternative, only show the one that would newly
-    merge) picks dev-libs/newpkg (New) over dev-libs/samepkg (already
-    installed, stays silent)."""
+    machinery as any other package -- real "||" semantics pick only
+    dev-libs/newpkg (listed first, visible); dev-libs/samepkg (second,
+    already installed -- also satisfiable, but never reached at all)."""
     result = _run([str(emerge_binary)], ["--pretend", "virtual/texteditor"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [

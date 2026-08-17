@@ -28,6 +28,19 @@
 // fiction): lib/portage/package/ebuild/config.py, _emerge/resolver/, and
 // _emirrordist all call use_reduce(..., flat=True) for exactly this "give
 // me a flat token list" need.
+//
+// `use_reduce_flat_disjunctive` (the real "||"-group resolution follow-up)
+// reuses the exact same DepNode/build_dep_tree/serialize_dep_tree
+// machinery `use_reduce_flat_subset` already needed, extended with a new
+// `resolve_disjunctions` walk: picks the first alternative of every "||"
+// group a caller-supplied satisfiability closure accepts, instead of
+// flattening every alternative the way `use_reduce_flat` alone always
+// has -- see its own doc comment for the full grounding (real
+// `_add_pkg_dep_string`'s own considerably richer preference order isn't
+// ported; this pilot has no backtracking architecture at all). This
+// crate stays atom-agnostic throughout, matching its own established
+// "tokens stay opaque strings" architecture -- portage-repo supplies the
+// actual visibility-checking closure.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -380,6 +393,125 @@ pub fn use_reduce_flat_subset(
     use_reduce_flat(&reserialized, uselist, mode)
 }
 
+/// One "alternative" inside a `"||"` group -- a single atom, a bracketed
+/// multi-atom group, or a conditional (`flag?`) itself, each consumed as
+/// one logical unit even though a conditional spans two sibling
+/// `DepNode`s (the `flag?` marker plus its own `Group`) -- real
+/// portage's own dependency-specification grammar allows a bare
+/// conditional directly as a `"||"` alternative, not just atoms/groups.
+fn next_alternative<'a>(
+    iter: &mut std::slice::Iter<'a, DepNode>,
+) -> Option<Result<Vec<DepNode>, String>> {
+    let node = iter.next()?;
+    Some(match node {
+        DepNode::Str(s) if s.ends_with('?') => match iter.next() {
+            Some(group @ DepNode::Group(_)) => Ok(vec![node.clone(), group.clone()]),
+            _ => Err(format!("conditional '{s}' not followed by a group")),
+        },
+        other => Ok(vec![other.clone()]),
+    })
+}
+
+/// Real `_add_pkg_dep_string`'s own `"||"` resolution, considerably
+/// simplified: picks the first alternative every one of whose own atoms
+/// `alternative_satisfiable` accepts (a caller-supplied probe -- this
+/// crate stays atom-agnostic, matching its own existing "tokens stay
+/// opaque strings" architecture, see the module doc comment), instead
+/// of flattening every alternative into the result the way plain
+/// `use_reduce_flat` always has. An alternative that resolves to zero
+/// atoms at all (every token inside it gated by an inactive conditional)
+/// counts as trivially satisfiable -- `alternative_satisfiable` is
+/// expected to return `true` for an empty slice, the same vacuous-truth
+/// real portage itself gives a no-cost alternative.
+///
+/// Falls back to keeping the *whole* `"||"` group exactly as
+/// `use_reduce_flat` would have flattened it (literal `"||"` marker,
+/// every alternative's own atoms, no selection at all) whenever *no*
+/// alternative is currently satisfiable -- so a dependency this pilot
+/// can't currently resolve is never silently dropped, preserving the
+/// exact "never silently wrong about whether a dependency exists"
+/// invariant `resolve_pretend_graph`'s own doc comment (portage-repo)
+/// already established for the unconditional-flatten v1 this replaces.
+/// Real portage's own considerably richer preference order (installed
+/// packages first, backtracking on a later constraint failure, etc.)
+/// isn't ported -- this pilot has no backtracking architecture at all --
+/// just the single "first currently-resolvable alternative wins" rule.
+pub fn use_reduce_flat_disjunctive(
+    tokens: &[String],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+    alternative_satisfiable: &mut impl FnMut(&[String]) -> bool,
+) -> Result<Vec<String>, String> {
+    let tree = build_dep_tree(tokens)?;
+    let resolved = resolve_disjunctions(&tree, uselist, mode, alternative_satisfiable)?;
+    let mut reserialized = Vec::new();
+    serialize_dep_tree(&resolved, &mut reserialized);
+    use_reduce_flat(&reserialized, uselist, mode)
+}
+
+fn resolve_disjunctions(
+    nodes: &[DepNode],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+    alternative_satisfiable: &mut impl FnMut(&[String]) -> bool,
+) -> Result<Vec<DepNode>, String> {
+    let mut result: Vec<DepNode> = Vec::new();
+    let mut iter = nodes.iter();
+    while let Some(node) = iter.next() {
+        match node {
+            DepNode::Group(children) => {
+                let resolved =
+                    resolve_disjunctions(children, uselist, mode, alternative_satisfiable)?;
+                result.push(DepNode::Group(resolved));
+            }
+            DepNode::Str(s) if s.ends_with('?') => {
+                let Some(DepNode::Group(children)) = iter.next() else {
+                    return Err(format!("conditional '{s}' not followed by a group"));
+                };
+                let resolved =
+                    resolve_disjunctions(children, uselist, mode, alternative_satisfiable)?;
+                result.push(DepNode::Str(s.clone()));
+                result.push(DepNode::Group(resolved));
+            }
+            DepNode::Str(s) if s == "||" => {
+                let Some(DepNode::Group(alternatives)) = iter.next() else {
+                    return Err("'||' not followed by a group".to_string());
+                };
+                let mut chosen: Option<Vec<DepNode>> = None;
+                let mut alt_iter = alternatives.iter();
+                while let Some(alt) = next_alternative(&mut alt_iter) {
+                    let alt_nodes = alt?;
+                    let mut flat = Vec::new();
+                    serialize_dep_tree(&alt_nodes, &mut flat);
+                    let Ok(flat_atoms) = use_reduce_flat(&flat, uselist, mode) else {
+                        continue;
+                    };
+                    if alternative_satisfiable(&flat_atoms) {
+                        chosen = Some(resolve_disjunctions(
+                            &alt_nodes,
+                            uselist,
+                            mode,
+                            alternative_satisfiable,
+                        )?);
+                        break;
+                    }
+                }
+                match chosen {
+                    Some(alt_nodes) => result.extend(alt_nodes),
+                    None => {
+                        result.push(DepNode::Str("||".to_string()));
+                        result.push(DepNode::Group(alternatives.clone()));
+                    }
+                }
+            }
+            DepNode::Str(s) => {
+                result.push(DepNode::Str(s.clone()));
+            }
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,5 +615,92 @@ mod tests {
         )
         .unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn disjunctive_picks_the_first_satisfiable_alternative() {
+        // "b" is the only satisfiable alternative -- "a" and "c" must
+        // both be dropped entirely, not just deprioritized.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b dev-libs/c )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            &mut |atoms| atoms == ["dev-libs/b"],
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_falls_back_to_every_alternative_when_none_satisfiable() {
+        // Nothing is satisfiable -- matches plain use_reduce_flat's own
+        // "flatten everything" output exactly, so nothing regresses
+        // when this pilot can't currently resolve any alternative.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( dev-libs/a dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            &mut |_| false,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["||", "dev-libs/a", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_treats_a_bracketed_multi_atom_alternative_as_one_unit() {
+        // || ( ( dev-libs/a dev-libs/b ) dev-libs/c ) -- the first
+        // alternative is the PAIR (a AND b together); it's only chosen
+        // if BOTH are satisfiable at once, not either one alone.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( ( dev-libs/a dev-libs/b ) dev-libs/c )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            &mut |atoms| atoms == ["dev-libs/a", "dev-libs/b"],
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_skips_the_bracketed_pair_when_only_one_half_is_satisfiable() {
+        // Same shape as above, but only "dev-libs/a" alone is
+        // satisfiable -- the bracketed pair needs BOTH, so it's
+        // rejected and the bare "dev-libs/c" alternative wins instead.
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( ( dev-libs/a dev-libs/b ) dev-libs/c )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            &mut |atoms| atoms == ["dev-libs/c"],
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/c"]);
+    }
+
+    #[test]
+    fn disjunctive_treats_an_inactive_conditional_alternative_as_vacuously_satisfiable() {
+        // || ( foo? ( dev-libs/a ) dev-libs/b ) with "foo" off -- the
+        // first alternative flattens to nothing at all (a real,
+        // legitimate "requires nothing" alternative), which must win
+        // immediately rather than falling through to "dev-libs/b".
+        let result = use_reduce_flat_disjunctive(
+            &toks("|| ( foo? ( dev-libs/a ) dev-libs/b )"),
+            &HashSet::new(),
+            MatchMode::Normal,
+            &mut |atoms: &[String]| atoms.is_empty(),
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn disjunctive_leaves_non_disjunctive_deps_untouched() {
+        let result = use_reduce_flat_disjunctive(
+            &toks("dev-libs/a foo? ( dev-libs/b )"),
+            &set(&["foo"]),
+            MatchMode::Normal,
+            &mut |_| false,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
     }
 }

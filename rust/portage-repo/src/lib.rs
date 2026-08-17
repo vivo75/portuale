@@ -2049,6 +2049,83 @@ fn reinstall_flags_for_use_change(
 /// dominant real-world use ("pin an installed package so `--update`/
 /// `--deep` never touch it") and the New/Upgrade selection case, not
 /// every real edge case.
+/// Whether every atom in `atoms` currently has a satisfying candidate --
+/// the probe `use_reduce_flat_disjunctive` (portage-use-reduce) needs to
+/// pick a `"||"` group's own first currently-resolvable alternative
+/// (see `resolve_pretend_graph`'s own doc comment for the full
+/// grounding). A blocker atom (`!foo/bar`/`!!foo/bar`) is always
+/// satisfiable here, vacuously -- it isn't a dependency to *resolve* at
+/// all, just a conflict to report (`enqueue_flat_deps` handles that
+/// separately, unaffected by which `"||"` alternative was chosen), so
+/// it never disqualifies an otherwise-fine alternative.
+///
+/// Deliberately the *early* half of `resolve_pretend`'s own logic only
+/// (`list_candidates` -> filter `is_visible` -> `match_from_list` ->
+/// USE-dep post-filter) -- not a call to `resolve_pretend` itself,
+/// which also applies `--update`/`--newuse`/`--exclude`/reinstall
+/// refinements that only matter once an alternative has already been
+/// chosen and is actually being resolved, not for this "is it even
+/// possible" probe. A minor, deliberate duplication of that logic
+/// rather than a shared refactor -- the same "duplicate a small,
+/// stable chunk rather than force two different call sites through one
+/// function" precedent `keyword_masked_only` already set against
+/// `is_visible` itself.
+fn atom_currently_satisfiable(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    if atom.blocker != portage_dep::Blocker::None {
+        return true;
+    }
+    let Ok(candidates) = list_candidates(repos, &atom.category, &atom.package) else {
+        return false;
+    };
+    let visible: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| is_visible(c, &atom.category, &atom.package, config))
+        .collect();
+    if visible.is_empty() {
+        return false;
+    }
+
+    let candidate_strs: Vec<String> = visible
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(atom_str, &candidate_str_refs) else {
+        return false;
+    };
+
+    let Some(use_deps) = atom.use_deps.as_ref().filter(|d| !d.is_empty()) else {
+        return !matched.is_empty();
+    };
+    let mut by_str: HashMap<&str, &Candidate> = HashMap::new();
+    for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
+        by_str.insert(*s, *c);
+    }
+    matched.into_iter().any(|m| {
+        let Some(candidate) = by_str.get(m) else {
+            return false;
+        };
+        let Some((iuse, use_flags)) =
+            candidate_iuse_and_use(candidate, &atom.category, &atom.package, config)
+        else {
+            return false;
+        };
+        portage_dep::use_deps_satisfied(use_deps, &iuse, &use_flags)
+    })
+}
+
 // 11 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
@@ -2679,15 +2756,26 @@ fn enqueue_flat_deps(
 ///     package.* mechanics are and aren't implemented) rather than being
 ///     read here; this crate stays decoupled from profile-parsing logic
 ///     even though it now depends on portage-profile for the `Config` type.
-///   - `||` (any-of) groups: `use_reduce(flat=True)` deliberately discards
-///     group boundaries (that's what "flat" means), so there is no
-///     reliable way to identify "the first alternative" from its output
-///     without reimplementing non-flat structured mode -- a considerably
-///     bigger, previously out-of-scope piece of work (see
-///     portage-use-reduce's doc comment on why flat-only was chosen).
-///     Rather than take that on, v1 resolves *every* atom in an any-of
-///     group. This can pull in more than a real resolver would, but is
-///     never silently wrong about whether a dependency exists.
+///   - `||` (any-of) groups: NOW resolved with real semantics --
+///     `use_reduce_flat_disjunctive` (portage-use-reduce) picks the
+///     first alternative every one of whose own atoms
+///     `atom_currently_satisfiable` (below) accepts, instead of the
+///     earlier v1's own "resolve every atom in the group" (an
+///     over-inclusive but never-silently-wrong stopgap, back when
+///     `use_reduce(flat=True)`'s own group-boundary-discarding output
+///     left no reliable way to identify "the first alternative" without
+///     structured, non-flat parsing -- see `portage-use-reduce`'s own
+///     doc comment for the `DepNode`/`build_dep_tree` machinery this
+///     reuses, originally built for the `--with-test-deps` `subset`
+///     follow-up). Falls back to the old "resolve every alternative"
+///     behavior when *none* is currently satisfiable, so the same
+///     "never silently wrong about whether a dependency exists"
+///     invariant still holds -- nothing regresses for a dependency this
+///     pilot genuinely can't resolve either way. Real portage's own
+///     considerably richer preference order (installed packages first,
+///     backtracking on a later constraint failure) isn't ported -- this
+///     pilot has no backtracking architecture at all -- just the single
+///     "first currently-resolvable alternative wins" rule.
 ///   - A dependency atom with no visible candidate does not fail the
 ///     whole graph: it still gets a `GraphEntry` with
 ///     `PretendOutcome::NoVisibleCandidate` (so it's visible in the
@@ -3355,10 +3443,15 @@ pub fn resolve_pretend_graph(
             }
         }
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
-        let Ok(flat_deps) = portage_use_reduce::use_reduce_flat(
+        let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
             &tokens,
             &use_flags,
             portage_use_reduce::MatchMode::Normal,
+            &mut |atoms: &[String]| {
+                atoms
+                    .iter()
+                    .all(|a| atom_currently_satisfiable(&repos, a, config))
+            },
         ) else {
             continue;
         };
@@ -3550,10 +3643,15 @@ fn enqueue_dependencies(
         }
     }
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
-    let Ok(flat_deps) = portage_use_reduce::use_reduce_flat(
+    let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
         &tokens,
         &use_flags,
         portage_use_reduce::MatchMode::Normal,
+        &mut |atoms: &[String]| {
+            atoms
+                .iter()
+                .all(|a| atom_currently_satisfiable(repos, a, config))
+        },
     ) else {
         return;
     };
@@ -4692,25 +4790,25 @@ mod tests {
         // virtual/texteditor is shaped exactly like a real virtual (e.g.
         // virtual/pager in the real Gentoo tree, confirmed by
         // inspection): an ordinary ebuild whose RDEPEND is a
-        // "|| ( ... )" any-of group of real providers -- no PROVIDE
-        // mechanism, no dedicated virtuals resolution code anywhere in
-        // this pilot. Both alternatives resolve (v1's documented any-of
-        // behavior): dev-libs/newpkg as New, dev-libs/samepkg as
-        // AlreadyInstalled (multicall's own printing layer is what hides
-        // already-installed dependencies from --pretend's stdout, not
-        // resolve_pretend_graph itself).
+        // "|| ( dev-libs/newpkg dev-libs/samepkg )" any-of group of real
+        // providers -- no PROVIDE mechanism, no dedicated virtuals
+        // resolution code anywhere in this pilot. Real "||" semantics
+        // (see use_reduce_flat_disjunctive, portage-use-reduce): the
+        // first alternative with a currently-satisfiable candidate wins
+        // -- dev-libs/newpkg (listed first, and visible) -- so
+        // dev-libs/samepkg (second, and already installed -- also
+        // satisfiable, but never even reached) is correctly never
+        // enqueued at all, unlike this pilot's own earlier "resolve
+        // every alternative" v1.
         let entries = graph_entries_real("virtual/texteditor");
         let full_names: Vec<String> = entries
             .iter()
             .map(|e| format!("{}/{}", e.category, e.package))
             .collect();
+        assert_eq!(full_names, vec!["virtual/texteditor", "dev-libs/newpkg"]);
         assert_eq!(
-            full_names,
-            vec!["virtual/texteditor", "dev-libs/newpkg", "dev-libs/samepkg"]
-        );
-        assert_eq!(
-            entries[2].outcome,
-            PretendOutcome::AlreadyInstalled {
+            entries[1].outcome,
+            PretendOutcome::New {
                 version: "1.0".to_string()
             }
         );
@@ -5537,15 +5635,19 @@ mod tests {
     }
 
     #[test]
-    fn recursion_resolves_every_any_of_alternative() {
-        // v1 documented simplification: || resolves every alternative,
-        // not just the first (see resolve_pretend_graph's doc comment).
+    fn recursion_resolves_only_the_first_satisfiable_any_of_alternative() {
+        // dev-libs/anyof's own RDEPEND is
+        // "|| ( dev-libs/newpkg dev-libs/samepkg )" -- dev-libs/newpkg
+        // (listed first) has a visible candidate, so it wins outright;
+        // dev-libs/samepkg (second, already installed -- also
+        // satisfiable) is never even reached. See
+        // use_reduce_flat_disjunctive's own doc comment
+        // (portage-use-reduce) for the full "first satisfiable
+        // alternative wins" grounding this replaced this pilot's
+        // earlier "resolve every alternative" v1 with.
         let entries = graph("dev-libs/anyof");
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(
-            names,
-            vec!["dev-libs/anyof", "dev-libs/newpkg", "dev-libs/samepkg"]
-        );
+        assert_eq!(names, vec!["dev-libs/anyof", "dev-libs/newpkg"]);
     }
 
     #[test]

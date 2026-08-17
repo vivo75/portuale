@@ -547,6 +547,56 @@ PORTING/
   any-of `RDEPEND` over two real fixture packages) and contract tests
   that pin this down, so it stays proven rather than merely assumed.
 
+  **`||` (any-of) groups, real semantics.** The paragraph above's own
+  "already resolves every alternative of an any-of group" is no longer
+  true -- superseded by this later slice. The groundwork already
+  existed: `use_reduce_flat_subset` (the `--with-test-deps` follow-up)
+  already needed a private `DepNode`/`build_dep_tree` tree preserving
+  `||`-group boundaries, just not exposed for regular dependency
+  processing. New `use_reduce_flat_disjunctive` (`portage-use-reduce`)
+  reuses that same tree, adding a `resolve_disjunctions` walk: for every
+  `"||"` group, it picks the first alternative every one of whose own
+  atoms a caller-supplied satisfiability closure accepts -- a single
+  atom, a bracketed multi-atom group (all must be satisfiable together),
+  or a conditional (`flag?`) used directly as an alternative (a real,
+  valid dependency-specification shape per PMS, resolved to vacuous
+  truth when the flag is off, since an alternative requiring nothing is
+  trivially satisfiable). Falls back to keeping every alternative --
+  `use_reduce_flat`'s own original behavior, literal `"||"` marker
+  included -- whenever *none* is currently satisfiable, so the "never
+  silently wrong about whether a dependency exists" invariant the
+  original v1 established still holds; nothing regresses for a
+  dependency this pilot genuinely can't resolve either way. This crate
+  stays atom-agnostic throughout (matching its own established "tokens
+  stay opaque strings" architecture) -- `portage-repo`'s own new
+  `atom_currently_satisfiable` (the *early* half of `resolve_pretend`'s
+  own logic only: `list_candidates` -> filter `is_visible` ->
+  `match_from_list` -> USE-dep post-filter, deliberately not the full
+  `--update`/`--newuse`/`--exclude`/reinstall-aware function itself,
+  since those refinements only matter once an alternative has already
+  been chosen) supplies the actual visibility-checking closure, wired
+  in at the two real dependency-enqueueing call sites (the main BFS
+  loop and `--deep`'s own `AlreadyInstalled` walk -- the other three
+  `use_reduce_flat` call sites in `portage-repo`, for LICENSE/
+  PROPERTIES/RESTRICT acceptance and `--changed-deps`'s own order-
+  independent set comparison, are deliberately untouched: none of them
+  is a "pick one alternative to enqueue" decision). Real portage's own
+  considerably richer preference order (installed packages first,
+  backtracking on a later constraint failure) isn't ported -- this
+  pilot has no backtracking architecture at all -- just the single
+  "first currently-resolvable alternative wins" rule. `virtual/
+  texteditor`'s own RDEPEND (`"|| ( dev-libs/newpkg dev-libs/samepkg )"`)
+  now correctly enqueues only `dev-libs/newpkg` (listed first, visible)
+  -- `dev-libs/samepkg` (already installed, also satisfiable, but never
+  reached) doesn't show up in the graph at all, though `--pretend`'s own
+  stdout looked identical either way (an `AlreadyInstalled` dependency
+  never prints under plain `--pretend`). New fixture
+  `dev-libs/anyofunresolvable` (`"|| ( dev-libs/doesnotexist-anywhere
+  dev-libs/alsodoesnotexist-anywhere )"`, neither alternative visible
+  anywhere) proves the fallback: both still get reported on stderr,
+  neither silently dropped just because they're inside an unresolvable
+  `||` group.
+
   **CLI surface recognition**: `multicall/src/emerge_options.rs`
   transcribes real emerge's entire option surface from
   `lib/_emerge/main.py` into three tables -- boolean flags (the
@@ -3467,6 +3517,16 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/virtualconsum
 # [ebuild  N] dev-libs/virtualconsumerpkg-1.0
 # [ebuild  N] virtual/texteditor-0
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# real "||" semantics: neither alternative in this package's own RDEPEND
+# has a visible candidate anywhere, so BOTH still get reported (the
+# fallback, matching the pre-existing "never silently wrong about
+# whether a dependency exists" invariant) instead of one being silently
+# dropped
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/anyofunresolvable
+# [ebuild  N] dev-libs/anyofunresolvable-1.0
+# !!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"
+# !!! no visible ebuild for dependency "dev-libs/alsodoesnotexist-anywhere"
 
 # multiple top-level atoms: a dependency shared between two REQUESTED
 # packages (not just two deps of one package) dedupes the same way a

@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: || group where NEITHER alternative has a visible candidate -- proves the fallback to enqueuing every alternative (nothing regresses vs. this pilot's own earlier v1) when none is currently resolvable
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=|| ( dev-libs/doesnotexist-anywhere dev-libs/alsodoesnotexist-anywhere )
+SLOT=0
+_md5_=0000000000000000000000000000000
