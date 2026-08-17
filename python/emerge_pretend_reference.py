@@ -2803,9 +2803,9 @@ def _parse_atom(atom_str):
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
 # --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o,
 # --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps,
-# --changed-deps, --changed-slot, and --help/-h are actually implemented
-# (see run() below); every table here exists purely for recognition, not
-# behavior.
+# --with-bdeps-auto, --changed-deps, --changed-slot, --with-test-deps,
+# and --help/-h are actually implemented (see run() below); every table
+# here exists purely for recognition, not behavior.
 # Mirrors
 # PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
 # three tables exactly, so both sides report identical text for
@@ -2886,7 +2886,6 @@ _VALUE_OPTIONS = [
     ("--keep-going", None),
     ("--load-average", "-l"),
     ("--misspell-suggestions", None),
-    ("--with-bdeps-auto", None),
     ("--reinstall", None),
     ("--reinstall-atoms", None),
     ("--binpkg-respect-use", None),
@@ -3130,9 +3129,9 @@ def _report_option(token):
             "but is not implemented in this pilot (only --pretend/-p, "
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
-            "--deselect/-W, --with-bdeps, --changed-deps, --changed-slot, "
-            "--with-test-deps, and --help/-h are implemented so far; see "
-            "PROMPT.md)",
+            "--deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, "
+            "--changed-slot, --with-test-deps, and --help/-h are implemented "
+            "so far; see PROMPT.md)",
             file=sys.stderr,
         )
     else:
@@ -3185,6 +3184,9 @@ def _print_help():
     )
     print(
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies"
+    )
+    print(
+        '       --with-bdeps-auto y|n  changes the *default* --with-bdeps value (only when --with-bdeps itself isn\'t given) -- n makes it default to n instead of the real "auto" (y here)'
     )
     print(
         "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's"
@@ -3425,6 +3427,8 @@ def run(args):
     json_output = False
     deselect = False
     with_bdeps = True
+    with_bdeps_given = False
+    with_bdeps_auto = True
     changed_deps = False
     changed_slot = False
     with_test_deps = False
@@ -3566,9 +3570,11 @@ def run(args):
             value = args[i + 1]
             if value == "y":
                 with_bdeps = True
+                with_bdeps_given = True
                 i += 2
             elif value == "n":
                 with_bdeps = False
+                with_bdeps_given = True
                 i += 2
             else:
                 print(
@@ -3581,13 +3587,52 @@ def run(args):
             value = arg[len("--with-bdeps=") :]
             if value == "y":
                 with_bdeps = True
+                with_bdeps_given = True
                 i += 1
             elif value == "n":
                 with_bdeps = False
+                with_bdeps_given = True
                 i += 1
             else:
                 print(
                     f'emerge: option "--with-bdeps": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
+        elif arg == "--with-bdeps-auto":
+            # Real "--with-bdeps-auto": the identical required,
+            # closed-choice ("y"/"n") shape --with-bdeps itself has.
+            if i + 1 >= len(args):
+                print(
+                    'emerge: option "--with-bdeps-auto" requires an argument', file=sys.stderr
+                )
+                return 2
+            value = args[i + 1]
+            if value == "y":
+                with_bdeps_auto = True
+                i += 2
+            elif value == "n":
+                with_bdeps_auto = False
+                i += 2
+            else:
+                print(
+                    f'emerge: option "--with-bdeps-auto": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
+        elif arg.startswith("--with-bdeps-auto="):
+            value = arg[len("--with-bdeps-auto=") :]
+            if value == "y":
+                with_bdeps_auto = True
+                i += 1
+            elif value == "n":
+                with_bdeps_auto = False
+                i += 1
+            else:
+                print(
+                    f'emerge: option "--with-bdeps-auto": invalid choice: "{value}" '
                     '(choose from "y", "n")',
                     file=sys.stderr,
                 )
@@ -3798,6 +3843,13 @@ def run(args):
             return 2
 
     top_level_pkgs = {tuple(_parse_atom(a).cp.split("/", 1)) for a in atom_args}
+
+    # Real create_depgraph_params.py's own precedence: an explicit
+    # --with-bdeps always wins; only when it's absent does
+    # --with-bdeps-auto=n override the real default ("auto", this
+    # pilot's own pre-existing with_bdeps=True) down to "n" instead.
+    if not with_bdeps_given:
+        with_bdeps = with_bdeps_auto
 
     try:
         result = resolve_pretend_graph(

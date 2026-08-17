@@ -12,10 +12,10 @@
 // PORTING/python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
 // (verified by the shared contract suite). `--deep`/`-D`,
-// `--exclude`/`-X`, `--deselect`/`-W`, `--with-bdeps`, `--changed-deps`,
-// `--changed-slot`, and `--with-test-deps` are ALSO implemented now (see
-// below) -- all excluded from `VALUE_OPTIONS` too, not just
-// `BOOLEAN_OPTIONS`.
+// `--exclude`/`-X`, `--deselect`/`-W`, `--with-bdeps`,
+// `--with-bdeps-auto`, `--changed-deps`, `--changed-slot`, and
+// `--with-test-deps` are ALSO implemented now (see below) -- all
+// excluded from `VALUE_OPTIONS` too, not just `BOOLEAN_OPTIONS`.
 //
 // KNOWN, DOCUMENTED SCOPE CUTS:
 //   - Short-flag bundling (`-pv`) IS supported -- see pretend.rs's own
@@ -114,9 +114,18 @@
 //     `y`/the real default `auto` both keep them, collapsed into one
 //     bool since `depgraph.py` itself never distinguishes the two).
 //     `--with-bdeps-auto` (the only other real lever on this same
-//     `bdeps` value, relevant only once `--usepkg`/binary-package support
-//     exists) is a deliberate, documented out-of-scope cut -- stays
-//     recognized-but-unimplemented via this same table.
+//     `bdeps` value) IS implemented too now, deliberately excluded from
+//     `VALUE_OPTIONS` for the same reason -- the identical REQUIRED
+//     closed-choice shape `--with-bdeps` itself has. See `pretend.rs`'s
+//     own CLI parsing for the precedence: `--with-bdeps-auto=n` only
+//     changes the *default* `with_bdeps` value (from real portage's own
+//     "auto" to "n") -- an explicit `--with-bdeps` always wins
+//     regardless, matching real `create_depgraph_params.py`'s own `bdeps
+//     = myopts.get("--with-bdeps"); if bdeps is not None: ... elif
+//     ... myopts.get("--with-bdeps-auto") != "n" ...: myparams["bdeps"] =
+//     "auto"` -- the `--usepkg`-gated half of that same real condition
+//     is always true here, since this pilot's CLI has no `--usepkg` at
+//     all.
 //   - `--changed-deps` IS implemented now too, deliberately excluded from
 //     `VALUE_OPTIONS` for the same reason -- real `default_arg_opts` with
 //     a `y_or_n` *optional* value, the identical shape `--verbose`/`-v`
@@ -250,7 +259,6 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--keep-going", None),
     ("--load-average", Some("-l")),
     ("--misspell-suggestions", None),
-    ("--with-bdeps-auto", None),
     ("--reinstall", None),
     ("--reinstall-atoms", None),
     ("--binpkg-respect-use", None),
@@ -472,13 +480,11 @@ mod tests {
     }
 
     #[test]
-    fn does_not_recognize_with_bdeps_itself_but_still_recognizes_with_bdeps_auto() {
-        // --with-bdeps is handled directly by the caller (it's
-        // implemented), not through this "not implemented" table --
-        // --with-bdeps-auto is a real, separate option that stays
-        // unimplemented, so it must still be found.
+    fn does_not_recognize_with_bdeps_or_with_bdeps_auto_either() {
+        // Both are handled directly by the caller now (both
+        // implemented), not through this "not implemented" table.
         assert!(lookup("--with-bdeps").is_none());
-        assert!(lookup("--with-bdeps-auto").is_some());
+        assert!(lookup("--with-bdeps-auto").is_none());
     }
 
     #[test]

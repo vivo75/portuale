@@ -714,14 +714,39 @@ PORTING/
   bundle-compatible either -- real `main.py` declares no `shortopt` for
   it at all, so unlike `--exclude`'s own deliberate bundling cut, there's
   no bundling concept to begin with. `--with-bdeps-auto` (the only other
-  real lever on this same `bdeps` value, relevant only once
-  `--usepkg`/binary-package support exists) stays a deliberate,
-  documented out-of-scope cut. New fixture packages `withbdepspkg`
+  real lever on this same `bdeps` value) was still a deliberate,
+  documented out-of-scope cut at the time -- closed by a later follow-up
+  below (it turns out to matter *now*, not "only once `--usepkg`/binary-
+  package support exists" as first assumed here, since this pilot's own
+  `--usepkg`-less CLI always satisfies the real `--usepkg`-gated half of
+  its own condition). New fixture packages `withbdepspkg`
   (installed, `DEPEND`s on `builddeponlypkg`, `BDEPEND`s on
   `hostdeponlypkg`, `RDEPEND`s on the existing `newpkg`) prove the
   distinction end to end: under `--deep`, the default walks all three;
   `--with-bdeps=n` walks only `newpkg` (`RDEPEND`), leaving the other two
   entirely unmentioned.
+
+  **`--with-bdeps-auto[=y|n]`: closes the cut named just above.**
+  Grounded against real `create_depgraph_params.py`: `bdeps =
+  myopts.get("--with-bdeps"); if bdeps is not None: myparams["bdeps"] =
+  bdeps; elif myaction == "remove" or (myopts.get("--with-bdeps-auto")
+  != "n" and "--usepkg" not in myopts): myparams["bdeps"] = "auto"` -- an
+  explicit `--with-bdeps` always wins outright; only in its *absence*
+  does `--with-bdeps-auto=n` matter at all, changing the real default
+  from `"auto"` (this pilot's own pre-existing `with_bdeps = true`) down
+  to unset (equivalent to `"n"`, since `depgraph.py` itself only ever
+  tests `bdeps in ("y", "auto")`). The real `"--usepkg" not in
+  myopts` half of that same condition is always true here, since this
+  pilot's CLI has no `--usepkg` at all -- so `--with-bdeps-auto` isn't
+  gated on anything else in this pilot, unlike the module doc comment's
+  own earlier (now-corrected) assumption. Same real
+  `argument_options`/`"choices": ("y", "n")` shape `--with-bdeps` itself
+  has -- required value, no short alias, not bundle-compatible. Verified
+  against `withbdepspkg`, the same fixture `--with-bdeps` itself already
+  uses: `--deep --with-bdeps-auto n` (no explicit `--with-bdeps`) walks
+  only `newpkg`, exactly like explicit `--with-bdeps n` already does;
+  `--deep --with-bdeps y --with-bdeps-auto n` still walks all three,
+  proving the explicit flag's own precedence.
 
   **`--changed-deps[=y|n]`: reinstall a package whose own recorded
   dependencies changed.** Grounded against real `depgraph.py`'s own
@@ -3191,6 +3216,20 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep dev-libs/withbd
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep --with-bdeps n dev-libs/withbdepspkg
 # dev-libs/withbdepspkg-1.0 is already installed; nothing to do
 # [ebuild  N] dev-libs/newpkg-1.0
+
+# --with-bdeps-auto n: with no explicit --with-bdeps given, changes the
+# *default* from "auto" (walk all three) down to "n" -- same effect as
+# --with-bdeps n above, but via the default instead of an explicit value
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep --with-bdeps-auto n dev-libs/withbdepspkg
+# dev-libs/withbdepspkg-1.0 is already installed; nothing to do
+# [ebuild  N] dev-libs/newpkg-1.0
+
+# an explicit --with-bdeps always wins over --with-bdeps-auto regardless
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --deep --with-bdeps y --with-bdeps-auto n dev-libs/withbdepspkg
+# dev-libs/withbdepspkg-1.0 is already installed; nothing to do
+# [ebuild  N] dev-libs/builddeponlypkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N] dev-libs/hostdeponlypkg-1.0
 
 # --changed-deps: changeddepspkg's own vdb-recorded RDEPEND (samepkg)
 # differs from its current ebuild's own RDEPEND (newpkg) -- reinstalls

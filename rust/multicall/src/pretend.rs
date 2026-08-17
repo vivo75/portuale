@@ -478,9 +478,9 @@ fn report_option(token: &str) -> ExitCode {
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
              --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
-             --with-bdeps, --changed-deps, --changed-slot, \
-             --with-test-deps, and --help/-h are implemented so far; see \
-             PROMPT.md)",
+             --with-bdeps, --with-bdeps-auto, --changed-deps, \
+             --changed-slot, --with-test-deps, and --help/-h are \
+             implemented so far; see PROMPT.md)",
             found.canonical
         );
     } else {
@@ -532,6 +532,9 @@ fn print_help() {
     );
     println!(
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies"
+    );
+    println!(
+        "       --with-bdeps-auto y|n  changes the *default* --with-bdeps value (only when --with-bdeps itself isn't given) -- n makes it default to n instead of the real \"auto\" (y here)"
     );
     println!(
         "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's"
@@ -815,6 +818,8 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut json = false;
     let mut deselect = false;
     let mut with_bdeps = true;
+    let mut with_bdeps_given = false;
+    let mut with_bdeps_auto = true;
     let mut changed_deps = false;
     let mut changed_slot = false;
     let mut with_test_deps = false;
@@ -981,10 +986,12 @@ pub fn run(args: &[String]) -> ExitCode {
             match value.as_str() {
                 "y" => {
                     with_bdeps = true;
+                    with_bdeps_given = true;
                     i += 2;
                 }
                 "n" => {
                     with_bdeps = false;
+                    with_bdeps_given = true;
                     i += 2;
                 }
                 _ => {
@@ -996,14 +1003,55 @@ pub fn run(args: &[String]) -> ExitCode {
             match value {
                 "y" => {
                     with_bdeps = true;
+                    with_bdeps_given = true;
                     i += 1;
                 }
                 "n" => {
                     with_bdeps = false;
+                    with_bdeps_given = true;
                     i += 1;
                 }
                 _ => {
                     eprintln!("emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if arg == "--with-bdeps-auto" {
+            // Real "--with-bdeps-auto": the identical required,
+            // closed-choice ("y"/"n") shape "--with-bdeps" itself has --
+            // both live in real main.py's own "argument_options" table,
+            // registered the same way, not the optional-value "y_or_n"
+            // shape --changed-slot/--with-test-deps have.
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--with-bdeps-auto\" requires an argument");
+                return ExitCode::from(2);
+            };
+            match value.as_str() {
+                "y" => {
+                    with_bdeps_auto = true;
+                    i += 2;
+                }
+                "n" => {
+                    with_bdeps_auto = false;
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--with-bdeps-auto\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--with-bdeps-auto=") {
+            match value {
+                "y" => {
+                    with_bdeps_auto = true;
+                    i += 1;
+                }
+                "n" => {
+                    with_bdeps_auto = false;
+                    i += 1;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--with-bdeps-auto\": invalid choice: {value:?} (choose from \"y\", \"n\")");
                     return ExitCode::from(2);
                 }
             }
@@ -1253,6 +1301,14 @@ pub fn run(args: &[String]) -> ExitCode {
             eprintln!("emerge (pilot v1): {atom_str:?} is a blocker, not a valid emerge target");
             return ExitCode::from(2);
         }
+    }
+
+    // Real create_depgraph_params.py's own precedence: an explicit
+    // --with-bdeps always wins; only when it's absent does
+    // --with-bdeps-auto=n override the real default ("auto", this
+    // pilot's own pre-existing `with_bdeps = true`) down to "n" instead.
+    if !with_bdeps_given {
+        with_bdeps = with_bdeps_auto;
     }
 
     let result = match resolve_pretend_graph(
