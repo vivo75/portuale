@@ -614,6 +614,21 @@ pub fn use_reduce_flat_subset(
     use_reduce_flat(&reserialized, uselist, mode)
 }
 
+/// One "alternative" inside a `"||"` group, consumed as one logical unit
+/// even though a conditional spans two sibling `DepNode`s.
+fn next_alternative<'a>(
+    iter: &mut std::slice::Iter<'a, DepNode>,
+) -> Option<Result<Vec<DepNode>, Error>> {
+    let node = iter.next()?;
+    Some(match node {
+        DepNode::Str(s) if s.ends_with('?') => match iter.next() {
+            Some(group @ DepNode::Group(_)) => Ok(vec![node.clone(), group.clone()]),
+            _ => Err(Error::ConditionalNotFollowedByGroup { s: s.to_string() }),
+        },
+        other => Ok(vec![other.clone()]),
+    })
+}
+
 /// How much a caller prefers one `"||"` alternative -- port of Portage
 /// `dep_zapdeps`'s `choice_bins`: nine bins, first atom of the first
 /// *selectable* choice in bin order.
@@ -710,12 +725,192 @@ impl AltPreference {
 // Portage: lib/portage/dep/dep_check.py, dep_zapdeps
 pub type TieBreak<'a> = dyn FnMut(&[Vec<String>]) -> usize + 'a;
 
+pub struct UseReduceFlatDisjunctiveArgs<'a> {
+    pub tokens: &'a [String],
+    pub uselist: &'a HashSet<String>,
+    pub mode: MatchMode,
+    pub empty_groups_always_true: bool,
+    pub tie_break: &'a mut TieBreak<'a>,
+}
+
+pub fn use_reduce_flat_disjunctive(
+    args: UseReduceFlatDisjunctiveArgs<'_>,
+    alternative_satisfiable: &mut impl FnMut(&[String]) -> AltPreference,
+) -> Result<Vec<String>, Error> {
+    let UseReduceFlatDisjunctiveArgs {
+        tokens,
+        uselist,
+        mode,
+        empty_groups_always_true,
+        tie_break,
+    } = args;
+    let tree = build_dep_tree(tokens)?;
+    let resolved = resolve_disjunctions(
+        ResolveDisjunctionsArgs {
+            nodes: &tree,
+            uselist,
+            mode,
+            empty_groups_always_true,
+            tie_break,
+        },
+        alternative_satisfiable,
+    )?;
+    let mut reserialized = Vec::new();
+    serialize_dep_tree(&resolved, &mut reserialized);
+    use_reduce_flat(&reserialized, uselist, mode)
+}
+
 struct ResolveDisjunctionsArgs<'a> {
     nodes: &'a [DepNode],
     uselist: &'a HashSet<String>,
     mode: MatchMode,
     empty_groups_always_true: bool,
     tie_break: &'a mut TieBreak<'a>,
+}
+
+fn resolve_disjunctions(
+    args: ResolveDisjunctionsArgs<'_>,
+    alternative_satisfiable: &mut impl FnMut(&[String]) -> AltPreference,
+) -> Result<Vec<DepNode>, Error> {
+    let ResolveDisjunctionsArgs {
+        nodes,
+        uselist,
+        mode,
+        empty_groups_always_true,
+        tie_break,
+    } = args;
+    let mut result: Vec<DepNode> = Vec::new();
+    // Portage drains the plain `dep_stack` before the disjunctive stack,
+    // so plain results are emitted first, then the `||`-chosen ones, each
+    // in original order. An unresolved `||` group stays in place.
+    // Portage: lib/portage/_emerge/depgraph.py, _create_graph
+    let mut deferred: Vec<DepNode> = Vec::new();
+    let mut iter = nodes.iter();
+    while let Some(node) = iter.next() {
+        match node {
+            DepNode::Group(children) => {
+                let resolved = resolve_disjunctions(
+                    ResolveDisjunctionsArgs {
+                        nodes: children,
+                        uselist,
+                        mode,
+                        empty_groups_always_true,
+                        tie_break,
+                    },
+                    alternative_satisfiable,
+                )?;
+                result.push(DepNode::Group(resolved));
+            }
+            DepNode::Str(s) if s.ends_with('?') => {
+                let Some(DepNode::Group(children)) = iter.next() else {
+                    return Err(Error::ConditionalNotFollowedByGroup { s: s.to_string() });
+                };
+                let resolved = resolve_disjunctions(
+                    ResolveDisjunctionsArgs {
+                        nodes: children,
+                        uselist,
+                        mode,
+                        empty_groups_always_true,
+                        tie_break,
+                    },
+                    alternative_satisfiable,
+                )?;
+                result.push(DepNode::Str(s.clone()));
+                result.push(DepNode::Group(resolved));
+            }
+            DepNode::Str(s) if s == "||" => {
+                let Some(DepNode::Group(alternatives)) = iter.next() else {
+                    return Err(Error::OrNotFollowedByGroup);
+                };
+                // Two passes like Portage: rank every alternative, hand a tie
+                // at the best bin to `tie_break`, and only consider the
+                // non-selectable `other_*` bins when the first pass finds
+                // nothing at all.
+                let mut ranked: Vec<(AltPreference, Vec<DepNode>, Vec<String>)> = Vec::new();
+                let mut alt_iter = alternatives.iter();
+                while let Some(alt) = next_alternative(&mut alt_iter) {
+                    let alt_nodes = alt?;
+                    let mut flat = Vec::new();
+                    serialize_dep_tree(&alt_nodes, &mut flat);
+                    let Ok(flat_atoms) = use_reduce_flat(&flat, uselist, mode) else {
+                        continue;
+                    };
+                    // An alternative an inactive conditional emptied is not
+                    // a rankable choice: skip it before probing.
+                    if flat_atoms.is_empty() {
+                        continue;
+                    }
+                    let rank = alternative_satisfiable(&flat_atoms);
+                    ranked.push((rank, alt_nodes, flat_atoms));
+                }
+                if ranked.is_empty() {
+                    // Every alternative was emptied by inactive
+                    // conditionals: drop the group, or emit the
+                    // unsatisfiable placeholder as a `||`-chosen atom.
+                    if !empty_groups_always_true {
+                        deferred.push(DepNode::Str(EMPTY_ANY_OF.to_string()));
+                    }
+                    continue;
+                }
+                let mut selectable: Vec<&(AltPreference, Vec<DepNode>, Vec<String>)> = ranked
+                    .iter()
+                    .filter(|(r, _, _)| r.is_selectable())
+                    .collect();
+                if selectable.is_empty() {
+                    // Second pass: never the circular-self-dep guard (no
+                    // Portage equivalent), only a genuine `other_*` bin.
+                    selectable = ranked
+                        .iter()
+                        .filter(|(r, _, _)| *r != AltPreference::Unsatisfiable)
+                        .collect();
+                }
+                let best_rank = selectable.iter().map(|(r, _, _)| *r).max();
+                let chosen_nodes = match best_rank {
+                    None => None,
+                    Some(best_rank) => {
+                        let mut tied: Vec<(Vec<DepNode>, Vec<String>)> = selectable
+                            .into_iter()
+                            .filter(|(r, _, _)| *r == best_rank)
+                            .map(|(_, nodes, flat)| (nodes.clone(), flat.clone()))
+                            .collect();
+                        let winner = if tied.len() == 1 {
+                            0
+                        } else {
+                            let flats: Vec<Vec<String>> =
+                                tied.iter().map(|(_, flat)| flat.clone()).collect();
+                            tie_break(&flats).min(tied.len() - 1)
+                        };
+                        Some(tied.swap_remove(winner).0)
+                    }
+                };
+                let chosen = match chosen_nodes {
+                    Some(alt_nodes) => Some(resolve_disjunctions(
+                        ResolveDisjunctionsArgs {
+                            nodes: &alt_nodes,
+                            uselist,
+                            mode,
+                            empty_groups_always_true,
+                            tie_break,
+                        },
+                        alternative_satisfiable,
+                    )?),
+                    None => None,
+                };
+                match chosen {
+                    Some(alt_nodes) => deferred.extend(alt_nodes),
+                    None => {
+                        result.push(DepNode::Str("||".to_string()));
+                        result.push(DepNode::Group(alternatives.clone()));
+                    }
+                }
+            }
+            DepNode::Str(s) => {
+                result.push(DepNode::Str(s.clone()));
+            }
+        }
+    }
+    result.extend(deferred);
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -822,5 +1017,155 @@ mod tests {
         )
         .unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn disjunctive_picks_the_first_satisfiable_alternative() {
+        // Only "b" is satisfiable; the rest is dropped entirely.
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( dev-libs/a dev-libs/b dev-libs/c )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| 0,
+            },
+            &mut |atoms| pref(atoms == ["dev-libs/b"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_falls_back_to_every_alternative_when_none_satisfiable() {
+        // Nothing satisfiable: falls back to flattening everything.
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( dev-libs/a dev-libs/b )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| 0,
+            },
+            &mut |_| AltPreference::Unsatisfiable,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["||", "dev-libs/a", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_treats_a_bracketed_multi_atom_alternative_as_one_unit() {
+        // The first alternative is the pair (a AND b); it needs both.
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( ( dev-libs/a dev-libs/b ) dev-libs/c )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| 0,
+            },
+            &mut |atoms| pref(atoms == ["dev-libs/a", "dev-libs/b"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_skips_the_bracketed_pair_when_only_one_half_is_satisfiable() {
+        // Only "a" alone is satisfiable, so "c" wins instead.
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( ( dev-libs/a dev-libs/b ) dev-libs/c )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| 0,
+            },
+            &mut |atoms| pref(atoms == ["dev-libs/c"]),
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/c"]);
+    }
+
+    #[test]
+    fn disjunctive_skips_an_emptied_alternative_and_selects_the_survivor() {
+        // With "foo" off the emptied alternative is skipped; the probe
+        // panics on an empty slice, so it must never see one.
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( foo? ( dev-libs/a ) dev-libs/b )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| 0,
+            },
+            &mut |atoms: &[String]| {
+                assert!(
+                    !atoms.is_empty(),
+                    "an emptied alternative must never reach the probe"
+                );
+                pref(atoms == ["dev-libs/b"])
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_emptied_group_is_dropped_when_empty_groups_always_true() {
+        // Fully-emptied group under EAPI <= 6 rules: dropped.
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( foo? ( dev-libs/a ) )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| 0,
+            },
+            &mut |_: &[String]| -> AltPreference {
+                panic!("no surviving alternative may reach the probe")
+            },
+        )
+        .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn disjunctive_prefers_an_installed_alternative_over_an_earlier_available_one() {
+        // Bin 0 beats bin 1: `b` wins even though `a` is listed first.
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("|| ( dev-libs/a dev-libs/b )"),
+                uselist: &HashSet::new(),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| 0,
+            },
+            &mut |atoms: &[String]| {
+                if atoms == ["dev-libs/b"] {
+                    AltPreference::Installed
+                } else {
+                    AltPreference::Available
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/b"]);
+    }
+
+    #[test]
+    fn disjunctive_leaves_non_disjunctive_deps_untouched() {
+        let result = use_reduce_flat_disjunctive(
+            UseReduceFlatDisjunctiveArgs {
+                tokens: &toks("dev-libs/a foo? ( dev-libs/b )"),
+                uselist: &set(&["foo"]),
+                mode: MatchMode::Normal,
+                empty_groups_always_true: true,
+                tie_break: &mut |_| 0,
+            },
+            &mut |_| AltPreference::Unsatisfiable,
+        )
+        .unwrap();
+        assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
     }
 }
