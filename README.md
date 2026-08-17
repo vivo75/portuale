@@ -767,6 +767,53 @@ PORTING/
   the same "current tree wins" precedent `enqueue_dependencies` already
   established for `--deep`'s own `AlreadyInstalled` walk.
 
+  **Nested `@set` references.** Closes the `@world` slice's own
+  documented gap (see the correction on that paragraph above), grounded
+  by reading real `WorldSelectedSet`/`WorldSelectedSetsSet`/
+  `StaticFileSet` (`lib/portage/_sets/files.py`) and `SetConfig`
+  (`lib/portage/_sets/__init__.py`) directly rather than assuming from
+  the name: real `@world` is the union of *two* separate files, not one
+  -- `var/lib/portage/world` (plain atoms, already read) and
+  `var/lib/portage/world_sets` (real `WORLD_SETS_FILE`, a list of
+  `@name` references, e.g. added by a prior `emerge --noreplace
+  @some-set`) -- ported here as a new `read_world_sets`. Each `@name` is
+  resolved against `<config_root>/etc/portage/sets/<name>`, real
+  portage's own default `usersets` source (`_create_default_config`'s
+  own `class = StaticFileSet`, `directory = .../etc/portage/sets`, one
+  file per set, the file's own relative path becoming the set's name) --
+  ported as `resolve_custom_set`, same atom-per-line format the world
+  file itself uses. The "nested" part earns its name genuinely: unlike
+  the plain world file (whose own stricter validator rejects a
+  `@`-prefixed line outright), a *custom* set file's own validator
+  explicitly accepts one, and real `SetConfig.getSetAtoms` recurses into
+  each such reference it finds -- so a custom set can reference another
+  custom set, which can reference another, and so on. Ported with a
+  `seen` cycle guard (real `getSetAtoms`'s own `ignorelist`, a fresh one
+  per top-level name in `world_sets`): a name already being expanded on
+  the current path contributes nothing further rather than looping
+  forever, matching real portage's own silent (not erroring) cycle
+  tolerance exactly. Deliberately **not** the same "absence is valid"
+  tolerance the world/`world_sets` *files* themselves get: a `@name`
+  explicitly listed (in `world_sets`, or referenced by another set) with
+  no matching file is a real, immediate error (real `PackageSetNotFound`,
+  which every real call site treats as fatal) -- a genuine configuration
+  inconsistency, not an implicitly-optional file that simply might not
+  exist yet. Deliberately still out of scope, confirmed as a *separate*
+  mechanism rather than folded in here: `--deselect`'s own world-atom
+  matching (`run_deselect`) is not integrated with `world_sets`/custom
+  sets at all -- real `action_deselect` operates against the identical
+  combined `world_set` `@world` itself now fully resolves, but
+  deselect's own removal semantics (matching installed candidates,
+  discarding matched world *entries*) are a genuinely different
+  operation from simply resolving `@world` for a dependency walk, not a
+  trivial extension of the same code -- see `run_deselect`'s own doc
+  comment. New fixture packages `nestedsetpkg`/`innernestedsetpkg`
+  (reached only via `PORTING/fixtures/var/lib/portage/world_sets`'s own
+  `@nestedtestset`, whose own `etc/portage/sets/nestedtestset` nests a
+  further `@innernestedset` reference, which itself references back to
+  `@nestedtestset` to exercise the cycle guard) prove the whole path end
+  to end.
+
   **Multiple top-level atoms**: `emerge --pretend foo bar` -- real
   emerge's most common invocation shape -- was, until this slice,
   explicitly rejected ("only a single package atom is supported"). Now
@@ -1082,17 +1129,22 @@ PORTING/
   @some-set`). This pilot reads the file's plain atom lines and expands
   them in place at whatever position `@world` appears in argv, feeding
   the exact same multi-atom/recursion machinery every other invocation
-  already uses -- not a separate code path. This is a **deliberate,
-  confirmed-with-the-user simplification**: a `@`-prefixed line is
-  silently skipped rather than recursively expanded, since that would
-  need general set-recursion machinery this pilot doesn't have; a
-  missing world file (a fresh `ROOT` that's never had anything merged
-  into it) is treated as a real, valid empty state, not an error. Only
-  the literal token `@world` triggers this expansion -- `@system` (a
-  separate mechanism, the profile's own `packages` file -- now also
-  implemented, see below) or any other `@`-prefixed top-level target
-  falls through to the ordinary atom-parsing path and gets a clear
-  "invalid atom" error rather than a silent no-op.
+  already uses -- not a separate code path. **Correction (see the
+  "Nested `@set` references" paragraph further below): a `@`-prefixed
+  line really is skipped in *this specific file* (real
+  `WorldSelectedPackagesSet`'s own validator rejects it outright, no
+  general set-recursion machinery needed to explain that part) -- but
+  the claim that this was the *whole* story for real `@world`'s own
+  nested-set union was wrong; nested `@set` references live in a
+  genuinely separate file this pilot didn't yet read at the time this
+  paragraph was written.** A missing world file (a fresh `ROOT` that's
+  never had anything merged into it) is treated as a real, valid empty
+  state, not an error. Only the literal token `@world` triggers this
+  expansion -- `@system` (a separate mechanism, the profile's own
+  `packages` file -- now also implemented, see below) or any other
+  `@`-prefixed top-level target falls through to the ordinary
+  atom-parsing path and gets a clear "invalid atom" error rather than a
+  silent no-op.
 
   **`--newuse`/`-N` reinstall detection**: closes the exact scope cut
   `resolve_pretend_graph`'s own doc comment named ("v1 has no
@@ -1972,8 +2024,19 @@ location, `ROOT`-relative) exercises `@world` expansion: it lists
 `newpkg` again -- deduped -- and `dev-libs/upgradepkg` via its own
 RDEPEND, proving `@world`'s expanded atoms feed the same recursion
 machinery any other target does), and a `@some-nested-set-reference`
-line proving a nested-set reference is silently skipped rather than
-mishandled.
+line proving a `@`-prefixed line in the world *file* itself is silently
+skipped rather than mishandled (real portage's own `WorldSelectedPackagesSet`
+validator would reject it too).
+
+`PORTING/fixtures/var/lib/portage/world_sets` (real `WORLD_SETS_FILE`,
+the genuinely separate file real `@world` also unions in) lists
+`@nestedtestset`, resolved against
+`PORTING/fixtures/etc/portage/sets/nestedtestset` -- a plain atom
+(`dev-libs/nestedsetpkg`) plus a further nested `@innernestedset`
+reference (`PORTING/fixtures/etc/portage/sets/innernestedset`), which
+itself contributes `dev-libs/innernestedsetpkg` and references back to
+`@nestedtestset`, exercising the cycle guard (contributes nothing
+further, doesn't loop or error).
 
 `PORTING/fixtures/repo/profiles/base/packages` (`*dev-libs/newpkg`, plus
 a non-`*`-prefixed `dev-libs/hintonly` hint line that must never
@@ -2433,15 +2496,22 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg:0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend '!!dev-libs/newpkg'
 # emerge (pilot v1): "!!dev-libs/newpkg" is a blocker, not a valid emerge target  (exit 2)
 
-# @world expands in place to the fixture world file's own atoms: newpkg
-# directly, withdeps (which recurses into newpkg again -- deduped -- and
-# upgradepkg), and a "@some-nested-set-reference" line that's silently
-# skipped, not mishandled. --update is added here purely so upgradepkg
-# actually upgrades (see the --update example further below) rather than
-# staying silently already-installed -- unrelated to @world itself
+# @world expands in place to the union of the fixture world file's own
+# atoms (newpkg directly, withdeps -- which recurses into newpkg again,
+# deduped, and upgradepkg -- and a "@some-nested-set-reference" line
+# that's silently skipped there, not mishandled, since a "@"-prefixed
+# line genuinely fails real portage's own world-FILE validation too) and
+# the fixture world_sets file's own "@nestedtestset" (nestedsetpkg
+# directly, plus a further nested "@innernestedset" reference --
+# innernestedsetpkg, which itself cycles back to "@nestedtestset" without
+# looping). --update is added here purely so upgradepkg actually
+# upgrades (see the --update example further below) rather than staying
+# silently already-installed -- unrelated to @world itself
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update @world
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  N] dev-libs/withdeps-1.0
+# [ebuild  N] dev-libs/nestedsetpkg-1.0
+# [ebuild  N] dev-libs/innernestedsetpkg-1.0
 # [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
 
 # @world combines with an explicit atom in the same invocation
@@ -2449,7 +2519,17 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/same
 # dev-libs/samepkg-1.0 is already installed; nothing to do
 # [ebuild  N] dev-libs/newpkg-1.0
 # [ebuild  N] dev-libs/withdeps-1.0
+# [ebuild  N] dev-libs/nestedsetpkg-1.0
+# [ebuild  N] dev-libs/innernestedsetpkg-1.0
 # [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+
+# an unresolvable "@name" listed in world_sets is a real, immediate
+# error (real PackageSetNotFound) -- unlike a missing world/world_sets
+# *file* itself (a real, valid "nothing selected" state)
+mkdir -p /tmp/badset-root/var/lib/portage
+echo '@doesnotexist' > /tmp/badset-root/var/lib/portage/world_sets
+PORTAGE_CONFIGROOT="$FX" ROOT="/tmp/badset-root" /tmp/emerge --pretend @world
+# emerge: set 'doesnotexist' not found  (exit 1)
 
 # a missing world file (a fresh ROOT that's never had anything merged
 # into it) is a real, valid empty state, not an error -- it hits the same

@@ -2837,14 +2837,15 @@ def _read_world_atoms(root):
     A missing file is not an error -- an empty, or never-yet-created,
     world is a real, valid state, not a mistake.
 
-    KNOWN, DOCUMENTED SCOPE CUT: only plain atom lines are read, via a
-    leading "@" check. Real portage's own world file may also contain
-    "@some-set" lines (added by a prior "emerge --noreplace @some-set"),
-    and real @world is itself defined as the union of this file's own
-    atoms with any such referenced sets (see WorldSelectedSet in
-    lib/portage/_sets/files.py) -- resolving those recursively would
-    need general set-recursion machinery this pilot doesn't have, so a
-    "@"-prefixed line here is simply skipped rather than expanded.
+    Only plain atom lines are read, via a leading "@" check -- this is
+    real, not a simplification: real WorldSelectedPackagesSet's own
+    ItemFileLoader validates each line with a plain isvalidatom
+    (lib/portage/env/validators.py's own ValidAtomValidator, no "@"
+    bypass), so a "@"-prefixed line in *this* file specifically really
+    would just fail validation and be dropped in real portage too. A
+    nested "@some-set" reference lives in a genuinely separate file --
+    see _read_world_sets's own docstring for the other half of real
+    @world's union (WorldSelectedSet in lib/portage/_sets/files.py).
     @system (the profile's own "packages" file -- see resolve_config's
     own "system_packages" key) is a separate, different mechanism with
     its own expansion in run() below, not handled by this function at
@@ -2861,6 +2862,84 @@ def _read_world_atoms(root):
         for line in (raw.strip() for raw in text.splitlines())
         if line and not line.startswith("#") and not line.startswith("@")
     ]
+
+
+def _read_world_sets(root):
+    """Reads <root>/var/lib/portage/world_sets (real portage's own
+    WORLD_SETS_FILE -- lib/portage/const.py), a file genuinely SEPARATE
+    from the world file above, listing every "@name" set reference the
+    user has directly selected (e.g. via a prior "emerge --noreplace
+    @some-set") -- real WorldSelectedSetsSet, whose own validator
+    (lib/portage/_sets/files.py) just checks each line starts with "@".
+    Real @world is the union of WorldSelectedSetsSet (this) with
+    WorldSelectedPackagesSet (_read_world_atoms above) -- see
+    WorldSelectedSet.load's own "chain(self._pkgset, self._setset)". A
+    missing file is not an error, same "absence is a real, valid state"
+    precedent the world file itself already established. Returns each
+    name with its own leading "@" stripped, ready for
+    _resolve_custom_set. Mirrors pretend.rs's read_world_sets exactly."""
+    path = os.path.join(root, "var", "lib", "portage", "world_sets")
+    try:
+        with open(path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        return []
+    return [
+        line[1:]
+        for line in (raw.strip() for raw in text.splitlines())
+        if line and not line.startswith("#") and line.startswith("@")
+    ]
+
+
+def _resolve_custom_set(config_root, name, seen):
+    """Resolves one custom, file-based package set by `name` (no leading
+    "@"), real portage's own default "usersets" source
+    (lib/portage/_sets/__init__.py's own _create_default_config: class =
+    StaticFileSet, directory = <config_root>/etc/portage/sets, one file
+    per set, the file's own path relative to that directory becoming
+    the set's name) -- reads <config_root>/etc/portage/sets/<name>, same
+    line format as the world file itself (one atom per line,
+    "#"-comment/blank-line handling identical), *except* a line starting
+    with "@" is itself another nested set reference here, resolved
+    recursively -- real StaticFileSet's own validator (unlike
+    WorldSelectedPackagesSet's stricter one) explicitly accepts a
+    "@"-prefixed line too, and real SetConfig.getSetAtoms walks every
+    such non-atom entry, recursing into any that start with "@"
+    (lib/portage/_sets/__init__.py). `seen` is that same recursion's own
+    "ignorelist" -- a name already being expanded on the current path
+    contributes nothing further (silently, not an error) rather than
+    looping forever; a *fresh* `seen` set is used for each top-level
+    name in _read_world_sets's own list, matching real
+    getSetAtoms(setname, ignorelist=None)'s own per-top-level-call
+    default.
+
+    A `name` with no matching file raises ResolutionError (real
+    PackageSetNotFound, eventually surfaced and fatal at every real call
+    site in lib/_emerge/actions.py/depgraph.py) -- deliberately NOT the
+    same "absence is valid" tolerance _read_world_atoms/_read_world_sets
+    give their own *files*: those are optional, implicitly-checked-for
+    state (a fresh ROOT may simply never have either), but a name
+    explicitly listed in world_sets (or referenced by another set)
+    pointing at nothing is a real configuration error, not an absence to
+    tolerate. Mirrors pretend.rs's resolve_custom_set exactly."""
+    if name in seen:
+        return []
+    seen.add(name)
+    path = os.path.join(config_root, "etc", "portage", "sets", name)
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        raise ResolutionError(f"set {name!r} not found")
+    atoms = []
+    for line in (raw.strip() for raw in text.splitlines()):
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("@"):
+            atoms.extend(_resolve_custom_set(config_root, line[1:], seen))
+        else:
+            atoms.append(line)
+    return atoms
 
 
 def _run_deselect(targets, root):
@@ -3236,20 +3315,28 @@ def run(args):
 
     # "@world"/"@system" each expand to their own real atom list, in
     # place, at whichever position they appear -- see _read_world_atoms's
-    # own docstring for @world's exact scope (plain atoms only; nested
-    # "@set" references stay unimplemented), and resolve_config's own
-    # docstring for @system's. Only these two literal tokens trigger
-    # expansion -- any other "@"-prefixed token falls through to the
-    # ordinary atom-parsing path below and gets a clear "invalid atom"
-    # error, not a silent no-op.
-    expanded_atoms = []
-    for atom_arg in atom_args:
-        if atom_arg == "@world":
-            expanded_atoms.extend(_read_world_atoms(_root()))
-        elif atom_arg == "@system":
-            expanded_atoms.extend(config["system_packages"])
-        else:
-            expanded_atoms.append(atom_arg)
+    # own docstring for the world file's own scope, _read_world_sets's
+    # for the world_sets file's own nested-@set half of real @world's
+    # union, and resolve_config's own docstring for @system's. Only
+    # these two literal tokens trigger expansion -- any other
+    # "@"-prefixed token falls through to the ordinary atom-parsing path
+    # below and gets a clear "invalid atom" error, not a silent no-op.
+    try:
+        expanded_atoms = []
+        for atom_arg in atom_args:
+            if atom_arg == "@world":
+                expanded_atoms.extend(_read_world_atoms(_root()))
+                for set_name in _read_world_sets(_root()):
+                    expanded_atoms.extend(
+                        _resolve_custom_set(_config_root(), set_name, set())
+                    )
+            elif atom_arg == "@system":
+                expanded_atoms.extend(config["system_packages"])
+            else:
+                expanded_atoms.append(atom_arg)
+    except ResolutionError as e:
+        print(f"emerge: {e}", file=sys.stderr)
+        return 1
     atom_args = expanded_atoms
 
     if not atom_args:

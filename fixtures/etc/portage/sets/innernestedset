@@ -1,0 +1,6 @@
+# references back to @nestedtestset (its own parent) too, proving the
+# cycle guard: nestedtestset is already "seen" by the time this line is
+# reached, so it contributes nothing further rather than looping
+# forever or erroring.
+dev-libs/innernestedsetpkg
+@nestedtestset

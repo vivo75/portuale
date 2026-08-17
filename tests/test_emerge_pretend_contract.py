@@ -1650,17 +1650,29 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
     WORLD_FILE, <ROOT>/var/lib/portage/world) lists dev-libs/newpkg and
     dev-libs/withdeps (which itself recurses into newpkg again -- deduped
     -- and upgradepkg), plus a "@some-nested-set-reference" line that
-    must be silently skipped, not mishandled -- proving @world expansion
-    feeds the exact same multi-atom/recursion machinery every other
-    invocation already uses, not a separate code path. --update is added
-    purely so upgradepkg's own dependency-level entry actually upgrades
-    (see the --update contract tests) rather than staying silently
-    AlreadyInstalled -- unrelated to what this test itself is about."""
+    must be silently skipped, not mishandled (a "@"-prefixed line in the
+    plain world FILE itself really does fail real portage's own
+    validation too -- see _read_world_atoms's own docstring; nested sets
+    live in the separate world_sets file, exercised below in this same
+    test) -- proving @world expansion feeds the exact same multi-atom/
+    recursion machinery every other invocation already uses, not a
+    separate code path. PORTING/fixtures/var/lib/portage/world_sets
+    lists "@nestedtestset" (PORTING/fixtures/etc/portage/sets/
+    nestedtestset), which itself contributes dev-libs/nestedsetpkg
+    directly and nests a further "@innernestedset" reference
+    (contributing dev-libs/innernestedsetpkg, and -- proving the cycle
+    guard -- referencing "@nestedtestset" right back without looping
+    forever or erroring). --update is added purely so upgradepkg's own
+    dependency-level entry actually upgrades (see the --update contract
+    tests) rather than staying silently AlreadyInstalled -- unrelated to
+    what this test itself is about."""
     result = _run([str(emerge_binary)], ["--pretend", "--update", "@world"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         "[ebuild  N] dev-libs/newpkg-1.0",
         "[ebuild  N] dev-libs/withdeps-1.0",
+        "[ebuild  N] dev-libs/nestedsetpkg-1.0",
+        "[ebuild  N] dev-libs/innernestedsetpkg-1.0",
         "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
     ]
 
@@ -1680,6 +1692,8 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
         "dev-libs/samepkg-1.0 is already installed; nothing to do",
         "[ebuild  N] dev-libs/newpkg-1.0",
         "[ebuild  N] dev-libs/withdeps-1.0",
+        "[ebuild  N] dev-libs/nestedsetpkg-1.0",
+        "[ebuild  N] dev-libs/innernestedsetpkg-1.0",
         "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
     ]
 
@@ -1705,6 +1719,26 @@ def test_world_missing_file_expands_to_nothing_not_an_error(
         == "emerge (pilot v1): no package atoms to resolve (the target list, "
         "after expanding any @world/@system, is empty)"
     )
+
+
+def test_world_sets_unresolvable_set_name_is_a_real_error(emerge_binary, fixture_env, tmp_path):
+    """A "@name" listed in world_sets with no matching
+    etc/portage/sets/<name> file is a real, immediate error (real
+    PackageSetNotFound) -- unlike a missing world/world_sets *file*
+    itself (a real, valid "nothing selected" state), a name explicitly
+    listed but unresolvable is a genuine configuration error. Only ROOT
+    is redirected (for a throwaway world_sets); PORTAGE_CONFIGROOT stays
+    on the real fixtures, whose own etc/portage/sets/ has no
+    "doesnotexist" file."""
+    world_lib = tmp_path / "var" / "lib" / "portage"
+    world_lib.mkdir(parents=True)
+    (world_lib / "world_sets").write_text("@doesnotexist\n")
+    env = dict(fixture_env)
+    env["ROOT"] = str(tmp_path)
+    result = _run([str(emerge_binary)], ["--pretend", "@world"], env)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == "emerge: set 'doesnotexist' not found"
 
 
 def _deselect_root(tmp_path):

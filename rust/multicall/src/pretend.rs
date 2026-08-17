@@ -550,14 +550,15 @@ fn print_help() {
 /// empty, or never-yet-created, world is a real, valid state (e.g. a
 /// fresh `ROOT`), not a mistake.
 ///
-/// KNOWN, DOCUMENTED SCOPE CUT: only plain atom lines are read, via a
-/// leading `@` check. Real portage's own world file may also contain
-/// `@some-set` lines (added by a prior `emerge --noreplace @some-set`),
-/// and real `@world` is itself defined as the *union* of this file's own
-/// atoms with any such referenced sets (see `WorldSelectedSet` in
-/// `lib/portage/_sets/files.py`) -- resolving those recursively would
-/// need general set-recursion machinery this pilot doesn't have, so a
-/// `@`-prefixed line here is simply skipped rather than expanded.
+/// Only plain atom lines are read, via a leading `@` check -- this is
+/// real, not a simplification: real `WorldSelectedPackagesSet`'s own
+/// `ItemFileLoader` validates each line with a plain `isvalidatom`
+/// (`lib/portage/env/validators.py`'s own `ValidAtomValidator`, no `@`
+/// bypass), so a `@`-prefixed line in *this* file specifically really
+/// would just fail validation and be dropped in real portage too. A
+/// nested `@some-set` reference lives in a genuinely separate file --
+/// see `read_world_sets`'s own doc comment for the other half of real
+/// `@world`'s union (`WorldSelectedSet` in `lib/portage/_sets/files.py`).
 /// `@system` (the profile's own `packages` file -- see
 /// `portage_profile::Config::system_packages`) is a separate, different
 /// mechanism with its own expansion in `run` below, not handled by this
@@ -578,6 +579,90 @@ fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
         .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('@'))
         .map(String::from)
         .collect())
+}
+
+/// Reads `<root>/var/lib/portage/world_sets` (real portage's own
+/// `WORLD_SETS_FILE` -- `lib/portage/const.py`), a file genuinely
+/// SEPARATE from the world file above, listing every `@name` set
+/// reference the user has directly selected (e.g. via a prior `emerge
+/// --noreplace @some-set`) -- real `WorldSelectedSetsSet`, whose own
+/// validator (`lib/portage/_sets/files.py`) just checks each line
+/// starts with `@`. Real `@world` is the union of `WorldSelectedSetsSet`
+/// (this) with `WorldSelectedPackagesSet` (`read_world_atoms` above) --
+/// see `WorldSelectedSet.load`'s own `chain(self._pkgset, self._setset)`.
+/// A missing file is not an error, same "absence is a real, valid
+/// state" precedent the world file itself already established. Returns
+/// each name with its own leading `@` stripped, ready for
+/// `resolve_custom_set`.
+fn read_world_sets(root: &Path) -> Result<Vec<String>, String> {
+    let path = root.join("var/lib/portage/world_sets");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("reading {}: {e}", path.display())),
+    };
+    Ok(text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && l.starts_with('@'))
+        .map(|l| l.trim_start_matches('@').to_string())
+        .collect())
+}
+
+/// Resolves one custom, file-based package set by `name` (no leading
+/// `@`), real portage's own default `usersets` source
+/// (`lib/portage/_sets/__init__.py`'s own `_create_default_config`:
+/// `class = StaticFileSet`, `directory =
+/// <config_root>/etc/portage/sets`, one file per set, the file's own
+/// path relative to that directory becoming the set's name) -- reads
+/// `<config_root>/etc/portage/sets/<name>`, same line format as the
+/// world file itself (one atom per line, `#`-comment/blank-line
+/// handling identical), *except* a line starting with `@` is itself
+/// another nested set reference here, resolved recursively -- real
+/// `StaticFileSet`'s own validator (unlike `WorldSelectedPackagesSet`'s
+/// stricter one) explicitly accepts a `@`-prefixed line too, and real
+/// `SetConfig.getSetAtoms` walks every such non-atom entry, recursing
+/// into any that start with `@` (`lib/portage/_sets/__init__.py`).
+/// `seen` is that same recursion's own `ignorelist` -- a name already
+/// being expanded on the current path contributes nothing further
+/// (silently, not an error) rather than looping forever; a *fresh*
+/// `seen` set is used for each top-level name in `read_world_sets`'s
+/// own list, matching real `getSetAtoms(setname, ignorelist=None)`'s
+/// own per-top-level-call default.
+///
+/// A `name` with no matching file is a real, immediate error (real
+/// `PackageSetNotFound`, eventually surfaced and fatal at every real
+/// call site in `lib/_emerge/actions.py`/`depgraph.py`) -- deliberately
+/// NOT the same "absence is valid" tolerance `read_world_atoms`/
+/// `read_world_sets` give their own *files*: those are optional,
+/// implicitly-checked-for state (a fresh `ROOT` may simply never have
+/// either), but a name explicitly listed in `world_sets` (or referenced
+/// by another set) pointing at nothing is a real configuration error,
+/// not an absence to tolerate.
+fn resolve_custom_set(
+    config_root: &Path,
+    name: &str,
+    seen: &mut HashSet<String>,
+) -> Result<Vec<String>, String> {
+    if !seen.insert(name.to_string()) {
+        return Ok(Vec::new());
+    }
+    let path = config_root.join("etc/portage/sets").join(name);
+    let text =
+        std::fs::read_to_string(&path).map_err(|_| format!("emerge: set '{name}' not found"))?;
+    let mut atoms = Vec::new();
+    for line in text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+    {
+        if let Some(nested_name) = line.strip_prefix('@') {
+            atoms.extend(resolve_custom_set(config_root, nested_name, seen)?);
+        } else {
+            atoms.push(line.to_string());
+        }
+    }
+    Ok(atoms)
 }
 
 /// `emerge --deselect <atom-or-bare-name> [...]`: real `action_deselect`
@@ -615,11 +700,21 @@ fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
 /// grammar has no `intersects()` equivalent, and the dominant real-world
 /// `--deselect` usage (a plain, unversioned target against a plain,
 /// unversioned or slot-qualified world entry) is fully captured by this
-/// narrower category/package(+slot) check. `@set`-prefixed world
-/// entries are never matched at all -- `read_world_atoms` above already
-/// only ever returns plain atoms (see its own doc comment), the same
-/// pre-existing "@set references stay unimplemented" cut `@world`
-/// expansion already has.
+/// narrower category/package(+slot) check. Deliberately, still
+/// out-of-scope here (unlike `@world`'s own expansion, which now does
+/// resolve `world_sets`/nested custom sets -- see `read_world_sets`'s
+/// own doc comment): a `--deselect @some-set` target, or a world-set
+/// member being considered for removal, is never expanded against
+/// `world_sets`/custom sets at all -- `read_world_atoms` above only
+/// ever returns the plain world *file*'s own atoms. Real
+/// `action_deselect` operates against the same combined `world_set`
+/// (`WorldSelectedSet`, atoms + sets together) `@world` itself uses, so
+/// this is a real, narrower scope than real portage's own -- confirmed
+/// deliberate rather than fixed alongside `@world`'s own expansion,
+/// since deselect's own removal semantics (matching installed
+/// candidates, discarding matched world *entries*) are a genuinely
+/// separate mechanism from simply resolving `@world` for a dependency
+/// walk, not a trivial extension of the same code.
 ///
 /// Real `action_deselect` always returns `os.EX_OK` on every reachable
 /// path here (found matches, no matches, even no targets at all) --
@@ -1017,12 +1112,12 @@ pub fn run(args: &[String]) -> ExitCode {
 
     // "@world"/"@system" each expand to their own real atom list, in
     // place, at whichever position they appear -- see read_world_atoms's
-    // doc comment for @world's exact scope (plain atoms only; nested
-    // "@set" references stay unimplemented), and portage-profile's
-    // `system_packages` doc comment for @system's. Only these two
-    // literal tokens trigger expansion -- any other "@"-prefixed token
-    // falls through to the ordinary atom-parsing path below and gets a
-    // clear "invalid atom" error, not a silent no-op.
+    // doc comment for the world file's own scope, read_world_sets's for
+    // the world_sets file's own nested-@set half of real @world's union,
+    // and portage-profile's `system_packages` doc comment for @system's.
+    // Only these two literal tokens trigger expansion -- any other
+    // "@"-prefixed token falls through to the ordinary atom-parsing path
+    // below and gets a clear "invalid atom" error, not a silent no-op.
     let mut expanded_atoms: Vec<String> = Vec::new();
     for atom_str in &atom_args {
         if *atom_str == "@world" {
@@ -1031,6 +1126,23 @@ pub fn run(args: &[String]) -> ExitCode {
                 Err(e) => {
                     eprintln!("emerge: {e}");
                     return ExitCode::from(1);
+                }
+            }
+            let set_names = match read_world_sets(&root) {
+                Ok(names) => names,
+                Err(e) => {
+                    eprintln!("emerge: {e}");
+                    return ExitCode::from(1);
+                }
+            };
+            for name in set_names {
+                let mut seen = HashSet::new();
+                match resolve_custom_set(&config_root, &name, &mut seen) {
+                    Ok(atoms) => expanded_atoms.extend(atoms),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        return ExitCode::from(1);
+                    }
                 }
             }
         } else if *atom_str == "@system" {

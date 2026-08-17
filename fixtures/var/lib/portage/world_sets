@@ -1,0 +1,5 @@
+# fixture world_sets: one directly-selected custom set (real portage's
+# own WORLD_SETS_FILE, separate from the plain "world" file), whose own
+# contents include a further nested "@innernestedset" reference to prove
+# recursive expansion.
+@nestedtestset
