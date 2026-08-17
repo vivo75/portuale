@@ -11,13 +11,14 @@
 //
 // KNOWN, DOCUMENTED SCOPE CUTS (confirmed with the user before
 // implementing):
-//   - Cross-repo profile parent references (`reponame:path` syntax) are
-//     rejected with a clear error rather than resolved -- doing so would
-//     need full multi-repo resolution (this pilot only ever looks at the
-//     main repo). This means a profile using a cross-repo parent (as real
-//     Gentoo's desktop/plasma profiles often do) will NOT fully resolve
-//     under v1; testing this mechanism needs a same-repo synthetic
-//     fixture chain instead (see PORTING/fixtures/repo/profiles).
+//   - Cross-repo profile parent references (`reponame:path` syntax, a
+//     bare `:path` too) ARE now resolved -- see `expand_parent_colon`/
+//     `repo_containing`/`resolve_config`'s own doc comment -- gated in
+//     real portage on the current profile node's own repo declaring
+//     `profile-formats = portage-2` in `layout.conf`; since this pilot
+//     doesn't model `layout.conf` profile-formats at all, it's always
+//     allowed here (every real Gentoo profile fixture this pilot ships
+//     already implies it).
 //   - Wildcard `_*` IUSE-aware expansion (e.g. `linguas_*`, which needs a
 //     specific package's own IUSE -- global config resolution has no
 //     such per-package context at all) and ARCH-based KEYWORDS-format
@@ -43,12 +44,12 @@
 //     user-level `/etc/portage` files -- with `-atom` removal applying
 //     across the whole combined stream, exactly matching real
 //     `MaskManager.py`'s `stack_lists(incremental=1)` (see
-//     `stack_mask_lines`). Still out of scope: an *overlay* repo's own
-//     repo-level `package.mask`/`.unmask` (only the main repo's is read;
-//     matches the overlays follow-up's own already-confirmed "per-repo
-//     package.mask/.unmask/profiles/ out of scope" cut), and `masters`
-//     (eclass/mask inheritance across repos via a repo's own `masters`
-//     setting).
+//     `stack_mask_lines`). An *overlay* repo's own repo-level
+//     `package.mask`/`.unmask` is now read too (every configured repo,
+//     unconditionally, each auto-scoped to its own `::reponame` -- see
+//     `scope_repo_mask_lines`/`resolve_config`'s own doc comment). Still
+//     out of scope: `masters` (eclass/mask inheritance across repos via a
+//     repo's own `masters` setting).
 //   - `package.accept_keywords` is stacked from profile-chain (in chain
 //     order) + user-level sources, mirroring real `KeywordsManager.
 //     getPKeywords` exactly -- confirmed by reading it, there's no
@@ -501,19 +502,95 @@ fn read_parent_lines(profile_dir: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// Finds which of `repos` (each `(name, location)`) `dir` lives inside,
+/// via the longest matching location prefix -- mirrors real
+/// `LocationsManager._addProfile`'s own `intersecting_repos`/
+/// `max(key=len)` logic, needed to resolve a same-repo `:path` profile
+/// parent shorthand. Repo locations are canonicalized before comparing
+/// (falling back to the raw path if that fails, e.g. a repo location
+/// that doesn't exist on disk in a test fixture -- it simply won't match
+/// any real profile dir either way), since `dir` itself is always
+/// already canonicalized by `visit_profile`.
+fn repo_containing(dir: &Path, repos: &[(String, PathBuf)]) -> Option<(String, PathBuf)> {
+    repos
+        .iter()
+        .filter_map(|(name, loc)| {
+            let canon_loc = loc.canonicalize().unwrap_or_else(|_| loc.clone());
+            dir.starts_with(&canon_loc)
+                .then_some((name.clone(), canon_loc))
+        })
+        .max_by_key(|(_, loc)| loc.as_os_str().len())
+}
+
+/// Expands a profile `parent` file line's real cross-repo `:path`/
+/// `reponame:path` syntax (`LocationsManager._expand_parent_colon`):
+/// a `:` with nothing before it means "this same repo" (`current_repo`),
+/// anything else before the `:` is another repo's own name, looked up in
+/// `repos`. Both forms expand to `<repo_location>/profiles/<rest>`. A
+/// line with no `:` at all (the plain relative-path form) is returned
+/// unchanged. Real portage only allows this syntax when the *current*
+/// profile node's own repo declares `profile-formats = portage-2` (or
+/// similar) in `layout.conf` -- this pilot doesn't model `layout.conf`
+/// profile-formats at all, so it's always allowed here, matching every
+/// real Gentoo profile fixture this pilot already ships (the same "real
+/// default, ported without modeling the mechanism that technically
+/// gates it" treatment already applied to `ACCEPT_LICENSE`'s own
+/// hardcoded `"* -@EULA"` default).
+fn expand_parent_colon(
+    parent: &str,
+    current_repo: Option<&(String, PathBuf)>,
+    repos: &[(String, PathBuf)],
+    parents_file: &Path,
+) -> Result<String, String> {
+    let Some(colon) = parent.find(':') else {
+        return Ok(parent.to_string());
+    };
+    let repo_loc = if colon == 0 {
+        &current_repo
+            .ok_or_else(|| {
+                format!(
+                    "parent {parent:?} not found: {} (not inside any known repo)",
+                    parents_file.display()
+                )
+            })?
+            .1
+    } else {
+        let repo_name = &parent[..colon];
+        repos
+            .iter()
+            .find(|(name, _)| name == repo_name)
+            .map(|(_, loc)| loc)
+            .ok_or_else(|| {
+                format!(
+                    "parent {parent:?} not found: {} (no repo named {repo_name:?})",
+                    parents_file.display()
+                )
+            })?
+    };
+    Ok(repo_loc
+        .join("profiles")
+        .join(&parent[colon + 1..])
+        .to_string_lossy()
+        .into_owned())
+}
+
 /// Recursively resolves the profile inheritance chain starting at `leaf`,
 /// ancestors before descendants (parents listed in a level's `parent`
 /// file are visited in the order given), cycle/diamond-safe via a visited
-/// set keyed on the canonicalized directory.
-fn resolve_profile_chain(leaf: &Path) -> Result<Vec<PathBuf>, String> {
+/// set keyed on the canonicalized directory. `repos` (main + every
+/// overlay, name + location) is only needed to resolve a cross-repo
+/// `parent` entry (see `expand_parent_colon`); a chain with none never
+/// consults it.
+fn resolve_profile_chain(leaf: &Path, repos: &[(String, PathBuf)]) -> Result<Vec<PathBuf>, String> {
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut chain: Vec<PathBuf> = Vec::new();
-    visit_profile(leaf, &mut visited, &mut chain)?;
+    visit_profile(leaf, repos, &mut visited, &mut chain)?;
     Ok(chain)
 }
 
 fn visit_profile(
     dir: &Path,
+    repos: &[(String, PathBuf)],
     visited: &mut HashSet<PathBuf>,
     chain: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
@@ -523,14 +600,11 @@ fn visit_profile(
     if !visited.insert(canon.clone()) {
         return Ok(());
     }
+    let current_repo = repo_containing(&canon, repos);
+    let parents_file = canon.join("parent");
     for parent in read_parent_lines(&canon)? {
-        if parent.contains(':') {
-            return Err(format!(
-                "cross-repo profile parent {parent:?} (referenced from {}) is out of v1 scope",
-                canon.display()
-            ));
-        }
-        visit_profile(&canon.join(&parent), visited, chain)?;
+        let expanded = expand_parent_colon(&parent, current_repo.as_ref(), repos, &parents_file)?;
+        visit_profile(&canon.join(&expanded), repos, visited, chain)?;
     }
     chain.push(canon);
     Ok(())
@@ -922,20 +996,41 @@ fn parse_package_use_lines(
 /// `license_groups` from an overlay are NOT part of this same "every
 /// repo, unconditionally" mechanism -- real `LicenseManager`'s own
 /// `profile_locations` and the profile chain itself only ever include
-/// an overlay's own directories if the active chain's `parent` file
-/// uses `reponame:path` syntax to reach into it, a different,
-/// still-out-of-scope mechanism (cross-repo profile parents).
+/// an overlay's own directories once the active chain's `parent` file
+/// uses `reponame:path` syntax to reach into it (`expand_parent_colon`,
+/// `main_repo_name` below), which is exactly what makes them reachable:
+/// once a chain level's `parent` file names an overlay, every one of
+/// this function's own `for level in &chain` loops above (`license_groups`
+/// included) reads from that overlay's own directory the same as any
+/// other chain level, with no separate code path needed.
+///
+/// `main_repo_name` (the main repo's own name from `repos.conf`, e.g.
+/// `portage_repo::find_repos`'s main entry) plus `overlay_repos` above
+/// together give `resolve_profile_chain` every configured repo's own
+/// `(name, location)`, needed to resolve a `parent` file's real
+/// cross-repo syntax (`expand_parent_colon`, grounded against
+/// `LocationsManager._expand_parent_colon`): a bare `:some/path` means
+/// "this same repo" (whichever repo the *current* profile node's own
+/// directory belongs to -- `repo_containing`), `reponame:some/path`
+/// means a different, named repo. Both expand to
+/// `<repo_location>/profiles/some/path`.
 pub fn resolve_config(
     config_root: &Path,
     main_repo_location: &Path,
     overlay_repos: &[(String, PathBuf)],
+    main_repo_name: &str,
 ) -> Result<Config, String> {
     let mut config = Config::default();
     let mut scalars: HashMap<String, String> = HashMap::new();
 
+    let all_repos: Vec<(String, PathBuf)> =
+        std::iter::once((main_repo_name.to_string(), main_repo_location.to_path_buf()))
+            .chain(overlay_repos.iter().cloned())
+            .collect();
+
     let make_profile = config_root.join("etc/portage/make.profile");
     let chain: Vec<PathBuf> = if make_profile.exists() {
-        resolve_profile_chain(&make_profile)?
+        resolve_profile_chain(&make_profile, &all_repos)?
     } else {
         Vec::new()
     };
@@ -1381,8 +1476,14 @@ mod tests {
     #[test]
     fn resolves_fixture_profile_chain_and_make_conf() {
         let root = fixtures_root();
-        let config =
-            resolve_config(&root, &root.join("repo"), &[]).expect("fixture config must resolve");
+        // The fixture's own default/parent has a real cross-repo entry
+        // ("overlay:crossrepo-parent"), so this test needs "overlay" in
+        // its own repo list too -- mirroring exactly what production
+        // (multicall's pretend.rs, built from real find_repos) already
+        // passes for this same fixture tree.
+        let overlay_repos = [("overlay".to_string(), root.join("overlay"))];
+        let config = resolve_config(&root, &root.join("repo"), &overlay_repos, "testrepo")
+            .expect("fixture config must resolve");
         assert_eq!(
             config.use_flags,
             HashSet::from([
@@ -1402,15 +1503,24 @@ mod tests {
         // ACCEPT_LICENSE at all -- real portage's own "* -@EULA"
         // default applies; profiles/base/license_groups defines
         // EULA="SomeEula" (see the dedicated LICENSE-masking fixtures),
-        // so "@EULA" expands to that real member rather than staying
-        // literal.
+        // extended by the cross-repo-reached overlay/profiles/
+        // crossrepo-parent/license_groups with one more member,
+        // "CrossRepoNonfree" -- so "@EULA" expands to both real members,
+        // in chain order, rather than staying literal.
         assert_eq!(
             config.accept_license,
-            vec!["*".to_string(), "-SomeEula".to_string()]
+            vec![
+                "*".to_string(),
+                "-SomeEula".to_string(),
+                "-CrossRepoNonfree".to_string()
+            ]
         );
         assert_eq!(
             config.license_groups.get("EULA"),
-            Some(&vec!["SomeEula".to_string()])
+            Some(&vec![
+                "SomeEula".to_string(),
+                "CrossRepoNonfree".to_string()
+            ])
         );
     }
 
@@ -1418,7 +1528,7 @@ mod tests {
     fn missing_profile_and_make_conf_yield_empty_config() {
         let empty_root = std::env::temp_dir().join("portage-profile-test-empty-root");
         let _ = fs::create_dir_all(&empty_root);
-        let config = resolve_config(&empty_root, &empty_root.join("repo"), &[])
+        let config = resolve_config(&empty_root, &empty_root.join("repo"), &[], "testrepo")
             .expect("missing profile/make.conf is not an error");
         assert_eq!(config.use_flags, HashSet::new());
         assert_eq!(config.accept_keywords, HashSet::new());
@@ -1431,21 +1541,108 @@ mod tests {
     }
 
     #[test]
-    fn cross_repo_profile_parent_is_rejected_with_a_clear_error() {
-        let root = std::env::temp_dir().join("portage-profile-test-cross-repo");
+    fn cross_repo_profile_parent_resolves_a_named_repos_own_profile() {
+        // The leaf profile lives outside any known repo, but its own
+        // "parent" file names "otherrepo:base" -- expand_parent_colon
+        // must resolve that to otherrepo's own profiles/base directory
+        // regardless, proving repo-name lookup doesn't depend on the
+        // referencing node's own repo membership.
+        let root = std::env::temp_dir().join("portage-profile-test-cross-repo-named");
+        let main_repo = root.join("repo");
+        let other_repo = root.join("otherrepo");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(main_repo.join("profiles")).unwrap();
+        fs::create_dir_all(other_repo.join("profiles/base")).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+
+        fs::write(
+            other_repo.join("profiles/base/make.defaults"),
+            "USE=\"crossrepoflag\"\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("parent"), "otherrepo:base\n").unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let overlay_repos = [("otherrepo".to_string(), other_repo.clone())];
+        let config = resolve_config(&root, &main_repo, &overlay_repos, "testrepo")
+            .expect("cross-repo parent must resolve");
+        assert!(config.use_flags.contains("crossrepoflag"));
+    }
+
+    #[test]
+    fn cross_repo_profile_parent_unknown_repo_name_is_a_clear_error() {
+        let root = std::env::temp_dir().join("portage-profile-test-cross-repo-unknown");
         let profile_dir = root.join("etc/portage");
         let leaf = root.join("leaf-profile");
         fs::create_dir_all(&profile_dir).unwrap();
         fs::create_dir_all(&leaf).unwrap();
-        fs::write(leaf.join("parent"), "gentoo:default/linux/amd64\n").unwrap();
+        fs::write(leaf.join("parent"), "doesnotexist:base\n").unwrap();
         let make_profile = profile_dir.join("make.profile");
         let _ = fs::remove_file(&make_profile);
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let err = resolve_config(&root, &root.join("repo"), &[])
-            .expect_err("cross-repo parent must be rejected");
-        assert!(err.contains("out of v1 scope"), "unexpected error: {err}");
+        let err = resolve_config(&root, &root.join("repo"), &[], "testrepo")
+            .expect_err("unknown repo name must be rejected");
+        assert!(err.contains("no repo named"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn same_repo_colon_profile_parent_resolves_within_the_current_repo() {
+        // A bare ":base" parent entry (no repo name before the colon)
+        // means "this same repo" -- resolved via whichever repo the
+        // *referencing* profile node's own directory belongs to, not
+        // necessarily the main repo (repo_containing's own longest-
+        // prefix-match), so the leaf profile here lives inside the main
+        // repo itself.
+        let root = std::env::temp_dir().join("portage-profile-test-same-repo-colon");
+        let main_repo = root.join("repo");
+        fs::create_dir_all(main_repo.join("profiles/leaf")).unwrap();
+        fs::create_dir_all(main_repo.join("profiles/base")).unwrap();
+        fs::write(
+            main_repo.join("profiles/base/make.defaults"),
+            "USE=\"samerepocolon\"\n",
+        )
+        .unwrap();
+        fs::write(main_repo.join("profiles/leaf/parent"), ":base\n").unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(main_repo.join("profiles/leaf"), &make_profile).unwrap();
+
+        let config = resolve_config(&root, &main_repo, &[], "testrepo")
+            .expect("same-repo colon parent must resolve");
+        assert!(config.use_flags.contains("samerepocolon"));
+    }
+
+    #[test]
+    fn same_repo_colon_profile_parent_outside_any_known_repo_is_a_clear_error() {
+        let root = std::env::temp_dir().join("portage-profile-test-same-repo-colon-outside");
+        let profile_dir = root.join("etc/portage");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&profile_dir).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(leaf.join("parent"), ":base\n").unwrap();
+        let make_profile = profile_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let err = resolve_config(&root, &root.join("repo"), &[], "testrepo")
+            .expect_err("same-repo colon outside any known repo must be rejected");
+        assert!(
+            err.contains("not inside any known repo"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1473,7 +1670,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("top"), &make_profile).unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"), &[])
+        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo")
             .expect("diamond inheritance must resolve");
         assert_eq!(
             config.use_flags,
@@ -1505,7 +1702,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"), &[])
+        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo")
             .expect("config with package.* files must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/foo".to_string()]);
         assert_eq!(config.package_unmask, vec!["dev-libs/baz".to_string()]);
@@ -1554,7 +1751,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.package_mask,
             vec!["dev-libs/b".to_string(), "dev-libs/d".to_string()]
@@ -1593,7 +1790,8 @@ mod tests {
         fs::write(overlay.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config = resolve_config(&root, &repo, &overlay_repos).expect("config must resolve");
+        let config =
+            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
     }
 
@@ -1615,7 +1813,8 @@ mod tests {
         fs::write(overlay.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config = resolve_config(&root, &repo, &overlay_repos).expect("config must resolve");
+        let config =
+            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
         assert_eq!(
             config.package_unmask,
@@ -1652,7 +1851,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(config.system_packages, vec!["dev-libs/b".to_string()]);
     }
 
@@ -1687,7 +1886,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.use_flags,
             HashSet::from(["normalflag".to_string(), "forceflag".to_string()])
@@ -1737,7 +1936,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.use_expand,
             HashSet::from(["VIDEO_CARDS".to_string(), "PYTHON_TARGETS".to_string()])
@@ -1775,7 +1974,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert!(!config.use_flags.contains("video_cards_nvidia"));
         assert!(config.use_flags.contains("video_cards_intel"));
         assert!(!config.use_flags.contains("+video_cards_intel"));
@@ -1808,7 +2007,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
             vec![
@@ -1843,7 +2042,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![
@@ -1872,7 +2071,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![(
@@ -1902,7 +2101,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![
@@ -1933,7 +2132,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![(
@@ -1976,7 +2175,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.package_use_mask,
             vec![
@@ -2017,7 +2216,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.use_stable_mask,
             HashSet::from(["stablemaskflag".to_string()])
@@ -2074,7 +2273,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[]).expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.package_use_stable_mask,
             vec![
@@ -2102,7 +2301,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"), &[])
+        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo")
             .expect("config with package.use must resolve");
         assert_eq!(
             config.package_use,

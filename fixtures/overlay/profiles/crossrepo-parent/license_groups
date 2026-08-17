@@ -1,0 +1,9 @@
+# fixture cross-repo profile parent target: reached only if the main
+# repo's own profiles/default/parent's "overlay:crossrepo-parent" entry
+# actually resolves (real LocationsManager._expand_parent_colon) and
+# joins the active profile chain. Extends the main repo's own EULA
+# license_groups entry (profiles/base/license_groups) with one extra
+# member -- extending an existing group, not just defining a new one,
+# to prove this level's own license_groups genuinely stacks with the
+# rest of the chain rather than merely being read in isolation.
+EULA CrossRepoNonfree

@@ -22,11 +22,9 @@ resolve_config) come from a real profile chain + make.conf + package.*,
 not a hardcoded stand-in -- mirroring PORTING/rust/portage-profile/src/lib.rs
 exactly (own implementation, not a wrapper around real config.py; see that
 crate's doc comment for the full algorithm and its documented scope cuts:
-no cross-repo profile parents, no USE_EXPAND (including package.use's
-USE_EXPAND-prefix shorthand), only the `defaults`/`conf` USE_ORDER layers,
-user-level package.mask/.unmask/.accept_keywords/.use only (no repo/
-profile-level stacking), and the real config.py quirk where `${VAR}`
-substitution excludes USE across profile levels). Matching a candidate
+only the `defaults`/`conf` USE_ORDER layers, `masters` (layout.conf repo
+inheritance) still unimplemented, and the real config.py quirk where
+`${VAR}` substitution excludes USE across profile levels). Matching a candidate
 against a package.mask/.unmask/.accept_keywords/.use entry reuses the real
 portage.dep.Atom(allow_wildcard=True) + match_from_list directly, since --
 unlike the Rust side, whose v1 Atom grammar rejects wildcard atoms outright
@@ -1364,27 +1362,75 @@ def _read_parent_lines(profile_dir):
         return [line.strip() for line in f if line.strip() and not line.strip().startswith("#")]
 
 
-def _visit_profile(directory, visited, chain):
+def _repo_containing(directory, repos):
+    """Finds which of `repos` (each (name, location)) `directory` lives
+    inside, via the longest matching location prefix -- mirrors real
+    LocationsManager._addProfile's own intersecting_repos/max(key=len)
+    logic, needed to resolve a same-repo ":path" profile parent
+    shorthand. Mirrors portage-profile/src/lib.rs's repo_containing
+    exactly."""
+    best = None
+    for name, location in repos:
+        canon_loc = os.path.realpath(location)
+        if directory.startswith(canon_loc) and (best is None or len(canon_loc) > len(best[1])):
+            best = (name, canon_loc)
+    return best
+
+
+def _expand_parent_colon(parent, current_repo, repos, parents_file):
+    """Expands a profile "parent" file line's real cross-repo ":path"/
+    "reponame:path" syntax (LocationsManager._expand_parent_colon): a
+    ":" with nothing before it means "this same repo" (current_repo),
+    anything else before the ":" is another repo's own name, looked up
+    in repos. Both forms expand to "<repo_location>/profiles/<rest>". A
+    line with no ":" at all is returned unchanged. Real portage only
+    allows this syntax when the current profile node's own repo
+    declares profile-formats = portage-2 in layout.conf -- this pilot
+    doesn't model layout.conf profile-formats at all, so it's always
+    allowed here (see resolve_config's own docstring). Mirrors
+    portage-profile/src/lib.rs's expand_parent_colon exactly."""
+    colon = parent.find(":")
+    if colon == -1:
+        return parent
+    if colon == 0:
+        if current_repo is None:
+            raise ResolutionError(
+                f'parent "{parent}" not found: {parents_file} '
+                "(not inside any known repo)"
+            )
+        repo_loc = current_repo[1]
+        rest = parent[1:]
+    else:
+        repo_name = parent[:colon]
+        repo_loc = next((loc for name, loc in repos if name == repo_name), None)
+        if repo_loc is None:
+            raise ResolutionError(
+                f'parent "{parent}" not found: {parents_file} '
+                f'(no repo named "{repo_name}")'
+            )
+        rest = parent[colon + 1 :]
+    return os.path.join(repo_loc, "profiles", rest)
+
+
+def _visit_profile(directory, repos, visited, chain):
     canon = os.path.realpath(directory)
     if not os.path.isdir(canon):
         raise ResolutionError(f"resolving profile {directory}: not a directory")
     if canon in visited:
         return
     visited.add(canon)
+    current_repo = _repo_containing(canon, repos)
+    parents_file = os.path.join(canon, "parent")
     for parent in _read_parent_lines(canon):
-        if ":" in parent:
-            raise ResolutionError(
-                f'cross-repo profile parent "{parent}" (referenced from {canon}) '
-                "is out of v1 scope"
-            )
-        _visit_profile(os.path.join(canon, parent), visited, chain)
+        expanded = _expand_parent_colon(parent, current_repo, repos, parents_file)
+        _visit_profile(os.path.join(canon, expanded), repos, visited, chain)
     chain.append(canon)
 
 
-def _resolve_profile_chain(leaf):
+def _resolve_profile_chain(leaf, repos):
     visited = set()
     chain = []
-    _visit_profile(leaf, visited, chain)
+    _visit_profile(leaf, repos, visited, chain)
     return chain
 
 
@@ -1434,7 +1480,7 @@ def _process_make_conf_file(
         scalars[key] = value
 
 
-def resolve_config(config_root, main_repo_location, overlay_repos=()):
+def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_name=""):
     """Computes real USE/ACCEPT_KEYWORDS/package.mask/.unmask/
     .accept_keywords: the profile chain rooted at
     <config_root>/etc/portage/make.profile (if it exists), then
@@ -1484,16 +1530,33 @@ def resolve_config(config_root, main_repo_location, overlay_repos=()):
     overlay are NOT part of this same "every repo, unconditionally"
     mechanism -- real LicenseManager's own profile_locations and the
     profile chain itself only ever include an overlay's own directories
-    if the active chain's parent file uses reponame:path syntax to reach
-    into it, a different, still-out-of-scope mechanism (cross-repo
-    profile parents)."""
+    once the active chain's parent file uses reponame:path syntax to
+    reach into it (_expand_parent_colon, main_repo_name below), which is
+    exactly what makes them reachable: once a chain level's parent file
+    names an overlay, every "for level in chain" loop below
+    (license_groups included) reads from that overlay's own directory
+    the same as any other chain level, with no separate code path
+    needed.
+
+    main_repo_name (the main repo's own name from repos.conf, e.g.
+    find_repos's main entry) plus overlay_repos above together give
+    _resolve_profile_chain every configured repo's own (name, location),
+    needed to resolve a parent file's real cross-repo syntax
+    (_expand_parent_colon, grounded against
+    LocationsManager._expand_parent_colon): a bare ":some/path" means
+    "this same repo" (whichever repo the current profile node's own
+    directory belongs to -- _repo_containing), "reponame:some/path"
+    means a different, named repo. Both expand to
+    "<repo_location>/profiles/some/path"."""
     use_flags = set()
     accept_keywords = set()
     use_expand = set()
     scalars = {}
 
+    all_repos = [(main_repo_name, main_repo_location)] + list(overlay_repos)
+
     make_profile = os.path.join(config_root, "etc", "portage", "make.profile")
-    chain = _resolve_profile_chain(make_profile) if os.path.exists(make_profile) else []
+    chain = _resolve_profile_chain(make_profile, all_repos) if os.path.exists(make_profile) else []
     for level in chain:
         make_defaults = os.path.join(level, "make.defaults")
         if not os.path.isfile(make_defaults):
@@ -3531,9 +3594,13 @@ def run(args):
         # docstring); ascending-priority order, same as find_repos' own
         # order, which only matters if two overlays' own entries could
         # otherwise interfere, and the "::name" scoping already rules
-        # that out regardless.
+        # that out regardless. The same list, plus the main repo's own
+        # name below, also lets resolve_config follow a profile's own
+        # cross-repo "parent" entries (reponame:path syntax).
         overlay_repos = [(r["name"], r["location"]) for r in all_repos if not r["is_main"]]
-        config = resolve_config(_config_root(), main_repo["location"], overlay_repos)
+        config = resolve_config(
+            _config_root(), main_repo["location"], overlay_repos, main_repo["name"]
+        )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1

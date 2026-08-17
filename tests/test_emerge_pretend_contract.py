@@ -66,6 +66,7 @@ CASES = [
     ("LICENSE in @EULA group, masked by the real default ACCEPT_LICENSE", ["--pretend", "dev-libs/eulapkg"], 1),
     ("LICENSE || any-of group, visible via the accepted alternative", ["--pretend", "dev-libs/anyoflicensepkg"], 0),
     ("package.license unmasks an otherwise EULA-masked package", ["--pretend", "dev-libs/packagelicensepkg"], 0),
+    ("cross-repo profile parent: overlay's own license_groups joins the chain", ["--pretend", "dev-libs/crossrepolicensepkg"], 1),
     ("USE-conditional LICENSE, visible with the flag off", ["--pretend", "dev-libs/uselicensepkg"], 0),
     ("USE-conditional LICENSE, masked once package.use forces the flag on", ["--pretend", "dev-libs/uselicensepkgforced"], 1),
     ("PROPERTIES visible under the real default ACCEPT_PROPERTIES=*", ["--pretend", "dev-libs/propertiespkg"], 0),
@@ -943,6 +944,32 @@ def test_license_package_license_unmasks_an_otherwise_eula_masked_package(
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "[ebuild  N] dev-libs/packagelicensepkg-1.0"
+
+
+def test_cross_repo_profile_parent_lets_an_overlay_license_groups_join_the_chain(
+    emerge_binary, fixture_env
+):
+    """PORTING/fixtures/repo/profiles/default/parent's own third entry,
+    "overlay:crossrepo-parent", is real portage's cross-repo profile
+    parent syntax (LocationsManager._expand_parent_colon) -- it must
+    resolve to PORTING/fixtures/overlay/profiles/crossrepo-parent, whose
+    own license_groups extends EULA with "CrossRepoNonfree" (on top of
+    the main repo's own "SomeEula" member, proving the two stack rather
+    than one replacing the other). dev-libs/crossrepolicensepkg's own
+    LICENSE="CrossRepoNonfree" is masked by the real default
+    "* -@EULA" only if that overlay-level license_groups entry actually
+    got read as part of the active chain -- exactly the mechanism this
+    slice unlocks (an overlay's own profiles/license_groups previously
+    couldn't join the chain at all)."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/crossrepolicensepkg"], fixture_env
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/crossrepolicensepkg".'
+    )
 
 
 def test_license_use_conditional_visible_when_flag_off_masked_when_forced_on(

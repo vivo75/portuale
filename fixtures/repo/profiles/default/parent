@@ -1,2 +1,3 @@
 ../base
 ../arch/amd64
+overlay:crossrepo-parent

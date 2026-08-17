@@ -1023,8 +1023,8 @@ PORTING/
   `license_group_locations` is tied to `locations_manager.
   profile_locations`, i.e. the profile *chain's* own directories, which
   only reach into an overlay once cross-repo profile parents
-  (`reponame:path` syntax) exist -- a separate, still-unimplemented
-  mechanism this follow-up doesn't also take on. Also deliberately not
+  (`reponame:path` syntax) exist -- a separate mechanism, closed by a
+  later follow-up below. Also deliberately not
   done: retroactively scoping the *main* repo's own, already-shipped
   `package.mask`/`.unmask` entries with their own `::reponame` (real
   portage does this too, for consistency) -- an unrequested behavior
@@ -1037,6 +1037,46 @@ PORTING/
   `::testrepo` bypasses it) and `overlaymaskedthenunmaskedpkg` (masked
   and unmasked by two entries in that same overlay's own files, proving
   both get the identical auto-scoping and still cancel out).
+
+  **Cross-repo profile parents (`reponame:path` syntax)**: closes the
+  cut named just above, grounded against real `LocationsManager.
+  _addProfile`/`_expand_parent_colon`: a profile's own `parent` file
+  entry can name another repo before a `:` (`reponame:some/path`,
+  expanding to `<that repo's own location>/profiles/some/path`) or use a
+  bare leading `:` (`:some/path`, meaning "this same repo" -- whichever
+  repo the *referencing* profile node's own directory belongs to, found
+  via the longest matching repo-location prefix, `repo_containing`,
+  mirroring real `intersecting_repos`/`max(key=len)`). Previously
+  rejected outright ("out of v1 scope"); now resolved by
+  `resolve_profile_chain`, which gained a `repos: &[(String, PathBuf)]`
+  parameter -- the main repo's own `(name, location)` plus every
+  overlay's -- `resolve_config` itself gained one new parameter,
+  `main_repo_name: &str` (`main_repo_name=""` default in Python),
+  needed alongside the `overlay_repos` parameter the previous follow-up
+  already added to build that combined list. One real, deliberate
+  simplification: real portage only allows this syntax when the
+  *referencing* profile node's own repo declares `profile-formats =
+  portage-2` in `layout.conf`; this pilot doesn't model `layout.conf`
+  profile-formats at all (a pre-existing cut, unrelated to this one), so
+  it's always allowed here -- every real Gentoo profile fixture this
+  pilot already ships implies it, the same "real default, ported without
+  modeling the mechanism that technically gates it" treatment already
+  applied elsewhere (e.g. `ACCEPT_LICENSE`'s own hardcoded `"* -@EULA"`
+  default). This closes the exact gap the previous follow-up's own scope
+  cut named: since every one of `resolve_config`'s own `for level in
+  &chain` loops (license_groups included) already reads from *whichever*
+  directories are in the chain, an overlay's own `profiles/`/
+  `license_groups` becomes reachable automatically the moment a `parent`
+  file actually names it -- no separate code path needed beyond the
+  chain-resolution fix itself. `PORTING/fixtures/repo/profiles/default/
+  parent` gained a third entry, `overlay:crossrepo-parent`, pointing at
+  a new `PORTING/fixtures/overlay/profiles/crossrepo-parent/
+  license_groups` that *extends* the main repo's own `EULA` group with
+  one more member (`CrossRepoNonfree`, alongside the existing
+  `SomeEula`) -- proving the two stack rather than one replacing the
+  other. `dev-libs/crossrepolicensepkg` (`LICENSE="CrossRepoNonfree"`)
+  is masked by the real default `"* -@EULA"` only if that overlay-level
+  entry actually joined the active chain.
 
   **`package.accept_keywords` profile-chain stacking**: extends this
   same file from user-level-only to profile-chain (in chain order) +
@@ -2223,6 +2263,14 @@ read). The overlay also has its own `profiles/package.mask`/`.unmask`
 `package.mask` entry, auto-scoped to `::overlay` -- an identically-named
 main-repo copy stays unaffected) and `overlaymaskedthenunmaskedpkg`
 (masked and unmasked by two entries in that same overlay's own files).
+The main repo's own `profiles/default/parent` also has a third entry,
+`overlay:crossrepo-parent`, real cross-repo profile parent syntax
+reaching into `PORTING/fixtures/overlay/profiles/crossrepo-parent/
+license_groups` (extending `EULA` with one more member,
+`CrossRepoNonfree`, alongside the main repo's own `SomeEula`) --
+`dev-libs/crossrepolicensepkg` (`LICENSE="CrossRepoNonfree"`) is masked
+by the real default `"* -@EULA"` only once that overlay-level entry
+actually joins the active chain.
 
 Six more fixture packages exercise slot conflicts: `slotconflicttarget`
 (two versions, `1.0` and `2.0`, both `SLOT="0"`), `slotconflictnewconsumer`
@@ -2834,6 +2882,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/anyoflicensep
 # just for this atom)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packagelicensepkg
 # [ebuild  N] dev-libs/packagelicensepkg-1.0
+
+# cross-repo profile parents: the main repo's own profiles/default/parent
+# names "overlay:crossrepo-parent" -- that overlay directory's own
+# license_groups extends EULA with "CrossRepoNonfree", so this package
+# is masked only once the overlay-level entry actually joins the chain
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/crossrepolicensepkg
+# emerge: there are no ebuilds to satisfy "dev-libs/crossrepolicensepkg".  (exit 1)
+
 # a USE-conditional LICENSE is visible with the flag off (the default);
 # its sibling has package.use forcing the same flag on, activating the
 # conditional and masking it

@@ -3129,8 +3129,13 @@ mod tests {
     fn resolve_real(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
             &repos,
@@ -3153,8 +3158,13 @@ mod tests {
     fn resolve_real_newuse(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
             &repos,
@@ -3176,8 +3186,13 @@ mod tests {
     fn resolve_real_changed_use(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
             &repos,
@@ -3264,8 +3279,13 @@ mod tests {
     ) -> PretendOutcome {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
             &repos,
@@ -3342,8 +3362,13 @@ mod tests {
     fn resolve_real_changed_slot(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
         resolve_pretend(
             &repos,
@@ -3394,8 +3419,13 @@ mod tests {
         // --changed-slot enabled.
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         assert_eq!(
             resolve_pretend(
                 &repos,
@@ -3434,8 +3464,13 @@ mod tests {
         // the same Reinstall outcome, not just whichever fires first.
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         assert_eq!(
             resolve_pretend(
                 &repos,
@@ -3553,8 +3588,13 @@ mod tests {
         // and match it in isolation.
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         assert_eq!(
             resolve_pretend(
                 &repos,
@@ -4349,8 +4389,13 @@ mod tests {
         // walk really is skipped (no second entry), while its own
         // IUSE="foo missingflag" still shows up correctly.
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         let entries = resolve_pretend_graph(
             &root,
             &root,
@@ -4550,8 +4595,13 @@ mod tests {
     #[test]
     fn real_resolved_use_flags_drive_dependency_recursion() {
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         let entries = resolve_pretend_graph(
             &root,
             &root,
@@ -4630,8 +4680,13 @@ mod tests {
 
     fn graph_real(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         resolve_pretend_graph(
             &root,
             &root,
@@ -4658,8 +4713,13 @@ mod tests {
     /// returns the error message instead of panicking on one.
     fn graph_real_err(atom_str: &str) -> String {
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         resolve_pretend_graph(
             &root,
             &root,
@@ -4683,8 +4743,13 @@ mod tests {
     /// Like `graph_real`, but with `--newuse` enabled.
     fn graph_real_newuse(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         resolve_pretend_graph(
             &root,
             &root,
@@ -4710,8 +4775,13 @@ mod tests {
     /// Like `graph_real`, but with `--changed-use` enabled.
     fn graph_real_changed_use(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         resolve_pretend_graph(
             &root,
             &root,
@@ -4737,8 +4807,13 @@ mod tests {
     /// Like `graph_real`, but with `--nodeps` enabled.
     fn graph_real_nodeps(atom_str: &str) -> Vec<(String, PretendOutcome)> {
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         resolve_pretend_graph(
             &root,
             &root,
@@ -4965,8 +5040,13 @@ mod tests {
 
     fn graph_result_real(atom_str: &str) -> GraphResult {
         let root = fixtures_root();
-        let config = portage_profile::resolve_config(&root, &root.join("repo"), &[])
-            .expect("fixture config resolves");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
         resolve_pretend_graph(
             &root,
             &root,
