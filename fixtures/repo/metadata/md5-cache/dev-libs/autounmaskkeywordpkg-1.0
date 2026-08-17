@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: keyword-masked only, no package.accept_keywords entry -- --autounmask's own keyword-suggestion v1
+EAPI=8
+KEYWORDS=~amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

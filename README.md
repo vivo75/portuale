@@ -2071,6 +2071,49 @@ PORTING/
   call, in argument order, instead of the second one going silently
   unattempted.
 
+  **`--autounmask`, a deliberately narrow v1.** Scoped starting from the
+  backlog item's own label ("the `--autounmask*` family"), which turned
+  out considerably bigger than expected on closer reading: real
+  `--autounmask` tracks *why* each candidate was rejected
+  (`_get_masking_status`, distinguishing keyword-mask from package.mask
+  from USE-conditional mask), builds dependency-chain comments
+  (`_get_dep_chain_as_comment`), and picks specific suggested-atom syntax
+  (`=`/`>=`, with/without slot) based on whether the suggested version is
+  the latest -- none of that machinery exists in this pilot at all, and
+  this pilot's own `is_visible` returned a plain `bool` with no reason
+  tracking whatsoever. On top of that, real `--autounmask-keep-keywords`
+  (found while reading `create_depgraph_params.py`'s own default-
+  resolution logic) defaults to **suppressing** keyword suggestions --
+  the "simplest, most common" sub-case isn't even what a bare
+  `--autounmask` invocation does by default. Scoped down, twice, to a v1
+  that: (1) adds a single new `keyword_masked_only` check (candidate
+  would be `is_visible` except its own KEYWORDS aren't accepted --
+  package.mask/license/properties/restrict all still have to pass) and a
+  `suggested_keyword` helper (the first non-`-`-prefixed KEYWORDS token,
+  a real simplification of `_get_masking_status`'s own unstable-vs-
+  different-arch-vs-`**` distinction); (2) appends a pilot-specific
+  (not real-portage-formatted) suggestion line to a top-level atom's own
+  fatal `NoVisibleCandidate` message when the best keyword-masked-only
+  candidate exists; (3) ports real `create_depgraph_params.py`'s own
+  `autounmask`/`autounmask_keep_keywords` default-resolution logic
+  faithfully for the one sub-flag this pilot actually reads (with
+  `--autounmask-use`/`-license` never consulted at all, confirmed this
+  simplifies to exactly the same real outcome, not a shortcut around
+  it): `autounmask` defaults enabled, off only via explicit
+  `--autounmask=n`; `autounmask_keep_keywords` defaults *suppressed*
+  when `--autounmask` itself was never given, but defaults *not
+  suppressed* once `--autounmask` itself was explicitly given (any
+  value) -- real portage's own "asking for autounmask implies wanting
+  its keyword suggestions too, but the ambient default doesn't"
+  asymmetry. Deliberately still out: package.mask/license/USE
+  suggestions, suggestions for a *dependency's* own `NoVisibleCandidate`,
+  and any actual mutation (`--autounmask-write`) -- report only. New
+  fixture `dev-libs/autounmaskkeywordpkg` (`KEYWORDS="~amd64"`, no
+  `package.accept_keywords` entry) confirmed live across all five
+  meaningfully distinct flag combinations (nothing given; `=n`; bare;
+  `--autounmask-keep-keywords=n` alone; both explicit and contradicting)
+  -- Rust and Python byte-identical on every one.
+
   **`IUSE`'s own `+`/`-` default markers, closing a real, comprehensive
   gap this pilot's own REQUIRED_USE reporting (paragraph above) helped
   surface.** Found the same way the `selective` gap above was: comparing
@@ -3170,6 +3213,19 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requireduseba
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requiredusebadpkg dev-libs/requiredusebadpkg2
 # emerge: REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: "foo? ( bar )"
 # REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg2-1.0: "baz? ( qux )"  (exit 1)
+
+# --autounmask: this package is masked by KEYWORDS alone ("~amd64", no
+# package.accept_keywords entry) -- quiet by default (real
+# --autounmask-keep-keywords defaults to suppressing keyword
+# suggestions when --autounmask itself was never explicitly given)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/autounmaskkeywordpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/autounmaskkeywordpkg".  (exit 1)
+# ...but once --autounmask is explicitly given, its own keyword
+# suggestion sub-feature turns on too (real portage's own "asking for
+# autounmask implies wanting its keyword suggestions" default flip)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/autounmaskkeywordpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/autounmaskkeywordpkg".
+# note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg ~amd64" to package.accept_keywords  (exit 1)
 
 # IUSE's own "+"/"-" default markers are honored now: "+enableddefault"
 # defaults on, "-disableddefault" stays off (own REQUIRED_USE requires

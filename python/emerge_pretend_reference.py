@@ -725,6 +725,83 @@ def is_visible(candidate, category, package, config):
     )
 
 
+def _keyword_masked_only(candidate, category, package, config):
+    """--autounmask's own keyword-suggestion sub-feature (real
+    --autounmask-keep-keywords=n, see resolve_pretend_graph's own
+    docstring for the full on/off default-resolution logic this pilot
+    ported): true iff candidate would be is_visible except for its own
+    KEYWORDS -- every other check is_visible makes (package.mask,
+    license, properties, restrict) passes, only _keywords_accepted
+    fails. Duplicates is_visible's own body rather than refactoring it
+    to return a reason -- real portage's own _get_masking_status is
+    considerably more elaborate (distinguishing package.mask/license/
+    keyword/REQUIRED_USE/etc. reasons, each with its own "unmask hint"),
+    and this pilot only needs the single "keywords, and only keywords"
+    question for its own deliberately narrow v1."""
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}/{candidate['sub_slot']}"
+        f"::{candidate['repo_name']}"
+    )
+
+    masked = any(
+        _matches_config_entry(m, candidate_str, category, package)
+        for m in config["package_mask"]
+    ) and not any(
+        _matches_config_entry(u, candidate_str, category, package)
+        for u in config["package_unmask"]
+    )
+    if masked:
+        return False
+
+    if not _license_accepted(candidate, category, package, candidate_str, config):
+        return False
+
+    if not _metadata_key_accepted(
+        candidate.get("properties", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_properties"],
+        config["package_properties"],
+    ):
+        return False
+
+    if not _metadata_key_accepted(
+        candidate.get("restrict", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_restrict"],
+        config["package_accept_restrict"],
+    ):
+        return False
+
+    return not _keywords_accepted(
+        candidate["keywords"],
+        candidate_str,
+        category,
+        package,
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+    )
+
+
+def _suggested_keyword(candidate):
+    """The keyword this pilot's own --autounmask v1 would suggest adding
+    to package.accept_keywords for candidate -- the first of its own
+    (non-"-"-prefixed) KEYWORDS tokens. Deliberately simpler than real
+    portage's own _get_masking_status -- see _keyword_masked_only's own
+    docstring for the full scope writeup this shares."""
+    for token in candidate["keywords"]:
+        if not token.startswith("-"):
+            return token
+    return None
+
+
 def _keywords_accepted(
     keywords, candidate_str, category, package, accept_keywords, package_accept_keywords
 ):
@@ -2536,6 +2613,7 @@ def resolve_pretend_graph(
     with_test_deps=False,
     changed_deps_report=False,
     selective=False,
+    autounmask_suggest_keywords=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -2782,7 +2860,32 @@ def resolve_pretend_graph(
         # unsatisfiable target, not the "report and keep going" treatment
         # a dependency's own NoVisibleCandidate gets a few lines down.
         if current_atom_str in top_level and outcome[0] == "no_visible_candidate":
-            raise ResolutionError(f'there are no ebuilds to satisfy "{current_atom_str}".')
+            message = f'there are no ebuilds to satisfy "{current_atom_str}".'
+            # --autounmask's own keyword-suggestion sub-feature (see
+            # this function's own docstring for the full on/off
+            # default-resolution logic): only even attempted when
+            # enabled, and only ever finds something to suggest when a
+            # real candidate exists that's masked by KEYWORDS alone
+            # (see _keyword_masked_only's own docstring) -- a candidate
+            # masked by package.mask/license/etc. too gets no
+            # suggestion here, matching real portage's own "only
+            # suggest a change that would actually fix it" spirit.
+            if autounmask_suggest_keywords:
+                keyword_masked = [
+                    c
+                    for c in list_candidates(repos, category, package)
+                    if _keyword_masked_only(c, category, package, config)
+                    and _suggested_keyword(c) is not None
+                ]
+                if keyword_masked:
+                    candidate = _best_candidate(keyword_masked)
+                    keyword = _suggested_keyword(candidate)
+                    message += (
+                        f'\nnote: {category}/{package}-{candidate["version"]} exists but is '
+                        f'masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding '
+                        f'"{category}/{package} {keyword}" to package.accept_keywords'
+                    )
+            raise ResolutionError(message)
 
         if outcome[0] == "new":
             version = outcome[1]
@@ -3891,6 +3994,11 @@ def run(args):
     changed_slot = False
     with_test_deps = False
     changed_deps_report = False
+    # --autounmask/--autounmask-keep-keywords: None means "not explicitly
+    # given" -- see the on/off default-resolution logic just below where
+    # these are actually consumed, mirroring pretend.rs exactly.
+    autounmask = None
+    autounmask_keep_keywords = None
     noreplace = False
     # None until an explicit --selective/--selective=y/--selective=n is
     # given, so "n" can override whatever update/newuse/changed_use/
@@ -4225,6 +4333,65 @@ def run(args):
         elif arg == "--with-test-deps=n":
             with_test_deps = False
             i += 1
+        elif arg == "--autounmask":
+            # Real "--autounmask": choices=true_y_or_n ("True", "y",
+            # "n") -- a bare flag means true, same optional-value shape
+            # "--changed-slot"/"--with-test-deps" already have.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                autounmask = True
+                i += 2
+            elif nxt == "n":
+                autounmask = False
+                i += 2
+            else:
+                autounmask = True
+                i += 1
+        elif arg == "--autounmask=y":
+            autounmask = True
+            i += 1
+        elif arg == "--autounmask=n":
+            autounmask = False
+            i += 1
+        elif arg == "--autounmask-keep-keywords":
+            # Real "--autounmask-keep-keywords": plain y_or_n, a
+            # REQUIRED value -- no bare/optional form real "--autounmask"
+            # itself has, the same required shape "--with-bdeps" has.
+            if i + 1 >= len(args):
+                print(
+                    'emerge: option "--autounmask-keep-keywords" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
+            value = args[i + 1]
+            if value == "y":
+                autounmask_keep_keywords = True
+                i += 2
+            elif value == "n":
+                autounmask_keep_keywords = False
+                i += 2
+            else:
+                print(
+                    f'emerge: option "--autounmask-keep-keywords": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
+        elif arg.startswith("--autounmask-keep-keywords="):
+            value = arg[len("--autounmask-keep-keywords=") :]
+            if value == "y":
+                autounmask_keep_keywords = True
+                i += 1
+            elif value == "n":
+                autounmask_keep_keywords = False
+                i += 1
+            else:
+                print(
+                    f'emerge: option "--autounmask-keep-keywords": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
         elif not arg.startswith("-"):
             atom_args.append(arg)
             i += 1
@@ -4392,6 +4559,28 @@ def run(args):
     else:
         selective = selective_flag
 
+    # --autounmask/--autounmask-keep-keywords: real create_depgraph_
+    # params.py's own default-resolution logic, simplified for this
+    # pilot's own v1 scope (only the keyword-suggestion sub-feature is
+    # implemented at all -- --autounmask-use/-license/-masks aren't
+    # read here, matching every real fixture/user who also never
+    # touches them getting the exact same outcome this simplification
+    # produces). Real logic: autounmask itself defaults to enabled
+    # (only --autounmask=n turns the whole feature off). autounmask_
+    # keep_keywords (real: "suppress keyword suggestions") defaults to
+    # suppressed (True) when --autounmask itself was NOT explicitly
+    # given at all, but defaults to *not* suppressed (False, i.e.
+    # keyword suggestions ARE generated) once --autounmask itself WAS
+    # explicitly given (any value) -- real portage's own "explicitly
+    # asking for autounmask implies wanting its keyword suggestions
+    # too, but the ambient always-on default doesn't" asymmetry, ported
+    # exactly. Mirrors pretend.rs exactly.
+    autounmask_enabled = autounmask is not False
+    if autounmask_keep_keywords is not None:
+        autounmask_suggest_keywords = autounmask_enabled and not autounmask_keep_keywords
+    else:
+        autounmask_suggest_keywords = autounmask_enabled and autounmask is not None
+
     try:
         result = resolve_pretend_graph(
             _config_root(),
@@ -4410,6 +4599,7 @@ def run(args):
             with_test_deps,
             changed_deps_report,
             selective,
+            autounmask_suggest_keywords,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

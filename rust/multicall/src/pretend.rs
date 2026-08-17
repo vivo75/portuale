@@ -928,6 +928,14 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut changed_slot = false;
     let mut with_test_deps = false;
     let mut changed_deps_report = false;
+    // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
+    // (bare flag, "=y", or "=n") for the first, plain required "y"/"n"
+    // (no bare form) for the second -- see the on/off default-
+    // resolution logic just below where these are actually consumed,
+    // grounded against real create_depgraph_params.py's own
+    // autounmask/autounmask_keep_keywords computation.
+    let mut autounmask: Option<bool> = None;
+    let mut autounmask_keep_keywords: Option<bool> = None;
     let mut noreplace = false;
     // `None` until an explicit `--selective`/`--selective=y`/`--selective=n`
     // is given, so `n` can override whatever `update`/`newuse`/
@@ -1310,6 +1318,70 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--with-test-deps=n" {
             with_test_deps = false;
             i += 1;
+        } else if arg == "--autounmask" {
+            // Real "--autounmask": choices=true_y_or_n ("True", "y",
+            // "n") -- a bare flag means true (real argparse's own
+            // const="True" for this option), same optional-value shape
+            // "--changed-slot"/"--with-test-deps" already have, just
+            // with three accepted spellings for "true" instead of one.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    autounmask = Some(true);
+                    i += 2;
+                }
+                Some("n") => {
+                    autounmask = Some(false);
+                    i += 2;
+                }
+                _ => {
+                    autounmask = Some(true);
+                    i += 1;
+                }
+            }
+        } else if arg == "--autounmask=y" {
+            autounmask = Some(true);
+            i += 1;
+        } else if arg == "--autounmask=n" {
+            autounmask = Some(false);
+            i += 1;
+        } else if arg == "--autounmask-keep-keywords" {
+            // Real "--autounmask-keep-keywords": plain y_or_n, a
+            // REQUIRED value -- no bare/optional form real
+            // "--autounmask" itself has, the same required shape
+            // "--with-bdeps" already has.
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--autounmask-keep-keywords\" requires an argument");
+                return ExitCode::from(2);
+            };
+            match value.as_str() {
+                "y" => {
+                    autounmask_keep_keywords = Some(true);
+                    i += 2;
+                }
+                "n" => {
+                    autounmask_keep_keywords = Some(false);
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--autounmask-keep-keywords=") {
+            match value {
+                "y" => {
+                    autounmask_keep_keywords = Some(true);
+                    i += 1;
+                }
+                "n" => {
+                    autounmask_keep_keywords = Some(false);
+                    i += 1;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
         } else if !arg.starts_with('-') {
             atom_args.push(arg);
             i += 1;
@@ -1505,6 +1577,34 @@ pub fn run(args: &[String]) -> ExitCode {
     let selective = selective_flag
         .unwrap_or(update || newuse || changed_use || changed_deps || changed_slot || noreplace);
 
+    // --autounmask/--autounmask-keep-keywords: real create_depgraph_
+    // params.py's own default-resolution logic, simplified for this
+    // pilot's own v1 scope (only the keyword-suggestion sub-feature is
+    // implemented at all -- --autounmask-use/-license/-masks aren't
+    // read here, matching every real fixture/user who also never
+    // touches them getting the exact same outcome this simplification
+    // produces). Real logic: `autounmask` itself defaults to enabled
+    // (only `--autounmask=n` turns the whole feature off -- with
+    // `--autounmask-use`/`-license` unread, the "is autounmask_use/
+    // license itself what makes autounmask default true" branch in real
+    // create_depgraph_params.py always takes the "yes" arm, so this
+    // simplifies to exactly that). `autounmask_keep_keywords` (real:
+    // "suppress keyword suggestions") is subtler: it defaults to
+    // suppressed (true) when `--autounmask` itself was NOT explicitly
+    // given at all, but defaults to *not* suppressed (false, i.e.
+    // keyword suggestions ARE generated) once `--autounmask` itself WAS
+    // explicitly given (any value) -- real portage's own "explicitly
+    // asking for autounmask implies wanting its keyword suggestions
+    // too, but the ambient always-on default doesn't" asymmetry, ported
+    // exactly. Either way, an explicit `--autounmask-keep-keywords=y`/
+    // `=n` always wins outright.
+    let autounmask_enabled = autounmask != Some(false);
+    let autounmask_suggest_keywords = autounmask_enabled
+        && match autounmask_keep_keywords {
+            Some(keep) => !keep,
+            None => autounmask.is_some(),
+        };
+
     let result = match resolve_pretend_graph(
         &config_root,
         &root,
@@ -1522,6 +1622,7 @@ pub fn run(args: &[String]) -> ExitCode {
         with_test_deps,
         changed_deps_report,
         selective,
+        autounmask_suggest_keywords,
     ) {
         Ok(result) => result,
         Err(e) => {

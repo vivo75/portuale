@@ -1140,6 +1140,103 @@ pub fn is_visible(
     )
 }
 
+/// `--autounmask`'s own keyword-suggestion sub-feature (real
+/// `--autounmask-keep-keywords=n`, see `resolve_pretend_graph`'s doc
+/// comment for the full on/off default-resolution logic this pilot
+/// ported): true iff `candidate` would be `is_visible` except for its
+/// own KEYWORDS -- every other check `is_visible` makes (package.mask,
+/// license, properties, restrict) passes, only `keywords_accepted`
+/// fails. Duplicates `is_visible`'s own body rather than refactoring it
+/// to return a reason enum -- real portage's own `_get_masking_status`
+/// is considerably more elaborate (distinguishing package.mask/license/
+/// keyword/REQUIRED_USE/etc. reasons, each with its own "unmask hint"),
+/// and this pilot only needs the single "keywords, and only keywords"
+/// question for its own deliberately narrow v1 (see
+/// `resolve_pretend_graph`'s own doc comment for the full scope
+/// writeup, including what's deliberately still out: package.mask/
+/// license/USE suggestions, real portage's own exact suggested-atom
+/// syntax and dependency-chain-comment formatting).
+fn keyword_masked_only(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+
+    let masked = config
+        .package_mask
+        .iter()
+        .any(|m| matches_config_entry(m, &candidate_str, category, package))
+        && !config
+            .package_unmask
+            .iter()
+            .any(|u| matches_config_entry(u, &candidate_str, category, package));
+    if masked {
+        return false;
+    }
+
+    if !license_accepted(candidate, category, package, &candidate_str, config) {
+        return false;
+    }
+
+    if !metadata_key_accepted(
+        &candidate.properties,
+        candidate,
+        category,
+        package,
+        &candidate_str,
+        config,
+        &config.accept_properties,
+        &config.package_properties,
+    ) {
+        return false;
+    }
+
+    if !metadata_key_accepted(
+        &candidate.restrict,
+        candidate,
+        category,
+        package,
+        &candidate_str,
+        config,
+        &config.accept_restrict,
+        &config.package_accept_restrict,
+    ) {
+        return false;
+    }
+
+    !keywords_accepted(
+        &candidate.keywords,
+        &candidate_str,
+        category,
+        package,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
+    )
+}
+
+/// The keyword this pilot's own `--autounmask` v1 would suggest adding
+/// to `package.accept_keywords` for `candidate` -- the first of its own
+/// (non-`-`-prefixed; a `-`-prefixed KEYWORDS token means "explicitly
+/// unsupported here," never a valid suggestion) `KEYWORDS` tokens.
+/// Deliberately simpler than real portage's own `_get_masking_status`
+/// (which picks specifically between the unstable (`~arch`) form, a
+/// different arch entirely, or `**`, based on exactly what's already
+/// accepted) -- see `keyword_masked_only`'s own doc comment for the
+/// full scope writeup this shares. `None` only if `KEYWORDS` is empty or
+/// every token is `-`-prefixed (unusual, but not impossible).
+fn suggested_keyword(candidate: &Candidate) -> Option<&str> {
+    candidate
+        .keywords
+        .iter()
+        .find(|k| !k.starts_with('-'))
+        .map(String::as_str)
+}
+
 /// The keyword-matching half of `is_visible` (everything except the
 /// `package.mask`/`.unmask` check), factored out so `is_stable` below
 /// can reuse it against an artificially-unstabilized keyword list
@@ -2723,6 +2820,54 @@ fn enqueue_flat_deps(
 ///     pre-existing `depth == 0`, passed at the one call site below --
 ///     the same equivalence `--with-test-deps` already established
 ///     between real "argument" and this pilot's own `depth == 0`.
+///   - `--autounmask` (`autounmask_suggest_keywords`): a deliberately
+///     narrow v1 of a considerably bigger real feature (real portage's
+///     own version tracks *why* each candidate was rejected via
+///     `_get_masking_status`, builds dependency-chain comments via
+///     `_get_dep_chain_as_comment`, and picks specific suggested-atom
+///     syntax based on whether the suggested version is the latest --
+///     none of that is ported here). This pilot's own v1 only detects
+///     the single "masked by KEYWORDS, and only KEYWORDS" case (see
+///     `keyword_masked_only`'s own doc comment) for a top-level atom's
+///     own fatal `NoVisibleCandidate`, and appends a pilot-specific
+///     summary line naming the best such candidate and its own
+///     suggested keyword (see `suggested_keyword`'s own doc comment) --
+///     not real portage's own exact suggested-atom syntax or comment-
+///     chain formatting, the same "pilot-specific summary, not a port
+///     of real formatting" precedent already established for
+///     REQUIRED_USE's own error message. Deliberately still out of
+///     scope: package.mask/license/USE suggestions (real
+///     `--autounmask-keep-masks`/`-license`/`-use`), suggestions for a
+///     *dependency's* own `NoVisibleCandidate` (matching the same
+///     "only a top-level atom's own `NoVisibleCandidate` is fatal, so
+///     only it gets a suggestion attached" scope this function's own
+///     top-level-fatal check already draws), and any actual mutation
+///     (`--autounmask-write`) -- report only, matching this pilot's own
+///     "report, don't enforce" spirit throughout.
+///
+///     `autounmask_suggest_keywords` itself is the caller's own
+///     already-resolved on/off decision (computed in `pretend.rs`),
+///     grounded against real `create_depgraph_params.py`'s own
+///     `autounmask`/`autounmask_keep_keywords` default-resolution logic,
+///     simplified since this pilot's v1 never reads
+///     `--autounmask-use`/`-license` at all (confirmed: with those two
+///     always unset, real `create_depgraph_params.py`'s own "is
+///     autounmask itself enabled" branch always takes its "yes" arm
+///     regardless, so this is a faithful simplification for exactly the
+///     scope this pilot supports, not a shortcut around it):
+///     `autounmask` itself defaults to enabled, off only via explicit
+///     `--autounmask=n`; `autounmask_keep_keywords` (real: "suppress
+///     keyword suggestions") defaults to suppressed (kept) when
+///     `--autounmask` itself was never explicitly given at all, but
+///     defaults to *not* suppressed once `--autounmask` itself WAS
+///     explicitly given (any value) -- real portage's own "explicitly
+///     asking for autounmask implies wanting its keyword suggestions
+///     too, but the ambient always-on default doesn't" asymmetry.
+///     Either way, an explicit `--autounmask-keep-keywords=y`/`=n`
+///     always wins outright. Confirmed live: `--autounmask=n` and no
+///     flags at all both suppress; bare `--autounmask` and
+///     `--autounmask-keep-keywords=n` alone both suggest;
+///     `--autounmask --autounmask-keep-keywords=y` suppresses again.
 // 14 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
@@ -2745,6 +2890,7 @@ pub fn resolve_pretend_graph(
     with_test_deps: bool,
     changed_deps_report: bool,
     selective: bool,
+    autounmask_suggest_keywords: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -2910,7 +3056,44 @@ pub fn resolve_pretend_graph(
         if top_level.contains(current_atom.as_str())
             && matches!(outcome, PretendOutcome::NoVisibleCandidate)
         {
-            return Err(format!("there are no ebuilds to satisfy {current_atom:?}."));
+            let mut message = format!("there are no ebuilds to satisfy {current_atom:?}.");
+            // --autounmask's own keyword-suggestion sub-feature (see
+            // this function's own doc comment for the full on/off
+            // default-resolution logic): only even attempted when
+            // enabled, and only ever finds something to suggest when a
+            // real candidate exists that's masked by KEYWORDS alone
+            // (see `keyword_masked_only`'s own doc comment) -- a
+            // candidate masked by package.mask/license/etc. too gets no
+            // suggestion here, matching real portage's own "only
+            // suggest a change that would actually fix it" spirit,
+            // even though this pilot doesn't yet combine multiple
+            // simultaneous suggestion kinds the way real portage can.
+            if autounmask_suggest_keywords {
+                if let Ok(candidates) = list_candidates(&repos, &atom.category, &atom.package) {
+                    if let Some((candidate, keyword)) = candidates
+                        .iter()
+                        .filter(|c| keyword_masked_only(c, &atom.category, &atom.package, config))
+                        .filter_map(|c| suggested_keyword(c).map(|k| (c, k)))
+                        .max_by(|(a, _), (b, _)| {
+                            vercmp_ordering(&a.version, &b.version)
+                                .then(a.repo_priority.cmp(&b.repo_priority))
+                        })
+                    {
+                        message.push_str(&format!(
+                            "\nnote: {}/{}-{} exists but is masked by KEYWORDS; \
+                             --autounmask-keep-keywords=n suggests adding \"{}/{} {}\" \
+                             to package.accept_keywords",
+                            atom.category,
+                            atom.package,
+                            candidate.version,
+                            atom.category,
+                            atom.package,
+                            keyword
+                        ));
+                    }
+                }
+            }
+            return Err(message);
         }
 
         let resolved_version = match &outcome {
@@ -3968,6 +4151,7 @@ mod tests {
             false,
             changed_deps_report,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -4729,6 +4913,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4757,6 +4942,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4787,6 +4973,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4821,6 +5008,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -4872,6 +5060,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -4971,6 +5160,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5072,6 +5262,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -5209,6 +5400,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -5284,6 +5476,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5421,6 +5614,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -5509,6 +5703,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5544,6 +5739,7 @@ mod tests {
             true,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5638,6 +5834,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -5671,6 +5868,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5706,6 +5904,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5741,6 +5940,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5991,12 +6191,88 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
             err,
             "REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0: \"foo? ( bar )\"\n\
              REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg2-1.0: \"baz? ( qux )\""
+        );
+    }
+
+    #[test]
+    fn autounmask_suggests_a_keyword_only_when_enabled() {
+        // dev-libs/autounmaskkeywordpkg's own KEYWORDS is "~amd64", not
+        // accepted by the fixture profile's own ACCEPT_KEYWORDS, and it
+        // has no package.accept_keywords entry of its own -- masked by
+        // KEYWORDS alone (package.mask/license/properties/restrict all
+        // pass), the exact "keyword_masked_only" shape --autounmask's
+        // own v1 suggestion targets. With autounmask_suggest_keywords
+        // off (the real, correct default -- see resolve_pretend_graph's
+        // own doc comment for the full on/off default-resolution logic
+        // this mirrors), no suggestion is appended, matching this
+        // pilot's own pre-existing behavior exactly.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
+        let atoms = vec!["dev-libs/autounmaskkeywordpkg".to_string()];
+        let err_without_suggestion = resolve_pretend_graph(
+            &root,
+            &root,
+            &atoms,
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+        )
+        .expect_err("no visible candidate at all");
+        assert_eq!(
+            err_without_suggestion,
+            "there are no ebuilds to satisfy \"dev-libs/autounmaskkeywordpkg\"."
+        );
+
+        let err_with_suggestion = resolve_pretend_graph(
+            &root,
+            &root,
+            &atoms,
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+        )
+        .expect_err("no visible candidate at all");
+        assert_eq!(
+            err_with_suggestion,
+            "there are no ebuilds to satisfy \"dev-libs/autounmaskkeywordpkg\".\n\
+             note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; \
+             --autounmask-keep-keywords=n suggests adding \"dev-libs/autounmaskkeywordpkg ~amd64\" \
+             to package.accept_keywords"
         );
     }
 
@@ -6050,6 +6326,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

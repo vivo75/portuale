@@ -227,6 +227,16 @@ CASES = [
         ["--pretend", "dev-libs/requiredusebadpkg", "dev-libs/requiredusebadpkg2"],
         1,
     ),
+    (
+        "--autounmask: no keyword suggestion by default",
+        ["--pretend", "dev-libs/autounmaskkeywordpkg"],
+        1,
+    ),
+    (
+        "--autounmask: keyword suggestion once explicitly enabled",
+        ["--pretend", "--autounmask", "dev-libs/autounmaskkeywordpkg"],
+        1,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -1060,6 +1070,54 @@ def test_required_use_violations_are_collected_across_the_whole_walk_not_just_th
         '"foo? ( bar )"\n'
         'REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg2-1.0: '
         '"baz? ( qux )"'
+    )
+
+
+def test_autounmask_no_keyword_suggestion_by_default(emerge_binary, fixture_env):
+    """Real --autounmask-keep-keywords defaults to True (suppress keyword
+    suggestions) whenever --autounmask itself was never explicitly given
+    at all -- confirmed by reading create_depgraph_params.py's own
+    default-resolution logic end to end. dev-libs/autounmaskkeywordpkg's
+    own KEYWORDS is "~amd64", never accepted by the fixture profile's own
+    ACCEPT_KEYWORDS and never granted a package.accept_keywords entry --
+    masked by KEYWORDS alone. With no --autounmask flag at all (the
+    common case), no suggestion is appended, matching real portage's own
+    "quiet by default" behavior for this specific sub-flag."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/autounmaskkeywordpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == (
+        'emerge: there are no ebuilds to satisfy "dev-libs/autounmaskkeywordpkg".'
+    )
+
+
+def test_autounmask_suggests_a_keyword_once_explicitly_enabled(emerge_binary, fixture_env):
+    """Real portage's own asymmetry (create_depgraph_params.py):
+    --autounmask-keep-keywords defaults to False (i.e. keyword
+    suggestions ARE generated) once --autounmask itself was explicitly
+    given, unlike the ambient always-on default (see the sibling test
+    above) -- "explicitly asking for autounmask implies wanting its
+    keyword suggestions too." A deliberately narrow v1 (see
+    resolve_pretend_graph's own doc comment, portage-repo): only the
+    single "masked by KEYWORDS alone" case is detected, and the
+    suggestion is a pilot-specific summary, not real portage's own exact
+    suggested-atom syntax or dependency-chain-comment formatting."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask", "dev-libs/autounmaskkeywordpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == (
+        'emerge: there are no ebuilds to satisfy "dev-libs/autounmaskkeywordpkg".\n'
+        'note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; '
+        '--autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg '
+        '~amd64" to package.accept_keywords'
     )
 
 
