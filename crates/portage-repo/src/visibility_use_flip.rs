@@ -61,6 +61,68 @@ pub(crate) fn flag_is_settable(args: FlagIsSettableArgs<'_>) -> bool {
     use_flags.contains(flag) == desired
 }
 
+/// The best `--autounmask-use` flag-flip suggestion for `candidate`
+/// against `use_deps` (already conditional-evaluated: only plain
+/// `flag`/`-flag` forms are consulted). `None` when nothing needs to
+/// change, a needed flag isn't in the candidate's IUSE at all, or any
+/// needed change is blocked by `flag_is_settable` (a partially-fixable
+/// atom suggests nothing, rather than a change that wouldn't resolve).
+/// Portage: can_adjust_use (whole-atom rejection)
+pub(crate) fn suggested_use_flip(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    use_deps: &[portage_dep::UseDep],
+    config: &portage_profile::Config,
+) -> Option<Vec<(String, bool)>> {
+    let (iuse, use_flags) = candidate_iuse_and_use(candidate, category, package, config)?;
+    let mut changes = Vec::new();
+    for ud in use_deps {
+        let desired = match ud.op {
+            portage_dep::UseDepOp::Enabled => true,
+            portage_dep::UseDepOp::Disabled => false,
+            // Conditional forms were evaluated away before the atom was
+            // ever queued (see `enqueue_flat_deps`); the parent-side
+            // mechanism below is a separate path.
+            _ => continue,
+        };
+        if !iuse.contains(&ud.flag) {
+            // No `package.use` entry could ever set an undeclared flag --
+            // but a matching `(+)`/`(-)` default already satisfies the
+            // requirement; only a genuinely unsatisfiable missing flag
+            // makes the whole atom unfixable.
+            match (&ud.op, &ud.default) {
+                (portage_dep::UseDepOp::Enabled, Some(portage_dep::UseDepDefault::Enabled))
+                | (portage_dep::UseDepOp::Disabled, Some(portage_dep::UseDepDefault::Disabled)) => {
+                    continue;
+                }
+                _ => return None,
+            }
+        }
+        let currently_enabled = use_flags.contains(&ud.flag);
+        if currently_enabled != desired {
+            changes.push((ud.flag.clone(), desired));
+        }
+    }
+    if changes.is_empty() {
+        return None;
+    }
+    if changes.iter().any(|(flag, desired)| {
+        !flag_is_settable(FlagIsSettableArgs {
+            candidate,
+            category,
+            package,
+            flag,
+            desired: *desired,
+            config,
+        })
+    }) {
+        return None;
+    }
+    changes.sort();
+    Some(changes)
+}
+
 /// A package's declared `IUSE` (markers stripped) folded together with
 /// the arch list, `use.mask ∪ use.force`, the literal
 /// `build`/`bootstrap` flags and `iuse_effective`: the full domain for
