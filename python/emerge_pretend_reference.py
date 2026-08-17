@@ -1534,10 +1534,16 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     repo's own repo-level entries this same way, including the main
     repo's, so a package.mask entry from main only masking main's own
     packages is a separate, distinct correctness question this slice
-    doesn't also take on. Real masters (layout.conf repo inheritance)
-    stays a separate, not-yet-implemented mechanism; with no repo in
-    this pilot's own fixtures declaring any, every repo's own entries
-    here are read standalone. profiles/ (an overlay's own profile
+    doesn't also take on. Real masters (each repo's own package.mask --
+    and ONLY package.mask, MaskManager.py's own package.unmask loop
+    never consults masters at all -- stacks with its declared masters'
+    own lines before repo-scoping) is now modeled to the extent every
+    fixture here needs: a repo with no explicit "masters =" (this pilot
+    doesn't parse that repos.conf key at all yet) implicitly masters the
+    main repo alone, real config.py's own
+    "repo.masters = (self.mainRepo(),)" default -- every overlay here
+    gets exactly that. An explicit "masters =" override, or a
+    multi-master chain, stays unimplemented. profiles/ (an overlay's own profile
     directory joining the active chain) and license_groups from an
     overlay are NOT part of this same "every repo, unconditionally"
     mechanism -- real LicenseManager's own profile_locations and the
@@ -1635,19 +1641,27 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     use_flags |= use_force
     use_flags -= use_mask
 
-    mask_sources = [
-        _read_config_lines(os.path.join(main_repo_location, "profiles", "package.mask"))
-    ]
+    main_repo_mask_lines = _read_config_lines(
+        os.path.join(main_repo_location, "profiles", "package.mask")
+    )
+    mask_sources = [main_repo_mask_lines]
     unmask_sources = [
         _read_config_lines(os.path.join(main_repo_location, "profiles", "package.unmask"))
     ]
     for repo_name, repo_location in overlay_repos:
-        mask_sources.append(
-            _scope_repo_mask_lines(
-                _read_config_lines(os.path.join(repo_location, "profiles", "package.mask")),
-                repo_name,
-            )
+        # Real masters: a repo with no explicit "masters =" implicitly
+        # masters the main repo alone (config.py's own
+        # "repo.masters = (self.mainRepo(),)" default) -- an overlay's
+        # own package.mask is stacked *on top of* its master's own (main
+        # repo's) package.mask before the usual "::reponame" scoping.
+        # package.unmask deliberately does NOT get the same treatment --
+        # confirmed by reading MaskManager.py's own two loops side by
+        # side: only the package.mask loop iterates masters at all.
+        overlay_mask_lines = _read_config_lines(
+            os.path.join(repo_location, "profiles", "package.mask")
         )
+        mastered_mask_lines = _stack_mask_lines([main_repo_mask_lines, overlay_mask_lines])
+        mask_sources.append(_scope_repo_mask_lines(mastered_mask_lines, repo_name))
         unmask_sources.append(
             _scope_repo_mask_lines(
                 _read_config_lines(os.path.join(repo_location, "profiles", "package.unmask")),

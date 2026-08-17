@@ -1,3 +1,9 @@
 # fixture overlay package.unmask: cancels this same overlay's own
 # repo-level package.mask entry for overlaymaskedthenunmaskedpkg.
 dev-libs/overlaymaskedthenunmaskedpkg
+# masters: cancels the main repo's own package.mask entry for
+# mastermaskedthenoverlayunmaskedpkg, inherited via this overlay's
+# implicit masters default -- both this unmask entry and the inherited
+# mask entry get the identical "::overlay" auto-scoping, so they still
+# cancel out even though the mask itself originated in a different repo.
+dev-libs/mastermaskedthenoverlayunmaskedpkg

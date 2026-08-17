@@ -1038,6 +1038,42 @@ PORTING/
   and unmasked by two entries in that same overlay's own files, proving
   both get the identical auto-scoping and still cancel out).
 
+  **`repos.conf` `masters`**: a later, independent follow-up to the same
+  overlay `package.mask` work above, grounded against real `config.py`
+  (lines ~1229-1260) and `MaskManager.py` (lines ~69-100) together. A
+  repo with no explicit `masters =` doesn't read its own `package.mask`
+  standalone the way this pilot's own doc comments previously claimed --
+  real `config.py`'s own `repo.masters = (self.mainRepo(),)` default
+  means every non-main repo *implicitly* masters the main repo alone
+  (the main repo's own masters default to `()`, since it can't be its
+  own master), and `MaskManager.py`'s own per-repo loop stacks each
+  master's own `package.mask` lines in *ahead of* the repo's own (real
+  `stack_lists(incremental=1)`, i.e. this pilot's own `stack_mask_lines`)
+  before the combined result gets `::reponame`-scoped -- so an overlay
+  with no explicit masters still inherits the main repo's own masks for
+  its own packages. This was a genuine, if narrow, behavior gap this
+  pilot's own doc comments mis-described as intentional (`"every repo's
+  own entries here are read standalone, which is exactly what real
+  portage would also do for a masters-less repo"` -- a masters-less repo
+  and a repo with no *explicit* `masters =` are not the same thing, and
+  conflating them was the actual bug). A real asymmetry confirmed by
+  reading `MaskManager.py`'s own two loops side by side: only
+  `package.mask` consults masters at all -- `package.unmask`'s own loop
+  never does, so this stays exactly as the previous follow-up left it,
+  main-repo-only, no inheritance. Since this pilot doesn't parse an
+  explicit `masters =` `repos.conf` key at all (no fixture repo ever
+  declares one), only the implicit main-repo default is modeled -- an
+  explicit override or a multi-master chain stays unimplemented. Two new
+  overlay-only fixture packages exercise it end to end:
+  `mastermaskedpkg` (masked only by the *main* repo's own
+  `package.mask`, never mentioned in the overlay's own -- the only way
+  it can end up masked is via the implicit masters inheritance) and
+  `mastermaskedthenoverlayunmaskedpkg` (masked the same
+  masters-inherited way, then unmasked by the overlay's own
+  `package.unmask`, proving the inherited mask and the overlay's own
+  unmask still cancel out once both get the identical `::overlay`
+  scoping).
+
   **Cross-repo profile parents (`reponame:path` syntax)**: closes the
   cut named just above, grounded against real `LocationsManager.
   _addProfile`/`_expand_parent_colon`: a profile's own `parent` file
@@ -2289,13 +2325,19 @@ version), and `overlaytiepkg` (identically-versioned `1.0` in both
 repos, but only the overlay's copy `RDEPEND`s on `dev-libs/newpkg` --
 resolving it pulls `newpkg` in, proving the higher-priority overlay's
 copy, not the main repo's, is the one whose own metadata actually got
-read). The overlay also has its own `profiles/package.mask`/`.unmask`
-(the main repo has none), exercising overlay repo-level masking:
-`overlaymaskedpkg` (masked only by the overlay's own bare-atom
-`package.mask` entry, auto-scoped to `::overlay` -- an identically-named
-main-repo copy stays unaffected) and `overlaymaskedthenunmaskedpkg`
-(masked and unmasked by two entries in that same overlay's own files).
-The main repo's own `profiles/default/parent` also has a third entry,
+read). The overlay also has its own `profiles/package.mask`/`.unmask`,
+exercising overlay repo-level masking: `overlaymaskedpkg` (masked only
+by the overlay's own bare-atom `package.mask` entry, auto-scoped to
+`::overlay` -- an identically-named main-repo copy stays unaffected) and
+`overlaymaskedthenunmaskedpkg` (masked and unmasked by two entries in
+that same overlay's own files). The main repo's own
+`profiles/package.mask` has two more entries exercising the overlay's
+own implicit `masters` inheritance: `mastermaskedpkg` (exists only in
+the overlay, masked purely via inheriting the main repo's own
+`package.mask` -- the overlay's own file never mentions it) and
+`mastermaskedthenoverlayunmaskedpkg` (masked the same inherited way,
+then unmasked by the overlay's own `package.unmask`). The main repo's
+own `profiles/default/parent` also has a third entry,
 `overlay:crossrepo-parent`, real cross-repo profile parent syntax
 reaching into `PORTING/fixtures/overlay/profiles/crossrepo-parent/
 license_groups` (extending `EULA` with one more member,
@@ -2662,6 +2704,17 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaymasked
 # package.mask entry (both get the identical "::overlay" auto-scoping)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaymaskedthenunmaskedpkg
 # [ebuild  N] dev-libs/overlaymaskedthenunmaskedpkg-1.0
+
+# repos.conf masters: the overlay has no explicit "masters =", so it
+# implicitly masters the main repo -- mastermaskedpkg exists only in the
+# overlay and is masked purely by the MAIN repo's own package.mask
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/mastermaskedpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/mastermaskedpkg".  (exit 1)
+
+# the overlay's own package.unmask still cancels a masters-inherited
+# mask, since both get the identical "::overlay" auto-scoping
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/mastermaskedthenoverlayunmaskedpkg
+# [ebuild  N] dev-libs/mastermaskedthenoverlayunmaskedpkg-1.0
 
 # slot conflict: slotconflictnewconsumer resolves slotconflicttarget to
 # 2.0 first; slotconflictoldconsumer's own "<...-2.0" constraint rejects

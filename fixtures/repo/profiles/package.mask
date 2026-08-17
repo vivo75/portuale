@@ -5,3 +5,10 @@
 dev-libs/repomaskedpkg
 dev-libs/repomaskedthenprofileunmaskedpkg
 dev-libs/repomaskedthenuserremovedpkg
+# masters: an overlay with no explicit "masters =" implicitly masters
+# this (the main) repo alone -- these two entries mask packages that
+# exist ONLY in the overlay (never in this repo), so the only way
+# either can end up masked is via that implicit master inheritance,
+# not an ordinary same-repo mask.
+dev-libs/mastermaskedpkg
+dev-libs/mastermaskedthenoverlayunmaskedpkg

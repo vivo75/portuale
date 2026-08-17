@@ -215,6 +215,8 @@ CASES = [
     ("overlay: explicit ::overlay atom still hits the overlay's own mask", ["--pretend", "dev-libs/overlaymaskedpkg::overlay"], 1),
     ("overlay: explicit ::testrepo atom bypasses the overlay's own mask", ["--pretend", "dev-libs/overlaymaskedpkg::testrepo"], 0),
     ("overlay: repo-level package.unmask cancels the same overlay's own mask", ["--pretend", "dev-libs/overlaymaskedthenunmaskedpkg"], 0),
+    ("overlay: implicit masters inherits the main repo's own package.mask", ["--pretend", "dev-libs/mastermaskedpkg"], 1),
+    ("overlay: package.unmask cancels a masters-inherited mask", ["--pretend", "dev-libs/mastermaskedthenoverlayunmaskedpkg"], 0),
     ("slot conflict: two incompatible version constraints on one slot", ["--pretend", "dev-libs/slotconflictparent"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
@@ -1436,6 +1438,41 @@ def test_overlay_own_package_unmask_cancels_the_same_overlay_own_package_mask(
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "[ebuild  N] dev-libs/overlaymaskedthenunmaskedpkg-1.0"
+
+
+def test_overlay_implicit_masters_inherits_the_main_repos_own_package_mask(
+    emerge_binary, fixture_env
+):
+    """dev-libs/mastermaskedpkg exists only in the overlay repo, and is
+    masked only by the MAIN repo's own profiles/package.mask -- never
+    mentioned in the overlay's own package.mask at all. Real portage's
+    own masters default (a repo with no explicit "masters =" implicitly
+    masters the main repo) means the main repo's own mask entry is
+    stacked in ahead of the overlay's own lines before "::overlay"
+    scoping, so it still applies to the overlay's own copy."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/mastermaskedpkg"], fixture_env)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/mastermaskedpkg".'
+    )
+
+
+def test_overlay_package_unmask_cancels_a_masters_inherited_mask(emerge_binary, fixture_env):
+    """dev-libs/mastermaskedthenoverlayunmaskedpkg is masked the same
+    masters-inherited way as mastermaskedpkg above, but the overlay's
+    own package.unmask also names it -- both the inherited mask and the
+    overlay's own unmask get the identical "::overlay" scoping, so they
+    still cancel out even though the mask itself originated in the main
+    repo, not the overlay."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/mastermaskedthenoverlayunmaskedpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/mastermaskedthenoverlayunmaskedpkg-1.0"
 
 
 def test_slot_conflict_is_reported_between_two_incompatible_version_constraints(

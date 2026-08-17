@@ -47,9 +47,13 @@
 //     `stack_mask_lines`). An *overlay* repo's own repo-level
 //     `package.mask`/`.unmask` is now read too (every configured repo,
 //     unconditionally, each auto-scoped to its own `::reponame` -- see
-//     `scope_repo_mask_lines`/`resolve_config`'s own doc comment). Still
-//     out of scope: `masters` (eclass/mask inheritance across repos via a
-//     repo's own `masters` setting).
+//     `scope_repo_mask_lines`/`resolve_config`'s own doc comment). An
+//     overlay's own `package.mask` (only `package.mask` -- real portage
+//     never consults masters for `package.unmask`) also now stacks with
+//     its implicit `masters` default (the main repo alone, since this
+//     pilot doesn't parse an explicit `masters =` repos.conf key). Still
+//     out of scope: eclass inheritance via `masters`, and an explicit
+//     `masters =` override/multi-master chain.
 //   - `package.accept_keywords` is stacked from profile-chain (in chain
 //     order) + user-level sources, mirroring real `KeywordsManager.
 //     getPKeywords` exactly -- confirmed by reading it, there's no
@@ -142,9 +146,10 @@
 //     previously always empty -- see that function's own doc comment)
 //     is `use.force ∪ use.mask`, not either alone.
 //   - `package.use.mask`/`package.use.force` (per-package USE forcing) ARE
-//     now read too: repo-level (main repo only, no `masters` -- same cut
-//     `package.mask`'s own repo-level source already makes) plus every
-//     profile level's own file, in chain order -- confirmed by reading
+//     now read too: repo-level (main repo only, no `masters` -- unlike
+//     `package.mask`, which now does model its own implicit `masters`
+//     default) plus every profile level's own file, in chain order --
+//     confirmed by reading
 //     `UseManager.__init__`'s own file/variable table that there's no
 //     user-level source for either file at all (unlike `package.use`
 //     itself), so this pilot doesn't invent one. Stored flat, same as
@@ -995,12 +1000,18 @@ fn parse_package_use_lines(
 /// entry from main only masking main's own packages (not an
 /// identically-named overlay package) is a separate, distinct
 /// correctness question this slice doesn't also take on. Real
-/// `masters` (layout.conf repo inheritance -- each repo's own
-/// package.mask stacks with its declared masters' before repo-scoping)
-/// stays a separate, not-yet-implemented mechanism; with no repo in
-/// this pilot's own fixtures declaring any, every repo's own entries
-/// here are read standalone, which is exactly what real portage would
-/// also do for a masters-less repo. `profiles/`
+/// `masters` (each repo's own `package.mask` -- and *only*
+/// `package.mask`, real `MaskManager.py`'s own `package.unmask` loop
+/// never consults masters at all -- stacks with its declared masters'
+/// own lines before repo-scoping) is now modeled to the extent every
+/// fixture in this pilot ever needs: a repo with no explicit
+/// `masters =` (this pilot doesn't parse that `repos.conf` key at all
+/// yet) implicitly masters the main repo alone, real `config.py`'s own
+/// `repo.masters = (self.mainRepo(),)` default -- every overlay here
+/// gets exactly that, the main repo gets `()` (itself, since it can
+/// never be its own master). An explicit `masters =` override, or a
+/// multi-master chain, stays unimplemented (would need a `masters` key
+/// threaded through `portage-repo::find_repos` first). `profiles/`
 /// (an overlay's own profile directory joining the active chain) and
 /// `license_groups` from an overlay are NOT part of this same "every
 /// repo, unconditionally" mechanism -- real `LicenseManager`'s own
@@ -1149,17 +1160,35 @@ pub fn resolve_config(
         config.use_flags.remove(flag);
     }
 
-    let mut mask_sources: Vec<Vec<String>> = vec![read_config_lines(
-        &main_repo_location.join("profiles/package.mask"),
-    )?];
+    let main_repo_mask_lines =
+        read_config_lines(&main_repo_location.join("profiles/package.mask"))?;
+    let mut mask_sources: Vec<Vec<String>> = vec![main_repo_mask_lines.clone()];
     let mut unmask_sources: Vec<Vec<String>> = vec![read_config_lines(
         &main_repo_location.join("profiles/package.unmask"),
     )?];
     for (repo_name, repo_location) in overlay_repos {
-        mask_sources.push(scope_repo_mask_lines(
-            &read_config_lines(&repo_location.join("profiles/package.mask"))?,
-            repo_name,
-        ));
+        // Real masters: every non-main repo with no explicit "masters ="
+        // implicitly masters the main repo alone (config.py's own
+        // `repo.masters = (self.mainRepo(),)` default) -- an overlay's
+        // own package.mask is stacked *on top of* its master's own
+        // (main repo's) package.mask, exactly like stack_mask_lines
+        // already folds every other multi-source mask stack, before the
+        // combined result gets the usual "::reponame" scoping. Explicit
+        // "masters =" overrides aren't modeled (no fixture repo declares
+        // any), matching this pilot's own repos.conf parsing, which has
+        // no "masters" key at all yet.
+        let overlay_mask_lines = read_config_lines(&repo_location.join("profiles/package.mask"))?;
+        let mastered_mask_lines =
+            stack_mask_lines(&[main_repo_mask_lines.clone(), overlay_mask_lines]);
+        mask_sources.push(scope_repo_mask_lines(&mastered_mask_lines, repo_name));
+        // package.unmask deliberately does NOT get the same masters
+        // treatment -- confirmed by reading MaskManager.py's own two
+        // loops side by side: the package.mask loop stacks each
+        // master's own lines in first, but the package.unmask loop
+        // only ever stacks a repo's own lines against itself
+        // (`stack_lists([repo_lines], incremental=1, ...)`, no masters
+        // iteration at all), a real asymmetry in real portage itself,
+        // not a simplification on this pilot's part.
         unmask_sources.push(scope_repo_mask_lines(
             &read_config_lines(&repo_location.join("profiles/package.unmask"))?,
             repo_name,
@@ -1258,8 +1287,9 @@ pub fn resolve_config(
         .extend(parse_package_use_lines(&user_use_lines, true));
 
     // package.use.mask/package.use.force: repo-level (main repo only, no
-    // masters -- same cut package.mask's own repo-level source already
-    // makes) plus every profile level's own file (in chain order) -- NO
+    // masters -- unlike package.mask, which now does model its own
+    // implicit masters default) plus every profile level's own file (in
+    // chain order) -- NO
     // user-level source at all, unlike package.use: confirmed by reading
     // UseManager.__init__'s own file/variable table (the "user config"
     // section lists only "package.use -> _pusedict", nothing for
@@ -1860,6 +1890,56 @@ mod tests {
             config.package_unmask,
             vec!["dev-libs/a::overlay".to_string()]
         );
+    }
+
+    #[test]
+    fn overlay_package_mask_inherits_the_main_repos_own_entries_via_implicit_masters() {
+        // Real masters: an overlay with no explicit "masters =" always
+        // implicitly masters the main repo -- so the main repo's own
+        // package.mask entry for "dev-libs/a" must also end up
+        // "::overlay"-scoped, even though the overlay's own
+        // package.mask never mentions "dev-libs/a" at all (only "b").
+        let root = std::env::temp_dir().join("portage-profile-test-overlay-masters-mask");
+        let repo = root.join("repo");
+        let overlay = root.join("overlay");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(overlay.join("profiles")).unwrap();
+
+        fs::write(repo.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
+        fs::write(overlay.join("profiles/package.mask"), "dev-libs/b\n").unwrap();
+
+        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let config =
+            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        assert_eq!(
+            config.package_mask,
+            vec![
+                "dev-libs/a".to_string(),
+                "dev-libs/a::overlay".to_string(),
+                "dev-libs/b::overlay".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn overlay_package_unmask_does_not_inherit_via_masters() {
+        // Real MaskManager.py's own package.unmask loop never consults
+        // masters at all -- only package.mask does. The main repo's own
+        // package.unmask entry must stay exactly that (unscoped, main
+        // repo only), never also appearing "::overlay"-scoped just
+        // because the overlay implicitly masters the main repo.
+        let root = std::env::temp_dir().join("portage-profile-test-overlay-masters-unmask");
+        let repo = root.join("repo");
+        let overlay = root.join("overlay");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(overlay.join("profiles")).unwrap();
+
+        fs::write(repo.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
+
+        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let config =
+            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        assert_eq!(config.package_unmask, vec!["dev-libs/a".to_string()]);
     }
 
     #[test]
