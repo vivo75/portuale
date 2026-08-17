@@ -113,3 +113,79 @@ pub struct SrcUriEntry {
     /// prefix, exempting this one URI under `RESTRICT=fetch`. (See notes.)
     pub override_fetch: bool,
 }
+
+/// POSIX-ish argv splitting, public for callers parsing a config value
+/// Portage runs through `shlex.split` (e.g. `PORTAGE_RO_DISTDIRS`).
+pub fn split_shell_words(s: &str) -> Vec<String> {
+    shell_split(s)
+}
+
+/// Python `shlex.split` (posix) argv splitting: whitespace separates,
+/// single quotes are literal, a backslash escapes the next character
+/// outside single quotes, and inside double quotes only `\"`/`\\` lose
+/// the backslash.
+fn shell_split(s: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut cur = String::new();
+    let mut has_cur = false;
+    let mut chars = s.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+    while let Some(c) = chars.next() {
+        if in_single {
+            if c == '\'' {
+                in_single = false;
+            } else {
+                cur.push(c);
+            }
+            has_cur = true;
+            continue;
+        }
+        if in_double {
+            if c == '"' {
+                in_double = false;
+            } else if c == '\\'
+                && let Some(&next) = chars.peek()
+                && matches!(next, '"' | '\\')
+            {
+                // Python `shlex` (posix) removes the backslash only before
+                // the closing quote and before another backslash.
+                cur.push(chars.next().unwrap());
+            } else {
+                cur.push(c);
+            }
+            has_cur = true;
+            continue;
+        }
+        match c {
+            ' ' | '\t' | '\n' => {
+                if has_cur {
+                    args.push(std::mem::take(&mut cur));
+                    has_cur = false;
+                }
+            }
+            '\'' => {
+                in_single = true;
+                has_cur = true;
+            }
+            '"' => {
+                in_double = true;
+                has_cur = true;
+            }
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    cur.push(next);
+                    has_cur = true;
+                }
+            }
+            _ => {
+                cur.push(c);
+                has_cur = true;
+            }
+        }
+    }
+    if has_cur {
+        args.push(cur);
+    }
+    args
+}
