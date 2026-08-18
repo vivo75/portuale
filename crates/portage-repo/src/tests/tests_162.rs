@@ -182,3 +182,14 @@ fn cand_162(version: &str, keywords: &[&str], slot: &str) -> Candidate {
         binary_deps: HashMap::new(),
     }
 }
+/// Arguments of [`demote_162`].
+struct Demote162Args<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    self_cp: &'a RootCp,
+    atoms: &'a [&'a str],
+    queued: &'a [QueueItem],
+    update: bool,
+}

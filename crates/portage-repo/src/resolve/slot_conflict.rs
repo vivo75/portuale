@@ -93,3 +93,19 @@ pub(crate) fn slot_conflict_puller_cpv(
     let (psub, prepo, pslot) = slot_conflict_meta(repos, pc, pp, pv);
     format!("{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}")
 }
+
+/// Records a fresh `SlotConflict`, replacing the existing record for the same
+/// `(category, package, slot, existing, current)` triple.
+pub(crate) fn record_slot_conflict(slot_conflicts: &mut Vec<SlotConflict>, sc: SlotConflict) {
+    if let Some(prev) = slot_conflicts.iter_mut().find(|p| {
+        p.category == sc.category
+            && p.package == sc.package
+            && p.slot == sc.slot
+            && p.resolved_version == sc.resolved_version
+            && p.instances.get(1).map(|i| &i.version) == sc.instances.get(1).map(|i| &i.version)
+    }) {
+        *prev = sc;
+    } else {
+        slot_conflicts.push(sc);
+    }
+}
