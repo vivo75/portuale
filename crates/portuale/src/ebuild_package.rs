@@ -563,6 +563,222 @@ pub(crate) struct PackageAfterInstallArgs<'a> {
     pub(crate) per_entry_binpkg_multi_instance: bool,
 }
 
+/// The packaging tail of `run_package`, also run as a side effect of a source
+/// merge (`FEATURES=buildpkg` / `--buildpkg`, after `src_install`, before the
+/// vdb merge). Assumes a populated `${D}` from a prior `install` chain.
+/// `use_flags` is `Package.use.enabled` (space-joined enabled-only, the shape
+/// an index `USE` field carries); `""` for standalone builds (no resolved
+/// graph reaches that deep). `per_entry_binpkg_multi_instance` is the entry's
+/// own resolved token: the layout stays run-wide while the `BUILD_ID` export
+/// and index entry follow this gate. Run-wide single + per-entry token writes
+/// no `BUILD_ID` anywhere here, where Portage writes index `None` and vdb
+/// `-1`: a documented divergence, not mirrored.
+// Portage: _emerge/EbuildBinpkg
+pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result<i32, String> {
+    let PackageAfterInstallArgs {
+        ebuild_path,
+        root,
+        portage_tmpdir,
+        options,
+        use_flags,
+        per_entry_binpkg_multi_instance,
+    } = args;
+    // Repeated here so the `FEATURES=buildpkg` side-effect path through
+    // `ebuild_merge::run_merge` hits the gate too.
+    require_signing_config(options)?;
+    let binpkg_extension = binpkg_extension(&options.binpkg_format)?;
+
+    let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
+
+    let build_time = now_unix_time()?;
+    let build_info_dir = env.build_info();
+    std::fs::create_dir_all(&build_info_dir)
+        .map_err(|e| format!("{}: {e}", build_info_dir.display()))?;
+    std::fs::write(build_info_dir.join("BUILD_TIME"), build_time.to_string())
+        .map_err(|e| format!("{}: {e}", build_info_dir.join("BUILD_TIME").display()))?;
+
+    // Multi-instance layout (see `PackageOptions::binpkg_multi_instance`):
+    // `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.<suffix>`; the archive bytes are
+    // the single-instance form either way.
+    let multi_instance_suffix = multi_instance_binpkg_suffix(&options.binpkg_format)?;
+    let build_id = options.binpkg_multi_instance.then(|| {
+        allocate_binpkg_build_id(
+            &options.pkgdir,
+            &env.category,
+            &env.split.pn,
+            &env.split.pf,
+            multi_instance_suffix,
+        )
+    });
+    let binpkg_path = match build_id {
+        Some(id) => options
+            .pkgdir
+            .join(&env.category)
+            .join(&env.split.pn)
+            .join(format!("{}-{id}.{multi_instance_suffix}", env.split.pf)),
+        None => options
+            .pkgdir
+            .join(&env.category)
+            .join(format!("{}.{binpkg_extension}", env.split.pf)),
+    };
+    if let Some(parent) = binpkg_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+
+    // Temp-file-then-rename: `__dyn_package` writes a same-directory temp file,
+    // renamed into place only after the phase exits success, so a mid-write
+    // failure never leaves a corrupt archive at the final path.
+    // Portage: _emerge/EbuildBinpkg
+    let tmp_path = binpkg_path.with_extension(format!(
+        "{}.tmp{}",
+        binpkg_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default(),
+        std::process::id()
+    ));
+    let package_status = invoke_dyn_package(InvokeDynPackageArgs {
+        ebuild_path,
+        portage_tmpdir,
+        root,
+        options,
+        binpkg_path: &tmp_path,
+        // The `BUILD_ID` export follows the entry's own token, while the
+        // allocation above stays run-wide.
+        build_id: build_id.filter(|_| per_entry_binpkg_multi_instance),
+    })?;
+    if package_status != 0 {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Ok(package_status);
+    }
+    std::fs::rename(&tmp_path, &binpkg_path)
+        .map_err(|e| format!("{} -> {}: {e}", tmp_path.display(), binpkg_path.display()))?;
+
+    let cpv = format!("{}/{}", env.category, env.split.pf);
+    let metadata = ebuild_phases::repo_root_for(&env.pkg_dir)
+        .and_then(|repo_root| {
+            portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok()
+        })
+        .unwrap_or_default();
+    let get = |key: &str| metadata.get(key).map(String::as_str).unwrap_or("");
+    // `build-info` first (it carries what the install phase rewrote: `RDEPEND`,
+    // `PROVIDES`/`REQUIRES`, `IUSE`, `SIZE`), `md5-cache` as fallback.
+    let build_info = env.build_info();
+    let build_info_value = |key: &str| -> Option<String> {
+        std::fs::read_to_string(build_info.join(key))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let get_bi =
+        |key: &str| -> String { build_info_value(key).unwrap_or_else(|| get(key).to_string()) };
+    let build_time_str = build_time.to_string();
+    // `PATH` is always written, in any format: a remote fetch falls back to a
+    // bare `<pf>.<ext>` guess without it, and the local-pkgdir scan's
+    // mtime-staleness fast path looks entries up by it. Derived from
+    // `binpkg_path` relative to `$PKGDIR` so the two can never drift apart.
+    // Portage: bintree.py, _pkgindex_entry
+    let path_field = binpkg_path
+        .strip_prefix(&options.pkgdir)
+        .ok()
+        .and_then(|rel| rel.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            format!(
+                "{}/{}",
+                env.category,
+                binpkg_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default()
+            )
+        });
+    // The index `BUILD_ID` is the archive's own metadata, so it follows the
+    // same per-entry gate as the export above, not the allocation.
+    let build_id_str = build_id
+        .filter(|_| per_entry_binpkg_multi_instance)
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    let size_str = std::fs::metadata(&binpkg_path)
+        .map(|st| st.len().to_string())
+        .unwrap_or_default();
+    let mtime_str = std::fs::metadata(&binpkg_path)
+        .ok()
+        .map(|st| binpkg::file_mtime(&st).to_string())
+        .unwrap_or_default();
+    let (md5_str, sha1_str) = binpkg_checksums(&binpkg_path).unwrap_or_default();
+
+    // The stanza fields are the archive metadata's values in Portage's
+    // `keys.sort()` order; both digests are always computed (Portage's fixed
+    // `_pkgindex_hashes`, unaffected by `PORTAGE_CHECKSUM_FILTER`).
+    let defined_phases = get_bi("DEFINED_PHASES");
+    let eapi = get_bi("EAPI");
+    let slot = get_bi("SLOT");
+    let iuse = get_bi("IUSE");
+    let keywords = get_bi("KEYWORDS");
+    let license = get_bi("LICENSE");
+    let properties = get_bi("PROPERTIES");
+    let restrict = get_bi("RESTRICT");
+    let depend = get_bi("DEPEND");
+    let rdepend = get_bi("RDEPEND");
+    let bdepend = get_bi("BDEPEND");
+    let pdepend = get_bi("PDEPEND");
+    let idepend = get_bi("IDEPEND");
+    let provides = get_bi("PROVIDES");
+    let requires = get_bi("REQUIRES");
+    let repo_revisions = get_bi("REPO_REVISIONS");
+    let repository = build_info_value("repository").unwrap_or_default();
+    let stanza = BuiltBinpkgStanza {
+        bdepend: &bdepend,
+        build_id: &build_id_str,
+        build_time: &build_time_str,
+        cpv: &cpv,
+        defined_phases: &defined_phases,
+        depend: &depend,
+        eapi: &eapi,
+        idepend: &idepend,
+        iuse: &iuse,
+        keywords: &keywords,
+        license: &license,
+        md5: &md5_str,
+        path: &path_field,
+        pdepend: &pdepend,
+        properties: &properties,
+        provides: &provides,
+        rdepend: &rdepend,
+        repo_revisions: &repo_revisions,
+        requires: &requires,
+        restrict: &restrict,
+        sha1: &sha1_str,
+        size: &size_str,
+        slot: &slot,
+        use_flags,
+        mtime: &mtime_str,
+        repository: &repository,
+    };
+    write_packages_index_entry(
+        &options.pkgdir,
+        &cpv,
+        &built_binpkg_stanza_fields(&stanza),
+        options.pkgindex_header.as_ref().map(|h| &h.parent),
+    )?;
+
+    // Record the fresh archive in `build-info`: `BINPKGMD5` always, `BUILD_ID`
+    // when the archive carries one. The vdb merge copies `build-info`
+    // wholesale, so a from-source merge records the binpkg it produced too.
+    // Portage: _emerge/EbuildBuild._record_binpkg_info; doebuild.py, package
+    if !md5_str.is_empty() {
+        std::fs::write(build_info.join("BINPKGMD5"), format!("{md5_str}\n"))
+            .map_err(|e| format!("{}: {e}", build_info.join("BINPKGMD5").display()))?;
+    }
+    if !build_id_str.is_empty() {
+        std::fs::write(build_info.join("BUILD_ID"), format!("{build_id_str}\n"))
+            .map_err(|e| format!("{}: {e}", build_info.join("BUILD_ID").display()))?;
+    }
+
+    Ok(0)
+}
+
 /// Rejected here rather than letting the bash hit `die "Unknown BINPKG_FORMAT"`,
 /// so the caller gets a clean `Err` instead of a phase-script failure.
 fn binpkg_extension(binpkg_format: &str) -> Result<&'static str, String> {
@@ -643,6 +859,17 @@ fn binpkg_checksums(path: &Path) -> Option<(String, String)> {
     Some((md5, sha1))
 }
 
+/// `MAKEOPTS` for the package step's native gpkg compressor: the ebuild's own
+/// resolved chain, else the global chain (which serves `quickpkg_from_vdb`,
+/// whose scratch vdb-ebuild copy has no repo above it).
+fn package_makeopts(ebuild_path: &Path, config_root: &Path, root: &Path) -> Option<String> {
+    ebuild_phases::resolve_standalone_chain_scalar(ebuild_path, config_root, root, "MAKEOPTS")
+        .or_else(|| {
+            ebuild_phases::resolve_unmerge_config(config_root, root)
+                .and_then(|config| config.other_vars.get("MAKEOPTS").cloned())
+        })
+}
+
 struct InvokeDynPackageArgs<'a> {
     ebuild_path: &'a Path,
     portage_tmpdir: &'a Path,
@@ -650,4 +877,124 @@ struct InvokeDynPackageArgs<'a> {
     options: &'a PackageOptions,
     binpkg_path: &'a Path,
     build_id: Option<u64>,
+}
+
+/// Runs `bin/misc-functions.sh __dyn_package` against `ebuild_path` with the
+/// compressor / `PKGDIR` / `PORTAGE_BINPKG_TMPFILE` environment Portage sets.
+/// Shared by `run_package` (fresh `src_install` image) and `quickpkg_from_vdb`
+/// (installed-files image).
+///
+/// `build_id`: exported exactly when the caller allocated one, so
+/// `__dyn_package` writes `build-info/BUILD_ID` into the archive itself (and
+/// `__generate_packdebug` gets the name it needs under `FEATURES=packdebug`).
+// Portage: _emerge/EbuildBinpkg._start
+fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
+    let InvokeDynPackageArgs {
+        ebuild_path,
+        portage_tmpdir,
+        root,
+        options,
+        binpkg_path,
+        build_id,
+    } = args;
+    let binpkg_format = options.binpkg_format.as_str();
+    let mut extra_env = vec![
+        ("PKGDIR".to_string(), options.pkgdir.display().to_string()),
+        (
+            "PORTAGE_BINPKG_TMPFILE".to_string(),
+            binpkg_path.display().to_string(),
+        ),
+        ("BINPKG_FORMAT".to_string(), binpkg_format.to_string()),
+    ];
+    // The helper prefers `PORTAGE_PYTHONPATH` over `PORTAGE_PYM_PATH`: set it
+    // directly so the helper imports `portage` from this checkout. Nothing is
+    // pushed without a checkout.
+    let checkout = ebuild_phases::portage_checkout();
+    if let Some(pythonpath) = ebuild_phases::pythonpath_value(&checkout) {
+        extra_env.push(("PORTAGE_PYTHONPATH".to_string(), pythonpath));
+    }
+    if let Some(id) = build_id {
+        extra_env.push(("BUILD_ID".to_string(), id.to_string()));
+    }
+    if binpkg_format == "gpkg" {
+        // The gpkg helper rebuilds its own settings in the subprocess and reads
+        // the compressor from `BINPKG_COMPRESS`/`FLAGS` (not from
+        // `PORTAGE_COMPRESSION_COMMAND`, which is xpak's tar-pipe only), so
+        // the already-resolved values are exported for a deterministic build.
+        extra_env.push((
+            "BINPKG_COMPRESS".to_string(),
+            options.binpkg_compress.clone(),
+        ));
+        extra_env.push((
+            format!(
+                "BINPKG_COMPRESS_FLAGS_{}",
+                options.binpkg_compress.to_uppercase()
+            ),
+            options.binpkg_compress_flags.clone(),
+        ));
+        extra_env.push((
+            "BINPKG_COMPRESS_FLAGS".to_string(),
+            options.binpkg_compress_flags.clone(),
+        ));
+        extra_env.push((
+            "PORTAGE_BZIP2_COMMAND".to_string(),
+            options.portage_bzip2_command.clone(),
+        ));
+        // The helper takes `{JOBS}` from `MAKEOPTS` in its own settings; the
+        // calling-env side already reaches it through the phase env, so only
+        // the `make.conf`/profile side is exported here (left unset when
+        // nothing resolves: the helper then counts CPUs, like Portage).
+        if portage_profile::config_env_var("MAKEOPTS").is_none()
+            && let Some(makeopts) = package_makeopts(ebuild_path, &options.config_root, root)
+        {
+            extra_env.push(("MAKEOPTS".to_string(), makeopts));
+        }
+        // Only non-empty signing values are exported, so an unset var falls back
+        // to the helper's own default exactly as an unset `make.conf` would.
+        // A signing request with no keyring/key never reaches here (rejected
+        // by the pre-check).
+        for (key, value) in [
+            (
+                "BINPKG_GPG_SIGNING_BASE_COMMAND",
+                options.binpkg_gpg_signing_base_command.as_str(),
+            ),
+            (
+                "BINPKG_GPG_SIGNING_DIGEST",
+                options.binpkg_gpg_signing_digest.as_str(),
+            ),
+            (
+                "BINPKG_GPG_SIGNING_GPG_HOME",
+                options.binpkg_gpg_signing_gpg_home.as_str(),
+            ),
+            (
+                "BINPKG_GPG_SIGNING_KEY",
+                options.binpkg_gpg_signing_key.as_str(),
+            ),
+        ] {
+            if !value.is_empty() {
+                extra_env.push((key.to_string(), value.to_string()));
+            }
+        }
+    } else if let Some(compression_command) = resolve_compression_command(
+        &options.binpkg_compress,
+        &options.binpkg_compress_flags,
+        &options.portage_bzip2_command,
+    ) {
+        extra_env.push((
+            "PORTAGE_COMPRESSION_COMMAND".to_string(),
+            compression_command,
+        ));
+    }
+
+    ebuild_phases::run_misc_function(ebuild_phases::RunMiscFunctionArgs {
+        ebuild_path,
+        portage_tmpdir,
+        root,
+        ebuild_phase_value: "package",
+        dyn_command: "__dyn_package",
+        extra_env: &extra_env,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+    })
 }
