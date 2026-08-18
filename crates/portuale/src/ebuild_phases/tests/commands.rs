@@ -38,6 +38,52 @@ fn install_lands_a_real_file_under_a_real_d() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// An in-process `Brush` phase must not leak its umask into the host
+/// process; the body runs in a re-executed child (`PORTUALE_UMASK_CHILD`).
+#[test]
+fn a_brush_phase_does_not_leak_its_umask_into_the_host_process() {
+    if std::env::var_os("PORTUALE_UMASK_CHILD").is_none() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ebuild_phases::tests::a_brush_phase_does_not_leak_its_umask_into_the_host_process",
+                "--nocapture",
+            ])
+            .env("PORTUALE_UMASK_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "child failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        return;
+    }
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+    let portage_tmpdir = TempDir::new(&format!("umask-leak-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    // SAFETY: `umask(2)` cannot fail; this is the single-test child.
+    unsafe { libc::umask(0o027) };
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
+    .expect("run_commands should not itself error");
+    assert_eq!(status, 0);
+    let after = unsafe { libc::umask(0o027) };
+    assert_eq!(after, 0o027, "the phase's umask leaked: {after:04o}");
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
 /// The install chain writes `build-info/BUILD_TIME` before any metadata
 /// key, for the merge to copy (Portage: doebuild.py, _post_src_install_write_metadata).
 #[test]
@@ -201,6 +247,61 @@ fn install_really_inherits_a_real_eclass_and_calls_its_own_function() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// The saved `${T}/environment` carries no bash special variables, so
+/// re-sourcing it prints no `cannot mutate readonly variable`.
+#[test]
+fn brush_phase_env_is_filtered_of_bash_special_variables() {
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+    let portage_tmpdir = TempDir::new(&format!(
+        "ebuild-phases-test-{}-{}",
+        std::process::id(),
+        "brush_phase_env_is_filtered_of_bash_special_variables"
+    ));
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    let log = portage_tmpdir.join("brush.log");
+
+    let status = run_commands_logged(RunCommandsLoggedArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        log_file: Some(&log),
+        build_env: &[],
+    })
+    .expect("run_commands_logged should not itself error");
+    assert_eq!(status, 0, "install should exit successfully");
+
+    let environment = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0/temp/environment");
+    let saved = std::fs::read_to_string(&environment)
+        .unwrap_or_else(|e| panic!("{} should have been written: {e}", environment.display()));
+    for name in ["BASHOPTS", "EUID", "PPID", "SHELLOPTS", "UID"] {
+        assert!(
+            !saved
+                .lines()
+                .any(|line| line.starts_with("declare") && line.contains(&format!(" {name}="))),
+            "{name} must be filtered out of the saved environment"
+        );
+    }
+
+    let logged = std::fs::read_to_string(&log)
+        .unwrap_or_else(|e| panic!("{} should have been written: {e}", log.display()));
+    assert!(
+        !logged.contains("cannot mutate readonly variable"),
+        "the phase log must not contain readonly-variable noise:\n{logged}"
+    );
+    assert!(
+        !logged.contains("env: ''"),
+        "the phase log must not contain an empty-$BASH `env` failure:\n{logged}"
+    );
+
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
 /// Passing `debug: true` exports `PORTAGE_DEBUG=1` into the phase's
 /// environment, proven via the value the fixture observed.
 #[test]
@@ -236,6 +337,49 @@ fn debug_flag_exports_portage_debug() {
             .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
         assert_eq!(observed, expected, "debug={debug}");
 
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+}
+
+/// The fake distdir is prepared for a command other than `setup`
+/// unless `FEATURES=noauto`.
+#[test]
+fn fake_distdir_is_prepared_only_when_portage_prepares_it() {
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+    let noauto = vec![("FEATURES".to_string(), "noauto".to_string())];
+    for (commands, build_env, expect_distdir) in [
+        (vec!["setup"], vec![], false),
+        (vec!["setup"], noauto.clone(), false),
+        (vec!["pretend"], noauto, false),
+        (vec!["pretend"], vec![], true),
+    ] {
+        let portage_tmpdir = TempDir::new(&format!(
+            "ebuild-phases-test-{}-fake-distdir-{}-{}",
+            std::process::id(),
+            commands[0],
+            expect_distdir
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let status = run_commands(RunCommandsArgs {
+            ebuild_path: &ebuild_path,
+            commands: &commands,
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &portage_tmpdir.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell: ShellBackend::Brush,
+            build_env: &build_env,
+        })
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "{commands:?} {build_env:?}");
+        let distdir = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0/distdir");
+        assert_eq!(
+            distdir.is_dir(),
+            expect_distdir,
+            "{commands:?} {build_env:?}"
+        );
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
 }

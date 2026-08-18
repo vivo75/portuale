@@ -30,3 +30,10 @@ fn parse_env_d_line(line: &str) -> Option<(String, String)> {
         .unwrap_or("");
     Some((key, value.to_string()))
 }
+
+fn write_generated(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
+}

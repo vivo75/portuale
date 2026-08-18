@@ -2,6 +2,20 @@
 
 use crate::remote::*;
 
+/// Parse `KEY=VALUE` stdout lines into a map (anything else ignored).
+pub(crate) fn parse_kv(stdout: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for line in stdout.lines() {
+        if let Some((key, value)) = line.split_once('=')
+            && !key.is_empty()
+            && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            map.insert(key.to_string(), value.to_string());
+        }
+    }
+    map
+}
+
 /// Clock gate: `|server - client| <= max_skew` (`0` disables). Returns
 /// the failure message, if any.
 pub(crate) fn clock_gate(

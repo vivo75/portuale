@@ -60,6 +60,56 @@ struct RemoveContentsArgs<'a> {
     contents_text: &'a str,
 }
 
+/// Options for `run_unmerge`. `config_protect`/`config_protect_mask`
+/// are only consulted by `FEATURES=unmerge-orphans`; defaults match
+/// `make.globals`, like `MergeOptions::default()`.
+pub struct UnmergeOptions {
+    pub debug: bool,
+    pub shell: ebuild_phases::ShellBackend,
+    pub config_protect: String,
+    pub config_protect_mask: String,
+    /// `unmerge-orphans` is a default-on `FEATURES` token, so `Default`
+    /// is `true`. The env-var read only checks the literal value, not the
+    /// accumulated default set -- setting `FEATURES` to any other token
+    /// reads as `false` here, unlike Portage.
+    pub unmerge_orphans: bool,
+    /// Portage's `PORTAGE_CONFIGROOT`; only consulted by the masters-chain
+    /// resolution reached via the `prerm`/`postrm` phase calls below.
+    pub config_root: PathBuf,
+    /// `pf`s of the same category the merge's replace loop already unmerged
+    /// but a database backend keeps installed until the publishing commit.
+    /// Left out of `others_in_slot`; empty everywhere else.
+    pub already_unmerged: Vec<String>,
+}
+
+impl Default for UnmergeOptions {
+    fn default() -> Self {
+        Self {
+            debug: false,
+            shell: ebuild_phases::ShellBackend::default(),
+            config_protect: "/etc".to_string(),
+            config_protect_mask: "/etc/env.d".to_string(),
+            unmerge_orphans: true,
+            config_root: PathBuf::from("/dev/null/no-config-root-configured"),
+            already_unmerged: Vec::new(),
+        }
+    }
+}
+
+/// Arguments of [`unmerge_pkgfiles`].
+#[cfg(test)]
+pub(crate) struct UnmergePkgfilesArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) also_keep: &'a [String],
+    pub(crate) options: &'a UnmergeOptions,
+    pub(crate) is_replacement: bool,
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+}
+
 /// Removes the vdb entry directory itself, then best-effort `rmdir`s its
 /// now-maybe-empty parent category directory (ignored on failure). Split
 /// out so the binpkg replace path can drop an old entry phaselessly.

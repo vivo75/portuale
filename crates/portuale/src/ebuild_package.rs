@@ -1055,4 +1055,55 @@ mod tests {
     fn tempdir() -> std::path::PathBuf {
         TempDir::new("portuale-ebuild-package-test").keep()
     }
+
+    #[test]
+    fn package_after_install_writes_the_resolved_use_flags_into_the_packages_index() {
+        // Resolved `USE` flags pass straight through to the index `USE` field.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_compress: "bzip2".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
+            ebuild_path: &ebuild,
+            commands: &["install"],
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &options.distdir,
+            debug: options.debug,
+            config_root: &options.config_root,
+            shell: options.shell,
+            build_env: &[],
+        })
+        .expect("install succeeds");
+        assert_eq!(status, 0);
+
+        let status = package_after_install(PackageAfterInstallArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            use_flags: "foo bar",
+            per_entry_binpkg_multi_instance: options.binpkg_multi_instance,
+        })
+        .expect("package_after_install succeeds");
+        assert_eq!(status, 0);
+
+        let index = portage_repo::BinaryIndex::from_pkgdir(&options.pkgdir);
+        let metadata = portage_repo::read_binary_metadata(&index, "dev-libs", "packagepkg", "1.0")
+            .expect("binary metadata entry exists");
+        assert_eq!(metadata.get("USE").map(String::as_str), Some("foo bar"));
+    }
 }
