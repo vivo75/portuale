@@ -7,4 +7,8 @@
 // 127, so a new upstream call fails loudly (D1).
 
 mod doins;
-pub(crate) use doins::{xattr_excluded, xattr_get, xattr_list};
+// The merge copies xattrs through the same `_copyxattr`/`_cmpxattr`
+// port the helpers use.
+#[cfg(test)]
+pub(crate) use doins::xattr_set;
+pub(crate) use doins::{copy_xattr, xattr_excluded, xattr_get, xattr_list};

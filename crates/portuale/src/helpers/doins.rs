@@ -19,6 +19,38 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------
+// Python `repr()` helpers (pinned lines match Portage's byte for byte)
+// ---------------------------------------------------------------------
+
+/// Python `repr()` of a byte string: `b'...'` (double quotes when the
+/// value contains a single quote and no double quote).
+fn py_bytes_repr(b: &[u8]) -> Vec<u8> {
+    let mut out = vec![b'b'];
+    let quote = if b.contains(&b'\'') && !b.contains(&b'"') {
+        b'"'
+    } else {
+        b'\''
+    };
+    out.push(quote);
+    for &c in b {
+        match c {
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            c if c == quote => {
+                out.push(b'\\');
+                out.push(c);
+            }
+            0x20..=0x7e => out.push(c),
+            c => out.extend_from_slice(format!("\\x{c:02x}").as_bytes()),
+        }
+    }
+    out.push(quote);
+    out
+}
+
+// ---------------------------------------------------------------------
 // fnmatch (posix: `*` matches everything including `/`) and
 // `_xattr_excluder` (whitespace-split globs; empty never excludes).
 // ---------------------------------------------------------------------
@@ -119,6 +151,36 @@ pub(crate) fn xattr_excluded(pattern: &str, attr: &[u8]) -> bool {
     false
 }
 
+/// Map an errno to Portage's Python exception type name.
+fn exc_name(errno: i32) -> &'static str {
+    match errno {
+        x if x == libc::ENOENT => "FileNotFoundError",
+        x if x == libc::EEXIST => "FileExistsError",
+        x if x == libc::EISDIR => "IsADirectoryError",
+        x if x == libc::ENOTDIR => "NotADirectoryError",
+        x if x == libc::EACCES || x == libc::EPERM => "PermissionError",
+        _ => "OSError",
+    }
+}
+
+fn c_strerror(errno: i32) -> String {
+    unsafe {
+        let p = libc::strerror(errno);
+        if p.is_null() {
+            return format!("Unknown error {errno}");
+        }
+        std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+    }
+}
+
+/// `ExcType: [Errno n] strerror: b'path'`.
+pub(super) fn errno_line(errno: i32, path: &[u8]) -> Vec<u8> {
+    let mut out = Vec::from(exc_name(errno).as_bytes());
+    out.extend_from_slice(format!(": [Errno {errno}] {}: ", c_strerror(errno)).as_bytes());
+    out.extend_from_slice(&py_bytes_repr(path));
+    out
+}
+
 fn last_errno() -> i32 {
     std::io::Error::last_os_error()
         .raw_os_error()
@@ -176,6 +238,53 @@ pub(crate) fn xattr_get(path: &[u8], name: &[u8]) -> Result<Vec<u8>, i32> {
     }
     buf.truncate(got as usize);
     Ok(buf)
+}
+
+/// Shared with `helpers/xattr.rs`.
+pub(crate) fn xattr_set(path: &[u8], name: &[u8], value: &[u8]) -> Result<(), i32> {
+    let c = c_path(path).map_err(|_| libc::EINVAL)?;
+    let n = std::ffi::CString::new(name).map_err(|_| libc::EINVAL)?;
+    let r = unsafe {
+        libc::setxattr(
+            c.as_ptr(),
+            n.as_ptr(),
+            value.as_ptr().cast(),
+            value.len(),
+            0,
+        )
+    };
+    if r != 0 { Err(last_errno()) } else { Ok(()) }
+}
+
+/// `_copyxattr(src, dest, exclude)`. `Err` is either an errno line
+/// (list/get failures other than ENOTSUP) or the full
+/// `OperationNotSupported: ...` line (set failures).
+/// Shared with `helpers/xattr.rs` (`install.py` copies through this,
+/// never its own).
+pub(crate) fn copy_xattr(src: &[u8], dest: &[u8], exclude: &[u8]) -> Result<(), Vec<u8>> {
+    let attrs = xattr_list(src).map_err(|e| errno_line(e, src))?;
+    if attrs.is_empty() {
+        return Ok(());
+    }
+    let excl = String::from_utf8_lossy(exclude).into_owned();
+    for attr in &attrs {
+        if xattr_excluded(&excl, attr) {
+            continue;
+        }
+        let value = xattr_get(src, attr).map_err(|e| errno_line(e, src))?;
+        if xattr_set(dest, attr, &value).is_err() {
+            // `OperationNotSupported("Filesystem containing file '%s'
+            // does not support extended attribute '%s'")`.
+            let mut line =
+                Vec::from("OperationNotSupported: Filesystem containing file '".as_bytes());
+            line.extend_from_slice(String::from_utf8_lossy(dest).as_bytes());
+            line.extend_from_slice(b"' does not support extended attribute '");
+            line.extend_from_slice(String::from_utf8_lossy(attr).as_bytes());
+            line.push(b'\'');
+            return Err(line);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

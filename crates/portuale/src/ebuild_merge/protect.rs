@@ -106,6 +106,79 @@ pub(crate) fn xattrs_equal(src: &Path, dest: &Path, exclude: &str) -> bool {
             .all(|a| crate::helpers::xattr_get(s, a).ok() == crate::helpers::xattr_get(d, a).ok())
 }
 
+/// Carries `src`'s xattrs onto the not-yet-renamed temporary `tmp`, the way
+/// Portage's move would have left them on `dest` (see [`XattrPolicy`]).
+pub(crate) fn carry_xattrs(
+    src: &Path,
+    tmp: &Path,
+    dest: &Path,
+    xattrs: &XattrPolicy,
+) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let src_dev = std::fs::metadata(src).map(|m| m.dev()).ok();
+    let dest_dev = dest
+        .parent()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map(|m| m.dev());
+    let (s, t) = (src.as_os_str().as_bytes(), tmp.as_os_str().as_bytes());
+    if src_dev.is_some() && src_dev == dest_dev {
+        // Same-device renames keep every attribute, so this copy only warns.
+        if let Err(line) = crate::helpers::copy_xattr(s, t, b"") {
+            eprintln!("!!! {}", String::from_utf8_lossy(&line));
+        }
+        return Ok(());
+    }
+    if xattrs.enabled {
+        crate::helpers::copy_xattr(s, t, xattrs.exclude.as_bytes()).map_err(|line| {
+            format!(
+                "{}\n!!! Failed to copy extended attributes. In order to avoid this error, set FEATURES=\"-xattr\" in make.conf.",
+                String::from_utf8_lossy(&line)
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Portage's `movefile` atomic replacement for a regular file: copy to a
+/// temporary, apply owner/mode/mtime, then rename over `dest`, never
+/// writing through the live inode (an in-place copy would rewrite running
+/// executables and libraries underneath their processes). `mtime` is the
+/// source's own, already computed by the caller; the temporary is removed
+/// on failure, leaving `dest` untouched.
+/// Portage: lib/portage/util/movefile.py, movefile
+pub(crate) fn replace_file_atomic(
+    src: &Path,
+    dest: &Path,
+    mtime: i64,
+    xattrs: &XattrPolicy,
+) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = unique_sibling_path(dest)?;
+    let outcome = (|| -> Result<(), String> {
+        std::fs::copy(src, &tmp).map_err(|e| format!("{}: {e}", src.display()))?;
+        let src_meta = std::fs::metadata(src).map_err(|e| format!("{}: {e}", src.display()))?;
+        // `std::fs::copy` carries the mode but never ownership; the chmod
+        // fixes up a umask-masked temporary. See `lchown_or_chown`.
+        lchown_or_chown(&tmp, src_meta.uid(), src_meta.gid(), false)?;
+        std::fs::set_permissions(
+            &tmp,
+            std::fs::Permissions::from_mode(src_meta.permissions().mode()),
+        )
+        .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        filetime::set_file_mtime(&tmp, filetime::FileTime::from_unix_time(mtime, 0))
+            .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        carry_xattrs(src, &tmp, dest, xattrs)?;
+        std::fs::rename(&tmp, dest)
+            .map_err(|e| format!("{} -> {}: {e}", tmp.display(), dest.display()))
+    })();
+    if outcome.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    outcome
+}
+
 /// Portage's `movefile` atomic replacement for a symlink: create the link
 /// at a temporary, apply `lchown` and mtime, then rename over `dest`; the
 /// path is never briefly absent. A directory here is the caller's backup case.

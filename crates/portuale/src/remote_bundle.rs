@@ -17,6 +17,21 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// One image entry for the client's merge: type, content hash (files
+/// only), source mtime, and `/`-rooted relative path.
+pub struct FileMeta {
+    /// `obj`, `dir` or `sym`.
+    pub kind: &'static str,
+    /// Hex MD5 of file bytes (`obj`), `-` otherwise.
+    pub md5: String,
+    /// Source mtime seconds, recorded verbatim into CONTENTS.
+    pub mtime: i64,
+    /// Path relative to the image root, `/`-separated, no leading `/`.
+    pub rel: String,
+    /// Symlink target (`sym` only).
+    pub target: Option<String>,
+}
+
 /// Which of the client phases (`pretend`/`setup`/`preinst`) a
 /// binpkg's `DEFINED_PHASES` actually defines -- and only when the ebuild
 /// file plus the hook environment are present to run them from.
