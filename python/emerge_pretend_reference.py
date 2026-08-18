@@ -3269,6 +3269,7 @@ def resolve_pretend_graph(
     rebuilt_binaries=False,
     rebuilt_binaries_timestamp=None,
     newrepo=False,
+    buildpkgonly=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -3870,10 +3871,26 @@ def resolve_pretend_graph(
     if required_use_violations:
         raise ResolutionError("\n".join(required_use_violations))
 
+    # Real depgraph.py:5706-5717 -- see the Rust side's own
+    # GraphResult::buildpkgonly_deps_unsatisfied doc comment.
+    buildpkgonly_deps_unsatisfied = False
+    if buildpkgonly:
+        needs_action = {
+            (category, package)
+            for (category, package, outcome, *_rest) in entries
+            if outcome[0] not in ("already_installed", "no_visible_candidate")
+        }
+        buildpkgonly_deps_unsatisfied = any(
+            (category, package) in needs_action
+            and any(owner in needs_action for owner in required_by)
+            for (category, package, _o, _b, _s, _u, required_by, *_rest) in entries
+        )
+
     return {
         "entries": entries,
         "slot_conflicts": slot_conflicts,
         "changed_deps_report": changed_deps_report_entries,
+        "buildpkgonly_deps_unsatisfied": buildpkgonly_deps_unsatisfied,
     }
 
 
@@ -4843,6 +4860,8 @@ def run(args):
     # value at all (same shape as --changed-use/-U) -- unlike
     # --changed-slot/--rebuilt-binaries, which are real "true_y_or_n".
     newrepo = False
+    # --buildpkgonly/-B: same plain-boolean shape as --newrepo above.
+    buildpkgonly = False
     with_test_deps = False
     changed_deps_report = False
     # --autounmask/--autounmask-keep-keywords: None means "not explicitly
@@ -5201,6 +5220,9 @@ def run(args):
         elif arg == "--newrepo":
             newrepo = True
             i += 1
+        elif arg == "--buildpkgonly" or arg == "-B":
+            buildpkgonly = True
+            i += 1
         elif arg == "--with-test-deps":
             # Real "--with-test-deps": y_or_n (default_arg_opts), the
             # identical optional-value shape "--changed-deps"/
@@ -5411,6 +5433,8 @@ def run(args):
                     usepkgonly = True
                 elif c == "W":
                     deselect = True
+                elif c == "B":
+                    buildpkgonly = True
                 elif c == "X":
                     # Unlike every other bundle-compatible short flag
                     # here, -X's own value is *required*, not optional --
@@ -5649,6 +5673,7 @@ def run(args):
             resolved_rebuilt_binaries,
             rebuilt_binaries_timestamp,
             newrepo,
+            buildpkgonly,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -5935,6 +5960,18 @@ def run(args):
         print("      --changed-deps option to automatically trigger rebuilds when changed", file=sys.stderr)
         print("      dependencies are detected. Refer to the emerge man page for more", file=sys.stderr)
         print("      information about this option.", file=sys.stderr)
+
+    # Real depgraph.py's own display_problems(): shown *after* the merge
+    # list above (real `_show_merge_list()` runs first), then the whole
+    # action fails -- see resolve_pretend_graph's own
+    # "buildpkgonly_deps_unsatisfied" comment for the exact real check
+    # this mirrors.
+    if result["buildpkgonly_deps_unsatisfied"]:
+        print(file=sys.stderr)
+        print("!!! --buildpkgonly requires all dependencies to be merged.", file=sys.stderr)
+        print("!!! Cannot merge requested packages. Merge deps and try again.", file=sys.stderr)
+        print(file=sys.stderr)
+        return 1
 
     return 0
 

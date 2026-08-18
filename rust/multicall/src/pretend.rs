@@ -1424,6 +1424,8 @@ pub fn run(args: &[String]) -> ExitCode {
     // value at all (same shape as --changed-use/-U above) -- unlike
     // --changed-slot/--rebuilt-binaries, which are real "true_y_or_n".
     let mut newrepo = false;
+    // --buildpkgonly/-B: same plain-boolean shape as --newrepo above.
+    let mut buildpkgonly = false;
     let mut with_test_deps = false;
     let mut changed_deps_report = false;
     // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
@@ -1841,6 +1843,9 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--newrepo" {
             newrepo = true;
             i += 1;
+        } else if arg == "--buildpkgonly" || arg == "-B" {
+            buildpkgonly = true;
+            i += 1;
         } else if arg == "--with-test-deps" {
             // Real "--with-test-deps": y_or_n (default_arg_opts), the
             // identical optional-value shape "--changed-deps"/
@@ -2067,6 +2072,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'k' => usepkg = true,
                     'K' => usepkgonly = true,
                     'W' => deselect = true,
+                    'B' => buildpkgonly = true,
                     'X' => {
                         // Unlike every other bundle-compatible short flag
                         // here, -X's own value is *required*, not
@@ -2336,6 +2342,7 @@ pub fn run(args: &[String]) -> ExitCode {
         rebuilt_binaries,
         rebuilt_binaries_timestamp,
         newrepo,
+        buildpkgonly,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -2454,6 +2461,16 @@ pub fn run(args: &[String]) -> ExitCode {
         eprintln!("      --changed-deps option to automatically trigger rebuilds when changed");
         eprintln!("      dependencies are detected. Refer to the emerge man page for more");
         eprintln!("      information about this option.");
+    }
+
+    // Real depgraph.py's own display_problems(): shown *after* the merge
+    // list above (real `_show_merge_list()` runs first), then the whole
+    // action fails -- see GraphResult::buildpkgonly_deps_unsatisfied's
+    // own doc comment for the exact real check this mirrors.
+    if result.buildpkgonly_deps_unsatisfied {
+        eprintln!("\n!!! --buildpkgonly requires all dependencies to be merged.");
+        eprintln!("!!! Cannot merge requested packages. Merge deps and try again.\n");
+        return ExitCode::from(1);
     }
 
     ExitCode::SUCCESS

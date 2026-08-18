@@ -3273,6 +3273,20 @@ pub struct GraphResult {
     pub entries: Vec<GraphEntry>,
     pub slot_conflicts: Vec<SlotConflict>,
     pub changed_deps_report: Vec<ChangedDepsReportEntry>,
+    /// `--buildpkgonly`'s own real depgraph check
+    /// (`lib/_emerge/depgraph.py:5706-5717`): `true` when some entry
+    /// that would newly merge (`New`/`Upgrade`/`Downgrade`/`Reinstall` --
+    /// anything but `AlreadyInstalled`/`NoVisibleCandidate`) has a
+    /// `required_by` owner that would *also* newly merge. Real
+    /// `--buildpkgonly` only ever builds a binary package without
+    /// merging it, so every one of a to-be-built package's own
+    /// dependencies must already be satisfied by something already
+    /// installed -- if a dependency itself also needs building, real
+    /// portage refuses to resolve at all ("--buildpkgonly requires all
+    /// dependencies to be merged", `depgraph.py`'s own
+    /// `display_problems()`). Always `false` when `buildpkgonly` wasn't
+    /// requested at all.
+    pub buildpkgonly_deps_unsatisfied: bool,
 }
 
 /// `--deep`/`-D` (real `lib/_emerge/main.py`'s own `"--deep": valid_integers`
@@ -3679,6 +3693,7 @@ pub fn resolve_pretend_graph(
     rebuilt_binaries: bool,
     rebuilt_binaries_timestamp: Option<u64>,
     newrepo: bool,
+    buildpkgonly: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -4294,10 +4309,32 @@ pub fn resolve_pretend_graph(
         return Err(required_use_violations.join("\n"));
     }
 
+    // Real depgraph.py:5706-5717 -- see GraphResult::
+    // buildpkgonly_deps_unsatisfied's own doc comment.
+    let buildpkgonly_deps_unsatisfied = buildpkgonly && {
+        let needs_action: HashSet<(String, String)> = entries
+            .iter()
+            .filter(|e| {
+                !matches!(
+                    e.outcome,
+                    PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+                )
+            })
+            .map(|e| (e.category.clone(), e.package.clone()))
+            .collect();
+        entries.iter().any(|e| {
+            needs_action.contains(&(e.category.clone(), e.package.clone()))
+                && e.required_by
+                    .iter()
+                    .any(|owner| needs_action.contains(owner))
+        })
+    };
+
     Ok(GraphResult {
         entries,
         slot_conflicts,
         changed_deps_report: changed_deps_report_entries,
+        buildpkgonly_deps_unsatisfied,
     })
 }
 
@@ -5116,6 +5153,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -6085,6 +6123,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6121,6 +6160,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -6160,6 +6200,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -6203,6 +6244,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
@@ -6263,6 +6305,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -6371,6 +6414,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -6481,6 +6525,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .expect("resolve_pretend_graph must succeed")
@@ -6628,6 +6673,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -6711,6 +6757,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -6862,6 +6909,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -6959,6 +7007,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7002,6 +7051,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -7106,6 +7156,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -7147,6 +7198,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -7192,6 +7244,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7235,6 +7288,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -7497,6 +7551,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -7553,6 +7608,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -7585,6 +7641,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .expect_err("no visible candidate at all");
@@ -7650,6 +7707,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
@@ -7723,12 +7781,81 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
 
     fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
         graph_result_real(atom_str).entries
+    }
+
+    fn graph_result_buildpkgonly(atom_str: &str) -> GraphResult {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn buildpkgonly_flags_a_new_package_depending_on_another_new_package() {
+        // dev-libs/dualdep (New) has both DEPEND and RDEPEND on
+        // dev-libs/newpkg (also New) -- real --buildpkgonly can't
+        // resolve this, since newpkg itself would also need building.
+        let result = graph_result_buildpkgonly("dev-libs/dualdep");
+        assert!(result.buildpkgonly_deps_unsatisfied);
+    }
+
+    #[test]
+    fn buildpkgonly_does_not_fire_when_the_dependency_is_already_installed() {
+        // dev-libs/buildpkgonlysatisfied (New) RDEPENDs on dev-libs/
+        // samepkg, which is already installed -- nothing else needs
+        // building.
+        let result = graph_result_buildpkgonly("dev-libs/buildpkgonlysatisfied");
+        assert!(!result.buildpkgonly_deps_unsatisfied);
+    }
+
+    #[test]
+    fn buildpkgonly_is_always_false_when_not_requested() {
+        // graph_result_real's own helper always passes buildpkgonly=false
+        // -- even for the same dualdep fixture that trips the check
+        // above, the field must stay false when the flag isn't given at
+        // all.
+        let result = graph_result_real("dev-libs/dualdep");
+        assert!(!result.buildpkgonly_deps_unsatisfied);
     }
 
     #[test]

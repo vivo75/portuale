@@ -3488,6 +3488,45 @@ the pre-existing `samepkg` (no `repository` file at all -- fires via the
 `"__unknown__"` sentinel, a real, sometimes-surprising consequence of
 that missing-tolerant-fallback design worth demonstrating explicitly).
 
+`--buildpkgonly`/`-B`: real `depgraph.py`'s own resolution-time
+validation (`lib/_emerge/depgraph.py:5706-5717`), not a display tweak --
+`--buildpkgonly` only ever builds a binary package without merging it,
+so every dependency of a package that needs building must already be
+satisfied by something *already installed*; if a dependency itself also
+needs building, real portage refuses to resolve at all. Implemented as
+one more field on `resolve_pretend_graph`'s own return value
+(`buildpkgonly_deps_unsatisfied`): once the whole graph is known, collect
+every entry that would newly merge (`New`/`Upgrade`/`Downgrade`/
+`Reinstall` -- anything but `AlreadyInstalled`/`NoVisibleCandidate`),
+then check whether any of *those* entries has a `required_by` owner
+that's *also* in that same set -- exactly real `digraph.hasallzeros()`'s
+own check, expressed against this pilot's own `required_by` edges
+instead of a real `digraph`. When it fires, `pretend.rs` prints the
+resolved merge list first (matching real `display_problems()`'s own
+`_show_merge_list()`-then-error ordering) and *then* the real error text
+verbatim (`"--buildpkgonly requires all dependencies to be merged."` /
+`"Cannot merge requested packages. Merge deps and try again."`, both to
+stderr) and exits `1`. Two fixtures prove it: `dualdep` (`New`, both
+`DEPEND` and `RDEPEND` on `newpkg`, itself `New` -- fires) and the new
+`buildpkgonlysatisfied` (`New`, `RDEPEND` on the already-installed
+`samepkg` -- doesn't fire).
+
+**v1 scope cuts**: no real "build the `.tbz2`/skip the merge, run
+`clean`" *execution* at all -- this pilot's `emerge` binary is still a
+pure `--pretend`-only dependency-resolution tool with no real merge
+orchestration of its own (`ebuild <file> merge`/`package` are the real,
+separate execution surfaces task #54/#55 built; `--buildpkgonly` doesn't
+change what either of those does, since it's an `emerge`-level flag).
+No `ignore_priority` distinction (real `DepPrioritySatisfiedRange.
+ignore_medium` ignores soft/optional edges when deciding whether the
+graph is "clean" -- this pilot treats every `required_by` edge as hard).
+No `--fetchonly` interaction (real portage only runs this check when
+`--fetchonly` is *not* also given -- this pilot has no `--fetchonly` at
+all yet, so the interaction can't arise). No `--quickpkg-direct`
+sibling check, and no `_start_resolution_display`'s own cosmetic
+"packages that would be *built*" spinner text (this pilot has no spinner
+concept at all).
+
 ### Real ebuild phase execution (task #54): the first slice
 
 A genuinely different kind of slice from everything above: not a new
@@ -4910,6 +4949,21 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo 
 # so --newrepo fires here too even though nothing really changed
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo dev-libs/samepkg
 # [ebuild  r] dev-libs/samepkg-1.0 (reinstall for new repository)
+
+# --buildpkgonly: dualdep is New, and both its DEPEND and RDEPEND on
+# newpkg are also New -- real portage refuses to resolve this at all,
+# since newpkg itself would also need building
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --buildpkgonly dev-libs/dualdep
+# [ebuild  N] dev-libs/dualdep-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+#
+# !!! --buildpkgonly requires all dependencies to be merged.
+# !!! Cannot merge requested packages. Merge deps and try again.
+# (exit 1)
+# buildpkgonlysatisfied is also New, but its own RDEPEND (samepkg) is
+# already installed -- nothing else needs building, so it resolves fine
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --buildpkgonly dev-libs/buildpkgonlysatisfied
+# [ebuild  N] dev-libs/buildpkgonlysatisfied-1.0
 
 # downgrade vs upgrade: downgradepkg is installed at 2.0, but only 1.0 is
 # visible in the tree -- a genuine downgrade, distinct from an upgrade,

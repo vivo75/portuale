@@ -370,6 +370,26 @@ CASES = [
         0,
     ),
     (
+        "--buildpkgonly: off by default, a New->New dependency chain resolves fine",
+        ["--pretend", "dev-libs/dualdep"],
+        0,
+    ),
+    (
+        "--buildpkgonly: a New package depending on another New package fails to resolve",
+        ["--pretend", "--buildpkgonly", "dev-libs/dualdep"],
+        1,
+    ),
+    (
+        "--buildpkgonly: a New package depending on an already-installed one resolves fine",
+        ["--pretend", "--buildpkgonly", "dev-libs/buildpkgonlysatisfied"],
+        0,
+    ),
+    (
+        "-B short alias for --buildpkgonly",
+        ["--pretend", "-B", "dev-libs/dualdep"],
+        1,
+    ),
+    (
         "opt= USE-dep: parent flag ON evaluates to [flag], matches the child's default-on flag",
         ["--pretend", "dev-libs/useeqparentonpkg"],
         0,
@@ -2379,6 +2399,46 @@ def test_newrepo_appears_in_json(emerge_binary, fixture_env):
     entry = payload["entries"][0]
     assert entry["outcome"] == "reinstall"
     assert entry["new_repo"] is True
+
+
+def test_buildpkgonly_reports_the_merge_list_then_the_real_error(
+    emerge_binary, fixture_env
+):
+    """Real depgraph.py's own display_problems(): the merge list is
+    printed first (real _show_merge_list()), and only then does the
+    real "--buildpkgonly requires all dependencies to be merged" error
+    follow, on stderr -- dev-libs/dualdep (New) RDEPENDs on dev-libs/
+    newpkg (also New), so both need building."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--buildpkgonly", "dev-libs/dualdep"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/dualdep-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+    assert result.stderr.strip().splitlines() == [
+        "!!! --buildpkgonly requires all dependencies to be merged.",
+        "!!! Cannot merge requested packages. Merge deps and try again.",
+    ]
+
+
+def test_buildpkgonly_does_not_fire_when_the_dependency_is_already_installed(
+    emerge_binary, fixture_env
+):
+    """dev-libs/buildpkgonlysatisfied (New) RDEPENDs on dev-libs/samepkg,
+    which is already installed -- nothing else needs building, so real
+    --buildpkgonly's own depgraph check has nothing to object to."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--buildpkgonly", "dev-libs/buildpkgonlysatisfied"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/buildpkgonlysatisfied-1.0"
+    assert result.stderr == ""
 
 
 def test_rebuilt_binaries_off_by_default_stays_already_installed(emerge_binary, fixture_env):
