@@ -21,6 +21,7 @@ use crate::color::{self, Colorizer};
 
 mod args;
 mod conflicts;
+mod display;
 mod env_config;
 mod help;
 mod json;
@@ -34,6 +35,7 @@ mod tests;
 
 pub(crate) use args::*;
 pub(crate) use conflicts::*;
+pub(crate) use display::*;
 pub(crate) use env_config::*;
 pub(crate) use help::*;
 pub(crate) use json::*;
