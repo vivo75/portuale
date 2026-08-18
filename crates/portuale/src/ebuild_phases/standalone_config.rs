@@ -226,6 +226,15 @@ pub(crate) fn resolve_standalone_chain_scalar(
     config.other_vars.get(key).cloned()
 }
 
+/// `resolve_standalone_chain_scalar` for `BINPKG_FORMAT`.
+pub(crate) fn resolve_standalone_binpkg_format(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<String> {
+    resolve_standalone_chain_scalar(ebuild_path, config_root, eroot, "BINPKG_FORMAT")
+}
+
 /// The resolved global `Config` for the config-less `emerge -C` path.
 /// `None` when no config resolves; the caller keeps its default.
 pub(crate) fn resolve_unmerge_config(

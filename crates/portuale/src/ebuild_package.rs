@@ -554,6 +554,54 @@ pub struct RunPackageArgs<'a> {
     pub use_flags: &'a str,
 }
 
+/// Runs the `install` chain, then the packaging tail.
+/// `build_env`: the resolved phase environment for the `install` chain
+/// (`--buildpkgonly` passes the full env plus the entry's `USE`;
+/// standalone passes `&[]`). `use_flags` is `Package.use.enabled`, written
+/// to the index `USE` field; `""` for standalone.
+// Portage: doebuild.py, actionmap_deps["package"] == ["install"]
+pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
+    let RunPackageArgs {
+        ebuild_path,
+        root,
+        portage_tmpdir,
+        options,
+        build_env,
+        use_flags,
+    } = args;
+    require_signing_config(options)?;
+    let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
+        ebuild_path,
+        commands: &["install"],
+        root,
+        portage_tmpdir,
+        distdir: &options.distdir,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        build_env,
+    })?;
+    if status != 0 {
+        return Ok(status);
+    }
+    // The per-entry multi-instance token comes from this run's own `build_env`,
+    // falling back to the run-wide construction value for standalone runs.
+    let per_entry_binpkg_multi_instance = build_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "FEATURES")
+        .map(|(_, v)| v.split_whitespace().any(|t| t == "binpkg-multi-instance"))
+        .unwrap_or(options.binpkg_multi_instance);
+    package_after_install(PackageAfterInstallArgs {
+        ebuild_path,
+        root,
+        portage_tmpdir,
+        options,
+        use_flags,
+        per_entry_binpkg_multi_instance,
+    })
+}
+
 pub(crate) struct PackageAfterInstallArgs<'a> {
     pub(crate) ebuild_path: &'a Path,
     pub(crate) root: &'a Path,

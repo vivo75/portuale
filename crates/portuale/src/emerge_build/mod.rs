@@ -5,11 +5,13 @@
 
 use crate::ebuild_merge;
 mod entry_env;
+mod logs;
 mod resume;
 
 #[cfg(test)]
 mod tests;
 pub(crate) use entry_env::*;
+pub(crate) use logs::*;
 pub(crate) use resume::*;
 
 use crate::ebuild_package::{self, PackageOptions};
