@@ -265,3 +265,42 @@ def test_ebuild_version_is_recognized_but_not_specially_implemented(ebuild_binar
     )
     assert result.returncode == 0
     assert "ebuild (pilot stub)" in result.stdout
+
+
+def test_ebuild_debug_flag_enables_real_set_x_tracing(ebuild_binary, tmp_path):
+    """`--debug` is real, not a no-op: unlike every other `Kind::Boolean`
+    ebuild option (still a pure no-op -- see the module docstring above),
+    ebuild.rs sets real `PORTAGE_DEBUG=1` in the phase environment, which
+    triggers real `bin/ebuild.sh`'s own `set -x` guard (`bin/ebuild.sh`
+    lines 479/680, `bin/phase-functions.sh`'s own phase-dispatch case
+    branches) during real phase execution (task #54). This exercises
+    task #54's real `pretend` phase (a fast, side-effect-free real phase)
+    against the `mergepkg` fixture, not the dry-run stub -- so unlike
+    every other test in this file, it needs its own writable ROOT/
+    PORTAGE_TMPDIR rather than the shared, read-only fixture ROOT."""
+    ebuild_path = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/mergepkg/mergepkg-1.0.ebuild"
+    )
+    env = dict(os.environ)
+    env["ROOT"] = str(tmp_path / "root")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    without_debug = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "pretend"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert not any(
+        line.startswith("+ ") for line in without_debug.stderr.splitlines()
+    )
+
+    with_debug = subprocess.run(
+        [str(ebuild_binary), "--debug", ebuild_path, "pretend"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert any(line.startswith("+ ") for line in with_debug.stderr.splitlines())
