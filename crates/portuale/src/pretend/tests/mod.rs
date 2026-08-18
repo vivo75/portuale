@@ -105,4 +105,5 @@ fn entry_with_use(outcome: PretendOutcome, pv_use: &str, p_use: &str) -> GraphEn
         deps: Vec::new(),
     }
 }
+mod attrs;
 mod env_config;
