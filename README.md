@@ -1385,6 +1385,48 @@ PORTING/
   unmask still cancel out once both get the identical `::overlay`
   scoping).
 
+  **Overlay repo-level `package.use`/`.mask`/`.force`/`.stable.mask`/
+  `.stable.force`**: a later follow-up to the same overlay `package.mask`
+  work, grounded against real `UseManager.py`: its own
+  `_parse_repository_files_to_dict_of_tuples`/`_of_dicts` both iterate
+  `repositories.repos_with_profiles()` -- every configured repo, not
+  just main -- for every one of these five files, the exact same
+  "every repo, unconditionally" mechanism `package.mask` already ports,
+  closing a gap this pilot's own doc comments had explicitly flagged
+  ("main repo only") in five separate places. Each overlay's own entries
+  get the identical `::repo`-auto-scoping `package.mask`'s own overlay
+  entries already get (`scope_repo_package_use_lines`, the same
+  atom-only-vs-`<atom> <flag>...`-shaped sibling of
+  `scope_repo_mask_lines`) so they can never silently apply to a
+  same-named package in a different repo, while the main repo's own
+  entries stay unscoped (apply everywhere, since every overlay here
+  implicitly masters it). One real asymmetry from `package.mask`,
+  confirmed by reading `UseManager.py`'s own parse functions: none of
+  these five files gets `package.mask`'s own masters-merge treatment at
+  load time (`stack_mask_lines`) -- real portage never combines an
+  overlay's own file with its master's own into one stacked list at
+  parse time here at all; the masters chain is only consulted later, per
+  candidate, in `getUseMask`/`getUseForce` (`repos = masters +
+  [pkg.repo]`, each repo's own already-independent dict appended in that
+  order), so this pilot's own `resolve_config` just scopes-then-appends
+  each overlay's own lines instead, no merge step needed. Three new
+  overlay-only fixture packages exercise the three files most likely to
+  matter in practice end to end: `overlayuseenablepkg` (its own
+  `overlayuseflag?`-gated dependency is pulled in only because the
+  overlay's own `profiles/package.use` enables the flag), 
+  `overlayuseforcepkg` (same proof for `package.use.force`, forcing a
+  flag on that's off everywhere else), and `overlayusemaskpkg` (the
+  inverse: `IUSE="+overlaymaskflag"` defaults the flag on, but the
+  overlay's own `profiles/package.use.mask` masks it back off, so the
+  dependency is *not* pulled in). `package.use.stable.mask`/`.force`
+  get the identical scoping too, verified via three new Rust unit tests
+  mirroring `package.mask`'s own overlay-scoping test style directly
+  (no e2e fixtures added for the `.stable.` variants specifically, since
+  the underlying mechanism -- one more `scope_repo_package_use_lines`
+  call site -- is already fully proven by the non-stable siblings above,
+  and reaching it end-to-end would need a dedicated `~arch`
+  stability setup disproportionate to what it'd actually prove).
+
   **Cross-repo profile parents (`reponame:path` syntax)**: closes the
   cut named just above, grounded against real `LocationsManager.
   _addProfile`/`_expand_parent_colon`: a profile's own `parent` file
@@ -3551,6 +3593,22 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/mastermaskedp
 # mask, since both get the identical "::overlay" auto-scoping
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/mastermaskedthenoverlayunmaskedpkg
 # [ebuild  N] dev-libs/mastermaskedthenoverlayunmaskedpkg-1.0
+
+# overlay package.use/.force/.mask: all three now read from every repo,
+# not just main -- overlayuseenablepkg exists only in the overlay, whose
+# own profiles/package.use enables its own overlayuseflag
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayuseenablepkg
+# [ebuild  N] dev-libs/overlayuseenablepkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+# package.use.force: the overlay's own profiles/package.use.force forces
+# a flag on that's off by IUSE default and every other source
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayuseforcepkg
+# [ebuild  N] dev-libs/overlayuseforcepkg-1.0
+# [ebuild  N] dev-libs/newpkg-1.0
+# package.use.mask: the inverse -- IUSE="+overlaymaskflag" defaults the
+# flag on, but the overlay's own profiles/package.use.mask masks it off
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayusemaskpkg
+# [ebuild  N] dev-libs/overlayusemaskpkg-1.0
 
 # slot conflict: slotconflictnewconsumer resolves slotconflicttarget to
 # 2.0 first; slotconflictoldconsumer's own "<...-2.0" constraint rejects

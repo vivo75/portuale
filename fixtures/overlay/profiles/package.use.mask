@@ -1,0 +1,4 @@
+# fixture overlay package.use.mask: masks overlaymaskflag off for
+# dev-libs/overlayusemaskpkg (whose own IUSE defaults it on) -- same
+# auto-scoping proof as package.use/.force.
+dev-libs/overlayusemaskpkg overlaymaskflag

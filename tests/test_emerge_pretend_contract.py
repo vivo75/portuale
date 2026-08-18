@@ -271,6 +271,21 @@ CASES = [
         ["--pretend", "dev-libs/downgradepkg"],
         0,
     ),
+    (
+        "overlay package.use: an overlay-only package.use entry gates a dependency",
+        ["--pretend", "dev-libs/overlayuseenablepkg"],
+        0,
+    ),
+    (
+        "overlay package.use.force: an overlay-only package.use.force entry forces a flag on",
+        ["--pretend", "dev-libs/overlayuseforcepkg"],
+        0,
+    ),
+    (
+        "overlay package.use.mask: an overlay-only package.use.mask entry masks a default-on flag",
+        ["--pretend", "dev-libs/overlayusemaskpkg"],
+        0,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -1993,6 +2008,53 @@ def test_overlay_package_unmask_cancels_a_masters_inherited_mask(emerge_binary, 
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "[ebuild  N] dev-libs/mastermaskedthenoverlayunmaskedpkg-1.0"
+
+
+def test_overlay_own_package_use_gates_a_dependency(emerge_binary, fixture_env):
+    """package.mask/.unmask already read from every repo (task #40), but
+    package.use/.mask/.force/.stable.mask/.stable.force were still main-
+    repo-only -- real UseManager.py's own repos_with_profiles() loop
+    confirms every one of these files is read from every configured
+    repo, the same mechanism. dev-libs/overlayuseenablepkg exists only
+    in the overlay, whose own profiles/package.use enables
+    "overlayuseflag" for it with a bare atom (no "::repo" part) -- must
+    get auto-scoped to "::overlay" (scope_repo_package_use_lines) so it
+    pulls in dev-libs/newpkg."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/overlayuseenablepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/overlayuseenablepkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_overlay_own_package_use_force_gates_a_dependency(emerge_binary, fixture_env):
+    """Same proof as package.use above, for package.use.force:
+    dev-libs/overlayuseforcepkg's own "overlayforceflag" is off by
+    IUSE default and every other source, forced on only by the
+    overlay's own profiles/package.use.force."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/overlayuseforcepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/overlayuseforcepkg-1.0",
+        "[ebuild  N] dev-libs/newpkg-1.0",
+    ]
+
+
+def test_overlay_own_package_use_mask_blocks_a_dependency(emerge_binary, fixture_env):
+    """Same proof as package.use/.force above, for package.use.mask:
+    dev-libs/overlayusemaskpkg's own IUSE="+overlaymaskflag" defaults
+    the flag on, but the overlay's own profiles/package.use.mask masks
+    it back off, so its flag?-gated dependency is never pulled in."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/overlayusemaskpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/overlayusemaskpkg-1.0"]
 
 
 def test_slot_conflict_is_reported_between_two_incompatible_version_constraints(

@@ -1,0 +1,5 @@
+# fixture overlay package.use: enables overlayuseflag for
+# dev-libs/overlayuseenablepkg -- no explicit "::repo" constraint, so it
+# must be auto-scoped to "::overlay" (real append_repo), never enabling
+# the flag for a same-named package in a different repo.
+dev-libs/overlayuseenablepkg overlayuseflag

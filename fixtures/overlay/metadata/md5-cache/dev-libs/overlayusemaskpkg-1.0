@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: its IUSE default-on overlaymaskflag is masked off only because the OVERLAY's own profiles/package.use.mask masks it -- without that entry the flag would default on and pull the dependency in
+EAPI=8
+IUSE=+overlaymaskflag
+KEYWORDS=amd64
+RDEPEND=overlaymaskflag? ( dev-libs/newpkg )
+SLOT=0
+_md5_=0000000000000000000000000000000

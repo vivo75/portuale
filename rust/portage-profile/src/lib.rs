@@ -153,9 +153,12 @@
 //     previously always empty -- see that function's own doc comment)
 //     is `use.force ∪ use.mask`, not either alone.
 //   - `package.use.mask`/`package.use.force` (per-package USE forcing) ARE
-//     now read too: repo-level (main repo only, no `masters` -- unlike
-//     `package.mask`, which now does model its own implicit `masters`
-//     default) plus every profile level's own file, in chain order --
+//     now read too: repo-level (every repo, `::repo`-scoped the same way
+//     `package.mask` scopes an overlay's own entries -- but with no
+//     `masters`-merge step, unlike `package.mask`: real `UseManager.py`
+//     never combines an overlay's own file with its master's own at load
+//     time, only later, per-package, in `getUseMask`/`getUseForce`)
+//     plus every profile level's own file, in chain order --
 //     confirmed by reading
 //     `UseManager.__init__`'s own file/variable table that there's no
 //     user-level source for either file at all (unlike `package.use`
@@ -217,10 +220,11 @@
 //     sourcing for the non-stable global files, not real per-package
 //     `getUseMask`/`getUseForce`'s own additional repo-level source for
 //     them, which this pilot's global mechanism never had either);
-//     `package.use.stable.mask`/`.force` read repo-level (main repo
-//     only) plus profile-chain, mirroring `package.use.mask`/`.force`'s
-//     own sourcing exactly, no user-level source (same
-//     `UseManager.__init__` file/variable table confirmation).
+//     `package.use.stable.mask`/`.force` read repo-level (every repo,
+//     `::repo`-scoped) plus profile-chain, mirroring
+//     `package.use.mask`/`.force`'s own sourcing exactly, no user-level
+//     source (same `UseManager.__init__` file/variable table
+//     confirmation).
 //
 // One real, deliberately-preserved quirk from lib/portage/package/ebuild/
 // config.py (see the comment above its `expand_map.pop("USE", None)`):
@@ -302,8 +306,9 @@ pub struct Config {
     /// *not* folded into `use_flags` either.
     pub use_mask: HashSet<String>,
     /// (atom-or-wildcard string, flag tokens) pairs from `package.use.force`
-    /// -- repo-level (main repo only) and every profile level's own file,
-    /// flat-concatenated same as `package_use`. Real portage has no
+    /// -- repo-level (every repo, `::repo`-scoped) and every profile
+    /// level's own file, flat-concatenated same as `package_use`. Real
+    /// portage has no
     /// user-level source for this file at all (confirmed by reading
     /// `UseManager.__init__`'s own file/variable table) -- see the module
     /// doc comment's `package.use.mask`/`.force` bullet for the full
@@ -376,8 +381,9 @@ pub struct Config {
     /// (no ELIBC/KERNEL/USERLAND support at all).
     pub archlist: HashSet<String>,
     /// (atom-or-wildcard string, flag tokens) pairs from
-    /// `package.use.stable.force` -- repo-level (main repo only) and
-    /// every profile level's own file, flat-concatenated exactly like
+    /// `package.use.stable.force` -- repo-level (every repo, `::repo`-
+    /// scoped) and every profile level's own file, flat-concatenated
+    /// exactly like
     /// `package_use_force` already is (same no-user-level-source
     /// confirmation from `UseManager.__init__`'s own file/variable
     /// table). Applied by `portage-repo` conditionally, only for a
@@ -807,6 +813,39 @@ fn scope_repo_mask_lines(lines: &[String], repo_name: &str) -> Vec<String> {
                 line.clone()
             } else {
                 format!("{prefix}{atom}::{repo_name}")
+            }
+        })
+        .collect()
+}
+
+/// Same real "add `::repo` to every atom without one" rule as
+/// `scope_repo_mask_lines`, applied to the `package.use`/`.mask`/`.force`/
+/// `.stable.mask`/`.stable.force` line shape instead
+/// (`<atom> <flag> <flag> ...`, see `parse_package_use_lines`): only the
+/// leading atom token gets scoped, the flag tokens after it are passed
+/// through untouched. Unlike `package.mask`/`.unmask`, none of these
+/// files has `-atom` whole-entry removal syntax (confirmed by
+/// `parse_package_use_lines`'s own doc comment: real portage only ever
+/// `.extend()`s these, and a leading `-` inside the flag list masks/
+/// forces a single flag off, not an atom) -- so there's no leading-`-`
+/// case to preserve here, unlike `scope_repo_mask_lines`.
+fn scope_repo_package_use_lines(lines: &[String], repo_name: &str) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            let (atom, rest) = match line.split_once(char::is_whitespace) {
+                Some((a, r)) => (a, r.trim_start()),
+                None => (line.as_str(), ""),
+            };
+            let scoped_atom = if atom.contains("::") {
+                atom.to_string()
+            } else {
+                format!("{atom}::{repo_name}")
+            };
+            if rest.is_empty() {
+                scoped_atom
+            } else {
+                format!("{scoped_atom} {rest}")
             }
         })
         .collect()
@@ -1397,8 +1436,28 @@ pub fn resolve_config(
     // concatenated pass, like every other package.use.* file here) only
     // because of the USE_EXPAND-prefix shorthand's own real user-only
     // restriction -- see parse_package_use_lines's own doc comment.
+    //
+    // Every overlay's own package.use (real UseManager.py's own
+    // _parse_repository_files_to_dict_of_dicts, confirmed to iterate
+    // repositories.repos_with_profiles() -- every configured repo, not
+    // just main) gets folded into the same flat list too, `::repo`-scoped
+    // via scope_repo_package_use_lines so an overlay's own entry can
+    // never apply to a same-named package elsewhere -- the same
+    // "package.mask, widened" precedent package.mask/.unmask itself
+    // already established (see that pair's own doc comment on overlay
+    // masters). The main repo's own package.use is deliberately left
+    // unscoped: real portage's own masters-chain lookup (`repos =
+    // masters + [pkg.repo]`) always includes the main repo, since every
+    // overlay here implicitly masters it (no explicit `masters =`
+    // support yet) -- so the main repo's own entries apply everywhere,
+    // exactly like package.mask's own unscoped main-repo lines do.
     let mut repo_and_profile_use_lines: Vec<String> =
         read_config_lines(&main_repo_location.join("profiles/package.use"))?;
+    for (repo_name, repo_location) in overlay_repos {
+        let overlay_use_lines = read_config_lines(&repo_location.join("profiles/package.use"))?;
+        repo_and_profile_use_lines
+            .extend(scope_repo_package_use_lines(&overlay_use_lines, repo_name));
+    }
     for level in &chain {
         repo_and_profile_use_lines.extend(read_config_lines(&level.join("package.use"))?);
     }
@@ -1408,22 +1467,37 @@ pub fn resolve_config(
         .package_use
         .extend(parse_package_use_lines(&user_use_lines, true));
 
-    // package.use.mask/package.use.force: repo-level (main repo only, no
-    // masters -- unlike package.mask, which now does model its own
-    // implicit masters default) plus every profile level's own file (in
-    // chain order) -- NO
+    // package.use.mask/package.use.force: repo-level (every repo, not
+    // just main -- see the package.use bullet just above for the same
+    // `::repo`-scoping this now applies here too) plus every profile
+    // level's own file (in chain order) -- NO
     // user-level source at all, unlike package.use: confirmed by reading
     // UseManager.__init__'s own file/variable table (the "user config"
     // section lists only "package.use -> _pusedict", nothing for
-    // mask/force). Flat-concatenated the same way package_use already
-    // is; which entry actually wins when more than one matches the same
-    // candidate is decided later, at application time -- see
-    // `portage-repo`'s own doc comment on why (atom-specificity
-    // ordering).
+    // mask/force). Unlike package.mask/.unmask, real UseManager.py never
+    // merges an overlay's own file with its master's own at load time
+    // (no `stack_lists`-equivalent combination here at all -- confirmed
+    // by reading `_parse_repository_files_to_dict_of_tuples`/`_of_dicts`,
+    // which just parse each repo's own file independently); the masters
+    // chain is only consulted later, per-package, in
+    // `getUseMask`/`getUseForce` (`repos = masters + [pkg.repo]`, each
+    // repo's own already-independent dict appended in that order) -- so
+    // no `stack_mask_lines`-style merge is needed here either, just the
+    // same scope-then-append `package.use` above already does. Flat-
+    // concatenated the same way package_use already is; which entry
+    // actually wins when more than one matches the same candidate is
+    // decided later, at application time -- see `portage-repo`'s own doc
+    // comment on why (atom-specificity ordering).
     let mut use_force_lines: Vec<String> =
         read_config_lines(&main_repo_location.join("profiles/package.use.force"))?;
     let mut use_mask_lines: Vec<String> =
         read_config_lines(&main_repo_location.join("profiles/package.use.mask"))?;
+    for (repo_name, repo_location) in overlay_repos {
+        let overlay_force = read_config_lines(&repo_location.join("profiles/package.use.force"))?;
+        use_force_lines.extend(scope_repo_package_use_lines(&overlay_force, repo_name));
+        let overlay_mask = read_config_lines(&repo_location.join("profiles/package.use.mask"))?;
+        use_mask_lines.extend(scope_repo_package_use_lines(&overlay_mask, repo_name));
+    }
     for level in &chain {
         use_force_lines.extend(read_config_lines(&level.join("package.use.force"))?);
         use_mask_lines.extend(read_config_lines(&level.join("package.use.mask"))?);
@@ -1454,15 +1528,32 @@ pub fn resolve_config(
         .into_iter()
         .collect();
 
-    // package.use.stable.mask/package.use.stable.force: repo-level (main
-    // repo only) plus every profile level's own file (in chain order) --
-    // NO user-level source at all, mirroring package_use_force/_mask's
-    // own confirmed sourcing exactly (same UseManager.__init__ file/
-    // variable table). No shorthand either, same reasoning.
+    // package.use.stable.mask/package.use.stable.force: repo-level
+    // (every repo, not just main -- same `::repo`-scoped, no-masters-
+    // merge treatment package.use.mask/.force just above now gets,
+    // confirmed by the same UseManager.__init__ table entries for
+    // `_repo_pusestablemask_dict`/`_repo_pusestableforce_dict`) plus
+    // every profile level's own file (in chain order) -- NO user-level
+    // source at all, mirroring package_use_force/_mask's own confirmed
+    // sourcing exactly. No shorthand either, same reasoning.
     let mut use_stable_force_lines: Vec<String> =
         read_config_lines(&main_repo_location.join("profiles/package.use.stable.force"))?;
     let mut use_stable_mask_lines: Vec<String> =
         read_config_lines(&main_repo_location.join("profiles/package.use.stable.mask"))?;
+    for (repo_name, repo_location) in overlay_repos {
+        let overlay_stable_force =
+            read_config_lines(&repo_location.join("profiles/package.use.stable.force"))?;
+        use_stable_force_lines.extend(scope_repo_package_use_lines(
+            &overlay_stable_force,
+            repo_name,
+        ));
+        let overlay_stable_mask =
+            read_config_lines(&repo_location.join("profiles/package.use.stable.mask"))?;
+        use_stable_mask_lines.extend(scope_repo_package_use_lines(
+            &overlay_stable_mask,
+            repo_name,
+        ));
+    }
     for level in &chain {
         use_stable_force_lines.extend(read_config_lines(&level.join("package.use.stable.force"))?);
         use_stable_mask_lines.extend(read_config_lines(&level.join("package.use.stable.mask"))?);
@@ -2073,6 +2164,138 @@ mod tests {
         let config =
             resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
         assert_eq!(config.package_unmask, vec!["dev-libs/a".to_string()]);
+    }
+
+    #[test]
+    fn overlay_package_use_is_scoped_to_its_own_repo_only() {
+        // Main repo has no package.use at all; the overlay sets a flag
+        // for dev-libs/a with a bare atom (no "::repo" part) --
+        // resolve_config must auto-scope it to "::overlay" via
+        // scope_repo_package_use_lines, the same way package.mask's own
+        // overlay entries are scoped, so it never also applies to a
+        // same-named package in the main repo.
+        let root = std::env::temp_dir().join("portage-profile-test-overlay-package-use");
+        let repo = root.join("repo");
+        let overlay = root.join("overlay");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(overlay.join("profiles")).unwrap();
+
+        fs::write(overlay.join("profiles/package.use"), "dev-libs/a flag\n").unwrap();
+
+        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let config =
+            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        assert_eq!(
+            config.package_use,
+            vec![("dev-libs/a::overlay".to_string(), vec!["flag".to_string()])]
+        );
+    }
+
+    #[test]
+    fn overlay_package_use_mask_and_force_are_scoped_with_no_masters_merge() {
+        // Unlike package.mask, real UseManager.py never merges an
+        // overlay's own package.use.mask/.force with its master's own at
+        // load time (see resolve_config's own doc comment) -- so the
+        // main repo's entry for "dev-libs/a" stays unscoped (applies
+        // everywhere) and the overlay's own entry for "dev-libs/b" gets
+        // "::overlay"-scoped, with no cross-stacking between the two.
+        let root = std::env::temp_dir().join("portage-profile-test-overlay-package-use-mask-force");
+        let repo = root.join("repo");
+        let overlay = root.join("overlay");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(overlay.join("profiles")).unwrap();
+
+        fs::write(repo.join("profiles/package.use.mask"), "dev-libs/a maska\n").unwrap();
+        fs::write(
+            overlay.join("profiles/package.use.mask"),
+            "dev-libs/b maskb\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.join("profiles/package.use.force"),
+            "dev-libs/a forcea\n",
+        )
+        .unwrap();
+        fs::write(
+            overlay.join("profiles/package.use.force"),
+            "dev-libs/b forceb\n",
+        )
+        .unwrap();
+
+        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let config =
+            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        assert_eq!(
+            config.package_use_mask,
+            vec![
+                ("dev-libs/a".to_string(), vec!["maska".to_string()]),
+                ("dev-libs/b::overlay".to_string(), vec!["maskb".to_string()]),
+            ]
+        );
+        assert_eq!(
+            config.package_use_force,
+            vec![
+                ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
+                (
+                    "dev-libs/b::overlay".to_string(),
+                    vec!["forceb".to_string()]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn overlay_package_use_stable_mask_and_force_get_the_same_scoping() {
+        // Mirrors overlay_package_use_mask_and_force_are_scoped_with_no_masters_merge
+        // exactly, for the .stable. variant.
+        let root =
+            std::env::temp_dir().join("portage-profile-test-overlay-package-use-stable-mask-force");
+        let repo = root.join("repo");
+        let overlay = root.join("overlay");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(overlay.join("profiles")).unwrap();
+
+        fs::write(
+            repo.join("profiles/package.use.stable.mask"),
+            "dev-libs/a maska\n",
+        )
+        .unwrap();
+        fs::write(
+            overlay.join("profiles/package.use.stable.mask"),
+            "dev-libs/b maskb\n",
+        )
+        .unwrap();
+        fs::write(
+            repo.join("profiles/package.use.stable.force"),
+            "dev-libs/a forcea\n",
+        )
+        .unwrap();
+        fs::write(
+            overlay.join("profiles/package.use.stable.force"),
+            "dev-libs/b forceb\n",
+        )
+        .unwrap();
+
+        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let config =
+            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        assert_eq!(
+            config.package_use_stable_mask,
+            vec![
+                ("dev-libs/a".to_string(), vec!["maska".to_string()]),
+                ("dev-libs/b::overlay".to_string(), vec!["maskb".to_string()]),
+            ]
+        );
+        assert_eq!(
+            config.package_use_stable_force,
+            vec![
+                ("dev-libs/a".to_string(), vec!["forcea".to_string()]),
+                (
+                    "dev-libs/b::overlay".to_string(),
+                    vec!["forceb".to_string()]
+                ),
+            ]
+        );
     }
 
     #[test]

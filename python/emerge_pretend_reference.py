@@ -225,6 +225,28 @@ def _scope_repo_mask_lines(lines, repo_name):
     return result
 
 
+def _scope_repo_package_use_lines(lines, repo_name):
+    """Same real "add ::repo to every atom without one" rule as
+    _scope_repo_mask_lines, applied to the package.use/.mask/.force/
+    .stable.mask/.stable.force line shape instead ("<atom> <flag>
+    <flag> ...", see _parse_package_use_lines): only the leading atom
+    token gets scoped, the flag tokens after it are passed through
+    untouched. Unlike package.mask/.unmask, none of these files has
+    -atom whole-entry removal syntax (real portage only ever extends
+    these, and a leading "-" inside the flag list masks/forces a single
+    flag off, not an atom) -- so there's no leading-"-" case to
+    preserve here, unlike _scope_repo_mask_lines. Mirrors
+    portage-profile/src/lib.rs's scope_repo_package_use_lines exactly."""
+    result = []
+    for line in lines:
+        parts = line.split(None, 1)
+        atom = parts[0] if parts else line
+        rest = parts[1] if len(parts) > 1 else ""
+        scoped_atom = atom if "::" in atom else f"{atom}::{repo_name}"
+        result.append(f"{scoped_atom} {rest}" if rest else scoped_atom)
+    return result
+
+
 def _stack_mask_lines(sources):
     """Stacks ordered package.mask/.unmask lines from multiple sources
     (earlier sources first) with real portage's own -atom removal
@@ -2086,9 +2108,31 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     # other package.use.* file here) only because of the
     # USE_EXPAND-prefix shorthand's own real user-only restriction --
     # see _parse_package_use_lines's own docstring.
+    #
+    # Every overlay's own package.use (real UseManager.py's own
+    # _parse_repository_files_to_dict_of_dicts, confirmed to iterate
+    # repositories.repos_with_profiles() -- every configured repo, not
+    # just main) gets folded into the same flat list too, ::repo-scoped
+    # via _scope_repo_package_use_lines so an overlay's own entry can
+    # never apply to a same-named package elsewhere -- the same
+    # "package.mask, widened" precedent package.mask/.unmask itself
+    # already established. The main repo's own package.use is
+    # deliberately left unscoped: real portage's own masters-chain
+    # lookup (repos = masters + [pkg.repo]) always includes the main
+    # repo, since every overlay here implicitly masters it (no explicit
+    # "masters =" support yet) -- so the main repo's own entries apply
+    # everywhere, exactly like package.mask's own unscoped main-repo
+    # lines do.
     repo_and_profile_use_lines = _read_config_lines(
         os.path.join(main_repo_location, "profiles", "package.use")
     )
+    for repo_name, repo_location in overlay_repos:
+        overlay_use_lines = _read_config_lines(
+            os.path.join(repo_location, "profiles", "package.use")
+        )
+        repo_and_profile_use_lines.extend(
+            _scope_repo_package_use_lines(overlay_use_lines, repo_name)
+        )
     for level in chain:
         repo_and_profile_use_lines.extend(
             _read_config_lines(os.path.join(level, "package.use"))
@@ -2097,22 +2141,40 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
         os.path.join(config_root, "etc", "portage", "package.use")
     )
 
-    # package.use.mask/package.use.force: repo-level (main repo only, no
-    # masters) plus every profile level's own file (in chain order) -- NO
-    # user-level source at all, unlike package.use: confirmed by reading
-    # UseManager.__init__'s own file/variable table (the "user config"
-    # section lists only "package.use -> _pusedict", nothing for
-    # mask/force). Flat-concatenated the same way use_lines already is;
-    # which entry actually wins when more than one matches the same
-    # candidate is decided later, at application time -- see
-    # effective_use_flags's own docstring (atom-specificity ordering).
-    # Mirrors portage-profile/src/lib.rs's resolve_config exactly.
+    # package.use.mask/package.use.force: repo-level (every repo, not
+    # just main -- same ::repo-scoping the package.use bullet above now
+    # applies here too) plus every profile level's own file (in chain
+    # order) -- NO user-level source at all, unlike package.use:
+    # confirmed by reading UseManager.__init__'s own file/variable table
+    # (the "user config" section lists only "package.use -> _pusedict",
+    # nothing for mask/force). Unlike package.mask/.unmask, real
+    # UseManager.py never merges an overlay's own file with its master's
+    # own at load time (no stack_lists-equivalent combination here at
+    # all); the masters chain is only consulted later, per-package, in
+    # getUseMask/getUseForce (repos = masters + [pkg.repo], each repo's
+    # own already-independent dict appended in that order) -- so no
+    # _stack_mask_lines-style merge is needed here either, just the same
+    # scope-then-append package.use above already does. Flat-
+    # concatenated the same way use_lines already is; which entry
+    # actually wins when more than one matches the same candidate is
+    # decided later, at application time -- see effective_use_flags's
+    # own docstring (atom-specificity ordering). Mirrors
+    # portage-profile/src/lib.rs's resolve_config exactly.
     use_force_lines = _read_config_lines(
         os.path.join(main_repo_location, "profiles", "package.use.force")
     )
     use_mask_lines = _read_config_lines(
         os.path.join(main_repo_location, "profiles", "package.use.mask")
     )
+    for repo_name, repo_location in overlay_repos:
+        overlay_force = _read_config_lines(
+            os.path.join(repo_location, "profiles", "package.use.force")
+        )
+        use_force_lines.extend(_scope_repo_package_use_lines(overlay_force, repo_name))
+        overlay_mask = _read_config_lines(
+            os.path.join(repo_location, "profiles", "package.use.mask")
+        )
+        use_mask_lines.extend(_scope_repo_package_use_lines(overlay_mask, repo_name))
     for level in chain:
         use_force_lines.extend(_read_config_lines(os.path.join(level, "package.use.force")))
         use_mask_lines.extend(_read_config_lines(os.path.join(level, "package.use.mask")))
@@ -2141,16 +2203,31 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     use_stable_force = set(_stack_mask_lines(use_stable_force_sources))
     use_stable_mask = set(_stack_mask_lines(use_stable_mask_sources))
 
-    # package.use.stable.mask/package.use.stable.force: repo-level (main
-    # repo only) plus every profile level's own file (in chain order) --
-    # NO user-level source at all, mirroring package.use.force/.mask's
-    # own confirmed sourcing exactly. No shorthand either, same reasoning.
+    # package.use.stable.mask/package.use.stable.force: repo-level
+    # (every repo, ::repo-scoped, same no-masters-merge treatment
+    # package.use.mask/.force just above now gets) plus every profile
+    # level's own file (in chain order) -- NO user-level source at all,
+    # mirroring package.use.force/.mask's own confirmed sourcing
+    # exactly. No shorthand either, same reasoning.
     use_stable_force_lines = _read_config_lines(
         os.path.join(main_repo_location, "profiles", "package.use.stable.force")
     )
     use_stable_mask_lines = _read_config_lines(
         os.path.join(main_repo_location, "profiles", "package.use.stable.mask")
     )
+    for repo_name, repo_location in overlay_repos:
+        overlay_stable_force = _read_config_lines(
+            os.path.join(repo_location, "profiles", "package.use.stable.force")
+        )
+        use_stable_force_lines.extend(
+            _scope_repo_package_use_lines(overlay_stable_force, repo_name)
+        )
+        overlay_stable_mask = _read_config_lines(
+            os.path.join(repo_location, "profiles", "package.use.stable.mask")
+        )
+        use_stable_mask_lines.extend(
+            _scope_repo_package_use_lines(overlay_stable_mask, repo_name)
+        )
     for level in chain:
         use_stable_force_lines.extend(
             _read_config_lines(os.path.join(level, "package.use.stable.force"))
