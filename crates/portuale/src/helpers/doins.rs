@@ -177,3 +177,39 @@ pub(crate) fn xattr_get(path: &[u8], name: &[u8]) -> Result<Vec<u8>, i32> {
     buf.truncate(got as usize);
     Ok(buf)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    // ---- end to end: a real package whose src_install uses doins ----
+
+    /// `dev-libs/packagepkg`'s `src_install` is `insinto` + `doins`
+    /// (in-process, through the existing package test machinery).
+    fn install_packagepkg(portage_tmpdir: &Path) {
+        let ebuild = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild");
+        let status = crate::ebuild_phases::run_commands(crate::ebuild_phases::RunCommandsArgs {
+            ebuild_path: &ebuild,
+            commands: &["install"],
+            root: Path::new("/"),
+            portage_tmpdir,
+            distdir: &portage_tmpdir.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell: crate::ebuild_phases::ShellBackend::default(),
+            build_env: &[],
+        })
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+        let installed = portage_tmpdir
+            .join("portage/dev-libs/packagepkg-1.0/image/usr/share/packagepkg/hello.txt");
+        let contents = std::fs::read_to_string(&installed)
+            .unwrap_or_else(|e| panic!("{} should have been installed: {e}", installed.display()));
+        assert_eq!(contents, "hello from packagepkg\n");
+    }
+}

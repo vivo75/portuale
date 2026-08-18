@@ -59,6 +59,28 @@ struct RegenFailure {
     code: i32,
     message: String,
 }
+
+/// One item's `depend` phase plus cache write.
+/// Portage: MetadataRegen.py, EbuildMetadataPhase.
+fn run_work_item(
+    item: &RegenWorkItem,
+    root: &Path,
+    config_root: &Path,
+    portage_tmpdir: &Path,
+    debug: bool,
+) -> Result<(), RegenFailure> {
+    regen_one(RegenOneArgs {
+        ebuild_path: &item.ebuild_path,
+        repo_location: &item.repo_location,
+        masters: &item.masters,
+        category: &item.category,
+        pf: &item.pf,
+        root,
+        config_root,
+        portage_tmpdir,
+        debug,
+    })
+}
 /// Arguments of [`regen_one`].
 struct RegenOneArgs<'a> {
     ebuild_path: &'a Path,
@@ -70,6 +92,42 @@ struct RegenOneArgs<'a> {
     config_root: &'a Path,
     portage_tmpdir: &'a Path,
     debug: bool,
+}
+
+fn regen_one(args: RegenOneArgs<'_>) -> Result<(), RegenFailure> {
+    let RegenOneArgs {
+        ebuild_path,
+        repo_location,
+        masters,
+        category,
+        pf,
+        root,
+        config_root,
+        portage_tmpdir,
+        debug,
+    } = args;
+    // Failures carry the returncode Portage would report, so the caller replays
+    // the retry decision; only a non-1 phase exit is retryable.
+    let fail = |code: i32, message: String| RegenFailure { code, message };
+    // A valid on-disk entry skips the `depend` phase entirely (the rewrite would
+    // be byte-identical).
+    if portage_repo::md5_dict::cache_entry_is_valid(
+        portage_repo::md5_dict::CacheEntryIsValidArgs { ebuild_path, repo_location, masters, category, pf, store_eclass_paths: // The repo's pregen cache is `flat_hash.md5_database`:
+        // `_eclasses_` is `name\tmd5` pairs (`store_eclass_paths = False`).
+        false },
+    ) {
+        return Ok(());
+    }
+    let env =
+        ebuild_phases::compute_environment(ebuild_path, portage_tmpdir).map_err(|e| fail(1, e))?;
+    let md = ebuild_phases::run_depend_phase(&env, root, config_root, debug)
+        .map_err(|e| fail(e.code, e.message))?;
+
+    let out =
+        render_entry(&md, ebuild_path, repo_location, masters, false).map_err(|e| fail(1, e))?;
+    let cache_dir = repo_location.join("metadata/md5-cache").join(category);
+    write_entry(&cache_dir, pf, &out).map_err(|e| fail(1, e))?;
+    Ok(())
 }
 
 /// Render one `depend`-phase result as `flat_hash` cache bytes: sorted keys,

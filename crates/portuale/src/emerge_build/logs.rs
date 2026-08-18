@@ -2,6 +2,51 @@
 
 use crate::emerge_build::*;
 
+/// Also used by the binary-merge digest-failure path, which logs to the
+/// same `PORTAGE_LOG_FILE`.
+pub(crate) fn build_log_path(
+    portage_tmpdir: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    features: &str,
+) -> PathBuf {
+    let builddir = portage_tmpdir
+        .join("portage")
+        .join(category)
+        .join(format!("{package}-{version}"));
+    // `PORTAGE_LOGDIR`/`PORTAGE_LOG_FILE_SEP`/`FEATURES=split-log` are read
+    // here, where the log path is decided, and handed to the pure
+    // `ensure_portage_logdir_symlink` so it stays unit-testable with no
+    // env involvement.
+    let logdir = std::env::var_os("PORTAGE_LOGDIR")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty());
+    let sep = std::env::var("PORTAGE_LOG_FILE_SEP").unwrap_or_else(|_| ":".to_string());
+    let split_log = features.split_whitespace().any(|t| t == "split-log");
+    // The `.gz` suffix applies to both the `${T}` path and the
+    // `PORTAGE_LOG_FILE` below, so the symlink and its target agree.
+    let compress = features
+        .split_whitespace()
+        .any(|t| t == "compress-build-logs");
+    let path = builddir.join("temp").join(if compress {
+        "build.log.gz"
+    } else {
+        "build.log"
+    });
+    ensure_portage_logdir_symlink(EnsurePortageLogdirSymlinkArgs {
+        tmpdir_log_path: &path,
+        builddir: &builddir,
+        category,
+        pf: &format!("{package}-{version}"),
+        logdir: logdir.as_deref(),
+        sep: &sep,
+        split_log,
+        compress,
+    });
+    path
+}
+
 /// Arguments of [`ensure_portage_logdir_symlink`].
 pub(crate) struct EnsurePortageLogdirSymlinkArgs<'a> {
     pub(crate) tmpdir_log_path: &'a Path,
