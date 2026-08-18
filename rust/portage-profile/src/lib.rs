@@ -862,12 +862,37 @@ fn scope_repo_package_use_lines(lines: &[String], repo_name: &str) -> Vec<String
 /// this pilot's previous, user-level-only `package.unmask` handling,
 /// which treated a leading `-` there as meaningless; it's meaningful
 /// once more than one source can contribute an unmask entry.
+///
+/// Ports real `stack_lists`'s own `ignore_repo=True` behavior (the flag
+/// real `MaskManager.__init__` always passes for its own final
+/// `[repo_pkgmasklines, profile_pkgmasklines, user_pkgmasklines]`
+/// combination -- confirmed by reading it directly): "let `-cat/pkg`
+/// remove `cat/pkg::repo`" -- an unscoped removal token (no `::` of its
+/// own, which is all a profile-level or user-level `-atom` can ever be,
+/// since only repo-level entries ever get `::repo`-scoped at all, see
+/// `scope_repo_mask_lines`) strips any `::repo` suffix off every
+/// existing entry before comparing, so it cancels a repo-scoped atom
+/// from *any* repo, not just an identically-unscoped one -- without
+/// this, a profile's `-dev-libs/foo` could never again cancel the main
+/// repo's own (now `::reponame`-scoped) `dev-libs/foo` mask entry, a
+/// real regression the main-repo-scoping follow-up above would
+/// otherwise have introduced. A removal token that's already `::repo`-
+/// scoped itself (rare -- only possible if a user writes one by hand)
+/// keeps exact-match semantics instead, matching real `stack_lists`'s
+/// own `"::" not in token` guard exactly.
 fn stack_mask_lines(sources: &[Vec<String>]) -> Vec<String> {
     let mut list: Vec<String> = Vec::new();
     for lines in sources {
         for line in lines {
             match line.strip_prefix('-') {
-                Some(removed) => list.retain(|x| x != removed),
+                Some(removed) if removed.contains("::") => {
+                    list.retain(|x| x != removed);
+                }
+                Some(removed) => {
+                    list.retain(|x| {
+                        x.split_once("::").map_or(x.as_str(), |(atom, _)| atom) != removed
+                    });
+                }
                 None => list.push(line.clone()),
             }
         }
@@ -1321,12 +1346,31 @@ pub fn resolve_config(
     }
     config.archlist = stack_mask_lines(&archlist_sources).into_iter().collect();
 
+    // Real append_repo scopes EVERY repo's own repo-level package.mask/
+    // .unmask, including the main repo's own -- not just an overlay's,
+    // confirmed by reading MaskManager.py's own repo_pkgmasklines/
+    // repo_pkgunmasklines loop (`for repo in repositories.
+    // repos_with_profiles()`, unconditional). This pilot previously left
+    // the main repo's own entries unscoped, a genuine, documented gap
+    // (see this function's own earlier doc comment on the overlay
+    // scoping work): an identically-named package.mask atom from main
+    // would incorrectly also mask a same-named-but-different overlay
+    // package that no mask file ever actually mentions. Note this is
+    // NOT the same as the profile-chain's own package.mask/.unmask below
+    // (`for level in &chain`) or the user-level one further down --
+    // real MaskManager.py's own profile_pkgmasklines/user_pkgmasklines
+    // never get append_repo'd at all, only the repo-level ones do, so
+    // those two stay exactly as unscoped as they already were.
     let main_repo_mask_lines =
         read_config_lines(&main_repo_location.join("profiles/package.mask"))?;
-    let mut mask_sources: Vec<Vec<String>> = vec![main_repo_mask_lines.clone()];
-    let mut unmask_sources: Vec<Vec<String>> = vec![read_config_lines(
-        &main_repo_location.join("profiles/package.unmask"),
-    )?];
+    let main_repo_unmask_lines =
+        read_config_lines(&main_repo_location.join("profiles/package.unmask"))?;
+    let mut mask_sources: Vec<Vec<String>> =
+        vec![scope_repo_mask_lines(&main_repo_mask_lines, main_repo_name)];
+    let mut unmask_sources: Vec<Vec<String>> = vec![scope_repo_mask_lines(
+        &main_repo_unmask_lines,
+        main_repo_name,
+    )];
     for (repo_name, repo_location) in overlay_repos {
         // Real masters: every non-main repo with no explicit "masters ="
         // implicitly masters the main repo alone (config.py's own
@@ -2011,14 +2055,18 @@ mod tests {
 
     #[test]
     fn package_mask_atom_removal_applies_across_repo_profile_and_user_sources() {
-        // repo-level: masks a and b.
+        // repo-level: masks a and b -- gets "::testrepo"-scoped (the
+        // main repo's own repo-level entries now get the same scoping
+        // an overlay's own already did).
         // profile-level (the one chain level): "-a" removes the
-        // repo-level entry, adds c.
+        // repo-level entry (its own unscoped "-dev-libs/a" still cancels
+        // the now-scoped "dev-libs/a::testrepo" -- see stack_mask_lines's
+        // own "ignore_repo" doc comment), adds c.
         // user-level: "-c" removes the profile-level entry, adds d.
-        // Final: b (repo, survives) + d (user) -- a and c were each
-        // removed by a LATER source than the one that added them, which
-        // only works if -atom removal spans all three sources, not just
-        // within each file on its own.
+        // Final: b::testrepo (repo, survives) + d (user) -- a and c were
+        // each removed by a LATER source than the one that added them,
+        // which only works if -atom removal spans all three sources, not
+        // just within each file on its own.
         let root = std::env::temp_dir().join("portage-profile-test-cross-source-mask");
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
@@ -2048,7 +2096,7 @@ mod tests {
         let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
         assert_eq!(
             config.package_mask,
-            vec!["dev-libs/b".to_string(), "dev-libs/d".to_string()]
+            vec!["dev-libs/b::testrepo".to_string(), "dev-libs/d".to_string()]
         );
     }
 
@@ -2121,8 +2169,11 @@ mod tests {
         // Real masters: an overlay with no explicit "masters =" always
         // implicitly masters the main repo -- so the main repo's own
         // package.mask entry for "dev-libs/a" must also end up
-        // "::overlay"-scoped, even though the overlay's own
-        // package.mask never mentions "dev-libs/a" at all (only "b").
+        // "::overlay"-scoped (on top of its own, separate "::testrepo"
+        // scoping from being the main repo's own repo-level entry, see
+        // this function's own doc comment on that follow-up), even
+        // though the overlay's own package.mask never mentions
+        // "dev-libs/a" at all (only "b").
         let root = std::env::temp_dir().join("portage-profile-test-overlay-masters-mask");
         let repo = root.join("repo");
         let overlay = root.join("overlay");
@@ -2138,7 +2189,7 @@ mod tests {
         assert_eq!(
             config.package_mask,
             vec![
-                "dev-libs/a".to_string(),
+                "dev-libs/a::testrepo".to_string(),
                 "dev-libs/a::overlay".to_string(),
                 "dev-libs/b::overlay".to_string(),
             ]
@@ -2149,9 +2200,10 @@ mod tests {
     fn overlay_package_unmask_does_not_inherit_via_masters() {
         // Real MaskManager.py's own package.unmask loop never consults
         // masters at all -- only package.mask does. The main repo's own
-        // package.unmask entry must stay exactly that (unscoped, main
-        // repo only), never also appearing "::overlay"-scoped just
-        // because the overlay implicitly masters the main repo.
+        // package.unmask entry must stay "::testrepo"-scoped only (its
+        // own repo-level scoping, see this function's own doc comment on
+        // that follow-up), never *also* "::overlay"-scoped just because
+        // the overlay implicitly masters the main repo.
         let root = std::env::temp_dir().join("portage-profile-test-overlay-masters-unmask");
         let repo = root.join("repo");
         let overlay = root.join("overlay");
@@ -2163,7 +2215,10 @@ mod tests {
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
         let config =
             resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
-        assert_eq!(config.package_unmask, vec!["dev-libs/a".to_string()]);
+        assert_eq!(
+            config.package_unmask,
+            vec!["dev-libs/a::testrepo".to_string()]
+        );
     }
 
     #[test]

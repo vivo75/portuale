@@ -1427,6 +1427,49 @@ PORTING/
   and reaching it end-to-end would need a dedicated `~arch`
   stability setup disproportionate to what it'd actually prove).
 
+  **Scoping the main repo's own `package.mask`/`.unmask` too**: an
+  immediate follow-up to the overlay `package.use` work above, closing a
+  gap this pilot's own doc comment had explicitly named and deferred at
+  the time of the original overlay-`package.mask` slice: real
+  `append_repo` scopes *every* repo's own repo-level `package.mask`/
+  `.unmask`, including the main repo's, not just an overlay's -- this
+  pilot previously left the main repo's own entries unscoped. Turned out
+  to be a more interesting investigation than expected: an initial live
+  repro (masking a package by its bare name in the main repo, then
+  querying an identically-named package that exists only in an overlay
+  via an explicit `::overlay` atom) looked like it confirmed a real
+  scoping leak -- but on closer inspection, that result is *also*
+  exactly what real portage would do anyway, via the pre-existing,
+  correct `masters` mechanism (every overlay here always implicitly
+  masters the main repo, so it inherits the main repo's own
+  `package.mask` entries regardless of whether they're separately
+  scoped). Since no fixture repo here can currently avoid mastering the
+  main repo (no explicit `masters =` override parsing exists -- a
+  separate, already-documented gap), this fix's own distinguishing
+  effect is presently latent, not currently observable through any
+  constructible fixture -- ported anyway for exact correctness with real
+  `MaskManager.py`, and because it's genuinely load-bearing already, not
+  just inert: scoping main's own entries without a companion fix would
+  have broken the pre-existing, already-passing
+  `repomaskedthenuserremovedpkg` test, whose own user-level
+  `-dev-libs/repomaskedthenuserremovedpkg` (necessarily unscoped, since
+  user-level entries never get repo-scoped at all) needs to keep
+  cancelling that now-`::testrepo`-scoped repo-level entry. That's what
+  the paired fix to `stack_mask_lines` (both `portage-repo`'s -- named
+  `scope_repo_mask_lines`'s sibling -- and its Python mirror) actually
+  does: ports real `stack_lists`'s own `ignore_repo=True` behavior
+  (`lib/portage/util/__init__.py`, confirmed by reading it directly),
+  "let `-cat/pkg` remove `cat/pkg::repo`" -- an unscoped removal token
+  strips any `::repo` suffix off every existing entry before comparing,
+  so a profile-level or user-level `-atom` can still cancel *any*
+  repo-scoped mask entry, not just an identically-unscoped one. Without
+  it, `repomaskedthenuserremovedpkg` would have regressed from "correctly
+  unmasked" to "incorrectly still masked" the moment main's own entries
+  started getting `::testrepo`-scoped -- so that pre-existing test is
+  itself live, e2e proof this fix is both correct and necessary, even
+  though its main-repo-scoping half has no fixture that isolates it on
+  its own.
+
   **Cross-repo profile parents (`reponame:path` syntax)**: closes the
   cut named just above, grounded against real `LocationsManager.
   _addProfile`/`_expand_parent_colon`: a profile's own `parent` file

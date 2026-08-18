@@ -78,11 +78,14 @@ pub struct RepoConfig {
     pub location: PathBuf,
     pub priority: i32,
     /// Whether this is `repos.conf`'s `[DEFAULT] main-repo` -- needed by
-    /// callers that read repo-level config from the main repo specifically
-    /// (e.g. `portage_profile::resolve_config`'s repo-level
-    /// `profiles/package.mask`), since an overlay's own repo-level config
-    /// is deliberately out of scope (see `resolve_pretend_graph`'s doc
-    /// comment on the overlays follow-up).
+    /// callers that read repo-level config keyed by repo identity (e.g.
+    /// `portage_profile::resolve_config`'s own `main_repo_name` param,
+    /// which scopes the main repo's own `package.mask`/`.unmask`/
+    /// `package.use` family with `::reponame` the same way every
+    /// overlay's own entries already are -- an overlay's own repo-level
+    /// config is fully in scope now, not deliberately excluded; see that
+    /// crate's own module doc comment for the overlay-scoping follow-ups
+    /// that closed this out).
     pub is_main: bool,
 }
 

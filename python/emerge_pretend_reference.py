@@ -258,14 +258,34 @@ def _stack_mask_lines(sources):
     package.unmask, which real portage stacks identically -- unlike this
     pilot's previous, user-level-only package.unmask handling, which
     treated a leading "-" there as meaningless; it's meaningful once
-    more than one source can contribute an unmask entry. Mirrors
-    portage-profile/src/lib.rs's stack_mask_lines exactly."""
+    more than one source can contribute an unmask entry.
+
+    Ports real stack_lists's own ignore_repo=True behavior (the flag
+    real MaskManager.__init__ always passes for its own final
+    [repo_pkgmasklines, profile_pkgmasklines, user_pkgmasklines]
+    combination -- confirmed by reading it directly): "let -cat/pkg
+    remove cat/pkg::repo" -- an unscoped removal token (no "::" of its
+    own, which is all a profile-level or user-level -atom can ever be,
+    since only repo-level entries ever get ::repo-scoped at all, see
+    _scope_repo_mask_lines) strips any "::repo" suffix off every
+    existing entry before comparing, so it cancels a repo-scoped atom
+    from *any* repo, not just an identically-unscoped one -- without
+    this, a profile's -dev-libs/foo could never again cancel the main
+    repo's own (now ::reponame-scoped) dev-libs/foo mask entry. A
+    removal token that's already ::repo-scoped itself (rare -- only
+    possible if a user writes one by hand) keeps exact-match semantics
+    instead, matching real stack_lists's own "::" not in token guard
+    exactly. Mirrors portage-profile/src/lib.rs's stack_mask_lines
+    exactly."""
     result = []
     for lines in sources:
         for line in lines:
             if line.startswith("-"):
                 removed = line[1:]
-                result = [x for x in result if x != removed]
+                if "::" in removed:
+                    result = [x for x in result if x != removed]
+                else:
+                    result = [x for x in result if x.split("::", 1)[0] != removed]
             else:
                 result.append(line)
     return result
@@ -2039,13 +2059,28 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     archlist_sources = [_read_config_lines(os.path.join(level, "arch.list")) for level in chain]
     archlist = set(_stack_mask_lines(archlist_sources))
 
+    # Real append_repo scopes EVERY repo's own repo-level package.mask/
+    # .unmask, including the main repo's own -- not just an overlay's,
+    # confirmed by reading MaskManager.py's own repo_pkgmasklines/
+    # repo_pkgunmasklines loop ("for repo in repositories.
+    # repos_with_profiles()", unconditional). Previously left the main
+    # repo's own entries unscoped, a genuine, documented gap: an
+    # identically-named package.mask atom from main would incorrectly
+    # also mask a same-named-but-different overlay package that no mask
+    # file ever actually mentions. Not the same as the profile-chain's
+    # own package.mask/.unmask below (chain loop) or the user-level one
+    # further down -- real MaskManager.py's own profile_pkgmasklines/
+    # user_pkgmasklines never get append_repo'd at all, only the
+    # repo-level ones do, so those two stay exactly as unscoped as they
+    # already were.
     main_repo_mask_lines = _read_config_lines(
         os.path.join(main_repo_location, "profiles", "package.mask")
     )
-    mask_sources = [main_repo_mask_lines]
-    unmask_sources = [
-        _read_config_lines(os.path.join(main_repo_location, "profiles", "package.unmask"))
-    ]
+    main_repo_unmask_lines = _read_config_lines(
+        os.path.join(main_repo_location, "profiles", "package.unmask")
+    )
+    mask_sources = [_scope_repo_mask_lines(main_repo_mask_lines, main_repo_name)]
+    unmask_sources = [_scope_repo_mask_lines(main_repo_unmask_lines, main_repo_name)]
     for repo_name, repo_location in overlay_repos:
         # Real masters: a repo with no explicit "masters =" implicitly
         # masters the main repo alone (config.py's own
