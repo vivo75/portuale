@@ -3,6 +3,7 @@ use super::*;
 use portage_util::TempDir;
 
 mod commands;
+mod environment;
 mod phase_env;
 mod phase_runs;
 mod phase_table;
