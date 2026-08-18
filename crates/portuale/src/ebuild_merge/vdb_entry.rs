@@ -2,6 +2,28 @@
 
 use crate::ebuild_merge::*;
 
+/// Records `CONTENTS` in the temporary entry, then folds every per-field
+/// file into the consolidated `metadata` file (`seal_entry`; Portage:
+/// vartree.py, dblink.treewalk). Runs after the file copy; the rename into
+/// place waits for the replace loop (see [`publish_vdb_tmp`]).
+pub(crate) fn write_vdb_tmp_contents(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    contents: &str,
+) -> Result<(), String> {
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    // The consolidation: body, `stat`, `#dir_mtime=` appended last. The
+    // rename below does not touch the dir's own mtime, so the value
+    // survives the move.
+    txn.put_entry_file(&key, "CONTENTS", contents.as_bytes())
+        .map_err(|e| e.to_string())?;
+    txn.seal_entry(&key).map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
+}
+
 /// Where `pkg_postinst`'s `PORTAGE_UPDATE_ENV` points: the live entry's own
 /// `environment.bz2` (Portage: vartree.py, dblink.treewalk). `files`:
 /// rewritten in place, `scratch` is `None`; a database backend copies the

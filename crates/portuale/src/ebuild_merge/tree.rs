@@ -32,6 +32,266 @@ pub(crate) fn md5_hex(path: &Path) -> Result<String, String> {
     Ok(md5_hex_bytes(&data))
 }
 
+/// One `CONTENTS` line: `<type> <path>[ <md5>| -> <target>][ <mtime>]\n`.
+// Portage: dblink._format_contents_line
+pub(crate) fn format_contents_line(
+    node_type: &str,
+    abs_path: &str,
+    md5_digest: Option<&str>,
+    symlink_target: Option<&str>,
+    mtime_secs: Option<i64>,
+) -> String {
+    let mut fields = vec![node_type.to_string(), abs_path.to_string()];
+    if let Some(md5) = md5_digest {
+        fields.push(md5.to_string());
+    } else if let Some(target) = symlink_target {
+        fields.push(format!("-> {target}"));
+    }
+    if let Some(mtime) = mtime_secs {
+        fields.push(mtime.to_string());
+    }
+    format!("{}\n", fields.join(" "))
+}
+
+/// Converts a file's mtime to seconds since the epoch. `ebuild_unmerge`'s
+/// mtime-staleness check reuses this to compare against `CONTENTS`-recorded times.
+pub(crate) fn mtime_secs(metadata: &std::fs::Metadata) -> Result<i64, String> {
+    use std::time::UNIX_EPOCH;
+    let mtime = metadata
+        .modified()
+        .map_err(|e| format!("reading mtime: {e}"))?;
+    Ok(mtime
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("mtime before epoch: {e}"))?
+        .as_secs() as i64)
+}
+
+pub(crate) struct MergeTreeArgs<'a> {
+    pub(crate) d: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) installed_instance_pf: Option<&'a str>,
+    pub(crate) protect_if_modified: bool,
+    pub(crate) config_protect: &'a str,
+    pub(crate) config_protect_mask: &'a str,
+    pub(crate) noconfmem: bool,
+    pub(crate) cfgfiledict: &'a mut BTreeMap<String, String>,
+    pub(crate) xattrs: &'a XattrPolicy,
+}
+
+/// Walks `d` (`${D}`) and merges every entry into `root` (`${ROOT}`),
+/// returning the accumulated `CONTENTS` text. `cfgfiledict` is read once by
+/// the caller before this runs and written back once after, a single
+/// whole-merge read/update/write, not a per-file one.
+// Portage: vartree.py, mergeme; vardbapi._conf_mem_file
+pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
+    let MergeTreeArgs {
+        d,
+        root,
+        category,
+        installed_instance_pf,
+        protect_if_modified,
+        config_protect,
+        config_protect_mask,
+        noconfmem,
+        cfgfiledict,
+        xattrs,
+    } = args;
+    let mut contents = String::new();
+    let mut stack: Vec<PathBuf> = vec![PathBuf::new()];
+    while let Some(relative_dir) = stack.pop() {
+        let src_dir = d.join(&relative_dir);
+        let children: Vec<PathBuf> = portage_util::read_dir_entries(&src_dir)
+            .map_err(|e| format!("{}: {e}", src_dir.display()))?
+            .into_iter()
+            .map(|e| relative_dir.join(e.file_name()))
+            .collect();
+
+        for relative_path in children {
+            let src = d.join(&relative_path);
+            let dest = root.join(&relative_path);
+            let abs_path = format!("/{}", relative_path.display());
+            let file_type = std::fs::symlink_metadata(&src)
+                .map_err(|e| format!("{}: {e}", src.display()))?
+                .file_type();
+
+            if file_type.is_symlink() {
+                let target =
+                    std::fs::read_link(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+                let target_str = target.to_string_lossy().to_string();
+                // A CONFIG_PROTECT'd `sym` entry whose live destination differs
+                // is diverted to a fresh ._cfgNNNN_ sibling (the target
+                // string's own MD5 is what's hashed, not file content).
+                // Portage: dblink._protect
+                let mut write_dest = dest.to_path_buf();
+                let mut moveme = true;
+                let protected_path = is_protected(root, config_protect, config_protect_mask, &dest);
+                if protected_path {
+                    let src_md5 = md5_hex_bytes(target_str.as_bytes());
+                    (write_dest, moveme) = protect_decision(ProtectDecisionArgs {
+                        root,
+                        category,
+                        installed_instance_pf,
+                        protect_if_modified,
+                        dest: &dest,
+                        abs_path: &abs_path,
+                        src_md5: &src_md5,
+                        cfgfiledict,
+                        noconfmem,
+                    })?;
+                }
+                // A symlink can never replace a directory: it lands at the
+                // first `dest.backup.NNNN` instead and the directory is kept.
+                // Directory-target symlinks always reach here and still exit 0.
+                // Portage: vartree.py, mergeme
+                if moveme
+                    && !protected_path
+                    && write_dest == dest
+                    && std::fs::symlink_metadata(&dest)
+                        .map(|m| m.file_type().is_dir())
+                        .unwrap_or(false)
+                {
+                    write_dest = new_backup_path(&dest);
+                    eprintln!("Installation of a symlink is blocked by a directory:");
+                    eprintln!("  '{}'", dest.display());
+                    eprintln!("This symlink will be merged with a different name:");
+                    eprintln!("  '{}'", write_dest.display());
+                    eprintln!();
+                }
+
+                let mtime = mtime_secs(
+                    &std::fs::symlink_metadata(&src)
+                        .map_err(|e| format!("{}: {e}", src.display()))?,
+                )?;
+                // `moveme == false` (confmem rejected this update): skip the
+                // write entirely. `mtime` still uses the source's mtime for
+                // CONTENTS either way.
+                // Portage: vartree.py, mergeme
+                if moveme {
+                    if let Some(parent) = write_dest.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("{}: {e}", parent.display()))?;
+                    }
+                    // Installed by atomic rename, like a regular file.
+                    replace_symlink_atomic(&target, &src, &write_dest, mtime)?;
+                }
+                // CONTENTS records the logical path/target, never the ._cfgNNNN_
+                // variant a protected write may have landed at.
+                contents.push_str(&format_contents_line(
+                    "sym",
+                    &abs_path,
+                    None,
+                    Some(&target_str),
+                    Some(mtime),
+                ));
+            } else if file_type.is_dir() {
+                // A newly created directory takes the source's mode/owner; an
+                // existing one is left alone (a shared `/usr/lib` must never
+                // have ownership clobbered by every package installing into it).
+                // Portage: vartree.py, mergeme
+                let dir_existed = dest.is_dir();
+                std::fs::create_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+                if !dir_existed {
+                    use std::os::unix::fs::PermissionsExt;
+                    let src_meta =
+                        std::fs::metadata(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+                    lchown_or_chown(&dest, src_meta.uid(), src_meta.gid(), false)?;
+                    std::fs::set_permissions(
+                        &dest,
+                        std::fs::Permissions::from_mode(src_meta.permissions().mode()),
+                    )
+                    .map_err(|e| format!("{}: {e}", dest.display()))?;
+                }
+                contents.push_str(&format_contents_line("dir", &abs_path, None, None, None));
+                stack.push(relative_path);
+            } else if file_type.is_file() {
+                let src_md5 = md5_hex(&src)?;
+                // A protected path whose on-disk content differs is diverted to
+                // a fresh ._cfgNNNN_ sibling, unless cfgfiledict already
+                // remembers this src_md5 for this path (`NOCONFMEM` forces
+                // re-protection regardless).
+                // Portage: dblink._protect
+                let mut write_dest = dest.to_path_buf();
+                let mut moveme = true;
+                if is_protected(root, config_protect, config_protect_mask, &dest) {
+                    (write_dest, moveme) = protect_decision(ProtectDecisionArgs {
+                        root,
+                        category,
+                        installed_instance_pf,
+                        protect_if_modified,
+                        dest: &dest,
+                        abs_path: &abs_path,
+                        src_md5: &src_md5,
+                        cfgfiledict,
+                        noconfmem,
+                    })?;
+                }
+
+                let mtime = mtime_secs(
+                    &std::fs::metadata(&src).map_err(|e| format!("{}: {e}", src.display()))?,
+                )?;
+                // `moveme == false` (confmem rejected this update): skip the copy
+                // entirely. `mtime` still uses the source's mtime for CONTENTS.
+                // Portage: vartree.py, mergeme
+                if moveme {
+                    if let Some(parent) = write_dest.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("{}: {e}", parent.display()))?;
+                    }
+                    // A destination already a regular file with the same mode and
+                    // byte-identical content is left in place (inode, ownership
+                    // and xattrs survive; only mtime is refreshed). A diverted
+                    // ._cfgNNNN_ write never takes this path.
+                    // Portage: vartree.py, dblink._needs_move
+                    if write_dest == dest && !needs_move(&src, &write_dest, xattrs) {
+                        filetime::set_file_mtime(
+                            &write_dest,
+                            filetime::FileTime::from_unix_time(mtime, 0),
+                        )
+                        .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                    } else {
+                        // Atomic replacement: the destination's existing inode is
+                        // never opened for write (a safety requirement, not an
+                        // optimization).
+                        replace_file_atomic(&src, &write_dest, mtime, xattrs)?;
+                    }
+                }
+                // CONTENTS records the logical path and the source's MD5, never
+                // the ._cfgNNNN_ variant; the vdb owns the logical path either way.
+                contents.push_str(&format_contents_line(
+                    "obj",
+                    &abs_path,
+                    Some(&src_md5),
+                    None,
+                    Some(mtime),
+                ));
+            } else if file_type.is_fifo()
+                || file_type.is_char_device()
+                || file_type.is_block_device()
+            {
+                // Fifo/device nodes: never protected; only created when the live
+                // destination doesn't exist yet (an existing node is left
+                // alone). The CONTENTS line is written unconditionally, with
+                // no digest/mtime/target. Recreated via mkfifo/mknod (not
+                // moved) so `${D}` stays intact.
+                // Portage: vartree.py, mergeme
+                if std::fs::symlink_metadata(&dest).is_err() {
+                    if let Some(parent) = dest.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("{}: {e}", parent.display()))?;
+                    }
+                    create_special_node(&src, &dest, &file_type)?;
+                }
+                let node_type = if file_type.is_fifo() { "fif" } else { "dev" };
+                contents.push_str(&format_contents_line(
+                    node_type, &abs_path, None, None, None,
+                ));
+            }
+        }
+    }
+    Ok(contents)
+}
+
 /// Creates a fresh FIFO or device node at `dest`, matching `src`'s type,
 /// permission bits, and (for a device) major/minor. Recreated rather than
 /// moved so `${D}` stays intact. An explicit `chmod` afterward closes the

@@ -640,6 +640,17 @@ fn smtp_read_response(reader: &mut impl std::io::BufRead) -> Result<(u16, Vec<St
     Ok((code, lines))
 }
 
+/// Arguments of [`smtp_send`].
+struct SmtpSendArgs<'a> {
+    host: &'a str,
+    port: u16,
+    user: &'a str,
+    passwd: &'a str,
+    recipient: &'a str,
+    from: &'a str,
+    message: &'a str,
+}
+
 // --- modules --------------------------------------------------------------
 
 /// The `${ACTION}` substitution: `merged` normally, `unmerged` when only
