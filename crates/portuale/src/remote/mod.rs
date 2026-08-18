@@ -18,10 +18,12 @@
 
 use clap::ArgMatches;
 mod ledger;
+mod preflight;
 
 #[cfg(test)]
 pub(crate) mod tests;
 pub(crate) use ledger::*;
+pub(crate) use preflight::*;
 
 use portage_util::TempDir;
 
