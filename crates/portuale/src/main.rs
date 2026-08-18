@@ -25,6 +25,7 @@ mod fetch;
 mod helpers;
 mod info_files;
 mod install_mask;
+mod merge_engines;
 mod mrg;
 mod mtimedb;
 mod needed_elf;

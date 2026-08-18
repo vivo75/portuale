@@ -685,3 +685,16 @@ pub fn fetch_src_uri(
     }
     Ok(filenames)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+    use std::fs;
+
+    fn tempdir() -> std::path::PathBuf {
+        let dir = TempDir::new("portuale_fetch_test").keep();
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+}

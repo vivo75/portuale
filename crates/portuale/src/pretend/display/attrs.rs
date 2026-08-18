@@ -117,6 +117,16 @@ pub(crate) fn use_suffix(args: UseSuffixArgs<'_>) -> String {
     format!(" {}", groups.concat())
 }
 
+/// Arguments of [`nomerge_row`].
+pub(crate) struct NomergeRowArgs<'a> {
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) disp_ver: &'a str,
+    pub(crate) indent: &'a str,
+    pub(crate) quiet: bool,
+    pub(crate) tail: &'a str,
+}
+
 /// The version `entry`'s own package line displays; `None` for the
 /// non-merging outcomes. `merge_order`'s own `entry_version` is the same
 /// mapping, but it is private to `portage-repo`.

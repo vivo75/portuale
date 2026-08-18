@@ -4867,3 +4867,80 @@ the freshly-built package with the right version/slot/keywords/`RDEPEND`
 md5-cache entry into a `Packages` index portuale's own binary-package
 reader already trusts.
 
+### Real `emerge --buildpkgonly` execution: `emerge`'s own first real, non-dry-run action
+
+Every prior slice in portuale kept `emerge` itself 100% dry-run --
+`--pretend` was a hard requirement, and even `--buildpkgonly` only ever
+changed what the dry-run *report* said (see the write-up above). This
+slice makes `emerge --buildpkgonly <atom>`, given *without* `--pretend`,
+actually build a real binary package for every entry the resolution
+graph says needs one -- at the time, the one real, non-dry-run action
+`emerge` itself implemented (since joined by `--getbinpkgonly` and then a
+plain `emerge <atom>` source merge -- see their own sections below).
+`--pretend --buildpkgonly` together still stays a pure
+dry-run report, unchanged: real `--pretend` always suppresses every real
+action, no matter what else is requested alongside it, and portuale
+now mirrors that precisely rather than only supporting dry-run at all.
+
+The gate `resolve_pretend_graph`'s own `buildpkgonly_deps_unsatisfied`
+check already computes (see the write-up above) turns out to do double
+duty here: real `--buildpkgonly` refuses to resolve at all when a
+package that needs building depends on another package that *also*
+needs building, which means that once the gate passes, nothing in the
+needs-building set depends on anything else in it -- there is no
+cross-package build ordering to compute at all. `emerge_build.rs`'s new
+`run_buildpkgonly` just walks the resolved entries in order and calls
+`ebuild_package::run_package` (task #105-#109 -- the exact same
+machinery `ebuild <file> package` already uses) for each one, since
+`GraphEntry` doesn't carry the winning candidate's own repo location (a
+deliberate omission -- see its own doc comment); `locate_candidate`
+re-derives it via `portage_repo::list_candidates`, the same repo/version
+lookup `resolve_pretend_graph` already did internally to pick the
+winning version in the first place.
+
+Building this surfaced a real, worth-recording finding, checked
+empirically rather than assumed: portuale's environment setup never
+populates `A`/`AA` from `SRC_URI` at all, so a real ebuild with a
+nonempty `SRC_URI` does *not* fail at `unpack` the way "no fetch
+machinery" first suggested it would -- EAPI 0's own default `src_unpack`
+(`unpack ${A}`) just runs with nothing to unpack and silently
+*succeeds*. Real portage's own `SRC_URI`-vs-`DISTDIR` check happens in a
+separate pre-phase step inside `doebuild()` itself, before the ebuild's
+own phases ever run at all -- a mechanism portuale has no equivalent
+of. Left unguarded, this would silently produce a real, valid-looking
+but functionally *empty* binary package instead of erroring, which is
+worse than a loud failure. `run_buildpkgonly` therefore checks the
+winning candidate's own md5-cache `SRC_URI` field and refuses outright
+(exit 1, `"has a real SRC_URI, but portuale has no real fetch/unpack
+machinery ... refusing rather than silently building an empty
+package"`) rather than letting that happen. Real fetch + Manifest
+verification stays a separately-scoped, not-yet-attempted follow-up.
+
+**v1 scope cuts as of this section's own original slice** (see
+`emerge_build.rs`'s own module doc comment for the current, full list):
+a `CandidateSource::Binary` entry (would only come from `--usepkg`) is
+skipped outright, nothing to build, still true. Real `--keep-going` has
+since shipped -- see this file's own "`emerge --buildpkgonly
+--keep-going`" section below; this paragraph's original "no partial-
+graph continuation" claim is now stale. `--debug` isn't threaded
+through this path yet (real `emerge --debug` still routes to the
+pre-existing "not implemented" bucket, unchanged).
+
+Proven via `dev-libs/packagepkg` (real end-to-end build, same fixture
+task #105-#109 already established) and a new `dev-libs/fetchpkg`
+fixture (a real, nonempty `SRC_URI`, proving the refusal fires and
+nothing gets built), both as Rust unit tests
+(`emerge_build::tests::real_buildpkgonly_builds_a_real_binary_package_end_to_end`/
+`real_buildpkgonly_refuses_a_real_src_uri_instead_of_building_an_empty_package`)
+and as black-box CLI tests against the compiled `emerge` binary
+(`test_portuale.py`'s own
+`test_emerge_buildpkgonly_without_pretend_really_builds_a_binary_package`/
+`test_emerge_buildpkgonly_with_pretend_stays_dry_run`/
+`test_emerge_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry`)
+-- this path has no Python reference mirror at all (unlike every
+dry-run-only feature so far): the Python side gained the identical
+CLI-gate/message-text changes so the shared dry-run contract tests
+still match byte-for-byte, but it has no real ebuild-execution
+machinery to mirror the actual building with, consistent with every
+other real-execution slice in portuale staying Rust-only.
+

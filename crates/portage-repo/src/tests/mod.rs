@@ -277,6 +277,35 @@ fn s2_conflict(rows: Vec<S2Row<'_>>) -> SlotConflict {
     }
 }
 
+fn abi_probe_entries(consumer_outcome: PretendOutcome) -> Vec<GraphEntry> {
+    let provider = |version: &str, sub: &str| GraphEntry {
+        outcome: PretendOutcome::New {
+            version: version.to_string(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some(sub.into()),
+        ..graph_entry("app-misc", "abiprov", version)
+    };
+    vec![
+        provider("2", "2"),
+        provider("1", "1"),
+        GraphEntry {
+            outcome: consumer_outcome,
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("app-misc", "abicons", "1")
+        },
+        GraphEntry {
+            outcome: PretendOutcome::New {
+                version: "1".to_string(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("app-misc", "abiforce", "1")
+        },
+    ]
+}
+
 #[derive(Default)]
 struct CtxOpts161 {
     reachable: HashSet<(String, String)>,

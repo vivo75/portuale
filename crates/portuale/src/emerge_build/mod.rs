@@ -7,12 +7,14 @@ use crate::ebuild_merge;
 mod entry_env;
 mod logs;
 mod resume;
+mod status;
 
 #[cfg(test)]
 mod tests;
 pub(crate) use entry_env::*;
 pub(crate) use logs::*;
 pub(crate) use resume::*;
+pub(crate) use status::*;
 
 use crate::ebuild_package::{self, PackageOptions};
 
@@ -52,6 +54,16 @@ fn locate_candidate(
         .filter(|c| c.version == version)
         .max_by_key(|c| c.repo_priority)
         .cloned()
+}
+
+/// Portage's `<repo>/<category>/<package>/<package>-<version>.ebuild`
+/// path convention.
+fn ebuild_path(candidate: &Candidate, category: &str, package: &str, version: &str) -> PathBuf {
+    candidate
+        .repo_location
+        .join(category)
+        .join(package)
+        .join(format!("{package}-{version}.ebuild"))
 }
 
 /// Whether `entry`'s resolved cpv (+ slot) matches any of `atoms`.
