@@ -127,6 +127,22 @@ pub(crate) struct NomergeRowArgs<'a> {
     pub(crate) tail: &'a str,
 }
 
+/// Pure constructor for the `[nomerge …]` row. `tail` carries the oldbest /
+/// running-root / USE pieces (each empty when absent). The bracket pad is
+/// `"nomerge".ljust(13)` plus `empty_space_in_brackets()`.
+pub(crate) fn nomerge_row(args: NomergeRowArgs<'_>) -> String {
+    let NomergeRowArgs {
+        category,
+        package,
+        disp_ver,
+        indent,
+        quiet,
+        tail,
+    } = args;
+    let pad = if quiet { "      " } else { "       " };
+    format!("[nomerge{pad}] {indent}{category}/{package}-{disp_ver}{tail}")
+}
+
 /// The version `entry`'s own package line displays; `None` for the
 /// non-merging outcomes. `merge_order`'s own `entry_version` is the same
 /// mapping, but it is private to `portage-repo`.

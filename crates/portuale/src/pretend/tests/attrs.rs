@@ -145,6 +145,76 @@ fn use_suffix_picks_the_p_or_pv_use_rendering_by_verbosity() {
 }
 
 #[test]
+fn nomerge_row_carries_the_use_suffix_when_the_package_has_one() {
+    // Portage: resolver/output.py, Display. Nomerge rows carry the same USE
+    // suffix as merge rows, never a size suffix.
+    let nc = Colorizer::new(false);
+    let gpcyclea = entry_with_use(
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        "x",
+        "x",
+    );
+    let use_str = use_suffix(UseSuffixArgs {
+        entry: &gpcyclea,
+        verbose: false,
+        quiet: false,
+        alphabetical: false,
+        color: &nc,
+    });
+    assert_eq!(use_str, " USE=\"x\" ");
+    assert_eq!(
+        nomerge_row(NomergeRowArgs {
+            category: "dev-libs",
+            package: "gpcyclea",
+            disp_ver: "1.0",
+            indent: " ",
+            quiet: false,
+            tail: &use_str
+        }),
+        "[nomerge       ]  dev-libs/gpcyclea-1.0 USE=\"x\" "
+    );
+    let bare = entry_with_use(
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        "",
+        "",
+    );
+    let bare_use = use_suffix(UseSuffixArgs {
+        entry: &bare,
+        verbose: false,
+        quiet: false,
+        alphabetical: false,
+        color: &nc,
+    });
+    assert_eq!(bare_use, "");
+    assert_eq!(
+        nomerge_row(NomergeRowArgs {
+            category: "dev-libs",
+            package: "diamond",
+            disp_ver: "1.0",
+            indent: "",
+            quiet: false,
+            tail: &bare_use
+        }),
+        "[nomerge       ] dev-libs/diamond-1.0"
+    );
+    assert_eq!(
+        nomerge_row(NomergeRowArgs {
+            category: "dev-libs",
+            package: "diamond",
+            disp_ver: "1.0",
+            indent: " ",
+            quiet: true,
+            tail: &bare_use
+        }),
+        "[nomerge      ]  dev-libs/diamond-1.0"
+    );
+}
+
+#[test]
 fn use_suffix_renders_portages_trailing_space_after_each_use_group() {
     // Portage: output_helpers.py, _create_use_string. Every non-empty USE
     // group ends with a trailing space.
