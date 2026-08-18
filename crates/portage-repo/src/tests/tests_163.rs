@@ -159,6 +159,14 @@ struct RpOpts163 {
 }
 
 impl RpOpts163 {
+    fn top() -> Self {
+        RpOpts163 {
+            selective: true,
+            is_top_level: true,
+            with_bdeps: true,
+            ..Default::default()
+        }
+    }
     fn dep() -> Self {
         RpOpts163 {
             with_bdeps: true,
@@ -212,6 +220,19 @@ fn resolve_163(
         },
     )
     .unwrap_or_else(|e| panic!("resolve_163({atom}) failed: {e}"))
+}
+
+fn binpkg_163(cpv: &str, slot: &str, extra: &[(&str, &str)]) -> HashMap<String, String> {
+    let mut m = HashMap::from([
+        ("CPV".to_string(), cpv.to_string()),
+        ("SLOT".to_string(), slot.to_string()),
+        ("KEYWORDS".to_string(), "amd64".to_string()),
+        ("REPO".to_string(), "testrepo".to_string()),
+    ]);
+    for (k, v) in extra {
+        m.insert(k.to_string(), v.to_string());
+    }
+    m
 }
 
 /// Each reinstall trigger also fires through the best-version

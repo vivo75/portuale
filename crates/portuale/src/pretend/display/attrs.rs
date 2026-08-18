@@ -19,6 +19,43 @@ pub(crate) fn columnwidth_from_env() -> i64 {
     }
 }
 
+/// The bare flag name inside a rendered `USE=` token, for the
+/// `--alphabetical` re-sort: strip a leading `(` / `-` and any trailing
+/// `)` / `*` / `%` (`(-maskflag)` -> `maskflag`, `foo%*` -> `foo`).
+pub(crate) fn use_flag_sort_key(tok: &str) -> &str {
+    tok.trim_start_matches('(')
+        .trim_start_matches('-')
+        .trim_end_matches([')', '*', '%'])
+}
+
+/// Portage's `_create_use_string` per-flag colour, re-derived from an
+/// already-rendered token's shape: plain `flag` is red, `-flag` blue,
+/// `%`/`%*` yellow (newly in IUSE), lone `*` green (polarity flipped).
+/// Only the core is coloured; markers and `( )` wrap stay plain.
+/// Portage: output_helpers.py, _create_use_string
+pub(crate) fn colorize_use_token(tok: &str, color: &Colorizer) -> String {
+    let (open, inner, close) = match tok.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+        Some(i) => ("(", i, ")"),
+        None => ("", tok, ""),
+    };
+    let (core, markers) = if let Some(c) = inner.strip_suffix("%*") {
+        (c, "%*")
+    } else if let Some(c) = inner.strip_suffix('*') {
+        (c, "*")
+    } else if let Some(c) = inner.strip_suffix('%') {
+        (c, "%")
+    } else {
+        (inner, "")
+    };
+    let key = match markers {
+        "%*" | "%" => "yellow",
+        "*" => "green",
+        _ if core.starts_with('-') => "blue",
+        _ => "red",
+    };
+    format!("{open}{}{markers}{close}", color.c(key, core))
+}
+
 /// The version `entry`'s own package line displays; `None` for the
 /// non-merging outcomes. `merge_order`'s own `entry_version` is the same
 /// mapping, but it is private to `portage-repo`.

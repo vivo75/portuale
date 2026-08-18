@@ -65,4 +65,44 @@ fn wait_pty_output_bound(
         }
     }
 }
+
+fn entry_with_use(outcome: PretendOutcome, pv_use: &str, p_use: &str) -> GraphEntry {
+    let grp = |s: &str| {
+        if s.is_empty() {
+            vec![]
+        } else {
+            vec![("USE".to_string(), s.to_string())]
+        }
+    };
+    GraphEntry {
+        discovery: 0,
+        category: "dev-libs".into(),
+        package: "foo".into(),
+        outcome,
+        blockers: vec![],
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        repo_name: Some("testrepo".into()),
+        oldbest: vec![],
+        use_flags_display: vec![("bar".into(), true), ("baz".into(), false)],
+        use_expand_display: grp(pv_use),
+        use_expand_display_p: grp(p_use),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: vec![],
+        required_by: vec![],
+        source: portage_repo::CandidateSource::Ebuild,
+        provenance: Default::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    }
+}
 mod env_config;

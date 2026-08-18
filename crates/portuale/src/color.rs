@@ -239,6 +239,10 @@ pub struct Colorizer {
 }
 
 impl Colorizer {
+    pub fn new(enabled: bool) -> Self {
+        Self { enabled }
+    }
+
     /// `colorize(key, text)`: a `codes` key wraps directly, a `_styles`
     /// key resolves to its colour-name first; either way `text` is
     /// followed by `codes["reset"]`.
