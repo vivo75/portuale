@@ -37,6 +37,8 @@ mod remote_bundle;
 mod self_exe;
 mod vdb_ipc;
 #[cfg(feature = "vdb-fuse")]
+mod vdb_rw;
+#[cfg(feature = "vdb-fuse")]
 mod vdb_view;
 
 use std::process::ExitCode;

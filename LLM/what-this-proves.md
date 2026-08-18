@@ -4783,3 +4783,87 @@ never calls `ebuild_phases`/`ebuild_merge` at all (it's still pure
 dry-run/`--pretend`), so there's no real phase-execution path there yet
 to make `PORTAGE_DEBUG`/xtrace observable.
 
+### Real `ebuild <file> package`/binpkg building (task #54's own natural sibling)
+
+`ebuild <file> package` mirrors real `doebuild()`'s own `"package"`
+action: `actionmap_deps["package"] == ["install"]` (the same
+prerequisite-chain idea as `merge`), so it first runs the real `install`
+phase chain, then really invokes `bin/misc-functions.sh`'s own
+`__dyn_package` (real, unmodified bash). Grounding this against
+`lib/_emerge/MiscFunctionsProcess.py`/`doebuild.py` found `misc-
+functions.sh` is spawned as a *separate script invocation*, not a
+`bin/ebuild.sh` phase (`bin/phase-functions.sh`'s own case statement has
+no `"package"` branch at all) -- `ebuild_phases.rs` gained a new
+`run_misc_function`/`run_misc_functions` primitive alongside the
+existing `run_one_phase`, sharing a new `phase_setup_script()` helper
+extracted from what used to be `run_one_phase`'s own inline `format!`
+block, plus an `extra_env` hook for command-specific exports
+(`PKGDIR`/`PORTAGE_BINPKG_TMPFILE`/`BINPKG_FORMAT`/
+`PORTAGE_COMPRESSION_COMMAND`/`PORTAGE_PYTHONPATH`) that `run_one_phase`
+itself doesn't need.
+
+`__dyn_package` itself is real, unmodified bash: it tars `${D}` into
+`PORTAGE_BINPKG_TMPFILE`, then shells out to the real, unmodified
+`bin/xpak-helper.py recompose` to append XPAK metadata read straight out
+of `${PORTAGE_BUILDDIR}/build-info` (already populated for free as a
+side effect of the `install` chain's own case branch -- no
+reimplementation needed on either side). `PORTAGE_BINPKG_TMPFILE` is the
+real, final destination path itself (`lib/_emerge/EbuildPhase.py:210-249`:
+`os.path.join(PKGDIR, CATEGORY, PF) + ".tbz2"` for the real default
+`BINPKG_FORMAT="xpak"`) -- no separate atomic-rename step for the binpkg
+file the way portuale's own vdb write uses one.
+
+`portage_repo`'s own pre-existing binary-package reader (task #53/#63)
+never parses a `.tbz2`/XPAK file's own content at all -- only
+`<PKGDIR>/Packages`, a plain-text index -- so the new `ebuild_package.rs`
+module also writes/updates a real entry there (`write_packages_index_entry`:
+creates a minimal `TIMESTAMP`-only header on first write, replaces an
+existing block for the same `CPV` on a rebuild, otherwise preserves every
+other entry untouched), sourcing `SLOT`/`KEYWORDS`/`IUSE`/`LICENSE`/
+`PROPERTIES`/`RESTRICT`/the `*DEPEND` family from the ebuild's own repo's
+real `metadata/md5-cache` entry via `portage_repo::read_md5_cache` --
+the exact same source `emerge --pretend`'s own dependency resolution
+already trusts -- when the ebuild's own containing repo can be found by
+walking up for a `profiles/repo_name` file, closing the loop: a package
+built this way is immediately visible to `emerge --pretend --usepkg`. A
+real `BUILD_TIME` (the wall-clock time the package finished building) is
+written into both `build-info` and the `Packages` entry, matching real
+portage's own use of it for `--rebuilt-binaries` comparisons.
+
+Real vdb `COUNTER` is deliberately left untouched by this code -- grepped
+`doebuild.py` for `counter_tick`/`COUNTER` and found zero hits, confirming
+real `doebuild()`'s own `"package"` action never touches it at all (it's
+a real install/merge-time-only concept, and `ebuild <file> package` never
+merges anything).
+
+**v1 scope cuts as of this section's own original slice** (see
+`ebuild_package.rs`'s own module doc comment for the current, full
+list): `BINPKG_FORMAT` was always `"xpak"` here -- the newer `"gpkg"`
+format has since shipped, see this file's own "Real `ebuild <file>
+package`: the `gpkg` binary-package format" section below. Real
+`PORTAGE_COMPRESSION_COMMAND` resolution has since shipped -- see this
+file's own "Real `PORTAGE_COMPRESSION_COMMAND` resolution" section
+below; that paragraph's original claim (hardcoded `"bzip2 -c"`) is now
+stale. `USE` is always empty in the `Packages` entry, matching this
+portuale's own phase
+environment (nothing was actually built with any USE flags enabled, so
+an empty set is the honest value). No `BUILD_ID`/`packdebug`/
+`splitdebug`/RPM (`__dyn_rpm`) support, no `PKGDIR`-index locking (this
+portuale's own CLI is never invoked concurrently against the same
+`PKGDIR`), and no real `bindbapi.inject()` equivalent (no long-lived
+in-memory binary-package database here, only ever re-reading `Packages`
+fresh each invocation).
+
+Proven via a new `dev-libs/packagepkg` fixture (deliberately new rather
+than retrofitted onto the pre-existing `mergepkg` fixture, to avoid
+making `mergepkg` newly visible to unrelated `emerge --pretend` repo-wide
+scans) and a real end-to-end test
+(`ebuild_package::tests::real_package_builds_a_real_xpak_tbz2_and_a_real_packages_entry`):
+runs `run_package`, asserts the produced `.tbz2` contains the real
+`"XPAKPACK"`/`"XPAKSTOP"` magic bytes, then asserts `portage_repo`'s own
+unmodified `list_binary_candidates`/`read_binary_metadata` correctly see
+the freshly-built package with the right version/slot/keywords/`RDEPEND`
+-- proving the metadata really flowed end-to-end from the ebuild's
+md5-cache entry into a `Packages` index portuale's own binary-package
+reader already trusts.
+

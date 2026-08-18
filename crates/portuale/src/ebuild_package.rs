@@ -19,6 +19,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Whether `command` is the package-building command this module implements
+/// (`ebuild.rs` checks this alongside the phase/merge/unmerge routers).
+pub fn is_package_command(command: &str) -> bool {
+    command == "package"
+}
+
 /// Options for `run_package`, bundled into a struct rather than more
 /// positional parameters. `pkgdir` is chain-resolved at the construction
 /// sites (calling env over `make.conf`/profile/`make.globals`); `Default`
@@ -1056,6 +1062,236 @@ mod tests {
         TempDir::new("portuale-ebuild-package-test").keep()
     }
 
+    // `repo_root_for` lives in, and is tested in, `ebuild_phases.rs`.
+
+    #[test]
+    fn write_packages_index_entry_creates_a_header_then_the_entry() {
+        let tmp = tempdir();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/foo-1.0",
+            &[("CPV", "dev-libs/foo-1.0"), ("SLOT", "0")],
+            None,
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(tmp.join("Packages")).unwrap();
+        let blocks: Vec<&str> = text.trim().split("\n\n").collect();
+        assert_eq!(blocks.len(), 2, "header block + one entry: {text:?}");
+        assert!(blocks[0].contains("TIMESTAMP:"));
+        // Without VERSION Portage discards the index wholesale.
+        assert!(
+            blocks[0].contains("VERSION: 0"),
+            "header must carry VERSION for real Portage: {text:?}"
+        );
+        assert!(blocks[1].contains("CPV: dev-libs/foo-1.0"));
+        assert!(blocks[1].contains("SLOT: 0"));
+    }
+
+    #[test]
+    fn write_packages_index_entry_replaces_an_existing_entry_for_a_rebuild() {
+        let tmp = tempdir();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/foo-1.0",
+            &[
+                ("CPV", "dev-libs/foo-1.0"),
+                ("SLOT", "0"),
+                ("BUILD_TIME", "100"),
+            ],
+            None,
+        )
+        .unwrap();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/foo-1.0",
+            &[
+                ("CPV", "dev-libs/foo-1.0"),
+                ("SLOT", "0"),
+                ("BUILD_TIME", "200"),
+            ],
+            None,
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(tmp.join("Packages")).unwrap();
+        let blocks: Vec<&str> = text.trim().split("\n\n").collect();
+        assert_eq!(blocks.len(), 2, "still header + a single entry: {text:?}");
+        assert!(blocks[1].contains("BUILD_TIME: 200"));
+        assert!(!text.contains("BUILD_TIME: 100"));
+    }
+
+    #[test]
+    fn write_packages_index_entry_preserves_other_entries() {
+        let tmp = tempdir();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/foo-1.0",
+            &[("CPV", "dev-libs/foo-1.0"), ("SLOT", "0")],
+            None,
+        )
+        .unwrap();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/bar-2.0",
+            &[("CPV", "dev-libs/bar-2.0"), ("SLOT", "0")],
+            None,
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(tmp.join("Packages")).unwrap();
+        assert!(text.contains("CPV: dev-libs/foo-1.0"));
+        assert!(text.contains("CPV: dev-libs/bar-2.0"));
+    }
+
+    fn compress_index_snapshot(features: &str) -> portage_profile::HeaderSnapshot {
+        vec![("FEATURES".to_string(), Some(features.to_string()))]
+    }
+
+    /// Without `compress-index` Portage unlinks a stale `Packages.gz`
+    /// (`ENOENT` ignored); the lock file goes just the same.
+    // Portage: bintree.py, _pkgindex_write; locks.py, unlockfile
+    #[test]
+    fn write_packages_index_entry_removes_a_stale_packages_gz_without_compress_index() {
+        let tmp = tempdir();
+        std::fs::write(tmp.join("Packages.gz"), b"stale").unwrap();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/foo-1.0",
+            &[("CPV", "dev-libs/foo-1.0"), ("SLOT", "0")],
+            Some(&compress_index_snapshot("sandbox -compress-index")),
+        )
+        .unwrap();
+        assert!(
+            !tmp.join("Packages.gz").exists(),
+            "stale copy removed, like Portage's else branch"
+        );
+        assert!(
+            !tmp.join(".Packages.portage_lockfile").exists(),
+            "lock released as usual"
+        );
+    }
+
+    /// A config-less (`None`) write has no resolved `FEATURES` to judge by,
+    /// so it neither creates nor removes `Packages.gz` — but the lock file
+    /// is still Portage's `wantnewlockfile` shape and goes.
+    // Portage: bintree.py, _pkgindex_write; locks.py, unlockfile
+    #[test]
+    fn write_packages_index_entry_leaves_packages_gz_alone_without_a_snapshot() {
+        let tmp = tempdir();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/foo-1.0",
+            &[("CPV", "dev-libs/foo-1.0"), ("SLOT", "0")],
+            None,
+        )
+        .unwrap();
+        assert!(!tmp.join("Packages.gz").exists(), "no snapshot, no copy");
+        std::fs::write(tmp.join("Packages.gz"), b"stale").unwrap();
+        write_packages_index_entry(
+            &tmp,
+            "dev-libs/bar-2.0",
+            &[("CPV", "dev-libs/bar-2.0"), ("SLOT", "0")],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(tmp.join("Packages.gz")).unwrap(),
+            b"stale",
+            "a stale copy survives a snapshot-less write"
+        );
+        assert!(
+            !tmp.join(".Packages.portage_lockfile").exists(),
+            "lock released as usual"
+        );
+    }
+
+    #[test]
+    fn real_package_builds_a_real_xpak_tbz2_and_a_real_packages_entry() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            // Pinned to "bzip2" (not the default "zstd") so this test doesn't
+            // depend on the host having `zstd` installed.
+            binpkg_compress: "bzip2".to_string(),
+            // Pinned explicitly: the point of this test is the xpak path,
+            // not the (now gpkg) default.
+            binpkg_format: "xpak".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package succeeds");
+        assert_eq!(status, 0);
+
+        // A genuine bzip2+tar+XPAK file: Portage's `xpak.py` writes an
+        // `XPAKPACK` magic marker right before the appended metadata blob.
+        let binpkg_path = options.pkgdir.join("dev-libs/packagepkg-1.0.tbz2");
+        let binpkg_bytes = std::fs::read(&binpkg_path)
+            .unwrap_or_else(|e| panic!("{}: {e}", binpkg_path.display()));
+        assert!(!binpkg_bytes.is_empty());
+        assert!(
+            binpkg_bytes.windows(8).any(|w| w == b"XPAKPACK"),
+            "real XPAKPACK magic not found in {}",
+            binpkg_path.display()
+        );
+
+        // The binpkg reader sees it immediately -- the point of writing a
+        // Packages entry in the exact format that reader parses.
+        let index = portage_repo::BinaryIndex::from_pkgdir(&options.pkgdir);
+        let candidates = portage_repo::list_binary_candidates(&index, "dev-libs", "packagepkg");
+        assert_eq!(candidates.len(), 1);
+        let candidate = &candidates[0];
+        assert_eq!(candidate.version, "1.0");
+        assert_eq!(candidate.slot, "0");
+        assert_eq!(candidate.keywords, vec!["amd64".to_string()]);
+
+        // The fixture's md5-cache RDEPEND came through into the index too.
+        let metadata = portage_repo::read_binary_metadata(&index, "dev-libs", "packagepkg", "1.0")
+            .expect("binary metadata entry exists");
+        assert_eq!(
+            metadata.get("RDEPEND").map(String::as_str),
+            Some("dev-libs/samepkg")
+        );
+
+        // Both fixed digests are written; without them integrity checks would
+        // be silently skipped for anyone fetching this file as a remote binhost.
+        // (`md5::Digest` is the shared trait both hashers implement.)
+        use md5::Digest as _;
+        let expected_md5: String = md5::Md5::digest(&binpkg_bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let expected_sha1: String = sha1::Sha1::digest(&binpkg_bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(
+            metadata.get("MD5").map(String::as_str),
+            Some(expected_md5.as_str())
+        );
+        assert_eq!(
+            metadata.get("SHA1").map(String::as_str),
+            Some(expected_sha1.as_str())
+        );
+    }
+
     #[test]
     fn package_after_install_writes_the_resolved_use_flags_into_the_packages_index() {
         // Resolved `USE` flags pass straight through to the index `USE` field.
@@ -1105,5 +1341,137 @@ mod tests {
         let metadata = portage_repo::read_binary_metadata(&index, "dev-libs", "packagepkg", "1.0")
             .expect("binary metadata entry exists");
         assert_eq!(metadata.get("USE").map(String::as_str), Some("foo bar"));
+    }
+
+    #[test]
+    fn package_after_install_stanza_omits_default_slot_and_writes_both_digests() {
+        // Expected values from Portage (container probe): no `SLOT` line for the
+        // default slot, both fixed digests, translated `MTIME` key.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_compress: "bzip2".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
+            ebuild_path: &ebuild,
+            commands: &["install"],
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &options.distdir,
+            debug: options.debug,
+            config_root: &options.config_root,
+            shell: options.shell,
+            build_env: &[],
+        })
+        .expect("install succeeds");
+        assert_eq!(status, 0);
+
+        let status = package_after_install(PackageAfterInstallArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            use_flags: "",
+            per_entry_binpkg_multi_instance: options.binpkg_multi_instance,
+        })
+        .expect("package_after_install succeeds");
+        assert_eq!(status, 0);
+
+        let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
+        assert!(
+            !packages.lines().any(|l| l.starts_with("SLOT:")),
+            "default SLOT must be omitted like real's: {packages:?}"
+        );
+        assert!(
+            packages.lines().any(|l| l.starts_with("MD5: ")),
+            "fixed MD5 digest missing: {packages:?}"
+        );
+        assert!(
+            packages.lines().any(|l| l.starts_with("SHA1: ")),
+            "fixed SHA1 digest missing: {packages:?}"
+        );
+        assert!(
+            packages.lines().any(|l| l.starts_with("MTIME: ")),
+            "translated MTIME key missing: {packages:?}"
+        );
+        assert!(
+            !packages.lines().any(|l| l.starts_with("_mtime_:")),
+            "internal _mtime_ key must never be written: {packages:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_packaging_phase_never_touches_the_final_binpkg_path() {
+        // `__dyn_package` only ever writes a same-directory temp file, so a
+        // mid-write failure can never leave a corrupt archive at the
+        // discoverable index path.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            // An unresolvable compressor leaves PORTAGE_COMPRESSION_COMMAND
+            // unset, so `__dyn_package` dies before ever opening the tar pipe:
+            // a clean, deterministic failure that never touches the tmpfile.
+            binpkg_compress: "made-up-codec".to_string(),
+            // Pinned explicitly: the deterministic die this test needs is the
+            // xpak tar pipe's guard, not the gpkg path.
+            binpkg_format: "xpak".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        // Sentinel content at the final path, standing in for a prior
+        // successful build -- a failed re-package must never clobber it.
+        let binpkg_path = options.pkgdir.join("dev-libs/packagepkg-1.0.tbz2");
+        std::fs::create_dir_all(binpkg_path.parent().unwrap()).unwrap();
+        std::fs::write(&binpkg_path, b"OLD-CONTENT").unwrap();
+
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+        })
+        .expect("run_package returns Ok(status)");
+        assert_ne!(
+            status, 0,
+            "packaging should fail with an unresolvable compressor"
+        );
+
+        assert_eq!(
+            std::fs::read(&binpkg_path).unwrap(),
+            b"OLD-CONTENT",
+            "a failed packaging phase must not touch the final binpkg path"
+        );
+        // No stray temp file left behind either.
+        let leftovers: Vec<_> = portage_util::read_dir_entries(binpkg_path.parent().unwrap())
+            .unwrap()
+            .into_iter()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "leftover temp files: {leftovers:?}");
     }
 }

@@ -17,6 +17,28 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// EAPI for the driver exports: `build-info/EAPI` first, else the
+/// `EAPI=` line of the ebuild itself. `None` when neither exists.
+pub fn read_eapi(build_info: &Path, ebuild_file: &Path) -> Option<String> {
+    if let Ok(text) = std::fs::read_to_string(build_info.join("EAPI")) {
+        let value = text.trim().to_string();
+        if !value.is_empty() {
+            return Some(value);
+        }
+    }
+    let text = std::fs::read_to_string(ebuild_file).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("EAPI=") {
+            let value = value.trim().trim_matches('"').trim().to_string();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
 /// One image entry for the client's merge: type, content hash (files
 /// only), source mtime, and `/`-rooted relative path.
 pub struct FileMeta {

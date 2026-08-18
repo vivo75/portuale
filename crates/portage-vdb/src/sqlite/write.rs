@@ -26,3 +26,9 @@ impl<T> Be<T> for rusqlite::Result<T> {
         self.map_err(|e| db_err(path, e))
     }
 }
+
+fn now_ns() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX))
+}
