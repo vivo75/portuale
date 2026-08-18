@@ -20,6 +20,7 @@
 
 use crate::ebuild_merge;
 use crate::ebuild_options::{self, Kind};
+use crate::ebuild_package;
 use crate::ebuild_phases;
 use crate::ebuild_unmerge;
 use std::process::ExitCode;

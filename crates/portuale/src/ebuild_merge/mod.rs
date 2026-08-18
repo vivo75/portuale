@@ -44,3 +44,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
 use std::path::{Path, PathBuf};
+
+/// Arguments of [`run_merge_with_hook`].
+pub struct RunMergeWithHookArgs<'a> {
+    pub ebuild_path: &'a Path,
+    pub root: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub options: &'a MergeOptions,
+    pub buildpkg: Option<&'a crate::ebuild_package::PackageOptions>,
+    pub before_merge: Option<&'a dyn Fn()>,
+}

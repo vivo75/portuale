@@ -54,6 +54,46 @@ pub fn eapi_has_iuse_effective(eapi: &str) -> bool {
     digits.parse::<u32>().is_ok_and(|n| n >= 5)
 }
 
+/// Arguments of [`cache_entry_is_valid`].
+pub struct CacheEntryIsValidArgs<'a> {
+    pub ebuild_path: &'a Path,
+    pub repo_location: &'a Path,
+    pub masters: &'a [PathBuf],
+    pub category: &'a str,
+    pub pf: &'a str,
+    pub store_eclass_paths: bool,
+}
+
+/// `true` when `metadata/md5-cache/<category>/<pf>` validates, so the `depend`
+/// phase can be skipped. Any I/O failure (no cache file, no ebuild, no eclass
+/// dir) is `false` -- `depend` runs, as when no auxdb hits.
+// Portage: portdbapi._pull_valid_cache, porttree.py, cache/template.py
+pub fn cache_entry_is_valid(args: CacheEntryIsValidArgs<'_>) -> bool {
+    let CacheEntryIsValidArgs {
+        ebuild_path,
+        repo_location,
+        masters,
+        category,
+        pf,
+        store_eclass_paths,
+    } = args;
+    let cache_file = repo_location
+        .join("metadata/md5-cache")
+        .join(category)
+        .join(pf);
+    let text = match std::fs::read_to_string(&cache_file) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    entry_is_valid(
+        &text,
+        ebuild_path,
+        repo_location,
+        masters,
+        store_eclass_paths,
+    )
+}
+
 /// The path-independent half of [`cache_entry_is_valid`]: one entry's bytes in
 /// `flat_hash` format, accepted or not against the current ebuild. Shared by
 /// `--regen`, the depcachedir rung and `repo_aux_metadata`'s read-path validation.

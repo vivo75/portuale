@@ -8,11 +8,17 @@
 // to `Packages`.
 
 use portage_util::TempDir;
+
+mod digest;
 mod extract;
+mod gpg;
 
 #[cfg(test)]
 mod tests;
+
+pub use digest::*;
 pub use extract::*;
+pub use gpg::*;
 
 use std::collections::HashMap;
 
@@ -23,3 +29,38 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use std::process::{Command, Stdio};
+
+/// Why reading one binpkg file failed: `Invalid` (not a valid/usable
+/// binpkg; the scan warns and skips the file) or `Fatal` (the read
+/// itself failed; the scan aborts).
+// Portage: `bintree._populate_local`'s caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BinpkgError {
+    /// The scan warns and drops the file.
+    Invalid(String),
+    /// The scan stops with the message.
+    Fatal(String),
+}
+
+impl BinpkgError {
+    /// The message, without the class.
+    pub fn message(&self) -> &str {
+        match self {
+            BinpkgError::Invalid(message) | BinpkgError::Fatal(message) => message,
+        }
+    }
+}
+
+impl std::fmt::Display for BinpkgError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+/// Existing `Result<_, String>` callers (the merge path, `--info`) keep
+/// working through `?`; only the populate scan inspects the class.
+impl From<BinpkgError> for String {
+    fn from(error: BinpkgError) -> String {
+        error.to_string()
+    }
+}

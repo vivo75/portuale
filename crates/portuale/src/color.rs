@@ -208,6 +208,25 @@ fn color_map_overrides() -> &'static HashMap<String, String> {
     })
 }
 
+/// The `PORTAGE_COLORMAP` phase-env value: bash source the ebuild
+/// helpers `eval` so `elog`/`einfo`/`ewarn` use the same (possibly
+/// `color.map`-overridden) colours `emerge` itself does.
+// Portage: output.py, colormap
+pub fn phase_colormap_export() -> String {
+    [
+        "BAD", "BRACKET", "ERR", "GOOD", "HILITE", "INFO", "LOG", "NORMAL", "QAWARN", "WARN",
+    ]
+    .iter()
+    .map(|k| format!("PORTAGE_COLOR_{k}=$'{}'", ansi_escape(&resolved_code(k))))
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+/// `\x1b` -> `\E` for a bash `$'...'` literal.
+fn ansi_escape(seq: &str) -> String {
+    seq.replace('\x1b', "\\E")
+}
+
 /// The escape sequence for `name`, honouring `color.map` overrides:
 /// an override for `name` itself wins; else the hardcoded `codes`
 /// entry; else a `_styles` key resolves to its colour-name (which may

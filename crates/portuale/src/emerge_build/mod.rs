@@ -10,6 +10,8 @@ mod resume;
 mod tests;
 pub(crate) use resume::*;
 
+use crate::ebuild_package::{self, PackageOptions};
+
 use crate::ebuild_phases;
 
 use portage_repo::{Candidate, CandidateSource, GraphEntry, PretendOutcome, RepoConfig};

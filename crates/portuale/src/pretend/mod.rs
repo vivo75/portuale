@@ -46,6 +46,8 @@ pub(crate) use world::*;
 
 use crate::ebuild_merge;
 
+use crate::ebuild_package;
+
 use crate::ebuild_phases;
 
 use crate::emerge_build;

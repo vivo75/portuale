@@ -10,7 +10,7 @@
 //! the `MD5`/`SHA1` fields present, plus a downloaded gpkg's internal
 //! manifest and signature layer at merge time.
 
-use crate::ebuild_merge::{self};
+use crate::ebuild_merge::{self, MergeOptions};
 use mrg_director::BinpkgIndex;
 use portage_profile::{BinRepo, Config};
 use portage_repo::{GraphEntry, PretendOutcome, RepoConfig};
