@@ -304,3 +304,96 @@ def test_ebuild_debug_flag_enables_real_set_x_tracing(ebuild_binary, tmp_path):
         env=env,
     )
     assert any(line.startswith("+ ") for line in with_debug.stderr.splitlines())
+
+
+def _real_build_env(tmp_path):
+    """`ROOT` stays the real, read-only fixture tree (`run_package`'s own
+    real chain never writes under `ROOT` at all -- only `${D}`/`PKGDIR`,
+    both `tmp_path`-relative here), matching how this pilot's own manual
+    verification of `ebuild <file> package` and `emerge --buildpkgonly`
+    already proved this is safe."""
+    env = _fixture_env()
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+    env["PKGDIR"] = str(tmp_path / "pkgdir")
+    return env
+
+
+def test_emerge_buildpkgonly_without_pretend_really_builds_a_binary_package(
+    emerge_binary, tmp_path
+):
+    """The feature this whole slice is about: `emerge --buildpkgonly
+    <atom>` -- deliberately WITHOUT `--pretend` -- is the one real,
+    non-dry-run execution path this pilot implements for `emerge`
+    itself (see emerge_build.rs's own module doc comment). `packagepkg`
+    RDEPENDs on `samepkg`, which the shared fixture ROOT already has an
+    installed vdb entry for, so --buildpkgonly's own real depgraph gate
+    (see the dry-run contract tests) has nothing to object to."""
+    env = _real_build_env(tmp_path)
+    result = subprocess.run(
+        [str(emerge_binary), "--buildpkgonly", "dev-libs/packagepkg"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert "[ebuild  N] dev-libs/packagepkg-1.0" in result.stdout
+    assert ">>> Building binary for dev-libs/packagepkg-1.0..." in result.stdout
+
+    tbz2 = Path(env["PKGDIR"]) / "dev-libs/packagepkg-1.0.tbz2"
+    assert tbz2.is_file()
+    assert b"XPAKPACK" in tbz2.read_bytes()
+
+    packages = (Path(env["PKGDIR"]) / "Packages").read_text()
+    assert "CPV: dev-libs/packagepkg-1.0" in packages
+    assert "RDEPEND: dev-libs/samepkg" in packages
+
+
+def test_emerge_buildpkgonly_with_pretend_stays_dry_run(emerge_binary, tmp_path):
+    """The exact same atom as the real-build test above, but with
+    `--pretend` also given -- must stay a pure dry-run report, matching
+    real portage's own `--pretend` always suppressing every real action
+    regardless of what else is requested alongside it."""
+    env = _real_build_env(tmp_path)
+    result = subprocess.run(
+        [str(emerge_binary), "--pretend", "--buildpkgonly", "dev-libs/packagepkg"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/packagepkg-1.0"
+    assert "Building binary" not in result.stdout
+    assert not (Path(env["PKGDIR"]) / "dev-libs").exists()
+
+
+def test_emerge_buildpkgonly_refuses_a_real_src_uri(emerge_binary, tmp_path):
+    """`fetchpkg` has a real, nonempty `SRC_URI` this pilot has no
+    fetch/unpack machinery for -- see emerge_build.rs's own module doc
+    comment for why this must be a loud refusal (exit 1) rather than
+    silently producing a real but functionally empty binary package."""
+    env = _real_build_env(tmp_path)
+    result = subprocess.run(
+        [str(emerge_binary), "--buildpkgonly", "dev-libs/fetchpkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 1
+    assert "dev-libs/fetchpkg-1.0" in result.stderr
+    assert "SRC_URI" in result.stderr
+    assert not (Path(env["PKGDIR"]) / "dev-libs").exists()
+
+
+def test_emerge_without_pretend_or_buildpkgonly_still_refuses(emerge_binary):
+    """Every other real action stays exactly as unimplemented as before
+    this slice -- `--buildpkgonly` is the one, narrow exception."""
+    result = subprocess.run(
+        [str(emerge_binary), "dev-libs/packagepkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=_fixture_env(),
+    )
+    assert result.returncode == 2
+    assert "only --pretend" in result.stderr or "--buildpkgonly without --pretend" in result.stderr

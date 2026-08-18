@@ -3567,8 +3567,7 @@ def test_deselect_requires_pretend(emerge_binary, fixture_env, tmp_path):
     assert result.returncode == 2
     assert (
         result.stderr.strip()
-        == "emerge (pilot v1): only --pretend is implemented (no real merges "
-        "yet, see PROMPT.md)"
+        == "emerge (pilot v1): --deselect requires --pretend (see PROMPT.md)"
     )
 
 

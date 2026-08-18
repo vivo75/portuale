@@ -206,6 +206,8 @@
 // this pilot actually supports, ending with a pointer to
 // PORTING/README.md and PORTING/PROMPT.md for the rest.
 
+use crate::ebuild_package;
+use crate::emerge_build;
 use crate::emerge_options;
 use portage_dep::{match_from_list, parse_atom, Atom, Blocker};
 use portage_repo::{
@@ -2113,10 +2115,28 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    if !pretend {
+    // `--deselect` is checked first, before the general gate below: it's
+    // a real action in its own right that always requires `--pretend`
+    // (real `action_deselect`'s own file-writing branch is unreachable
+    // here), regardless of whether `--buildpkgonly` also happens to be
+    // given -- `--buildpkgonly` unlocking real building is not the same
+    // thing as unlocking `--deselect`.
+    if deselect && !pretend {
+        eprintln!("emerge (pilot v1): --deselect requires --pretend (see PROMPT.md)");
+        return ExitCode::from(2);
+    }
+
+    // `--buildpkgonly` without `--pretend` is the one real, non-dry-run
+    // execution path this pilot implements for `emerge` itself (see
+    // `emerge_build.rs`'s own module doc comment): it only ever builds a
+    // binary package, never merges anything, so it's safe to let through
+    // here even though every other real action still isn't implemented.
+    if !pretend && !buildpkgonly {
         eprintln!(
-            "emerge (pilot v1): only --pretend is implemented \
-             (no real merges yet, see PROMPT.md)"
+            "emerge (pilot v1): no real merges implemented yet -- only \
+             --pretend (dry-run) or --buildpkgonly without --pretend (real \
+             binary-package building only, still never merges) are \
+             supported (see PROMPT.md)"
         );
         return ExitCode::from(2);
     }
@@ -2471,6 +2491,32 @@ pub fn run(args: &[String]) -> ExitCode {
         eprintln!("\n!!! --buildpkgonly requires all dependencies to be merged.");
         eprintln!("!!! Cannot merge requested packages. Merge deps and try again.\n");
         return ExitCode::from(1);
+    }
+
+    // Real execution: only reachable when `!pretend`, which the gate at
+    // the top of this function only ever lets through when `buildpkgonly`
+    // is also `true` -- see `emerge_build.rs`'s own module doc comment
+    // for what this actually does (and doesn't) build.
+    if !pretend {
+        let package_options = ebuild_package::PackageOptions {
+            debug: false,
+            pkgdir: std::env::var_os("PKGDIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| ebuild_package::PackageOptions::default().pkgdir),
+        };
+        let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+        if let Err(e) = emerge_build::run_buildpkgonly(
+            entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &package_options,
+        ) {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
     }
 
     ExitCode::SUCCESS

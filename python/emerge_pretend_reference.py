@@ -5473,10 +5473,33 @@ def run(args):
     # when `columns` is True.
     columnwidth = _columnwidth_from_env()
 
-    if not pretend:
+    # `--deselect` is checked first, before the general gate below: it's
+    # a real action in its own right that always requires `--pretend`
+    # (real `action_deselect`'s own file-writing branch is unreachable
+    # here), regardless of whether `--buildpkgonly` also happens to be
+    # given -- `--buildpkgonly` unlocking real building is not the same
+    # thing as unlocking `--deselect`.
+    if deselect and not pretend:
         print(
-            "emerge (pilot v1): only --pretend is implemented "
-            "(no real merges yet, see PROMPT.md)",
+            "emerge (pilot v1): --deselect requires --pretend (see PROMPT.md)",
+            file=sys.stderr,
+        )
+        return 2
+
+    # `--buildpkgonly` without `--pretend` is the one real, non-dry-run
+    # execution path the Rust side implements for `emerge` itself (see
+    # multicall's own emerge_build.rs module doc comment): it only ever
+    # builds a binary package, never merges anything, so it's let through
+    # here too even though this reference implementation never actually
+    # builds anything itself -- it has no real ebuild-execution machinery
+    # at all, only the dry-run resolution logic every other CASES entry
+    # in the contract suite already exercises.
+    if not pretend and not buildpkgonly:
+        print(
+            "emerge (pilot v1): no real merges implemented yet -- only "
+            "--pretend (dry-run) or --buildpkgonly without --pretend (real "
+            "binary-package building only, still never merges) are "
+            "supported (see PROMPT.md)",
             file=sys.stderr,
         )
         return 2
