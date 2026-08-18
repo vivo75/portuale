@@ -16,6 +16,14 @@ use portage_profile::{BinRepo, Config};
 use portage_repo::{GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
+/// Seconds since the epoch as `f64` (Portage's `time.time()`).
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
 /// Whether the local `<pkgdir>/Packages` index still lists this cpv. Like
 /// [`local_index_record`] minus the basename tie-break (no file to name it
 /// after): with several same-`CPV` stanzas the entry's `BUILD_ID` picks.

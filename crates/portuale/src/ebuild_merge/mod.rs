@@ -35,6 +35,8 @@ pub(crate) use protect::*;
 pub(crate) use tree::*;
 pub(crate) use vdb_entry::*;
 
+use crate::env_update;
+
 use md5::{Digest, Md5};
 
 use mrg_director::PackagesDb as _;
@@ -62,6 +64,24 @@ pub(crate) fn feature_enabled(options: &MergeOptions, token: &str) -> bool {
         &options.features
     };
     features.split_whitespace().any(|t| t == token)
+}
+
+/// Hand this package's `${T}/logging/<phase>` files to every configured
+/// elog module. Runs per-package, before the post-merge clean removes
+/// `${T}`.
+///
+/// `run_merge`/`run_qmerge` (through `merge_after_install`) and
+/// `merge_binpkg` each call it once on their success path.
+pub(crate) fn process_merge_elog(
+    env: &ebuild_phases::Environment,
+    root: &Path,
+    options: &MergeOptions,
+) {
+    let cpv = format!("{}/{}", env.category, env.split.pf);
+    crate::elog::process_batch(
+        crate::elog::ProcessBatchArgs { logdir: &crate::elog::logdir(root), root_display: &root.display().to_string(), items: &[(cpv, env.t())], phases: None, color: &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)), split_elog: // The merge's resolved list when set; else the raw env.
+        feature_enabled(options, "split-elog") },
+    );
 }
 
 /// Arguments of [`run_merge_with_hook`].

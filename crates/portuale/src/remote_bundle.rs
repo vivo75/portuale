@@ -32,6 +32,72 @@ pub struct FileMeta {
     pub target: Option<String>,
 }
 
+/// Walk `image/` (sorted, like the local `merge_tree`) recording type, MD5
+/// and mtime per entry. Anything but a file, directory or symlink is an
+/// error.
+pub fn collect_filemeta(image: &Path) -> Result<Vec<FileMeta>, String> {
+    use std::os::unix::fs::MetadataExt as _;
+    fn md5_file(path: &Path) -> Result<String, String> {
+        use md5::Digest as _;
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(format!("{:x}", md5::Md5::digest(&bytes)))
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::new()];
+    while let Some(relative_dir) = stack.pop() {
+        let src_dir = image.join(&relative_dir);
+        let children: Vec<PathBuf> = portage_util::read_dir_entries(&src_dir)
+            .map_err(|e| format!("{}: {e}", src_dir.display()))?
+            .into_iter()
+            .map(|e| relative_dir.join(e.file_name()))
+            .collect();
+        for relative_path in children {
+            let src = image.join(&relative_path);
+            let meta =
+                std::fs::symlink_metadata(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+            let file_type = meta.file_type();
+            let rel = relative_path.to_string_lossy().replace('\\', "/");
+            let mtime = meta.mtime();
+            if file_type.is_symlink() {
+                let target = std::fs::read_link(&src)
+                    .map_err(|e| format!("{}: {e}", src.display()))?
+                    .to_string_lossy()
+                    .to_string();
+                out.push(FileMeta {
+                    kind: "sym",
+                    md5: "-".to_string(),
+                    mtime,
+                    rel,
+                    target: Some(target),
+                });
+            } else if file_type.is_dir() {
+                stack.push(relative_path);
+                out.push(FileMeta {
+                    kind: "dir",
+                    md5: "-".to_string(),
+                    mtime,
+                    rel,
+                    target: None,
+                });
+            } else if file_type.is_file() {
+                out.push(FileMeta {
+                    kind: "obj",
+                    md5: md5_file(&src)?,
+                    mtime,
+                    rel,
+                    target: None,
+                });
+            } else {
+                return Err(format!(
+                    "{}: special file in image (only obj/dir/sym supported)",
+                    src.display()
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Which of the client phases (`pretend`/`setup`/`preinst`) a
 /// binpkg's `DEFINED_PHASES` actually defines -- and only when the ebuild
 /// file plus the hook environment are present to run them from.

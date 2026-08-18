@@ -10,6 +10,7 @@
 
 use crate::ebuild_merge;
 use crate::ebuild_phases;
+use crate::env_update;
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
