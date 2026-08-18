@@ -37,6 +37,59 @@ pub(crate) fn is_protected(
     protected_len > longest_match(root, config_protect_mask, dest)
 }
 
+/// Portage's `new_protect_filename`: the next unused `._cfgNNNN_<basename>`
+/// sibling of `dest`, reusing the highest-numbered one when it already
+/// holds `newmd5`. `newmd5` is a content MD5 for files but a raw target
+/// string for symlinks; `dest` itself is never touched. Narrower than
+/// Portage: no `force` parameter (every call site is an existing `dest`).
+/// Portage: lib/portage/util/__init__.py, new_protect_filename
+pub(crate) fn new_protect_filename(dest: &Path, newmd5: &str) -> Result<PathBuf, String> {
+    let parent = dest
+        .parent()
+        .ok_or_else(|| format!("{}: has no parent directory", dest.display()))?;
+    let basename = dest
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("{}: not a valid filename", dest.display()))?;
+
+    let mut max_num: i64 = -1;
+    let mut last_pfile: Option<PathBuf> = None;
+    if let Ok(entries) = portage_util::read_dir_entries(parent) {
+        for entry in entries {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if let Some(rest) = name.strip_prefix("._cfg")
+                && rest.len() > 5
+                && rest.as_bytes()[4] == b'_'
+                && &rest[5..] == basename
+                && let Ok(n) = rest[..4].parse::<i64>()
+                && n > max_num
+            {
+                max_num = n;
+                last_pfile = Some(parent.join(entry.file_name()));
+            }
+        }
+    }
+
+    if let Some(old_pfile) = &last_pfile
+        && let Ok(meta) = std::fs::symlink_metadata(old_pfile)
+    {
+        if meta.file_type().is_symlink() {
+            if let Ok(target) = std::fs::read_link(old_pfile)
+                && target.to_string_lossy() == newmd5
+            {
+                return Ok(old_pfile.clone());
+            }
+        } else if meta.is_file()
+            && let Ok(md5) = md5_hex(old_pfile)
+            && md5 == newmd5
+        {
+            return Ok(old_pfile.clone());
+        }
+    }
+    Ok(parent.join(format!("._cfg{:04}_{basename}", max_num + 1)))
+}
+
 /// Portage's `dblink._new_backup_path`: the first `dest.backup.NNNN` (from
 /// `0000`) with no file, symlink or directory yet. Used where a symlink
 /// would otherwise overwrite a directory.
@@ -218,4 +271,78 @@ pub(crate) struct ProtectDecisionArgs<'a> {
     pub(crate) src_md5: &'a str,
     pub(crate) cfgfiledict: &'a mut BTreeMap<String, String>,
     pub(crate) noconfmem: bool,
+}
+
+/// Portage's `dblink._protect` decision, shared by `merge_tree`'s `obj`/`sym`
+/// branches: `dest`'s type comes from its own on-disk lstat, so
+/// type-changing updates are protected too. `src_md5` is always MD5-shaped
+/// (a symlink source's is its target string's MD5); `src_link` is `Some`
+/// only for a symlink source. With `protect_if_modified`, a destination
+/// still matching the previous instance's recorded content applies
+/// directly. Returns `(write_dest, moveme)`: `moveme` is `false` only for
+/// an already-offered update without `noconfmem`.
+/// Portage: lib/portage/dbapi/vartree.py, dblink._protect
+pub(crate) fn protect_decision(args: ProtectDecisionArgs<'_>) -> Result<(PathBuf, bool), String> {
+    let ProtectDecisionArgs {
+        root,
+        category,
+        installed_instance_pf,
+        protect_if_modified,
+        dest,
+        abs_path,
+        src_md5,
+        cfgfiledict,
+        noconfmem,
+    } = args;
+    let matched: Option<(String, String)> =
+        installed_instance_pf.and_then(|pf| owned_node_value_pf(root, category, pf, abs_path));
+
+    let Ok(dest_meta) = std::fs::symlink_metadata(dest) else {
+        // Portage's `dest_mode is None` (the live destination is missing).
+        if matched.is_some() {
+            // A previous instance recorded this path, so divert into a fresh
+            // `._cfgNNNN_` sibling instead of re-creating a removed path.
+            cfgfiledict.insert(abs_path.to_string(), src_md5.to_string());
+            return Ok((new_protect_filename(dest, src_md5)?, true));
+        }
+        return Ok((dest.to_path_buf(), true));
+    };
+
+    let (dest_md5, dest_link): (Option<String>, Option<String>) =
+        if dest_meta.file_type().is_symlink() {
+            let target = std::fs::read_link(dest)
+                .ok()
+                .map(|t| t.to_string_lossy().to_string());
+            let md5 = target.as_deref().map(|t| md5_hex_bytes(t.as_bytes()));
+            (md5, target)
+        } else if dest_meta.is_file() {
+            (md5_hex(dest).ok(), None)
+        } else {
+            (None, None)
+        };
+
+    if protect_if_modified && let Some((node_type, value)) = &matched {
+        let unmodified_since_installed = match node_type.as_str() {
+            "obj" => dest_md5.as_deref() == Some(value.as_str()),
+            "sym" => dest_link.as_deref() == Some(value.as_str()),
+            _ => false,
+        };
+        if unmodified_since_installed {
+            return Ok((dest.to_path_buf(), true));
+        }
+    }
+
+    if dest_md5.as_deref() == Some(src_md5) {
+        return Ok((dest.to_path_buf(), true));
+    }
+
+    let already_offered = cfgfiledict.get(abs_path).map(String::as_str) == Some(src_md5);
+    if already_offered && !noconfmem {
+        return Ok((dest.to_path_buf(), false));
+    }
+
+    let newmd5 = dest_link.as_deref().unwrap_or(src_md5);
+    let write_dest = new_protect_filename(dest, newmd5)?;
+    cfgfiledict.insert(abs_path.to_string(), src_md5.to_string());
+    Ok((write_dest, true))
 }
