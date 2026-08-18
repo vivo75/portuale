@@ -64,3 +64,13 @@ impl From<BinpkgError> for String {
         error.to_string()
     }
 }
+
+/// A best-effort temp directory, removed when the guard drops. The
+/// `nanos` suffix keeps concurrent reads from colliding.
+struct ScratchDir(PathBuf);
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}

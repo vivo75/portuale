@@ -95,6 +95,21 @@ pub(crate) fn read_entry_text(root: &Path, category: &str, pf: &str, name: &str)
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 
+/// Same `CONTENTS`-ownership check as `owns_path`, but keyed by a bare
+/// `category`/`pf` pair (the vdb directory-name convention) for callers
+/// holding only the directory name. Stays a direct `CONTENTS` read: the
+/// seam keys by split `(package, version)` and has no `pf`-keyed query.
+pub(crate) fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str) -> bool {
+    let Some(text) = read_contents_pf(root, category, pf) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        parts.next();
+        parts.next() == Some(abs_path)
+    })
+}
+
 /// The node type (`"obj"`/`"dir"`/`"sym"`/...) `category/pf` recorded
 /// for `abs_path`, or `None` if unowned. Tells "still a symlink there"
 /// apart from "reclassified as a directory".

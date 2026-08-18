@@ -336,3 +336,20 @@ impl BinpkgIndex for PkgdirBinIndex<'_> {
         self.pkgdir.to_string_lossy().into_owned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_repo::GraphResult;
+    use portage_util::TempDir;
+
+    /// Arguments of [`write_vdb_entry`].
+    struct WriteVdbEntryArgs<'a> {
+        root: &'a Path,
+        category: &'a str,
+        package: &'a str,
+        version: &'a str,
+        slot: &'a str,
+        files: &'a [(&'a str, &'a str)],
+    }
+}

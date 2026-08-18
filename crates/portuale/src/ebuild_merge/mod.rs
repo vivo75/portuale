@@ -45,6 +45,20 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
 use std::path::{Path, PathBuf};
 
+/// `token` in the merge's own `FEATURES`: the resolved incremental list
+/// when set, else the raw `$FEATURES` process env. Kept private to the
+/// merge path so its `noclean` gate and the phase env can never disagree.
+pub(crate) fn feature_enabled(options: &MergeOptions, token: &str) -> bool {
+    let env_features;
+    let features: &str = if options.features.is_empty() {
+        env_features = std::env::var("FEATURES").unwrap_or_default();
+        &env_features
+    } else {
+        &options.features
+    };
+    features.split_whitespace().any(|t| t == token)
+}
+
 /// Arguments of [`run_merge_with_hook`].
 pub struct RunMergeWithHookArgs<'a> {
     pub ebuild_path: &'a Path,

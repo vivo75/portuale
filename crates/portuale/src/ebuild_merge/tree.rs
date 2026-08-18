@@ -2,6 +2,99 @@
 
 use crate::ebuild_merge::*;
 
+/// Creates a fresh FIFO or device node at `dest`, matching `src`'s type,
+/// permission bits, and (for a device) major/minor. Recreated rather than
+/// moved so `${D}` stays intact. An explicit `chmod` afterward closes the
+/// umask gap (`mkfifo`/`mknod` apply it, unlike `std::fs::copy`).
+///
+/// # Errors
+///
+/// Returns `Err` (not a panic) when `mknod` hits the root/`CAP_MKNOD`
+/// permission wall for a nonzero major:minor device.
+pub(crate) fn create_special_node(
+    src: &Path,
+    dest: &Path,
+    file_type: &std::fs::FileType,
+) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let src_meta = std::fs::symlink_metadata(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let mode = src_meta.mode() & 0o7777;
+    let dest_c = std::ffi::CString::new(dest.as_os_str().as_bytes())
+        .map_err(|e| format!("{}: {e}", dest.display()))?;
+
+    let ret = if file_type.is_fifo() {
+        // SAFETY: `dest_c` is a CString that outlives the call; takes a
+        // NUL-terminated path pointer plus a plain mode int.
+        unsafe { libc::mkfifo(dest_c.as_ptr(), mode) }
+    } else {
+        let type_bit = if file_type.is_char_device() {
+            libc::S_IFCHR
+        } else {
+            libc::S_IFBLK
+        };
+        // SAFETY: `dest_c` is a CString that outlives the call; takes a
+        // NUL-terminated path pointer plus plain mode/dev ints.
+        unsafe {
+            libc::mknod(
+                dest_c.as_ptr(),
+                type_bit | mode,
+                src_meta.rdev() as libc::dev_t,
+            )
+        }
+    };
+    if ret != 0 {
+        return Err(format!(
+            "{}: {}",
+            dest.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: `dest_c` is a CString that outlives the call; takes a
+    // NUL-terminated path pointer plus a plain mode int.
+    if unsafe { libc::chmod(dest_c.as_ptr(), mode) } != 0 {
+        return Err(format!(
+            "{}: {}",
+            dest.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+/// Sets `dest`'s owner/group to the source's recorded uid/gid from `${D}`
+/// (`lchown` for a symlink, `chown` otherwise). Unconditional, like Portage:
+/// unprivileged callers only fail on a genuinely privileged change, and that
+/// surfaces as an ordinary merge failure, never silently swallowed.
+// Portage: movefile.py, movefile._apply_stat
+pub(crate) fn lchown_or_chown(
+    dest: &Path,
+    uid: u32,
+    gid: u32,
+    is_symlink: bool,
+) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+    let dest_c = std::ffi::CString::new(dest.as_os_str().as_bytes())
+        .map_err(|e| format!("{}: {e}", dest.display()))?;
+    let ret = if is_symlink {
+        // SAFETY: `dest_c` is a CString that outlives the call; takes a
+        // NUL-terminated path pointer plus plain uid/gid ints.
+        unsafe { libc::lchown(dest_c.as_ptr(), uid, gid) }
+    } else {
+        // SAFETY: `dest_c` is a CString that outlives the call; takes a
+        // NUL-terminated path pointer plus plain uid/gid ints.
+        unsafe { libc::chown(dest_c.as_ptr(), uid, gid) }
+    };
+    if ret != 0 {
+        return Err(format!(
+            "{}: {}",
+            dest.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
 /// `true` unless the destination already exists as a regular file with the
 /// same full mode and byte-identical content. When `false`, the destination's
 /// inode, ownership and xattrs survive the rebuild and only its mtime is

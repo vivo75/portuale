@@ -152,3 +152,17 @@ pub(crate) fn blockers_from_flat_deps(
     })()
     .unwrap_or_default()
 }
+
+/// PMS 13.4's symlink-over-directory ban (unconditional, but only for
+/// the checked file-target/dangling symlinks) plus ordinary-collision
+/// detection, preserve-libs exclusion and blocker exclusion.
+/// `FEATURES=protect-owned` is decided by the caller from this
+/// function's `collisions` plus `find_owners`, not inside. Walks `d`
+/// read-only and file/symlink-only (directories merging into existing
+/// directories are normal). Returns `(collisions, symlink_collisions,
+/// plib_collisions)` as `ROOT`-relative absolute paths; only the caller
+/// decides whether `collisions` aborts, `symlink_collisions` always
+/// should, `plib_collisions` never does.
+// Portage: vartree.py, dblink._collision_protect
+pub(crate) type CollisionsResult =
+    Result<(Vec<String>, Vec<String>, BTreeMap<String, BTreeSet<String>>), String>;

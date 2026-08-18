@@ -249,6 +249,38 @@ fn resolved_code(name: &str) -> String {
         .unwrap_or_else(|| code(s).to_string())
 }
 
+/// Whether colour is emitted:
+/// 1. off, then on unless `no_color` -- `NO_COLOR` set, or `NOCOLOR`
+///    = `yes`/`true`;
+/// 2. an explicit `--color y|n` overrides everything;
+/// 3. otherwise also off when `TERM=dumb` or stdout is not a tty.
+///
+/// `color_opt` is `Some(true)`/`Some(false)` for `--color y`/`--color n`,
+/// `None` when the flag was not given.
+// Portage: actions.py, no_color
+pub fn resolve_havecolor(color_opt: Option<bool>) -> bool {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let no_color = env("NO_COLOR").is_some()
+        || matches!(
+            env("NOCOLOR")
+                .as_deref()
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("yes") | Some("true")
+        );
+    let mut havecolor = !no_color;
+    match color_opt {
+        Some(v) => havecolor = v,
+        None => {
+            use std::io::IsTerminal;
+            if env("TERM").as_deref() == Some("dumb") || !std::io::stdout().is_terminal() {
+                havecolor = false;
+            }
+        }
+    }
+    havecolor
+}
+
 /// A colouriser bound to a resolved `havecolor` value. When `enabled`
 /// is false every method returns its input unchanged, so callers never
 /// branch on colour themselves.
