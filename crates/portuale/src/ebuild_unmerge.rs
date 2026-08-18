@@ -143,6 +143,10 @@ mod tests {
     use super::*;
     use portage_util::TempDir;
 
+    fn tempdir() -> std::path::PathBuf {
+        TempDir::new("portuale-ebuild-unmerge-test").keep()
+    }
+
     #[test]
     fn parse_contents_reads_type_and_path_ignoring_trailing_fields() {
         let text = "dir /usr\nobj /usr/hello.txt abc123 100\nsym /usr/link -> hello.txt 100\n";

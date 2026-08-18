@@ -84,6 +84,52 @@ fn a_brush_phase_does_not_leak_its_umask_into_the_host_process() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// A source-less ebuild with no `S` fails `install` with Portage's
+/// `The source directory '${S}' doesn't exist`.
+/// Portage: phase-functions.sh, __dyn_install.
+#[test]
+fn install_dies_like_portage_when_s_is_missing() {
+    let tmp = TempDir::new(&format!(
+        "ebuild-phases-test-{}-{}",
+        std::process::id(),
+        "install_dies_like_portage_when_s_is_missing"
+    ));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let pkg_dir = tmp.join("pkg/dev-libs/nosrcpkg");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    let ebuild_path = pkg_dir.join("nosrcpkg-1.0.ebuild");
+    std::fs::write(
+        &ebuild_path,
+        "EAPI=8\nDESCRIPTION=\"fixture: no sources, no S\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n\nsrc_install() {\n\tinsinto /usr/share/${PN}\n}\n",
+    )
+    .unwrap();
+    let portage_tmpdir = tmp.join("tmp");
+    let log_file = tmp.join("build.log");
+
+    let status = run_commands_logged(RunCommandsLoggedArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::default(),
+        log_file: Some(&log_file),
+        build_env: &[],
+    })
+    .expect("run_commands_logged should not itself error");
+    assert_ne!(status, 0, "install must fail when ${{S}} does not exist");
+    let log = std::fs::read_to_string(&log_file)
+        .unwrap_or_else(|e| panic!("{} should have been written: {e}", log_file.display()));
+    assert!(
+        log.contains("The source directory") && log.contains("doesn't exist"),
+        "install log should carry real's missing-S message, got:\n{log}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The install chain writes `build-info/BUILD_TIME` before any metadata
 /// key, for the merge to copy (Portage: doebuild.py, _post_src_install_write_metadata).
 #[test]
@@ -339,6 +385,98 @@ fn debug_flag_exports_portage_debug() {
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
+}
+
+/// Phases export `PORTAGE_ACTUAL_DISTDIR` as `DISTDIR` for `doins.py
+/// --distdir`; without it absolute symlinks dereference and fail.
+/// Portage: config.py, config.environ.
+#[test]
+fn phases_export_portage_actual_distdir_so_doins_keeps_absolute_symlinks() {
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/actualdistdirpkg/actualdistdirpkg-1.0.ebuild");
+    let portage_tmpdir = TempDir::new(&format!(
+        "ebuild-phases-test-{}-actual-distdir",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    let distdir = portage_tmpdir.join("distfiles");
+
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &distdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
+    .expect("run_commands should not itself error");
+    assert_eq!(status, 0);
+
+    let builddir = portage_tmpdir.join("portage/dev-libs/actualdistdirpkg-1.0");
+    let observed = std::fs::read_to_string(builddir.join("temp/portage-actual-distdir.txt"))
+        .expect("the install phase should record PORTAGE_ACTUAL_DISTDIR");
+    assert_eq!(observed, distdir.display().to_string());
+    let link = builddir.join("image/usr/share/actualdistdirpkg/payload/abs-link");
+    assert_eq!(
+        std::fs::read_link(&link).expect("abs-link should be installed as a symlink"),
+        Path::new("/usr/share/actualdistdirpkg/not-installed-yet")
+    );
+
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// Every phase sees `DISTDIR` as symlinks of its own `A` only, with the
+/// directory itself in `PORTAGE_ACTUAL_DISTDIR`; foreign distfiles hide.
+#[test]
+fn phases_see_the_per_package_fake_distdir() {
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/fakedistdirpkg/fakedistdirpkg-1.0.ebuild");
+    let name = format!("ebuild-phases-test-{}-fake-distdir", std::process::id());
+    let portage_tmpdir = TempDir::new(&name);
+    let distdir = TempDir::new(&format!("{name}-distfiles"));
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    let _ = std::fs::remove_dir_all(&distdir);
+    std::fs::create_dir_all(&distdir).unwrap();
+    std::fs::write(
+        distdir.join("fakedistdirpkg-1.0.tar.gz"),
+        b"hello from fakedistdirpkg\n",
+    )
+    .unwrap();
+    // Present in the distdir but not in this package's SRC_URI.
+    std::fs::write(distdir.join("frs-1.0.tar.gz"), b"unrelated\n").unwrap();
+
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &distdir,
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
+    .expect("run_commands should not itself error");
+    assert_eq!(status, 0, "install should exit successfully");
+
+    let builddir = portage_tmpdir.join("portage/dev-libs/fakedistdirpkg-1.0");
+    let observed = std::fs::read_to_string(builddir.join("temp/fake-distdir.txt"))
+        .expect("the install phase should record its DISTDIR view");
+    assert_eq!(
+        observed,
+        format!(
+            "DISTDIR={}\nPORTAGE_ACTUAL_DISTDIR={}\nLINK={}\nUNLISTED=absent\n",
+            builddir.join("distdir").display(),
+            distdir.display(),
+            distdir.join("fakedistdirpkg-1.0.tar.gz").display(),
+        )
+    );
+
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    let _ = std::fs::remove_dir_all(&distdir);
 }
 
 /// The fake distdir is prepared for a command other than `setup`

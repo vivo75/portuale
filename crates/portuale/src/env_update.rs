@@ -37,3 +37,14 @@ fn write_generated(path: &Path, text: &str) -> Result<(), String> {
     }
     std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+    use std::os::unix::fs::MetadataExt;
+
+    fn tempdir() -> std::path::PathBuf {
+        TempDir::new("portuale-env-update-test").keep()
+    }
+}

@@ -56,3 +56,52 @@ fn local_index_lists_cpv(
     }
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_repo::CandidateSource;
+    use portage_repo::PretendOutcome;
+    use portage_repo::find_remote_binpkg;
+    use portage_util::TempDir;
+    use std::collections::HashMap;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn tempdir() -> std::path::PathBuf {
+        TempDir::new("portuale-getbinpkg").keep()
+    }
+
+    /// [`serve`] with an explicit status line per route, for fault injection;
+    /// unlisted paths still 404.
+    fn serve_with_status(
+        routes: HashMap<String, (String, Vec<u8>)>,
+        requests: usize,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            for _ in 0..requests {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let (status, body) = match routes.get(&path) {
+                    Some((s, b)) => (s.clone(), b.clone()),
+                    None => ("404 Not Found".to_string(), Vec::new()),
+                };
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+}

@@ -697,4 +697,618 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         dir
     }
+
+    // Fixed, known-good distfile payload ("hello world"; digests confirmed via
+    // the system `b2sum`/`sha512sum` tools).
+    const HELLO_BLAKE2B: &str = "021ced8799296ceca557832ab941a50b4a11f83478cf141f51f933f653ab9fbcc05a037cddbed06e309bf334942c4e58cdf1a46e237911ccd7fcf9787cbc7fd0";
+    const HELLO_SHA512: &str = "309ecc489c12d6eb4cc40f50c902f2b4d0ed77ee511a7c7a9bcd3ca86d4cd86f989dd35bc5ff499670da34255b45b0cfd830e81f605dcf7dc5542e93ae9cd76f";
+
+    fn write_manifest(pkg_dir: &Path, filename: &str, size: u64) {
+        fs::write(
+            pkg_dir.join("Manifest"),
+            format!("DIST {filename} {size} BLAKE2B {HELLO_BLAKE2B} SHA512 {HELLO_SHA512}\n"),
+        )
+        .unwrap();
+    }
+
+    /// Serves `body` over loopback HTTP for exactly one connection, so tests
+    /// exercise the genuine `wget` subprocess end to end without internet.
+    fn serve_once(body: Vec<u8>) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}/file"), handle)
+    }
+
+    #[test]
+    fn fetch_src_uri_is_empty_for_an_empty_src_uri() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        let result = fetch_src_uri(
+            &pkg_dir,
+            "",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert!(result.is_empty());
+        assert!(
+            !distdir.join("Manifest").exists(),
+            "must not touch DISTDIR at all when there's nothing to fetch"
+        );
+    }
+
+    #[test]
+    fn fetch_src_uri_skips_a_real_already_verified_file_without_touching_the_network() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        fs::write(distdir.join("hello-1.0.tar.gz"), b"hello world").unwrap();
+
+        // Deliberately unreachable address: reaching the network at all would
+        // hang/fail instead of returning immediately.
+        let result = fetch_src_uri(
+            &pkg_dir,
+            "https://192.0.2.1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
+    }
+
+    /// Expected values from Portage (`app-shells/bash-completion[eselect]`):
+    /// an enabled conditional distfile is part of `A`; a `!flag?` one is not.
+    #[test]
+    fn fetch_src_uri_reduces_use_conditional_groups_against_the_resolved_use() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        fs::write(distdir.join("hello-1.0.tar.gz"), b"hello world").unwrap();
+        let src_uri = "eselect? ( https://192.0.2.1/hello-1.0.tar.gz ) \
+                       !eselect? ( https://192.0.2.1/unlisted-1.0.tar.gz )";
+        let with_use = |flags: &[&str]| FetchOptions {
+            distdir: distdir.clone(),
+            gentoo_mirrors: vec![],
+            use_flags: flags.iter().map(|f| f.to_string()).collect(),
+            ..FetchOptions::default()
+        };
+        assert_eq!(
+            fetch_src_uri(&pkg_dir, src_uri, &with_use(&["eselect"])).unwrap(),
+            vec!["hello-1.0.tar.gz".to_string()]
+        );
+        // Flag off: the negated group is selected (and refused -- no
+        // Manifest entry), the enabled-only file is not.
+        let err = fetch_src_uri(&pkg_dir, src_uri, &with_use(&[])).unwrap_err();
+        assert!(err.contains("unlisted-1.0.tar.gz"), "{err}");
+    }
+
+    #[test]
+    fn fetch_src_uri_runs_a_configured_fetchcommand() {
+        // A configured FETCHCOMMAND is spawned directly, with substitutions.
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let uri = format!("{uri_base} -> hello-1.0.tar.gz");
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        let marker = distdir.join("marker");
+        let script = distdir.join("fetch.sh");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ntouch {}\nwget -q -O \"$1\" \"$2\"\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script, perms).unwrap();
+
+        let fetch_commands = portage_fetch::FetchCommands {
+            fetchcommand: Some(format!(
+                "{} \"${{DISTDIR}}/${{FILE}}\" \"${{URI}}\"",
+                script.display()
+            )),
+            resumecommand: Some(format!(
+                "{} \"${{DISTDIR}}/${{FILE}}\" \"${{URI}}\"",
+                script.display()
+            )),
+            ..portage_fetch::FetchCommands::default()
+        };
+        let result = fetch_src_uri(
+            &pkg_dir,
+            &uri,
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                fetch_commands: Some(fetch_commands),
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
+        assert!(marker.is_file(), "the configured FETCHCOMMAND ran");
+        assert_eq!(
+            fs::read(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            b"hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_src_uri_uses_the_make_globals_default_without_a_config_value() {
+        // A config root without make.globals still downloads via the default
+        // template.
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let uri = format!("{uri_base} -> hello-1.0.tar.gz");
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let config_root = tempdir();
+        let eroot = tempdir();
+        let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+            config_root: &config_root,
+            main_repo_location: &config_root,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "gentoo",
+            repo_masters: &std::collections::HashMap::new(),
+            eroot: &eroot,
+        })
+        .unwrap();
+        assert!(
+            !config_root
+                .join("usr/share/portage/config/make.globals")
+                .exists(),
+            "fixture root must have no make.globals"
+        );
+        let result = fetch_src_uri(
+            &pkg_dir,
+            &uri,
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                fetch_commands: Some(fetch_commands_from_config(&config)),
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            b"hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_src_uri_symlinks_a_verified_portage_ro_distdirs_file() {
+        // A verified read-only copy is symlinked, never downloaded.
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        let ro = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        fs::write(ro.join("hello-1.0.tar.gz"), b"hello world").unwrap();
+        let result = fetch_src_uri(
+            &pkg_dir,
+            "https://192.0.2.1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ro_distdirs: vec![ro.clone()],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
+        let dest = distdir.join("hello-1.0.tar.gz");
+        assert!(
+            fs::symlink_metadata(&dest)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the RO distdir copy is symlinked, not copied"
+        );
+        assert_eq!(fs::read(&dest).unwrap(), b"hello world");
+        // A non-existent RO entry is skipped, not an error.
+        let err = fetch_src_uri(
+            &pkg_dir,
+            "https://192.0.2.1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: tempdir(),
+                gentoo_mirrors: vec![],
+                ro_distdirs: vec![distdir.join("does-not-exist")],
+                ..FetchOptions::default()
+            },
+        );
+        assert!(err.is_err(), "no other candidate can serve the file");
+    }
+
+    #[test]
+    fn fetch_src_uri_refuses_a_file_with_no_manifest_entry() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        // No Manifest written at all.
+        let err = fetch_src_uri(
+            &pkg_dir,
+            "https://192.0.2.1/nowhere-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("no Manifest entry"), "{err}");
+        assert!(!distdir.join("nowhere-1.0.tar.gz").exists());
+    }
+
+    #[test]
+    fn fetch_src_uri_really_downloads_via_a_real_wget_subprocess_and_verifies_it() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let uri = format!("{uri_base} -> hello-1.0.tar.gz");
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let result = fetch_src_uri(
+            &pkg_dir,
+            &uri,
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            b"hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    /// Serves `body` in two halves: the first connection drops mid-transfer;
+    /// the second answers `wget -c`'s `Range` request with the rest.
+    fn serve_dropped_then_resumed(
+        body: Vec<u8>,
+        split: usize,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let total = body.len();
+        let handle = std::thread::spawn(move || {
+            // Connection 1: header promises `total`, but only `split`
+            // bytes are written before the connection drops.
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\n\
+                     Connection: close\r\n\r\n"
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body[..split]);
+                let _ = stream.flush();
+            }
+            // Connection 2: `wget -c` asks for `bytes=split-`.
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                assert!(
+                    req.contains(&format!("Range: bytes={split}-")),
+                    "wget -c must send a Range header, got:\n{req}"
+                );
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\n\
+                     Content-Range: bytes {split}-{}/{total}\r\nConnection: close\r\n\r\n",
+                    total - split,
+                    total - 1
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body[split..]);
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}/file"), handle)
+    }
+
+    #[test]
+    fn fetch_src_uri_resumes_a_dropped_download_with_wget_c() {
+        let (uri_base, handle) = serve_dropped_then_resumed(b"hello world".to_vec(), 5);
+        let uri = format!("{uri_base} -> hello-1.0.tar.gz");
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let result = fetch_src_uri(
+            &pkg_dir,
+            &uri,
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .expect("the dropped download must be resumed and verified");
+        assert_eq!(result, vec!["hello-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            b"hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_src_uri_rejects_a_real_download_that_fails_digest_verification() {
+        // Serves content that mismatches the Manifest's digests/size.
+        let (uri_base, handle) = serve_once(b"this is not hello world at all".to_vec());
+        let uri = format!("{uri_base} -> wrong-1.0.tar.gz");
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "wrong-1.0.tar.gz", 11);
+
+        let err = fetch_src_uri(
+            &pkg_dir,
+            &uri,
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("digest verification failed"), "{err}");
+        assert!(
+            !distdir.join("wrong-1.0.tar.gz").exists(),
+            "a failed-verification download must not be left behind"
+        );
+        handle.join().unwrap();
+    }
+
+    /// The default `config_root` sentinel fails with `ENOTDIR`, not `NotFound`:
+    /// must still degrade to "no custommirrors" with a clean error.
+    #[test]
+    fn fetch_src_uri_degrades_gracefully_when_config_root_is_the_default_sentinel() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
+
+        let err = fetch_src_uri(
+            &pkg_dir,
+            "mirror://unknown-name/foo-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("no working candidate mirror"), "{err}");
+    }
+
+    /// `RESTRICT=mirror`: the public fallback is not tried, so an unreachable
+    /// primary URI fails the fetch and the mirror is never contacted.
+    #[test]
+    fn fetch_src_uri_restrict_mirror_skips_the_gentoo_mirrors_fallback() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let mirror_addr = uri_base
+            .trim_start_matches("http://")
+            .trim_end_matches("/file")
+            .to_string();
+        let mirror_root = format!("http://{mirror_addr}");
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let err = fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root],
+                restrict_mirror: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap_err();
+        // Only the unreachable primary URI was tried.
+        assert!(err.contains("127.0.0.1:1"), "{err}");
+        assert!(!distdir.join("hello-1.0.tar.gz").exists());
+
+        // Unblock the still-parked server thread so it can exit cleanly.
+        let _ = std::net::TcpStream::connect(&mirror_addr);
+        handle.join().unwrap();
+    }
+
+    /// A `/`-rooted entry is never handed to `wget`: only the download
+    /// candidates are tried and reported.
+    #[test]
+    fn fetch_src_uri_never_downloads_from_a_slash_rooted_gentoo_mirror() {
+        let mirror_dir = tempdir();
+        let pkg_dir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        let err = fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: tempdir(),
+                gentoo_mirrors: vec![mirror_dir.display().to_string()],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("127.0.0.1:1"), "{err}");
+        assert!(!err.contains(&mirror_dir.display().to_string()), "{err}");
+    }
+
+    #[test]
+    fn fetch_src_uri_fsmirrors_with_layout_conf_resolution() {
+        let mirror = tempdir();
+        // Create a file in the filesystem mirror using flat layout
+        fs::write(mirror.join("hello-1.0.tar.gz"), "hello world").unwrap();
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        // Fetch from the filesystem mirror (flat layout)
+        let result = fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:999/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror.display().to_string()],
+                ..FetchOptions::default()
+            },
+        );
+
+        assert!(
+            result.is_ok(),
+            "should successfully copy from filesystem mirror"
+        );
+        assert_eq!(
+            fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+    }
+
+    /// `RESTRICT=fetch`: a missing distfile fails without ever contacting the
+    /// URI or the mirror server.
+    #[test]
+    fn fetch_src_uri_restrict_fetch_bars_the_plain_uri_and_public_mirrors() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let mirror_addr = uri_base
+            .trim_start_matches("http://")
+            .trim_end_matches("/file")
+            .to_string();
+        let mirror_root = format!("http://{mirror_addr}");
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let err = fetch_src_uri(
+            &pkg_dir,
+            // A *reachable* server -- proving it's the RESTRICT=fetch
+            // gate, not a connection failure, that stops the fetch.
+            &format!("{uri_base} -> hello-1.0.tar.gz"),
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root],
+                restrict_fetch: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("RESTRICT=fetch"), "{err}");
+        assert!(!distdir.join("hello-1.0.tar.gz").exists());
+
+        // The server was never contacted -- unblock it so it exits.
+        let _ = std::net::TcpStream::connect(&mirror_addr);
+        handle.join().unwrap();
+    }
+
+    /// `RESTRICT=fetch` still accepts an already-verified `DISTDIR` copy.
+    #[test]
+    fn fetch_src_uri_restrict_fetch_uses_an_already_verified_distdir_copy() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        fs::write(distdir.join("hello-1.0.tar.gz"), b"hello world").unwrap();
+
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "https://192.0.2.1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                restrict_fetch: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+    }
+
+    /// A `fetch+` prefix re-permits the plain URI under `RESTRICT=fetch`.
+    #[test]
+    fn fetch_src_uri_fetch_prefix_re_permits_the_uri_under_restrict_fetch() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let uri = format!("fetch+{uri_base} -> hello-1.0.tar.gz");
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            &uri,
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                restrict_fetch: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    /// A multiply-sourced file is still listed once.
+    #[test]
+    fn fetch_src_uri_returns_a_multiply_sourced_file_once() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        fs::write(distdir.join("hello-1.0.tar.gz"), "hello world").unwrap();
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "http://a.example/hello-1.0.tar.gz http://b.example/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir,
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+    }
 }

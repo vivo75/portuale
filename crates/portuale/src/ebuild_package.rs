@@ -1412,6 +1412,68 @@ mod tests {
         );
     }
 
+    /// Expected values from Portage: after a package step `build-info` holds
+    /// `BINPKGMD5` and, when the archive carries one, `BUILD_ID`.
+    #[test]
+    fn package_records_binpkgmd5_and_build_id_in_build_info_like_portage() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+        let build_info = ebuild_phases::compute_environment(&ebuild, &portage_tmpdir)
+            .unwrap()
+            .build_info();
+
+        for (multi, archive, build_id) in [
+            (false, "dev-libs/packagepkg-1.0.gpkg.tar", None),
+            (
+                true,
+                "dev-libs/packagepkg/packagepkg-1.0-1.gpkg.tar",
+                Some("1\n"),
+            ),
+        ] {
+            let options = PackageOptions {
+                debug: false,
+                pkgdir: tmp.join(format!("pkgdir-{multi}")),
+                distdir: tmp.join("distdir"),
+                shell: ebuild_phases::ShellBackend::default(),
+                binpkg_format: "gpkg".to_string(),
+                binpkg_compress: "bzip2".to_string(),
+                binpkg_multi_instance: multi,
+                ..PackageOptions::default()
+            };
+            let status = run_package(RunPackageArgs {
+                ebuild_path: &ebuild,
+                root: &root,
+                portage_tmpdir: &portage_tmpdir,
+                options: &options,
+                build_env: &[],
+                use_flags: "",
+            })
+            .expect("run_package succeeds");
+            assert_eq!(status, 0);
+            let archive = options.pkgdir.join(archive);
+            let md5 = crate::ebuild_merge::md5_hex(&archive).unwrap();
+            assert_eq!(
+                std::fs::read_to_string(build_info.join("BINPKGMD5")).unwrap(),
+                format!("{md5}\n"),
+                "multi={multi}"
+            );
+            let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
+            assert!(packages.contains(&format!("MD5: {md5}")), "{packages}");
+            assert_eq!(
+                std::fs::read_to_string(build_info.join("BUILD_ID"))
+                    .ok()
+                    .as_deref(),
+                build_id,
+                "multi={multi}"
+            );
+        }
+    }
+
     #[test]
     fn a_failed_packaging_phase_never_touches_the_final_binpkg_path() {
         // `__dyn_package` only ever writes a same-directory temp file, so a

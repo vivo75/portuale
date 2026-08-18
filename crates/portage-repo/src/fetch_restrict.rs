@@ -78,3 +78,64 @@ pub(crate) fn evaluated_metadata_tokens(args: EvaluatedMetadataTokensArgs<'_>) -
         .map(|flat| flat.into_iter().filter(|t| t != "||").collect())
         .unwrap_or_default()
 }
+
+/// `portage_fetch::flatten_src_uri` with a USE-membership check: `flag?` is active
+/// iff the flag is on (`!flag?` iff off).
+// Portage: getfetchsizes, getFetchMap with useflags=pkg.use
+pub(crate) fn flatten_src_uri_with_use(
+    src_uri: &str,
+    use_flags: &HashSet<String>,
+) -> Result<Vec<portage_fetch::SrcUriEntry>, Error> {
+    portage_fetch::flatten_src_uri(src_uri, |negated, flag| {
+        let on = use_flags.contains(flag);
+        if negated { !on } else { on }
+    })
+    .map_err(Error::Fetch)
+}
+
+/// Arguments of [`fetch_bytes_to_download`].
+pub(crate) struct FetchBytesToDownloadArgs<'a> {
+    pub(crate) src_uri: &'a str,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) repo_location: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) distdir: &'a Path,
+}
+
+/// Per-package download size: every `SRC_URI` distfile whose on-disk size isn't
+/// already the Manifest-recorded size, as `(filename, size)` pairs (the caller
+/// dedupes shared distfiles). Unparsable `SRC_URI` or missing `DIST` yields empty.
+// Portage: output.py, _calc_size via db.getfetchsizes
+pub(crate) fn fetch_bytes_to_download(args: FetchBytesToDownloadArgs<'_>) -> Vec<(String, u64)> {
+    let FetchBytesToDownloadArgs {
+        src_uri,
+        use_flags,
+        repo_location,
+        category,
+        package,
+        distdir,
+    } = args;
+    let Ok(files) = flatten_src_uri_with_use(src_uri, use_flags) else {
+        return Vec::new();
+    };
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let digests =
+        portage_fetch::parse_manifest(&repo_location.join(category).join(package).join("Manifest"))
+            .unwrap_or_default();
+    let mut out = Vec::new();
+    for f in &files {
+        let Some(recorded) = digests.get(&f.filename) else {
+            return Vec::new();
+        };
+        let on_disk = std::fs::metadata(distdir.join(&f.filename))
+            .map(|m| m.len())
+            .ok();
+        if on_disk != Some(recorded.size) {
+            out.push((f.filename.clone(), recorded.size));
+        }
+    }
+    out
+}
