@@ -3624,6 +3624,53 @@ sorted by filename for deterministic tests, rather than real
 `os.listdir()`'s own arbitrary/OS-dependent order (`CONTENTS` line order
 has no real semantic meaning portage itself relies on).
 
+### `--debug`: real `PORTAGE_DEBUG` plumbing (task #56)
+
+Real `emerge --debug` (`lib/_emerge/main.py:1234-1239`) does two things:
+sets `PORTAGE_DEBUG=1` in the environment, and bumps Python's own
+`logging` level to `DEBUG`. Grounding both against this pilot's own
+real-execution surface (`ebuild_phases.rs`/`ebuild_merge.rs`) found they
+split into two unrelated features: the logging-level bump has *zero*
+effect on `doebuild.py`/`vartree.py` (they route messages through
+`writemsg_level()`, gated by `PORTAGE_VERBOSE`, not the logging level at
+all) -- the real content there lives in `lib/_emerge/depgraph.py`'s own
+~60 `logging.DEBUG`-level dependency-resolution trace calls, a much
+bigger, separately-scoped port into `pretend.rs`'s own resolution logic,
+not attempted here. `PORTAGE_DEBUG=1` itself, though, is exactly what
+real `bin/ebuild.sh:479` and friends (`phase-functions.sh`,
+`phase-helpers.sh`, `misc-functions.sh`) check to `set -x` -- real bash
+xtrace of every phase command as it runs -- and that part *is* real
+execution this pilot already drives.
+
+`ebuild.rs`'s option-parsing loop now captures `--debug` instead of
+silently discarding it like every other real `Kind::Boolean` option
+still does, threading a `debug: bool` through
+`ebuild_phases::run_commands`/`run_single_phase` and
+`ebuild_merge::run_merge` down to `run_one_phase`'s own environment-setup
+block, which now always explicitly `export`s `PORTAGE_DEBUG=1` or `=0`
+(never leaving it unset, so the real bash guard's behavior doesn't
+depend on whatever happened to be in the host environment already).
+Real, unmodified `bin/ebuild.sh` does the rest -- brush-core already has
+full `xtrace` support (`set -x`'s own `namedoptions.rs` mapping to
+`options.print_commands_and_arguments`, real `trace_command` call
+sites), so nothing needed fixing on the shell-backend side, this was
+pure plumbing.
+
+Proven via a new `dev-libs/debugpkg` fixture whose `src_install` writes
+the `PORTAGE_DEBUG` value it actually observed to a file under `${T}`,
+run once with `debug: true` and once with `debug: false`, asserting `"1"`
+and `"0"` respectively (`ebuild_phases::tests::
+debug_flag_exports_real_portage_debug`) -- a marker-file proof rather
+than one that captures the real `set -x` trace text itself (which would
+need redirecting the whole test process's stdout/stderr, a much heavier
+mechanism for the same underlying claim: that the export reaches the
+phase, real `bin/ebuild.sh`'s own already-real guard does the rest).
+`emerge`'s own `--debug` deliberately stays unchanged, still routed to
+`pretend.rs`'s `report_option()` "not implemented" bucket -- `emerge`
+never calls `ebuild_phases`/`ebuild_merge` at all (it's still pure
+dry-run/`--pretend`), so there's no real phase-execution path there yet
+to make `PORTAGE_DEBUG`/xtrace observable.
+
 ## Running it
 
 Build both Rust binaries:
@@ -4930,3 +4977,27 @@ cat "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0/COUNTER
 ls "${ROOT}"/var/db/pkg/dev-libs/
 # mergepkg-1.0 (no leftover -MERGING-mergepkg-1.0 temp dir)
 ```
+
+`--debug` (task #56 -- see "What this proves" above for the full
+writeup): really exports `PORTAGE_DEBUG=1`, so real `bin/ebuild.sh`'s own
+`set -x` guard fires -- real bash xtrace, not simulated. Uses
+`PORTING/fixtures/repo/dev-libs/debugpkg`, whose own `src_install` writes
+the `PORTAGE_DEBUG` value it actually observed to `${T}/portage-debug-value.txt`:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/multicall ebuild \
+    PORTING/fixtures/repo/dev-libs/debugpkg/debugpkg-1.0.ebuild install --debug
+# (real phase output, including the same known-nonfatal noise as the
+# task #54 example, PLUS real bash xtrace not present without --debug, e.g.:)
+# ++ local needle=--allow-extra-vars
+# ++ shift
+# ...
+# + set +x
+cat "${PORTAGE_TMPDIR}"/portage/dev-libs/debugpkg-1.0/temp/portage-debug-value.txt
+# 1
+```
+
+Without `--debug`, the same run produces zero `+`/`++`-prefixed lines and
+the marker file reads `0` instead.

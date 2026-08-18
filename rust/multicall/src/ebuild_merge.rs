@@ -303,8 +303,14 @@ fn write_vdb_entry(
 /// already-done `install` chain cheap, so this is safe to call even when
 /// the caller's own command list already ran `install` immediately
 /// before `merge` (see `ebuild.rs`'s own dispatch loop).
-pub fn run_merge(ebuild_path: &Path, root: &Path, portage_tmpdir: &Path) -> Result<i32, String> {
-    let status = ebuild_phases::run_commands(ebuild_path, &["install"], root, portage_tmpdir)?;
+pub fn run_merge(
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    debug: bool,
+) -> Result<i32, String> {
+    let status =
+        ebuild_phases::run_commands(ebuild_path, &["install"], root, portage_tmpdir, debug)?;
     if status != 0 {
         return Ok(status);
     }
@@ -315,7 +321,7 @@ pub fn run_merge(ebuild_path: &Path, root: &Path, portage_tmpdir: &Path) -> Resu
     // neither is part of `install`'s own `actionmap_deps` chain (real
     // `treewalk()` invokes them directly, not through `doebuild()`).
     let preinst_status =
-        ebuild_phases::run_single_phase(ebuild_path, "preinst", root, portage_tmpdir)?;
+        ebuild_phases::run_single_phase(ebuild_path, "preinst", root, portage_tmpdir, debug)?;
     if preinst_status != 0 {
         return Ok(preinst_status);
     }
@@ -329,7 +335,7 @@ pub fn run_merge(ebuild_path: &Path, root: &Path, portage_tmpdir: &Path) -> Resu
     let contents = merge_tree(&env.d(), root)?;
     write_vdb_entry(root, &env, &slot, &repository, &contents)?;
 
-    ebuild_phases::run_single_phase(ebuild_path, "postinst", root, portage_tmpdir)
+    ebuild_phases::run_single_phase(ebuild_path, "postinst", root, portage_tmpdir, debug)
 }
 
 #[cfg(test)]
@@ -449,7 +455,7 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
 
-        let status = run_merge(&ebuild, &root, &portage_tmpdir).expect("run_merge succeeds");
+        let status = run_merge(&ebuild, &root, &portage_tmpdir, false).expect("run_merge succeeds");
         assert_eq!(status, 0);
 
         assert!(root.join("usr/share/mergepkg/hello.txt").is_file());
@@ -532,13 +538,19 @@ mod tests {
         let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
         let vdb_dir = root.join("var/db/pkg/dev-libs/mergepkg-1.0");
 
-        assert_eq!(run_merge(&ebuild, &root, &portage_tmpdir).unwrap(), 0);
+        assert_eq!(
+            run_merge(&ebuild, &root, &portage_tmpdir, false).unwrap(),
+            0
+        );
         let first_counter: i64 = std::fs::read_to_string(vdb_dir.join("COUNTER"))
             .unwrap()
             .parse()
             .unwrap();
 
-        assert_eq!(run_merge(&ebuild, &root, &portage_tmpdir).unwrap(), 0);
+        assert_eq!(
+            run_merge(&ebuild, &root, &portage_tmpdir, false).unwrap(),
+            0
+        );
         let second_counter: i64 = std::fs::read_to_string(vdb_dir.join("COUNTER"))
             .unwrap()
             .parse()

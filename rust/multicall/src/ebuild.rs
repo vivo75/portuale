@@ -97,6 +97,14 @@ pub fn run(args: &[String]) -> ExitCode {
 
     let mut ebuild_file: Option<&str> = None;
     let mut commands: Vec<&str> = Vec::new();
+    // Real, not simulated (task #56): `--debug` sets real `PORTAGE_DEBUG`,
+    // triggering real `bin/ebuild.sh`'s own `set -x` guard during phase
+    // execution below -- see `ebuild_phases::run_one_phase`'s own setup
+    // block. Every other real ebuild `Kind::Boolean` option is still a
+    // pure no-op (the `Some(Kind::Boolean) => {}` arm below), matching
+    // this module's own long-documented v1 scope; `--debug` is the first
+    // one wired to something real.
+    let mut debug = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -111,7 +119,11 @@ pub fn run(args: &[String]) -> ExitCode {
                         i += 1;
                     }
                 }
-                Some(Kind::Boolean) => {}
+                Some(Kind::Boolean) => {
+                    if arg == "--debug" {
+                        debug = true;
+                    }
+                }
                 None => {
                     eprintln!("ebuild: unrecognized option {arg:?}");
                     return ExitCode::from(1);
@@ -174,9 +186,9 @@ pub fn run(args: &[String]) -> ExitCode {
         // environment fresh for every top-level command argument.
         for &cmd in &commands {
             let result = if ebuild_merge::is_real_merge_command(cmd) {
-                ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir)
+                ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, debug)
             } else {
-                ebuild_phases::run_commands(ebuild_path, &[cmd], &root, &portage_tmpdir)
+                ebuild_phases::run_commands(ebuild_path, &[cmd], &root, &portage_tmpdir, debug)
             };
             match result {
                 Ok(0) => {}

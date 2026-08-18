@@ -414,7 +414,12 @@ fn repo_root() -> PathBuf {
 /// run cheap to "re-run" from a fresh shell, exactly the way real
 /// `doebuild()` itself relies on across its own separate `spawnebuild()`
 /// calls -- this isn't a new mechanism invented for this pilot.
-async fn run_one_phase(env: &Environment, root: &Path, phase: &str) -> Result<i32, String> {
+async fn run_one_phase(
+    env: &Environment,
+    root: &Path,
+    phase: &str,
+    debug: bool,
+) -> Result<i32, String> {
     let bin_dir = repo_root().join("bin");
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
@@ -456,6 +461,7 @@ export USE=""
 export EPREFIX=""
 export EMERGE_FROM=ebuild
 export PORTAGE_QUIET=1
+export PORTAGE_DEBUG={portage_debug}
 export EBUILD_PHASE={phase:?}
 "#,
         eapi = env.eapi,
@@ -478,6 +484,7 @@ export EBUILD_PHASE={phase:?}
         filesdir = env.filesdir().display(),
         bin_dir = bin_dir.display(),
         helpers_dir = helpers_dir.display(),
+        portage_debug = if debug { "1" } else { "0" },
         phase = phase,
     );
     shell
@@ -525,13 +532,14 @@ async fn run_commands_async(
     commands: &[&str],
     root: &Path,
     portage_tmpdir: &Path,
+    debug: bool,
 ) -> Result<i32, String> {
     let env = compute_environment(ebuild_path, portage_tmpdir)?;
     create_directories(&env)?;
 
     for &command in commands {
         for phase in phase_prerequisites(command) {
-            let status = run_one_phase(&env, root, phase).await?;
+            let status = run_one_phase(&env, root, phase, debug).await?;
             if status != 0 {
                 return Ok(status);
             }
@@ -563,6 +571,7 @@ pub fn run_commands(
     commands: &[&str],
     root: &Path,
     portage_tmpdir: &Path,
+    debug: bool,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -573,6 +582,7 @@ pub fn run_commands(
         commands,
         root,
         portage_tmpdir,
+        debug,
     ))
 }
 
@@ -596,6 +606,7 @@ pub(crate) fn run_single_phase(
     phase: &str,
     root: &Path,
     portage_tmpdir: &Path,
+    debug: bool,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -604,7 +615,7 @@ pub(crate) fn run_single_phase(
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;
         create_directories(&env)?;
-        run_one_phase(&env, root, phase).await
+        run_one_phase(&env, root, phase, debug).await
     })
 }
 
@@ -736,8 +747,14 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
-        let status = run_commands(&ebuild_path, &["install"], Path::new("/"), &portage_tmpdir)
-            .expect("run_commands should not itself error");
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            false,
+        )
+        .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
 
         let installed =
@@ -747,6 +764,51 @@ mod tests {
         assert_eq!(contents, "hello from phasepkg\n");
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Real, not simulated (task #56): passing `debug: true` really
+    /// exports `PORTAGE_DEBUG=1` into the phase's own environment (see
+    /// `run_one_phase`'s own setup block) -- proven here by having the
+    /// fixture's own `src_install` record the value it actually observed,
+    /// rather than asserting on captured `set -x` trace output (which
+    /// would need redirecting the whole test process's stdout/stderr, a
+    /// much heavier and flakier mechanism for the same underlying claim).
+    /// Real `bin/ebuild.sh:479`'s own `[[ ${PORTAGE_DEBUG} == 1 ]]` guard
+    /// is what turns this exported value into the real `set -x` xtrace a
+    /// human running `ebuild <file> install --debug` directly would see;
+    /// that guard itself is real, unmodified bash this pilot doesn't
+    /// reimplement, so proving the export is correct is sufficient here.
+    #[test]
+    fn debug_flag_exports_real_portage_debug() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/debugpkg/debugpkg-1.0.ebuild");
+
+        for (debug, expected) in [(true, "1"), (false, "0")] {
+            let portage_tmpdir = std::env::temp_dir().join(format!(
+                "ebuild-phases-test-{}-{}-{debug}",
+                std::process::id(),
+                "debug_flag_exports_real_portage_debug"
+            ));
+            let _ = std::fs::remove_dir_all(&portage_tmpdir);
+
+            let status = run_commands(
+                &ebuild_path,
+                &["install"],
+                Path::new("/"),
+                &portage_tmpdir,
+                debug,
+            )
+            .expect("run_commands should not itself error");
+            assert_eq!(status, 0);
+
+            let marker =
+                portage_tmpdir.join("portage/dev-libs/debugpkg-1.0/temp/portage-debug-value.txt");
+            let observed = std::fs::read_to_string(&marker)
+                .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
+            assert_eq!(observed, expected, "debug={debug}");
+
+            let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        }
     }
 
     /// `pretend` alone (the shortest real prerequisite chain -- see
@@ -768,8 +830,14 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
-        let status = run_commands(&ebuild_path, &["pretend"], Path::new("/"), &portage_tmpdir)
-            .expect("run_commands should not itself error");
+        let status = run_commands(
+            &ebuild_path,
+            &["pretend"],
+            Path::new("/"),
+            &portage_tmpdir,
+            false,
+        )
+        .expect("run_commands should not itself error");
         assert_eq!(status, 0);
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
