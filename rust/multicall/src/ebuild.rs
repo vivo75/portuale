@@ -11,14 +11,15 @@
 // `ebuild_phases`'s own module doc comment for the full architecture and
 // v1 scope cuts), PLUS, as of task #55, real execution for `merge` (see
 // `ebuild_merge`'s own module doc comment: runs the real `install` chain,
-// then really copies `${D}` into `${ROOT}` and writes a real vdb entry --
-// still without config-protect/collision-protect/preserve-libs/
-// pkg_preinst+postinst hooks, its own documented v1 cuts). Every other
-// real command (`qmerge`/`unmerge`/`package`/`preinst`/`postinst`/
-// `prerm`/`postrm`/`config`/`info`/`nofetch`/`depend`/`fetch`/
-// `fetchall`/`digest`/`manifest`/`rpm`/`instprep`/`clean`/`cleanrm`)
-// still falls through to the pre-existing dry-run stub message below
-// unchanged.
+// then really runs pkg_preinst, copies `${D}` into `${ROOT}`, writes a
+// real vdb entry, then really runs pkg_postinst) and `unmerge` (see
+// `ebuild_unmerge`'s own module doc comment: runs pkg_prerm, really
+// deletes every file/dir/symlink the vdb entry's own CONTENTS lists from
+// `${ROOT}`, runs pkg_postrm, then removes the vdb entry itself). Every
+// other real command (`qmerge`/`package`/`preinst`/`postinst`/`prerm`/
+// `postrm`/`config`/`info`/`nofetch`/`depend`/`fetch`/`fetchall`/
+// `digest`/`manifest`/`rpm`/`instprep`/`clean`/`cleanrm`) still falls
+// through to the pre-existing dry-run stub message below unchanged.
 //
 // Exit codes mirror real `ebuild`'s own conventions: 2 for "missing
 // required args" (real bin/ebuild's argparse `parser.error()`), 1 for
@@ -48,6 +49,7 @@
 use crate::ebuild_merge;
 use crate::ebuild_options::{self, Kind};
 use crate::ebuild_phases;
+use crate::ebuild_unmerge;
 use std::process::ExitCode;
 
 /// Whether `--help`/`-h` appears anywhere in `args` -- unlike `emerge`'s
@@ -157,16 +159,19 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
-    // Real execution (task #54/#55, ebuild_phases's/ebuild_merge's own
-    // module doc comments) only when EVERY requested command is one this
-    // pilot actually implements for real (the actionmap_deps-chained
-    // phase subset, plus `merge`) -- a deliberate, simple v1 boundary:
-    // no partial-real-execution ambiguity when a request mixes a real
-    // command with one this pilot still only dry-runs (e.g. `ebuild
-    // foo.ebuild compile package`). A purely dry-run request keeps the
-    // exact pre-existing stub message unchanged.
+    // Real execution (task #54/#55, ebuild_phases's/ebuild_merge's/
+    // ebuild_unmerge's own module doc comments) only when EVERY requested
+    // command is one this pilot actually implements for real (the
+    // actionmap_deps-chained phase subset, plus `merge`/`unmerge`) -- a
+    // deliberate, simple v1 boundary: no partial-real-execution ambiguity
+    // when a request mixes a real command with one this pilot still only
+    // dry-runs (e.g. `ebuild foo.ebuild compile package`). A purely
+    // dry-run request keeps the exact pre-existing stub message
+    // unchanged.
     if commands.iter().all(|cmd| {
-        ebuild_phases::is_real_phase_command(cmd) || ebuild_merge::is_real_merge_command(cmd)
+        ebuild_phases::is_real_phase_command(cmd)
+            || ebuild_merge::is_real_merge_command(cmd)
+            || ebuild_unmerge::is_real_unmerge_command(cmd)
     }) {
         let root = portage_repo::root_from_env();
         // Real portage's own make.globals default -- see
@@ -177,16 +182,19 @@ pub fn run(args: &[String]) -> ExitCode {
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
         let ebuild_path = std::path::Path::new(ebuild_file);
         // One command at a time here, not the whole slice at once --
-        // `merge` isn't itself an ebuild_phases-recognized phase (real
-        // `doebuild()` handles it as its own, separate vdb-merge step,
-        // not a `bin/ebuild.sh` phase argument at all), so a mixed list
-        // like `["install", "merge"]` needs its own per-command routing.
-        // This also mirrors real `bin/ebuild`'s own `for arg in pargs:
-        // doebuild(ebuild, arg, ...)` loop, which likewise re-derives the
-        // environment fresh for every top-level command argument.
+        // neither `merge` nor `unmerge` is itself an ebuild_phases-
+        // recognized phase (real `doebuild()` handles them as their own,
+        // separate steps, not `bin/ebuild.sh` phase arguments at all), so
+        // a mixed list like `["install", "merge"]` needs its own
+        // per-command routing. This also mirrors real `bin/ebuild`'s own
+        // `for arg in pargs: doebuild(ebuild, arg, ...)` loop, which
+        // likewise re-derives the environment fresh for every top-level
+        // command argument.
         for &cmd in &commands {
             let result = if ebuild_merge::is_real_merge_command(cmd) {
                 ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, debug)
+            } else if ebuild_unmerge::is_real_unmerge_command(cmd) {
+                ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, debug)
             } else {
                 ebuild_phases::run_commands(ebuild_path, &[cmd], &root, &portage_tmpdir, debug)
             };

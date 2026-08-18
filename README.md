@@ -3624,6 +3624,35 @@ sorted by filename for deterministic tests, rather than real
 `os.listdir()`'s own arbitrary/OS-dependent order (`CONTENTS` line order
 has no real semantic meaning portage itself relies on).
 
+### Real package removal: `unmerge` (task #55's own natural complement)
+
+`ebuild <file> unmerge` (`multicall/src/ebuild_unmerge.rs`) really
+removes a package `merge` previously installed, instead of falling
+through to the dry-run stub -- without this, `merge` alone could never be
+exercised through a real install/reinstall/removal cycle; every merge
+would just accumulate vdb entries and files forever. Mirrors real
+`dblink.unmerge()` plus the top-level `unmerge()` function's own
+success-gated `dblink.delete()` call: really runs `pkg_prerm`
+(`ebuild_phases::run_single_phase`, the same non-`actionmap_deps`
+mechanism `pkg_preinst`/`pkg_postinst` already use), really deletes every
+file/dir/symlink the vdb entry's own `CONTENTS` lists from `${ROOT}` --
+in real `_unmerge_pkgfiles()`'s own reverse-sorted order (`mykeys.sort();
+mykeys.reverse()`), deepest paths first, so a directory always empties
+out before its own removal is attempted -- really runs `pkg_postrm`, and
+only then, on success, removes the vdb entry itself (real
+`dblink.delete()`'s own `shutil.rmtree()` plus a best-effort `rmdir` of
+the parent `<category>` directory if it's now empty).
+
+**v1 scope cuts** (see `ebuild_unmerge.rs`'s own module doc comment for
+the full list): no `CONFIG_PROTECT` handling (nothing to protect against
+yet, since `merge` doesn't implement it either). No preserve-libs /
+"others in this slot" reverse-dependency checking. No
+`unmerge-orphans`/`bsd_chflags`/`INFOPATH` handling. Coarser failure
+tolerance: a genuine I/O error (not "already gone" or "directory not
+empty", both tolerated) is a hard failure here, rather than real
+`_unmerge_pkgfiles()`'s own per-file failure counter that keeps going
+regardless.
+
 ### `--debug`: real `PORTAGE_DEBUG` plumbing (task #56)
 
 Real `emerge --debug` (`lib/_emerge/main.py:1234-1239`) does two things:
@@ -4976,6 +5005,21 @@ cat "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0/COUNTER
 # 0 (a bare integer, no trailing newline -- the real vdb COUNTER format)
 ls "${ROOT}"/var/db/pkg/dev-libs/
 # mergepkg-1.0 (no leftover -MERGING-mergepkg-1.0 temp dir)
+```
+
+Real package removal: `ebuild <file> unmerge` (see "What this proves"
+above for the full writeup) really deletes what `merge` just installed:
+
+```sh
+PORTING/rust/target/release/multicall ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+# (real prerm/postrm phase output, then exit 0)
+test -e "${ROOT}"/usr/share/mergepkg && echo "still there" || echo "gone"
+# gone
+test -e "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0 && echo "still there" || echo "gone"
+# gone
+test -e "${ROOT}"/var/db/pkg/dev-libs && echo "still there" || echo "gone"
+# gone (the now-empty category directory is removed too)
 ```
 
 `--debug` (task #56 -- see "What this proves" above for the full
