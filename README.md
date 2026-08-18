@@ -3402,6 +3402,35 @@ candidate, not for every candidate considered; `AlreadyInstalled`/
 to trace at all, so their own `provenance` is always all-`null`, same
 scope cut as `slot`/`use_flags_display`.
 
+`--autounmask`'s own keyword-suggestion sub-feature, extended to a
+*dependency's* own `NoVisibleCandidate`: this pilot's own v1 (task #51)
+only ever suggested something for a top-level atom's own **fatal**
+`NoVisibleCandidate` (the one that aborts the whole call) -- a
+dependency's own `NoVisibleCandidate` (reported, not fatal -- the graph
+still resolves) got no suggestion at all, explicitly called out as
+deliberately out of scope in `resolve_pretend_graph`'s own doc comment.
+Closes that gap: a `GraphEntry`'s new `keyword_suggestion` field
+(`Option<(version, keyword)>`) is computed the same way the top-level
+case's own message already was, via a new shared `suggested_keyword_
+candidate` helper factored out of what was previously separate inline
+logic at both call sites -- unlike `is_visible`/`keyword_masked_only`'s
+own deliberate duplication (which trade off genuinely different
+questions), these two calls wanted the exact same "best near-miss"
+computation, so sharing it was the right call. The plain-text loop
+prints it as an extra `!!! note: ...` line right after the existing
+`!!! no visible ebuild for dependency "..."` one (same wording as the
+top-level case's own message, sharing the fixture:
+`dev-libs/autounmaskkeywordpkg`, `~amd64`-masked with no
+`package.accept_keywords` help), gated on `--autounmask` exactly like
+the top-level case already was. `--json` gets the mirror-image field:
+`"keyword_suggestion"` (`{"version", "keyword"}` or `null`) appears only
+on a `"no_visible_candidate"` entry, in the very slot `"source"`/
+`"provenance"` occupy on every other outcome (those two are absent
+there instead -- there's nothing visible to name a source or trace
+provenance for). A new `dev-libs/autounmaskdepconsumer` fixture (RDEPEND
+on the existing keyword-masked-only package) proves it live, both with
+and without `--autounmask`, and in both plain-text and `--json` form.
+
 ## Running it
 
 Build both Rust binaries:
@@ -3635,6 +3664,24 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/autounmaskkey
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/autounmaskkeywordpkg
 # emerge: there are no ebuilds to satisfy "dev-libs/autounmaskkeywordpkg".
 # note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg ~amd64" to package.accept_keywords  (exit 1)
+# the same suggestion, now for a *dependency's* own no-visible-candidate
+# (dev-libs/autounmaskdepconsumer RDEPENDs on the fixture above) -- this
+# is never fatal, so the graph still resolves; quiet by default, same as
+# the top-level case
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/autounmaskdepconsumer
+# [ebuild  N] dev-libs/autounmaskdepconsumer-1.0
+# !!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"  (exit 0)
+# ...and once --autounmask is given, an extra note line, exactly like
+# the top-level case's own message
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/autounmaskdepconsumer
+# [ebuild  N] dev-libs/autounmaskdepconsumer-1.0
+# !!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"
+# !!! note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg ~amd64" to package.accept_keywords  (exit 0)
+# --json's own mirror: "keyword_suggestion" appears only on the
+# "no_visible_candidate" entry, in the slot "source"/"provenance"
+# occupy on every other outcome
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask --json dev-libs/autounmaskdepconsumer | python3 -c 'import json,sys; print(next(e["keyword_suggestion"] for e in json.load(sys.stdin)["entries"] if e["package"] == "autounmaskkeywordpkg"))'
+# {'version': '1.0', 'keyword': '~amd64'}
 
 # IUSE's own "+"/"-" default markers are honored now: "+enableddefault"
 # defaults on, "-disableddefault" stays off (own REQUIRED_USE requires

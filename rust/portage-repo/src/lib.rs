@@ -1452,6 +1452,37 @@ fn suggested_keyword(candidate: &Candidate) -> Option<&str> {
         .map(String::as_str)
 }
 
+/// The best `--autounmask` keyword suggestion for `category/package`, if
+/// any: among every candidate masked by `KEYWORDS` alone (`keyword_
+/// masked_only`), the highest-versioned one (repo priority breaking a
+/// tie), paired with its own `suggested_keyword`. `None` if `category/
+/// package` isn't listable at all, or no candidate is masked by
+/// `KEYWORDS` alone. Shared by both call sites that need this exact
+/// "what would I suggest here" question -- a top-level atom's own fatal
+/// `NoVisibleCandidate` (which turns it into part of an `Err` message)
+/// and a *dependency's* own `NoVisibleCandidate` (which attaches it to
+/// that `GraphEntry` instead, see `GraphEntry::keyword_suggestion`'s own
+/// doc comment) -- unlike `is_visible`/`keyword_masked_only`'s own
+/// deliberate duplication (which trade off different bools entirely),
+/// these two calls want the exact same "best near-miss" computation, so
+/// factoring it out is the right call here.
+fn suggested_keyword_candidate(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Option<(String, String)> {
+    let candidates = list_candidates(repos, category, package).ok()?;
+    candidates
+        .iter()
+        .filter(|c| keyword_masked_only(c, category, package, config))
+        .filter_map(|c| suggested_keyword(c).map(|k| (c, k)))
+        .max_by(|(a, _), (b, _)| {
+            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+        })
+        .map(|(c, k)| (c.version.clone(), k.to_string()))
+}
+
 /// `--json`'s own "state-change trace" (this pilot's own feature -- see
 /// the `--json` module doc comment; not a port of any real emerge
 /// output): which config entries, if any, were actually load-bearing for
@@ -3010,6 +3041,19 @@ pub struct GraphEntry {
     /// a fresh repo/PKGDIR candidate to trace at all, same scope cut as
     /// `slot`/`use_flags_display` above.
     pub provenance: VisibilityProvenance,
+    /// `--autounmask`'s own keyword-suggestion sub-feature (see
+    /// `resolve_pretend_graph`'s own doc comment), extended to a
+    /// *dependency's* own `NoVisibleCandidate` -- previously deliberately
+    /// out of scope (this pilot's own v1 only ever suggested something
+    /// for a top-level atom's own fatal `NoVisibleCandidate`, which
+    /// aborts the whole call and never reaches a `GraphEntry` at all).
+    /// `(version, keyword)` of the best `suggested_keyword_candidate`
+    /// result, or `None` when `--autounmask-keep-keywords=n` isn't in
+    /// effect (`autounmask_suggest_keywords` off) or no real candidate is
+    /// masked by `KEYWORDS` alone. Only ever `Some` for a
+    /// `NoVisibleCandidate` entry -- every other outcome had a visible
+    /// candidate, so there's nothing to suggest unmasking.
+    pub keyword_suggestion: Option<(String, String)>,
 }
 
 /// A blocker atom found while flattening one package's own dependency strings,
@@ -3760,28 +3804,15 @@ pub fn resolve_pretend_graph(
             // even though this pilot doesn't yet combine multiple
             // simultaneous suggestion kinds the way real portage can.
             if autounmask_suggest_keywords {
-                if let Ok(candidates) = list_candidates(&repos, &atom.category, &atom.package) {
-                    if let Some((candidate, keyword)) = candidates
-                        .iter()
-                        .filter(|c| keyword_masked_only(c, &atom.category, &atom.package, config))
-                        .filter_map(|c| suggested_keyword(c).map(|k| (c, k)))
-                        .max_by(|(a, _), (b, _)| {
-                            vercmp_ordering(&a.version, &b.version)
-                                .then(a.repo_priority.cmp(&b.repo_priority))
-                        })
-                    {
-                        message.push_str(&format!(
-                            "\nnote: {}/{}-{} exists but is masked by KEYWORDS; \
-                             --autounmask-keep-keywords=n suggests adding \"{}/{} {}\" \
-                             to package.accept_keywords",
-                            atom.category,
-                            atom.package,
-                            candidate.version,
-                            atom.category,
-                            atom.package,
-                            keyword
-                        ));
-                    }
+                if let Some((version, keyword)) =
+                    suggested_keyword_candidate(&repos, &atom.category, &atom.package, config)
+                {
+                    message.push_str(&format!(
+                        "\nnote: {}/{}-{version} exists but is masked by KEYWORDS; \
+                         --autounmask-keep-keywords=n suggests adding \"{}/{} {keyword}\" \
+                         to package.accept_keywords",
+                        atom.category, atom.package, atom.category, atom.package,
+                    ));
                 }
             }
             return Err(message);
@@ -3826,6 +3857,16 @@ pub fn resolve_pretend_graph(
                     );
                 }
             }
+            // `--autounmask`'s own keyword-suggestion sub-feature,
+            // extended here to a *dependency's* own `NoVisibleCandidate`
+            // -- see `GraphEntry::keyword_suggestion`'s own doc comment.
+            let keyword_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                && autounmask_suggest_keywords
+            {
+                suggested_keyword_candidate(&repos, &key.0, &key.1, config)
+            } else {
+                None
+            };
             entries.push(GraphEntry {
                 category: key.0,
                 package: key.1,
@@ -3836,6 +3877,7 @@ pub fn resolve_pretend_graph(
                 required_by: Vec::new(),
                 source: CandidateSource::Ebuild,
                 provenance: VisibilityProvenance::default(),
+                keyword_suggestion,
             });
             continue;
         };
@@ -3936,6 +3978,7 @@ pub fn resolve_pretend_graph(
             required_by: Vec::new(),
             source: candidate_source,
             provenance,
+            keyword_suggestion: None,
         });
 
         let metadata = if candidate_source == CandidateSource::Binary {
@@ -7358,6 +7401,72 @@ mod tests {
     }
 
     #[test]
+    fn fixture_dependency_no_visible_candidate_gets_no_keyword_suggestion_by_default() {
+        // dev-libs/autounmaskdepconsumer RDEPENDs on dev-libs/
+        // autounmaskkeywordpkg (the same keyword-masked-only fixture the
+        // top-level test above uses), a *dependency's* own
+        // NoVisibleCandidate -- previously always silent, now able to
+        // carry a keyword_suggestion, but only once
+        // autounmask_suggest_keywords is on.
+        let entries = graph_entries_real("dev-libs/autounmaskdepconsumer");
+        let dep = entries
+            .iter()
+            .find(|e| e.package == "autounmaskkeywordpkg")
+            .expect("dependency entry present");
+        assert_eq!(dep.outcome, PretendOutcome::NoVisibleCandidate);
+        assert_eq!(dep.keyword_suggestion, None);
+    }
+
+    #[test]
+    fn fixture_dependency_no_visible_candidate_gets_a_keyword_suggestion_once_enabled() {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
+        let atoms = vec!["dev-libs/autounmaskdepconsumer".to_string()];
+        let result = resolve_pretend_graph(
+            &root,
+            &root,
+            &atoms,
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+        )
+        .expect("dependency's own NoVisibleCandidate is never fatal");
+        let dep = result
+            .entries
+            .iter()
+            .find(|e| e.package == "autounmaskkeywordpkg")
+            .expect("dependency entry present");
+        assert_eq!(
+            dep.keyword_suggestion,
+            Some(("1.0".to_string(), "~amd64".to_string()))
+        );
+    }
+
+    #[test]
     fn required_use_referencing_an_implicit_arch_list_flag_is_valid() {
         // dev-libs/archiuseimplicitpkg's own IUSE is empty and its own
         // REQUIRED_USE is "!x86" -- "x86" is never declared by this
@@ -8574,6 +8683,7 @@ mod tests {
             required_by: Vec::new(),
             source: CandidateSource::Ebuild,
             provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
         }
     }
 

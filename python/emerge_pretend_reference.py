@@ -966,6 +966,30 @@ def _suggested_keyword(candidate):
     return None
 
 
+def _suggested_keyword_candidate(repos, category, package, config):
+    """The best --autounmask keyword suggestion for category/package, if
+    any: among every candidate masked by KEYWORDS alone
+    (_keyword_masked_only), the highest-versioned one (_best_candidate),
+    paired with its own _suggested_keyword. None if category/package
+    isn't listable at all, or no candidate is masked by KEYWORDS alone.
+    Mirrors portage-repo/src/lib.rs's suggested_keyword_candidate --
+    shared by both call sites that need this exact "what would I suggest
+    here" computation: a top-level atom's own fatal NoVisibleCandidate
+    (which raises ResolutionError with it) and a *dependency's* own
+    NoVisibleCandidate (which attaches it to that entry tuple instead --
+    see resolve_pretend_graph's own docstring)."""
+    candidates = list_candidates(repos, category, package)
+    keyword_masked = [
+        c
+        for c in candidates
+        if _keyword_masked_only(c, category, package, config) and _suggested_keyword(c) is not None
+    ]
+    if not keyword_masked:
+        return None
+    candidate = _best_candidate(keyword_masked)
+    return candidate["version"], _suggested_keyword(candidate)
+
+
 def _visibility_provenance(candidate, category, package, config):
     """--json's own "state-change trace" (this pilot's own feature, not
     a port of any real emerge output): which config entries, if any,
@@ -3090,6 +3114,7 @@ def resolve_blockers(root, pending, entries):
             _required_by,
             _source,
             _provenance,
+            _keyword_suggestion,
         ) in entries:
             if (category, package) != target_key:
                 continue
@@ -3465,18 +3490,12 @@ def resolve_pretend_graph(
             # suggestion here, matching real portage's own "only
             # suggest a change that would actually fix it" spirit.
             if autounmask_suggest_keywords:
-                keyword_masked = [
-                    c
-                    for c in list_candidates(repos, category, package)
-                    if _keyword_masked_only(c, category, package, config)
-                    and _suggested_keyword(c) is not None
-                ]
-                if keyword_masked:
-                    candidate = _best_candidate(keyword_masked)
-                    keyword = _suggested_keyword(candidate)
+                suggestion = _suggested_keyword_candidate(repos, category, package, config)
+                if suggestion is not None:
+                    version, keyword = suggestion
                     message += (
-                        f'\nnote: {category}/{package}-{candidate["version"]} exists but is '
-                        f'masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding '
+                        f"\nnote: {category}/{package}-{version} exists but is "
+                        f"masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding "
                         f'"{category}/{package} {keyword}" to package.accept_keywords'
                     )
             raise ResolutionError(message)
@@ -3515,6 +3534,13 @@ def resolve_pretend_graph(
                     outcome[1],
                     with_bdeps,
                 )
+            # --autounmask's own keyword-suggestion sub-feature, extended
+            # here to a *dependency's* own NoVisibleCandidate -- see
+            # portage-repo/src/lib.rs's GraphEntry::keyword_suggestion own
+            # doc comment.
+            keyword_suggestion = None
+            if outcome[0] == "no_visible_candidate" and autounmask_suggest_keywords:
+                keyword_suggestion = _suggested_keyword_candidate(repos, category, package, config)
             entries.append(
                 (
                     category,
@@ -3526,6 +3552,7 @@ def resolve_pretend_graph(
                     [],
                     "ebuild",
                     {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
+                    keyword_suggestion,
                 )
             )
             continue
@@ -3588,7 +3615,7 @@ def resolve_pretend_graph(
         resolved_slots[slot_key] = entry_idx
         provenance = _visibility_provenance(resolved, category, package, config)
         entries.append(
-            (category, package, outcome, [], slot, [], [], candidate_source, provenance)
+            (category, package, outcome, [], slot, [], [], candidate_source, provenance, None)
         )
 
         pf = f"{package}-{version}"
@@ -3706,6 +3733,7 @@ def resolve_pretend_graph(
                 [],
                 candidate_source,
                 entries[entry_idx][8],
+                entries[entry_idx][9],
             )
 
         # --nodeps: skip this package's own DEPEND/RDEPEND/etc entirely --
@@ -3768,8 +3796,9 @@ def resolve_pretend_graph(
             sorted(required_by_map.get((category, package), ())),
             source,
             provenance,
+            keyword_suggestion,
         )
-        for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance in entries
+        for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance, keyword_suggestion in entries
     ]
 
     # setdefault (not a dict comprehension) so the *first* entry for a
@@ -3788,6 +3817,7 @@ def resolve_pretend_graph(
         _required_by,
         _source,
         _provenance,
+        _keyword_suggestion,
     ) in entries:
         blockers_by_owner.setdefault((category, package), blockers)
     for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
@@ -4180,7 +4210,7 @@ def _json_bool(b):
     return "true" if b else "false"
 
 
-def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, provenance, top_level_pkgs, verbose):
+def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, top_level_pkgs, verbose):
     """One JSON object per entry -- a structured mirror of the plain-text
     "[ebuild ...]"/"[binary ...]"/"already installed"/blocker lines in
     run(), plus two fields no plain-text line carries at all: "requested"
@@ -4201,8 +4231,13 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
     load-bearing for this candidate to be visible at all -- always
     present (each of its three sub-fields null rather than omitted when
     not applicable), no verbose gate, unlike use_flags above; see
-    _visibility_provenance's own docstring. Mirrors pretend.rs's own
-    entry_to_json exactly, field for field, in the same order."""
+    _visibility_provenance's own docstring. "keyword_suggestion" is
+    provenance's own mirror image -- present (as {"version", "keyword"}
+    or null) only for "no_visible_candidate" entries, since that's the
+    one outcome with nothing visible to trace provenance for and
+    something to suggest instead; see _suggested_keyword_candidate's own
+    docstring. Mirrors pretend.rs's own entry_to_json exactly, field for
+    field, in the same order."""
     requested = (category, package) in top_level_pkgs
     fields = [
         f'"category":{_json_string(category)}',
@@ -4234,6 +4269,15 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
             f'"unmask_entry":{_opt_str(provenance["unmask_entry"])},'
             f'"keyword_entry":{_opt_str(provenance["keyword_entry"])}}}'
         )
+    else:
+        if keyword_suggestion is not None:
+            version, keyword = keyword_suggestion
+            fields.append(
+                f'"keyword_suggestion":{{"version":{_json_string(version)},'
+                f'"keyword":{_json_string(keyword)}}}'
+            )
+        else:
+            fields.append('"keyword_suggestion":null')
     fields.append(f'"requested":{_json_bool(requested)}')
     required_by_json = ",".join(
         f'{{"category":{_json_string(c)},"package":{_json_string(p)}}}' for c, p in required_by
@@ -4275,9 +4319,9 @@ def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, ve
     own --json handling). Mirrors pretend.rs's own print_json exactly."""
     entries_json = ",".join(
         _entry_to_json(
-            category, package, outcome, blockers, slot, use_display, required_by, source, provenance, top_level_pkgs, verbose
+            category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, top_level_pkgs, verbose
         )
-        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance in entries
+        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion in entries
     )
     conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)
     changed_deps_report_json = ",".join(
@@ -5505,7 +5549,7 @@ def run(args):
         # out so both display modes share one implementation rather than
         # drifting apart. Mirrors pretend.rs's own print_entry_line
         # exactly.
-        category, package, outcome, blockers, _slot, use_display, _required_by, source, _provenance = entry
+        category, package, outcome, blockers, _slot, use_display, _required_by, source, _provenance, keyword_suggestion = entry
         tag = outcome[0]
         # --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
         # dependencies of the packages specified, not the packages
@@ -5573,6 +5617,20 @@ def run(args):
                 f'!!! no visible ebuild for dependency "{category}/{package}"',
                 file=sys.stderr,
             )
+            # --autounmask's own keyword-suggestion sub-feature, extended
+            # to a dependency's own no_visible_candidate -- see
+            # portage-repo/src/lib.rs's GraphEntry::keyword_suggestion own
+            # doc comment. Previously only a top-level atom's own fatal
+            # no_visible_candidate got this note (as part of the
+            # ResolutionError that aborts the whole call).
+            if keyword_suggestion is not None:
+                version, keyword = keyword_suggestion
+                print(
+                    f'!!! note: {category}/{package}-{version} exists but is masked by '
+                    f"KEYWORDS; --autounmask-keep-keywords=n suggests adding "
+                    f'"{category}/{package} {keyword}" to package.accept_keywords',
+                    file=sys.stderr,
+                )
 
     def print_tree(entries):
         # --tree/-t: indents each entry under whichever other entry's own

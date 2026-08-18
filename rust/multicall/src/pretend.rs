@@ -408,6 +408,20 @@ fn print_entry_line(
                 "!!! no visible ebuild for dependency \"{}/{}\"",
                 entry.category, entry.package
             );
+            // `--autounmask`'s own keyword-suggestion sub-feature,
+            // extended to a dependency's own NoVisibleCandidate -- see
+            // GraphEntry::keyword_suggestion's own doc comment.
+            // Previously only a top-level atom's own fatal
+            // NoVisibleCandidate got this note (as part of the Err
+            // message that aborts the whole call).
+            if let Some((version, keyword)) = &entry.keyword_suggestion {
+                eprintln!(
+                    "!!! note: {}/{}-{version} exists but is masked by KEYWORDS; \
+                     --autounmask-keep-keywords=n suggests adding \"{}/{} {keyword}\" \
+                     to package.accept_keywords",
+                    entry.category, entry.package, entry.category, entry.package,
+                );
+            }
         }
     }
 }
@@ -593,6 +607,11 @@ fn json_string(s: &str) -> String {
 /// detail `--json` exists to expose unconditionally, see this module's
 /// own doc comment) and a consumer scripting against this output
 /// shouldn't have to branch on whether the key is even present.
+/// `keyword_suggestion` is `provenance`'s own mirror image -- present
+/// (as `{"version", "keyword"}` or `null`) only for `NoVisibleCandidate`
+/// entries, since that's the one outcome with nothing visible to trace
+/// provenance for and something to suggest instead. Mirrors
+/// `entry.keyword_suggestion` (portage-repo) -- see its own doc comment.
 fn entry_to_json(
     entry: &GraphEntry,
     top_level_pkgs: &HashSet<(String, String)>,
@@ -660,6 +679,19 @@ fn entry_to_json(
             opt_str(&entry.provenance.mask_entry),
             opt_str(&entry.provenance.unmask_entry),
             opt_str(&entry.provenance.keyword_entry),
+        ));
+    } else {
+        fields.push(format!(
+            "\"keyword_suggestion\":{}",
+            entry
+                .keyword_suggestion
+                .as_ref()
+                .map(|(version, keyword)| format!(
+                    "{{\"version\":{},\"keyword\":{}}}",
+                    json_string(version),
+                    json_string(keyword)
+                ))
+                .unwrap_or_else(|| "null".to_string())
         ));
     }
     fields.push(format!("\"requested\":{requested}"));

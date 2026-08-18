@@ -257,6 +257,21 @@ CASES = [
         1,
     ),
     (
+        "--autounmask: a dependency's own no-visible-candidate gets no suggestion by default",
+        ["--pretend", "dev-libs/autounmaskdepconsumer"],
+        0,
+    ),
+    (
+        "--autounmask: a dependency's own no-visible-candidate gets a suggestion once enabled",
+        ["--pretend", "--autounmask", "dev-libs/autounmaskdepconsumer"],
+        0,
+    ),
+    (
+        "--autounmask: dependency-level keyword suggestion also appears in --json",
+        ["--pretend", "--autounmask", "--json", "dev-libs/autounmaskdepconsumer"],
+        0,
+    ),
+    (
         "--usepkg: a binary-only package is invisible without it",
         ["--pretend", "dev-libs/binaryonlypkg"],
         1,
@@ -1243,6 +1258,74 @@ def test_autounmask_suggests_a_keyword_once_explicitly_enabled(emerge_binary, fi
         '--autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg '
         '~amd64" to package.accept_keywords'
     )
+
+
+def test_autounmask_dependency_gets_no_keyword_suggestion_by_default(emerge_binary, fixture_env):
+    """dev-libs/autounmaskdepconsumer RDEPENDs on dev-libs/
+    autounmaskkeywordpkg (the same keyword-masked-only fixture the
+    top-level tests above use) -- a *dependency's* own
+    no-visible-candidate, previously always silent beyond the bare
+    "no visible ebuild" line, regardless of --autounmask. With no
+    --autounmask flag at all (the real, correct default), no suggestion
+    is appended here either, matching the top-level case's own default."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/autounmaskdepconsumer"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  N] dev-libs/autounmaskdepconsumer-1.0\n"
+    assert result.stderr.strip() == (
+        '!!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"'
+    )
+
+
+def test_autounmask_dependency_gets_a_keyword_suggestion_once_enabled(emerge_binary, fixture_env):
+    """Extends --autounmask's own keyword-suggestion sub-feature (task
+    #51) to a *dependency's* own no-visible-candidate -- previously
+    deliberately out of scope (resolve_pretend_graph's own doc comment:
+    "suggestions for a dependency's own NoVisibleCandidate"). Unlike the
+    top-level case, this dependency's own no-visible-candidate is never
+    fatal -- the graph still resolves, dev-libs/autounmaskdepconsumer
+    itself still prints as a normal New entry on stdout, and the note is
+    just an extra stderr line alongside the pre-existing "no visible
+    ebuild" one."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask", "dev-libs/autounmaskdepconsumer"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  N] dev-libs/autounmaskdepconsumer-1.0\n"
+    assert result.stderr.strip() == (
+        '!!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"\n'
+        '!!! note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; '
+        '--autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg '
+        '~amd64" to package.accept_keywords'
+    )
+
+
+def test_autounmask_dependency_keyword_suggestion_appears_in_json(emerge_binary, fixture_env):
+    """--json's own mirror of the plain-text note above: a
+    "no_visible_candidate" entry carries a "keyword_suggestion" field
+    (present only for that one outcome, the mirror image of
+    "provenance", which is absent there instead) -- {"version",
+    "keyword"} when --autounmask found something to suggest, null
+    otherwise."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask", "--json", "dev-libs/autounmaskdepconsumer"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    dep = next(e for e in payload["entries"] if e["package"] == "autounmaskkeywordpkg")
+    assert dep["outcome"] == "no_visible_candidate"
+    assert "provenance" not in dep
+    assert dep["keyword_suggestion"] == {"version": "1.0", "keyword": "~amd64"}
+    consumer = next(e for e in payload["entries"] if e["package"] == "autounmaskdepconsumer")
+    assert consumer["outcome"] == "new"
+    assert "keyword_suggestion" not in consumer
 
 
 def test_unresolvable_dependency_is_reported_not_silently_dropped(
