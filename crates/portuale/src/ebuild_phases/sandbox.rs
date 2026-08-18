@@ -47,10 +47,84 @@ pub(crate) fn environ_whitelisted(key: &str) -> bool {
     listed(ENVIRON_WHITELIST, key) || key.starts_with("CCACHE_") || key.starts_with("DISTCC_")
 }
 
+/// Settings the native `gpkg-helper compress` reads from its env. The native helper
+/// has no config loader, so `invoke_dyn_package` exports the resolved values and they
+/// must survive the calling-env filter in the `package` phase — the one phase running
+/// `__dyn_package`. They never reach any other phase.
+/// Portage: gpkg-helper.py
+pub(crate) fn gpkg_helper_setting(phase: &str, key: &str) -> bool {
+    phase == "package"
+        && (key == "BINPKG_COMPRESS"
+            || key == "BINPKG_COMPRESS_FLAGS"
+            || key.starts_with("BINPKG_COMPRESS_FLAGS_")
+            || key.starts_with("BINPKG_GPG_SIGNING_"))
+}
+
+/// Portage's `filter_calling_env`: once `${T}/environment` exists, only whitelisted
+/// calling-env keys pass; the saved environment supplies the rest, so an ebuild's
+/// `unset` sticks. Exempts the init/fetch phases and standalone-`ebuild` `setup`.
+/// Portage: config.py
+pub(crate) fn filter_calling_env(
+    phase: &str,
+    t_dir: &Path,
+    extra_env: &[(String, String)],
+) -> bool {
+    if matches!(phase, "clean" | "cleanrm" | "depend" | "fetch") {
+        return false;
+    }
+    // `EMERGE_FROM` rides in `extra_env` for the binary/saved-env paths.
+    let emerge_from = extra_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "EMERGE_FROM")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("ebuild");
+    if phase == "setup" && emerge_from == "ebuild" {
+        return false;
+    }
+    t_dir.join("environment").is_file()
+}
+
+/// The `FEATURES` string phase decisions consult: the last `extra_env` pair when
+/// present (the resolved list), else the process env (standalone runs).
+/// Portage: config.py, settings.features
+pub(crate) fn features_string(extra_env: &[(String, String)]) -> String {
+    extra_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "FEATURES")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| std::env::var("FEATURES").unwrap_or_default())
+}
+
 /// A `FEATURES` token check over `features_string`'s output. CLI fallbacks elsewhere
 /// keep their own process-env reads.
 pub(crate) fn feature_token_present(features: &str, token: &str) -> bool {
     features.split_whitespace().any(|t| t == token)
+}
+
+/// `FEATURES` for the phase's bash: passed straight through so unmodified bash gating
+/// on `contains_word <token> "${FEATURES}"` works (estrip handling, `__dyn_test`'s test
+/// gate, `misc-functions.sh` handling). Tokens Rust acts on independently are never
+/// re-gated by any bash run here (verified by grep), so no double-handling.
+/// Portage: doebuild.py, doebuild_environment
+pub(crate) fn phase_features_value() -> String {
+    std::env::var("FEATURES").unwrap_or_default()
+}
+
+/// `FEATURES=network-sandbox` present?
+pub(crate) fn network_sandbox_requested(features: &str) -> bool {
+    feature_token_present(features, "network-sandbox")
+}
+
+/// The non-`FEATURES` half of the net-unshare decision (pure, so unit-testable):
+/// unpack of a `live` package, `test` of a `test_network` package, or
+/// `RESTRICT=network-sandbox`. Inputs are already USE-reduced token strings.
+/// Portage: doebuild.py, _doebuild_spawn
+pub(crate) fn network_sandbox_exempt(phase: &str, restrict: &str, properties: &str) -> bool {
+    (phase == "unpack" && flat_field_has_token(properties, &["live"]))
+        || (phase == "test" && flat_field_has_token(properties, &["test_network"]))
+        || flat_field_has_token(restrict, &["network-sandbox"])
 }
 
 /// `FEATURES=sandbox` or `usersandbox` present (equivalent here: no `userpriv`).
@@ -125,6 +199,9 @@ impl Isolation {
     pub(crate) fn any_unshare(&self) -> bool {
         self.net || self.ipc || self.mount || self.pid
     }
+    pub(crate) fn any(&self) -> bool {
+        self.any_unshare() || self.fs_sandbox
+    }
     /// `unshare(1)` flags, `--map-root-user` first so it works non-root (Portage
     /// unshares only as `uid == 0`).
     pub(crate) fn unshare_flags(&self) -> Vec<&'static str> {
@@ -143,6 +220,72 @@ impl Isolation {
         }
         f
     }
+}
+
+/// Whether `unshare <flags> -- true` succeeds here (cached per flag set; Portage
+/// validates the same way via `_unshare_validator`). `false` drops the wrappers
+/// with a warning — Portage's non-fatal "Unable to unshare".
+pub(crate) fn unshare_combo_usable(flags: &[&str]) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    let key = flags.join(" ");
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(&v) = cache.lock().unwrap().get(&key) {
+        return v;
+    }
+    let ok = std::process::Command::new("unshare")
+        .args(flags)
+        .args(["--", "true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    cache.lock().unwrap().insert(key, ok);
+    ok
+}
+
+/// Wrappers for one phase from `FEATURES`: only `src_*` phases; an unusable unshare
+/// combination degrades with one warning. `net` also carries the `networked`
+/// exemption (live-`unpack`, `test_network`-`test`, `RESTRICT` opt-out).
+/// Portage: doebuild.py, _doebuild_spawn
+pub(crate) fn phase_isolation(env: &Environment, phase: &str, features: &str) -> Isolation {
+    use std::sync::OnceLock;
+    if !listed(SANDBOXED_SRC_PHASES, phase) {
+        return Isolation::default();
+    }
+    let mut net = network_sandbox_requested(features);
+    if net {
+        // Exemptions run for sandboxable phases only, so the empty-set reduction suffices.
+        let (restrict, properties) =
+            restrict_and_properties(env, &std::collections::HashSet::new());
+        if network_sandbox_exempt(phase, &restrict, &properties) {
+            net = false;
+        }
+    }
+    let mut iso = Isolation {
+        net,
+        ipc: feature_token_present(features, "ipc-sandbox"),
+        mount: feature_token_present(features, "mount-sandbox"),
+        pid: feature_token_present(features, "pid-sandbox"),
+        fs_sandbox: fs_sandbox_for_phase(phase, features),
+    };
+    if iso.any_unshare() && !unshare_combo_usable(&iso.unshare_flags()) {
+        static WARNED: OnceLock<()> = OnceLock::new();
+        WARNED.get_or_init(|| {
+            eprintln!(
+                "!!! Unable to unshare (for FEATURES=\"network-sandbox / ipc-sandbox / \
+                 mount-sandbox / pid-sandbox\"); src_* phases run without namespace isolation"
+            );
+        });
+        iso.net = false;
+        iso.ipc = false;
+        iso.mount = false;
+        iso.pid = false;
+    }
+    iso
 }
 
 /// A blocking `Command` running `bash <script> <arg>` (Portage's `EBUILD_SH_BINARY`

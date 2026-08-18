@@ -25,6 +25,8 @@ mod run_phase;
 mod runtime_paths;
 mod sandbox;
 mod scheduler_registry;
+mod single_phase;
+mod standalone_config;
 
 #[cfg(test)]
 mod tests;
@@ -41,6 +43,8 @@ pub(crate) use run_phase::*;
 pub(crate) use runtime_paths::*;
 pub use sandbox::*;
 pub(crate) use scheduler_registry::*;
+pub(crate) use single_phase::*;
+pub(crate) use standalone_config::*;
 
 use brush_builtins::ShellBuilderExt as _;
 

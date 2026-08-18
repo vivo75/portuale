@@ -161,3 +161,21 @@ pub(crate) fn match_package_env_incremental_raw(
     }
     container
 }
+
+/// The `Config` and `cpv_slot` identity for an ebuild with no resolved graph entry
+/// (standalone runs): the path gives `category`/`pf`, the md5-cache gives `SLOT`.
+/// `None` outside a repo or on an unparsable path; shared so path-parsing happens once.
+pub(crate) fn standalone_package_env_lookup(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<(portage_profile::Config, String)> {
+    let ebuild_abs = ebuild_path.canonicalize().ok()?;
+    let pkg_dir = ebuild_abs.parent()?.to_path_buf();
+    let file_name = ebuild_abs.file_name()?.to_str()?;
+    let pf = file_name.strip_suffix(".ebuild")?;
+    let category = pkg_dir.parent()?.file_name()?.to_str()?;
+    let config = resolve_standalone_config(&pkg_dir, config_root, eroot)?;
+    let cpv_slot = standalone_cpv_slot(&pkg_dir, category, pf)?;
+    Some((config, cpv_slot))
+}
