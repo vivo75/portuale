@@ -576,6 +576,38 @@ pub fn run_commands(
     ))
 }
 
+/// Runs exactly `phase`, with no `actionmap_deps` prerequisite chain --
+/// unlike `run_commands`, for phases real portage itself never reaches
+/// via `doebuild()`'s own chain at all. Real `dblink.treewalk()` invokes
+/// `pkg_preinst`/`pkg_postinst` directly (`EbuildPhase(phase="preinst"/
+/// "postinst")`, `lib/portage/dbapi/vartree.py`), not through
+/// `doebuild(mydo=...)` -- `ebuild_merge::run_merge` is this pilot's own
+/// equivalent call site, wrapping its own file-merge step with real
+/// `pkg_preinst`/`pkg_postinst` hook execution the same way. Real
+/// `bin/phase-functions.sh`'s own `__ebuild_main` already accepts
+/// `preinst`/`postinst` as literal phase arguments directly (`case
+/// prerm|postrm|preinst|postinst|config|info)`), and `__ebuild_phase`
+/// itself silently no-ops when the named function isn't defined
+/// (`declare -F "$1" >/dev/null && __qa_call $1`) -- so this is safe to
+/// call even for a fixture ebuild that defines neither `pkg_preinst` nor
+/// `pkg_postinst` at all.
+pub(crate) fn run_single_phase(
+    ebuild_path: &Path,
+    phase: &str,
+    root: &Path,
+    portage_tmpdir: &Path,
+) -> Result<i32, String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("failed to start async runtime: {e}"))?;
+    runtime.block_on(async {
+        let env = compute_environment(ebuild_path, portage_tmpdir)?;
+        create_directories(&env)?;
+        run_one_phase(&env, root, phase).await
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

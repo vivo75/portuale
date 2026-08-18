@@ -1,21 +1,20 @@
 // Real merge/filesystem mutation (task #55, `PORTING/PROMPT-next.md`'s own
-// "Real merge/install/filesystem mutation" section) -- the first slice:
-// after running the real `install` phase chain (task #54's own
-// `ebuild_phases` module), really copy `${D}`'s own regular files,
-// directories, and symlinks into `${ROOT}`, and write a real vdb entry
-// (`CONTENTS`, in the exact `obj`/`dir`/`sym` line format real
-// `dblink._format_contents_line` uses, plus `CATEGORY`/`SLOT`/
-// `repository`) -- mirroring real `dblink.merge()`/`treewalk()`/
+// "Real merge/install/filesystem mutation" section): after running the
+// real `install` phase chain (task #54's own `ebuild_phases` module),
+// really run `pkg_preinst`, copy `${D}`'s own regular files, directories,
+// and symlinks into `${ROOT}`, write a real vdb entry (`CONTENTS`, in the
+// exact `obj`/`dir`/`sym` line format real `dblink._format_contents_line`
+// uses, plus `CATEGORY`/`SLOT`/`repository`), then really run
+// `pkg_postinst` -- mirroring real `dblink.merge()`/`treewalk()`/
 // `mergeme()` (`lib/portage/dbapi/vartree.py`, ~6500 lines total) at a
 // deliberately narrow v1 scope, the same "narrow v1, document the cut"
 // pattern `ebuild_phases`'s own module doc comment already established.
+// `pkg_preinst`/`pkg_postinst` run via `ebuild_phases::run_single_phase`,
+// not `run_commands` -- real `treewalk()` invokes them directly
+// (`EbuildPhase(phase="preinst"/"postinst")`), not through `doebuild()`'s
+// own `actionmap_deps` chain the way `pretend`..`install` are.
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope):
-//   - No `pkg_preinst`/`pkg_postinst` hook execution around the merge --
-//     real `treewalk()` runs `pkg_preinst` before copying anything and
-//     `pkg_postinst` after; this slice does neither. `ebuild_phases`
-//     could run them as ordinary phases already, but wiring that in is a
-//     separate, natural follow-on, not bundled into this slice.
 //   - No `CONFIG_PROTECT`/collision-protect/preserve-libs handling at
 //     all -- real `mergeme()`'s own config-file-protection branch
 //     (renaming a changed `/etc` file to `._cfg0000_...` instead of
@@ -260,6 +259,17 @@ pub fn run_merge(ebuild_path: &Path, root: &Path, portage_tmpdir: &Path) -> Resu
         return Ok(status);
     }
 
+    // Real `dblink.treewalk()`'s own order: `pkg_preinst` runs before
+    // anything is copied, `pkg_postinst` only after the vdb entry is
+    // fully written -- `run_single_phase` (not `run_commands`) since
+    // neither is part of `install`'s own `actionmap_deps` chain (real
+    // `treewalk()` invokes them directly, not through `doebuild()`).
+    let preinst_status =
+        ebuild_phases::run_single_phase(ebuild_path, "preinst", root, portage_tmpdir)?;
+    if preinst_status != 0 {
+        return Ok(preinst_status);
+    }
+
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
     let ebuild_text = std::fs::read_to_string(&env.ebuild_abs)
         .map_err(|e| format!("{}: {e}", env.ebuild_abs.display()))?;
@@ -269,7 +279,7 @@ pub fn run_merge(ebuild_path: &Path, root: &Path, portage_tmpdir: &Path) -> Resu
     let contents = merge_tree(&env.d(), root)?;
     write_vdb_entry(root, &env, &slot, &repository, &contents)?;
 
-    Ok(0)
+    ebuild_phases::run_single_phase(ebuild_path, "postinst", root, portage_tmpdir)
 }
 
 #[cfg(test)]
@@ -429,5 +439,20 @@ mod tests {
             .lines()
             .any(|l| l.starts_with("obj /usr/share/mergepkg/hello.txt ")));
         assert!(contents.contains("sym /usr/share/mergepkg/hello-link.txt -> hello.txt"));
+
+        // Real pkg_preinst/pkg_postinst ordering proof: the fixture's own
+        // hooks only touch these markers if, respectively, the merged
+        // file was *not yet* visible under ${ROOT} (preinst) and *was
+        // already* visible, vdb entry included (postinst) -- see
+        // mergepkg-1.0.ebuild's own pkg_preinst/pkg_postinst.
+        let t_dir = portage_tmpdir.join("portage/dev-libs/mergepkg-1.0/temp");
+        assert!(
+            t_dir.join("preinst-ran-before-merge").is_file(),
+            "pkg_preinst must run, and see the file not yet merged"
+        );
+        assert!(
+            t_dir.join("postinst-ran-after-merge").is_file(),
+            "pkg_postinst must run, and see the file (and vdb entry) already merged"
+        );
     }
 }

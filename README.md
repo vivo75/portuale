@@ -3563,24 +3563,35 @@ from the ebuild's own text via the real PMS 7.3.1 rule (`parse_eapi`),
 since `ebuild <file> <command>` operates on an arbitrary standalone
 ebuild file, not necessarily one indexed in a configured repo.
 
-### Real merge/filesystem mutation (task #55): the first slice
+### Real merge/filesystem mutation (task #55): the first slice, plus real `pkg_preinst`/`pkg_postinst` hooks
 
 The natural next step after task #54: `ebuild <file> merge`
 (`multicall/src/ebuild_merge.rs`) now really copies `${D}` into `${ROOT}`
 and writes a real vdb entry, instead of falling through to the dry-run
 stub. Runs the real `install` phase chain first (task #54's own
-`ebuild_phases::run_commands`), then walks `${D}` and, for every regular
-file, directory, and symlink found, really merges it into `${ROOT}` --
-matching real `dblink.mergeme()`'s own `_format_contents_line` format
-exactly: `dir <path>`, `obj <path> <md5> <mtime>`, `sym <path> ->
-<target> <mtime>`. Writes that `CONTENTS` text, plus `CATEGORY`/`SLOT`/
-`repository`, into a real `${ROOT}/var/db/pkg/<category>/<pf>/`
-directory -- the same one-value-per-file vdb layout this pilot's own
-fixtures and `portage_repo`'s own vdb readers (`installed_candidates`,
+`ebuild_phases::run_commands`), then really runs `pkg_preinst`
+(`ebuild_phases::run_single_phase`, not `run_commands` -- real
+`dblink.treewalk()` invokes `pkg_preinst`/`pkg_postinst` directly,
+`EbuildPhase(phase="preinst"/"postinst")`, not through `doebuild()`'s own
+`actionmap_deps` chain the way `pretend`..`install` are), then walks
+`${D}` and, for every regular file, directory, and symlink found, really
+merges it into `${ROOT}` -- matching real `dblink.mergeme()`'s own
+`_format_contents_line` format exactly: `dir <path>`, `obj <path> <md5>
+<mtime>`, `sym <path> -> <target> <mtime>`. Writes that `CONTENTS` text,
+plus `CATEGORY`/`SLOT`/`repository`, into a real
+`${ROOT}/var/db/pkg/<category>/<pf>/` directory -- the same
+one-value-per-file vdb layout this pilot's own fixtures and
+`portage_repo`'s own vdb readers (`installed_candidates`,
 `read_vdb_string`, etc.) already use, so a package merged this way is
 immediately visible to every other slice in this pilot (`emerge
 --pretend`'s own `AlreadyInstalled`/`Reinstall` detection, `--deselect`,
-and so on).
+and so on) -- then really runs `pkg_postinst`, only once the vdb entry is
+fully written, matching real `treewalk()`'s own relative ordering.
+`bin/phase-functions.sh`'s own `__ebuild_main` already accepts
+`preinst`/`postinst` as literal phase arguments directly, and silently
+no-ops when the ebuild defines neither function at all -- no new
+bash-side gap, this is exactly the same real, unmodified toolchain task
+#54 already drives.
 
 `SLOT` is read directly from the ebuild's own text (a literal
 `SLOT=...` assignment, scanned anywhere in the file -- unlike `EAPI`,
@@ -3593,8 +3604,7 @@ sentinel `portage_repo::new_repo_changed` already uses when none is
 found.
 
 **v1 scope cuts** (see `ebuild_merge.rs`'s own module doc comment for
-the full list): no `pkg_preinst`/`pkg_postinst` hook execution around
-the merge. No `CONFIG_PROTECT`/collision-protect/preserve-libs. No
+the full list): no `CONFIG_PROTECT`/collision-protect/preserve-libs. No
 `COUNTER`/`env_update()`/`ldconfig`, and no atomic
 temp-directory-then-rename vdb write (real `merge()` builds the new vdb
 entry in a temporary directory and only atomically moves it into place
@@ -4877,9 +4887,12 @@ cat "${PORTAGE_TMPDIR}"/portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/h
 
 Real merge/filesystem mutation (task #55 -- see "What this proves" above
 for the full writeup): `ebuild <file> merge` runs the same real `install`
-chain, then really copies `${D}` into a real `${ROOT}` and writes a real
-vdb entry. Uses `PORTING/fixtures/repo/dev-libs/mergepkg`, whose own
-`src_install` calls real `insinto`/`doins`/`dosym`:
+chain, then really runs `pkg_preinst`, really copies `${D}` into a real
+`${ROOT}` and writes a real vdb entry, then really runs `pkg_postinst`.
+Uses `PORTING/fixtures/repo/dev-libs/mergepkg`, whose own `src_install`
+calls real `insinto`/`doins`/`dosym`, and whose own `pkg_preinst`/
+`pkg_postinst` each drop a marker file under `${T}` proving the real
+ordering (preinst before the merge is visible, postinst only after):
 
 ```sh
 cd PORTING/rust && cargo build --release && cd ../..
@@ -4899,4 +4912,7 @@ cat "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0/CONTENTS
 # dir /usr/share/mergepkg
 # sym /usr/share/mergepkg/hello-link.txt -> hello.txt <mtime>
 # obj /usr/share/mergepkg/hello.txt <md5> <mtime>
+ls "${PORTAGE_TMPDIR}"/portage/dev-libs/mergepkg-1.0/temp/ | grep -E "preinst|postinst"
+# postinst-ran-after-merge
+# preinst-ran-before-merge
 ```
