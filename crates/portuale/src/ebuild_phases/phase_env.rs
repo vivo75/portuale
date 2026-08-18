@@ -58,6 +58,16 @@ pub(crate) fn portage_python_value(bin_dir: &Path) -> String {
         bin_dir.join("portuale-python").display().to_string()
     }
 }
+pub(crate) struct PhaseEnvVarsArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) ebuild_phase_value: &'a str,
+    pub(crate) debug: bool,
+    pub(crate) bin_dir: &'a Path,
+    pub(crate) helpers_dir: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) extra_env: &'a [(String, String)],
+}
 
 /// Trailing `/` on `D`/`ED`/`ROOT`/`EROOT` only for EAPI 6 and below; later EAPIs
 /// strip it (so `ROOT=/` exports `""`). `value` arrives with its slash.
@@ -101,6 +111,18 @@ pub(crate) fn phase_path(
         }
     }
     parts.join(":")
+}
+
+/// Arguments of [`phase_setup_script`].
+pub(crate) struct PhaseSetupScriptArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) ebuild_phase_value: &'a str,
+    pub(crate) debug: bool,
+    pub(crate) bin_dir: &'a Path,
+    pub(crate) helpers_dir: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) extra_env: &'a [(String, String)],
 }
 
 /// A POSIX single-quoted word: everything inside is literal; an embedded `'` is

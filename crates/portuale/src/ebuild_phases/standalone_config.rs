@@ -52,6 +52,16 @@ pub(crate) fn flat_field_on(raw: &str, use_set: &std::collections::HashSet<Strin
         .unwrap_or_default()
 }
 
+/// The standalone base env: the package's effective `USE` plus the
+/// resolved config env, exported into every phase. Skipped when
+/// `extra_env` already carries `USE` (merge builds) and for `depend`.
+/// Standalone `package.env` halves flow here too; see notes.
+///
+/// `(USE display pairs, build flag pairs)` from one standalone config
+/// load -- the alias keeps the loader closure below under clippy's
+/// `type_complexity` lint.
+pub(crate) type StandaloneBaseEnv = (Vec<(String, bool)>, Vec<(String, String)>);
+
 /// The resolved config for the standalone `ebuild <file>` paths;
 /// `None` outside any repo checkout.
 pub(crate) fn resolve_standalone_config(

@@ -168,3 +168,13 @@ pub(crate) fn package_a(env: &Environment, use_flags: &str) -> Result<Vec<String
         flags.contains(flag) != negated
     })
 }
+pub(crate) struct FetchSourcesArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) distdir: &'a Path,
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) features: &'a str,
+    pub(crate) use_flags: &'a str,
+}

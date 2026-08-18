@@ -2,6 +2,18 @@
 
 use crate::ebuild_phases::*;
 
+/// Arguments of [`run_one_phase`].
+pub(crate) struct RunOnePhaseArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) phase: &'a str,
+    pub(crate) debug: bool,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) log_file: Option<&'a Path>,
+}
+
 /// The host `bash` binary, as a phase's `$BASH` (brush never sets it, which broke
 /// `__filter_readonly_variables`). First `bash` on `PATH`, resolved once.
 pub(crate) fn real_bash_path() -> String {
@@ -20,6 +32,21 @@ pub(crate) fn real_bash_path() -> String {
             "bash".to_owned()
         })
         .clone()
+}
+
+/// A fresh embedded brush shell with `$BASH` set to the host bash (a shell-state
+/// assignment, not an exported variable).
+pub(crate) async fn new_brush_phase_shell() -> Result<brush_core::Shell, String> {
+    let mut shell = brush_core::Shell::builder()
+        .default_builtins(brush_builtins::BuiltinSet::BashMode)
+        .build()
+        .await
+        .map_err(|e| format!("brush shell failed to start: {e}"))?;
+    shell
+        .env_mut()
+        .set_global("BASH", brush_core::ShellVariable::new(real_bash_path()))
+        .map_err(|e| format!("setting $BASH failed: {e}"))?;
+    Ok(shell)
 }
 
 /// Restores the process umask on drop: the embedded shell's `umask` builtin is
@@ -50,4 +77,30 @@ impl Drop for UmaskGuard {
         // SAFETY: `umask(2)` cannot fail.
         unsafe { libc::umask(self.0) };
     }
+}
+/// Arguments of [`run_one_phase_brush`].
+pub(crate) struct RunOnePhaseBrushArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) phase: &'a str,
+    pub(crate) debug: bool,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) bin_dir: &'a Path,
+    pub(crate) helpers_dir: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) log_file: Option<&'a Path>,
+}
+
+/// Arguments of [`run_one_phase_bash`].
+pub(crate) struct RunOnePhaseBashArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) phase: &'a str,
+    pub(crate) debug: bool,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) bin_dir: &'a Path,
+    pub(crate) helpers_dir: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) iso: Isolation,
 }

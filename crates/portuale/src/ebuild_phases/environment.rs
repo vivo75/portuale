@@ -18,6 +18,84 @@ pub(crate) struct Environment {
     pub(crate) inherited: Option<String>,
 }
 
+pub(crate) fn compute_environment(
+    ebuild_path: &Path,
+    portage_tmpdir: &Path,
+) -> Result<Environment, String> {
+    let ebuild_abs = ebuild_path
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", ebuild_path.display()))?;
+    let pkg_dir = ebuild_abs
+        .parent()
+        .ok_or_else(|| format!("{}: has no parent directory", ebuild_abs.display()))?
+        .to_path_buf();
+    // The category is the grandparent dir name (<category>/<package>/<pf>.ebuild).
+    // Portage: doebuild.py, doebuild_environment
+    let category = pkg_dir
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| {
+            format!(
+                "{}: cannot determine CATEGORY from path",
+                ebuild_abs.display()
+            )
+        })?
+        .to_string();
+
+    let package_dir_name = pkg_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("{}: cannot determine package name", pkg_dir.display()))?;
+
+    let ebuild_text = std::fs::read_to_string(&ebuild_abs)
+        .map_err(|e| format!("{}: {e}", ebuild_abs.display()))?;
+    let eapi = parse_eapi(&ebuild_text);
+    let split = split_package(&ebuild_abs, package_dir_name)?;
+
+    let portage_builddir = portage_tmpdir
+        .join("portage")
+        .join(&category)
+        .join(&split.pf);
+
+    // `INHERITED` is the md5-cache `_eclasses_` names in order (stored tab-separated
+    // with md5s); older caches carry a plain space list. Absent outside a repo.
+    let inherited = repo_root_for(&pkg_dir)
+        .and_then(|repo_root| {
+            portage_repo::repo_aux_metadata(&repo_root, &category, &split.pf).ok()
+        })
+        .and_then(|md| {
+            if let Some(eclasses) = md.get("_eclasses_") {
+                let names: Vec<&str> = eclasses.split('\t').step_by(2).collect();
+                (!names.is_empty()).then(|| names.join(" "))
+            } else {
+                md.get("INHERITED")
+                    .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .filter(|s| !s.is_empty())
+            }
+        });
+
+    // `${PORTAGE_BUILDDIR}/files` is always a symlink to the repo `files/` dir,
+    // even dangling: consumers fail loudly either way, and `clean`'s `rm -f`
+    // needs a link, not a directory. Skipped for a binary merge (self-loop).
+    // Portage: prepare_build_dirs.py, _prepare_fake_filesdir
+    let real_filesdir = pkg_dir.join("files");
+    if pkg_dir != portage_builddir {
+        ensure_fake_filesdir_link(&real_filesdir, &portage_builddir.join("files"));
+    }
+
+    Ok(Environment {
+        ebuild_abs,
+        pkg_dir,
+        category,
+        split,
+        eapi,
+        portage_tmpdir: portage_tmpdir.to_path_buf(),
+        portage_builddir,
+        inherited,
+    })
+}
+
 impl Environment {
     /// `${PORTAGE_TMPDIR}`: must be an exported var when `FEATURES=sandbox` is on,
     /// for `bin/ebuild.sh`'s `addwrite`.
@@ -26,6 +104,22 @@ impl Environment {
     }
     pub(crate) fn d(&self) -> PathBuf {
         self.portage_builddir.join("image")
+    }
+    pub(crate) fn workdir(&self) -> PathBuf {
+        self.portage_builddir.join("work")
+    }
+    /// `${T}`: also read by the per-package `elog` flush before the post-merge clean.
+    pub(crate) fn t(&self) -> PathBuf {
+        self.portage_builddir.join("temp")
+    }
+    pub(crate) fn s(&self) -> PathBuf {
+        self.workdir().join(&self.split.p)
+    }
+    pub(crate) fn home(&self) -> PathBuf {
+        self.portage_builddir.join("homedir")
+    }
+    pub(crate) fn filesdir(&self) -> PathBuf {
+        self.portage_builddir.join("files")
     }
     /// `${PORTAGE_BUILDDIR}/distdir`: the per-package fake `DISTDIR`.
     /// Portage: config.py
@@ -126,6 +220,31 @@ pub(crate) fn prepare_fake_distdir(
             Err(_) => {}
         }
         std::os::unix::fs::symlink(&target, &link).map_err(|e| io(&link, e))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn create_directories(env: &Environment) -> Result<(), String> {
+    // `S` is deliberately not created: only `unpack` extracting an archive or the
+    // ebuild itself may bring it to life, so a source-less ebuild still fails the `[[ -d ${S} ]]` check.
+    for dir in [
+        env.t(),
+        env.d(),
+        env.home(),
+        env.filesdir(),
+        // `bin/ebuild.sh` sources into `${PORTAGE_BUILDDIR}/empty` when it exists
+        // (its "safe cwd" branch); always pre-created so the fallback never triggers.
+        env.portage_builddir.join("empty"),
+        // `${T}/logging`: without it `__elog_base` silently drops all elog output.
+        env.t().join("logging"),
+    ] {
+        // `files` is a (possibly dangling) symlink, never a dir: don't follow it.
+        if dir == env.filesdir()
+            && std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            continue;
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     Ok(())
 }

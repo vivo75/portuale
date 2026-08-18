@@ -56,6 +56,37 @@ use std::os::unix::io::FromRawFd as _;
 
 use std::path::{Path, PathBuf};
 
+/// The ebuild's EAPI per PMS 7.3.1: the `EAPI=` assignment on the first
+/// non-blank, non-comment line only; anything else (including no match) is `"0"`.
+/// PMS's `\1` backreference has no Rust-`regex` equivalent (`_parse_eapi_ebuild_head`),
+/// so the three quote shapes are explicit alternatives.
+fn parse_eapi(ebuild_text: &str) -> String {
+    // PMS's `\1` backreference isn't expressible without backrefs (guaranteed
+    // linear-time matching), so three explicit alternatives instead.
+    let eapi_re = Regex::new(
+        r#"^[ \t]*EAPI=(?:"([A-Za-z0-9+_.-]*)"|'([A-Za-z0-9+_.-]*)'|([A-Za-z0-9+_.-]*))[ \t]*([ \t]#.*)?$"#,
+    )
+    .expect("static regex is valid");
+    let comment_or_blank = Regex::new(r"^\s*(#.*)?$").expect("static regex is valid");
+
+    for line in ebuild_text.lines() {
+        if comment_or_blank.is_match(line) {
+            continue;
+        }
+        return match eapi_re.captures(line) {
+            Some(caps) => caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .or_else(|| caps.get(3))
+                .map(|m| m.as_str())
+                .unwrap_or("")
+                .to_string(),
+            None => "0".to_string(),
+        };
+    }
+    "0".to_string()
+}
+
 /// Portage's `_pkgsplit`-derived `P`/`PN`/`PV`/`PR`/`PVR`, except `PN` is the
 /// ebuild's parent directory name (which Portage itself asserts holds).
 /// Portage: doebuild.py
@@ -69,6 +100,39 @@ pub(crate) struct PackageSplit {
     /// Portage's `PVR`: `PV` alone for `r0`, else `PV-PR`.
     pub(crate) pvr: String,
     pub(crate) pf: String,
+}
+
+fn split_package(ebuild_path: &Path, package_dir_name: &str) -> Result<PackageSplit, String> {
+    let pf = ebuild_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("{}: not a valid file path", ebuild_path.display()))?
+        .to_string();
+    let pvr = pf
+        .strip_prefix(package_dir_name)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .ok_or_else(|| {
+            format!(
+                "{}: filename doesn't start with the parent directory's own name ({package_dir_name:?})",
+                ebuild_path.display()
+            )
+        })?
+        .to_string();
+    let revision_re = Regex::new(r"^(.*)-(r\d+)$").expect("static regex is valid");
+    let (pv, pr) = match revision_re.captures(&pvr) {
+        Some(caps) => (caps[1].to_string(), caps[2].to_string()),
+        None => (pvr.clone(), "r0".to_string()),
+    };
+    let pn = package_dir_name.to_string();
+    let p = format!("{pn}-{pv}");
+    Ok(PackageSplit {
+        p,
+        pn,
+        pv,
+        pr,
+        pvr,
+        pf,
+    })
 }
 
 /// Portage's `actionmap_deps` (`doebuild.py`): the prerequisite chain for `mydo`,
@@ -88,4 +152,10 @@ fn phase_prerequisites(mydo: &str) -> Vec<&'static str> {
         Some(idx) => CHAIN[..=idx].to_vec(),
         None => Vec::new(),
     }
+}
+
+/// Whether `command` runs through `run_commands` (the chained phases);
+/// `ebuild.rs` falls back to its dry-run stub for anything else.
+pub fn is_phase_command(command: &str) -> bool {
+    phase_prerequisites(command).last() == Some(&command)
 }
