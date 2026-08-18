@@ -1684,26 +1684,30 @@ pub enum PretendOutcome {
         version: String,
     },
     /// `--newuse`/`--changed-use` and/or `--changed-deps` and/or
-    /// `--changed-slot`: already installed at this exact version, but
-    /// this package's currently-effective USE differs from what the vdb
-    /// recorded at merge time (see `reinstall_flags_for_use_change`),
-    /// and/or its own vdb-recorded dependency strings differ from the
-    /// repo's current ebuild (see `deps_changed`), and/or its own
-    /// vdb-recorded `SLOT` differs from the repo's current ebuild (see
-    /// `slot_changed`) -- real portage treats these as independent,
-    /// freely-combinable reinstall reasons, not mutually exclusive ones.
-    /// `changed_flags` is the sorted set of flag names that triggered
-    /// the USE-based reason (real depgraph's own `_reinstall_for_flags`
-    /// return value, kept here purely for display, matching `Upgrade`'s
-    /// own `from`/`to` pattern) -- empty when it didn't trigger this
-    /// outcome. At least one of `changed_flags`/`deps_changed`/
-    /// `slot_changed` is always non-empty/`true`; a `Reinstall` with
-    /// none of the three is never constructed.
+    /// `--changed-slot` and/or `--rebuilt-binaries`: already installed at
+    /// this exact version, but this package's currently-effective USE
+    /// differs from what the vdb recorded at merge time (see
+    /// `reinstall_flags_for_use_change`), and/or its own vdb-recorded
+    /// dependency strings differ from the repo's current ebuild (see
+    /// `deps_changed`), and/or its own vdb-recorded `SLOT` differs from
+    /// the repo's current ebuild (see `slot_changed`), and/or a binary
+    /// candidate at this same version has a different `BUILD_TIME` than
+    /// the vdb's own recorded one (see `rebuilt_binary_changed`) -- real
+    /// portage treats these as independent, freely-combinable reinstall
+    /// reasons, not mutually exclusive ones. `changed_flags` is the
+    /// sorted set of flag names that triggered the USE-based reason (real
+    /// depgraph's own `_reinstall_for_flags` return value, kept here
+    /// purely for display, matching `Upgrade`'s own `from`/`to` pattern)
+    /// -- empty when it didn't trigger this outcome. At least one of
+    /// `changed_flags`/`deps_changed`/`slot_changed`/`rebuilt_binary` is
+    /// always non-empty/`true`; a `Reinstall` with none of the four is
+    /// never constructed.
     Reinstall {
         version: String,
         changed_flags: Vec<String>,
         deps_changed: bool,
         slot_changed: bool,
+        rebuilt_binary: bool,
     },
 }
 
@@ -2011,6 +2015,68 @@ fn slot_changed(
     );
 
     vdb_slot != repo_slot
+}
+
+/// `--rebuilt-binaries`: real `depgraph.py`'s own reinstall trigger
+/// (lines ~8394-8429, confirmed by reading it) comparing a binary
+/// candidate's own `BUILD_TIME` against the already-installed package's
+/// own recorded `BUILD_TIME` -- "replace installed packages with binary
+/// packages that have been rebuilt" (real `main.py`'s own help text),
+/// the common real-world case being a same-version binary rebuilt
+/// against updated dependencies (a toolchain/ABI bump), not a version
+/// change at all. Real code's own "skip the check if a newer *source*
+/// (unbuilt) candidate exists" branch has no equivalent here: this
+/// function is only ever called once the caller has already established
+/// `version` is both the best *visible* candidate and what's already
+/// installed, so nothing newer (built or unbuilt) can exist by
+/// construction -- see this function's own two call sites in
+/// `resolve_pretend`. `rebuilt_binaries_timestamp` mirrors real
+/// `--rebuilt-binaries-timestamp`: when given, only a *newer*
+/// (`built_timestamp > installed_timestamp`) binary at or above that
+/// cutoff triggers a reinstall ("use `--rebuilt-binaries-timestamp 0` if
+/// you want only newer binaries pulled in", real code comment); when
+/// absent, any *different* `BUILD_TIME` triggers one either direction
+/// ("don't care ... this is for closely tracking a binhost", same
+/// comment) -- real portage's own asymmetry, not a simplification here.
+/// A missing/unparseable `BUILD_TIME` on either side (binary index entry
+/// or vdb) never triggers a reinstall, matching real code's own `if
+/// built_timestamp and ...` guard (an empty string is falsy in Python
+/// too, real code's own comment on `bug #306659` cites exactly this: a
+/// missing local/remote `BUILD_TIME` must never cause a spurious
+/// reinstall). Both call sites gate this on `usepkg || usepkgonly`, not
+/// `usepkg` alone -- real `built_pkg` only ever exists in
+/// `matched_packages` when the binary db is part of the candidate pool
+/// at all, and (see `resolve_pretend`'s own doc comment on `--usepkg`/
+/// `--usepkgonly`) *either* flag makes that true, matching real
+/// `depgraph.py`'s own `dbs` construction exactly.
+fn rebuilt_binary_changed(
+    root: &Path,
+    pkgdir: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    rebuilt_binaries_timestamp: Option<u64>,
+) -> bool {
+    let Some(binary_metadata) = read_binary_metadata(pkgdir, category, package, version) else {
+        return false;
+    };
+    let Some(built_timestamp) = binary_metadata
+        .get("BUILD_TIME")
+        .and_then(|s| s.trim().parse::<u64>().ok())
+    else {
+        return false;
+    };
+    let Some(installed_timestamp) = read_vdb_string(root, category, package, version, "BUILD_TIME")
+        .trim()
+        .parse::<u64>()
+        .ok()
+    else {
+        return false;
+    };
+    match rebuilt_binaries_timestamp {
+        Some(minimal) => built_timestamp > installed_timestamp && built_timestamp >= minimal,
+        None => built_timestamp != installed_timestamp,
+    }
 }
 
 /// `candidate`'s own current IUSE (read fresh from its own md5-cache
@@ -2379,6 +2445,8 @@ pub fn resolve_pretend(
     binpkg_respect_use: bool,
     usepkg_exclude: &[String],
     usepkg_include: &[String],
+    rebuilt_binaries: bool,
+    rebuilt_binaries_timestamp: Option<u64>,
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
@@ -2617,12 +2685,27 @@ pub fn resolve_pretend(
                     &atom.package,
                     &installed_best.version,
                 );
-            if !changed_flags.is_empty() || deps_changed_flag || slot_changed_flag {
+            let rebuilt_binary_flag = (usepkg || usepkgonly)
+                && rebuilt_binaries
+                && rebuilt_binary_changed(
+                    root,
+                    Path::new(&config.pkgdir),
+                    &atom.category,
+                    &atom.package,
+                    &installed_best.version,
+                    rebuilt_binaries_timestamp,
+                );
+            if !changed_flags.is_empty()
+                || deps_changed_flag
+                || slot_changed_flag
+                || rebuilt_binary_flag
+            {
                 return Ok(PretendOutcome::Reinstall {
                     version: installed_best.version.clone(),
                     changed_flags,
                     deps_changed: deps_changed_flag,
                     slot_changed: slot_changed_flag,
+                    rebuilt_binary: rebuilt_binary_flag,
                 });
             }
             return Ok(PretendOutcome::AlreadyInstalled {
@@ -2685,14 +2768,26 @@ pub fn resolve_pretend(
             );
         let slot_changed_flag =
             changed_slot && slot_changed(root, repos, &atom.category, &atom.package, &best.version);
+        let rebuilt_binary_flag = (usepkg || usepkgonly)
+            && rebuilt_binaries
+            && rebuilt_binary_changed(
+                root,
+                Path::new(&config.pkgdir),
+                &atom.category,
+                &atom.package,
+                &best.version,
+                rebuilt_binaries_timestamp,
+            );
         // `is_top_level && !selective`: real portage's own bare,
         // reasonless `[ebuild R]` -- see this function's own doc
         // comment's `selective`/`is_top_level` paragraph. `changed_flags`/
-        // `deps_changed_flag`/`slot_changed_flag` may all still be
-        // empty/false here; that's the whole point of this case.
+        // `deps_changed_flag`/`slot_changed_flag`/`rebuilt_binary_flag`
+        // may all still be empty/false here; that's the whole point of
+        // this case.
         if !changed_flags.is_empty()
             || deps_changed_flag
             || slot_changed_flag
+            || rebuilt_binary_flag
             || (is_top_level && !selective)
         {
             return Ok(PretendOutcome::Reinstall {
@@ -2700,6 +2795,7 @@ pub fn resolve_pretend(
                 changed_flags,
                 deps_changed: deps_changed_flag,
                 slot_changed: slot_changed_flag,
+                rebuilt_binary: rebuilt_binary_flag,
             });
         }
         return Ok(PretendOutcome::AlreadyInstalled {
@@ -3331,6 +3427,8 @@ pub fn resolve_pretend_graph(
     binpkg_respect_use: bool,
     usepkg_exclude: &[String],
     usepkg_include: &[String],
+    rebuilt_binaries: bool,
+    rebuilt_binaries_timestamp: Option<u64>,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -3447,6 +3545,8 @@ pub fn resolve_pretend_graph(
             binpkg_respect_use,
             usepkg_exclude,
             usepkg_include,
+            rebuilt_binaries,
+            rebuilt_binaries_timestamp,
         )?;
 
         // `--changed-deps-report`: real portage stays "completely
@@ -4130,6 +4230,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4161,6 +4263,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4193,6 +4297,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4206,6 +4312,7 @@ mod tests {
                 changed_flags: Vec::new(),
                 deps_changed: false,
                 slot_changed: false,
+                rebuilt_binary: false,
             }
         );
     }
@@ -4272,6 +4379,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4353,6 +4462,8 @@ mod tests {
                 false,
                 &[],
                 &[],
+                false,
+                None,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -4478,6 +4589,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4514,6 +4627,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4549,6 +4664,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4566,6 +4683,7 @@ mod tests {
                 changed_flags: vec!["foo".to_string()],
                 deps_changed: false,
                 slot_changed: false,
+                rebuilt_binary: false,
             }
         );
     }
@@ -4649,6 +4767,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4665,6 +4785,7 @@ mod tests {
                 changed_flags: Vec::new(),
                 deps_changed: true,
                 slot_changed: false,
+                rebuilt_binary: false,
             }
         );
     }
@@ -4691,6 +4812,7 @@ mod tests {
                 changed_flags: Vec::new(),
                 deps_changed: true,
                 slot_changed: false,
+                rebuilt_binary: false,
             }
         );
     }
@@ -4724,6 +4846,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -4764,6 +4888,7 @@ mod tests {
                 changed_flags: Vec::new(),
                 deps_changed: true,
                 slot_changed: false,
+                rebuilt_binary: false,
             }
         );
     }
@@ -4835,6 +4960,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4851,6 +4978,7 @@ mod tests {
                 changed_flags: Vec::new(),
                 deps_changed: false,
                 slot_changed: true,
+                rebuilt_binary: false,
             }
         );
     }
@@ -4899,6 +5027,8 @@ mod tests {
                 false,
                 &[],
                 &[],
+                false,
+                None,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -4958,6 +5088,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -4994,6 +5126,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
@@ -5036,6 +5170,8 @@ mod tests {
                 false,
                 &[],
                 &[],
+                false,
+                None,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::Reinstall {
@@ -5043,6 +5179,7 @@ mod tests {
                 changed_flags: Vec::new(),
                 deps_changed: true,
                 slot_changed: true,
+                rebuilt_binary: false,
             }
         );
     }
@@ -5064,6 +5201,7 @@ mod tests {
                 changed_flags: vec!["brandnewflag".to_string()],
                 deps_changed: false,
                 slot_changed: false,
+                rebuilt_binary: false,
             }
         );
         assert_eq!(
@@ -5086,6 +5224,7 @@ mod tests {
                 changed_flags: vec!["foo".to_string()],
                 deps_changed: false,
                 slot_changed: false,
+                rebuilt_binary: false,
             }
         );
     }
@@ -5104,6 +5243,7 @@ mod tests {
                         changed_flags: vec!["foo".to_string()],
                         deps_changed: false,
                         slot_changed: false,
+                        rebuilt_binary: false,
                     }
                 ),
                 (
@@ -5167,6 +5307,8 @@ mod tests {
                 false,
                 &[],
                 &[],
+                false,
+                None,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -5193,6 +5335,8 @@ mod tests {
                 false,
                 &[],
                 &[],
+                false,
+                None,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -5526,6 +5670,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5560,6 +5706,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5596,6 +5744,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5636,6 +5786,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -5693,6 +5845,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5798,6 +5952,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5905,6 +6061,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -6048,6 +6206,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -6129,6 +6289,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6276,6 +6438,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -6370,6 +6534,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6411,6 +6577,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6511,6 +6679,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -6550,6 +6720,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6591,6 +6763,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6632,6 +6806,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6656,6 +6832,7 @@ mod tests {
                         changed_flags: vec!["foo".to_string()],
                         deps_changed: false,
                         slot_changed: false,
+                        rebuilt_binary: false,
                     }
                 ),
                 (
@@ -6888,6 +7065,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -6941,6 +7120,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -6971,6 +7152,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -7038,6 +7221,8 @@ mod tests {
             false,
             &[],
             &[],
+            false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

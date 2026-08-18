@@ -20,3 +20,14 @@ KEYWORDS: amd64
 SLOT: 0
 USE:
 BUILD_ID: 1
+
+CPV: dev-libs/rebuiltbinarypkg-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture package: binary build's own BUILD_TIME (2000) differs from the installed package's own recorded BUILD_TIME (1000) -- --rebuilt-binaries
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+SLOT: 0
+USE:
+BUILD_ID: 1
+BUILD_TIME: 2000

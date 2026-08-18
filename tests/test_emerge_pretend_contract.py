@@ -301,6 +301,29 @@ CASES = [
         ["--pretend", "--usepkg", "--usepkg-include", "dev-libs/binaryonlypkg", "dev-libs/binaryonlypkg"],
         0,
     ),
+    (
+        "--rebuilt-binaries: off by default, stays already-installed",
+        ["--pretend", "--usepkg", "--selective", "dev-libs/rebuiltbinarypkg"],
+        0,
+    ),
+    (
+        "--rebuilt-binaries: a differing BUILD_TIME triggers a reinstall",
+        ["--pretend", "--usepkg", "--selective", "--rebuilt-binaries", "dev-libs/rebuiltbinarypkg"],
+        0,
+    ),
+    (
+        "--rebuilt-binaries-timestamp: cutoff above the binary's own BUILD_TIME suppresses it",
+        [
+            "--pretend",
+            "--usepkg",
+            "--selective",
+            "--rebuilt-binaries",
+            "--rebuilt-binaries-timestamp",
+            "3000",
+            "dev-libs/rebuiltbinarypkg",
+        ],
+        0,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -2121,6 +2144,132 @@ def test_usepkg_include_gates_binary_eligibility_both_ways(emerge_binary, fixtur
     )
     assert matching.returncode == 0
     assert matching.stdout.splitlines() == ["[binary  N] dev-libs/binaryonlypkg-1.0"]
+
+
+def test_rebuilt_binaries_off_by_default_stays_already_installed(emerge_binary, fixture_env):
+    """dev-libs/rebuiltbinarypkg is installed at 1.0 with its own vdb-
+    recorded BUILD_TIME=1000; the binary index's own copy at the same
+    version has BUILD_TIME=2000. Without --rebuilt-binaries at all (and
+    with none of --usepkgonly/--deep/--update present to trigger the
+    real auto-on default -- create_depgraph_params.py:185-193), the
+    differing BUILD_TIME is never even checked, so a --selective query
+    (avoiding the unrelated "always reinstall a bare top-level atom"
+    behavior) stays already-installed."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--usepkg", "--selective", "dev-libs/rebuiltbinarypkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do"
+
+
+def test_rebuilt_binaries_triggers_a_reinstall_for_a_differing_build_time(
+    emerge_binary, fixture_env
+):
+    """Same fixture as above, but with --rebuilt-binaries explicitly
+    given: real depgraph.py's own "don't care if the binary has an older
+    BUILD_TIME ... this is for closely tracking a binhost" comment means
+    ANY difference (2000 vs 1000, either direction) triggers a reinstall
+    once no --rebuilt-binaries-timestamp cutoff is given."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--usepkg", "--selective", "--rebuilt-binaries", "dev-libs/rebuiltbinarypkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)"
+    ]
+
+
+def test_rebuilt_binaries_timestamp_gates_the_reinstall(emerge_binary, fixture_env):
+    """--rebuilt-binaries-timestamp changes the comparison from "any
+    difference" to "strictly newer AND at or above this cutoff" (real
+    depgraph.py: "built_timestamp > installed_timestamp and
+    built_timestamp >= minimal_timestamp"). The binary's own BUILD_TIME
+    is 2000: a cutoff of 3000 suppresses the reinstall (2000 < 3000),
+    while a cutoff of 1500 still triggers it (2000 > 1000 installed, and
+    2000 >= 1500)."""
+    too_high = _run(
+        [str(emerge_binary)],
+        [
+            "--pretend",
+            "--usepkg",
+            "--selective",
+            "--rebuilt-binaries",
+            "--rebuilt-binaries-timestamp",
+            "3000",
+            "dev-libs/rebuiltbinarypkg",
+        ],
+        fixture_env,
+    )
+    assert too_high.returncode == 0
+    assert (
+        too_high.stdout.strip() == "dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do"
+    )
+
+    low_enough = _run(
+        [str(emerge_binary)],
+        [
+            "--pretend",
+            "--usepkg",
+            "--selective",
+            "--rebuilt-binaries",
+            "--rebuilt-binaries-timestamp",
+            "1500",
+            "dev-libs/rebuiltbinarypkg",
+        ],
+        fixture_env,
+    )
+    assert low_enough.returncode == 0
+    assert low_enough.stdout.splitlines() == [
+        "[binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)"
+    ]
+
+
+def test_rebuilt_binaries_auto_enables_under_usepkgonly_deep_update(emerge_binary, fixture_env):
+    """The real, non-obvious default-resolution asymmetry
+    (create_depgraph_params.py:185-193): --rebuilt-binaries auto-enables
+    even with no explicit flag at all, but only when --usepkgonly, bare
+    --deep (no explicit number), and --update are ALL given together. A
+    bounded --deep 3 does NOT count as the real "deep is True" bare
+    form, so it must NOT auto-enable."""
+    auto_on = _run(
+        [str(emerge_binary)],
+        [
+            "--pretend",
+            "--usepkgonly",
+            "--deep",
+            "--update",
+            "--selective",
+            "dev-libs/rebuiltbinarypkg",
+        ],
+        fixture_env,
+    )
+    assert auto_on.returncode == 0
+    assert auto_on.stdout.splitlines() == [
+        "[binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)"
+    ]
+
+    bounded_deep = _run(
+        [str(emerge_binary)],
+        [
+            "--pretend",
+            "--usepkgonly",
+            "--deep",
+            "3",
+            "--update",
+            "--selective",
+            "dev-libs/rebuiltbinarypkg",
+        ],
+        fixture_env,
+    )
+    assert bounded_deep.returncode == 0
+    assert (
+        bounded_deep.stdout.strip()
+        == "dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do"
+    )
 
 
 def test_slot_conflict_is_reported_between_two_incompatible_version_constraints(

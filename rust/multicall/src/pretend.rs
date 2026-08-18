@@ -249,14 +249,15 @@ fn use_suffix(entry: &GraphEntry, verbose: bool) -> String {
 }
 
 /// The `(reinstall for ...)` note's own reason text, real portage
-/// treating `--newuse`/`--changed-use` and `--changed-deps` as
-/// independent, freely-combinable triggers (see `PretendOutcome::
-/// Reinstall`'s own doc comment, portage-repo). Pilot-invented wording,
-/// same as the pre-existing "changed USE: ..." text -- real portage's
-/// own default `--pretend` output shows no such itemized reason at all.
-/// Returns `None` when all three fields are empty/false -- real
-/// portage's own bare, reasonless `[ebuild R]` (see `resolve_pretend`'s
-/// own `selective`/`is_top_level` doc comment paragraph, portage-repo):
+/// treating `--newuse`/`--changed-use`, `--changed-deps`,
+/// `--changed-slot`, and `--rebuilt-binaries` as independent,
+/// freely-combinable triggers (see `PretendOutcome::Reinstall`'s own doc
+/// comment, portage-repo). Pilot-invented wording, same as the
+/// pre-existing "changed USE: ..." text -- real portage's own default
+/// `--pretend` output shows no such itemized reason at all. Returns
+/// `None` when all four fields are empty/false -- real portage's own
+/// bare, reasonless `[ebuild R]` (see `resolve_pretend`'s own
+/// `selective`/`is_top_level` doc comment paragraph, portage-repo):
 /// unlike every other `Reinstall`, this one genuinely has no tracked
 /// reason to report at all, so the caller omits the whole `(reinstall
 /// for ...)` parenthetical rather than printing an empty one.
@@ -264,6 +265,7 @@ fn reinstall_reason(
     changed_flags: &[String],
     deps_changed: bool,
     slot_changed: bool,
+    rebuilt_binary: bool,
 ) -> Option<String> {
     let mut reasons = Vec::new();
     if !changed_flags.is_empty() {
@@ -274,6 +276,9 @@ fn reinstall_reason(
     }
     if slot_changed {
         reasons.push("changed slot".to_string());
+    }
+    if rebuilt_binary {
+        reasons.push("rebuilt binary".to_string());
     }
     if reasons.is_empty() {
         return None;
@@ -372,12 +377,14 @@ fn entry_to_json(
             changed_flags,
             deps_changed,
             slot_changed,
+            rebuilt_binary,
         } => {
             fields.push(format!("\"version\":{}", json_string(version)));
             let changed_use: Vec<String> = changed_flags.iter().map(|f| json_string(f)).collect();
             fields.push(format!("\"changed_use\":[{}]", changed_use.join(",")));
             fields.push(format!("\"changed_deps\":{deps_changed}"));
             fields.push(format!("\"changed_slot\":{slot_changed}"));
+            fields.push(format!("\"rebuilt_binary\":{rebuilt_binary}"));
         }
         PretendOutcome::NoVisibleCandidate => {}
     }
@@ -958,6 +965,12 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut usepkg = false;
     let mut usepkgonly = false;
     let mut binpkg_respect_use: Option<bool> = None;
+    // --rebuilt-binaries's own real default ("auto-on" whenever
+    // --usepkgonly/--deep/--update are ALL given together, even with no
+    // explicit --rebuilt-binaries at all -- create_depgraph_params.py:
+    // 185-193) is resolved below, once those three are known.
+    let mut rebuilt_binaries: Option<bool> = None;
+    let mut rebuilt_binaries_timestamp: Option<u64> = None;
     let mut noreplace = false;
     // `None` until an explicit `--selective`/`--selective=y`/`--selective=n`
     // is given, so `n` can override whatever `update`/`newuse`/
@@ -1490,6 +1503,56 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--binpkg-respect-use=n" {
             binpkg_respect_use = Some(false);
             i += 1;
+        } else if arg == "--rebuilt-binaries" {
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    rebuilt_binaries = Some(true);
+                    i += 2;
+                }
+                Some("n") => {
+                    rebuilt_binaries = Some(false);
+                    i += 2;
+                }
+                _ => {
+                    rebuilt_binaries = Some(true);
+                    i += 1;
+                }
+            }
+        } else if arg == "--rebuilt-binaries=y" {
+            rebuilt_binaries = Some(true);
+            i += 1;
+        } else if arg == "--rebuilt-binaries=n" {
+            rebuilt_binaries = Some(false);
+            i += 1;
+        } else if arg == "--rebuilt-binaries-timestamp" {
+            // Real "action": "store" -- a required value, same shape as
+            // --exclude's own required argument, but numeric (a Unix
+            // timestamp real BUILD_TIME values are compared against).
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--rebuilt-binaries-timestamp\" requires an argument");
+                return ExitCode::from(2);
+            };
+            match value.parse::<u64>() {
+                Ok(n) => {
+                    rebuilt_binaries_timestamp = Some(n);
+                    i += 2;
+                }
+                Err(_) => {
+                    eprintln!("emerge: invalid --rebuilt-binaries-timestamp parameter: {value:?}");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--rebuilt-binaries-timestamp=") {
+            match value.parse::<u64>() {
+                Ok(n) => {
+                    rebuilt_binaries_timestamp = Some(n);
+                    i += 1;
+                }
+                Err(_) => {
+                    eprintln!("emerge: invalid --rebuilt-binaries-timestamp parameter: {value:?}");
+                    return ExitCode::from(2);
+                }
+            }
         } else if !arg.starts_with('-') {
             atom_args.push(arg);
             i += 1;
@@ -1721,6 +1784,21 @@ pub fn run(args: &[String]) -> ExitCode {
     // explicit --binpkg-respect-use=y/=n always wins outright either way.
     let binpkg_respect_use = binpkg_respect_use.unwrap_or(!usepkgonly);
 
+    // --rebuilt-binaries's own real default-resolution
+    // (create_depgraph_params.py:185-193, confirmed by reading it):
+    // `rebuilt_binaries is True or (rebuilt_binaries != "n" and
+    // usepkgonly is True and deep is True and "--update" in myopts)` --
+    // an explicit "=n" always wins outright (turns the auto-on
+    // condition off too, not just the bare flag); an explicit bare/"=y"
+    // always wins on; otherwise (never mentioned at all) it still
+    // auto-enables once --usepkgonly, bare --deep (no explicit number --
+    // `Deep::Unlimited`, real `myopts.get("--deep") is True`), and
+    // --update are ALL given together. `--rebuilt-binaries-timestamp`
+    // needs no separate default: `rebuilt_binary_changed` (portage-repo)
+    // already treats "no timestamp given" as its own distinct branch.
+    let rebuilt_binaries =
+        rebuilt_binaries.unwrap_or(usepkgonly && deep == portage_repo::Deep::Unlimited && update);
+
     let result = match resolve_pretend_graph(
         &config_root,
         &root,
@@ -1744,6 +1822,8 @@ pub fn run(args: &[String]) -> ExitCode {
         binpkg_respect_use,
         &usepkg_exclude,
         &usepkg_include,
+        rebuilt_binaries,
+        rebuilt_binaries_timestamp,
     ) {
         Ok(result) => result,
         Err(e) => {
@@ -1835,9 +1915,15 @@ pub fn run(args: &[String]) -> ExitCode {
                 changed_flags,
                 deps_changed,
                 slot_changed,
+                rebuilt_binary,
             } => {
                 if !onlydeps_suppressed {
-                    match reinstall_reason(changed_flags, *deps_changed, *slot_changed) {
+                    match reinstall_reason(
+                        changed_flags,
+                        *deps_changed,
+                        *slot_changed,
+                        *rebuilt_binary,
+                    ) {
                         Some(reason) => println!(
                             "[{bracket}  r] {}/{}-{version} (reinstall for {reason}){}",
                             entry.category,

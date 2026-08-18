@@ -3223,6 +3223,37 @@ it needs comparing a binary's own baked-in dependency versions against
 the current best plus a `--rebuilt-binaries-timestamp` cutoff, a
 meaningfully fuzzier scope than a straightforward include/exclude list.
 
+`--rebuilt-binaries`/`--rebuilt-binaries-timestamp`: the deferred half
+above, closed as its own follow-on once properly grounded in real
+`depgraph.py` (lines ~8394-8429) -- a new independent reinstall trigger
+alongside `--newuse`/`--changed-use`/`--changed-deps`/`--changed-slot`,
+comparing a binary candidate's own `BUILD_TIME` against the vdb's own
+recorded `BUILD_TIME` for an already-installed, same-version package
+("replace installed packages with binary packages that have been
+rebuilt", real `main.py`'s own help text -- the common real-world case
+being a same-version binary rebuilt against updated dependencies, e.g.
+a toolchain/ABI bump, not a version change at all). Real code's own
+"skip the check if a newer *source* candidate exists" branch has no
+equivalent here: this pilot only ever reaches the check once the best
+*visible* candidate already equals what's installed, so nothing newer
+can exist by construction. `--rebuilt-binaries-timestamp`, when given,
+narrows the comparison from "any difference triggers a reinstall"
+(real code's own "don't care ... this is for closely tracking a
+binhost" default) to "only a *newer* binary at or above this cutoff"
+-- a real, deliberate asymmetry in real portage itself, ported exactly.
+The real default-resolution is a second non-obvious asymmetry, this
+one from `create_depgraph_params.py` (lines 185-193): `--rebuilt-
+binaries` auto-enables with no explicit flag at all whenever
+`--usepkgonly`, bare `--deep` (no explicit number), and `--update` are
+ALL given together -- confirmed live, including that a *bounded*
+`--deep 3` does NOT count as the real "deep is True" bare form and so
+correctly does NOT auto-enable. `dev-libs/rebuiltbinarypkg` (installed
+at `1.0` with `BUILD_TIME=1000`, a binary candidate at the same version
+with `BUILD_TIME=2000`) proves it end to end, including the timestamp
+cutoff and the auto-enable default, live-verified with `--selective` to
+avoid the unrelated "bare top-level atom always reinstalls" behavior
+muddying the baseline.
+
 A real bug fix, found by grounding against real `output.py`'s own
 `PkgAttrDisplay` logic (around line 750): before this slice, any version
 change for an already-installed package was unconditionally labeled
@@ -4292,6 +4323,26 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --usepkg-incl
 # emerge: there are no ebuilds to satisfy "dev-libs/binaryonlypkg".  (exit 1)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --usepkg-include dev-libs/binaryonlypkg dev-libs/binaryonlypkg
 # [binary  N] dev-libs/binaryonlypkg-1.0
+
+# --rebuilt-binaries: rebuiltbinarypkg is installed at 1.0 (BUILD_TIME
+# 1000), but the binary index's own copy at the same version has
+# BUILD_TIME 2000 -- off by default (--selective avoids the unrelated
+# "bare top-level atom always reinstalls" behavior muddying this)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective dev-libs/rebuiltbinarypkg
+# dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do
+# given explicitly, the differing BUILD_TIME triggers a reinstall
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective --rebuilt-binaries dev-libs/rebuiltbinarypkg
+# [binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)
+# --rebuilt-binaries-timestamp narrows it to "newer AND at/above this
+# cutoff" -- 2000 is below 3000, so no reinstall; 2000 clears 1500
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective --rebuilt-binaries --rebuilt-binaries-timestamp 3000 dev-libs/rebuiltbinarypkg
+# dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective --rebuilt-binaries --rebuilt-binaries-timestamp 1500 dev-libs/rebuiltbinarypkg
+# [binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)
+# the real, non-obvious default: --usepkgonly + bare --deep + --update
+# together auto-enable --rebuilt-binaries with no explicit flag at all
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkgonly --deep --update --selective dev-libs/rebuiltbinarypkg
+# [binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)
 
 # downgrade vs upgrade: downgradepkg is installed at 2.0, but only 1.0 is
 # visible in the tree -- a genuine downgrade, distinct from an upgrade,

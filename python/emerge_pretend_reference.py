@@ -1536,6 +1536,48 @@ def _slot_changed(root, repos, category, package, version):
     return vdb_slot != repo_slot
 
 
+def _rebuilt_binary_changed(root, pkgdir, category, package, version, rebuilt_binaries_timestamp):
+    """--rebuilt-binaries: real depgraph.py's own reinstall trigger
+    (lines ~8394-8429, confirmed by reading it) comparing a binary
+    candidate's own BUILD_TIME against the already-installed package's
+    own recorded BUILD_TIME -- "replace installed packages with binary
+    packages that have been rebuilt" (real main.py's own help text), the
+    common real-world case being a same-version binary rebuilt against
+    updated dependencies (a toolchain/ABI bump), not a version change at
+    all. Real code's own "skip the check if a newer *source* (unbuilt)
+    candidate exists" branch has no equivalent here: this function is
+    only ever called once the caller has already established `version`
+    is both the best *visible* candidate and what's already installed,
+    so nothing newer (built or unbuilt) can exist by construction.
+    rebuilt_binaries_timestamp mirrors real --rebuilt-binaries-timestamp:
+    when given, only a *newer* (built_timestamp > installed_timestamp)
+    binary at or above that cutoff triggers a reinstall ("use
+    --rebuilt-binaries-timestamp 0 if you want only newer binaries
+    pulled in", real code comment); when absent, any *different*
+    BUILD_TIME triggers one either direction ("don't care ... this is
+    for closely tracking a binhost", same comment) -- real portage's own
+    asymmetry, not a simplification here. A missing/unparseable
+    BUILD_TIME on either side never triggers a reinstall, matching real
+    code's own "if built_timestamp and ..." guard (bug #306659: a
+    missing local/remote BUILD_TIME must never cause a spurious
+    reinstall). Mirrors portage-repo/src/lib.rs's rebuilt_binary_changed
+    exactly."""
+    binary_metadata = read_binary_metadata(pkgdir, category, package, version)
+    if binary_metadata is None:
+        return False
+    try:
+        built_timestamp = int(binary_metadata.get("BUILD_TIME", "").strip())
+    except ValueError:
+        return False
+    try:
+        installed_timestamp = int(_read_vdb_string(root, category, package, version, "BUILD_TIME").strip())
+    except ValueError:
+        return False
+    if rebuilt_binaries_timestamp is not None:
+        return built_timestamp > installed_timestamp and built_timestamp >= rebuilt_binaries_timestamp
+    return built_timestamp != installed_timestamp
+
+
 def _use_deps_satisfied(atom, iuse, enabled):
     """Ports real match_from_list's own USE-dep post-pass (its
     "if mydep.unevaluated_atom.use:" block, lib/portage/dep/__init__.py
@@ -2591,6 +2633,8 @@ def resolve_pretend(
     binpkg_respect_use=False,
     usepkg_exclude=(),
     usepkg_include=(),
+    rebuilt_binaries=False,
+    rebuilt_binaries_timestamp=None,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -2850,13 +2894,17 @@ def resolve_pretend(
             slot_changed_flag = changed_slot and _slot_changed(
                 root, repos, category, package, installed_best["version"]
             )
-            if changed_flags or deps_changed_flag or slot_changed_flag:
+            rebuilt_binary_flag = (usepkg or usepkgonly) and rebuilt_binaries and _rebuilt_binary_changed(
+                root, config["pkgdir"], category, package, installed_best["version"], rebuilt_binaries_timestamp
+            )
+            if changed_flags or deps_changed_flag or slot_changed_flag or rebuilt_binary_flag:
                 return (
                     "reinstall",
                     installed_best["version"],
                     changed_flags,
                     deps_changed_flag,
                     slot_changed_flag,
+                    rebuilt_binary_flag,
                 )
             return ("already_installed", installed_best["version"])
 
@@ -2897,18 +2945,28 @@ def resolve_pretend(
         slot_changed_flag = changed_slot and _slot_changed(
             root, repos, category, package, best["version"]
         )
+        rebuilt_binary_flag = (usepkg or usepkgonly) and rebuilt_binaries and _rebuilt_binary_changed(
+            root, config["pkgdir"], category, package, best["version"], rebuilt_binaries_timestamp
+        )
         # is_top_level and not selective: real portage's own bare,
         # reasonless "[ebuild R]" -- see this function's own docstring's
         # selective/is_top_level paragraph. changed_flags/
-        # deps_changed_flag/slot_changed_flag may all still be
-        # empty/false here; that's the whole point of this case.
-        if changed_flags or deps_changed_flag or slot_changed_flag or (is_top_level and not selective):
+        # deps_changed_flag/slot_changed_flag/rebuilt_binary_flag may all
+        # still be empty/false here; that's the whole point of this case.
+        if (
+            changed_flags
+            or deps_changed_flag
+            or slot_changed_flag
+            or rebuilt_binary_flag
+            or (is_top_level and not selective)
+        ):
             return (
                 "reinstall",
                 best["version"],
                 changed_flags,
                 deps_changed_flag,
                 slot_changed_flag,
+                rebuilt_binary_flag,
             )
         return ("already_installed", best["version"])
     if installed:
@@ -3037,6 +3095,8 @@ def resolve_pretend_graph(
     binpkg_respect_use=False,
     usepkg_exclude=(),
     usepkg_include=(),
+    rebuilt_binaries=False,
+    rebuilt_binaries_timestamp=None,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -3237,6 +3297,8 @@ def resolve_pretend_graph(
             binpkg_respect_use,
             usepkg_exclude,
             usepkg_include,
+            rebuilt_binaries,
+            rebuilt_binaries_timestamp,
         )
 
         # --changed-deps-report: real portage stays "completely silent"
@@ -4002,6 +4064,7 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
         fields.append(f'"changed_use":[{changed_use}]')
         fields.append(f'"changed_deps":{_json_bool(outcome[3])}')
         fields.append(f'"changed_slot":{_json_bool(outcome[4])}')
+        fields.append(f'"rebuilt_binary":{_json_bool(outcome[5])}')
     fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
     if tag != "no_visible_candidate":
         fields.append(f'"source":{_json_string(source)}')
@@ -4402,19 +4465,19 @@ def _run_deselect(targets, root):
     return 0
 
 
-def _reinstall_reason(changed_flags, deps_changed, slot_changed):
+def _reinstall_reason(changed_flags, deps_changed, slot_changed, rebuilt_binary):
     """The "(reinstall for ...)" note's own reason text, real portage
-    treating --newuse/--changed-use, --changed-deps, and --changed-slot
-    as independent, freely-combinable triggers. Pilot-invented wording,
-    same as the pre-existing "changed USE: ..." text -- real portage's
-    own default --pretend output shows no such itemized reason at all.
-    Returns None when all three are empty/False -- real portage's own
-    bare, reasonless "[ebuild R]" (see resolve_pretend's own selective/
-    is_top_level docstring paragraph): unlike every other reinstall,
-    this one genuinely has no tracked reason to report at all, so the
-    caller omits the whole "(reinstall for ...)" parenthetical rather
-    than printing an empty one. Mirrors pretend.rs's own
-    reinstall_reason exactly."""
+    treating --newuse/--changed-use, --changed-deps, --changed-slot, and
+    --rebuilt-binaries as independent, freely-combinable triggers.
+    Pilot-invented wording, same as the pre-existing "changed USE: ..."
+    text -- real portage's own default --pretend output shows no such
+    itemized reason at all. Returns None when all four are empty/False
+    -- real portage's own bare, reasonless "[ebuild R]" (see
+    resolve_pretend's own selective/is_top_level docstring paragraph):
+    unlike every other reinstall, this one genuinely has no tracked
+    reason to report at all, so the caller omits the whole "(reinstall
+    for ...)" parenthetical rather than printing an empty one. Mirrors
+    pretend.rs's own reinstall_reason exactly."""
     reasons = []
     if changed_flags:
         reasons.append(f"changed USE: {', '.join(changed_flags)}")
@@ -4422,6 +4485,8 @@ def _reinstall_reason(changed_flags, deps_changed, slot_changed):
         reasons.append("changed dependencies")
     if slot_changed:
         reasons.append("changed slot")
+    if rebuilt_binary:
+        reasons.append("rebuilt binary")
     if not reasons:
         return None
     return "; ".join(reasons)
@@ -4461,6 +4526,8 @@ def run(args):
     usepkg = False
     usepkgonly = False
     binpkg_respect_use = None
+    rebuilt_binaries = None
+    rebuilt_binaries_timestamp = None
     noreplace = False
     # None until an explicit --selective/--selective=y/--selective=n is
     # given, so "n" can override whatever update/newuse/changed_use/
@@ -4926,6 +4993,48 @@ def run(args):
         elif arg == "--binpkg-respect-use=n":
             binpkg_respect_use = False
             i += 1
+        elif arg == "--rebuilt-binaries":
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                rebuilt_binaries = True
+                i += 2
+            elif nxt == "n":
+                rebuilt_binaries = False
+                i += 2
+            else:
+                rebuilt_binaries = True
+                i += 1
+        elif arg == "--rebuilt-binaries=y":
+            rebuilt_binaries = True
+            i += 1
+        elif arg == "--rebuilt-binaries=n":
+            rebuilt_binaries = False
+            i += 1
+        elif arg == "--rebuilt-binaries-timestamp":
+            # Real "action": "store" -- a required value, same shape as
+            # --exclude's own required argument, but numeric (a Unix
+            # timestamp real BUILD_TIME values are compared against).
+            if i + 1 >= len(args):
+                print(
+                    'emerge: option "--rebuilt-binaries-timestamp" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
+            value = args[i + 1]
+            if value.isdigit():
+                rebuilt_binaries_timestamp = int(value)
+                i += 2
+            else:
+                print(f'emerge: invalid --rebuilt-binaries-timestamp parameter: "{value}"', file=sys.stderr)
+                return 2
+        elif arg.startswith("--rebuilt-binaries-timestamp="):
+            value = arg[len("--rebuilt-binaries-timestamp=") :]
+            if value.isdigit():
+                rebuilt_binaries_timestamp = int(value)
+                i += 1
+            else:
+                print(f'emerge: invalid --rebuilt-binaries-timestamp parameter: "{value}"', file=sys.stderr)
+                return 2
         elif not arg.startswith("-"):
             atom_args.append(arg)
             i += 1
@@ -5127,6 +5236,21 @@ def run(args):
         binpkg_respect_use if binpkg_respect_use is not None else not usepkgonly
     )
 
+    # --rebuilt-binaries's own real default-resolution
+    # (create_depgraph_params.py:185-193, confirmed by reading it):
+    # "rebuilt_binaries is True or (rebuilt_binaries != "n" and
+    # usepkgonly is True and deep is True and "--update" in myopts)" --
+    # an explicit "=n" always wins outright (turns the auto-on condition
+    # off too, not just the bare flag); an explicit bare/"=y" always
+    # wins on; otherwise (never mentioned at all) it still auto-enables
+    # once --usepkgonly, bare --deep (no explicit number -- deep is
+    # True), and --update are ALL given together.
+    resolved_rebuilt_binaries = (
+        rebuilt_binaries
+        if rebuilt_binaries is not None
+        else (usepkgonly and deep is True and update)
+    )
+
     try:
         result = resolve_pretend_graph(
             _config_root(),
@@ -5151,6 +5275,8 @@ def run(args):
             resolved_binpkg_respect_use,
             usepkg_exclude,
             usepkg_include,
+            resolved_rebuilt_binaries,
+            rebuilt_binaries_timestamp,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -5227,8 +5353,11 @@ def run(args):
             changed_flags = outcome[2]
             deps_changed_flag = outcome[3]
             slot_changed_flag = outcome[4]
+            rebuilt_binary_flag = outcome[5]
             if not onlydeps_suppressed:
-                reason = _reinstall_reason(changed_flags, deps_changed_flag, slot_changed_flag)
+                reason = _reinstall_reason(
+                    changed_flags, deps_changed_flag, slot_changed_flag, rebuilt_binary_flag
+                )
                 if reason is None:
                     print(f"[{bracket}  r] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
                 else:
