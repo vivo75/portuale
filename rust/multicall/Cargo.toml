@@ -24,3 +24,9 @@ brush-builtins = { git = "https://github.com/vivo75/brush", rev = "879d963458a3e
 # Cargo.toml requires this exact feature under unix too.
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 regex = "1"
+# Real merge/filesystem mutation (task #55, first slice): CONTENTS's own
+# "obj" lines record a real MD5 digest of each merged regular file
+# (mergeme()'s own `perform_md5`, `lib/portage/checksum.py`) -- another
+# deliberate, documented dependency, same waiver as brush-core/regex
+# above.
+md-5 = "0.10"

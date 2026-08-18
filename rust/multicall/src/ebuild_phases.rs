@@ -181,19 +181,19 @@ fn parse_eapi(ebuild_text: &str) -> String {
 /// derives from scratch). `PR` is the trailing `-r<digits>` suffix of
 /// what's left after stripping `PN-` (default `"r0"`, real portage's own
 /// "no explicit revision" default) with `PV` being everything before it.
-struct PackageSplit {
-    p: String,
-    pn: String,
+pub(crate) struct PackageSplit {
+    pub(crate) p: String,
+    pub(crate) pn: String,
     /// Real `PV`: the version *without* any `-r<digits>` revision suffix.
-    pv: String,
+    pub(crate) pv: String,
     /// Real `PR`: `"r0"` when no explicit `-r<digits>` suffix was present
     /// (real portage's own "no explicit revision" default), otherwise the
     /// suffix itself.
-    pr: String,
+    pub(crate) pr: String,
     /// Real `PVR`: `PV` alone when `PR` is `"r0"`, otherwise `PV-PR` --
     /// real portage's own "omit r0 from display" convention.
-    pvr: String,
-    pf: String,
+    pub(crate) pvr: String,
+    pub(crate) pf: String,
 }
 
 fn split_package(ebuild_path: &Path, package_dir_name: &str) -> Result<PackageSplit, String> {
@@ -266,16 +266,19 @@ pub fn is_real_phase_command(command: &str) -> bool {
 /// `lib/portage/package/ebuild/doebuild.py:499-524` exactly): `D`/`ED`
 /// get a trailing separator, matching real portage's own convention
 /// (every real helper script's own path-joining assumes it).
-struct Environment {
-    ebuild_abs: PathBuf,
-    pkg_dir: PathBuf,
-    category: String,
-    split: PackageSplit,
+pub(crate) struct Environment {
+    pub(crate) ebuild_abs: PathBuf,
+    pub(crate) pkg_dir: PathBuf,
+    pub(crate) category: String,
+    pub(crate) split: PackageSplit,
     eapi: String,
     portage_builddir: PathBuf,
 }
 
-fn compute_environment(ebuild_path: &Path, portage_tmpdir: &Path) -> Result<Environment, String> {
+pub(crate) fn compute_environment(
+    ebuild_path: &Path,
+    portage_tmpdir: &Path,
+) -> Result<Environment, String> {
     let ebuild_abs = ebuild_path
         .canonicalize()
         .map_err(|e| format!("{}: {e}", ebuild_path.display()))?;
@@ -324,7 +327,7 @@ fn compute_environment(ebuild_path: &Path, portage_tmpdir: &Path) -> Result<Envi
 }
 
 impl Environment {
-    fn d(&self) -> PathBuf {
+    pub(crate) fn d(&self) -> PathBuf {
         self.portage_builddir.join("image")
     }
     fn workdir(&self) -> PathBuf {

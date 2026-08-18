@@ -9,14 +9,16 @@
 // for the `actionmap_deps`-chained phase commands (`pretend`/`setup`/
 // `unpack`/`prepare`/`configure`/`compile`/`test`/`install` -- see
 // `ebuild_phases`'s own module doc comment for the full architecture and
-// v1 scope cuts). Every other real command (`merge`/`qmerge`/`unmerge`/
-// `package`/`preinst`/`postinst`/`prerm`/`postrm`/`config`/`info`/
-// `nofetch`/`depend`/`fetch`/`fetchall`/`digest`/`manifest`/`rpm`/
-// `instprep`/`clean`/`cleanrm`) still falls through to the pre-existing
-// dry-run stub message below unchanged -- most notably `merge`, which
-// needs the real vdb/CONTENTS merge machinery task #55 explicitly defers
-// (`dblink.merge()`/`treewalk()`/`mergeme()` in
-// `lib/portage/dbapi/vartree.py`, ~6500 lines).
+// v1 scope cuts), PLUS, as of task #55, real execution for `merge` (see
+// `ebuild_merge`'s own module doc comment: runs the real `install` chain,
+// then really copies `${D}` into `${ROOT}` and writes a real vdb entry --
+// still without config-protect/collision-protect/preserve-libs/
+// pkg_preinst+postinst hooks, its own documented v1 cuts). Every other
+// real command (`qmerge`/`unmerge`/`package`/`preinst`/`postinst`/
+// `prerm`/`postrm`/`config`/`info`/`nofetch`/`depend`/`fetch`/
+// `fetchall`/`digest`/`manifest`/`rpm`/`instprep`/`clean`/`cleanrm`)
+// still falls through to the pre-existing dry-run stub message below
+// unchanged.
 //
 // Exit codes mirror real `ebuild`'s own conventions: 2 for "missing
 // required args" (real bin/ebuild's argparse `parser.error()`), 1 for
@@ -43,6 +45,7 @@
 // pilot-specific summary, the same "pilot-specific summary, not a port
 // of real formatting" precedent `emerge --help` already set.
 
+use crate::ebuild_merge;
 use crate::ebuild_options::{self, Kind};
 use crate::ebuild_phases;
 use std::process::ExitCode;
@@ -142,20 +145,17 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
-    // Real execution (task #54, ebuild_phases's own module doc comment)
-    // only when EVERY requested command is one this pilot actually
-    // implements for real (the actionmap_deps-chained phase subset) --
-    // a deliberate, simple v1 boundary: no partial-real-execution
-    // ambiguity when a request mixes a real phase command with one this
-    // pilot still only dry-runs (e.g. `ebuild foo.ebuild compile merge`).
-    // A purely dry-run request (the common case today, since `merge` is
-    // what most real workflows actually want, and that's still task
-    // #55's own deferred territory) keeps the exact pre-existing stub
-    // message unchanged.
-    if commands
-        .iter()
-        .all(|cmd| ebuild_phases::is_real_phase_command(cmd))
-    {
+    // Real execution (task #54/#55, ebuild_phases's/ebuild_merge's own
+    // module doc comments) only when EVERY requested command is one this
+    // pilot actually implements for real (the actionmap_deps-chained
+    // phase subset, plus `merge`) -- a deliberate, simple v1 boundary:
+    // no partial-real-execution ambiguity when a request mixes a real
+    // command with one this pilot still only dry-runs (e.g. `ebuild
+    // foo.ebuild compile package`). A purely dry-run request keeps the
+    // exact pre-existing stub message unchanged.
+    if commands.iter().all(|cmd| {
+        ebuild_phases::is_real_phase_command(cmd) || ebuild_merge::is_real_merge_command(cmd)
+    }) {
         let root = portage_repo::root_from_env();
         // Real portage's own make.globals default -- see
         // ebuild_phases::run_commands's own doc comment for why this is
@@ -163,19 +163,31 @@ pub fn run(args: &[String]) -> ExitCode {
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
-        return match ebuild_phases::run_commands(
-            std::path::Path::new(ebuild_file),
-            &commands,
-            &root,
-            &portage_tmpdir,
-        ) {
-            Ok(0) => ExitCode::SUCCESS,
-            Ok(_) => ExitCode::from(1),
-            Err(e) => {
-                eprintln!("ebuild: {e}");
-                ExitCode::from(1)
+        let ebuild_path = std::path::Path::new(ebuild_file);
+        // One command at a time here, not the whole slice at once --
+        // `merge` isn't itself an ebuild_phases-recognized phase (real
+        // `doebuild()` handles it as its own, separate vdb-merge step,
+        // not a `bin/ebuild.sh` phase argument at all), so a mixed list
+        // like `["install", "merge"]` needs its own per-command routing.
+        // This also mirrors real `bin/ebuild`'s own `for arg in pargs:
+        // doebuild(ebuild, arg, ...)` loop, which likewise re-derives the
+        // environment fresh for every top-level command argument.
+        for &cmd in &commands {
+            let result = if ebuild_merge::is_real_merge_command(cmd) {
+                ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir)
+            } else {
+                ebuild_phases::run_commands(ebuild_path, &[cmd], &root, &portage_tmpdir)
+            };
+            match result {
+                Ok(0) => {}
+                Ok(_) => return ExitCode::from(1),
+                Err(e) => {
+                    eprintln!("ebuild: {e}");
+                    return ExitCode::from(1);
+                }
             }
-        };
+        }
+        return ExitCode::SUCCESS;
     }
 
     println!(
@@ -197,7 +209,12 @@ mod tests {
 
     #[test]
     fn accepts_a_real_command_and_still_prints_the_stub_marker() {
-        let code = run(&args(&["foo-1.0.ebuild", "merge"]));
+        // "package" is a real ebuild command (doebuild()'s own
+        // validcommands list) that this pilot still doesn't implement
+        // for real (unlike "merge"/the actionmap_deps-chained phases as
+        // of tasks #54/#55) -- exactly the case the dry-run stub still
+        // needs to cover.
+        let code = run(&args(&["foo-1.0.ebuild", "package"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
@@ -209,25 +226,25 @@ mod tests {
 
     #[test]
     fn accepts_a_real_boolean_option() {
-        let code = run(&args(&["--force", "foo-1.0.ebuild", "merge"]));
+        let code = run(&args(&["--force", "foo-1.0.ebuild", "package"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn accepts_a_real_value_option_without_misreading_its_value() {
-        let code = run(&args(&["--color", "y", "foo-1.0.ebuild", "merge"]));
+        let code = run(&args(&["--color", "y", "foo-1.0.ebuild", "package"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn accepts_the_inline_equals_form_of_a_value_option() {
-        let code = run(&args(&["--color=y", "foo-1.0.ebuild", "merge"]));
+        let code = run(&args(&["--color=y", "foo-1.0.ebuild", "package"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn rejects_an_unrecognized_option() {
-        let code = run(&args(&["--not-a-real-option", "foo-1.0.ebuild", "merge"]));
+        let code = run(&args(&["--not-a-real-option", "foo-1.0.ebuild", "package"]));
         assert_eq!(code, ExitCode::from(1));
     }
 

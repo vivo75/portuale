@@ -14,6 +14,7 @@
 // behavior isn't implemented.
 
 mod ebuild;
+mod ebuild_merge;
 mod ebuild_options;
 mod ebuild_phases;
 mod emerge_options;

@@ -3563,6 +3563,47 @@ from the ebuild's own text via the real PMS 7.3.1 rule (`parse_eapi`),
 since `ebuild <file> <command>` operates on an arbitrary standalone
 ebuild file, not necessarily one indexed in a configured repo.
 
+### Real merge/filesystem mutation (task #55): the first slice
+
+The natural next step after task #54: `ebuild <file> merge`
+(`multicall/src/ebuild_merge.rs`) now really copies `${D}` into `${ROOT}`
+and writes a real vdb entry, instead of falling through to the dry-run
+stub. Runs the real `install` phase chain first (task #54's own
+`ebuild_phases::run_commands`), then walks `${D}` and, for every regular
+file, directory, and symlink found, really merges it into `${ROOT}` --
+matching real `dblink.mergeme()`'s own `_format_contents_line` format
+exactly: `dir <path>`, `obj <path> <md5> <mtime>`, `sym <path> ->
+<target> <mtime>`. Writes that `CONTENTS` text, plus `CATEGORY`/`SLOT`/
+`repository`, into a real `${ROOT}/var/db/pkg/<category>/<pf>/`
+directory -- the same one-value-per-file vdb layout this pilot's own
+fixtures and `portage_repo`'s own vdb readers (`installed_candidates`,
+`read_vdb_string`, etc.) already use, so a package merged this way is
+immediately visible to every other slice in this pilot (`emerge
+--pretend`'s own `AlreadyInstalled`/`Reinstall` detection, `--deselect`,
+and so on).
+
+`SLOT` is read directly from the ebuild's own text (a literal
+`SLOT=...` assignment, scanned anywhere in the file -- unlike `EAPI`,
+real PMS doesn't restrict where `SLOT` may appear), the same
+direct-text-parsing shortcut `parse_eapi` already established.
+`repository` is resolved by walking up from the ebuild's own package
+directory looking for a `profiles/repo_name` file (real portage's own
+mechanism for naming a repo), falling back to the same `"__unknown__"`
+sentinel `portage_repo::new_repo_changed` already uses when none is
+found.
+
+**v1 scope cuts** (see `ebuild_merge.rs`'s own module doc comment for
+the full list): no `pkg_preinst`/`pkg_postinst` hook execution around
+the merge. No `CONFIG_PROTECT`/collision-protect/preserve-libs. No
+`COUNTER`/`env_update()`/`ldconfig`, and no atomic
+temp-directory-then-rename vdb write (real `merge()` builds the new vdb
+entry in a temporary directory and only atomically moves it into place
+once everything succeeded; this slice writes directly into the final vdb
+directory). Directory-entry merge order is sorted by filename for
+deterministic tests, rather than real `os.listdir()`'s own
+arbitrary/OS-dependent order (`CONTENTS` line order has no real semantic
+meaning portage itself relies on).
+
 ## Running it
 
 Build both Rust binaries:
@@ -4832,4 +4873,30 @@ PORTING/rust/target/release/multicall ebuild \
 #  * Final size of installed tree:  4 KiB
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/hello.txt
 # hello from phasepkg
+```
+
+Real merge/filesystem mutation (task #55 -- see "What this proves" above
+for the full writeup): `ebuild <file> merge` runs the same real `install`
+chain, then really copies `${D}` into a real `${ROOT}` and writes a real
+vdb entry. Uses `PORTING/fixtures/repo/dev-libs/mergepkg`, whose own
+`src_install` calls real `insinto`/`doins`/`dosym`:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export ROOT="$(mktemp -d)"
+PORTING/rust/target/release/multicall ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+# (real phase output, including the same known-nonfatal noise as the
+# task #54 example, then exit 0)
+cat "${ROOT}"/usr/share/mergepkg/hello.txt
+# hello from mergepkg
+readlink "${ROOT}"/usr/share/mergepkg/hello-link.txt
+# hello.txt
+cat "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0/CONTENTS
+# dir /usr
+# dir /usr/share
+# dir /usr/share/mergepkg
+# sym /usr/share/mergepkg/hello-link.txt -> hello.txt <mtime>
+# obj /usr/share/mergepkg/hello.txt <md5> <mtime>
 ```
