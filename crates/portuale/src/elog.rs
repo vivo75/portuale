@@ -1043,6 +1043,86 @@ pub fn save_modules_process(
     Ok(written)
 }
 
+/// Arguments of [`process_batch`].
+pub struct ProcessBatchArgs<'a> {
+    pub logdir: &'a Path,
+    pub root_display: &'a str,
+    pub items: &'a [(String, PathBuf)],
+    pub phases: Option<&'a [&'a str]>,
+    pub color: &'a Colorizer,
+    pub split_elog: bool,
+}
+
+/// `elog_process` over packages that just merged or unmerged. Each item
+/// is `(cpv, t_dir)` with that package's `${T}`. `phases` restricts the
+/// files read: `None` after a merge, `Some(&["prerm", "postrm"])` for an
+/// unmerge. `root_display` is the `ROOT` string for the `echo` header.
+/// Portage: elog_process.
+///
+/// `save` / `save_summary` run immediately per package; `echo` accumulates
+/// for the call and prints at its end; `mail` sends immediately per
+/// package; `mail_summary` accumulates and sends once at process exit.
+/// A no-op when no module is enabled or nothing has messages.
+/// `split_elog` is the `split-elog` feature token.
+pub fn process_batch(args: ProcessBatchArgs<'_>) {
+    let ProcessBatchArgs {
+        logdir,
+        root_display,
+        items,
+        phases,
+        color,
+        split_elog,
+    } = args;
+    let echo = echo_enabled();
+    // Gates the one `collect_all`/`save_modules_process` call below, so it
+    // needs every module that call dispatches to, not just save/summary.
+    let save_any = module_enabled("save")
+        || module_enabled("save_summary")
+        || module_enabled("syslog")
+        || module_enabled("custom")
+        || module_enabled("mail")
+        || module_enabled("mail_summary");
+    if !(echo || save_any) {
+        return;
+    }
+    let mut packages = Vec::new();
+    for (cpv, t_dir) in items {
+        if save_any {
+            let all = match phases {
+                Some(p) => collect_all_phases(t_dir, p),
+                None => collect_all(t_dir),
+            };
+            if !all.is_empty() {
+                match save_modules_process(logdir, cpv, &all, split_elog) {
+                    Ok(paths) => {
+                        for p in paths {
+                            println!(
+                                "{}Elog messages for {cpv} written to {}",
+                                color.c("INFO", " * "),
+                                p.display()
+                            );
+                        }
+                    }
+                    Err(e) => eprintln!("elog: {e}"),
+                }
+            }
+        }
+        if echo {
+            let messages = collect(t_dir, phases);
+            if !messages.is_empty() {
+                packages.push(ElogPackage {
+                    cpv: cpv.clone(),
+                    root: root_display.to_string(),
+                    messages,
+                });
+            }
+        }
+    }
+    if echo {
+        echo_summary(&packages, color);
+    }
+}
+
 /// The `* Messages for package <cpv>:` block for every accumulated
 /// package, all message types on stdout.
 /// Portage: mod_echo._finalize.
