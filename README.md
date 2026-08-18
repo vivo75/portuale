@@ -4083,6 +4083,67 @@ paths stay genuinely distinct) and
 real USE-dep on the atom, checked against real vdb `USE` -- the actual
 `liburing:=[...]`-shaped case).
 
+### Real eclass `inherit()` support: `PORTAGE_ECLASS_LOCATIONS`
+
+The single biggest real blocker to "a real ebuild actually builds",
+found by running `emerge --buildpkgonly` against real packages
+(`app-editors/nano`, `app-arch/xz-utils`, `sys-fs/fuse`) after the
+`avoid_update` fix above: real `bin/ebuild.sh`'s own `inherit()`
+function (unmodified bash) walks a real bash array,
+`PORTAGE_ECLASS_LOCATIONS`, looking for `<location>/eclass/
+<name>.eclass` for every eclass an ebuild's own top-level `inherit
+...` line names -- and this pilot never populated that variable at
+all, so `inherit()` `die`d immediately for literally any eclass,
+before this fix. Nearly every real-world ebuild inherits *something*
+(`nano` needed `verify-sig`; `xz-utils` needed `dot-a`/`flag-o-matic`/
+`libtool`/`multilib`/`multilib-minimal`/`preserve-libs`/
+`toolchain-funcs`; `fuse` needed `flag-o-matic`/`meson-multilib`/
+`toolchain-funcs`/`udev`/`python-any-r1`), so this alone made
+real compilation of almost any real package impossible.
+
+Real `doebuild.py` sets this variable from `repo.eclass_db.
+eclass_locations_string` -- a real, `shlex`-quoted, priority-ordered
+list of the ebuild's own repo *plus every one of its master repos*
+(`layout.conf`'s own `masters =` chain). `eclass_locations_value`
+(`ebuild_phases.rs`) implements the v1 slice of this: the ebuild's own
+containing repo alone (`repo_root_for`, single-quoted the same real
+way `shlex.join` would), no masters chain at all -- a real, separately-
+scoped gap for an overlay ebuild that inherits a main-repo-only eclass
+without redeclaring it locally. Every real eclass this pilot has
+needed so far lives in the *same* repo as the ebuild that inherits it
+(confirmed live: `nano`'s/`xz-utils`'s/`fuse`'s own eclasses are all
+real files under the real `gentoo` main repo's own `eclass/`
+directory, and that repo's own real `metadata/layout.conf` explicitly
+declares `masters =` empty), so this narrower slice already closes the
+gap for every case demonstrated so far. Exported unconditionally
+(like `DISTDIR`), not just for phases that happen to need it, matching
+real `doebuild()`'s own environment.
+
+**A new, separate gap surfaced while live-verifying this**: after
+`inherit()` itself stopped `die`ing, `app-arch/xz-utils` and
+`sys-fs/fuse` (but not `app-editors/nano`) hung indefinitely during
+real phase execution. Bisected live (a scratch fixture repo, copying
+in real eclasses one at a time under a timeout) to the `multilib`
+eclass family specifically: `flag-o-matic` + `toolchain-funcs` alone
+(the pair `nano` doesn't need but both hanging packages do) complete
+fine; adding `multilib-minimal` (which pulls in `multilib-build` ->
+`multibuild`/`multilib`) reproduces the hang. Not root-caused further
+-- deferred as a separately-scoped, real, documented gap (likely a
+real `multilib.eclass`-internal construct this pilot's embedded
+`brush` shell handles differently from real bash) rather than chased
+down within this slice.
+
+Proven via a new `dev-libs/eclasspkg` fixture with a real (if fixture-
+only) `eclass/pilotcheck.eclass` defining one real function,
+`pilotcheck_hello` -- `src_install` calls it directly, proving the
+eclass's own *content*, not just its own presence, is real and usable
+after `inherit()` finds it. Both as a Rust unit test
+(`ebuild_phases::tests::
+install_really_inherits_a_real_eclass_and_calls_its_own_function`, plus
+two narrower ones directly exercising `eclass_locations_value`) and a
+black-box one against the compiled `ebuild` binary
+(`test_ebuild_install_really_inherits_a_real_eclass`).
+
 ## Running it
 
 Build both Rust binaries:
@@ -5573,4 +5634,19 @@ PORTING/rust/target/release/multicall ebuild \
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/verifiedfetchpkg-1.0/temp/fetch-vars.txt
 # A=verifiedfetchpkg-1.0.tar.gz
 # AA=verifiedfetchpkg-1.0.tar.gz verifiedfetchpkg-tests-1.0.tar.gz
+```
+
+Real eclass `inherit()` support (see "What this proves" above for the
+full writeup): `dev-libs/eclasspkg` really `inherit`s a real (if
+fixture-only) eclass and calls a real function it defines:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/multicall ebuild \
+    PORTING/fixtures/repo/dev-libs/eclasspkg/eclasspkg-1.0.ebuild install
+# (real phase output, including the same known-nonfatal noise as the
+# task #54 example, then exit 0)
+cat "${PORTAGE_TMPDIR}"/portage/dev-libs/eclasspkg-1.0/temp/eclass-marker.txt
+# hello from pilotcheck.eclass
 ```

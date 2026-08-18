@@ -444,3 +444,34 @@ def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(
         "A=verifiedfetchpkg-1.0.tar.gz\n"
         "AA=verifiedfetchpkg-1.0.tar.gz verifiedfetchpkg-tests-1.0.tar.gz\n"
     )
+
+
+def test_ebuild_install_really_inherits_a_real_eclass(ebuild_binary, tmp_path):
+    """`dev-libs/eclasspkg` really `inherit`s a real (if fixture-only)
+    eclass, `pilotcheck.eclass`, via real, unmodified `bin/ebuild.sh`'s
+    own `inherit()` function -- previously this pilot never populated
+    `PORTAGE_ECLASS_LOCATIONS` at all, so this would have `die`d
+    immediately with `"pilotcheck.eclass could not be found by
+    inherit()"`. Confirmed live against a real system before this fix:
+    `sys-fs/fuse`, `app-editors/nano`, and `app-arch/xz-utils` all
+    failed here, each on a different real eclass. `src_install` calls a
+    real function the eclass defines, proving the eclass's own content
+    -- not just its own existence -- is really usable afterward."""
+    ebuild_path = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/eclasspkg/eclasspkg-1.0.ebuild"
+    )
+    env = dict(os.environ)
+    portage_tmpdir = tmp_path / "portage-tmpdir"
+    env["PORTAGE_TMPDIR"] = str(portage_tmpdir)
+
+    result = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+
+    marker = portage_tmpdir / "portage/dev-libs/eclasspkg-1.0/temp/eclass-marker.txt"
+    assert marker.read_text() == "hello from pilotcheck.eclass\n"

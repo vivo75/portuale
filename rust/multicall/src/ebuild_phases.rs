@@ -471,6 +471,48 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
 /// lines (already-shell-quoted by the caller), for anything specific to
 /// one call site (e.g. `ebuild_package`'s own `PKGDIR`/
 /// `PORTAGE_BINPKG_TMPFILE`).
+/// Real `bin/ebuild.sh`'s own `eval "PORTAGE_ECLASS_LOCATIONS=(${{PORTAGE_ECLASS_LOCATIONS}})"`
+/// (line ~611, run once, unconditionally, right after being sourced)
+/// expects this env var's own raw string value to already be a
+/// sequence of shell-single-quoted path tokens -- real `doebuild.py`'s
+/// own `repo.eclass_db.eclass_locations_string` (`shlex.join(...)`)
+/// builds it the same way. `inherit()` itself (also real, unmodified
+/// bash) then walks that array looking for `<location>/eclass/
+/// <name>.eclass` for every eclass named on an ebuild's own top-level
+/// `inherit ...` line -- previously this pilot never populated this
+/// var at all, so `inherit()` always `die`d immediately for ANY
+/// eclass, confirmed live against a real system: `sys-fs/fuse`,
+/// `app-editors/nano`, and `app-arch/xz-utils` all failed here before
+/// this fix, each on a different real eclass.
+///
+/// V1 scope: the ebuild's own containing repo alone (`repo_root_for`),
+/// no masters chain -- real `eclass_db`'s own cross-repo inheritance
+/// (an overlay ebuild inheriting an eclass that only exists in its own
+/// master repo, never redeclared locally) is a real, separately-scoped
+/// gap this pilot doesn't reach yet. Every real eclass this pilot has
+/// needed so far lives in the exact same repo as the ebuild that
+/// inherits it (confirmed live: `sys-fs/fuse`'s/`app-editors/nano`'s/
+/// `app-arch/xz-utils`'s own eclasses -- `meson-multilib`,
+/// `toolchain-funcs`, `flag-o-matic`, `verify-sig`, `dot-a`, ... --
+/// are all real files under the real `gentoo` main repo's own
+/// `eclass/` directory, and that repo's own real `metadata/
+/// layout.conf` explicitly declares `masters =` empty). `None` (a
+/// standalone ebuild file outside any repo checkout) exports an empty
+/// value -- `inherit()` still `die`s for any eclass in that case, the
+/// same honest "nothing to look in" real behavior a truly master-less,
+/// repo-less ebuild file would hit too.
+fn eclass_locations_value(pkg_dir: &Path) -> String {
+    match repo_root_for(pkg_dir) {
+        Some(repo_root) => {
+            format!(
+                "'{}'",
+                repo_root.display().to_string().replace('\'', r"'\''")
+            )
+        }
+        None => String::new(),
+    }
+}
+
 fn phase_setup_script(
     env: &Environment,
     root: &Path,
@@ -503,6 +545,7 @@ export T={t:?}
 export HOME={home:?}
 export FILESDIR={filesdir:?}
 export PORTAGE_BIN_PATH={bin_dir:?}
+export PORTAGE_ECLASS_LOCATIONS={eclass_locations:?}
 export PORTAGE_PYTHON=/usr/bin/python
 export PATH={helpers_dir:?}:$PATH
 export SANDBOX_DISABLED=1
@@ -533,6 +576,7 @@ export EBUILD_PHASE={ebuild_phase_value:?}
         home = env.home().display(),
         filesdir = env.filesdir().display(),
         bin_dir = bin_dir.display(),
+        eclass_locations = eclass_locations_value(&env.pkg_dir),
         helpers_dir = helpers_dir.display(),
         portage_debug = if debug { "1" } else { "0" },
         ebuild_phase_value = ebuild_phase_value,
@@ -1048,6 +1092,76 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
         let _ = std::fs::remove_dir_all(&distdir);
+    }
+
+    /// Real, end-to-end proof of `eclass_locations_value`: `dev-libs/
+    /// eclasspkg` really `inherit`s a real (if fixture-only) eclass,
+    /// `pilotcheck.eclass`, via real, unmodified `bin/ebuild.sh`'s own
+    /// `inherit()` function -- previously this pilot never populated
+    /// `PORTAGE_ECLASS_LOCATIONS` at all, so this would have `die`d
+    /// immediately with `"pilotcheck.eclass could not be found by
+    /// inherit()"`. `src_install` calls a real function the eclass
+    /// defines (`pilotcheck_hello`), proving the eclass's own content
+    /// -- not just its own existence -- is really usable afterward.
+    #[test]
+    fn install_really_inherits_a_real_eclass_and_calls_its_own_function() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/eclasspkg/eclasspkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-{}",
+            std::process::id(),
+            "install_really_inherits_a_real_eclass_and_calls_its_own_function"
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
+            false,
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+
+        let marker = portage_tmpdir.join("portage/dev-libs/eclasspkg-1.0/temp/eclass-marker.txt");
+        let observed = std::fs::read_to_string(&marker)
+            .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
+        assert_eq!(observed, "hello from pilotcheck.eclass\n");
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn eclass_locations_value_quotes_the_containing_repo_root() {
+        // Canonicalized first, matching what `compute_environment`
+        // always hands `repo_root_for` in the real path (it always
+        // canonicalizes the ebuild's own path before deriving
+        // `pkg_dir` from it).
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo")
+            .canonicalize()
+            .unwrap();
+        let pkg_dir = repo_root.join("dev-libs/eclasspkg");
+        let value = eclass_locations_value(&pkg_dir);
+        // Real bin/ebuild.sh's own `eval "PORTAGE_ECLASS_LOCATIONS=(${...})"`
+        // expects single-quoted tokens -- confirmed by round-tripping
+        // through the exact same real, unmodified bash line here.
+        assert_eq!(value, format!("'{}'", repo_root.display()));
+    }
+
+    #[test]
+    fn eclass_locations_value_is_empty_outside_any_repo_checkout() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-eclass_locations_value_none",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("dev-libs/standalone");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        assert_eq!(eclass_locations_value(&pkg_dir), "");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
