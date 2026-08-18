@@ -2,6 +2,31 @@
 
 use crate::ebuild_phases::*;
 
+pub struct RunCommandsArgs<'a> {
+    pub ebuild_path: &'a Path,
+    pub commands: &'a [&'a str],
+    pub root: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub distdir: &'a Path,
+    pub debug: bool,
+    pub config_root: &'a Path,
+    pub shell: ShellBackend,
+    pub build_env: &'a [(String, String)],
+}
+
+pub struct RunCommandsLoggedArgs<'a> {
+    pub ebuild_path: &'a Path,
+    pub commands: &'a [&'a str],
+    pub root: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub distdir: &'a Path,
+    pub debug: bool,
+    pub config_root: &'a Path,
+    pub shell: ShellBackend,
+    pub log_file: Option<&'a Path>,
+    pub build_env: &'a [(String, String)],
+}
+
 /// Opens `log_file` for append (creating parents): directly, or through a gzip
 /// pump thread (one member per call; an empty phase appends nothing) for `.gz`.
 /// The guard must drop after the phase's write ends close, or the join hangs

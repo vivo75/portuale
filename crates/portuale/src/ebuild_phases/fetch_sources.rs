@@ -132,3 +132,39 @@ pub(crate) fn resolved_ro_distdirs(
     })
     .unwrap_or_default()
 }
+
+/// The distfile names `src_uri` lists once each, in first-seen order, for the
+/// `flag?` groups `active` keeps. The one place both `AA` and `A` are read from.
+/// Portage: fetch.py, _parse_uri_map
+pub(crate) fn distfile_names(
+    env: &Environment,
+    src_uri: &str,
+    active: impl Fn(bool, &str) -> bool,
+) -> Result<Vec<String>, String> {
+    let mut names: Vec<String> = Vec::new();
+    for entry in portage_fetch::flatten_src_uri(src_uri, active)
+        .map_err(|e| format!("{}: {e}", env.pkg_dir.display()))?
+    {
+        if !names.contains(&entry.filename) {
+            names.push(entry.filename);
+        }
+    }
+    Ok(names)
+}
+
+/// The package's `A` without fetching: md5-cache `SRC_URI` reduced against the
+/// phase `USE`. Empty outside a repo or without `SRC_URI`; feeds
+/// `prepare_fake_distdir` on chains with no `unpack`.
+pub(crate) fn package_a(env: &Environment, use_flags: &str) -> Result<Vec<String>, String> {
+    let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
+        return Ok(Vec::new());
+    };
+    let src_uri = portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf)
+        .ok()
+        .and_then(|m| m.get("SRC_URI").cloned())
+        .unwrap_or_default();
+    let flags: std::collections::HashSet<&str> = use_flags.split_whitespace().collect();
+    distfile_names(env, &src_uri, |negated, flag| {
+        flags.contains(flag) != negated
+    })
+}
