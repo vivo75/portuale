@@ -178,3 +178,99 @@ pub(crate) struct FetchSourcesArgs<'a> {
     pub(crate) features: &'a str,
     pub(crate) use_flags: &'a str,
 }
+
+pub(crate) async fn fetch_sources(
+    args: FetchSourcesArgs<'_>,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let FetchSourcesArgs {
+        env,
+        root,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        features,
+        use_flags,
+    } = args;
+    let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let metadata = portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok();
+    let src_uri = metadata
+        .as_ref()
+        .and_then(|m| m.get("SRC_URI").cloned())
+        .unwrap_or_default();
+    if src_uri.trim().is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let restrict = metadata.as_ref().and_then(|m| m.get("RESTRICT"));
+    let restrict_mirror = restrict
+        .map(|r| restrict_mirror_from_restrict(r))
+        .unwrap_or(false);
+    let restrict_fetch = restrict
+        .map(|r| restrict_fetch_from_restrict(r))
+        .unwrap_or(false);
+    let restrict_primaryuri = restrict
+        .map(|r| restrict_primaryuri_from_restrict(r))
+        .unwrap_or(false);
+    let aa = distfile_names(env, &src_uri, |_, _| true)?;
+    // The fetch commands come from the same resolved settings the phases use.
+    let fetch_config = resolved_fetch_config(env, config_root, root);
+    let a = fetch::fetch_src_uri(
+        &env.pkg_dir,
+        &src_uri,
+        &FetchOptions {
+            distdir: distdir.to_path_buf(),
+            gentoo_mirrors: fetch::gentoo_mirrors_from_env(),
+            // Consulted only for `custommirrors`; see `FetchOptions::config_root`.
+            config_root: portage_repo::config_root_from_env(),
+            // Env-var shortcut for `"distlocks" in features` (defaults on).
+            distlocks: features.split_whitespace().any(|tok| tok == "distlocks"),
+            restrict_mirror,
+            restrict_fetch,
+            restrict_primaryuri,
+            // Same env-var shortcut as `distlocks` (defaults off).
+            force_mirror: features.split_whitespace().any(|tok| tok == "force-mirror"),
+            use_flags: use_flags.split_whitespace().map(String::from).collect(),
+            fetch_commands: fetch_config.as_ref().map(fetch::fetch_commands_from_config),
+            portage_ssh_opts: fetch_config
+                .as_ref()
+                .and_then(fetch::portage_ssh_opts_from_config),
+            ro_distdirs: resolved_ro_distdirs(env, config_root, root),
+            mirror_cache_now: None,
+            // Same env-var shortcut as `distlocks`.
+            checksum_failure_max_tries: {
+                let value = std::env::var("PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS").ok();
+                let (tries, warnings) = fetch::checksum_failure_max_tries(value.as_deref());
+                for warning in warnings {
+                    eprintln!("{warning}");
+                }
+                tries
+            },
+        },
+    );
+    let a = match a {
+        Ok(a) => a,
+        Err(e) => {
+            // Unfetchable: run the ebuild's own `pkg_nofetch` phase for its custom
+            // instructions (best-effort; never masks the fetch error), then fail.
+            // Portage: fetch.py
+            let ebuild = env.pkg_dir.join(format!("{}.ebuild", env.split.pf));
+            if ebuild.is_file() {
+                let _ = run_one_phase(RunOnePhaseArgs {
+                    env,
+                    root,
+                    phase: "nofetch",
+                    debug,
+                    extra_env: &[],
+                    config_root,
+                    shell,
+                    log_file: None,
+                })
+                .await;
+            }
+            return Err(e);
+        }
+    };
+    Ok((a, aa))
+}
