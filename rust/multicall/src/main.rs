@@ -16,6 +16,7 @@
 mod ebuild;
 mod ebuild_merge;
 mod ebuild_options;
+mod ebuild_package;
 mod ebuild_phases;
 mod ebuild_unmerge;
 mod emerge_options;

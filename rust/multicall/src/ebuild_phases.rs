@@ -345,6 +345,16 @@ impl Environment {
     fn filesdir(&self) -> PathBuf {
         self.portage_builddir.join("files")
     }
+    /// Real `${PORTAGE_BUILDDIR}/build-info`: created as a side effect of
+    /// every real `unpack|prepare|configure|compile|test|clean|install`
+    /// phase already run by the time `ebuild_package::run_package`'s own
+    /// `install` chain completes (`bin/phase-functions.sh`'s own
+    /// unconditional `mkdir build-info` in that case branch) -- so by
+    /// the time packaging needs it, it already exists and already has a
+    /// real copy of the ebuild file in it (`build-info/${PF}.ebuild`).
+    pub(crate) fn build_info(&self) -> PathBuf {
+        self.portage_builddir.join("build-info")
+    }
 }
 
 /// Real `bin/*.sh` needs every directory it writes into (via helpers, or
@@ -389,12 +399,91 @@ fn create_directories(env: &Environment) -> Result<(), String> {
     Ok(())
 }
 
-fn repo_root() -> PathBuf {
+pub(crate) fn repo_root() -> PathBuf {
     // multicall/src/ebuild_phases.rs -> multicall -> rust -> PORTING -> repo root
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../")
         .canonicalize()
         .expect("repo root resolves (multicall is always built from within the real checkout)")
+}
+
+/// The real environment-variable block every real phase and every real
+/// `bin/misc-functions.sh` `__dyn_*` command alike needs -- shared by
+/// `run_one_phase` and `run_misc_function` so the two don't duplicate
+/// this. `extra_env` is appended verbatim as more `export NAME=value`
+/// lines (already-shell-quoted by the caller), for anything specific to
+/// one call site (e.g. `ebuild_package`'s own `PKGDIR`/
+/// `PORTAGE_BINPKG_TMPFILE`).
+fn phase_setup_script(
+    env: &Environment,
+    root: &Path,
+    ebuild_phase_value: &str,
+    debug: bool,
+    bin_dir: &Path,
+    helpers_dir: &Path,
+    extra_env: &[(String, String)],
+) -> String {
+    let mut script = format!(
+        r#"
+export EAPI={eapi:?}
+export PN={pn:?}
+export PV={pv:?}
+export PR={pr:?}
+export PVR={pvr:?}
+export P={p:?}
+export PF={pf:?}
+export CATEGORY={category:?}
+export EBUILD={ebuild:?}
+export O={o:?}
+export ROOT={root:?}
+export EROOT={root:?}
+export PORTAGE_BUILDDIR={builddir:?}
+export WORKDIR={workdir:?}
+export S={s:?}
+export D={d:?}/
+export ED="${{D}}"
+export T={t:?}
+export HOME={home:?}
+export FILESDIR={filesdir:?}
+export PORTAGE_BIN_PATH={bin_dir:?}
+export PORTAGE_PYTHON=/usr/bin/python
+export PATH={helpers_dir:?}:$PATH
+export SANDBOX_DISABLED=1
+export FEATURES=""
+export USE=""
+export EPREFIX=""
+export EMERGE_FROM=ebuild
+export PORTAGE_QUIET=1
+export PORTAGE_DEBUG={portage_debug}
+export EBUILD_PHASE={ebuild_phase_value:?}
+"#,
+        eapi = env.eapi,
+        pn = env.split.pn,
+        pv = env.split.pv,
+        pr = env.split.pr,
+        pvr = env.split.pvr,
+        p = env.split.p,
+        pf = env.split.pf,
+        category = env.category,
+        ebuild = env.ebuild_abs.display(),
+        o = env.pkg_dir.display(),
+        root = root.display(),
+        builddir = env.portage_builddir.display(),
+        workdir = env.workdir().display(),
+        s = env.s().display(),
+        d = env.d().display(),
+        t = env.t().display(),
+        home = env.home().display(),
+        filesdir = env.filesdir().display(),
+        bin_dir = bin_dir.display(),
+        helpers_dir = helpers_dir.display(),
+        portage_debug = if debug { "1" } else { "0" },
+        ebuild_phase_value = ebuild_phase_value,
+    );
+    for (name, value) in extra_env {
+        script.push_str(&format!("export {name}={value:?}\n"));
+    }
+    script
 }
 
 /// Builds one fresh embedded brush shell for a single phase: real
@@ -430,63 +519,7 @@ async fn run_one_phase(
         .map_err(|e| format!("brush shell failed to start: {e}"))?;
     let params = shell.default_exec_params();
 
-    let setup = format!(
-        r#"
-export EAPI={eapi:?}
-export PN={pn:?}
-export PV={pv:?}
-export PR={pr:?}
-export PVR={pvr:?}
-export P={p:?}
-export PF={pf:?}
-export CATEGORY={category:?}
-export EBUILD={ebuild:?}
-export O={o:?}
-export ROOT={root:?}
-export EROOT={root:?}
-export PORTAGE_BUILDDIR={builddir:?}
-export WORKDIR={workdir:?}
-export S={s:?}
-export D={d:?}/
-export ED="${{D}}"
-export T={t:?}
-export HOME={home:?}
-export FILESDIR={filesdir:?}
-export PORTAGE_BIN_PATH={bin_dir:?}
-export PORTAGE_PYTHON=/usr/bin/python
-export PATH={helpers_dir:?}:$PATH
-export SANDBOX_DISABLED=1
-export FEATURES=""
-export USE=""
-export EPREFIX=""
-export EMERGE_FROM=ebuild
-export PORTAGE_QUIET=1
-export PORTAGE_DEBUG={portage_debug}
-export EBUILD_PHASE={phase:?}
-"#,
-        eapi = env.eapi,
-        pn = env.split.pn,
-        pv = env.split.pv,
-        pr = env.split.pr,
-        pvr = env.split.pvr,
-        p = env.split.p,
-        pf = env.split.pf,
-        category = env.category,
-        ebuild = env.ebuild_abs.display(),
-        o = env.pkg_dir.display(),
-        root = root.display(),
-        builddir = env.portage_builddir.display(),
-        workdir = env.workdir().display(),
-        s = env.s().display(),
-        d = env.d().display(),
-        t = env.t().display(),
-        home = env.home().display(),
-        filesdir = env.filesdir().display(),
-        bin_dir = bin_dir.display(),
-        helpers_dir = helpers_dir.display(),
-        portage_debug = if debug { "1" } else { "0" },
-        phase = phase,
-    );
+    let setup = phase_setup_script(env, root, phase, debug, &bin_dir, &helpers_dir, &[]);
     shell
         .run_string(&setup, &brush_core::SourceInfo::default(), &params)
         .await
@@ -518,6 +551,96 @@ export EBUILD_PHASE={phase:?}
         .await
         .map_err(|e| format!("phase {phase} failed: {e}"))
         .map(u8::into)
+}
+
+/// Real `bin/misc-functions.sh`'s own invocation shape -- unlike
+/// `run_one_phase`'s own `bin/ebuild.sh` + `__ebuild_main <phase>`, real
+/// `doebuild()` invokes commands like `"package"` as a *separate*
+/// script, `bin/misc-functions.sh __dyn_<mydo>` (real
+/// `lib/portage/package/ebuild/doebuild.py`'s own `misc_sh = ... +
+/// " __dyn_%s"`), not through `bin/ebuild.sh`'s own phase dispatch at
+/// all -- confirmed by reading it: `bin/phase-functions.sh`'s own
+/// `__ebuild_main` case statement has no `"package"` branch whatsoever.
+/// `misc-functions.sh` itself sources `bin/ebuild.sh` (inheriting the
+/// same environment/ebuild-sourcing this pilot's own `run_one_phase`
+/// already relies on), captures its own positional args into
+/// `MISC_FUNCTIONS_ARGS` *before* sourcing (so `ebuild.sh`'s own arg
+/// handling never sees them), then its own tail unconditionally runs
+/// `for x in ${MISC_FUNCTIONS_ARGS}; do ${x}; done` -- i.e. sourcing it
+/// with `dyn_command` as a positional arg is enough to invoke it
+/// directly; no separate `invoke_function` call is needed the way
+/// `run_one_phase`'s own explicit `__ebuild_main` call is.
+async fn run_misc_functions(
+    env: &Environment,
+    root: &Path,
+    ebuild_phase_value: &str,
+    dyn_command: &str,
+    extra_env: &[(String, String)],
+    debug: bool,
+) -> Result<i32, String> {
+    let bin_dir = repo_root().join("bin");
+    let helpers_dir = bin_dir.join("ebuild-helpers");
+
+    let mut shell = brush_core::Shell::builder()
+        .default_builtins(brush_builtins::BuiltinSet::BashMode)
+        .build()
+        .await
+        .map_err(|e| format!("brush shell failed to start: {e}"))?;
+    let params = shell.default_exec_params();
+
+    let setup = phase_setup_script(
+        env,
+        root,
+        ebuild_phase_value,
+        debug,
+        &bin_dir,
+        &helpers_dir,
+        extra_env,
+    );
+    shell
+        .run_string(&setup, &brush_core::SourceInfo::default(), &params)
+        .await
+        .map_err(|e| format!("environment setup failed: {e}"))?;
+
+    shell
+        .source_script(
+            bin_dir.join("misc-functions.sh"),
+            [dyn_command.to_string()].into_iter(),
+            &params,
+        )
+        .await
+        .map_err(|e| format!("running {dyn_command} failed: {e}"))
+        .map(|result| i32::from(u8::from(result.exit_code)))
+}
+
+/// Synchronous entry point mirroring `run_single_phase`'s own shape, for
+/// `ebuild_package`'s own real `__dyn_package` call.
+pub(crate) fn run_misc_function(
+    ebuild_path: &Path,
+    portage_tmpdir: &Path,
+    root: &Path,
+    ebuild_phase_value: &str,
+    dyn_command: &str,
+    extra_env: &[(String, String)],
+    debug: bool,
+) -> Result<i32, String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("failed to start async runtime: {e}"))?;
+    runtime.block_on(async {
+        let env = compute_environment(ebuild_path, portage_tmpdir)?;
+        create_directories(&env)?;
+        run_misc_functions(
+            &env,
+            root,
+            ebuild_phase_value,
+            dyn_command,
+            extra_env,
+            debug,
+        )
+        .await
+    })
 }
 
 /// Drives `commands` against `ebuild_path` for real: computes the

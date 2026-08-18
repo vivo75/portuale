@@ -12,14 +12,19 @@
 // v1 scope cuts), PLUS, as of task #55, real execution for `merge` (see
 // `ebuild_merge`'s own module doc comment: runs the real `install` chain,
 // then really runs pkg_preinst, copies `${D}` into `${ROOT}`, writes a
-// real vdb entry, then really runs pkg_postinst) and `unmerge` (see
+// real vdb entry, then really runs pkg_postinst), `unmerge` (see
 // `ebuild_unmerge`'s own module doc comment: runs pkg_prerm, really
 // deletes every file/dir/symlink the vdb entry's own CONTENTS lists from
-// `${ROOT}`, runs pkg_postrm, then removes the vdb entry itself). Every
-// other real command (`qmerge`/`package`/`preinst`/`postinst`/`prerm`/
-// `postrm`/`config`/`info`/`nofetch`/`depend`/`fetch`/`fetchall`/
-// `digest`/`manifest`/`rpm`/`instprep`/`clean`/`cleanrm`) still falls
-// through to the pre-existing dry-run stub message below unchanged.
+// `${ROOT}`, runs pkg_postrm, then removes the vdb entry itself), and
+// `package` (see `ebuild_package`'s own module doc comment: runs the
+// real `install` chain, then really invokes `bin/misc-functions.sh`'s
+// own `__dyn_package` -- real, unmodified bash shelling out to the real,
+// unmodified `bin/xpak-helper.py` -- producing a genuine XPAK-tagged
+// `.tbz2` at `PKGDIR`, plus a real `Packages` index entry for it). Every
+// other real command (`qmerge`/`preinst`/`postinst`/`prerm`/`postrm`/
+// `config`/`info`/`nofetch`/`depend`/`fetch`/`fetchall`/`digest`/
+// `manifest`/`rpm`/`instprep`/`clean`/`cleanrm`) still falls through to
+// the pre-existing dry-run stub message below unchanged.
 //
 // Exit codes mirror real `ebuild`'s own conventions: 2 for "missing
 // required args" (real bin/ebuild's argparse `parser.error()`), 1 for
@@ -48,6 +53,7 @@
 
 use crate::ebuild_merge;
 use crate::ebuild_options::{self, Kind};
+use crate::ebuild_package;
 use crate::ebuild_phases;
 use crate::ebuild_unmerge;
 use std::process::ExitCode;
@@ -160,18 +166,19 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     // Real execution (task #54/#55, ebuild_phases's/ebuild_merge's/
-    // ebuild_unmerge's own module doc comments) only when EVERY requested
-    // command is one this pilot actually implements for real (the
-    // actionmap_deps-chained phase subset, plus `merge`/`unmerge`) -- a
-    // deliberate, simple v1 boundary: no partial-real-execution ambiguity
-    // when a request mixes a real command with one this pilot still only
-    // dry-runs (e.g. `ebuild foo.ebuild compile package`). A purely
-    // dry-run request keeps the exact pre-existing stub message
-    // unchanged.
+    // ebuild_unmerge's/ebuild_package's own module doc comments) only
+    // when EVERY requested command is one this pilot actually implements
+    // for real (the actionmap_deps-chained phase subset, plus
+    // `merge`/`unmerge`/`package`) -- a deliberate, simple v1 boundary:
+    // no partial-real-execution ambiguity when a request mixes a real
+    // command with one this pilot still only dry-runs (e.g. `ebuild
+    // foo.ebuild compile qmerge`). A purely dry-run request keeps the
+    // exact pre-existing stub message unchanged.
     if commands.iter().all(|cmd| {
         ebuild_phases::is_real_phase_command(cmd)
             || ebuild_merge::is_real_merge_command(cmd)
             || ebuild_unmerge::is_real_unmerge_command(cmd)
+            || ebuild_package::is_real_package_command(cmd)
     }) {
         let root = portage_repo::root_from_env();
         // Real portage's own make.globals default -- see
@@ -192,21 +199,31 @@ pub fn run(args: &[String]) -> ExitCode {
             config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
                 .unwrap_or(default_merge_options.config_protect_mask),
         };
+        // Real make.globals's own PKGDIR default -- see
+        // ebuild_package::PackageOptions's own Default impl.
+        let package_options = ebuild_package::PackageOptions {
+            debug,
+            pkgdir: std::env::var_os("PKGDIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| ebuild_package::PackageOptions::default().pkgdir),
+        };
         let ebuild_path = std::path::Path::new(ebuild_file);
         // One command at a time here, not the whole slice at once --
-        // neither `merge` nor `unmerge` is itself an ebuild_phases-
-        // recognized phase (real `doebuild()` handles them as their own,
-        // separate steps, not `bin/ebuild.sh` phase arguments at all), so
-        // a mixed list like `["install", "merge"]` needs its own
-        // per-command routing. This also mirrors real `bin/ebuild`'s own
-        // `for arg in pargs: doebuild(ebuild, arg, ...)` loop, which
-        // likewise re-derives the environment fresh for every top-level
-        // command argument.
+        // neither `merge`/`unmerge` nor `package` is itself an
+        // ebuild_phases-recognized phase (real `doebuild()` handles them
+        // as their own, separate steps, not `bin/ebuild.sh` phase
+        // arguments at all), so a mixed list like `["install", "merge"]`
+        // needs its own per-command routing. This also mirrors real
+        // `bin/ebuild`'s own `for arg in pargs: doebuild(ebuild, arg,
+        // ...)` loop, which likewise re-derives the environment fresh
+        // for every top-level command argument.
         for &cmd in &commands {
             let result = if ebuild_merge::is_real_merge_command(cmd) {
                 ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options)
             } else if ebuild_unmerge::is_real_unmerge_command(cmd) {
                 ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, debug)
+            } else if ebuild_package::is_real_package_command(cmd) {
+                ebuild_package::run_package(ebuild_path, &root, &portage_tmpdir, &package_options)
             } else {
                 ebuild_phases::run_commands(ebuild_path, &[cmd], &root, &portage_tmpdir, debug)
             };
@@ -241,12 +258,12 @@ mod tests {
 
     #[test]
     fn accepts_a_real_command_and_still_prints_the_stub_marker() {
-        // "package" is a real ebuild command (doebuild()'s own
+        // "qmerge" is a real ebuild command (doebuild()'s own
         // validcommands list) that this pilot still doesn't implement
-        // for real (unlike "merge"/the actionmap_deps-chained phases as
-        // of tasks #54/#55) -- exactly the case the dry-run stub still
-        // needs to cover.
-        let code = run(&args(&["foo-1.0.ebuild", "package"]));
+        // for real (unlike "merge"/"package"/the actionmap_deps-chained
+        // phases as of tasks #54/#55) -- exactly the case the dry-run
+        // stub still needs to cover.
+        let code = run(&args(&["foo-1.0.ebuild", "qmerge"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
@@ -258,25 +275,25 @@ mod tests {
 
     #[test]
     fn accepts_a_real_boolean_option() {
-        let code = run(&args(&["--force", "foo-1.0.ebuild", "package"]));
+        let code = run(&args(&["--force", "foo-1.0.ebuild", "qmerge"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn accepts_a_real_value_option_without_misreading_its_value() {
-        let code = run(&args(&["--color", "y", "foo-1.0.ebuild", "package"]));
+        let code = run(&args(&["--color", "y", "foo-1.0.ebuild", "qmerge"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn accepts_the_inline_equals_form_of_a_value_option() {
-        let code = run(&args(&["--color=y", "foo-1.0.ebuild", "package"]));
+        let code = run(&args(&["--color=y", "foo-1.0.ebuild", "qmerge"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn rejects_an_unrecognized_option() {
-        let code = run(&args(&["--not-a-real-option", "foo-1.0.ebuild", "package"]));
+        let code = run(&args(&["--not-a-real-option", "foo-1.0.ebuild", "qmerge"]));
         assert_eq!(code, ExitCode::from(1));
     }
 
