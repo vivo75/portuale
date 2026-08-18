@@ -324,6 +324,16 @@ CASES = [
         ],
         0,
     ),
+    (
+        "opt= USE-dep: parent flag ON evaluates to [flag], matches the child's default-on flag",
+        ["--pretend", "dev-libs/useeqparentonpkg"],
+        0,
+    ),
+    (
+        "opt= USE-dep: parent flag OFF evaluates to [-flag], mismatches the child's default-on flag",
+        ["--pretend", "dev-libs/useeqparentoffpkg"],
+        0,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -2269,6 +2279,49 @@ def test_rebuilt_binaries_auto_enables_under_usepkgonly_deep_update(emerge_binar
     assert (
         bounded_deep.stdout.strip()
         == "dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do"
+    )
+
+
+def test_use_dep_equal_parent_matches_when_parent_flag_is_enabled(emerge_binary, fixture_env):
+    """PMS 8.3.4's "opt=" conditional use-dep: "the flag must be enabled
+    if the flag is enabled for the package with the dependency, or
+    disabled otherwise" -- real Atom.evaluate_conditionals
+    (lib/portage/dep/__init__.py:1387), confirmed by reading it, applied
+    at real use_reduce's own per-token integration point
+    (__init__.py:1045-1046). dev-libs/useeqparentonpkg's own
+    IUSE="+eqflag" defaults it ON; its RDEPEND
+    "dev-libs/useeqchildpkg[eqflag=]" evaluates to "[eqflag]" (must be
+    enabled), which matches dev-libs/useeqchildpkg's own default-on
+    eqflag, so the dependency resolves normally."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/useeqparentonpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/useeqparentonpkg-1.0",
+        "[ebuild  N] dev-libs/useeqchildpkg-1.0",
+    ]
+    assert result.stderr == ""
+
+
+def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_binary, fixture_env):
+    """Same mechanism as the sibling test above, the other half of
+    "opt="'s own truth table: dev-libs/useeqparentoffpkg's own
+    IUSE="eqflag" (no "+") defaults it OFF, so the identical
+    "[eqflag=]" use-dep now evaluates to "[-eqflag]" (must be disabled)
+    -- which does NOT match dev-libs/useeqchildpkg's own default-on
+    eqflag, so the dependency is reported unresolvable (same "genuinely
+    unresolvable, but doesn't fail the whole call" precedent
+    dev-libs/missingdep already established), not silently dropped or
+    incorrectly satisfied."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/useeqparentoffpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/useeqparentoffpkg-1.0"
+    assert (
+        result.stderr.strip()
+        == '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
     )
 
 

@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: own IUSE default-enables eqflag -- the target of the [eqflag=] conditional use-dep tests
+EAPI=8
+IUSE=+eqflag
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

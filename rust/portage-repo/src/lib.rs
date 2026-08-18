@@ -3101,11 +3101,27 @@ type QueueItem = (String, u32, Option<(String, String)>);
 /// instead -- shared by `resolve_pretend_graph`'s own normal-deps queueing
 /// and its `--with-test-deps` follow-up below, so the two can't drift
 /// apart on blocker handling or `depth`/`owner` bookkeeping.
+///
+/// `parent_use` (the owning package's own already-computed effective USE
+/// -- the exact same set passed as `use_reduce_flat`'s own `uselist`
+/// argument for this same dependency string) evaluates each token's own
+/// PMS 8.3.4 conditional use-deps (`flag?`/`!flag?`/`flag=`/`!flag=`)
+/// before it's ever queued or classified as a blocker -- real
+/// `use_reduce`'s own per-token integration point (see
+/// `portage_dep::evaluate_atom_conditionals`'s own doc comment), applied
+/// uniformly to every token the same way real portage does, blockers
+/// included (a blocker atom can syntactically carry use-deps too, e.g.
+/// `!foo/bar[baz=]`). A token that fails to re-evaluate (shouldn't
+/// happen for anything `use_reduce_flat` itself already accepted, but
+/// treated the same "can't tell, so pass it through as-is" way an
+/// unparseable-at-all token already silently falls through the
+/// `parse_atom` check below) is queued unevaluated rather than dropped.
 fn enqueue_flat_deps(
     flat_deps: Vec<String>,
     key: &(String, String),
     version: &str,
     depth: u32,
+    parent_use: &HashSet<String>,
     queue: &mut VecDeque<QueueItem>,
     pending_blockers: &mut Vec<PendingBlocker>,
 ) {
@@ -3113,6 +3129,7 @@ fn enqueue_flat_deps(
         if tok == "||" {
             continue;
         }
+        let tok = portage_dep::evaluate_atom_conditionals(&tok, parent_use).unwrap_or(tok);
         if let Some(dep_atom) = portage_dep::parse_atom(&tok) {
             if dep_atom.blocker != portage_dep::Blocker::None {
                 pending_blockers.push(PendingBlocker {
@@ -3964,6 +3981,7 @@ pub fn resolve_pretend_graph(
             &key,
             &version,
             depth,
+            &use_flags,
             &mut queue,
             &mut pending_blockers,
         );
@@ -4006,6 +4024,7 @@ pub fn resolve_pretend_graph(
                         &key,
                         &version,
                         depth,
+                        &test_uselist,
                         &mut queue,
                         &mut pending_blockers,
                     );

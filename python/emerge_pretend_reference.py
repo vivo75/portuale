@@ -3045,18 +3045,37 @@ def resolve_blockers(root, pending, entries):
     return conflicts
 
 
-def _enqueue_flat_deps(flat_deps, key, version, depth, queue, pending_blockers):
+def _enqueue_flat_deps(flat_deps, key, version, depth, parent_use, queue, pending_blockers):
     """Queues every atom in `flat_deps` (a use_reduce(flat=True) result,
     with or without `subset`) onto `queue` at `depth + 1`, owned by
     `key`/`version`, splitting off a blocker atom into `pending_blockers`
     instead -- shared by resolve_pretend_graph's own normal-deps queueing
     and its --with-test-deps follow-up, so the two can't drift apart on
-    blocker handling or depth/owner bookkeeping. Mirrors
-    portage-repo/src/lib.rs's enqueue_flat_deps exactly."""
+    blocker handling or depth/owner bookkeeping.
+
+    `parent_use` (the owning package's own already-computed effective
+    USE -- the exact same set passed as use_reduce's own `uselist`
+    argument for this same dependency string) evaluates each token's own
+    PMS 8.3.4 conditional use-deps (flag?/!flag?/flag=/!flag=) before
+    it's ever queued or classified as a blocker, via the real Atom
+    class's own evaluate_conditionals (this pilot's Python side uses the
+    real portage.dep.Atom directly, so this is genuinely the same
+    mechanism real use_reduce's own per-token integration point uses
+    -- lib/portage/dep/__init__.py:1045-1046, confirmed by reading it
+    -- not a reimplementation the way the Rust side needed). Applied
+    uniformly to every token, blockers included (a blocker atom can
+    syntactically carry use-deps too, e.g. "!foo/bar[baz=]").
+    evaluate_conditionals is a safe no-op for an atom with no
+    conditional use-deps at all (real Atom.evaluate_conditionals's own
+    "if not (self.use and self.use.conditional): return self" guard).
+    Mirrors portage-repo/src/lib.rs's enqueue_flat_deps exactly."""
     for tok in flat_deps:
         if tok == "||":
             continue
         dep_atom = _parse_atom(tok)
+        if dep_atom is not None:
+            dep_atom = dep_atom.evaluate_conditionals(set(parent_use))
+            tok = str(dep_atom)
         if dep_atom is not None and dep_atom.blocker:
             pending_blockers.append(
                 {
@@ -3599,7 +3618,7 @@ def resolve_pretend_graph(
             )
         except InvalidDependString:
             continue
-        _enqueue_flat_deps(flat_deps, key, version, depth, queue, pending_blockers)
+        _enqueue_flat_deps(flat_deps, key, version, depth, use_flags, queue, pending_blockers)
 
         # --with-test-deps: additive on top of the normal deps just
         # queued above, never a replacement for them -- see this
@@ -3619,7 +3638,9 @@ def resolve_pretend_graph(
                     )
                 except InvalidDependString:
                     test_deps = []
-                _enqueue_flat_deps(test_deps, key, version, depth, queue, pending_blockers)
+                _enqueue_flat_deps(
+                    test_deps, key, version, depth, use_flags | {"test"}, queue, pending_blockers
+                )
 
     # Merge required_by_map into entries in a single post-pass, mirroring
     # portage-repo/src/lib.rs's own identical final loop (run before

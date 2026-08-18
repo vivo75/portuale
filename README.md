@@ -204,10 +204,11 @@ PORTING/
   `.force` gave every candidate real, computable IUSE/effective-USE
   state for other reasons, this stopped being a hard blocker -- see the
   dedicated **USE-dep enforcement** paragraph further below for the
-  follow-up that closes most of this gap (the `opt=`/`opt?` forms stay
-  genuinely out of scope, for the reason named above -- they're
-  conditional on the *atom-owning* package's own USE state, not just the
-  candidate's, a wholly different mechanism).
+  follow-up that closed most of this gap, and the later **`opt=`/`opt?`
+  conditional USE-deps** paragraph for the one named here as a "wholly
+  different mechanism" (conditional on the *atom-owning* package's own
+  USE state, not just the candidate's) -- closed too, once this pilot's
+  own dependency recursion had a natural place to plug that state in.
 
   **The `=*` glob version operator** (PMS 8.3.1) closes the last named
   scope cut in `portage-dep`'s own module doc comment. PMS: "if the
@@ -2095,7 +2096,9 @@ PORTING/
   values live in a separate `.conditional` structure it never reads),
   not a pilot simplification: evaluating one for real needs the
   *atom-owning* package's own USE state, a wholly different mechanism
-  this pilot doesn't have and `match_from_list` itself doesn't either.
+  (real `Atom.evaluate_conditionals`, not anything `match_from_list`
+  itself does) -- **now closed**, see the dedicated `opt=`/`opt?`
+  paragraph further below for the follow-up.
   Wiring this up surfaced a second, real latent bug along the way,
   fixed as part of the same slice: `candidate_iuse_and_use` (and the
   `reinstall_flags_for_use_change` code it was extracted from) used to
@@ -2119,6 +2122,53 @@ PORTING/
   rejected *dependency-level* USE-dep atom reports `NoVisibleCandidate`
   for that one entry without failing the whole graph, the same
   "report, don't fail" precedent an unresolvable dependency already had.
+
+  **`opt=`/`!opt=`/`opt?`/`!opt?` conditional USE-deps** (PMS 8.3.4),
+  closing the one gap the USE-dep enforcement paragraph above explicitly
+  named as "a wholly different mechanism". Grounded against real
+  `Atom.evaluate_conditionals` (`lib/portage/dep/__init__.py:1387`,
+  confirmed by reading it directly for its own truth table) and its own
+  real integration point inside `use_reduce` itself
+  (`__init__.py:1045-1046`: `if not matchall and hasattr(token,
+  "evaluate_conditionals"): token = token.evaluate_conditionals(uselist)`
+  -- called on *every* dependency-string atom token, the same `uselist`
+  already threaded through for `flag? ( ... )` *group* conditionals).
+  This pilot's own `use_reduce_flat` (`portage-use-reduce`) deliberately
+  stays atom-grammar-agnostic (see that crate's own module doc comment on
+  the tokenizing/atom-parsing split), so the equivalent step lives one
+  layer up instead: `portage-repo`'s own `enqueue_flat_deps` (shared by
+  the normal-deps queueing and the `--with-test-deps` follow-up, so
+  they can't drift apart) now evaluates each flattened token's own
+  conditional use-deps against the *owning* package's own
+  already-computed effective USE -- the exact same set already being
+  passed as `use_reduce_flat`'s own `uselist` for that identical
+  dependency string -- before the token is ever queued or classified as
+  a blocker. Ported as a new `portage_dep::evaluate_use_dep_conditionals`
+  (the truth table itself, exhaustively unit-tested for all four
+  operators plus default-preservation) and `evaluate_atom_conditionals`
+  (applies it to a whole atom string, surgically rewriting just the
+  `[...]` bracket via the same `atom_regex` capture range `parse_atom`
+  itself uses, leaving everything else -- slot, `::repo`, version --
+  byte-for-byte untouched, and leaving a plain or non-conditional
+  use-dep atom completely unrewritten, not just semantically
+  equivalent). The Python side needed no reimplementation at all: it
+  calls the real `portage.dep.Atom` directly (`from portage.dep import
+  Atom`, confirmed already true for this whole file), so
+  `dep_atom.evaluate_conditionals(parent_use)` *is* the real mechanism,
+  not a port of it. One real one-directional subtlety, faithfully
+  ported: `opt?`/`!opt?` only ever *add* a constraint when their own
+  condition holds -- when it doesn't, the token is dropped entirely
+  (no constraint at all), never rewritten to the opposite unconditional
+  form, unlike `opt=`/`!opt=` which always produce a concrete `flag`/
+  `-flag` either way. `dev-libs/useeqparentonpkg`/`useeqparentoffpkg`
+  (identical RDEPEND `dev-libs/useeqchildpkg[eqflag=]`, differing only
+  in their own `IUSE="+eqflag"` vs `IUSE="eqflag"` default) prove both
+  halves of `opt=`'s own truth table end to end: the `on` variant's
+  dependency resolves normally (evaluates to `[eqflag]`, matching the
+  child's own default-on flag); the `off` variant's identical use-dep
+  evaluates to `[-eqflag]` instead, mismatching the child and reporting
+  it as an unresolvable dependency -- the same "report, don't fail"
+  outcome an ordinary rejected USE-dep already had.
 
   **REQUIRED_USE violation reporting** (PMS 7.3.4/8.2). Grounded against
   real `depgraph.py`'s own integration point, not just `check_required_use`
@@ -3439,6 +3489,19 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[n
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeprejectedpkg
 # [ebuild  N] dev-libs/usedeprejectedpkg-1.0
 # !!! no visible ebuild for dependency "dev-libs/useflagpkg"  (stderr)
+
+# opt= conditional USE-dep (PMS 8.3.4): useeqparentonpkg's own
+# IUSE="+eqflag" defaults it ON, so its RDEPEND's "[eqflag=]" evaluates
+# to "[eqflag]" -- matches useeqchildpkg's own default-on eqflag
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useeqparentonpkg
+# [ebuild  N] dev-libs/useeqparentonpkg-1.0
+# [ebuild  N] dev-libs/useeqchildpkg-1.0
+# the identical use-dep string, but useeqparentoffpkg's own IUSE="eqflag"
+# (no "+") defaults it OFF -- "[eqflag=]" now evaluates to "[-eqflag]",
+# which mismatches the child, so the dependency is reported unresolvable
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useeqparentoffpkg
+# [ebuild  N] dev-libs/useeqparentoffpkg-1.0
+# !!! no visible ebuild for dependency "dev-libs/useeqchildpkg"  (stderr)
 
 # REQUIRED_USE is real and implemented: requireduseokpkg's own
 # "foo? ( bar )" is genuinely satisfied (foo enabled globally, bar

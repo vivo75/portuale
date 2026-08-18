@@ -774,6 +774,166 @@ pub fn use_deps_satisfied(
     true
 }
 
+/// Renders one `UseDep` back to its own atom-string token, the exact
+/// inverse of `parse_use_deps`'s own per-token parse (`flag`/`-flag`/
+/// `flag?`/`!flag?`/`flag=`/`!flag=`, each optionally suffixed with its
+/// own `(+)`/`(-)` default) -- "parsed for fidelity/round-tripping" per
+/// `UseDep`'s own doc comment, now actually round-tripped by
+/// `evaluate_atom_conditionals` below.
+fn render_use_dep(ud: &UseDep) -> String {
+    let default = match ud.default {
+        None => "",
+        Some(UseDepDefault::Enabled) => "(+)",
+        Some(UseDepDefault::Disabled) => "(-)",
+    };
+    match ud.op {
+        UseDepOp::Enabled => format!("{}{default}", ud.flag),
+        UseDepOp::Disabled => format!("-{}{default}", ud.flag),
+        UseDepOp::IfParentEnabled => format!("{}?{default}", ud.flag),
+        UseDepOp::IfParentDisabled => format!("!{}?{default}", ud.flag),
+        UseDepOp::EqualParent => format!("{}={default}", ud.flag),
+        UseDepOp::OppositeParent => format!("!{}={default}", ud.flag),
+    }
+}
+
+/// PMS 8.3.4's own 4 conditional use-dep forms (`flag?`/`!flag?`/
+/// `flag=`/`!flag=`), evaluated against `parent_use` -- the *atom-owning*
+/// package's own current effective USE set, i.e. the same `uselist`
+/// already threaded into `use_reduce_flat` for evaluating a dependency
+/// string's own `flag? ( ... )` groups (real `Atom.evaluate_conditionals`,
+/// `lib/portage/dep/__init__.py:1387`, confirmed by reading it directly
+/// -- ported here verbatim from its own truth table):
+///
+/// ```text
+///     parent state   conditional   result
+///      x              x?            x
+///     -x              x?            (dropped -- no constraint at all)
+///      x             !x?            (dropped -- no constraint at all)
+///     -x             !x?           -x
+///      x              x=            x
+///     -x              x=           -x
+///      x             !x=           -x
+///     -x             !x=            x
+/// ```
+///
+/// `x?`/`!x?` are one-directional: they only ever *add* a constraint,
+/// never remove the flag from consideration entirely the way a dropped
+/// token here does -- a `Vec<UseDep>` that becomes empty after this call
+/// is exactly equivalent to "no use-dep at all", the same "empty means
+/// unconstrained" convention `use_deps_satisfied`'s own callers already
+/// established (see `resolve_pretend`'s own `.filter(|d| !d.is_empty())`
+/// gate, portage-repo). The two unconditional forms (`Enabled`/
+/// `Disabled`) and any `(+)`/`(-)` default pass through completely
+/// unchanged -- only the parent-relative ops are ever touched here.
+pub fn evaluate_use_dep_conditionals(
+    use_deps: &[UseDep],
+    parent_use: &HashSet<String>,
+) -> Vec<UseDep> {
+    use_deps
+        .iter()
+        .filter_map(|ud| {
+            let op = match ud.op {
+                UseDepOp::Enabled | UseDepOp::Disabled => ud.op.clone(),
+                UseDepOp::IfParentEnabled => {
+                    if parent_use.contains(&ud.flag) {
+                        UseDepOp::Enabled
+                    } else {
+                        return None;
+                    }
+                }
+                UseDepOp::IfParentDisabled => {
+                    if parent_use.contains(&ud.flag) {
+                        return None;
+                    } else {
+                        UseDepOp::Disabled
+                    }
+                }
+                UseDepOp::EqualParent => {
+                    if parent_use.contains(&ud.flag) {
+                        UseDepOp::Enabled
+                    } else {
+                        UseDepOp::Disabled
+                    }
+                }
+                UseDepOp::OppositeParent => {
+                    if parent_use.contains(&ud.flag) {
+                        UseDepOp::Disabled
+                    } else {
+                        UseDepOp::Enabled
+                    }
+                }
+            };
+            Some(UseDep {
+                flag: ud.flag.clone(),
+                op,
+                default: ud.default.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Applies `evaluate_use_dep_conditionals` to `atom_str` itself, real
+/// `use_reduce`'s own per-token integration point (`lib/portage/dep/
+/// __init__.py:1045-1046`, confirmed by reading it: `if not matchall and
+/// hasattr(token, "evaluate_conditionals"): token =
+/// token.evaluate_conditionals(uselist)`, called on every dependency
+/// *atom* token as `use_reduce` walks a dependency string -- the exact
+/// same `uselist` parameter it already threads through for `flag?
+/// ( ... )` *group* conditionals). This pilot's own `use_reduce_flat`
+/// (portage-use-reduce) deliberately stays atom-grammar-agnostic (see
+/// its own module doc comment on the atom-parsing/tokenizing split), so
+/// this step lives here instead, applied by the caller (portage-repo's
+/// own `enqueue_flat_deps`) to each flattened token once it already has
+/// the owning package's own effective USE in hand.
+///
+/// Returns `atom_str` completely unchanged (not just semantically
+/// equivalent -- literally the same string) whenever it has no use-deps
+/// at all or none of them are conditional, so a non-USE-dep or
+/// plain-`[flag]`-only atom is never needlessly rewritten. Returns
+/// `None` only if `atom_str` doesn't parse as a valid atom at all --
+/// callers should treat that the same as any other unparseable token.
+pub fn evaluate_atom_conditionals(atom_str: &str, parent_use: &HashSet<String>) -> Option<String> {
+    let atom = parse_atom(atom_str)?;
+    let Some(use_deps) = atom.use_deps.as_ref().filter(|d| !d.is_empty()) else {
+        return Some(atom_str.to_string());
+    };
+    if !use_deps.iter().any(|ud| {
+        matches!(
+            ud.op,
+            UseDepOp::IfParentEnabled
+                | UseDepOp::IfParentDisabled
+                | UseDepOp::EqualParent
+                | UseDepOp::OppositeParent
+        )
+    }) {
+        return Some(atom_str.to_string());
+    }
+    let evaluated = evaluate_use_dep_conditionals(use_deps, parent_use);
+
+    let caps = atom_regex().captures(atom_str)?;
+    let bracket_start = match caps.name("usedeps") {
+        Some(m) => m.start(),
+        None => atom_str.len(),
+    };
+    let bracket_end = atom_str.len();
+    let new_bracket = if evaluated.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "[{}]",
+            evaluated
+                .iter()
+                .map(render_use_dep)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
+    Some(format!(
+        "{}{new_bracket}",
+        &atom_str[..bracket_start.min(bracket_end)]
+    ))
+}
+
 /// Mirrors `match_from_list`: given an atom string and a list of candidate
 /// strings, returns the subset (in input order) that match. `None` means
 /// the atom itself failed to parse under the v1 grammar. Unparseable
@@ -1239,5 +1399,196 @@ mod use_dep_satisfaction_tests {
         let a = parse_atom("dev-libs/foo[bar]").unwrap();
         let b = parse_atom("dev-libs/foo[-bar]").unwrap();
         assert!(!atom_intersects(&a, &b));
+    }
+}
+
+#[cfg(test)]
+mod use_dep_conditional_evaluation_tests {
+    use super::*;
+
+    #[test]
+    fn if_parent_enabled_becomes_enabled_when_parent_has_the_flag() {
+        // "x?": parent state x -> result x (real truth table, see
+        // evaluate_use_dep_conditionals's own doc comment).
+        let ud = parse_atom("dev-libs/foo[bar?]").unwrap().use_deps.unwrap();
+        let parent_use = HashSet::from(["bar".to_string()]);
+        let evaluated = evaluate_use_dep_conditionals(&ud, &parent_use);
+        assert_eq!(
+            evaluated,
+            vec![UseDep {
+                flag: "bar".to_string(),
+                op: UseDepOp::Enabled,
+                default: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn if_parent_enabled_is_dropped_when_parent_lacks_the_flag() {
+        // "x?": parent state -x -> dropped (no constraint at all), not
+        // "-x" -- the one-directional half of the truth table.
+        let ud = parse_atom("dev-libs/foo[bar?]").unwrap().use_deps.unwrap();
+        let evaluated = evaluate_use_dep_conditionals(&ud, &HashSet::new());
+        assert!(evaluated.is_empty());
+    }
+
+    #[test]
+    fn if_parent_disabled_becomes_disabled_when_parent_lacks_the_flag() {
+        // "!x?": parent state -x -> result -x.
+        let ud = parse_atom("dev-libs/foo[!bar?]").unwrap().use_deps.unwrap();
+        let evaluated = evaluate_use_dep_conditionals(&ud, &HashSet::new());
+        assert_eq!(
+            evaluated,
+            vec![UseDep {
+                flag: "bar".to_string(),
+                op: UseDepOp::Disabled,
+                default: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn if_parent_disabled_is_dropped_when_parent_has_the_flag() {
+        let ud = parse_atom("dev-libs/foo[!bar?]").unwrap().use_deps.unwrap();
+        let parent_use = HashSet::from(["bar".to_string()]);
+        let evaluated = evaluate_use_dep_conditionals(&ud, &parent_use);
+        assert!(evaluated.is_empty());
+    }
+
+    #[test]
+    fn equal_parent_mirrors_the_parents_own_state_exactly() {
+        // "x=": x -> x, -x -> -x -- always imposes a constraint, unlike
+        // the "?" forms.
+        let ud = parse_atom("dev-libs/foo[bar=]").unwrap().use_deps.unwrap();
+        assert_eq!(
+            evaluate_use_dep_conditionals(&ud, &HashSet::from(["bar".to_string()])),
+            vec![UseDep {
+                flag: "bar".to_string(),
+                op: UseDepOp::Enabled,
+                default: None,
+            }]
+        );
+        assert_eq!(
+            evaluate_use_dep_conditionals(&ud, &HashSet::new()),
+            vec![UseDep {
+                flag: "bar".to_string(),
+                op: UseDepOp::Disabled,
+                default: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn opposite_parent_inverts_the_parents_own_state() {
+        // "!x=": x -> -x, -x -> x.
+        let ud = parse_atom("dev-libs/foo[!bar=]").unwrap().use_deps.unwrap();
+        assert_eq!(
+            evaluate_use_dep_conditionals(&ud, &HashSet::from(["bar".to_string()])),
+            vec![UseDep {
+                flag: "bar".to_string(),
+                op: UseDepOp::Disabled,
+                default: None,
+            }]
+        );
+        assert_eq!(
+            evaluate_use_dep_conditionals(&ud, &HashSet::new()),
+            vec![UseDep {
+                flag: "bar".to_string(),
+                op: UseDepOp::Enabled,
+                default: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn defaults_survive_evaluation_unchanged() {
+        let ud = parse_atom("dev-libs/foo[bar(+)=]")
+            .unwrap()
+            .use_deps
+            .unwrap();
+        let evaluated = evaluate_use_dep_conditionals(&ud, &HashSet::new());
+        assert_eq!(
+            evaluated,
+            vec![UseDep {
+                flag: "bar".to_string(),
+                op: UseDepOp::Disabled,
+                default: Some(UseDepDefault::Enabled),
+            }]
+        );
+    }
+
+    #[test]
+    fn unconditional_forms_pass_through_untouched() {
+        let ud = parse_atom("dev-libs/foo[bar,-baz]")
+            .unwrap()
+            .use_deps
+            .unwrap();
+        assert_eq!(evaluate_use_dep_conditionals(&ud, &HashSet::new()), ud);
+    }
+
+    #[test]
+    fn evaluate_atom_conditionals_rewrites_the_bracket_in_place() {
+        let parent_use = HashSet::from(["bar".to_string()]);
+        assert_eq!(
+            evaluate_atom_conditionals("dev-libs/foo[bar=]", &parent_use).as_deref(),
+            Some("dev-libs/foo[bar]")
+        );
+        assert_eq!(
+            evaluate_atom_conditionals("dev-libs/foo[bar=]", &HashSet::new()).as_deref(),
+            Some("dev-libs/foo[-bar]")
+        );
+    }
+
+    #[test]
+    fn evaluate_atom_conditionals_drops_the_whole_bracket_once_empty() {
+        // A lone "x?" against a parent that lacks the flag evaluates to
+        // zero tokens -- the atom string must come back with no "[...]"
+        // clause at all, not "dev-libs/foo[]".
+        assert_eq!(
+            evaluate_atom_conditionals("dev-libs/foo[bar?]", &HashSet::new()).as_deref(),
+            Some("dev-libs/foo")
+        );
+    }
+
+    #[test]
+    fn evaluate_atom_conditionals_preserves_slot_and_repo() {
+        // This pilot's own atom grammar orders "::repo" before the
+        // use-deps bracket (see atom_regex's own group order) -- unlike
+        // real portage, which puts use-deps before "::repo". Matching
+        // this crate's own already-accepted order, not inventing a new
+        // one.
+        let parent_use = HashSet::from(["bar".to_string()]);
+        assert_eq!(
+            evaluate_atom_conditionals("dev-libs/foo:0::testrepo[bar=]", &parent_use).as_deref(),
+            Some("dev-libs/foo:0::testrepo[bar]")
+        );
+    }
+
+    #[test]
+    fn evaluate_atom_conditionals_leaves_a_plain_use_dep_atom_unchanged() {
+        // No conditional ops at all -- must be the literal same string,
+        // not just an equivalent re-rendering.
+        let atom_str = "dev-libs/foo[bar,-baz(+)]";
+        assert_eq!(
+            evaluate_atom_conditionals(atom_str, &HashSet::new()).as_deref(),
+            Some(atom_str)
+        );
+    }
+
+    #[test]
+    fn evaluate_atom_conditionals_leaves_a_no_use_dep_atom_unchanged() {
+        let atom_str = "dev-libs/foo";
+        assert_eq!(
+            evaluate_atom_conditionals(atom_str, &HashSet::new()).as_deref(),
+            Some(atom_str)
+        );
+    }
+
+    #[test]
+    fn evaluate_atom_conditionals_returns_none_for_an_unparseable_atom() {
+        assert_eq!(
+            evaluate_atom_conditionals("not a valid atom", &HashSet::new()),
+            None
+        );
     }
 }
