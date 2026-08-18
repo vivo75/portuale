@@ -27,11 +27,13 @@ mod install_mask;
 mod mrg;
 mod mtimedb;
 mod needed_elf;
+mod portage_lock;
 mod portageq;
 mod pretend;
 mod regen;
 mod remote;
 mod remote_bundle;
+mod self_exe;
 mod vdb_ipc;
 #[cfg(feature = "vdb-fuse")]
 mod vdb_view;

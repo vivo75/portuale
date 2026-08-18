@@ -350,6 +350,146 @@ fn built_binpkg_stanza_fields<'a>(
     fields
 }
 
+/// Writes (creating the file and its header if necessary) or replaces `cpv`'s
+/// entry in `<pkgdir>/Packages`. A pre-existing entry for the same `cpv` (a
+/// rebuild) is replaced in place, not duplicated; every other entry is
+/// preserved verbatim.
+///
+/// `header` is the resolved snapshot for this write's mode (`parent` for a
+/// `--buildpkg` inject, `child` for a `quickpkg`): the stored header's keys
+/// are refreshed from it, `TIMESTAMP`/`PACKAGES`/`VERSION` rewritten, and
+/// the block emitted sorted, like Portage's `PackageIndex.write`. `None`
+/// (the config-less standalone path) keeps the legacy minimal header and
+/// preserves a stored one verbatim.
+///
+/// Like Portage's `bintree.inject`, the `Packages` lock is the
+/// `wantnewlockfile` shape, so the `.Packages.portage_lockfile` sibling is
+/// removed on release. A `Packages.gz` copy (same bytes, gzip level 9, no
+/// original-filename field, header mtime = the index `TIMESTAMP`) is written
+/// when `compress-index` is in the snapshot's resolved `FEATURES`, and any
+/// stale copy is removed when it is not; `None` leaves it alone (no resolved
+/// features to judge by).
+///
+/// The whole read-modify-write runs under that lock, so a concurrent write
+/// to the same `Packages` file cannot interleave.
+// Portage: bintree.py, bintree.inject/_pkgindex_write;
+//   locks.py, lockfile/unlockfile; getbinpkg.py, PackageIndex.write
+fn write_packages_index_entry(
+    pkgdir: &Path,
+    cpv: &str,
+    fields: &[(&str, &str)],
+    header: Option<&portage_profile::HeaderSnapshot>,
+) -> Result<(), String> {
+    let path = pkgdir.join("Packages");
+    let now = now_unix_time()?;
+
+    // Makedirs first, then the lock: the lock file is a sibling of `Packages`,
+    // so its parent dir must exist first (Portage's order).
+    std::fs::create_dir_all(pkgdir).map_err(|e| format!("{}: {e}", pkgdir.display()))?;
+    let _lock = crate::portage_lock::PortageLockfile::acquire_new_lockfile(&path)?;
+
+    let mut blocks: Vec<String> = Vec::new();
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        for block in text.split("\n\n") {
+            let block = block.trim();
+            if !block.is_empty() {
+                blocks.push(block.to_string());
+            }
+        }
+    }
+    let mut stored_header = String::new();
+    if !blocks.is_empty() {
+        stored_header = blocks.remove(0);
+    }
+    // Header is always blocks[0]; dedup like Portage's `_inject_file`: by
+    // `PATH` when this entry carries one (a different `PATH` is a genuinely
+    // different file and survives), else by `CPV` alone.
+    let path_value = fields
+        .iter()
+        .find(|(k, _)| *k == "PATH")
+        .map(|(_, v)| *v)
+        .unwrap_or("");
+    if path_value.is_empty() {
+        blocks.retain(|b| !b.lines().any(|l| l == format!("CPV: {cpv}")));
+    } else {
+        blocks.retain(|b| !b.lines().any(|l| l == format!("PATH: {path_value}")));
+    }
+    blocks.push(format_packages_entry(fields).trim().to_string());
+
+    let header_text = match header {
+        Some(snapshot) => {
+            let mut kept: std::collections::BTreeMap<String, String> = stored_header
+                .lines()
+                .filter_map(|l| l.split_once(": "))
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            for (key, value) in snapshot {
+                match value {
+                    Some(v) => {
+                        kept.insert(key.clone(), v.clone());
+                    }
+                    None => {
+                        kept.remove(key);
+                    }
+                }
+            }
+            kept.insert("TIMESTAMP".to_string(), now.to_string());
+            kept.insert("PACKAGES".to_string(), blocks.len().to_string());
+            kept.insert("VERSION".to_string(), "0".to_string());
+            kept.into_iter()
+                .filter(|(_, v)| !v.is_empty())
+                .map(|(k, v)| format!("{k}: {v}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        None => {
+            if stored_header.is_empty() {
+                stored_header = packages_index_header(now).trim().to_string();
+            }
+            stored_header
+        }
+    };
+
+    let mut text = header_text;
+    for block in blocks {
+        text.push_str("\n\n");
+        text.push_str(&block);
+    }
+    // Every block (header and entries alike) ends with its own blank line,
+    // like Portage's `_writepkgindex`, so the file ends with one too.
+    // Portage: getbinpkg.py, PackageIndex._writepkgindex
+    text.push_str("\n\n");
+
+    std::fs::write(&path, &text).map_err(|e| format!("{}: {e}", path.display()))?;
+
+    // Portage's `_pkgindex_write` gzip half. The snapshot's `FEATURES` is
+    // the resolved fold (`make.globals` carries `compress-index` by
+    // default), so a config-less (`None`) write has nothing to judge by
+    // and leaves any existing copy alone.
+    let compress_index = header
+        .and_then(|snapshot| {
+            snapshot
+                .iter()
+                .find(|(key, _)| key == "FEATURES")
+                .and_then(|(_, value)| value.as_ref())
+        })
+        .is_some_and(|features| features.split_whitespace().any(|t| t == "compress-index"));
+    if compress_index {
+        // The header just written carries `TIMESTAMP: {now}` (inserted
+        // above), which is the mtime Portage stamps into the gzip header.
+        write_packages_gz(pkgdir, text.as_bytes(), now)?;
+    } else if header.is_some() {
+        let gz_path = pkgdir.join("Packages.gz");
+        match std::fs::remove_file(&gz_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", gz_path.display())),
+        }
+    }
+    Ok(())
+    // `_lock` drops here, releasing the flock and unlinking the lock file.
+}
+
 /// Portage's `_pkgindex_write` gzip half: the same bytes as `Packages`,
 /// compressed at level 9 with no original-filename field and the header
 /// mtime set to the index `TIMESTAMP`. Written through a same-directory

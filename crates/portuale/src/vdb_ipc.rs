@@ -41,6 +41,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+/// The variable that carries the socket path to the children.
+pub(crate) const IPC_VAR: &str = "PORTUALE_VDB_IPC";
+
 // ---------------------------------------------------------------------
 // Cleanup on panic (release builds abort, so `Drop` never runs)
 // ---------------------------------------------------------------------

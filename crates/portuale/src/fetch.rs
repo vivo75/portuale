@@ -16,6 +16,8 @@ use portage_fetch::{
 };
 use std::path::{Path, PathBuf};
 
+use crate::portage_lock::PortageLockfile;
+
 /// Default `GENTOO_MIRRORS` when the env var is unset/empty. A `FetchOptions`
 /// field rather than an ambient read, so tests control it directly (most set
 /// it to `vec![]`, so a deliberately-failing fetch never reaches the genuine
@@ -439,4 +441,247 @@ fn has_enough_space(distdir: &Path, bytes: u64) -> bool {
     }
     let available_bytes = (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64);
     available_bytes >= bytes
+}
+
+/// Fetch every file `src_uri` names for the current USE set into
+/// `options.distdir`, unless a Manifest-verified copy is already there.
+/// `flag?` groups reduce against `options.use_flags`. Returns the filename
+/// list the caller exports as `A`. A file with no `Manifest` entry is refused
+/// outright: unverifiable content is worse than a loud failure.
+pub fn fetch_src_uri(
+    pkg_dir: &Path,
+    src_uri: &str,
+    options: &FetchOptions,
+) -> Result<Vec<String>, String> {
+    let manifest = parse_manifest(&pkg_dir.join("Manifest"))?;
+    let entries = flatten_src_uri(src_uri, |negated, flag| {
+        options.use_flags.contains(flag) != negated
+    })
+    .map_err(|e| format!("{}: {e}", pkg_dir.display()))?;
+
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    std::fs::create_dir_all(&options.distdir)
+        .map_err(|e| format!("{}: {e}", options.distdir.display()))?;
+
+    // `mirror://` resolution: the ebuild repo's `thirdpartymirrors` (empty
+    // outside any repo checkout), `${config_root}/etc/portage/mirrors` as
+    // `custommirrors` (same file format), plus the `GENTOO_MIRRORS` fallback.
+    let thirdpartymirrors = crate::ebuild_phases::repo_root_for(pkg_dir)
+        .map(|repo_root| parse_thirdpartymirrors(&repo_root.join("profiles/thirdpartymirrors")))
+        .transpose()?
+        .unwrap_or_default();
+    // The default `config_root` is an impossible sentinel path, so ANY failure
+    // here (not just `NotFound`) degrades to an empty `custommirrors` map.
+    let custommirrors = parse_thirdpartymirrors(&options.config_root.join("etc/portage/mirrors"))
+        .unwrap_or_default();
+
+    let mut filenames = Vec::new();
+    for (_, group) in group_by_filename(&entries) {
+        // The first entry names the file (and any error message).
+        let entry = group[0];
+        let dest = options.distdir.join(&entry.filename);
+        // `FEATURES=distlocks`: held for the whole per-file sequence, released
+        // when `_lock` drops. Acquired after the no-Manifest-entry refusal below,
+        // which needs no lock (nothing to fetch or protect when refusing outright).
+        let digests = manifest.get(&entry.filename);
+        let Some(digests) = digests else {
+            return Err(format!(
+                "{}: no Manifest entry, cannot verify -- refusing to fetch \
+                 unverifiable content",
+                entry.filename
+            ));
+        };
+        let _lock = if options.distlocks {
+            Some(PortageLockfile::acquire(&dest)?)
+        } else {
+            None
+        };
+
+        let mut already_verified = dest.is_file() && verify_digests(&dest, digests).is_ok();
+
+        // `PORTAGE_RO_DISTDIRS`: a verified read-only copy is symlinked into a
+        // writable DISTDIR -- before the fsmirrors copy and every download.
+        if !already_verified
+            && distdir_writable(&options.distdir)
+            && !options.ro_distdirs.is_empty()
+        {
+            for dir in &options.ro_distdirs {
+                if !dir.is_dir() {
+                    continue;
+                }
+                let source = mirror_url(MirrorUrlArgs {
+                    mirror: &dir.to_string_lossy(),
+                    filename: &entry.filename,
+                    digests: &digests.hashes,
+                    distdir: &options.distdir,
+                    cache_path: None,
+                    now: 0.0,
+                });
+                let source = std::path::PathBuf::from(source);
+                if verify_digests(&source, digests).is_ok() {
+                    let _ = std::fs::remove_file(&dest);
+                    if std::os::unix::fs::symlink(&source, &dest).is_ok() {
+                        already_verified = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Before any download, a missing file is copied from the first
+        // on-filesystem mirror that has it, given enough free space.
+        if !already_verified && !dest.exists() && has_enough_space(&options.distdir, digests.size) {
+            let fsmirrors = fsmirrors(&custommirrors, &options.gentoo_mirrors);
+            if copy_from_fsmirrors(&fsmirrors, &entry.filename, &digests.hashes, options, &dest)? {
+                match verify_digests(&dest, digests) {
+                    Ok(()) => already_verified = true,
+                    // A short copy is kept to resume from; a full-size corrupt
+                    // one is replaced by the download.
+                    Err(_) if std::fs::metadata(&dest).is_ok_and(|m| m.len() < digests.size) => {}
+                    Err(_) => {
+                        let _ = std::fs::remove_file(&dest);
+                    }
+                }
+            }
+        }
+
+        if !already_verified {
+            let candidates =
+                assemble_candidates(&group, &custommirrors, &thirdpartymirrors, options);
+            // A plain URI barred by `RESTRICT=fetch`/`force-mirror` never enters
+            // the list; a `fetch+`/`mirror+` prefix re-permits it (except under
+            // `force-mirror`). `mirror://` candidates come only from expansions.
+            let plain_uri_barred_by_restrict_fetch =
+                (options.restrict_fetch && !entry.override_fetch || options.force_mirror)
+                    && !entry.uri.starts_with("mirror://");
+            // The public mirror list is appended unless mirroring is restricted;
+            // `mirror+` re-permits it for this file. `RESTRICT=fetch` implies it too.
+            let public_mirrors_barred =
+                (options.restrict_mirror || options.restrict_fetch) && !entry.override_mirror;
+            if candidates.is_empty() {
+                // A `RESTRICT=fetch` file missing from DISTDIR fails here; the
+                // caller then runs the ebuild's own `pkg_nofetch` phase.
+                let why = if plain_uri_barred_by_restrict_fetch {
+                    format!(
+                        "RESTRICT=fetch bars downloading it -- place a verified copy in {} \
+                         by hand (see the pkg_nofetch output above)",
+                        options.distdir.display()
+                    )
+                } else if public_mirrors_barred {
+                    "unknown mirror name, and RESTRICT=mirror bars the GENTOO_MIRRORS fallback"
+                        .to_string()
+                } else {
+                    "unknown mirror name, and GENTOO_MIRRORS is empty".to_string()
+                };
+                return Err(format!(
+                    "{}: no working candidate mirror for {:?} ({why})",
+                    entry.filename, entry.uri
+                ));
+            }
+
+            let mut errors = Vec::new();
+            let mut fetched = false;
+            // The assembled list may repeat a location, but each is attempted
+            // once per file.
+            let mut tried = std::collections::HashSet::new();
+            let cache_path = distdir_writable(&options.distdir)
+                .then(|| options.distdir.join(".mirror-cache.json"));
+            let now = options.mirror_cache_now.unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_secs_f64())
+            });
+            // A stack popped from the end, so the primary-uri switch below jumps
+            // ahead of what is left.
+            let mut uri_list: Vec<Candidate> = candidates.iter().rev().cloned().collect();
+            let mut checksum_failures = 0;
+            // One resolved candidate URI -> `dest`, fresh or resumed, with no
+            // Manifest context; digest verification stays here, which holds it.
+            let digests_var = portage_fetch::digests_variable(digests);
+            let fetcher: &dyn Fetcher = &WgetFetcher;
+            while let Some(candidate) = uri_list.pop() {
+                let candidate = match &candidate {
+                    Candidate::Uri(uri) => uri.clone(),
+                    Candidate::Mirror(root) => mirror_url(MirrorUrlArgs {
+                        mirror: root,
+                        filename: &entry.filename,
+                        digests: &digests.hashes,
+                        distdir: &options.distdir,
+                        cache_path: cache_path.as_deref(),
+                        now,
+                    }),
+                };
+                if !tried.insert(candidate.clone()) {
+                    continue;
+                }
+                let candidate = candidate.as_str();
+                // A non-empty partial on disk switches from `FETCHCOMMAND` to
+                // `RESUMECOMMAND` (`wget -c` continues it).
+                let has_partial = std::fs::metadata(&dest)
+                    .map(|m| m.len() > 0)
+                    .unwrap_or(false);
+                let attempt = fetcher.fetch(&FetchRequest {
+                    filename: entry.filename.as_str(),
+                    uri: candidate,
+                    dest: &dest,
+                    resume: has_partial,
+                    commands: options.fetch_commands.as_ref(),
+                    vars: portage_fetch::FetchCommandVars {
+                        digests: Some(&digests_var),
+                        portage_ssh_opts: options.portage_ssh_opts.as_deref(),
+                    },
+                });
+                match attempt {
+                    Ok(()) => match verify_digests(&dest, digests) {
+                        Ok(()) => {
+                            fetched = true;
+                            break;
+                        }
+                        Err(e) => {
+                            errors.push(format!("{candidate}: digest verification failed: {e}"));
+                            checksum_failures += 1;
+                            // Rename the corrupt file aside with a deterministic
+                            // counter suffix, preserving it as evidence.
+                            let bad_file = format!(
+                                "{}._checksum_failure_{}",
+                                dest.display(),
+                                checksum_failures
+                            );
+                            let _ = std::fs::rename(&dest, &bad_file);
+                            eprintln!("Refetching... File renamed to '{bad_file}'");
+                            // The second failure jumps to the primary URIs; the cap
+                            // stops trying further locations at all.
+                            if checksum_failures == 2 {
+                                uri_list.extend(
+                                    primary_uris(&group, &thirdpartymirrors, options)
+                                        .into_iter()
+                                        .rev()
+                                        .map(Candidate::Uri),
+                                );
+                            }
+                            if checksum_failures >= options.checksum_failure_max_tries {
+                                break;
+                            }
+                        }
+                    },
+                    // A transport failure may have left a resumable partial for
+                    // the next candidate.
+                    Err(e) => errors.push(e),
+                }
+            }
+            if !fetched {
+                let _ = std::fs::remove_file(&dest);
+                return Err(format!(
+                    "{}: every candidate failed:\n{}",
+                    entry.filename,
+                    errors.join("\n")
+                ));
+            }
+        }
+        filenames.push(entry.filename.clone());
+    }
+    Ok(filenames)
 }

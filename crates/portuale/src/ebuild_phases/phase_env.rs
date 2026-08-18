@@ -36,6 +36,19 @@ pub(crate) fn eclass_locations_value(pkg_dir: &Path, config_root: &Path) -> Stri
         .join(" ")
 }
 
+/// `PORTUALE_BIN`: absolute path of the running binary (under test, the `portuale`
+/// binary next to `deps/`, never the libtest harness).
+pub(crate) fn portuale_bin_value() -> String {
+    #[cfg(test)]
+    {
+        crate::self_exe::built_portuale_bin().display().to_string()
+    }
+    #[cfg(not(test))]
+    {
+        crate::self_exe::self_exe().display().to_string()
+    }
+}
+
 /// `PORTAGE_PYTHON`: the `portuale-python` shim, or `/usr/bin/python` under the
 /// oracle handle.
 pub(crate) fn portage_python_value(bin_dir: &Path) -> String {
