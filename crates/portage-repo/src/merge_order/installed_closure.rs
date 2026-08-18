@@ -32,3 +32,43 @@ pub(crate) fn edge_satisfied_with(
     }
     true
 }
+
+/// A synthetic `AlreadyInstalled` node for an installed package the resolve never
+/// made an entry for. Filtered back out of the scheduled list before returning.
+pub(crate) fn synthetic_installed_entry(
+    category: String,
+    package: String,
+    version: String,
+    deps: Vec<DepEdge>,
+) -> GraphEntry {
+    GraphEntry {
+        discovery: 0,
+        category,
+        package,
+        outcome: PretendOutcome::AlreadyInstalled { version },
+        blockers: Vec::new(),
+        slot: None,
+        sub_slot: None,
+        repo_name: None,
+        oldbest: Vec::new(),
+        use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: Vec::new(),
+        source: CandidateSource::Ebuild,
+        provenance: VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps,
+    }
+}

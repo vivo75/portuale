@@ -554,6 +554,15 @@ pub struct RunPackageArgs<'a> {
     pub use_flags: &'a str,
 }
 
+pub(crate) struct PackageAfterInstallArgs<'a> {
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a PackageOptions,
+    pub(crate) use_flags: &'a str,
+    pub(crate) per_entry_binpkg_multi_instance: bool,
+}
+
 /// Rejected here rather than letting the bash hit `die "Unknown BINPKG_FORMAT"`,
 /// so the caller gets a clean `Err` instead of a phase-script failure.
 fn binpkg_extension(binpkg_format: &str) -> Result<&'static str, String> {

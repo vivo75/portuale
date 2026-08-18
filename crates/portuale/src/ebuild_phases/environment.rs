@@ -24,6 +24,9 @@ impl Environment {
     pub(crate) fn portage_tmpdir(&self) -> &Path {
         &self.portage_tmpdir
     }
+    pub(crate) fn d(&self) -> PathBuf {
+        self.portage_builddir.join("image")
+    }
     /// `${PORTAGE_BUILDDIR}/distdir`: the per-package fake `DISTDIR`.
     /// Portage: config.py
     pub(crate) fn fake_distdir(&self) -> PathBuf {

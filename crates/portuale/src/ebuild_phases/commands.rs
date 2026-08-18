@@ -2,6 +2,22 @@
 
 use crate::ebuild_phases::*;
 
+pub(crate) struct RunCommandsAsyncArgs<'a> {
+    pub(crate) ebuild_path: &'a Path,
+    pub(crate) commands: &'a [&'a str],
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) distdir: &'a Path,
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) log_file: Option<&'a Path>,
+    /// Caller-supplied env, appended after portuale's own base vars so it
+    /// overrides them. The build path passes the resolved `USE` flags here;
+    /// `&[]` for a standalone `ebuild <file> <phase>` run.
+    pub(crate) build_env: &'a [(String, String)],
+}
+
 pub struct RunCommandsArgs<'a> {
     pub ebuild_path: &'a Path,
     pub commands: &'a [&'a str],
