@@ -32,6 +32,7 @@ mod needed_elf;
 mod portage_lock;
 mod portageq;
 mod pretend;
+mod privileges;
 mod regen;
 mod remote;
 mod remote_bundle;

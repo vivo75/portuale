@@ -504,3 +504,13 @@ pub fn getlibpaths(root: &Path, ld_library_path: Option<&str>) -> Vec<String> {
         .map(|s| normalize_path(&s))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+
+    fn tempdir() -> std::path::PathBuf {
+        TempDir::new("portuale-needed-elf-test").keep()
+    }
+}
