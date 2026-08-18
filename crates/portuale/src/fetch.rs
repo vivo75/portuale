@@ -1,0 +1,442 @@
+//! Network fetch: the second half of fetching a package's sources (the
+//! offline half -- SRC_URI flattening, Manifest parsing, digest
+//! verification -- lives in `portage_fetch`). Shells out to `wget` using
+//! `make.globals`' default `FETCHCOMMAND`, and honors `FEATURES=distlocks`
+//! with a blocking `flock` on a sibling lockfile per distfile.
+//!
+//! Scope cuts a caller must know: resume means any non-empty partial (no
+//! size threshold); `mirror://` resolution, `RESTRICT=mirror/fetch/
+//! primaryuri`, `force-mirror`, on-filesystem mirrors and `pkg_nofetch`
+//! are modelled; third-party mirrors are never shuffled (deterministic);
+//! no `FEATURES=verify-sig` (a `gpkg`/sync concept, not distfile-fetch).
+use mrg_director::{FetchRequest, Fetcher, WgetFetcher};
+use portage_fetch::{
+    SrcUriEntry, flatten_src_uri, parse_manifest, parse_thirdpartymirrors,
+    resolve_mirror_candidates, verify_digests,
+};
+use std::path::{Path, PathBuf};
+
+/// Default `GENTOO_MIRRORS` when the env var is unset/empty. A `FetchOptions`
+/// field rather than an ambient read, so tests control it directly (most set
+/// it to `vec![]`, so a deliberately-failing fetch never reaches the genuine
+/// mirror as an unintended fallback).
+pub fn gentoo_mirrors_from_env() -> Vec<String> {
+    match std::env::var("GENTOO_MIRRORS") {
+        Ok(value) if !value.trim().is_empty() => {
+            value.split_whitespace().map(String::from).collect()
+        }
+        _ => vec!["http://distfiles.gentoo.org".to_string()],
+    }
+}
+
+/// `distdir`/`config_root` are set at the CLI boundary, never read from the
+/// ambient env inside library code (a genuine Gentoo host's `/etc/portage`
+/// would otherwise leak into tests). `Default` matches `make.globals`
+/// (`DISTDIR`, the default mirrors) with an impossible `config_root`
+/// sentinel (empty `custommirrors` unless opted in) and `distlocks: true`
+/// (a default `FEATURES` token).
+pub struct FetchOptions {
+    pub distdir: PathBuf,
+    pub gentoo_mirrors: Vec<String>,
+    pub config_root: PathBuf,
+    pub distlocks: bool,
+    /// Portage's `RESTRICT=mirror`: skip the public `GENTOO_MIRRORS` fallback
+    /// for this package (`mirror://` expansions and explicit URIs are still
+    /// tried). A `mirror+` prefix re-permits it for that one file.
+    /// Sourced from the ebuild's `RESTRICT` field by `ebuild_phases::fetch_sources`.
+    pub restrict_mirror: bool,
+    /// Portage's `RESTRICT=fetch`: bar plain `SRC_URI` URIs and the public
+    /// mirrors, so the file resolves only from `DISTDIR`/`custommirrors`/
+    /// `mirror://` mirrors. A `fetch+`/`mirror+` prefix re-permits the URI.
+    /// Sourced from the ebuild's `RESTRICT` field by `ebuild_phases::fetch_sources`.
+    pub restrict_fetch: bool,
+    /// Portage's `RESTRICT=primaryuri`: the file's literal URIs (plus the
+    /// `mirror://` expansions) move to the front of its candidate list.
+    /// Sourced from the ebuild's `RESTRICT` field by `ebuild_phases::fetch_sources`.
+    pub restrict_primaryuri: bool,
+    /// Portage's `FEATURES=force-mirror`: plain `SRC_URI` URIs are never
+    /// candidates; mirrors only. Read from the process env by the caller.
+    pub force_mirror: bool,
+    /// The resolved `USE` (`PORTAGE_USE`) that `SRC_URI` `flag?` groups reduce
+    /// against; empty when none was threaded through.
+    pub use_flags: std::collections::HashSet<String>,
+    /// Clock time for the `.mirror-cache.json` day-long freshness check;
+    /// `None` reads the system clock. Tests pin it.
+    pub mirror_cache_now: Option<f64>,
+    /// Portage's `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` (default 5): stop trying
+    /// locations after this many digest failures.
+    pub checksum_failure_max_tries: usize,
+    /// The resolved `FETCHCOMMAND`/`RESUMECOMMAND` family; `None` keeps the
+    /// `make.globals` defaults. Built via [`fetch_commands_from_config`].
+    pub fetch_commands: Option<portage_fetch::FetchCommands>,
+    /// Portage's `PORTAGE_RO_DISTDIRS` (existing dirs only): a verified file is
+    /// symlinked into a writable DISTDIR, never copied.
+    pub ro_distdirs: Vec<std::path::PathBuf>,
+    /// Portage's `PORTAGE_SSH_OPTS` for the `FETCHCOMMAND_SSH`/`_SFTP`
+    /// templates; `None` (unset) expands to empty. See [`portage_ssh_opts_from_config`].
+    pub portage_ssh_opts: Option<String>,
+}
+
+impl Default for FetchOptions {
+    fn default() -> Self {
+        Self {
+            distdir: PathBuf::from("/var/cache/distfiles"),
+            gentoo_mirrors: vec!["http://distfiles.gentoo.org".to_string()],
+            config_root: PathBuf::from("/dev/null/no-config-root-configured"),
+            distlocks: true,
+            restrict_mirror: false,
+            restrict_fetch: false,
+            restrict_primaryuri: false,
+            force_mirror: false,
+            use_flags: std::collections::HashSet::new(),
+            mirror_cache_now: None,
+            checksum_failure_max_tries: 5,
+            fetch_commands: None,
+            ro_distdirs: Vec::new(),
+            portage_ssh_opts: None,
+        }
+    }
+}
+
+/// The default-`FETCHCOMMAND` wget (the shared `portage_fetch` transport),
+/// invoked as a genuine subprocess, not an in-process HTTP client. This names
+/// the non-resume `FETCHCOMMAND` for index/`layout.conf` fetches, while
+/// `fetch_src_uri` dispatches fresh-vs-resume through the `Fetcher` seam.
+// Portage: cnf/make.globals, FETCHCOMMAND
+pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
+    portage_fetch::download_via_wget(uri, dest, false)
+}
+
+/// The resolved `PORTAGE_SSH_OPTS` scalar, else `None` (absent expands to
+/// empty, like Portage's missing settings key).
+pub fn portage_ssh_opts_from_config(config: &portage_profile::Config) -> Option<String> {
+    config.other_vars.get("PORTAGE_SSH_OPTS").cloned()
+}
+
+/// The `FETCHCOMMAND` family out of a resolved config: plain scalars plus
+/// every `FETCHCOMMAND_<PROTO>`/`RESUMECOMMAND_<PROTO>` override. An absent
+/// entry resolves to the shipped `make.globals` default template, never `None`.
+pub fn fetch_commands_from_config(
+    config: &portage_profile::Config,
+) -> portage_fetch::FetchCommands {
+    let mut commands = portage_fetch::FetchCommands::default();
+    for (key, value) in &config.other_vars {
+        match key.as_str() {
+            "FETCHCOMMAND" => commands.fetchcommand = Some(value.clone()),
+            "RESUMECOMMAND" => commands.resumecommand = Some(value.clone()),
+            _ => {
+                if let Some(proto) = key.strip_prefix("FETCHCOMMAND_") {
+                    commands
+                        .fetchcommand_proto
+                        .insert(proto.to_string(), value.clone());
+                } else if let Some(proto) = key.strip_prefix("RESUMECOMMAND_") {
+                    commands
+                        .resumecommand_proto
+                        .insert(proto.to_string(), value.clone());
+                }
+            }
+        }
+    }
+    commands
+}
+
+/// Per-file candidate order for one distfile's `group` of `SRC_URI` entries:
+/// `custommirrors["local"]` roots, public `GENTOO_MIRRORS` roots (unless
+/// mirror-restricted), inline `mirror://` expansions, then the primary-uri
+/// group (literals in reverse `SRC_URI` order plus third-party expansions
+/// again) -- appended last normally, prepended first under
+/// `RESTRICT=primaryuri`. Steps 1-2 are mirror roots resolved lazily, so a
+/// file fetched earlier never downloads a later mirror's `layout.conf`.
+// Portage: lib/portage/package/ebuild/fetch.py, fetch
+fn assemble_candidates(
+    group: &[&SrcUriEntry],
+    custommirrors: &std::collections::HashMap<String, Vec<String>>,
+    thirdpartymirrors: &std::collections::HashMap<String, Vec<String>>,
+    options: &FetchOptions,
+) -> Vec<Candidate> {
+    let Some(first) = group.first() else {
+        return Vec::new();
+    };
+    // `local_mirrors` keep their spelling, `public_mirrors` are stripped; both
+    // spellings are `.mirror-cache.json` keys, so it matters.
+    let mut filedict: Vec<Candidate> = custommirrors
+        .get("local")
+        .into_iter()
+        .flatten()
+        .filter(|r| !r.starts_with('/'))
+        .map(|r| Candidate::Mirror(r.clone()))
+        .collect();
+    // Mirror restriction is decided once, by the FIRST URI's `mirror+` prefix.
+    let public_barred =
+        (options.restrict_mirror || options.restrict_fetch) && !first.override_mirror;
+    if !public_barred {
+        filedict.extend(
+            options
+                .gentoo_mirrors
+                .iter()
+                // `/`-rooted entries are on-filesystem mirrors, never download candidates.
+                .filter(|root| !root.starts_with('/'))
+                .map(|root| Candidate::Mirror(root.trim_end_matches('/').to_string())),
+        );
+    }
+    for entry in group {
+        if entry.uri.starts_with("mirror://") {
+            filedict.extend(
+                resolve_mirror_candidates(&entry.uri, custommirrors, thirdpartymirrors)
+                    .into_iter()
+                    .map(Candidate::Uri),
+            );
+        }
+    }
+    let primary: Vec<Candidate> = primary_uris(group, thirdpartymirrors, options)
+        .into_iter()
+        .map(Candidate::Uri)
+        .collect();
+    if options.restrict_primaryuri {
+        [primary, filedict].concat()
+    } else {
+        [filedict, primary].concat()
+    }
+}
+
+/// The file's fetchable literals in reverse `SRC_URI` order (tried
+/// last-listed first), then every third-party `mirror://` expansion.
+// Portage: lib/portage/package/ebuild/fetch.py, fetch
+fn primary_uris(
+    group: &[&SrcUriEntry],
+    thirdpartymirrors: &std::collections::HashMap<String, Vec<String>>,
+    options: &FetchOptions,
+) -> Vec<String> {
+    let mut literals: Vec<String> = Vec::new();
+    let mut thirdparty: Vec<String> = Vec::new();
+    for entry in group {
+        if entry.uri.starts_with("mirror://") {
+            thirdparty.extend(resolve_mirror_candidates(
+                &entry.uri,
+                &std::collections::HashMap::new(),
+                thirdpartymirrors,
+            ));
+        } else if !((options.restrict_fetch && !entry.override_fetch) || options.force_mirror) {
+            literals.push(entry.uri.clone());
+        }
+    }
+    literals.reverse();
+    literals.extend(thirdparty);
+    literals
+}
+
+/// Parse `PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS` (default 5); a non-integer or
+/// sub-1 value warns and uses the default.
+pub fn checksum_failure_max_tries(value: Option<&str>) -> (usize, Vec<String>) {
+    const DEFAULT: i64 = 5;
+    let Some(value) = value else {
+        return (DEFAULT as usize, Vec::new());
+    };
+    let fallback = format!("!!! Using PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS default value: {DEFAULT}");
+    match value.trim().parse::<i64>() {
+        Err(_) => (
+            DEFAULT as usize,
+            vec![
+                format!(
+                    "!!! Variable PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS contains non-integer value: '{value}'"
+                ),
+                fallback,
+            ],
+        ),
+        Ok(v) if v < 1 => (
+            DEFAULT as usize,
+            vec![
+                format!(
+                    "!!! Variable PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS contains value less than 1: '{v}'"
+                ),
+                fallback,
+            ],
+        ),
+        Ok(v) => (v as usize, Vec::new()),
+    }
+}
+
+/// `SRC_URI` entries grouped by distfile in first-seen order, identical URIs
+/// listed once.
+// Portage: lib/portage/package/ebuild/porttree.py, _parse_uri_map
+fn group_by_filename(entries: &[SrcUriEntry]) -> Vec<(&str, Vec<&SrcUriEntry>)> {
+    let mut groups: Vec<(&str, Vec<&SrcUriEntry>)> = Vec::new();
+    for entry in entries {
+        match groups.iter_mut().find(|(name, _)| *name == entry.filename) {
+            Some((_, group)) => {
+                if !group.iter().any(|e| e == &entry) {
+                    group.push(entry);
+                }
+            }
+            None => groups.push((&entry.filename, vec![entry])),
+        }
+    }
+    groups
+}
+
+/// One entry of a file's candidate list: a ready URI, or a mirror root
+/// whose URL depends on the mirror's `layout.conf` (`mirror_url`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Candidate {
+    Uri(String),
+    Mirror(String),
+}
+
+/// Arguments of [`mirror_url`].
+struct MirrorUrlArgs<'a> {
+    mirror: &'a str,
+    filename: &'a str,
+    digests: &'a std::collections::HashMap<String, String>,
+    distdir: &'a Path,
+    cache_path: Option<&'a Path>,
+    now: f64,
+}
+
+/// The URL (or local path, for a `/`-rooted mirror) of `filename` under
+/// `mirror`, laid out per the mirror's own `layout.conf`. Layouts cache in
+/// `.mirror-cache.json` for a day; only successful reads are cached, and a
+/// failed/unparseable read silently means flat. `now` is injectable for tests.
+// Portage: lib/portage/package/ebuild/fetch.py, async_mirror_url
+fn mirror_url(args: MirrorUrlArgs<'_>) -> String {
+    let MirrorUrlArgs {
+        mirror,
+        filename,
+        digests,
+        distdir,
+        cache_path,
+        now,
+    } = args;
+    use portage_fetch::layout::MirrorLayoutConfig;
+    use portage_fetch::mirror_cache::{
+        CacheEntry, MIRROR_CACHE_TTL_SECS, mirror_file_url, parse_mirror_cache,
+        serialize_mirror_cache, upsert_mirror_cache, url_hostname,
+    };
+
+    let mut cache = cache_path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|text| parse_mirror_cache(&text))
+        .unwrap_or_default();
+    let fresh = cache
+        .iter()
+        .find(|e| e.mirror_url == mirror)
+        .filter(|e| e.timestamp >= now - MIRROR_CACHE_TTL_SECS)
+        .map(|e| MirrorLayoutConfig {
+            structure: e.structure.clone(),
+        });
+    let config = fresh.unwrap_or_else(|| {
+        let read = if mirror.starts_with('/') {
+            let text = std::fs::read(Path::new(mirror).join("layout.conf")).unwrap_or_default();
+            MirrorLayoutConfig::parse(&String::from_utf8_lossy(&text)).ok()
+        } else {
+            let tmpfile = distdir.join(format!(".layout.conf.{}", url_hostname(mirror)));
+            wget_fetch(&format!("{mirror}/distfiles/layout.conf"), &tmpfile)
+                .ok()
+                .and_then(|()| std::fs::read(&tmpfile).ok())
+                .and_then(|text| MirrorLayoutConfig::parse(&String::from_utf8_lossy(&text)).ok())
+        };
+        let Some(config) = read else {
+            return MirrorLayoutConfig::default();
+        };
+        if let Some(cache_path) = cache_path {
+            upsert_mirror_cache(
+                &mut cache,
+                CacheEntry {
+                    mirror_url: mirror.to_string(),
+                    timestamp: now,
+                    structure: config.structure.clone(),
+                },
+            );
+            // Write a sibling, then rename over (Portage's `atomic_ofstream`).
+            let tmp = cache_path.with_extension(format!("json.{}", std::process::id()));
+            if std::fs::write(&tmp, serialize_mirror_cache(&cache)).is_ok() {
+                let _ = std::fs::rename(&tmp, cache_path);
+            } else {
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+        config
+    });
+    let layout = config.best_supported(Some(digests));
+    let path = layout
+        .get_path(filename, digests)
+        .unwrap_or_else(|| filename.to_string());
+    mirror_file_url(mirror, &path)
+}
+
+/// The `/`-rooted `custommirrors["local"]` entries (as written), then the
+/// `/`-rooted `GENTOO_MIRRORS` entries (stripped).
+fn fsmirrors(
+    custommirrors: &std::collections::HashMap<String, Vec<String>>,
+    gentoo_mirrors: &[String],
+) -> Vec<String> {
+    let local = custommirrors
+        .get("local")
+        .into_iter()
+        .flatten()
+        .filter(|root| root.starts_with('/'))
+        .cloned();
+    let public = gentoo_mirrors
+        .iter()
+        .filter(|root| root.starts_with('/'))
+        .map(|root| root.trim_end_matches('/').to_string());
+    local.chain(public).collect()
+}
+
+/// Copy the first on-filesystem mirror that has the file to `dest`, printing
+/// `Local mirror has file: <file>`. A missing file moves on; any other copy
+/// error is fatal. Returns whether a copy was made.
+// Portage: lib/portage/package/ebuild/fetch.py, fetch
+fn copy_from_fsmirrors(
+    fsmirrors: &[String],
+    filename: &str,
+    digests: &std::collections::HashMap<String, String>,
+    options: &FetchOptions,
+    dest: &Path,
+) -> Result<bool, String> {
+    for dir in fsmirrors {
+        let source = mirror_url(MirrorUrlArgs {
+            mirror: dir,
+            filename,
+            digests,
+            distdir: &options.distdir,
+            cache_path: None,
+            now: 0.0,
+        });
+        match std::fs::copy(&source, dest) {
+            Ok(_) => {
+                eprintln!("Local mirror has file: {filename}");
+                return Ok(true);
+            }
+            Err(e)
+                if e.kind() == std::io::ErrorKind::NotFound
+                    || e.raw_os_error() == Some(libc::ESTALE) => {}
+            Err(e) => return Err(format!("{source}: {e}")),
+        }
+    }
+    Ok(false)
+}
+
+/// Whether `DISTDIR` is writable, which decides if `.mirror-cache.json` is
+/// used at all.
+fn distdir_writable(distdir: &Path) -> bool {
+    let Ok(c) = std::ffi::CString::new(distdir.as_os_str().as_encoded_bytes()) else {
+        return false;
+    };
+    // SAFETY: `c` is a NUL-terminated path that outlives the call; the
+    // second argument is a plain access-mode flag.
+    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
+}
+
+/// Whether the filesystem holding `distdir` fits `bytes`, via `statvfs`.
+fn has_enough_space(distdir: &Path, bytes: u64) -> bool {
+    let Ok(c) = std::ffi::CString::new(distdir.as_os_str().as_encoded_bytes()) else {
+        return false;
+    };
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: `c` is a NUL-terminated path; `stat` is a valid mutable buffer.
+    if unsafe { libc::statvfs(c.as_ptr(), &mut stat) } != 0 {
+        return false;
+    }
+    let available_bytes = (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64);
+    available_bytes >= bytes
+}

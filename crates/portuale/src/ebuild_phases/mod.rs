@@ -13,6 +13,8 @@
 //! Backend: a genuine `bash` subprocess by default, embedded brush via `--shell brush`.
 // Portage: doebuild.py, bin/ebuild.sh
 
+use crate::fetch::{self, FetchOptions};
+
 mod commands;
 mod depend_phase;
 mod environment;

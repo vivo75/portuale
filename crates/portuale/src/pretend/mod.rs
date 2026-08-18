@@ -56,6 +56,8 @@ use crate::emerge_getbinpkg;
 
 use crate::emerge_options;
 
+use crate::needed_elf;
+
 use portage_dep::{Atom, Blocker, Operator, SlotOperator, match_from_list, parse_atom};
 
 use portage_repo::{

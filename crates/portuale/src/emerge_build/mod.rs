@@ -4,10 +4,12 @@
 //! the winning candidate's repo via `portage_repo::list_candidates`.
 
 use crate::ebuild_merge;
+mod entry_env;
 mod resume;
 
 #[cfg(test)]
 mod tests;
+pub(crate) use entry_env::*;
 pub(crate) use resume::*;
 
 use crate::ebuild_package::{self, PackageOptions};
