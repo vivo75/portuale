@@ -1046,3 +1046,13 @@ fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
         shell: options.shell,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+
+    fn tempdir() -> std::path::PathBuf {
+        TempDir::new("portuale-ebuild-package-test").keep()
+    }
+}

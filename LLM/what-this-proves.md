@@ -4695,6 +4695,47 @@ per-file failure counter that keeps going regardless. (`unmerge-orphans`
 and `INFOPATH` handling have since shipped -- see their own sections
 below; so has the "others in this slot" reverse-dependency check.)
 
+### Real `CONFIG_PROTECT`: a locally-edited config file survives an upgrade
+
+`ebuild <file> merge` now really implements `CONFIG_PROTECT` for `obj`
+(regular file) entries, closing what was previously merge's own biggest
+documented gap: real `ConfigProtect.isprotected()` path matching
+(`is_protected` -- longest-prefix match against `CONFIG_PROTECT` minus
+`CONFIG_PROTECT_MASK`, both env-var-sourced at the CLI boundary the same
+way `PORTAGE_TMPDIR` already is, defaulting to real `make.globals`'s own
+`CONFIG_PROTECT="/etc"`/`CONFIG_PROTECT_MASK="/etc/env.d"`), the real
+MD5-comparison rename-instead-of-overwrite decision (real
+`dblink._protect()`: a protected file whose real on-disk content differs
+from what's about to be merged is diverted to the next
+`._cfgNNNN_<name>` sibling -- real `new_protect_filename()` -- instead of
+being overwritten), and real `vardbapi._conf_mem_file` persistence
+(`<root>/var/lib/portage/config`, a real, persisted "which update has
+already been offered for this path" memory, so re-merging an
+already-protected update applies it directly instead of spawning a fresh
+`._cfgNNNN_` file every time). `CONTENTS` still always records the
+package's own logical path with the *new* content's own MD5 -- never the
+`._cfgNNNN_` variant a protected write may have actually landed at --
+exactly matching real `dblink.mergeme()`'s own behavior (the vdb
+considers this package the owner of the logical path either way, real
+content notwithstanding). `unmerge`'s own real `!mtime` staleness check
+(above) is what protects the same file symmetrically on removal.
+
+Real `movefile()` also explicitly preserves the source's own mtime onto
+the merged destination; `std::fs::copy` doesn't (a fresh copy gets its
+own "now" mtime), which would otherwise silently break both this
+MD5-based comparison's own correctness *and* `unmerge`'s `!mtime` check
+-- fixed by adding a small `filetime` dependency (no stable `std::fs`
+mtime setter exists, symlinks included) and explicitly setting it after
+every merged `obj`/`sym` write.
+
+**v1 scope cuts as of this slice** (see `ebuild_merge.rs`'s own module doc
+comment for the full, current list -- every gap this paragraph originally
+listed here has since shipped, see the sections below): an already-
+offered, unmodified-since update is applied directly here; real portage
+instead leaves the destination completely untouched in that case (while
+still recording the merge in `CONTENTS`) -- the one remaining, deliberate
+v1 simplification in this area.
+
 ### `--debug`: real `PORTAGE_DEBUG` plumbing (task #56)
 
 Real `emerge --debug` (`lib/_emerge/main.py:1234-1239`) does two things:
