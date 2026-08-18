@@ -659,3 +659,58 @@ pub fn download_with_commands(args: DownloadWithCommandsArgs<'_>) -> Result<(), 
     }
     Ok(())
 }
+
+/// The `make.globals` default transport, for callers with no resolved
+/// config: `download_with_commands` over the defaults, no extra
+/// variables. Shared by the `portuale` fetch path and the `mrg-director`
+/// `Fetcher` seam so the transport is never duplicated per caller.
+pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), String> {
+    let distdir = dest.parent().unwrap_or_else(|| Path::new("."));
+    download_with_commands(DownloadWithCommandsArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars: FetchCommandVars::default(),
+        commands: &FetchCommands::default(),
+    })
+}
+
+/// Portage digest verification: file size first (Portage `_check_distfile`'s
+/// cheap pre-check before hashing) plus every `BLAKE2B`/`SHA512` entry
+/// `digests` carries (see notes for why only those two). Any other hash
+/// name is silently skipped. An empty `digests.hashes` still passes once
+/// the size matches (Portage's "size alone is still something" tolerance).
+pub fn verify_digests(path: &Path, digests: &DistfileDigests) -> Result<(), Error> {
+    // `blake2`/`sha2` re-export the same `digest::Digest` trait under
+    // their own names -- one import covers both hashers below.
+    use blake2::Digest as _;
+
+    let bytes = std::fs::read(path).map_err(|e| Error::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    if bytes.len() as u64 != digests.size {
+        return Err(Error::SizeMismatch {
+            path: path.display().to_string(),
+            expected: digests.size,
+            got: bytes.len(),
+        });
+    }
+    for (algo, expected) in &digests.hashes {
+        let actual = match algo.as_str() {
+            "BLAKE2B" => to_hex(&blake2::Blake2b512::digest(&bytes)),
+            "SHA512" => to_hex(&sha2::Sha512::digest(&bytes)),
+            _ => continue,
+        };
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(Error::HashMismatch {
+                path: path.display().to_string(),
+                algo: algo.to_string(),
+                expected: expected.to_string(),
+                actual,
+            });
+        }
+    }
+    Ok(())
+}

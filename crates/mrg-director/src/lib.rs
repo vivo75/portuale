@@ -281,6 +281,27 @@ impl PackagesDb for VdbReader<'_> {
     }
 }
 
+/// The current `Fetcher`: source via the shared `wget` transport
+/// (`portage_fetch::download_via_wget`). One request, one `wget`
+/// invocation; the already-materialized short-circuit and Manifest
+/// verification live at the call sites, not here.
+pub struct WgetFetcher;
+impl Fetcher for WgetFetcher {
+    fn fetch(&self, request: &FetchRequest<'_>) -> Result<(), String> {
+        let distdir = request.dest.parent().unwrap_or_else(|| Path::new("."));
+        portage_fetch::download_with_commands(portage_fetch::DownloadWithCommandsArgs {
+            uri: request.uri,
+            dest: request.dest,
+            resume: request.resume,
+            distdir,
+            vars: request.vars,
+            commands: request
+                .commands
+                .unwrap_or_else(|| portage_fetch::default_commands()),
+        })
+    }
+}
+
 /// The local `$PKGDIR` `BinpkgIndex`: Portage `bintree.py`'s local-store
 /// candidates via `portage_repo::BinaryIndex`. One of two backends (the
 /// other is [`RemoteBinhostIndex`]).

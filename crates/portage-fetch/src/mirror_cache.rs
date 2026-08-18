@@ -14,6 +14,118 @@
 // Pure: no I/O and no clock here; `portuale/src/fetch.rs` reads/writes the
 // file and passes `now` in.
 
+/// One cache entry: when the mirror's `layout.conf` was last read
+/// (seconds since the epoch, Portage's `time.time()`), and its `[structure]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CacheEntry {
+    pub mirror_url: String,
+    pub timestamp: f64,
+    pub structure: Vec<Vec<String>>,
+}
+
+/// Portage `ts >= time.time() - 86400`: an entry refreshed at least daily.
+pub const MIRROR_CACHE_TTL_SECS: f64 = 86400.0;
+
+/// Parses the cache file. Anything that isn't Portage's shape -- invalid
+/// JSON, a non-object, an entry that isn't `[number, [[str...]...]]` --
+/// yields an empty cache, as Portage's `except (OSError, ValueError): pass`
+/// does for unreadable JSON (Portage would crash on a well-formed but
+/// wrongly-shaped entry; starting over is the non-crashing equivalent).
+pub fn parse_mirror_cache(text: &str) -> Vec<CacheEntry> {
+    let mut parser = Json {
+        chars: text.chars().collect(),
+        pos: 0,
+    };
+    let Some(value) = parser.value() else {
+        return Vec::new();
+    };
+    parser.skip_ws();
+    if parser.pos != parser.chars.len() {
+        return Vec::new();
+    }
+    let JsonValue::Object(members) = value else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    for (mirror_url, value) in members {
+        let JsonValue::Array(pair) = value else {
+            return Vec::new();
+        };
+        let [JsonValue::Number(timestamp), JsonValue::Array(structure)] = pair.as_slice() else {
+            return Vec::new();
+        };
+        let mut vals = Vec::new();
+        for val in structure {
+            let JsonValue::Array(args) = val else {
+                return Vec::new();
+            };
+            let mut strings = Vec::new();
+            for arg in args {
+                let JsonValue::String(s) = arg else {
+                    return Vec::new();
+                };
+                strings.push(s.clone());
+            }
+            vals.push(strings);
+        }
+        // Portage `json.load` keeps the LAST duplicate key.
+        entries.retain(|e: &CacheEntry| e.mirror_url != mirror_url);
+        entries.push(CacheEntry {
+            mirror_url,
+            timestamp: *timestamp,
+            structure: vals,
+        });
+    }
+    entries
+}
+
+/// Portage `json.dump(cache, f)` output for the cache.
+pub fn serialize_mirror_cache(entries: &[CacheEntry]) -> String {
+    let body: Vec<String> = entries
+        .iter()
+        .map(|entry| {
+            let structure: Vec<String> = entry
+                .structure
+                .iter()
+                .map(|val| {
+                    let args: Vec<String> = val.iter().map(|s| json_string(s)).collect();
+                    format!("[{}]", args.join(", "))
+                })
+                .collect();
+            format!(
+                "{}: [{}, [{}]]",
+                json_string(&entry.mirror_url),
+                python_float_repr(entry.timestamp),
+                structure.join(", ")
+            )
+        })
+        .collect();
+    format!("{{{}}}", body.join(", "))
+}
+
+/// Portage `cache[mirror_url] = (time.time(), structure)`: replace in
+/// place (dict order unchanged) or append.
+pub fn upsert_mirror_cache(entries: &mut Vec<CacheEntry>, entry: CacheEntry) {
+    match entries
+        .iter_mut()
+        .find(|e| e.mirror_url == entry.mirror_url)
+    {
+        Some(existing) => *existing = entry,
+        None => entries.push(entry),
+    }
+}
+
+/// Python `repr(float)`: shortest round-trip digits, always with a
+/// fractional part or exponent.
+fn python_float_repr(value: f64) -> String {
+    let s = format!("{value}");
+    if s.contains(['.', 'e', 'E', 'i', 'N']) {
+        s
+    } else {
+        format!("{s}.0")
+    }
+}
+
 /// Python `json.dumps(str)` with the default `ensure_ascii=True`.
 fn json_string(s: &str) -> String {
     let mut out = String::from("\"");
@@ -37,4 +149,232 @@ fn json_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// Portage `urlparse(url).scheme`, lower-cased; empty when there is none.
+pub fn url_scheme(url: &str) -> String {
+    match url.split_once(':') {
+        Some((scheme, _))
+            if scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) =>
+        {
+            scheme.to_ascii_lowercase()
+        }
+        _ => String::new(),
+    }
+}
+
+/// Portage `urlparse(url).hostname` (lower-cased, no userinfo, no port),
+/// rendered the way Portage's `f".layout.conf.{hostname}"` does -- `None`
+/// when there is no network location.
+pub fn url_hostname(url: &str) -> String {
+    let after_scheme = if url_scheme(url).is_empty() {
+        url
+    } else {
+        &url[url.find(':').map_or(0, |i| i + 1)..]
+    };
+    let Some(rest) = after_scheme.strip_prefix("//") else {
+        return "None".to_string();
+    };
+    let netloc = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = netloc.rsplit_once('@').map_or(netloc, |(_, h)| h);
+    let host = if let Some(bracketed) = host_port.strip_prefix('[') {
+        bracketed.split(']').next().unwrap_or("")
+    } else {
+        host_port.split(':').next().unwrap_or("")
+    };
+    if host.is_empty() {
+        "None".to_string()
+    } else {
+        host.to_ascii_lowercase()
+    }
+}
+
+/// Portage `urllib.parse.quote(path)` (default `safe="/"`): percent-encode
+/// every UTF-8 byte except ASCII letters, digits, `_.-~` and `/`.
+pub fn url_quote(path: &str) -> String {
+    let mut out = String::new();
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~' | b'/') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// Portage `async_mirror_url`'s final step: `path` is the layout path
+/// (`MirrorLayout::get_path`), URL-quoted for `ftp`/`http`/`https`
+/// mirrors only; a `/`-rooted mirror is a local directory
+/// (`os.path.join(mirror_url, path)`), anything else gets
+/// `/distfiles/` inserted.
+pub fn mirror_file_url(mirror_url: &str, path: &str) -> String {
+    let path = if matches!(url_scheme(mirror_url).as_str(), "ftp" | "http" | "https") {
+        url_quote(path)
+    } else {
+        path.to_string()
+    };
+    if mirror_url.starts_with('/') {
+        // `os.path.join`: an absolute second part replaces the first.
+        if path.starts_with('/') {
+            path
+        } else if mirror_url.ends_with('/') {
+            format!("{mirror_url}{path}")
+        } else {
+            format!("{mirror_url}/{path}")
+        }
+    } else {
+        format!("{mirror_url}/distfiles/{path}")
+    }
+}
+
+enum JsonValue {
+    Object(Vec<(String, JsonValue)>),
+    Array(Vec<JsonValue>),
+    String(String),
+    Number(f64),
+    Other,
+}
+
+/// Just enough JSON for the cache file (strict RFC 8259 syntax plus
+/// Python's `NaN`/`Infinity` tokens, which `json.dump` can emit).
+struct Json {
+    chars: Vec<char>,
+    pos: usize,
+}
+
+impl Json {
+    fn skip_ws(&mut self) {
+        while self
+            .chars
+            .get(self.pos)
+            .is_some_and(|c| c.is_ascii_whitespace())
+        {
+            self.pos += 1;
+        }
+    }
+
+    fn eat(&mut self, c: char) -> bool {
+        self.skip_ws();
+        if self.chars.get(self.pos) == Some(&c) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn value(&mut self) -> Option<JsonValue> {
+        self.skip_ws();
+        match *self.chars.get(self.pos)? {
+            '{' => {
+                self.pos += 1;
+                let mut members = Vec::new();
+                if self.eat('}') {
+                    return Some(JsonValue::Object(members));
+                }
+                loop {
+                    self.skip_ws();
+                    let JsonValue::String(key) = self.value()? else {
+                        return None;
+                    };
+                    if !self.eat(':') {
+                        return None;
+                    }
+                    members.push((key, self.value()?));
+                    if self.eat('}') {
+                        return Some(JsonValue::Object(members));
+                    }
+                    if !self.eat(',') {
+                        return None;
+                    }
+                }
+            }
+            '[' => {
+                self.pos += 1;
+                let mut items = Vec::new();
+                if self.eat(']') {
+                    return Some(JsonValue::Array(items));
+                }
+                loop {
+                    items.push(self.value()?);
+                    if self.eat(']') {
+                        return Some(JsonValue::Array(items));
+                    }
+                    if !self.eat(',') {
+                        return None;
+                    }
+                }
+            }
+            '"' => {
+                self.pos += 1;
+                let mut s = String::new();
+                loop {
+                    let c = *self.chars.get(self.pos)?;
+                    self.pos += 1;
+                    match c {
+                        '"' => return Some(JsonValue::String(s)),
+                        '\\' => {
+                            let esc = *self.chars.get(self.pos)?;
+                            self.pos += 1;
+                            match esc {
+                                '"' | '\\' | '/' => s.push(esc),
+                                'b' => s.push('\u{8}'),
+                                'f' => s.push('\u{c}'),
+                                'n' => s.push('\n'),
+                                'r' => s.push('\r'),
+                                't' => s.push('\t'),
+                                'u' => {
+                                    let unit = self.hex4()?;
+                                    if (0xd800..0xdc00).contains(&unit)
+                                        && self.chars.get(self.pos) == Some(&'\\')
+                                        && self.chars.get(self.pos + 1) == Some(&'u')
+                                    {
+                                        self.pos += 2;
+                                        let low = self.hex4()?;
+                                        let code = 0x10000
+                                            + ((unit as u32 - 0xd800) << 10)
+                                            + (low as u32).wrapping_sub(0xdc00);
+                                        s.push(char::from_u32(code)?);
+                                    } else {
+                                        s.push(char::from_u32(unit as u32)?);
+                                    }
+                                }
+                                _ => return None,
+                            }
+                        }
+                        c => s.push(c),
+                    }
+                }
+            }
+            _ => {
+                let start = self.pos;
+                while self
+                    .chars
+                    .get(self.pos)
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '+' | '.'))
+                {
+                    self.pos += 1;
+                }
+                let token: String = self.chars[start..self.pos].iter().collect();
+                match token.as_str() {
+                    "" => None,
+                    "true" | "false" | "null" => Some(JsonValue::Other),
+                    "NaN" => Some(JsonValue::Number(f64::NAN)),
+                    "Infinity" => Some(JsonValue::Number(f64::INFINITY)),
+                    "-Infinity" => Some(JsonValue::Number(f64::NEG_INFINITY)),
+                    _ => token.parse::<f64>().ok().map(JsonValue::Number),
+                }
+            }
+        }
+    }
+
+    fn hex4(&mut self) -> Option<u16> {
+        let digits: String = self.chars.get(self.pos..self.pos + 4)?.iter().collect();
+        self.pos += 4;
+        u16::from_str_radix(&digits, 16).ok()
+    }
 }

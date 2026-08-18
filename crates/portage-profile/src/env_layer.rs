@@ -70,6 +70,33 @@ pub fn config_env_var(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+/// The whole process environment through the same test override, for
+/// `phase_environ` (Portage's `env` layer is all of the calling
+/// environment). Non-UTF-8 entries are dropped.
+///
+/// `pub` so the `package.env` layering compares against the same source.
+pub fn config_env_all() -> Vec<(String, String)> {
+    #[cfg(test)]
+    {
+        if TEST_ENV_OVERRIDE.with(|o| o.borrow().is_some()) {
+            return TEST_ENV_OVERRIDE.with(|o| {
+                let mut v: Vec<(String, String)> = o
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                v.sort();
+                v
+            });
+        }
+    }
+    std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .collect()
+}
+
 /// Apply the `env` layer: allowlisted vars override (scalars) or stack
 /// (incrementals) on top of the profile chain + `make.conf`. Called once,
 /// right after `make.conf`.

@@ -21,6 +21,94 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Config;
 
+/// `environ_filter` keys: never exported to the ebuild environment.
+// Portage: special_env_vars.py, environ_filter (vendored 3.0.82.2)
+pub const ENVIRON_FILTER: &[&str] = &[
+    "DEPEND",
+    "RDEPEND",
+    "PDEPEND",
+    "SRC_URI",
+    "BDEPEND",
+    "IDEPEND",
+    "INFOPATH",
+    "MANPATH",
+    "PYTHONUTF8",
+    "USER",
+    "GLOBSORT",
+    "HISTFILE",
+    "POSIXLY_CORRECT",
+    "ACCEPT_CHOSTS",
+    "ACCEPT_KEYWORDS",
+    "ACCEPT_PROPERTIES",
+    "ACCEPT_RESTRICT",
+    "AUTOCLEAN",
+    "BINPKG_COMPRESS",
+    "BINPKG_COMPRESS_FLAGS",
+    "CLEAN_DELAY",
+    "COLLISION_IGNORE",
+    "CONFIG_PROTECT",
+    "CONFIG_PROTECT_MASK",
+    "EGENCACHE_DEFAULT_OPTS",
+    "EMERGE_DEFAULT_OPTS",
+    "EMERGE_LOG_DIR",
+    "EMERGE_WARNING_DELAY",
+    "FETCH_WRAPPER",
+    "FETCHCOMMAND",
+    "FETCHCOMMAND_FTP",
+    "FETCHCOMMAND_HTTP",
+    "FETCHCOMMAND_HTTPS",
+    "FETCHCOMMAND_RSYNC",
+    "FETCHCOMMAND_SFTP",
+    "FETCHCOMMAND_SSH",
+    "GENTOO_MIRRORS",
+    "NOCONFMEM",
+    "O",
+    "PORTAGE_BACKGROUND",
+    "PORTAGE_BACKGROUND_UNMERGE",
+    "PORTAGE_BINHOST",
+    "PORTAGE_BINPKG_FORMAT",
+    "PORTAGE_BUILDDIR_LOCKED",
+    "PORTAGE_CHECKSUM_FILTER",
+    "PORTAGE_ELOG_CLASSES",
+    "PORTAGE_ELOG_MAILFROM",
+    "PORTAGE_ELOG_MAILSUBJECT",
+    "PORTAGE_ELOG_MAILURI",
+    "PORTAGE_ELOG_SYSTEM",
+    "PORTAGE_FETCH_CHECKSUM_TRY_MIRRORS",
+    "PORTAGE_FETCH_RESUME_MIN_SIZE",
+    "PORTAGE_GPG_DIR",
+    "PORTAGE_GPG_KEY",
+    "PORTAGE_GPG_SIGNING_COMMAND",
+    "PORTAGE_IONICE_COMMAND",
+    "PORTAGE_PACKAGE_EMPTY_ABORT",
+    "PORTAGE_REPO_DUPLICATE_WARN",
+    "PORTAGE_RO_DISTDIRS",
+    "PORTAGE_RSYNC_EXTRA_OPTS",
+    "PORTAGE_RSYNC_OPTS",
+    "PORTAGE_RSYNC_RETRIES",
+    "PORTAGE_SSH_OPTS",
+    "PORTAGE_SYNC_STALE",
+    "PORTAGE_TRUST_HELPER",
+    "PORTAGE_USE",
+    "PORTAGE_LOG_FILTER_FILE_CMD",
+    "PORTAGE_LOGDIR",
+    "PORTAGE_LOGDIR_CLEAN",
+    "QUICKPKG_DEFAULT_OPTS",
+    "REPOMAN_DEFAULT_OPTS",
+    "RESUMECOMMAND",
+    "RESUMECOMMAND_FTP",
+    "RESUMECOMMAND_HTTP",
+    "RESUMECOMMAND_HTTPS",
+    "RESUMECOMMAND_RSYNC",
+    "RESUMECOMMAND_SFTP",
+    "RESUMECOMMAND_SSH",
+    "UNINSTALL_IGNORE",
+    "USE_EXPAND_HIDDEN",
+    "USE_ORDER",
+    "__PORTAGE_HELPER",
+    "SYNC",
+];
+
 /// `env_blacklist` keys: never enter the config from the environment or
 /// config files; set programmatically by the phase runner instead. The
 /// keys this module computes (`USE`, `IUSE_EFFECTIVE`) insert after the
@@ -80,6 +168,81 @@ pub const ENV_BLACKLIST: &[&str] = &[
     "_",
 ];
 
+/// Keys the phase runner computes and must always win: excluded from both
+/// halves of the export set so no `make.conf` scalar or calling-env
+/// variable can clobber them. Portage reaches the same result by assigning
+/// these after the config is built.
+// Portage: doebuild.py, doebuild_environment
+pub const PORTUALE_COMPUTED: &[&str] = &[
+    // build directory / identity (`compute_environment` + `phase_env_vars`)
+    "D",
+    "ED",
+    "T",
+    "S",
+    "WORKDIR",
+    "HOME",
+    "PORTAGE_BUILDDIR",
+    "FILESDIR",
+    "DISTDIR",
+    "ROOT",
+    "EROOT",
+    "EPREFIX",
+    "PATH",
+    "P",
+    "PN",
+    "PV",
+    "PR",
+    "PVR",
+    "PF",
+    "CATEGORY",
+    "EAPI",
+    "EBUILD",
+    "EBUILD_PHASE",
+    "EBUILD_PHASE_FUNC",
+    "O",
+    "PORTAGE_TMPDIR",
+    "PORTAGE_BIN_PATH",
+    "PORTAGE_PYM_PATH",
+    "PORTAGE_PYTHON",
+    "PORTAGE_ECLASS_LOCATIONS",
+    "PORTAGE_COLORMAP",
+    "PORTAGE_QUIET",
+    "PORTAGE_DEBUG",
+    "PORTAGE_RESTRICT",
+    "PORTAGE_PROPERTIES",
+    "INHERITED",
+    "EMERGE_FROM",
+    "MERGE_TYPE",
+    "SANDBOX_LOG",
+    "SANDBOX_DISABLED",
+    "SANDBOX_ON",
+    // `run_commands_async` (fetch results) and the vdb-regeneration path
+    "A",
+    "AA",
+    "PORTAGE_UPDATE_ENV",
+    // per-entry threading (`entry_build_env`)
+    "SLOT",
+    "PORTAGE_REPO_NAME",
+    "PORTAGE_REPO_REVISIONS",
+    // `doebuild_environment()` dynamic; the packaging path owns it
+    "PORTAGE_COMPRESSION_COMMAND",
+    // computed by this module itself (never taken from a config file or
+    // the calling env verbatim)
+    "USE",
+    "FEATURES",
+    "PORTAGE_FEATURES",
+    "IUSE_EFFECTIVE",
+];
+
+/// The per-package inputs `phase_environ` needs: the candidate's declared
+/// `IUSE` (raw tokens, `+`/`-` defaults allowed) and its enabled flag set.
+// Portage: Package.use.enabled
+#[derive(Debug, Clone, Copy)]
+pub struct PhaseUse<'a> {
+    pub iuse: &'a [String],
+    pub enabled: &'a [String],
+}
+
 /// `PORTAGE_USE`: `enabled ∩ (IUSE ∪ IUSE_EFFECTIVE)`, sorted. Exported
 /// as `USE` and written to a binpkg's `metadata/USE` / `Packages` index.
 // Portage: config.py, PORTAGE_USE / environ
@@ -99,8 +262,41 @@ pub fn portage_use(config: &Config, iuse: &[String], enabled: &[String]) -> Vec<
         .collect()
 }
 
+/// `IUSE_EFFECTIVE` for one package: the profile implicit set plus the
+/// package's own declared `IUSE` names, sorted.
+// Portage: config.py, _calc_iuse_effective
+fn iuse_effective_for(config: &Config, iuse: &[String]) -> Vec<String> {
+    iuse.iter()
+        .map(|f| iuse_bare(f).to_string())
+        .chain(config.iuse_effective.iter().cloned())
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect()
+}
+
 fn iuse_bare(flag: &str) -> &str {
     flag.trim_start_matches(['+', '-'])
+}
+
+/// A key bash can `export`: `[A-Za-z_][A-Za-z0-9_]*`. Exported-function
+/// entries (`BASH_FUNC_x%%`) cannot be re-exported and are dropped here.
+fn exportable_name(key: &str) -> bool {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// The gate every candidate key passes before entering the export set:
+/// a valid identifier, not `environ_filter`ed, not blacklisted, not
+/// portuale-computed.
+fn exportable(key: &str) -> bool {
+    exportable_name(key)
+        && !ENVIRON_FILTER.contains(&key)
+        && !ENV_BLACKLIST.contains(&key)
+        && !PORTUALE_COMPUTED.contains(&key)
 }
 
 fn sorted_joined<'a>(set: impl IntoIterator<Item = &'a String>) -> String {
@@ -110,4 +306,138 @@ fn sorted_joined<'a>(set: impl IntoIterator<Item = &'a String>) -> String {
         .into_iter()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Portage `config.environ()` for a build phase, from the resolved config
+/// (rules: see the module doc comment).
+///
+/// Returns `(name, value)` pairs in sorted-by-name order. Set-but-empty
+/// values export as empty; unset-everywhere keys are absent. Precedence:
+/// config scalars first, then the calling environment on top, then the
+/// folded incrementals and per-package values, which always win.
+///
+/// `pkg` is `None` for a run without a resolved candidate: no
+/// `USE`/`IUSE_EFFECTIVE` is produced and every `USE_EXPAND` variable is
+/// its profile scalar if set, else `""`.
+// Portage: config.py, environ
+pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String, String)> {
+    let mut env: BTreeMap<String, String> = BTreeMap::new();
+
+    // 1. Resolved config scalars.
+    for (k, v) in &config.other_vars {
+        if exportable(k) {
+            env.insert(k.clone(), v.clone());
+        }
+    }
+
+    // 2. The calling environment, wholesale -- highest layer.
+    for (k, v) in crate::config_env_all() {
+        if exportable(&k) {
+            env.insert(k, v);
+        }
+    }
+
+    // 2b. `doebuild_environment()` config-only dynamic defaults: `PATH`
+    //     when env.d sets it; `MAKEOPTS`/`GNUMAKEFLAGS` from the CPU count
+    //     when neither is set.
+    // Portage: doebuild.py, _doebuild_path and MAKEOPTS defaults
+    if config.envd_sets_path
+        && let Some(path) = config.other_vars.get("PATH")
+    {
+        env.insert("PATH".to_string(), path.clone());
+    }
+    if !env.contains_key("MAKEOPTS") && !env.contains_key("MAKEFLAGS") {
+        let nproc = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        env.insert("MAKEOPTS".to_string(), format!("-j{nproc}"));
+        env.entry("GNUMAKEFLAGS".to_string())
+            .or_insert_with(|| format!("--load-average {nproc} --output-sync=line"));
+    }
+
+    // 3. Incrementals, folded and sorted.
+    let features = config
+        .resolved_incremental("FEATURES")
+        .or_else(|| {
+            config
+                .other_vars
+                .get("FEATURES")
+                .map(|f| f.split_whitespace().map(String::from).collect())
+        })
+        .unwrap_or_default()
+        .join(" ");
+    env.insert("FEATURES".to_string(), features.clone());
+    env.insert("PORTAGE_FEATURES".to_string(), features);
+    for key in ["ENV_UNSET", "PROFILE_ONLY_VARIABLES"] {
+        if let Some(folded) = config.resolved_incremental(key) {
+            env.insert(key.to_string(), folded.join(" "));
+        }
+    }
+    env.insert("USE_EXPAND".to_string(), sorted_joined(&config.use_expand));
+    env.insert(
+        "USE_EXPAND_UNPREFIXED".to_string(),
+        sorted_joined(&config.use_expand_unprefixed),
+    );
+    env.insert(
+        "USE_EXPAND_IMPLICIT".to_string(),
+        sorted_joined(&config.use_expand_implicit),
+    );
+    env.insert(
+        "IUSE_IMPLICIT".to_string(),
+        sorted_joined(&config.iuse_implicit),
+    );
+
+    // 4. Per-package rows. With a package they overwrite steps 1-3; with
+    //    no package the placeholders only fill gaps (`or_insert`).
+    for (key, value) in phase_environ_pkg(config, pkg) {
+        if pkg.is_some() {
+            env.insert(key, value);
+        } else {
+            env.entry(key).or_insert(value);
+        }
+    }
+
+    env.into_iter().collect()
+}
+
+/// The per-package rows of `phase_environ`, split out so the per-entry
+/// build threading can add them on top of the run-wide
+/// `phase_environ(config, None)` result without recomputing the base.
+///
+/// `Some(pkg)`: `USE`, `IUSE_EFFECTIVE`, and every `USE_EXPAND` value
+/// derived from the effective USE (empty when off). `None`: no
+/// `USE`/`IUSE_EFFECTIVE`; unprefixed names (`ARCH`) keep their scalar.
+// Portage: config.py, setcpv
+pub fn phase_environ_pkg(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String, String)> {
+    let mut env: BTreeMap<String, String> = BTreeMap::new();
+    match pkg {
+        Some(p) => {
+            let use_flags = portage_use(config, p.iuse, p.enabled);
+            env.insert(
+                "IUSE_EFFECTIVE".to_string(),
+                iuse_effective_for(config, p.iuse).join(" "),
+            );
+            for var in &config.use_expand {
+                if config.use_expand_unprefixed.contains(var) {
+                    continue;
+                }
+                let prefix = format!("{}_", var.to_lowercase());
+                let values: Vec<&str> = use_flags
+                    .iter()
+                    .filter_map(|f| f.strip_prefix(prefix.as_str()))
+                    .collect();
+                env.insert(var.clone(), values.join(" "));
+            }
+            env.insert("USE".to_string(), use_flags.join(" "));
+        }
+        None => {
+            for var in &config.use_expand {
+                if config.use_expand_unprefixed.contains(var) {
+                    continue;
+                }
+                env.entry(var.clone()).or_default();
+            }
+        }
+    }
+    env.into_iter().collect()
 }
