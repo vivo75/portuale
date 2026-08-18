@@ -212,7 +212,7 @@ use portage_repo::{
     config_root_from_env, resolve_pretend_graph, root_from_env, ChangedDepsReportEntry, GraphEntry,
     PretendOutcome, SlotConflict,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -298,6 +298,244 @@ fn print_blockers(entry: &GraphEntry, owner_version: &str) {
             b.matched_version,
             b.atom_str
         );
+    }
+}
+
+/// One `GraphEntry`'s own display line, `indent` prepended right before
+/// the category/package text (empty for flat mode, `print_tree`'s own
+/// growing prefix for `--tree`) -- the exact same per-outcome
+/// bracket/reason logic the flat loop always had, just factored out so
+/// both display modes share one implementation rather than drifting
+/// apart. `onlydeps`/`top_level_pkgs` decide suppression exactly as
+/// before: a directly-requested top-level atom's own line (not its
+/// dependencies) is hidden under `--onlydeps`, whatever its outcome.
+fn print_entry_line(
+    entry: &GraphEntry,
+    indent: &str,
+    top_level_pkgs: &HashSet<(String, String)>,
+    onlydeps: bool,
+    verbose: bool,
+) {
+    let onlydeps_suppressed =
+        onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
+    // Real --pretend's own bracket word: literally `pkg.type_name`
+    // (`lib/_emerge/RootConfig.py`'s own `pkg_tree_map`, the exact
+    // two strings `"ebuild"`/`"binary"` this pilot's own
+    // `CandidateSource` mirrors) -- a binary merge prints
+    // `"[binary"`, never `"[ebuild"`, regardless of outcome.
+    let bracket = match entry.source {
+        portage_repo::CandidateSource::Binary => "binary",
+        portage_repo::CandidateSource::Ebuild => "ebuild",
+    };
+    match &entry.outcome {
+        PretendOutcome::New { version } => {
+            if !onlydeps_suppressed {
+                println!(
+                    "[{bracket}  N] {indent}{}/{}-{version}{}",
+                    entry.category,
+                    entry.package,
+                    use_suffix(entry, verbose)
+                );
+            }
+            print_blockers(entry, version);
+        }
+        PretendOutcome::Upgrade { from, to } => {
+            if !onlydeps_suppressed {
+                println!(
+                    "[{bracket}  U] {indent}{}/{}-{to} (upgrade from {from}){}",
+                    entry.category,
+                    entry.package,
+                    use_suffix(entry, verbose)
+                );
+            }
+            print_blockers(entry, to);
+        }
+        PretendOutcome::Downgrade { from, to } => {
+            if !onlydeps_suppressed {
+                println!(
+                    "[{bracket}  D] {indent}{}/{}-{to} (downgrade from {from}){}",
+                    entry.category,
+                    entry.package,
+                    use_suffix(entry, verbose)
+                );
+            }
+            print_blockers(entry, to);
+        }
+        PretendOutcome::Reinstall {
+            version,
+            changed_flags,
+            deps_changed,
+            slot_changed,
+            rebuilt_binary,
+        } => {
+            if !onlydeps_suppressed {
+                match reinstall_reason(changed_flags, *deps_changed, *slot_changed, *rebuilt_binary)
+                {
+                    Some(reason) => println!(
+                        "[{bracket}  r] {indent}{}/{}-{version} (reinstall for {reason}){}",
+                        entry.category,
+                        entry.package,
+                        use_suffix(entry, verbose)
+                    ),
+                    None => println!(
+                        "[{bracket}  r] {indent}{}/{}-{version}{}",
+                        entry.category,
+                        entry.package,
+                        use_suffix(entry, verbose)
+                    ),
+                }
+            }
+            print_blockers(entry, version);
+        }
+        PretendOutcome::AlreadyInstalled { version } => {
+            // Already-satisfied dependencies aren't shown, matching
+            // real emerge's usual "don't clutter the list with what's
+            // already there" behavior -- only a directly-requested
+            // (top-level) atom gets its own "nothing to do" line, and
+            // --onlydeps suppresses that too, same as every other
+            // outcome above.
+            if top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()))
+                && !onlydeps_suppressed
+            {
+                println!(
+                    "{indent}{}/{}-{version} is already installed; nothing to do",
+                    entry.category, entry.package
+                );
+            }
+        }
+        PretendOutcome::NoVisibleCandidate => {
+            eprintln!(
+                "!!! no visible ebuild for dependency \"{}/{}\"",
+                entry.category, entry.package
+            );
+        }
+    }
+}
+
+/// `--tree`/`-t`: indents each entry under whichever other entry's own
+/// dependency string reached it, real `output_helpers.py`'s own
+/// `_tree_display` -- but not a faithful port of it. Real
+/// `_ordered_tree_display` walks a genuine topologically-*scheduled*
+/// merge order (`mylist`) and a real bidirectional digraph
+/// (`parent_nodes`/`child_nodes`) to decide, for each node, exactly
+/// which already-placed node to nest it under (including cycle-avoiding
+/// parent-chasing when a fresh top-level branch needs to attach
+/// somewhere) -- machinery this pilot has no equivalent of at all (no
+/// merge scheduler exists, see task #55's own "real merge/install"
+/// scope boundary), so this is a deliberate, pilot-specific
+/// simplification instead, confirmed acceptable in place of a faithful
+/// port given that boundary.
+///
+/// The only edges this pilot has are `GraphEntry::required_by` (already
+/// "every distinct owner, sorted" -- see its own doc comment,
+/// portage-repo); this function inverts that into a `children` map
+/// (owner key -> the entries it pulled in) and walks it from the
+/// top-level/requested entries as roots, in their own `entries` order
+/// (already argv order, per `resolve_pretend_graph`'s "level-order
+/// guarantee"). A node already rendered once (anywhere in the tree,
+/// diamond dependencies included) is never rendered or recursed into
+/// again -- real `_unordered_tree_display`'s own `seen_nodes` behavior,
+/// ported exactly (and, as a side effect, what keeps this recursion
+/// from looping forever on a genuine dependency cycle). Since
+/// `required_by` only ever tracks `(category, package)`, not slot, a
+/// multi-slot package's own dependents can't be disambiguated between
+/// its slot-entries any more precisely than `required_by`/`--json`
+/// already can't -- an existing imprecision, not a new one.
+///
+/// `unordered_display` (`--unordered-display`, only ever meaningful
+/// together with `--tree` -- real portage's own `_tree_display` is
+/// never even called otherwise, and this pilot mirrors that: given
+/// alone it's accepted but does nothing) chooses the child order at
+/// each level: `entries`' own natural (BFS discovery) order when true
+/// -- genuinely "not sorted", using real already-existing data, no
+/// invented bookkeeping -- versus alphabetical-by-`(category, package)`
+/// when false, this pilot's own deterministic stand-in for real
+/// portage's genuine merge-order sort (which would need the scheduler
+/// this pilot doesn't have). Any entry never reached from a root at all
+/// (shouldn't normally happen -- every non-root entry's own
+/// `required_by` should trace back to one) is still printed, unindented,
+/// after the tree itself, rather than silently dropped -- this pilot's
+/// own "never silently lose information" invariant, seen already for
+/// slot conflicts and unresolvable dependencies.
+fn print_tree(
+    entries: &[GraphEntry],
+    top_level_pkgs: &HashSet<(String, String)>,
+    onlydeps: bool,
+    unordered_display: bool,
+    verbose: bool,
+) {
+    let mut children: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    for (i, entry) in entries.iter().enumerate() {
+        for owner in &entry.required_by {
+            children.entry(owner.clone()).or_default().push(i);
+        }
+    }
+    if !unordered_display {
+        for kids in children.values_mut() {
+            kids.sort_by(|&a, &b| {
+                (&entries[a].category, &entries[a].package)
+                    .cmp(&(&entries[b].category, &entries[b].package))
+            });
+        }
+    }
+
+    // Bundles print_tree's own mostly-invariant parameters together
+    // purely to keep render's own recursive calls readable (7+
+    // positional args tripped clippy::too_many_arguments) -- not a
+    // reusable abstraction, just this one function's own recursion
+    // state.
+    struct TreeCtx<'a> {
+        entries: &'a [GraphEntry],
+        children: &'a HashMap<(String, String), Vec<usize>>,
+        top_level_pkgs: &'a HashSet<(String, String)>,
+        onlydeps: bool,
+        verbose: bool,
+    }
+
+    fn render(i: usize, depth: u32, ctx: &TreeCtx, rendered: &mut HashSet<usize>) {
+        if !rendered.insert(i) {
+            return;
+        }
+        let indent = "  ".repeat(depth as usize);
+        print_entry_line(
+            &ctx.entries[i],
+            &indent,
+            ctx.top_level_pkgs,
+            ctx.onlydeps,
+            ctx.verbose,
+        );
+        let key = (
+            ctx.entries[i].category.clone(),
+            ctx.entries[i].package.clone(),
+        );
+        if let Some(kids) = ctx.children.get(&key) {
+            for &child in kids {
+                render(child, depth + 1, ctx, rendered);
+            }
+        }
+    }
+
+    let ctx = TreeCtx {
+        entries,
+        children: &children,
+        top_level_pkgs,
+        onlydeps,
+        verbose,
+    };
+    let mut rendered: HashSet<usize> = HashSet::new();
+    for (i, entry) in entries.iter().enumerate() {
+        if top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone())) {
+            render(i, 0, &ctx, &mut rendered);
+        }
+    }
+
+    // Safety net, not expected to ever trigger in practice (see this
+    // function's own doc comment) -- prints anything the tree walk
+    // somehow never reached, flat, rather than silently dropping it.
+    for (i, entry) in entries.iter().enumerate() {
+        if !rendered.contains(&i) {
+            print_entry_line(entry, "", top_level_pkgs, onlydeps, verbose);
+        }
     }
 }
 
@@ -929,6 +1167,13 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut changed_use = false;
     let mut nodeps = false;
     let mut onlydeps = false;
+    // --tree/-t and --unordered-display: display-only, entirely
+    // independent of resolution itself (real portage's own equivalent,
+    // output_helpers.py's _tree_display, lives in the display layer too,
+    // never depgraph.py's core resolution) -- see print_tree's own doc
+    // comment for the full pilot-specific design this needed.
+    let mut tree = false;
+    let mut unordered_display = false;
     let mut update = false;
     let mut deep = portage_repo::Deep::NotRequested;
     let mut excluded: Vec<String> = Vec::new();
@@ -998,6 +1243,12 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--onlydeps" || arg == "-o" {
             onlydeps = true;
+            i += 1;
+        } else if arg == "--tree" || arg == "-t" {
+            tree = true;
+            i += 1;
+        } else if arg == "--unordered-display" {
+            unordered_display = true;
             i += 1;
         } else if arg == "--update" || arg == "-u" {
             update = true;
@@ -1570,6 +1821,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'U' => changed_use = true,
                     'O' => nodeps = true,
                     'o' => onlydeps = true,
+                    't' => tree = true,
                     'u' => update = true,
                     'n' => noreplace = true,
                     'D' => deep = portage_repo::Deep::Unlimited,
@@ -1856,112 +2108,17 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    for entry in entries {
-        // --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
-        // dependencies of the packages specified, not the packages
-        // themselves"): a directly-requested (top-level) atom's own line
-        // is suppressed -- whatever its outcome -- while its dependencies
-        // (reached the same as always, since resolve_pretend_graph's own
-        // recursion is entirely unaffected by this flag) print normally.
-        // A dependency entry is never a top-level atom, so this is a
-        // no-op for it either way.
-        let onlydeps_suppressed =
-            onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
-        // Real --pretend's own bracket word: literally `pkg.type_name`
-        // (`lib/_emerge/RootConfig.py`'s own `pkg_tree_map`, the exact
-        // two strings `"ebuild"`/`"binary"` this pilot's own
-        // `CandidateSource` mirrors) -- a binary merge prints
-        // `"[binary"`, never `"[ebuild"`, regardless of outcome.
-        let bracket = match entry.source {
-            portage_repo::CandidateSource::Binary => "binary",
-            portage_repo::CandidateSource::Ebuild => "ebuild",
-        };
-        match &entry.outcome {
-            PretendOutcome::New { version } => {
-                if !onlydeps_suppressed {
-                    println!(
-                        "[{bracket}  N] {}/{}-{version}{}",
-                        entry.category,
-                        entry.package,
-                        use_suffix(entry, verbose)
-                    );
-                }
-                print_blockers(entry, version);
-            }
-            PretendOutcome::Upgrade { from, to } => {
-                if !onlydeps_suppressed {
-                    println!(
-                        "[{bracket}  U] {}/{}-{to} (upgrade from {from}){}",
-                        entry.category,
-                        entry.package,
-                        use_suffix(entry, verbose)
-                    );
-                }
-                print_blockers(entry, to);
-            }
-            PretendOutcome::Downgrade { from, to } => {
-                if !onlydeps_suppressed {
-                    println!(
-                        "[{bracket}  D] {}/{}-{to} (downgrade from {from}){}",
-                        entry.category,
-                        entry.package,
-                        use_suffix(entry, verbose)
-                    );
-                }
-                print_blockers(entry, to);
-            }
-            PretendOutcome::Reinstall {
-                version,
-                changed_flags,
-                deps_changed,
-                slot_changed,
-                rebuilt_binary,
-            } => {
-                if !onlydeps_suppressed {
-                    match reinstall_reason(
-                        changed_flags,
-                        *deps_changed,
-                        *slot_changed,
-                        *rebuilt_binary,
-                    ) {
-                        Some(reason) => println!(
-                            "[{bracket}  r] {}/{}-{version} (reinstall for {reason}){}",
-                            entry.category,
-                            entry.package,
-                            use_suffix(entry, verbose)
-                        ),
-                        None => println!(
-                            "[{bracket}  r] {}/{}-{version}{}",
-                            entry.category,
-                            entry.package,
-                            use_suffix(entry, verbose)
-                        ),
-                    }
-                }
-                print_blockers(entry, version);
-            }
-            PretendOutcome::AlreadyInstalled { version } => {
-                // Already-satisfied dependencies aren't shown, matching
-                // real emerge's usual "don't clutter the list with what's
-                // already there" behavior -- only a directly-requested
-                // (top-level) atom gets its own "nothing to do" line, and
-                // --onlydeps suppresses that too, same as every other
-                // outcome above.
-                if top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()))
-                    && !onlydeps_suppressed
-                {
-                    println!(
-                        "{}/{}-{version} is already installed; nothing to do",
-                        entry.category, entry.package
-                    );
-                }
-            }
-            PretendOutcome::NoVisibleCandidate => {
-                eprintln!(
-                    "!!! no visible ebuild for dependency \"{}/{}\"",
-                    entry.category, entry.package
-                );
-            }
+    if tree {
+        print_tree(
+            entries,
+            &top_level_pkgs,
+            onlydeps,
+            unordered_display,
+            verbose,
+        );
+    } else {
+        for entry in entries {
+            print_entry_line(entry, "", &top_level_pkgs, onlydeps, verbose);
         }
     }
 

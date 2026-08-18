@@ -4525,6 +4525,11 @@ def run(args):
     changed_use = False
     nodeps = False
     onlydeps = False
+    # --tree/-t and --unordered-display: display-only, entirely
+    # independent of resolution itself. See print_tree's own docstring
+    # for the full pilot-specific design this needed.
+    tree = False
+    unordered_display = False
     update = False
     deep = 0
     excluded = []
@@ -4576,6 +4581,12 @@ def run(args):
             i += 1
         elif arg in ("--onlydeps", "-o"):
             onlydeps = True
+            i += 1
+        elif arg in ("--tree", "-t"):
+            tree = True
+            i += 1
+        elif arg == "--unordered-display":
+            unordered_display = True
             i += 1
         elif arg in ("--update", "-u"):
             update = True
@@ -5079,6 +5090,8 @@ def run(args):
                     nodeps = True
                 elif c == "o":
                     onlydeps = True
+                elif c == "t":
+                    tree = True
                 elif c == "u":
                     update = True
                 elif c == "n":
@@ -5339,7 +5352,15 @@ def run(args):
         )
         return 0
 
-    for category, package, outcome, blockers, _slot, use_display, _required_by, source in entries:
+    def print_entry_line(entry, indent):
+        # One entry's own display line, `indent` prepended right before
+        # the category/package text (empty for flat mode, print_tree's
+        # own growing prefix for --tree) -- the exact same per-outcome
+        # bracket/reason logic the flat loop always had, just factored
+        # out so both display modes share one implementation rather than
+        # drifting apart. Mirrors pretend.rs's own print_entry_line
+        # exactly.
+        category, package, outcome, blockers, _slot, use_display, _required_by, source = entry
         tag = outcome[0]
         # --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
         # dependencies of the packages specified, not the packages
@@ -5354,20 +5375,22 @@ def run(args):
         bracket = "binary" if source == "binary" else "ebuild"
         if tag == "new":
             if not onlydeps_suppressed:
-                print(f"[{bracket}  N] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
+                print(
+                    f"[{bracket}  N] {indent}{category}/{package}-{outcome[1]}{use_suffix(use_display)}"
+                )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
             if not onlydeps_suppressed:
                 print(
-                    f"[{bracket}  U] {category}/{package}-{outcome[2]} (upgrade from {outcome[1]})"
-                    f"{use_suffix(use_display)}"
+                    f"[{bracket}  U] {indent}{category}/{package}-{outcome[2]} "
+                    f"(upgrade from {outcome[1]}){use_suffix(use_display)}"
                 )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "downgrade":
             if not onlydeps_suppressed:
                 print(
-                    f"[{bracket}  D] {category}/{package}-{outcome[2]} (downgrade from {outcome[1]})"
-                    f"{use_suffix(use_display)}"
+                    f"[{bracket}  D] {indent}{category}/{package}-{outcome[2]} "
+                    f"(downgrade from {outcome[1]}){use_suffix(use_display)}"
                 )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "reinstall":
@@ -5380,10 +5403,13 @@ def run(args):
                     changed_flags, deps_changed_flag, slot_changed_flag, rebuilt_binary_flag
                 )
                 if reason is None:
-                    print(f"[{bracket}  r] {category}/{package}-{outcome[1]}{use_suffix(use_display)}")
+                    print(
+                        f"[{bracket}  r] {indent}{category}/{package}-{outcome[1]}"
+                        f"{use_suffix(use_display)}"
+                    )
                 else:
                     print(
-                        f"[{bracket}  r] {category}/{package}-{outcome[1]} "
+                        f"[{bracket}  r] {indent}{category}/{package}-{outcome[1]} "
                         f"(reinstall for {reason}){use_suffix(use_display)}"
                     )
             print_blockers(category, package, outcome[1], blockers)
@@ -5394,12 +5420,74 @@ def run(args):
             # "is already installed; nothing to do" line, and --onlydeps
             # suppresses that too, same as every other outcome above.
             if (category, package) in top_level_pkgs and not onlydeps_suppressed:
-                print(f"{category}/{package}-{outcome[1]} is already installed; nothing to do")
+                print(
+                    f"{indent}{category}/{package}-{outcome[1]} is already installed; nothing to do"
+                )
         else:
             print(
                 f'!!! no visible ebuild for dependency "{category}/{package}"',
                 file=sys.stderr,
             )
+
+    def print_tree(entries):
+        # --tree/-t: indents each entry under whichever other entry's own
+        # dependency string reached it. Pilot-specific simplification,
+        # NOT a faithful port of real output_helpers.py's own
+        # _tree_display -- see pretend.rs's own print_tree docstring for
+        # the full grounding on why a faithful port isn't tractable here
+        # (no merge scheduler, no real bidirectional digraph) and the
+        # design this pilot uses instead: invert each entry's own
+        # required_by (already "every distinct owner, sorted") into a
+        # children map, walk it from the top-level/requested entries as
+        # roots in their own entries order (already argv order), never
+        # rendering (or recursing into) a node more than once anywhere in
+        # the tree -- real _unordered_tree_display's own seen_nodes
+        # behavior, ported exactly, and what keeps this from looping
+        # forever on a genuine dependency cycle too. unordered_display
+        # chooses child order at each level: entries' own natural (BFS
+        # discovery) order when true, versus alphabetical-by-
+        # (category, package) when false (this pilot's own deterministic
+        # stand-in for real portage's genuine merge-order sort, which
+        # would need the scheduler this pilot doesn't have). Any entry
+        # never reached from a root at all (shouldn't normally happen) is
+        # still printed, unindented, after the tree itself, rather than
+        # silently dropped. Mirrors pretend.rs's own print_tree exactly.
+        children = {}
+        for i, entry in enumerate(entries):
+            for owner in entry[6]:
+                children.setdefault(owner, []).append(i)
+        if not unordered_display:
+            for kids in children.values():
+                kids.sort(key=lambda i: (entries[i][0], entries[i][1]))
+
+        rendered = set()
+
+        def render(i, depth):
+            if i in rendered:
+                return
+            rendered.add(i)
+            indent = "  " * depth
+            print_entry_line(entries[i], indent)
+            key = (entries[i][0], entries[i][1])
+            for child in children.get(key, []):
+                render(child, depth + 1)
+
+        for i, entry in enumerate(entries):
+            if (entry[0], entry[1]) in top_level_pkgs:
+                render(i, 0)
+
+        # Safety net, not expected to ever trigger in practice (see this
+        # function's own docstring) -- prints anything the tree walk
+        # somehow never reached, flat, rather than silently dropping it.
+        for i, entry in enumerate(entries):
+            if i not in rendered:
+                print_entry_line(entry, "")
+
+    if tree:
+        print_tree(entries)
+    else:
+        for entry in entries:
+            print_entry_line(entry, "")
 
     # Purely informational, same as blockers -- see resolve_pretend_graph's
     # doc comment: v1 neither refuses nor changes the exit code for a slot

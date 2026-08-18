@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: RDEPEND lists its own two children in deliberately reverse-alphabetical order -- proves --tree's own default (alphabetical) vs --unordered-display (discovery/string order) distinction
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/ztreechild dev-libs/atreechild
+SLOT=0
+_md5_=0000000000000000000000000000000

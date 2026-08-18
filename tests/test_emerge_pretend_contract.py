@@ -334,6 +334,16 @@ CASES = [
         ["--pretend", "dev-libs/useeqparentoffpkg"],
         0,
     ),
+    (
+        "--tree: indents a diamond dependency, shown once",
+        ["--pretend", "--tree", "dev-libs/diamond"],
+        0,
+    ),
+    (
+        "--tree --unordered-display: children in discovery order, not alphabetical",
+        ["--pretend", "--tree", "--unordered-display", "dev-libs/treeorderpkg"],
+        0,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -2323,6 +2333,80 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
     )
+
+
+def test_tree_indents_a_diamond_dependency_and_shows_it_once(emerge_binary, fixture_env):
+    """--tree/-t: pilot-specific simplified indentation (real
+    output_helpers.py's own _tree_display needs a genuine merge
+    scheduler this pilot doesn't have -- see pretend.rs's own print_tree
+    docstring for the full grounding). dev-libs/diamond's own two
+    children (shared-a, shared-b) both RDEPEND on dev-libs/common -- the
+    diamond dependency must be shown exactly once, nested under whichever
+    parent's own subtree reaches it first (shared-a, the alphabetically
+    first child), not silently duplicated under both and not silently
+    dropped either -- real _unordered_tree_display's own "seen_nodes"
+    behavior, ported exactly."""
+    result = _run([str(emerge_binary)], ["--pretend", "--tree", "dev-libs/diamond"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/diamond-1.0",
+        "[ebuild  N]   dev-libs/shared-a-1.0",
+        "[ebuild  N]     dev-libs/common-1.0",
+        "[ebuild  N]   dev-libs/shared-b-1.0",
+    ]
+
+
+def test_tree_unordered_display_preserves_discovery_order(emerge_binary, fixture_env):
+    """--unordered-display (only meaningful together with --tree): real
+    portage's own man page wording -- does NOT sort the tree in merging
+    order. dev-libs/treeorderpkg's own RDEPEND deliberately lists its
+    two children in reverse-alphabetical order
+    ("dev-libs/ztreechild dev-libs/atreechild"). The default (--tree
+    alone) sorts children alphabetically, this pilot's own deterministic
+    stand-in for real portage's genuine merge-order sort (no scheduler
+    exists to be more faithful than that) -- --unordered-display instead
+    preserves the RDEPEND string's own literal order, using
+    already-existing BFS discovery-order data, not sorted at all."""
+    ordered = _run(
+        [str(emerge_binary)], ["--pretend", "--tree", "dev-libs/treeorderpkg"], fixture_env
+    )
+    assert ordered.returncode == 0
+    assert ordered.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/treeorderpkg-1.0",
+        "[ebuild  N]   dev-libs/atreechild-1.0",
+        "[ebuild  N]   dev-libs/ztreechild-1.0",
+    ]
+
+    unordered = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--tree", "--unordered-display", "dev-libs/treeorderpkg"],
+        fixture_env,
+    )
+    assert unordered.returncode == 0
+    assert unordered.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/treeorderpkg-1.0",
+        "[ebuild  N]   dev-libs/ztreechild-1.0",
+        "[ebuild  N]   dev-libs/atreechild-1.0",
+    ]
+
+
+def test_tree_onlydeps_suppresses_only_the_root_line(emerge_binary, fixture_env):
+    """--tree combined with --onlydeps: the same suppression rule flat
+    mode already has (a directly-requested top-level atom's own line is
+    hidden, its dependencies print normally) applies per-node in tree
+    mode too -- only the root's own line disappears, its children still
+    render, at their own normal indent."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--tree", "--onlydeps", "dev-libs/diamond"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N]   dev-libs/shared-a-1.0",
+        "[ebuild  N]     dev-libs/common-1.0",
+        "[ebuild  N]   dev-libs/shared-b-1.0",
+    ]
 
 
 def test_slot_conflict_is_reported_between_two_incompatible_version_constraints(

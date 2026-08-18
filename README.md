@@ -3327,6 +3327,51 @@ candidate path unchanged, exactly matching real portage's own comment
 about enabling "upgrade or downgrade to a version with visible KEYWORDS
 when the installed version is masked."
 
+`--tree`/`-t` and `--unordered-display`: indents each entry under
+whichever other entry's own dependency string reached it. Grounded
+against real `output_helpers.py`'s own `_tree_display`/
+`_ordered_tree_display`/`_unordered_tree_display` -- but, unlike almost
+every other slice in this series, explicitly **not** a faithful port of
+it: real `_ordered_tree_display` walks a genuine topologically-*
+scheduled* merge order (`mylist`) and a real bidirectional digraph
+(`parent_nodes`/`child_nodes`) to decide, for each node, exactly which
+already-placed node to nest it under, including cycle-avoiding
+parent-chasing logic when a fresh top-level branch needs to attach
+somewhere -- machinery this pilot has no equivalent of at all, since
+there's no merge scheduler (that's task #55's own "real merge/install"
+boundary). A deliberate, pilot-specific simplification instead: the
+only edges this pilot has are `GraphEntry::required_by` (already "every
+distinct owner, sorted"), inverted here into a `children` map (owner
+key -> the entries it pulled in), walked from the top-level/requested
+entries as roots in their own already-argv-ordered `entries` sequence.
+A node already rendered once anywhere in the tree (diamond dependencies
+included) is never rendered or recursed into again -- real
+`_unordered_tree_display`'s own `seen_nodes` behavior, ported exactly,
+and what keeps the recursion from looping forever on a genuine
+dependency cycle too, for free. `--unordered-display` (real man page:
+"does NOT sort the tree in merging order", only ever meaningful
+together with `--tree` -- given alone it's accepted but does nothing,
+matching real portage's own `_tree_display`-never-called-otherwise
+gating) chooses the child order at each level: `entries`' own natural
+BFS discovery order when given -- genuinely "not sorted", using real
+already-existing data, no invented bookkeeping -- versus alphabetical-
+by-`(category, package)` by default, this pilot's own deterministic
+stand-in for real portage's genuine merge-order sort. Both display
+modes (flat and tree) now share one `print_entry_line` per-outcome
+implementation (indent-parameterized) rather than duplicating the
+bracket/reason logic twice. `dev-libs/diamond` (already-established:
+`shared-a`/`shared-b` both RDEPEND on `common`) proves the
+once-only-rendering rule live -- `common` nests under `shared-a`
+only, not repeated under `shared-b`; a new `dev-libs/treeorderpkg`
+(RDEPEND deliberately `"dev-libs/ztreechild dev-libs/atreechild"`,
+reverse-alphabetical) proves the ordered/unordered distinction itself,
+since every pre-existing fixture's own RDEPEND happened to already be
+alphabetical. An entry never reached from any root at all (shouldn't
+normally happen) still prints, unindented, after the tree rather than
+being silently dropped -- this pilot's own "never silently lose
+information" invariant, already established for slot conflicts and
+unresolvable dependencies.
+
 ## Running it
 
 Build both Rust binaries:
@@ -3427,6 +3472,26 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/diamond
 # [ebuild  N] dev-libs/shared-a-1.0
 # [ebuild  N] dev-libs/shared-b-1.0
 # [ebuild  N] dev-libs/common-1.0
+
+# --tree: the same diamond, indented -- common nests under shared-a
+# only (first alphabetically), never repeated under shared-b
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --tree dev-libs/diamond
+# [ebuild  N] dev-libs/diamond-1.0
+# [ebuild  N]   dev-libs/shared-a-1.0
+# [ebuild  N]     dev-libs/common-1.0
+# [ebuild  N]   dev-libs/shared-b-1.0
+
+# --unordered-display (only meaningful with --tree): preserves RDEPEND's
+# own literal order instead of sorting alphabetically -- treeorderpkg's
+# own RDEPEND deliberately lists its children reverse-alphabetically
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --tree dev-libs/treeorderpkg
+# [ebuild  N] dev-libs/treeorderpkg-1.0
+# [ebuild  N]   dev-libs/atreechild-1.0
+# [ebuild  N]   dev-libs/ztreechild-1.0
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --tree --unordered-display dev-libs/treeorderpkg
+# [ebuild  N] dev-libs/treeorderpkg-1.0
+# [ebuild  N]   dev-libs/ztreechild-1.0
+# [ebuild  N]   dev-libs/atreechild-1.0
 
 # BDEPEND/PDEPEND/IDEPEND are walked too, not just DEPEND/RDEPEND -- v1
 # makes no distinction between any of the five real dependency-string
