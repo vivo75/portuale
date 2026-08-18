@@ -115,6 +115,82 @@ pub(crate) fn standalone_cpv_slot(pkg_dir: &Path, category: &str, pf: &str) -> O
     Some(format!("{category}/{pf}:{slot}/{sub_slot}"))
 }
 
+pub(crate) fn phase_standalone_base_env(
+    env: &Environment,
+    config_root: &Path,
+    eroot: &Path,
+    ebuild_phase_value: &str,
+    extra_env: &[(String, String)],
+) -> (String, Vec<(String, String)>) {
+    if ebuild_phase_value == "depend" || extra_env.iter().any(|(k, _)| k == "USE") {
+        return (String::new(), Vec::new());
+    }
+    let Some((display, flags)) = (|| -> Option<StandaloneBaseEnv> {
+        let config = resolve_standalone_config(&env.pkg_dir, config_root, eroot)?;
+        let repos = portage_repo::find_repos(config_root).ok()?;
+        let display = portage_repo::candidate_use_flags_display(
+            &repos,
+            &config,
+            &env.category,
+            &env.split.pn,
+            &env.split.pvr,
+        );
+        let flags = portage_profile::phase_environ(&config, None);
+        // Per-package `package.env` build vars, atom-matched against
+        // the ebuild's own md5-cache identity. Layered after the base
+        // flags so they win; the `USE=` half already folded in above.
+        let cpv_slot = standalone_cpv_slot(&env.pkg_dir, &env.category, &env.split.pf)?;
+        let mut flags = flags;
+        // The run-wide base folds with pkg and calling env in order;
+        // scalars lose to the caller.
+        let profile_only_variables = config
+            .resolved_incremental("PROFILE_ONLY_VARIABLES")
+            .unwrap_or_default();
+        let base = flags.clone();
+        flags.extend(match_package_env_vars(
+            &config.package_env_vars,
+            &cpv_slot,
+            &profile_only_variables,
+            &base,
+            &portage_profile::config_env_all(),
+        ));
+        // Per-package `FEATURES` is incremental: fold the matched raw
+        // value onto the resolved run-wide list instead of replacing it.
+        // No append when nothing matched, so fixtures without a
+        // `package.env` `FEATURES` entry keep byte-identical output.
+        let pkg_features =
+            match_package_env_incremental_raw(&config.package_env_vars, &cpv_slot, "FEATURES");
+        if !pkg_features.is_empty() {
+            let run_wide = config
+                .resolved_incremental("FEATURES")
+                .or_else(|| {
+                    config
+                        .other_vars
+                        .get("FEATURES")
+                        .map(|f| f.split_whitespace().map(String::from).collect())
+                })
+                .unwrap_or_default()
+                .join(" ");
+            let folded = fold_package_env_incremental(
+                &run_wide,
+                &pkg_features,
+                &std::env::var("FEATURES").unwrap_or_default(),
+            );
+            flags.push(("FEATURES".to_string(), folded.clone()));
+            flags.push(("PORTAGE_FEATURES".to_string(), folded));
+        }
+        Some((display, flags))
+    })() else {
+        return (String::new(), Vec::new());
+    };
+    let enabled: Vec<&str> = display
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(f, _)| f.as_str())
+        .collect();
+    (enabled.join(" "), flags)
+}
+
 /// The ebuild's USE-reduced `RESTRICT`/`PROPERTIES`; `("", "")`
 /// outside any repo checkout. `use_set` is empty except for `depend`.
 pub(crate) fn restrict_and_properties(
