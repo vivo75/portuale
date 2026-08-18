@@ -613,6 +613,90 @@ fn parse_mailuri(uri: &str) -> (String, Option<MailRoute>) {
     )
 }
 
+/// Sends one message over the parsed route: the sendmail binary gets
+/// `-f <from> <recipient>` on argv and the message on stdin, else the
+/// hand-rolled SMTP conversation below. `Err` text is already caller-ready.
+/// Portage: mail.send_mail.
+fn send_mail(
+    from: &str,
+    message: &str,
+    route: &Option<MailRoute>,
+    default_recipient: &str,
+) -> Result<(), String> {
+    match route {
+        // No second MAILURI word: SMTP to localhost:25, addressed to
+        // the whole URI word.
+        None => smtp_send(SmtpSendArgs {
+            host: "localhost",
+            port: 25,
+            user: "",
+            passwd: "",
+            recipient: default_recipient,
+            from,
+            message,
+        }),
+        Some(MailRoute::Sendmail { path }) => {
+            if !std::path::Path::new(path).exists() {
+                // A missing sendmail path is reported directly instead of
+                // falling through to SMTP against the path as a host.
+                return Err(format!("!!! sendmail binary {path} does not exist"));
+            }
+            let mut child = std::process::Command::new(path)
+                .arg("-f")
+                .arg(from)
+                .arg(default_recipient)
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    format!("!!! A network error occurred while trying to send logmail:\n{e}\nSure you configured PORTAGE_ELOG_MAILURI correctly?")
+                })?;
+            {
+                use std::io::Write;
+                if let Some(stdin) = child.stdin.take() {
+                    let mut stdin = stdin;
+                    let _ = stdin.write_all(force_ascii(message).as_bytes());
+                }
+            }
+            let status = child.wait().map_err(|e| {
+                format!("!!! A network error occurred while trying to send logmail:\n{e}\nSure you configured PORTAGE_ELOG_MAILURI correctly?")
+            })?;
+            if !status.success() {
+                eprintln!(
+                    "!!! {path} returned with a non-zero exit code. This generally indicates an error."
+                );
+            }
+            Ok(())
+        }
+        Some(MailRoute::Smtp {
+            recipient,
+            host,
+            port,
+            starttls,
+            user,
+            passwd,
+        }) => {
+            if *starttls {
+                // No TLS stack: report the cut and skip, keeping every
+                // other module's output.
+                eprintln!(
+                    " elog STARTTLS delivery is not supported by portuale \
+                     (no TLS stack) -- mail to {recipient} skipped"
+                );
+                return Ok(());
+            }
+            smtp_send(SmtpSendArgs {
+                host,
+                port: *port,
+                user,
+                passwd,
+                recipient,
+                from,
+                message,
+            })
+        }
+    }
+}
+
 /// One SMTP response: `(code, lines)` -- `250-...` continues, `250 ...` ends.
 fn smtp_read_response(reader: &mut impl std::io::BufRead) -> Result<(u16, Vec<String>), String> {
     let mut lines = Vec::new();
@@ -651,6 +735,114 @@ struct SmtpSendArgs<'a> {
     message: &'a str,
 }
 
+/// Hand-rolled SMTP subset: greeting, EHLO (extensions pick the AUTH
+/// choice), optional `AUTH LOGIN` (then `AUTH PLAIN`), `MAIL`/`RCPT`/`DATA`
+/// with dot-stuffing, `QUIT`.
+fn smtp_send(args: SmtpSendArgs<'_>) -> Result<(), String> {
+    let SmtpSendArgs {
+        host,
+        port,
+        user,
+        passwd,
+        recipient,
+        from,
+        message,
+    } = args;
+    use std::io::{BufReader, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+    fn net_err(e: impl std::fmt::Display) -> String {
+        format!(
+            "!!! A network error occurred while trying to send logmail:\n{e}\nSure you configured PORTAGE_ELOG_MAILURI correctly?"
+        )
+    }
+    fn smtp_err(e: impl std::fmt::Display) -> String {
+        format!("!!! An error occurred while trying to send logmail:\n{e}")
+    }
+    let addr = (host, port)
+        .to_socket_addrs()
+        .map_err(net_err)?
+        .next()
+        .ok_or_else(|| net_err(format!("cannot resolve {host}")))?;
+    let timeout = std::time::Duration::from_secs(60);
+    let stream = TcpStream::connect_timeout(&addr, timeout).map_err(net_err)?;
+    stream.set_read_timeout(Some(timeout)).map_err(net_err)?;
+    stream.set_write_timeout(Some(timeout)).map_err(net_err)?;
+    let mut reader = BufReader::new(stream.try_clone().map_err(net_err)?);
+    let mut writer = stream;
+    let mut cmd = |text: &str| -> Result<(), String> {
+        writer.write_all(text.as_bytes()).map_err(net_err)?;
+        writer.write_all(b"\r\n").map_err(net_err)?;
+        writer.flush().map_err(net_err)?;
+        Ok(())
+    };
+    let expect = |reader: &mut BufReader<TcpStream>,
+                  want: &[u16],
+                  what: &str|
+     -> Result<Vec<String>, String> {
+        let (code, lines) = smtp_read_response(reader)?;
+        if !want.contains(&code) {
+            return Err(smtp_err(format!("{what}: SMTP server replied {code}")));
+        }
+        Ok(lines)
+    };
+
+    expect(&mut reader, &[220], "greeting")?;
+    cmd(&format!("EHLO {}", mail_host()))?;
+    let extensions = expect(&mut reader, &[250], "EHLO")?
+        .into_iter()
+        .map(|l| l.to_uppercase())
+        .collect::<Vec<_>>();
+    if !user.is_empty() {
+        let mut authed = false;
+        if extensions
+            .iter()
+            .any(|e| e == "AUTH" || e.starts_with("AUTH "))
+        {
+            cmd("AUTH LOGIN")?;
+            let (code, _) = smtp_read_response(&mut reader)?;
+            if code == 334 {
+                cmd(&base64_encode(user.as_bytes()))?;
+                let (code, _) = smtp_read_response(&mut reader)?;
+                if code == 334 {
+                    cmd(&base64_encode(passwd.as_bytes()))?;
+                    let (code, _) = smtp_read_response(&mut reader)?;
+                    authed = code == 235;
+                }
+            }
+            if !authed {
+                // Empty authorize-id (`\0user\0pass` initial response).
+                let token = base64_encode(format!("\0{user}\0{passwd}").as_bytes());
+                cmd(&format!("AUTH PLAIN {token}"))?;
+                let (code, _) = smtp_read_response(&mut reader)?;
+                authed = code == 235;
+            }
+        }
+        if !authed {
+            return Err(smtp_err("SMTP AUTH failed"));
+        }
+    }
+    cmd(&format!("MAIL FROM:<{from}>"))?;
+    expect(&mut reader, &[250], "MAIL FROM")?;
+    cmd(&format!("RCPT TO:<{recipient}>"))?;
+    expect(&mut reader, &[250, 251], "RCPT TO")?;
+    cmd("DATA")?;
+    expect(&mut reader, &[354], "DATA")?;
+    for line in force_ascii(message).lines() {
+        // Dot-stuffing.
+        if let Some(stripped) = line.strip_prefix('.') {
+            cmd(&format!(".{stripped}"))?;
+        } else {
+            cmd(line)?;
+        }
+    }
+    // `BufRead::lines` drops a trailing empty line; the message must
+    // still end `<CRLF>.<CRLF>` (and an empty body still terminates).
+    cmd(".")?;
+    expect(&mut reader, &[250], "message data")?;
+    let _ = cmd("QUIT");
+    Ok(())
+}
+
 // --- modules --------------------------------------------------------------
 
 /// The `${ACTION}` substitution: `merged` normally, `unmerged` when only
@@ -667,6 +859,23 @@ fn mail_action(phases: &[&str]) -> &'static str {
     }
     "unmerged"
 }
+/// One mail for package `key` right away. `phases` feeds the `${ACTION}`
+/// call; `fulltext` is the class-filtered combined text.
+/// Portage: mod_mail.process.
+fn mail_process(key: &str, phases: &[&str], fulltext: &str) {
+    let uri = elog_mailuri();
+    let (recipient, route) = parse_mailuri(&uri);
+    let host = mail_host();
+    let from = elog_mailfrom().replace("${HOST}", &host);
+    let mut subject = elog_mailsubject()
+        .replace("${PACKAGE}", key)
+        .replace("${HOST}", &host);
+    subject = subject.replace("${ACTION}", mail_action(phases));
+    let message = create_message(&from, &recipient, &subject, fulltext, &[]);
+    if let Err(e) = send_mail(&from, &message, &route, &recipient) {
+        eprintln!("{e}");
+    }
+}
 
 /// Accumulated `mod_mail_summary` state: first-seen settings snapshot +
 /// per-package header+fulltext, narrowed to one config per process.
@@ -681,6 +890,158 @@ static MAIL_SUMMARY: std::sync::Mutex<MailSummaryState> = std::sync::Mutex::new(
     config: None,
     items: Vec::new(),
 });
+
+/// Stashes `header + fulltext` for `key`, snapshotting the three settings
+/// on first use (the first config wins for the whole run).
+/// Portage: mod_mail_summary.process.
+fn mail_summary_accumulate(key: &str, fulltext: &str) {
+    let header = format!(
+        ">>> Messages generated for package {key} by process {} on {}:\n\n",
+        std::process::id(),
+        rfc2822_now(),
+    );
+    let Ok(mut state) = MAIL_SUMMARY.lock() else {
+        return;
+    };
+    if state.config.is_none() {
+        state.config = Some((elog_mailuri(), elog_mailfrom(), elog_mailsubject()));
+    }
+    match state.items.iter_mut().find(|(k, _)| k == key) {
+        Some((_, body)) => *body = format!("{header}{fulltext}"),
+        None => state
+            .items
+            .push((key.to_string(), format!("{header}{fulltext}"))),
+    }
+    // First accumulation arms the exit-time finalize; `Once` keeps one
+    // registration per process.
+    static REGISTER_ONCE: std::sync::Once = std::sync::Once::new();
+    REGISTER_ONCE.call_once(|| {
+        // SAFETY: plain function pointer, no captures; the handler
+        // only locks `MAIL_SUMMARY` and does I/O, and process exit
+        // (not `_exit`/abort) is the only path that runs it.
+        unsafe {
+            libc::atexit(mail_summary_atexit);
+        }
+    });
+}
+
+/// One multipart mail for every accumulated package (or nothing when no
+/// package produced messages). Always clears the accumulation, sent or not.
+/// Portage: mod_mail_summary.finalize.
+fn mail_summary_finalize() {
+    let (config, items) = match MAIL_SUMMARY.lock() {
+        Ok(mut state) => (state.config.take(), std::mem::take(&mut state.items)),
+        Err(_) => return,
+    };
+    if items.is_empty() {
+        return;
+    }
+    let (uri, from_tpl, subject_tpl) =
+        config.unwrap_or_else(|| (elog_mailuri(), elog_mailfrom(), elog_mailsubject()));
+    let (recipient, route) = parse_mailuri(&uri);
+    let host = mail_host();
+    let from = from_tpl.replace("${HOST}", &host);
+    let count = if items.len() == 1 {
+        "one package"
+    } else {
+        "multiple packages"
+    };
+    let subject = subject_tpl
+        .replace("${PACKAGE}", count)
+        .replace("${HOST}", &host);
+    let mut body = format!(
+        "elog messages for the following packages generated by process {} on host {}:\n",
+        std::process::id(),
+        host,
+    );
+    let mut attachments = Vec::new();
+    for (key, item) in &items {
+        body.push_str(&format!("- {key}\n"));
+        // One part per package, each base64'd like the lead part.
+        attachments.push(mime_text_part(item));
+    }
+    let message = create_message(&from, &recipient, &subject, &body, &attachments);
+    if let Err(e) = send_mail(&from, &message, &route, &recipient) {
+        eprintln!("{e}");
+    }
+}
+
+/// `extern "C"` entry for `libc::atexit` -- see
+/// `mail_summary_accumulate`. Must not unwind (that would abort);
+/// every fallible step is already `Option`/`Result`-guarded inside
+/// `mail_summary_finalize` (lock failure returns silently, delivery
+/// errors print).
+extern "C" fn mail_summary_atexit() {
+    mail_summary_finalize();
+}
+
+/// `save` / `save_summary` / `syslog` / `custom` / `mail` / `mail_summary`
+/// for one merged package: per-module `fulltext` from `all_msgs`, handed
+/// to whichever modules are enabled. A module with nothing left after
+/// filtering is skipped. Returns the paths written, for the caller's log
+/// line. `mail_summary` only accumulates; its mail goes out at exit.
+/// Portage: per-module `process`.
+pub fn save_modules_process(
+    logdir: &Path,
+    key: &str,
+    all_msgs: &[ElogMessage],
+    split_elog: bool,
+) -> Result<Vec<PathBuf>, String> {
+    let mut written = Vec::new();
+    for (name, is_summary) in [("save", false), ("save_summary", true)] {
+        if !module_enabled(name) {
+            continue;
+        }
+        let filtered = filter_by_classes(all_msgs, &module_classes(name));
+        if filtered.is_empty() {
+            continue;
+        }
+        let fulltext = combine_logentries(&filtered);
+        let path = if is_summary {
+            save_summary_process(logdir, key, &fulltext)?
+        } else {
+            save_process(logdir, key, &fulltext, split_elog)?
+        };
+        written.push(path);
+    }
+    if module_enabled("syslog") {
+        let filtered = filter_by_classes(all_msgs, &module_classes("syslog"));
+        if !filtered.is_empty() {
+            syslog_process(key, &filtered);
+        }
+    }
+    if module_enabled("custom") {
+        let filtered = filter_by_classes(all_msgs, &module_classes("custom"));
+        if !filtered.is_empty() {
+            let fulltext = combine_logentries(&filtered);
+            written.push(custom_process(logdir, key, &fulltext, split_elog)?);
+        }
+    }
+    if module_enabled("mail") {
+        let filtered = filter_by_classes(all_msgs, &module_classes("mail"));
+        if !filtered.is_empty() {
+            // Only the phases present matter (`${ACTION}` detection).
+            let phases: Vec<&str> = {
+                let mut seen = std::collections::HashSet::new();
+                filtered
+                    .iter()
+                    .map(|m| m.phase.as_str())
+                    .filter(|p| seen.insert(*p))
+                    .collect()
+            };
+            let fulltext = combine_logentries(&filtered);
+            mail_process(key, &phases, &fulltext);
+        }
+    }
+    if module_enabled("mail_summary") {
+        let filtered = filter_by_classes(all_msgs, &module_classes("mail_summary"));
+        if !filtered.is_empty() {
+            let fulltext = combine_logentries(&filtered);
+            mail_summary_accumulate(key, &fulltext);
+        }
+    }
+    Ok(written)
+}
 
 /// The `* Messages for package <cpv>:` block for every accumulated
 /// package, all message types on stdout.
