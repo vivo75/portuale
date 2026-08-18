@@ -65,6 +65,58 @@ pub(crate) struct UseSuffixArgs<'a> {
     pub(crate) color: &'a Colorizer,
 }
 
+/// Renders the ` USE="…"` (and `VAR="…"` per USE_EXPAND group) suffix.
+/// Shown unless `--quiet` without `-v`. At `-pv`/`-pq` every flag renders;
+/// at plain `-p` only changed flags render (for `New`, both are equal).
+/// Portage: output.py, _display_use
+pub(crate) fn use_suffix(args: UseSuffixArgs<'_>) -> String {
+    let UseSuffixArgs {
+        entry,
+        verbose,
+        quiet,
+        alphabetical,
+        color,
+    } = args;
+    // `print_use_string = verbosity != 1 or "--verbose"`.
+    if quiet && !verbose {
+        return String::new();
+    }
+    // `all_flags = verbosity == 3 or quiet`.
+    let display = if verbose || quiet {
+        &entry.use_expand_display
+    } else {
+        &entry.use_expand_display_p
+    };
+    if display.is_empty() {
+        return String::new();
+    }
+    // `USE="…"` first, then one `VAR="…"` per non-hidden USE_EXPAND group.
+    // Colour is applied per token *after* the sort, so `--alphabetical`
+    // still sees plain tokens.
+    //
+    // Each group renders with its own trailing space; a single leading
+    // space joins the display to the line.
+    let groups: Vec<String> = display
+        .iter()
+        .map(|(name, rendered)| {
+            let mut toks: Vec<&str> = rendered.split(' ').collect();
+            if alphabetical {
+                // Portage's combined-list sort is natural (`_alnum_sort_key`).
+                toks.sort_by_key(|t| portage_repo::alnum_sort_key(use_flag_sort_key(t)));
+            }
+            let body = toks
+                .iter()
+                .map(|t| colorize_use_token(t, color))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{name}=\"{body}\" ")
+        })
+        .collect();
+    // A single space joins the USE display to the line, which already ends
+    // with the (possibly empty) `oldbest` slot's own trailing space.
+    format!(" {}", groups.concat())
+}
+
 /// The version `entry`'s own package line displays; `None` for the
 /// non-merging outcomes. `merge_order`'s own `entry_version` is the same
 /// mapping, but it is private to `portage-repo`.
