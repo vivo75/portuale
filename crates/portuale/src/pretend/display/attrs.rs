@@ -56,6 +56,15 @@ pub(crate) fn colorize_use_token(tok: &str, color: &Colorizer) -> String {
     format!("{open}{}{markers}{close}", color.c(key, core))
 }
 
+/// Arguments of [`use_suffix`].
+pub(crate) struct UseSuffixArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) verbose: bool,
+    pub(crate) quiet: bool,
+    pub(crate) alphabetical: bool,
+    pub(crate) color: &'a Colorizer,
+}
+
 /// The version `entry`'s own package line displays; `None` for the
 /// non-merging outcomes. `merge_order`'s own `entry_version` is the same
 /// mapping, but it is private to `portage-repo`.

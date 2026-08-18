@@ -343,6 +343,38 @@ struct Run161Args<'a> {
     with_bdeps: bool,
 }
 
+/// A walked rebuild entry: `Reinstall { slot_operator_rebuild: true }`
+/// at the installed version, with the given resolved USE display.
+fn slotundo_rebuild_entry(
+    name: &str,
+    version: &str,
+    slot: &str,
+    sub_slot: &str,
+    use_display: &[(&str, bool)],
+) -> GraphEntry {
+    GraphEntry {
+        discovery: 0,
+        category: "dev-libs".into(),
+        package: name.into(),
+        outcome: PretendOutcome::Reinstall {
+            version: version.into(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: true,
+        },
+        slot: Some(slot.into()),
+        sub_slot: Some(sub_slot.into()),
+        use_flags_display: use_display
+            .iter()
+            .map(|(f, on)| ((*f).to_string(), *on))
+            .collect(),
+        ..graph_entry("dev-libs", name, version)
+    }
+}
+
 /// Arguments of [`euf_flat`].
 struct EufFlatArgs<'a> {
     iuse: &'a str,
