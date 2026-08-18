@@ -3578,7 +3578,7 @@ stub. Runs the real `install` phase chain first (task #54's own
 merges it into `${ROOT}` -- matching real `dblink.mergeme()`'s own
 `_format_contents_line` format exactly: `dir <path>`, `obj <path> <md5>
 <mtime>`, `sym <path> -> <target> <mtime>`. Writes that `CONTENTS` text,
-plus `CATEGORY`/`SLOT`/`repository`, into a real
+plus `CATEGORY`/`SLOT`/`repository`/`COUNTER`, into a real
 `${ROOT}/var/db/pkg/<category>/<pf>/` directory -- the same
 one-value-per-file vdb layout this pilot's own fixtures and
 `portage_repo`'s own vdb readers (`installed_candidates`,
@@ -3593,6 +3593,20 @@ no-ops when the ebuild defines neither function at all -- no new
 bash-side gap, this is exactly the same real, unmodified toolchain task
 #54 already drives.
 
+The vdb write is real and atomic, not a direct write: `write_vdb_entry`
+builds the whole entry (`CATEGORY`/`SLOT`/`repository`/`CONTENTS`/
+`COUNTER`) in a `-MERGING-<pf>`-prefixed temporary sibling directory
+(real `lib/portage/const.py`'s own `MERGING_IDENTIFIER`) under the same
+`<category>` directory, then `std::fs::rename`s it into place -- the
+same same-filesystem atomicity guarantee real `dblink.merge()`'s own
+`dbtmpdir`-then-`_movefile()` approach relies on, so a crash mid-write
+leaves at most a harmless leftover temp directory, never a half-written
+*final* vdb entry. `COUNTER` is a real, monotonically-increasing global
+merge counter too: `next_counter` reads/increments/writes
+`${ROOT}/var/cache/edb/counter` (real `vardbapi.counter_tick_core()`'s
+own mechanism -- a missing or corrupt file is treated as `-1`, so the
+very first merge anywhere gets `COUNTER=0`).
+
 `SLOT` is read directly from the ebuild's own text (a literal
 `SLOT=...` assignment, scanned anywhere in the file -- unlike `EAPI`,
 real PMS doesn't restrict where `SLOT` may appear), the same
@@ -3605,14 +3619,10 @@ found.
 
 **v1 scope cuts** (see `ebuild_merge.rs`'s own module doc comment for
 the full list): no `CONFIG_PROTECT`/collision-protect/preserve-libs. No
-`COUNTER`/`env_update()`/`ldconfig`, and no atomic
-temp-directory-then-rename vdb write (real `merge()` builds the new vdb
-entry in a temporary directory and only atomically moves it into place
-once everything succeeded; this slice writes directly into the final vdb
-directory). Directory-entry merge order is sorted by filename for
-deterministic tests, rather than real `os.listdir()`'s own
-arbitrary/OS-dependent order (`CONTENTS` line order has no real semantic
-meaning portage itself relies on).
+`env_update()`/`ldconfig` triggering. Directory-entry merge order is
+sorted by filename for deterministic tests, rather than real
+`os.listdir()`'s own arbitrary/OS-dependent order (`CONTENTS` line order
+has no real semantic meaning portage itself relies on).
 
 ## Running it
 
@@ -4915,4 +4925,8 @@ cat "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0/CONTENTS
 ls "${PORTAGE_TMPDIR}"/portage/dev-libs/mergepkg-1.0/temp/ | grep -E "preinst|postinst"
 # postinst-ran-after-merge
 # preinst-ran-before-merge
+cat "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0/COUNTER
+# 0 (a bare integer, no trailing newline -- the real vdb COUNTER format)
+ls "${ROOT}"/var/db/pkg/dev-libs/
+# mergepkg-1.0 (no leftover -MERGING-mergepkg-1.0 temp dir)
 ```

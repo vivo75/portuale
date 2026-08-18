@@ -21,14 +21,12 @@
 //     overwriting it) and `FEATURES=collision-protect`/`preserve-libs`
 //     are both real, separately-scoped features this slice doesn't
 //     attempt.
-//   - No `COUNTER`/`env_update()`/`ldconfig` triggering, and no atomic
-//     `dbtmpdir`-then-rename vdb write -- real `merge()` builds the new
-//     vdb entry in a temporary `.dblink-tmp-<pf>` directory and
-//     atomically moves it into place only once everything succeeded,
-//     specifically so a crash mid-merge can't corrupt a pre-existing vdb
-//     entry; this slice writes directly into the final vdb directory
-//     instead, a real (if lower-fidelity) risk this pilot accepts for
-//     now.
+//   - No `env_update()`/`ldconfig` triggering -- real `merge()` runs
+//     `env_update()` (`/etc/ld.so.cache`-equivalent regeneration,
+//     `/etc/env.d` processing) after a successful merge; this pilot has
+//     no equivalent machinery at all yet. (`COUNTER` and the atomic
+//     `dbtmpdir`-then-rename vdb write are both now real -- see
+//     `write_vdb_entry`'s own doc comment.)
 //   - Real `os.chown`/permission-preserving `os.chmod` per merged file
 //     are not reproduced explicitly -- `std::fs::copy` already preserves
 //     a regular file's permission bits on Unix, which covers the common
@@ -214,11 +212,51 @@ fn merge_tree(d: &Path, root: &Path) -> Result<String, String> {
     Ok(contents)
 }
 
-/// Writes a minimal real vdb entry under `root` for the package described
-/// by `env` -- `CATEGORY`/`SLOT`/`repository`/`CONTENTS`, matching the
-/// same one-value-per-file convention this pilot's own fixtures (and
-/// `portage_repo`'s own vdb readers) already use. Not atomic (see this
-/// module's own doc comment).
+/// Real `lib/portage/const.py`'s own `CACHE_PATH` (`var/cache/edb`): the
+/// global, monotonically-increasing merge counter lives at
+/// `<root>/var/cache/edb/counter`, a bare integer with no trailing
+/// newline (`write_atomic(self._counter_path, str(counter))`). Real
+/// `vardbapi.counter_tick_core()` treats a missing or corrupt file as
+/// `-1` (so the very first merge anywhere gets `COUNTER=0`), then
+/// increments and writes back. Not reproduced here: real
+/// `get_counter_tick_core()`'s own extra safety net of scanning every
+/// already-installed package's own `COUNTER` for a higher value, in case
+/// the global file itself is stale/corrupt relative to the vdb -- a
+/// corner case with no real relevance to this pilot's own synthetic
+/// fixtures.
+fn next_counter(root: &Path) -> Result<i64, String> {
+    let counter_path = root.join("var/cache/edb/counter");
+    let previous: i64 = std::fs::read_to_string(&counter_path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(-1);
+    let next = previous + 1;
+    if let Some(parent) = counter_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    std::fs::write(&counter_path, next.to_string())
+        .map_err(|e| format!("{}: {e}", counter_path.display()))?;
+    Ok(next)
+}
+
+/// Real `lib/portage/const.py`'s own `MERGING_IDENTIFIER` (`"-MERGING-"`):
+/// the prefix real `dblink.dbtmpdir` uses for its own temporary,
+/// not-yet-finalized vdb entry directory, a sibling of the real vdb entry
+/// under the same `<category>` directory.
+const MERGING_IDENTIFIER: &str = "-MERGING-";
+
+/// Writes a real vdb entry under `root` for the package described by
+/// `env` -- `CATEGORY`/`SLOT`/`repository`/`COUNTER`/`CONTENTS`, matching
+/// the same one-value-per-file convention this pilot's own fixtures and
+/// `portage_repo`'s own vdb readers already use. Builds the entry in a
+/// `MERGING_IDENTIFIER`-prefixed temporary sibling directory first, then
+/// atomically renames it into place -- mirroring real `dblink.merge()`'s
+/// own `dbtmpdir`-then-`_movefile()` approach (both are guaranteed to sit
+/// on the same filesystem, under the same `<category>` directory, so
+/// `std::fs::rename` alone is already atomic here, the same guarantee
+/// real `_movefile()` relies on for a same-device move). A crash
+/// mid-write leaves at most a stale, harmless `MERGING_IDENTIFIER`
+/// leftover -- never a half-written *final* vdb entry.
 fn write_vdb_entry(
     root: &Path,
     env: &ebuild_phases::Environment,
@@ -226,21 +264,33 @@ fn write_vdb_entry(
     repository: &str,
     contents: &str,
 ) -> Result<(), String> {
-    let vdb_dir = root
-        .join("var/db/pkg")
-        .join(&env.category)
-        .join(&env.split.pf);
-    std::fs::create_dir_all(&vdb_dir).map_err(|e| format!("{}: {e}", vdb_dir.display()))?;
+    let cat_dir = root.join("var/db/pkg").join(&env.category);
+    let tmp_dir = cat_dir.join(format!("{MERGING_IDENTIFIER}{}", env.split.pf));
+    let final_dir = cat_dir.join(&env.split.pf);
+
+    if tmp_dir.exists() {
+        std::fs::remove_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
+    }
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
+
+    let counter = next_counter(root)?;
     for (name, value) in [
         ("CATEGORY", env.category.as_str()),
         ("SLOT", slot),
         ("repository", repository),
     ] {
-        std::fs::write(vdb_dir.join(name), format!("{value}\n"))
-            .map_err(|e| format!("{}: {e}", vdb_dir.join(name).display()))?;
+        std::fs::write(tmp_dir.join(name), format!("{value}\n"))
+            .map_err(|e| format!("{}: {e}", tmp_dir.join(name).display()))?;
     }
-    std::fs::write(vdb_dir.join("CONTENTS"), contents)
-        .map_err(|e| format!("{}: {e}", vdb_dir.join("CONTENTS").display()))?;
+    std::fs::write(tmp_dir.join("CONTENTS"), contents)
+        .map_err(|e| format!("{}: {e}", tmp_dir.join("CONTENTS").display()))?;
+    std::fs::write(tmp_dir.join("COUNTER"), counter.to_string())
+        .map_err(|e| format!("{}: {e}", tmp_dir.join("COUNTER").display()))?;
+
+    if final_dir.exists() {
+        std::fs::remove_dir_all(&final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
+    }
+    std::fs::rename(&tmp_dir, &final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
     Ok(())
 }
 
@@ -440,6 +490,19 @@ mod tests {
             .any(|l| l.starts_with("obj /usr/share/mergepkg/hello.txt ")));
         assert!(contents.contains("sym /usr/share/mergepkg/hello-link.txt -> hello.txt"));
 
+        let counter: i64 = std::fs::read_to_string(vdb_dir.join("COUNTER"))
+            .unwrap()
+            .parse()
+            .expect("COUNTER is a bare integer");
+        assert!(counter >= 0);
+
+        // Real dblink.merge()'s own atomic dbtmpdir-then-rename: no
+        // MERGING_IDENTIFIER-prefixed temp directory should survive a
+        // successful merge.
+        assert!(!root
+            .join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0")
+            .exists());
+
         // Real pkg_preinst/pkg_postinst ordering proof: the fixture's own
         // hooks only touch these markers if, respectively, the merged
         // file was *not yet* visible under ${ROOT} (preinst) and *was
@@ -454,5 +517,38 @@ mod tests {
             t_dir.join("postinst-ran-after-merge").is_file(),
             "pkg_postinst must run, and see the file (and vdb entry) already merged"
         );
+    }
+
+    #[test]
+    fn re_merging_the_same_package_replaces_the_vdb_entry_and_bumps_counter() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+        let vdb_dir = root.join("var/db/pkg/dev-libs/mergepkg-1.0");
+
+        assert_eq!(run_merge(&ebuild, &root, &portage_tmpdir).unwrap(), 0);
+        let first_counter: i64 = std::fs::read_to_string(vdb_dir.join("COUNTER"))
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        assert_eq!(run_merge(&ebuild, &root, &portage_tmpdir).unwrap(), 0);
+        let second_counter: i64 = std::fs::read_to_string(vdb_dir.join("COUNTER"))
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        assert!(second_counter > first_counter);
+        // Still a single, intact entry -- not a leftover-plus-new-copy.
+        assert!(root.join("usr/share/mergepkg/hello.txt").is_file());
+        assert!(!root
+            .join("var/db/pkg/dev-libs/-MERGING-mergepkg-1.0")
+            .exists());
     }
 }
