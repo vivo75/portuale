@@ -213,3 +213,95 @@ fn resolve_163(
     )
     .unwrap_or_else(|e| panic!("resolve_163({atom}) failed: {e}"))
 }
+
+/// Each reinstall trigger also fires through the best-version
+/// path (past `--update`, which bypasses the `avoid_update`
+/// shortcut): the gate and its disjunction arm must agree.
+#[test]
+fn resolve_pretend_triggers_fire_through_the_best_version_path() {
+    // Changed RDEPEND under --update.
+    let dir = dir_163("rp-bdeps");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[("dev-libs/rp", "1.0", "0", "", "dev-libs/other", "amd64")],
+    );
+    install_163(
+        &dir,
+        "dev-libs",
+        "rp-1.0",
+        "0",
+        &[("RDEPEND", "dev-libs/different")],
+    );
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.update = true;
+    o.selective = false;
+    o.changed_deps = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: true,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    // Changed sub-slot under --update, option on and off.
+    for (tag, changed_slot, expected) in [
+        (
+            "on",
+            true,
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: true,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            },
+        ),
+        ("off", false, installed_163("1.0")),
+    ] {
+        let dir = dir_163(&format!("rp-bslot-{tag}"));
+        let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0/1", "", "", "amd64")]);
+        install_163(&dir, "dev-libs", "rp-1.0", "0/0", &[]);
+        let config = cfg_163();
+        let mut o = RpOpts163::dep();
+        o.update = true;
+        o.selective = false;
+        o.changed_slot = changed_slot;
+        assert_eq!(
+            resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+            expected,
+            "{tag}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    // Changed repo under --update.
+    let dir = dir_163("rp-brepo");
+    let repos = repo_pkgs_163(&dir, &[("dev-libs/rp", "1.0", "0", "", "", "amd64")]);
+    install_163(&dir, "dev-libs", "rp-1.0", "0", &[("repository", "other")]);
+    let config = cfg_163();
+    let mut o = RpOpts163::dep();
+    o.update = true;
+    o.selective = false;
+    o.newrepo = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: true,
+            slot_operator_rebuild: false,
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

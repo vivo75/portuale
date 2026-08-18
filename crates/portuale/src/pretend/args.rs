@@ -1396,6 +1396,90 @@ fn parse_binpkg_opts<'a>(
     }
 }
 
+/// Quickpkg and timestamp flags. Returns whether the token was consumed.
+fn parse_quickpkg_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--rebuilt-binaries-timestamp" {
+        // A required numeric Unix timestamp.
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--rebuilt-binaries-timestamp\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        match value.parse::<u64>() {
+            Ok(n) => {
+                opts.rebuilt_binaries_timestamp = Some(n);
+                *idx += 2;
+            }
+            Err(_) => {
+                eprintln!("emerge: invalid --rebuilt-binaries-timestamp parameter: {value:?}");
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--rebuilt-binaries-timestamp=") {
+        match value.parse::<u64>() {
+            Ok(n) => {
+                opts.rebuilt_binaries_timestamp = Some(n);
+                *idx += 1;
+            }
+            Err(_) => {
+                eprintln!("emerge: invalid --rebuilt-binaries-timestamp parameter: {value:?}");
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if arg == "--quickpkg-direct" {
+        // A REQUIRED `y`/`n` value, like `--autounmask-backtrack`.
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--quickpkg-direct\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        match value.as_str() {
+            "y" => opts.quickpkg_direct = Some(true),
+            "n" => opts.quickpkg_direct = Some(false),
+            _ => {
+                eprintln!(
+                    "emerge: option \"--quickpkg-direct\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--quickpkg-direct=") {
+        match value {
+            "y" => opts.quickpkg_direct = Some(true),
+            "n" => opts.quickpkg_direct = Some(false),
+            _ => {
+                eprintln!(
+                    "emerge: option \"--quickpkg-direct\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--quickpkg-direct-root" {
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--quickpkg-direct-root\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        opts.quickpkg_direct_root = Some(value.clone());
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--quickpkg-direct-root=") {
+        opts.quickpkg_direct_root = Some(value.to_string());
+        *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Positional atoms, bundles, unknown options. Returns whether the token was consumed.
 fn parse_tail_opts<'a>(
     opts: &mut EmergeOpts<'a>,
