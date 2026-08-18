@@ -15,6 +15,13 @@ fn installed_163(version: &str) -> PretendOutcome {
     }
 }
 
+/// Fresh unique scratch dir per test (vdb + repo live under it, so
+/// the per-root memo caches never see a reused path). Mirrors
+/// `tests_162::dir_162`, which must stay untouched.
+fn dir_163(tag: &str) -> std::path::PathBuf {
+    TempDir::new(&format!("portuale-163-{tag}")).keep()
+}
+
 /// Fixed "amd64"-only, no-overrides config, mirroring `tests_162`'
 /// `cfg_162` (a `KEYWORDS="amd64"` scratch ebuild is always
 /// visible).
@@ -22,6 +29,101 @@ fn cfg_163() -> portage_profile::Config {
     portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
         ..Default::default()
+    }
+}
+/// Arguments of [`write_pkg_163`].
+struct WritePkg163Args<'a> {
+    repo: &'a Path,
+    cp: &'a str,
+    pv: &'a str,
+    slot: &'a str,
+    iuse: &'a str,
+    rdepend: &'a str,
+    keywords: &'a str,
+}
+
+/// One scratch ebuild plus its md5-cache entry, in the
+/// shape: `SLOT`, `KEYWORDS`, `IUSE`, `RDEPEND` lines in both.
+fn write_pkg_163(args: WritePkg163Args<'_>) {
+    let WritePkg163Args {
+        repo,
+        cp,
+        pv,
+        slot,
+        iuse,
+        rdepend,
+        keywords,
+    } = args;
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let (cat, pkg) = cp.split_once('/').expect("category/package");
+    let dir = repo.join(cat).join(pkg);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut body = format!(
+        "EAPI=8\nDESCRIPTION=\"163 result assembly\"\nSLOT=\"{slot}\"\nKEYWORDS=\"{keywords}\"\n"
+    );
+    if !iuse.is_empty() {
+        writeln!(body, "IUSE=\"{iuse}\"").unwrap();
+    }
+    if !rdepend.is_empty() {
+        writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+    }
+    std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=163 result assembly\nEAPI=8\n".to_string();
+    if !iuse.is_empty() {
+        writeln!(entry, "IUSE={iuse}").unwrap();
+    }
+    if !rdepend.is_empty() {
+        writeln!(entry, "RDEPEND={rdepend}").unwrap();
+    }
+    writeln!(entry, "KEYWORDS={keywords}\nSLOT={slot}\n_md5_={md5}").unwrap();
+    let cachedir = repo.join("metadata/md5-cache").join(cat);
+    std::fs::create_dir_all(&cachedir).unwrap();
+    std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+}
+
+/// Single scratch repo (name `testrepo`, priority 0, main) holding
+/// `(cp, version, slot, iuse, rdepend, keywords)` ebuilds.
+fn repo_pkgs_163(dir: &Path, pkgs: &[(&str, &str, &str, &str, &str, &str)]) -> Vec<RepoConfig> {
+    let repo = dir.join("repo");
+    for (cp, pv, slot, iuse, rdepend, keywords) in pkgs {
+        write_pkg_163(WritePkg163Args {
+            repo: &repo,
+            cp,
+            pv,
+            slot,
+            iuse,
+            rdepend,
+            keywords,
+        });
+    }
+    vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo,
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }]
+}
+
+/// One installed instance under `<root>/var/db/pkg` with the given
+/// `SLOT` plus caller-supplied field files (`USE`, `IUSE`,
+/// `RDEPEND`, `repository`, ...). Mirrors `tests_162::install_162`,
+/// which must stay untouched.
+fn install_163(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &str)]) {
+    let d = root.join("var/db/pkg").join(cat).join(pf);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+    for (name, contents) in files {
+        std::fs::write(d.join(name), contents.as_bytes()).unwrap();
     }
 }
 // ---- shared resolve_pretend harness ----
