@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: installed with a vdb repository file recording a different repo than the one currently providing this version -- --newrepo's own reinstall trigger
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

@@ -3459,6 +3459,35 @@ fixed, pilot-authored line instead, the same "never leak a language-
 specific parse-error string into pinned output" precedent `--deep`'s own
 invalid-value handling already set.
 
+`--newrepo`: a 5th independent, freely-combinable `Reinstall` trigger,
+alongside `--newuse`/`--changed-use`, `--changed-deps`, `--changed-slot`,
+and `--rebuilt-binaries` -- same architecture, one new vdb read
+(`new_repo_changed`, reusing the already-generic `read_vdb_string`
+helper for the vdb's own `repository` file) plus one new plain boolean
+CLI flag (real `main.py`'s own `options` list -- no value at all, unlike
+`--changed-slot`/`--rebuilt-binaries`, which are real `true_y_or_n`).
+Fires when the installed package's own vdb-recorded `repository` differs
+from the repo that currently provides that exact version -- a straight
+string compare against the already-resolved candidate's own `repo_name`
+at each of `resolve_pretend`'s two call sites, no md5-cache re-read
+needed at all (unlike `slot_changed`'s own re-lookup). A vdb entry with
+no `repository` file at all -- real portage predates this tracking, or a
+hand-installed/synthetic entry -- is treated as real
+`portage.versions._unknown_repo` (`"__unknown__"`) exactly, per real
+`depgraph.py`'s own comparison, which has no tolerant "missing data
+means unchanged" fallback the way `--changed-slot`/`--changed-deps` do:
+an unrecorded repo is a real, distinct value, and it either equals the
+current repo or it doesn't. `--newrepo` is also one of real
+`create_depgraph_params.py`'s own `selective` triggers (confirmed by
+reading it), so it now joins `update`/`newuse`/`changed_use`/
+`changed_deps`/`changed_slot`/`noreplace` in this pilot's own `selective`
+default-resolution OR-list too. Three fixtures prove it: `newrepopkg`
+(vdb `repository=oldrepo`, current provider `testrepo` -- fires),
+`samerepopkg` (vdb `repository=testrepo`, matching -- doesn't fire), and
+the pre-existing `samepkg` (no `repository` file at all -- fires via the
+`"__unknown__"` sentinel, a real, sometimes-surprising consequence of
+that missing-tolerant-fallback design worth demonstrating explicitly).
+
 ## Running it
 
 Build both Rust binaries:
@@ -4601,6 +4630,24 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective -
 # together auto-enable --rebuilt-binaries with no explicit flag at all
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkgonly --deep --update --selective dev-libs/rebuiltbinarypkg
 # [binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)
+
+# --newrepo: newrepopkg is installed with a vdb repository file
+# recording "oldrepo", but the current best candidate for this exact
+# version lives in "testrepo" instead -- off by default...
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective dev-libs/newrepopkg
+# dev-libs/newrepopkg-1.0 is already installed; nothing to do
+# ...fires once given explicitly
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo dev-libs/newrepopkg
+# [ebuild  r] dev-libs/newrepopkg-1.0 (reinstall for new repository)
+# a vdb repository file that DOES match the current provider never
+# triggers a reinstall
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo dev-libs/samerepopkg
+# dev-libs/samerepopkg-1.0 is already installed; nothing to do
+# samepkg has no vdb repository file at all -- real portage's own
+# "__unknown__" sentinel applies, which never matches a real repo name,
+# so --newrepo fires here too even though nothing really changed
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo dev-libs/samepkg
+# [ebuild  r] dev-libs/samepkg-1.0 (reinstall for new repository)
 
 # downgrade vs upgrade: downgradepkg is installed at 2.0, but only 1.0 is
 # visible in the tree -- a genuine downgrade, distinct from an upgrade,

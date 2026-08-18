@@ -322,22 +322,24 @@ fn use_suffix(entry: &GraphEntry, verbose: bool) -> String {
 
 /// The `(reinstall for ...)` note's own reason text, real portage
 /// treating `--newuse`/`--changed-use`, `--changed-deps`,
-/// `--changed-slot`, and `--rebuilt-binaries` as independent,
-/// freely-combinable triggers (see `PretendOutcome::Reinstall`'s own doc
-/// comment, portage-repo). Pilot-invented wording, same as the
-/// pre-existing "changed USE: ..." text -- real portage's own default
-/// `--pretend` output shows no such itemized reason at all. Returns
-/// `None` when all four fields are empty/false -- real portage's own
-/// bare, reasonless `[ebuild R]` (see `resolve_pretend`'s own
-/// `selective`/`is_top_level` doc comment paragraph, portage-repo):
-/// unlike every other `Reinstall`, this one genuinely has no tracked
-/// reason to report at all, so the caller omits the whole `(reinstall
-/// for ...)` parenthetical rather than printing an empty one.
+/// `--changed-slot`, `--rebuilt-binaries`, and `--newrepo` as
+/// independent, freely-combinable triggers (see
+/// `PretendOutcome::Reinstall`'s own doc comment, portage-repo).
+/// Pilot-invented wording, same as the pre-existing "changed USE: ..."
+/// text -- real portage's own default `--pretend` output shows no such
+/// itemized reason at all. Returns `None` when all five fields are
+/// empty/false -- real portage's own bare, reasonless `[ebuild R]` (see
+/// `resolve_pretend`'s own `selective`/`is_top_level` doc comment
+/// paragraph, portage-repo): unlike every other `Reinstall`, this one
+/// genuinely has no tracked reason to report at all, so the caller omits
+/// the whole `(reinstall for ...)` parenthetical rather than printing an
+/// empty one.
 fn reinstall_reason(
     changed_flags: &[String],
     deps_changed: bool,
     slot_changed: bool,
     rebuilt_binary: bool,
+    new_repo: bool,
 ) -> Option<String> {
     let mut reasons = Vec::new();
     if !changed_flags.is_empty() {
@@ -351,6 +353,9 @@ fn reinstall_reason(
     }
     if rebuilt_binary {
         reasons.push("rebuilt binary".to_string());
+    }
+    if new_repo {
+        reasons.push("new repository".to_string());
     }
     if reasons.is_empty() {
         return None;
@@ -501,6 +506,7 @@ fn print_entry_line(
             deps_changed,
             slot_changed,
             rebuilt_binary,
+            new_repo,
         } => {
             if !onlydeps_suppressed {
                 if columns {
@@ -524,6 +530,7 @@ fn print_entry_line(
                         *deps_changed,
                         *slot_changed,
                         *rebuilt_binary,
+                        *new_repo,
                     ) {
                         Some(reason) => println!(
                             "[{bracket}  r] {indent}{}/{}-{version} (reinstall for {reason}){}",
@@ -806,6 +813,7 @@ fn entry_to_json(
             deps_changed,
             slot_changed,
             rebuilt_binary,
+            new_repo,
         } => {
             fields.push(format!("\"version\":{}", json_string(version)));
             let changed_use: Vec<String> = changed_flags.iter().map(|f| json_string(f)).collect();
@@ -813,6 +821,7 @@ fn entry_to_json(
             fields.push(format!("\"changed_deps\":{deps_changed}"));
             fields.push(format!("\"changed_slot\":{slot_changed}"));
             fields.push(format!("\"rebuilt_binary\":{rebuilt_binary}"));
+            fields.push(format!("\"new_repo\":{new_repo}"));
         }
         PretendOutcome::NoVisibleCandidate => {}
     }
@@ -1411,6 +1420,10 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut with_bdeps_auto = true;
     let mut changed_deps = false;
     let mut changed_slot = false;
+    // --newrepo: real main.py's own plain boolean "options" list, no
+    // value at all (same shape as --changed-use/-U above) -- unlike
+    // --changed-slot/--rebuilt-binaries, which are real "true_y_or_n".
+    let mut newrepo = false;
     let mut with_test_deps = false;
     let mut changed_deps_report = false;
     // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
@@ -1825,6 +1838,9 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--changed-slot=n" {
             changed_slot = false;
             i += 1;
+        } else if arg == "--newrepo" {
+            newrepo = true;
+            i += 1;
         } else if arg == "--with-test-deps" {
             // Real "--with-test-deps": y_or_n (default_arg_opts), the
             // identical optional-value shape "--changed-deps"/
@@ -2234,13 +2250,16 @@ pub fn run(args: &[String]) -> ExitCode {
     // implements -- see `resolve_pretend`'s own doc comment
     // (portage-repo) for the full grounding, including why
     // `--changed-use` alone covers this pilot's whole share of real
-    // `--reinstall`'s own contribution. An explicit `--selective=n`
-    // unconditionally cancels it regardless of what the other flags
-    // computed, matching real `create_depgraph_params.py`'s own
-    // unconditional `if myopts.get("--selective") == "n": pop`, checked
-    // last, after every other trigger.
-    let selective = selective_flag
-        .unwrap_or(update || newuse || changed_use || changed_deps || changed_slot || noreplace);
+    // `--reinstall`'s own contribution. `--newrepo` is one of real
+    // create_depgraph_params.py's own listed triggers too (confirmed by
+    // reading it, line ~147: `"--newrepo" in myopts`). An explicit
+    // `--selective=n` unconditionally cancels it regardless of what the
+    // other flags computed, matching real `create_depgraph_params.py`'s
+    // own unconditional `if myopts.get("--selective") == "n": pop`,
+    // checked last, after every other trigger.
+    let selective = selective_flag.unwrap_or(
+        update || newuse || changed_use || changed_deps || changed_slot || noreplace || newrepo,
+    );
 
     // --autounmask/--autounmask-keep-keywords: real create_depgraph_
     // params.py's own default-resolution logic, simplified for this
@@ -2316,6 +2335,7 @@ pub fn run(args: &[String]) -> ExitCode {
         &usepkg_include,
         rebuilt_binaries,
         rebuilt_binaries_timestamp,
+        newrepo,
     ) {
         Ok(result) => result,
         Err(e) => {

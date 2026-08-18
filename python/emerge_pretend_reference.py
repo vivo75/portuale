@@ -1677,6 +1677,31 @@ def _rebuilt_binary_changed(root, pkgdir, category, package, version, rebuilt_bi
     return built_timestamp != installed_timestamp
 
 
+def _new_repo_changed(root, category, package, version, current_repo_name):
+    """--newrepo: whether version's own vdb-recorded "repository" file
+    differs from current_repo_name (the repo the caller has already
+    established currently provides this exact version -- the resolved
+    candidate's own "repo_name" at each of this function's own two call
+    sites, not re-derived here the way _slot_changed's own re-lookup
+    works, since the caller already has it in hand). Real depgraph.py:
+    "--newrepo" in myopts and myeb.repo != pkg.repo /
+    pkg.repo != inst_pkg.repo -- a straight repo-name comparison, no
+    md5-cache re-read needed at all, unlike _slot_changed. A vdb entry
+    with no "repository" file at all (real portage predates this
+    tracking, or a hand-installed/synthetic entry) is treated as real
+    portage.versions._unknown_repo ("__unknown__") exactly -- not
+    "unchanged" the way _slot_changed/_deps_changed's own missing-data
+    fallbacks work, since real portage's own comparison has no such
+    tolerant fallback at all: an unrecorded repo is a real, distinct
+    value ("__unknown__"), and it either equals current_repo_name or it
+    doesn't, the same as any other string. Mirrors portage-repo/src/
+    lib.rs's new_repo_changed exactly."""
+    vdb_repo = _read_vdb_string(root, category, package, version, "repository").strip()
+    if not vdb_repo:
+        vdb_repo = "__unknown__"
+    return vdb_repo != current_repo_name
+
+
 def _use_deps_satisfied(atom, iuse, enabled):
     """Ports real match_from_list's own USE-dep post-pass (its
     "if mydep.unevaluated_atom.use:" block, lib/portage/dep/__init__.py
@@ -2734,6 +2759,7 @@ def resolve_pretend(
     usepkg_include=(),
     rebuilt_binaries=False,
     rebuilt_binaries_timestamp=None,
+    newrepo=False,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -2996,7 +3022,16 @@ def resolve_pretend(
             rebuilt_binary_flag = (usepkg or usepkgonly) and rebuilt_binaries and _rebuilt_binary_changed(
                 root, config["pkgdir"], category, package, installed_best["version"], rebuilt_binaries_timestamp
             )
-            if changed_flags or deps_changed_flag or slot_changed_flag or rebuilt_binary_flag:
+            new_repo_flag = newrepo and _new_repo_changed(
+                root, category, package, installed_best["version"], installed_best["repo_name"]
+            )
+            if (
+                changed_flags
+                or deps_changed_flag
+                or slot_changed_flag
+                or rebuilt_binary_flag
+                or new_repo_flag
+            ):
                 return (
                     "reinstall",
                     installed_best["version"],
@@ -3004,6 +3039,7 @@ def resolve_pretend(
                     deps_changed_flag,
                     slot_changed_flag,
                     rebuilt_binary_flag,
+                    new_repo_flag,
                 )
             return ("already_installed", installed_best["version"])
 
@@ -3047,16 +3083,21 @@ def resolve_pretend(
         rebuilt_binary_flag = (usepkg or usepkgonly) and rebuilt_binaries and _rebuilt_binary_changed(
             root, config["pkgdir"], category, package, best["version"], rebuilt_binaries_timestamp
         )
+        new_repo_flag = newrepo and _new_repo_changed(
+            root, category, package, best["version"], best["repo_name"]
+        )
         # is_top_level and not selective: real portage's own bare,
         # reasonless "[ebuild R]" -- see this function's own docstring's
         # selective/is_top_level paragraph. changed_flags/
-        # deps_changed_flag/slot_changed_flag/rebuilt_binary_flag may all
-        # still be empty/false here; that's the whole point of this case.
+        # deps_changed_flag/slot_changed_flag/rebuilt_binary_flag/
+        # new_repo_flag may all still be empty/false here; that's the
+        # whole point of this case.
         if (
             changed_flags
             or deps_changed_flag
             or slot_changed_flag
             or rebuilt_binary_flag
+            or new_repo_flag
             or (is_top_level and not selective)
         ):
             return (
@@ -3066,6 +3107,7 @@ def resolve_pretend(
                 deps_changed_flag,
                 slot_changed_flag,
                 rebuilt_binary_flag,
+                new_repo_flag,
             )
         return ("already_installed", best["version"])
     if installed:
@@ -3226,6 +3268,7 @@ def resolve_pretend_graph(
     usepkg_include=(),
     rebuilt_binaries=False,
     rebuilt_binaries_timestamp=None,
+    newrepo=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -3428,6 +3471,7 @@ def resolve_pretend_graph(
             usepkg_include,
             rebuilt_binaries,
             rebuilt_binaries_timestamp,
+            newrepo,
         )
 
         # --changed-deps-report: real portage stays "completely silent"
@@ -4257,6 +4301,7 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
         fields.append(f'"changed_deps":{_json_bool(outcome[3])}')
         fields.append(f'"changed_slot":{_json_bool(outcome[4])}')
         fields.append(f'"rebuilt_binary":{_json_bool(outcome[5])}')
+        fields.append(f'"new_repo":{_json_bool(outcome[6])}')
     fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
     if tag != "no_visible_candidate":
         fields.append(f'"source":{_json_string(source)}')
@@ -4675,14 +4720,14 @@ def _run_deselect(targets, root):
     return 0
 
 
-def _reinstall_reason(changed_flags, deps_changed, slot_changed, rebuilt_binary):
+def _reinstall_reason(changed_flags, deps_changed, slot_changed, rebuilt_binary, new_repo):
     """The "(reinstall for ...)" note's own reason text, real portage
-    treating --newuse/--changed-use, --changed-deps, --changed-slot, and
-    --rebuilt-binaries as independent, freely-combinable triggers.
-    Pilot-invented wording, same as the pre-existing "changed USE: ..."
-    text -- real portage's own default --pretend output shows no such
-    itemized reason at all. Returns None when all four are empty/False
-    -- real portage's own bare, reasonless "[ebuild R]" (see
+    treating --newuse/--changed-use, --changed-deps, --changed-slot,
+    --rebuilt-binaries, and --newrepo as independent, freely-combinable
+    triggers. Pilot-invented wording, same as the pre-existing "changed
+    USE: ..." text -- real portage's own default --pretend output shows
+    no such itemized reason at all. Returns None when all five are
+    empty/False -- real portage's own bare, reasonless "[ebuild R]" (see
     resolve_pretend's own selective/is_top_level docstring paragraph):
     unlike every other reinstall, this one genuinely has no tracked
     reason to report at all, so the caller omits the whole "(reinstall
@@ -4697,6 +4742,8 @@ def _reinstall_reason(changed_flags, deps_changed, slot_changed, rebuilt_binary)
         reasons.append("changed slot")
     if rebuilt_binary:
         reasons.append("rebuilt binary")
+    if new_repo:
+        reasons.append("new repository")
     if not reasons:
         return None
     return "; ".join(reasons)
@@ -4792,6 +4839,10 @@ def run(args):
     with_bdeps_auto = True
     changed_deps = False
     changed_slot = False
+    # --newrepo: real main.py's own plain boolean "options" list, no
+    # value at all (same shape as --changed-use/-U) -- unlike
+    # --changed-slot/--rebuilt-binaries, which are real "true_y_or_n".
+    newrepo = False
     with_test_deps = False
     changed_deps_report = False
     # --autounmask/--autounmask-keep-keywords: None means "not explicitly
@@ -5146,6 +5197,9 @@ def run(args):
             i += 1
         elif arg == "--changed-slot=n":
             changed_slot = False
+            i += 1
+        elif arg == "--newrepo":
+            newrepo = True
             i += 1
         elif arg == "--with-test-deps":
             # Real "--with-test-deps": y_or_n (default_arg_opts), the
@@ -5502,13 +5556,24 @@ def run(args):
     # computed from whichever of its real trigger flags this pilot
     # implements -- see resolve_pretend's own docstring for the full
     # grounding, including why --changed-use alone covers this pilot's
-    # whole share of real --reinstall's own contribution. An explicit
-    # --selective=n unconditionally cancels it regardless of what the
-    # other flags computed, matching real create_depgraph_params.py's
-    # own unconditional `if myopts.get("--selective") == "n": pop`,
-    # checked last, after every other trigger.
+    # whole share of real --reinstall's own contribution. --newrepo is
+    # one of real create_depgraph_params.py's own listed triggers too
+    # (confirmed by reading it, line ~147: "--newrepo" in myopts). An
+    # explicit --selective=n unconditionally cancels it regardless of
+    # what the other flags computed, matching real
+    # create_depgraph_params.py's own unconditional `if myopts.get(
+    # "--selective") == "n": pop`, checked last, after every other
+    # trigger.
     if selective_flag is None:
-        selective = update or newuse or changed_use or changed_deps or changed_slot or noreplace
+        selective = (
+            update
+            or newuse
+            or changed_use
+            or changed_deps
+            or changed_slot
+            or noreplace
+            or newrepo
+        )
     else:
         selective = selective_flag
 
@@ -5583,6 +5648,7 @@ def run(args):
             usepkg_include,
             resolved_rebuilt_binaries,
             rebuilt_binaries_timestamp,
+            newrepo,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -5708,6 +5774,7 @@ def run(args):
             deps_changed_flag = outcome[3]
             slot_changed_flag = outcome[4]
             rebuilt_binary_flag = outcome[5]
+            new_repo_flag = outcome[6]
             if not onlydeps_suppressed and columns:
                 print(
                     _columns_line(
@@ -5717,7 +5784,11 @@ def run(args):
                 )
             elif not onlydeps_suppressed:
                 reason = _reinstall_reason(
-                    changed_flags, deps_changed_flag, slot_changed_flag, rebuilt_binary_flag
+                    changed_flags,
+                    deps_changed_flag,
+                    slot_changed_flag,
+                    rebuilt_binary_flag,
+                    new_repo_flag,
                 )
                 if reason is None:
                     print(

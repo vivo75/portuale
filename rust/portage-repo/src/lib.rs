@@ -1838,30 +1838,34 @@ pub enum PretendOutcome {
         version: String,
     },
     /// `--newuse`/`--changed-use` and/or `--changed-deps` and/or
-    /// `--changed-slot` and/or `--rebuilt-binaries`: already installed at
-    /// this exact version, but this package's currently-effective USE
-    /// differs from what the vdb recorded at merge time (see
-    /// `reinstall_flags_for_use_change`), and/or its own vdb-recorded
-    /// dependency strings differ from the repo's current ebuild (see
-    /// `deps_changed`), and/or its own vdb-recorded `SLOT` differs from
-    /// the repo's current ebuild (see `slot_changed`), and/or a binary
-    /// candidate at this same version has a different `BUILD_TIME` than
-    /// the vdb's own recorded one (see `rebuilt_binary_changed`) -- real
-    /// portage treats these as independent, freely-combinable reinstall
-    /// reasons, not mutually exclusive ones. `changed_flags` is the
-    /// sorted set of flag names that triggered the USE-based reason (real
-    /// depgraph's own `_reinstall_for_flags` return value, kept here
-    /// purely for display, matching `Upgrade`'s own `from`/`to` pattern)
-    /// -- empty when it didn't trigger this outcome. At least one of
-    /// `changed_flags`/`deps_changed`/`slot_changed`/`rebuilt_binary` is
-    /// always non-empty/`true`; a `Reinstall` with none of the four is
-    /// never constructed.
+    /// `--changed-slot` and/or `--rebuilt-binaries` and/or `--newrepo`:
+    /// already installed at this exact version, but this package's
+    /// currently-effective USE differs from what the vdb recorded at
+    /// merge time (see `reinstall_flags_for_use_change`), and/or its own
+    /// vdb-recorded dependency strings differ from the repo's current
+    /// ebuild (see `deps_changed`), and/or its own vdb-recorded `SLOT`
+    /// differs from the repo's current ebuild (see `slot_changed`),
+    /// and/or a binary candidate at this same version has a different
+    /// `BUILD_TIME` than the vdb's own recorded one (see
+    /// `rebuilt_binary_changed`), and/or its own vdb-recorded
+    /// `repository` differs from the repo that currently provides this
+    /// version (see `new_repo_changed`) -- real portage treats these as
+    /// independent, freely-combinable reinstall reasons, not mutually
+    /// exclusive ones. `changed_flags` is the sorted set of flag names
+    /// that triggered the USE-based reason (real depgraph's own
+    /// `_reinstall_for_flags` return value, kept here purely for
+    /// display, matching `Upgrade`'s own `from`/`to` pattern) -- empty
+    /// when it didn't trigger this outcome. At least one of
+    /// `changed_flags`/`deps_changed`/`slot_changed`/`rebuilt_binary`/
+    /// `new_repo` is always non-empty/`true`; a `Reinstall` with none of
+    /// the five is never constructed.
     Reinstall {
         version: String,
         changed_flags: Vec<String>,
         deps_changed: bool,
         slot_changed: bool,
         rebuilt_binary: bool,
+        new_repo: bool,
     },
 }
 
@@ -2169,6 +2173,40 @@ fn slot_changed(
     );
 
     vdb_slot != repo_slot
+}
+
+/// `--newrepo`: whether `version`'s own vdb-recorded `repository` file
+/// differs from `current_repo_name` (the repo the caller has already
+/// established currently provides this exact version -- the resolved
+/// `Candidate::repo_name` at each of this function's own two call
+/// sites, not re-derived here the way `slot_changed`'s own re-lookup
+/// works, since the caller already has it in hand). Real `depgraph.py`:
+/// `"--newrepo" in myopts and myeb.repo != pkg.repo` /
+/// `pkg.repo != inst_pkg.repo` -- a straight repo-name comparison, no
+/// md5-cache re-read needed at all, unlike `slot_changed`. A vdb entry
+/// with no `repository` file at all (real portage predates this
+/// tracking, or a hand-installed/synthetic entry) is treated as real
+/// `portage.versions._unknown_repo` (`"__unknown__"`) exactly -- not
+/// "unchanged" the way `slot_changed`/`deps_changed`'s own missing-data
+/// fallbacks work, since real portage's own comparison has no such
+/// tolerant fallback at all: an unrecorded repo is a real, distinct
+/// value (`"__unknown__"`), and it either equals `current_repo_name` or
+/// it doesn't, the same as any other string.
+fn new_repo_changed(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    current_repo_name: &str,
+) -> bool {
+    let vdb_repo = read_vdb_string(root, category, package, version, "repository");
+    let vdb_repo = vdb_repo.trim();
+    let vdb_repo = if vdb_repo.is_empty() {
+        "__unknown__"
+    } else {
+        vdb_repo
+    };
+    vdb_repo != current_repo_name
 }
 
 /// `--rebuilt-binaries`: real `depgraph.py`'s own reinstall trigger
@@ -2601,6 +2639,7 @@ pub fn resolve_pretend(
     usepkg_include: &[String],
     rebuilt_binaries: bool,
     rebuilt_binaries_timestamp: Option<u64>,
+    newrepo: bool,
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
@@ -2849,10 +2888,19 @@ pub fn resolve_pretend(
                     &installed_best.version,
                     rebuilt_binaries_timestamp,
                 );
+            let new_repo_flag = newrepo
+                && new_repo_changed(
+                    root,
+                    &atom.category,
+                    &atom.package,
+                    &installed_best.version,
+                    &installed_best.repo_name,
+                );
             if !changed_flags.is_empty()
                 || deps_changed_flag
                 || slot_changed_flag
                 || rebuilt_binary_flag
+                || new_repo_flag
             {
                 return Ok(PretendOutcome::Reinstall {
                     version: installed_best.version.clone(),
@@ -2860,6 +2908,7 @@ pub fn resolve_pretend(
                     deps_changed: deps_changed_flag,
                     slot_changed: slot_changed_flag,
                     rebuilt_binary: rebuilt_binary_flag,
+                    new_repo: new_repo_flag,
                 });
             }
             return Ok(PretendOutcome::AlreadyInstalled {
@@ -2932,16 +2981,25 @@ pub fn resolve_pretend(
                 &best.version,
                 rebuilt_binaries_timestamp,
             );
+        let new_repo_flag = newrepo
+            && new_repo_changed(
+                root,
+                &atom.category,
+                &atom.package,
+                &best.version,
+                &best.repo_name,
+            );
         // `is_top_level && !selective`: real portage's own bare,
         // reasonless `[ebuild R]` -- see this function's own doc
         // comment's `selective`/`is_top_level` paragraph. `changed_flags`/
-        // `deps_changed_flag`/`slot_changed_flag`/`rebuilt_binary_flag`
-        // may all still be empty/false here; that's the whole point of
-        // this case.
+        // `deps_changed_flag`/`slot_changed_flag`/`rebuilt_binary_flag`/
+        // `new_repo_flag` may all still be empty/false here; that's the
+        // whole point of this case.
         if !changed_flags.is_empty()
             || deps_changed_flag
             || slot_changed_flag
             || rebuilt_binary_flag
+            || new_repo_flag
             || (is_top_level && !selective)
         {
             return Ok(PretendOutcome::Reinstall {
@@ -2950,6 +3008,7 @@ pub fn resolve_pretend(
                 deps_changed: deps_changed_flag,
                 slot_changed: slot_changed_flag,
                 rebuilt_binary: rebuilt_binary_flag,
+                new_repo: new_repo_flag,
             });
         }
         return Ok(PretendOutcome::AlreadyInstalled {
@@ -3619,6 +3678,7 @@ pub fn resolve_pretend_graph(
     usepkg_include: &[String],
     rebuilt_binaries: bool,
     rebuilt_binaries_timestamp: Option<u64>,
+    newrepo: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -3737,6 +3797,7 @@ pub fn resolve_pretend_graph(
             usepkg_include,
             rebuilt_binaries,
             rebuilt_binaries_timestamp,
+            newrepo,
         )?;
 
         // `--changed-deps-report`: real portage stays "completely
@@ -4426,6 +4487,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4459,6 +4521,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4493,6 +4556,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4507,6 +4571,7 @@ mod tests {
                 deps_changed: false,
                 slot_changed: false,
                 rebuilt_binary: false,
+                new_repo: false,
             }
         );
     }
@@ -4575,6 +4640,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4658,6 +4724,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -4785,6 +4852,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4823,6 +4891,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4860,6 +4929,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4878,6 +4948,7 @@ mod tests {
                 deps_changed: false,
                 slot_changed: false,
                 rebuilt_binary: false,
+                new_repo: false,
             }
         );
     }
@@ -4963,6 +5034,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4980,6 +5052,7 @@ mod tests {
                 deps_changed: true,
                 slot_changed: false,
                 rebuilt_binary: false,
+                new_repo: false,
             }
         );
     }
@@ -5007,6 +5080,7 @@ mod tests {
                 deps_changed: true,
                 slot_changed: false,
                 rebuilt_binary: false,
+                new_repo: false,
             }
         );
     }
@@ -5042,6 +5116,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -5083,6 +5158,7 @@ mod tests {
                 deps_changed: true,
                 slot_changed: false,
                 rebuilt_binary: false,
+                new_repo: false,
             }
         );
     }
@@ -5156,6 +5232,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -5173,6 +5250,96 @@ mod tests {
                 deps_changed: false,
                 slot_changed: true,
                 rebuilt_binary: false,
+                new_repo: false,
+            }
+        );
+    }
+
+    fn resolve_real_newrepo(category: &str, package: &str) -> PretendOutcome {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &config,
+            false,
+            false,
+            false,
+            &[],
+            false,
+            true,
+            false,
+            true,
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn newrepo_reinstalls_when_vdb_repository_differs_from_the_repo_currently_providing_it() {
+        // dev-libs/newrepopkg is installed with a vdb "repository" file
+        // recording "oldrepo", but the current best candidate for this
+        // exact version lives in "testrepo" instead.
+        assert_eq!(
+            resolve_real_newrepo("dev-libs", "newrepopkg"),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: true,
+            }
+        );
+    }
+
+    #[test]
+    fn newrepo_does_not_fire_when_vdb_repository_matches() {
+        // dev-libs/samerepopkg is installed with a vdb "repository" file
+        // recording "testrepo" -- exactly matching the repo that
+        // currently provides this version, so --newrepo must not fire.
+        assert_eq!(
+            resolve_real_newrepo("dev-libs", "samerepopkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn newrepo_fires_via_the_unknown_repo_sentinel_when_no_repository_file_was_ever_recorded() {
+        // dev-libs/samepkg has no vdb "repository" file at all (real
+        // portage predates this tracking, or a hand-installed/synthetic
+        // entry) -- real portage.versions._unknown_repo ("__unknown__")
+        // applies, which never equals a real repo name, so --newrepo
+        // still fires even though nothing about this package actually
+        // changed.
+        assert_eq!(
+            resolve_real_newrepo("dev-libs", "samepkg"),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: true,
             }
         );
     }
@@ -5223,6 +5390,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -5284,6 +5452,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -5322,6 +5491,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
@@ -5366,6 +5536,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::Reinstall {
@@ -5374,6 +5545,7 @@ mod tests {
                 deps_changed: true,
                 slot_changed: true,
                 rebuilt_binary: false,
+                new_repo: false,
             }
         );
     }
@@ -5396,6 +5568,7 @@ mod tests {
                 deps_changed: false,
                 slot_changed: false,
                 rebuilt_binary: false,
+                new_repo: false,
             }
         );
         assert_eq!(
@@ -5419,6 +5592,7 @@ mod tests {
                 deps_changed: false,
                 slot_changed: false,
                 rebuilt_binary: false,
+                new_repo: false,
             }
         );
     }
@@ -5438,6 +5612,7 @@ mod tests {
                         deps_changed: false,
                         slot_changed: false,
                         rebuilt_binary: false,
+                        new_repo: false,
                     }
                 ),
                 (
@@ -5503,6 +5678,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -5531,6 +5707,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -5907,6 +6084,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5943,6 +6121,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5981,6 +6160,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6023,6 +6203,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -6082,6 +6263,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6189,6 +6371,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6298,6 +6481,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -6443,6 +6627,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -6526,6 +6711,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6675,6 +6861,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -6771,6 +6958,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6814,6 +7002,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6916,6 +7105,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -6957,6 +7147,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7000,6 +7191,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7043,6 +7235,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7068,6 +7261,7 @@ mod tests {
                         deps_changed: false,
                         slot_changed: false,
                         rebuilt_binary: false,
+                        new_repo: false,
                     }
                 ),
                 (
@@ -7302,6 +7496,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -7357,6 +7552,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -7389,6 +7585,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -7453,6 +7650,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -7524,6 +7722,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

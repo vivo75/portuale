@@ -350,6 +350,26 @@ CASES = [
         0,
     ),
     (
+        "--newrepo: off by default, stays already-installed",
+        ["--pretend", "--selective", "dev-libs/newrepopkg"],
+        0,
+    ),
+    (
+        "--newrepo: a differing vdb repository triggers a reinstall",
+        ["--pretend", "--selective", "--newrepo", "dev-libs/newrepopkg"],
+        0,
+    ),
+    (
+        "--newrepo: a matching vdb repository does not trigger a reinstall",
+        ["--pretend", "--selective", "--newrepo", "dev-libs/samerepopkg"],
+        0,
+    ),
+    (
+        "--newrepo: a missing vdb repository file falls back to the __unknown__ sentinel",
+        ["--pretend", "--selective", "--newrepo", "dev-libs/samepkg"],
+        0,
+    ),
+    (
         "opt= USE-dep: parent flag ON evaluates to [flag], matches the child's default-on flag",
         ["--pretend", "dev-libs/useeqparentonpkg"],
         0,
@@ -2272,6 +2292,93 @@ def test_usepkg_include_gates_binary_eligibility_both_ways(emerge_binary, fixtur
     )
     assert matching.returncode == 0
     assert matching.stdout.splitlines() == ["[binary  N] dev-libs/binaryonlypkg-1.0"]
+
+
+def test_newrepo_off_by_default_stays_already_installed(emerge_binary, fixture_env):
+    """dev-libs/newrepopkg is installed with a vdb "repository" file
+    recording "oldrepo", while the current best candidate for this exact
+    version lives in "testrepo" instead. Without --newrepo at all, the
+    mismatch is never even checked, so a --selective query (avoiding the
+    unrelated "always reinstall a bare top-level atom" behavior) stays
+    already-installed."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--selective", "dev-libs/newrepopkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "dev-libs/newrepopkg-1.0 is already installed; nothing to do"
+
+
+def test_newrepo_triggers_a_reinstall_for_a_differing_recorded_repository(
+    emerge_binary, fixture_env
+):
+    """Same fixture as above, but with --newrepo explicitly given: real
+    depgraph.py's own "pkg.repo != inst_pkg.repo" comparison fires since
+    the vdb's own recorded "oldrepo" doesn't match "testrepo", the repo
+    that actually provides this version now."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--selective", "--newrepo", "dev-libs/newrepopkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  r] dev-libs/newrepopkg-1.0 (reinstall for new repository)"
+    ]
+
+
+def test_newrepo_does_not_fire_when_the_recorded_repository_matches(
+    emerge_binary, fixture_env
+):
+    """dev-libs/samerepopkg's own vdb "repository" file records
+    "testrepo", exactly matching the repo that currently provides this
+    version -- --newrepo must not trigger a reinstall here."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--selective", "--newrepo", "dev-libs/samerepopkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "dev-libs/samerepopkg-1.0 is already installed; nothing to do"
+
+
+def test_newrepo_fires_via_the_unknown_repo_sentinel_when_unrecorded(
+    emerge_binary, fixture_env
+):
+    """dev-libs/samepkg has no vdb "repository" file at all (real portage
+    predates this tracking, or a hand-installed/synthetic entry) -- real
+    portage.versions._unknown_repo ("__unknown__") applies, which never
+    equals a real repo name, so --newrepo still fires even though
+    nothing about this package actually changed. A real, sometimes-
+    surprising consequence of real portage's own comparison having no
+    tolerant "missing data means unchanged" fallback the way
+    --changed-slot/--changed-deps do."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--selective", "--newrepo", "dev-libs/samepkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  r] dev-libs/samepkg-1.0 (reinstall for new repository)"
+    ]
+
+
+def test_newrepo_appears_in_json(emerge_binary, fixture_env):
+    """--json's own mirror: a "reinstall" entry's own "new_repo" field,
+    alongside the pre-existing changed_use/changed_deps/changed_slot/
+    rebuilt_binary siblings."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--selective", "--newrepo", "--json", "dev-libs/newrepopkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    entry = payload["entries"][0]
+    assert entry["outcome"] == "reinstall"
+    assert entry["new_repo"] is True
 
 
 def test_rebuilt_binaries_off_by_default_stays_already_installed(emerge_binary, fixture_env):
