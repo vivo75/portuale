@@ -186,6 +186,18 @@ pub(crate) fn owner_set_parent(
 ) -> bool {
     blocker_retry_closure.contains(owner_key)
 }
+
+/// Working set for `file_blocker_conflicts`: one removed `cpv`, its ordering
+/// anchors and the blocker rows that ride it when the owner has no entry.
+pub(crate) struct PendingRemoval {
+    pub(crate) category: String,
+    pub(crate) package: String,
+    pub(crate) version: String,
+    pub(crate) anchors: Vec<(String, String)>,
+    /// Rows whose owner is absent from `entries`: the removal entry carries
+    /// them so they print inline right after its `[uninstall]` row.
+    pub(crate) blockers: Vec<BlockerConflict>,
+}
 /// Arguments of [`resolve_blockers_with_seeds`].
 pub(crate) struct ResolveBlockersWithSeedsArgs<'a> {
     pub(crate) root: &'a Path,

@@ -352,4 +352,26 @@ mod tests {
         slot: &'a str,
         files: &'a [(&'a str, &'a str)],
     }
+
+    /// Write one vdb entry: `<root>/var/db/pkg/<cat>/<pkg>-<ver>/` with
+    /// `SLOT` plus the given `(filename, content)` files.
+    fn write_vdb_entry(args: WriteVdbEntryArgs<'_>) {
+        let WriteVdbEntryArgs {
+            root,
+            category,
+            package,
+            version,
+            slot,
+            files,
+        } = args;
+        let dir = root
+            .join("var/db/pkg")
+            .join(category)
+            .join(format!("{package}-{version}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SLOT"), slot).unwrap();
+        for (name, content) in files {
+            std::fs::write(dir.join(name), content).unwrap();
+        }
+    }
 }

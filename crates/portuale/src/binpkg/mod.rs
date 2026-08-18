@@ -69,6 +69,21 @@ impl From<BinpkgError> for String {
 /// `nanos` suffix keeps concurrent reads from colliding.
 struct ScratchDir(PathBuf);
 
+impl ScratchDir {
+    fn new(tag: &str) -> Result<Self, String> {
+        let dir = std::env::temp_dir().join(format!(
+            "portuale-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        Ok(Self(dir))
+    }
+}
+
 impl Drop for ScratchDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);

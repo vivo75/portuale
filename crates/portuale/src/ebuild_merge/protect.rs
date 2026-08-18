@@ -206,3 +206,16 @@ pub(crate) fn replace_symlink_atomic(
     }
     outcome
 }
+
+/// Arguments of [`protect_decision`].
+pub(crate) struct ProtectDecisionArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) installed_instance_pf: Option<&'a str>,
+    pub(crate) protect_if_modified: bool,
+    pub(crate) dest: &'a Path,
+    pub(crate) abs_path: &'a str,
+    pub(crate) src_md5: &'a str,
+    pub(crate) cfgfiledict: &'a mut BTreeMap<String, String>,
+    pub(crate) noconfmem: bool,
+}

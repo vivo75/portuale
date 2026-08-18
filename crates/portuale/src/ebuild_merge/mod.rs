@@ -45,6 +45,11 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
 use std::path::{Path, PathBuf};
 
+/// Whether `command` is the merge command this module implements.
+pub fn is_merge_command(command: &str) -> bool {
+    command == "merge"
+}
+
 /// `token` in the merge's own `FEATURES`: the resolved incremental list
 /// when set, else the raw `$FEATURES` process env. Kept private to the
 /// merge path so its `noclean` gate and the phase env can never disagree.

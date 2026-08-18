@@ -30,3 +30,4 @@ pub(super) fn publish_hook(root: &Path) {
 /// The merge on a database backend.
 #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 mod db_merge;
+mod tree;

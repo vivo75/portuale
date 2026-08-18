@@ -166,3 +166,105 @@ pub(crate) fn blockers_from_flat_deps(
 // Portage: vartree.py, dblink._collision_protect
 pub(crate) type CollisionsResult =
     Result<(Vec<String>, Vec<String>, BTreeMap<String, BTreeSet<String>>), String>;
+/// Arguments of [`find_collisions`].
+pub(crate) struct FindCollisionsArgs<'a> {
+    pub(crate) d: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) config_protect: &'a str,
+    pub(crate) config_protect_mask: &'a str,
+    pub(crate) plib_inodes: &'a HashMap<(u64, u64), Vec<(String, String)>>,
+    pub(crate) blocked: &'a HashSet<(String, String)>,
+}
+
+pub(crate) fn find_collisions(args: FindCollisionsArgs<'_>) -> CollisionsResult {
+    let FindCollisionsArgs {
+        d,
+        root,
+        category,
+        package,
+        slot,
+        config_protect,
+        config_protect_mask,
+        plib_inodes,
+        blocked,
+    } = args;
+    let own_versions: Vec<String> = portage_repo::installed_versions(root, category, package)
+        .into_iter()
+        .filter(|version| {
+            read_installed_slot(root, category, package, version).as_deref() == Some(slot)
+        })
+        .collect();
+
+    let mut collisions = Vec::new();
+    let mut symlink_collisions = Vec::new();
+    let mut plib_collisions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut stack: Vec<PathBuf> = vec![PathBuf::new()];
+    while let Some(relative_dir) = stack.pop() {
+        let src_dir = d.join(&relative_dir);
+        let children: Vec<PathBuf> = portage_util::read_dir_entries(&src_dir)
+            .map_err(|e| format!("{}: {e}", src_dir.display()))?
+            .into_iter()
+            .map(|e| relative_dir.join(e.file_name()))
+            .collect();
+
+        for relative_path in children {
+            let src = d.join(&relative_path);
+            let dest = root.join(&relative_path);
+            let abs_path = format!("/{}", relative_path.display());
+            let file_type = std::fs::symlink_metadata(&src)
+                .map_err(|e| format!("{}: {e}", src.display()))?
+                .file_type();
+
+            if file_type.is_dir() {
+                stack.push(relative_path);
+                continue;
+            }
+
+            // `os.walk` puts a directory-target symlink into `dirs`, not
+            // `files`, so it is never collision-checked; only
+            // file-target/dangling symlinks are checked below.
+            // `metadata` follows the link like `os.walk`'s `is_dir()`
+            // does; a dangling link errors and falls through to the
+            // check.
+            if file_type.is_symlink()
+                && std::fs::metadata(&src).map(|m| m.is_dir()).unwrap_or(false)
+            {
+                continue;
+            }
+
+            let Ok(dest_meta) = std::fs::symlink_metadata(&dest) else {
+                continue;
+            };
+
+            if file_type.is_symlink() && dest_meta.is_dir() {
+                symlink_collisions.push(abs_path);
+                continue;
+            }
+
+            if let Some(plibs) = plib_inodes.get(&(dest_meta.dev(), dest_meta.ino())) {
+                for (cpv, path) in plibs {
+                    plib_collisions
+                        .entry(cpv.clone())
+                        .or_default()
+                        .insert(path.clone());
+                }
+                continue;
+            }
+
+            let owned = own_versions
+                .iter()
+                .any(|version| owns_path(root, category, package, version, &abs_path))
+                || blocked
+                    .iter()
+                    .any(|(bcat, bpf)| owns_path_pf(root, bcat, bpf, &abs_path));
+            if owned || is_protected(root, config_protect, config_protect_mask, &dest) {
+                continue;
+            }
+            collisions.push(abs_path);
+        }
+    }
+    Ok((collisions, symlink_collisions, plib_collisions))
+}

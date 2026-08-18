@@ -2,6 +2,36 @@
 
 use crate::ebuild_merge::*;
 
+/// Finds the repo name by walking up from `pkg_dir` (`<category>/<package>`)
+/// for the first `profiles/repo_name` file (the canonical source besides
+/// `layout.conf`'s `repo-name` key). `None` when no ancestor has one.
+pub(crate) fn repository_name_for(pkg_dir: &Path) -> Option<String> {
+    for ancestor in pkg_dir.ancestors() {
+        let candidate = ancestor.join("profiles").join("repo_name");
+        if let Ok(text) = std::fs::read_to_string(&candidate) {
+            let name = text.lines().next().unwrap_or("").trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn md5_hex_bytes(data: &[u8]) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(data);
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Hex MD5 of a file's bytes. Shared with the remote-merge server so a later
+/// index rebuild sees a still-current instance either way.
+pub(crate) fn md5_hex(path: &Path) -> Result<String, String> {
+    let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(md5_hex_bytes(&data))
+}
+
 /// Creates a fresh FIFO or device node at `dest`, matching `src`'s type,
 /// permission bits, and (for a device) major/minor. Recreated rather than
 /// moved so `${D}` stays intact. An explicit `chmod` afterward closes the
