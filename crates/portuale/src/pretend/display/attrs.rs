@@ -2,6 +2,23 @@
 
 use crate::pretend::*;
 
+/// `COLUMNWIDTH` from the environment (default 130); an unparsable value
+/// warns and falls back to the default. Only the environment is read, not
+/// `make.conf`.
+/// Portage: output_helpers.py, MergeListItem
+pub(crate) fn columnwidth_from_env() -> i64 {
+    match std::env::var("COLUMNWIDTH") {
+        Ok(value) => match value.parse::<i64>() {
+            Ok(width) => width,
+            Err(_) => {
+                eprintln!("!!! Unable to parse COLUMNWIDTH={value:?}");
+                130
+            }
+        },
+        Err(_) => 130,
+    }
+}
+
 /// The version `entry`'s own package line displays; `None` for the
 /// non-merging outcomes. `merge_order`'s own `entry_version` is the same
 /// mapping, but it is private to `portage-repo`.
