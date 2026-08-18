@@ -4023,6 +4023,66 @@ install_computes_real_a_and_aa_from_a_verified_distfile_with_no_network`)
 and a black-box one
 (`test_ebuild_install_really_fetches_via_the_already_verified_skip_path`).
 
+### Bug fix: `avoid_update`'s own dependency-atom shortcut was requiring visibility it never should have
+
+Found by live-testing `emerge --buildpkgonly` against this machine's own
+real Gentoo tree (not a fixture): `sys-fs/fuse`'s own real
+`sys-libs/liburing:=[abi_x86_64(-)?,...]` dependency was installed at
+2.14, whose real `KEYWORDS` had since gone `~amd64`-only (no longer
+accepted under this system's own default `ACCEPT_KEYWORDS="amd64"`).
+This pilot's `resolve_pretend` printed a spurious `[ebuild D]
+sys-libs/liburing-2.9 (downgrade from 2.14)` -- and, worse, recursed
+into `liburing-2.9`'s own dependency chain as if it needed real work,
+inflating the "would rebuild" set with ~20 unrelated packages
+(`python`, `openssl`, `perl`, `meson`, ...) that real portage never
+touches at all. Real `emerge --pretend --buildpkgonly
+=sys-fs/fuse-3.18.2` prints exactly one line
+(`[ebuild R] sys-fs/fuse-3.18.2`); this pilot's own `--buildpkgonly`
+gate (task #100-#104) then correctly refused to proceed given that
+inflated set -- the gate itself was never wrong, the resolution
+feeding it was.
+
+Root cause, found by reading real `_select_pkg_highest_available_imp`
+(`lib/_emerge/depgraph.py` ~8440) directly: for a **dependency** atom
+(`parent is not None`), real portage returns the installed package
+immediately whenever nothing wants an update (`not self.
+_want_update_pkg(parent, inst_pkg)`) -- with **no visibility check at
+all**. That's a genuinely different, *earlier* real code path than the
+**top-level** atom's own `avoid_update` block a few lines later, which
+*does* require visibility (`self._pkg_visibility_check(pkg, ...)`).
+This pilot's own `resolve_pretend` had only ever ported the top-level
+version of that shortcut, applying its visibility requirement
+uniformly to dependency atoms too -- silently wrong for any dependency
+installed at a version the tree no longer keyword-accepts, a routine
+occurrence on a `~amd64`-tracking system syncing against a
+still-mostly-stable tree.
+
+The real ebuild case that actually surfaces this (`liburing:=[...]`) also
+carries a USE-dep on the atom itself -- real portage checks that against
+the installed package's own real vdb `USE`/`IUSE` for this same early
+return, not the current tree's, so the fix does too
+(`use_deps_satisfied`, reused as-is from the existing tree-USE call
+site, just fed vdb data instead). Fixed in both `resolve_pretend`
+(single-atom) and implicitly `resolve_pretend_graph` (which calls it
+for every dependency atom in the BFS) -- no separate graph-level change
+needed. A first attempt only checked this early enough when the atom
+had no USE-deps at all (falling back to the old, visibility-gated path
+otherwise) -- caught immediately by re-testing against the real
+`liburing:=[...]` atom itself, which still showed the spurious
+downgrade; the real fix needed the vdb-USE-dep check moved *before* the
+tree's own visibility/USE-dep filtering can bail out with
+`NoVisibleCandidate` at all, not just added on top of it afterward.
+
+Proven via three new fixture pairs, each as both a Rust unit test and a
+Rust-vs-Python contract test: `keywordmaskedpkg`/`needskeywordmasked`
+(the base case -- installed 2.0, `~amd64`-only, only 1.0 stable-visible;
+kept as-is when reached as a dependency, still a real downgrade when
+requested directly as a **top-level** atom, proving the two real code
+paths stay genuinely distinct) and
+`keywordmaskedusepkg`/`needskeywordmaskeduse` (the same situation plus a
+real USE-dep on the atom, checked against real vdb `USE` -- the actual
+`liburing:=[...]`-shaped case).
+
 ## Running it
 
 Build both Rust binaries:
@@ -5205,6 +5265,24 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --buildpkgonly dev-lib
 # candidate of its own to satisfy real avoid_update's own shortcut
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/downgradepkg
 # [ebuild  D] dev-libs/downgradepkg-1.0 (downgrade from 2.0)
+
+# avoid_update bug fix (see "What this proves" above for the full
+# writeup): keywordmaskedpkg is installed at 2.0 (~amd64-only, no
+# longer ACCEPT_KEYWORDS-visible); requested directly as a TOP-LEVEL
+# atom, it's still a real downgrade (real portage's own later
+# avoid_update block DOES require visibility there)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/keywordmaskedpkg
+# [ebuild  D] dev-libs/keywordmaskedpkg-1.0 (downgrade from 2.0)
+# ...but reached only as a DEPENDENCY (needskeywordmasked's own
+# RDEPEND), real portage's own EARLIER avoid_update return requires no
+# visibility at all -- kept exactly as installed
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/needskeywordmasked
+# [ebuild  N] dev-libs/needskeywordmasked-1.0
+# same again, but with a real USE-dep on the dependency atom too
+# (checked against the installed package's own real vdb USE, not the
+# current tree's -- the actual real-world sys-libs/liburing:=[...] case)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/needskeywordmaskeduse
+# [ebuild  N] dev-libs/needskeywordmaskeduse-1.0
 ```
 
 Try the `ebuild` stub (still a dry-run placeholder -- no real phase

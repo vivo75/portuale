@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: like keywordmaskedpkg, but the dependency atom also carries a USE-dep checked against real installed vdb USE/IUSE
+EAPI=8
+IUSE=flag
+KEYWORDS=~amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

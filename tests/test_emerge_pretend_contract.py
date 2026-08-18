@@ -297,6 +297,21 @@ CASES = [
         0,
     ),
     (
+        "downgrade: a keyword-masked-but-installed TOP-LEVEL atom still requires visibility",
+        ["--pretend", "dev-libs/keywordmaskedpkg"],
+        0,
+    ),
+    (
+        "avoid_update: a keyword-masked-but-installed DEPENDENCY is kept, not downgraded",
+        ["--pretend", "dev-libs/needskeywordmasked"],
+        0,
+    ),
+    (
+        "avoid_update: a keyword-masked-but-installed DEPENDENCY with a satisfied USE-dep is kept",
+        ["--pretend", "dev-libs/needskeywordmaskeduse"],
+        0,
+    ),
+    (
         "overlay package.use: an overlay-only package.use entry gates a dependency",
         ["--pretend", "dev-libs/overlayuseenablepkg"],
         0,
@@ -1465,6 +1480,62 @@ def test_downgrade_is_distinguished_from_upgrade(emerge_binary, fixture_env):
     assert result.stdout.splitlines() == [
         "[ebuild  D] dev-libs/downgradepkg-1.0 (downgrade from 2.0)"
     ]
+    assert result.stderr == ""
+
+
+def test_keyword_masked_but_installed_top_level_atom_still_downgrades(emerge_binary, fixture_env):
+    """dev-libs/keywordmaskedpkg is installed at 2.0 (KEYWORDS="~amd64",
+    not accepted under the fixture profile's own default
+    ACCEPT_KEYWORDS="amd64") -- only 1.0 (KEYWORDS="amd64") is currently
+    visible. As a TOP-LEVEL atom, real depgraph.py's own later
+    avoid_update block (`_pkg_visibility_check`) still requires
+    visibility, so this stays a real downgrade -- distinct from the
+    DEPENDENCY case in the very next test below."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/keywordmaskedpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  D] dev-libs/keywordmaskedpkg-1.0 (downgrade from 2.0)"
+    ]
+    assert result.stderr == ""
+
+
+def test_keyword_masked_but_installed_dependency_is_kept_not_downgraded(
+    emerge_binary, fixture_env
+):
+    """dev-libs/needskeywordmasked (New) RDEPENDs on the same
+    dev-libs/keywordmaskedpkg as the test above -- but reached only as a
+    DEPENDENCY here, real depgraph.py's own EARLIER avoid_update return
+    (no visibility check at all, see resolve_pretend's own doc comment)
+    means it's kept exactly as installed (2.0), never even considered
+    for a downgrade. Confirmed live against a real system
+    (sys-fs/fuse's own sys-libs/liburing dependency) before this fix:
+    this pilot used to (wrongly) print a spurious downgrade line here."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/needskeywordmasked"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/needskeywordmasked-1.0"]
+    assert result.stderr == ""
+
+
+def test_keyword_masked_but_installed_dependency_with_a_use_dep_is_kept(
+    emerge_binary, fixture_env
+):
+    """dev-libs/needskeywordmaskeduse (New) RDEPENDs on
+    dev-libs/keywordmaskedusepkg[flag] -- same keyword-masked-but-
+    installed situation as the test above, but with a real USE-dep on
+    the atom too (mirroring real sys-fs/fuse's own real
+    sys-libs/liburing:=[abi_x86_64(-)?,...] dependency, the actual
+    real-world case this fix was built for). The installed version
+    (2.0) has real vdb USE="flag" (see the fixture's own IUSE/USE
+    files), checked against that real vdb-recorded USE rather than the
+    current tree's -- so this is kept exactly as installed too, never
+    even considered for a downgrade."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/needskeywordmaskeduse"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/needskeywordmaskeduse-1.0"]
     assert result.stderr == ""
 
 

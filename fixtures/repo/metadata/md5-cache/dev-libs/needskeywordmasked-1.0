@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: New, RDEPENDs on keywordmaskedpkg (installed at a version keyword-masked under current ACCEPT_KEYWORDS)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/keywordmaskedpkg
+SLOT=0
+_md5_=0000000000000000000000000000000

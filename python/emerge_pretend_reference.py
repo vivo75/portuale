@@ -2738,6 +2738,103 @@ def _atom_currently_satisfiable(repos, atom_str, config):
     return bool(matched)
 
 
+def _dependency_avoid_update_candidate(root, atom, atom_str, category, package, candidates, installed):
+    """Real `_select_pkg_highest_available_imp`'s own early avoid_update
+    return for a DEPENDENCY atom (`lib/_emerge/depgraph.py` ~8440: "if
+    inst_pkg is not None and parent is not None and not self.
+    _want_update_pkg(parent, inst_pkg): return inst_pkg") -- the highest
+    installed version of category/package that matches atom_str
+    (version/slot/repo, via the FULL candidates list, deliberately NOT
+    is_visible-filtered) and, if the atom carries a USE-dep
+    (pkg[flag]), satisfies it against that version's own real, installed
+    vdb USE/IUSE -- NOT the current tree's, matching real
+    _iter_match_pkgs's own vardb-sourced USE-dep check for an already-
+    installed package. None when no installed version qualifies. Called
+    from two places in resolve_pretend below: once before visibility/
+    USE-dep filtering against the tree even begins (so a dependency
+    reached only via a keyword-masked-but-installed version never
+    spuriously hits no_visible_candidate in the first place), and once
+    more from the ordinary "not update" shortcut further down (the only
+    place this can still matter once --exclude is in play). Mirrors
+    portage-repo/src/lib.rs's dependency_avoid_update_candidate
+    exactly."""
+    all_candidate_strs = [
+        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+        for c in candidates
+    ]
+    all_by_str = dict(zip(all_candidate_strs, candidates))
+    all_matched = [
+        all_by_str[m] for m in match_from_list(atom_str, all_candidate_strs) if m in all_by_str
+    ]
+    installed_matched = [c for c in all_matched if c["version"] in installed]
+    if atom.use:
+        installed_matched = [
+            c
+            for c in installed_matched
+            if _use_deps_satisfied(
+                atom,
+                _read_vdb_flag_set(root, category, package, c["version"], "IUSE"),
+                _read_vdb_flag_set(root, category, package, c["version"], "USE"),
+            )
+        ]
+    if not installed_matched:
+        return None
+    return _best_candidate(installed_matched)
+
+
+def _already_installed_or_reinstall(
+    root,
+    repos,
+    config,
+    category,
+    package,
+    installed_best,
+    newuse,
+    changed_use,
+    changed_deps,
+    with_bdeps,
+    changed_slot,
+    usepkg,
+    usepkgonly,
+    rebuilt_binaries,
+    rebuilt_binaries_timestamp,
+    newrepo,
+):
+    """Shared by both of resolve_pretend's own "not update" shortcut call
+    sites: once an installed version has been chosen to keep, decides
+    between already_installed and reinstall exactly the same way.
+    Mirrors portage-repo/src/lib.rs's already_installed_or_reinstall
+    exactly."""
+    changed_flags = (
+        _reinstall_flags_for_use_change(root, category, package, installed_best, config, newuse)
+        if newuse or changed_use
+        else None
+    ) or []
+    deps_changed_flag = changed_deps and _deps_changed(
+        root, repos, category, package, installed_best["version"], with_bdeps
+    )
+    slot_changed_flag = changed_slot and _slot_changed(
+        root, repos, category, package, installed_best["version"]
+    )
+    rebuilt_binary_flag = (usepkg or usepkgonly) and rebuilt_binaries and _rebuilt_binary_changed(
+        root, config["pkgdir"], category, package, installed_best["version"], rebuilt_binaries_timestamp
+    )
+    new_repo_flag = newrepo and _new_repo_changed(
+        root, category, package, installed_best["version"], installed_best["repo_name"]
+    )
+    if changed_flags or deps_changed_flag or slot_changed_flag or rebuilt_binary_flag or new_repo_flag:
+        return (
+            "reinstall",
+            installed_best["version"],
+            changed_flags,
+            deps_changed_flag,
+            slot_changed_flag,
+            rebuilt_binary_flag,
+            new_repo_flag,
+        )
+    return ("already_installed", installed_best["version"])
+
+
 def resolve_pretend(
     repos,
     root,
@@ -2912,6 +3009,49 @@ def resolve_pretend(
         candidates = candidates + _filter_usepkg_exclude_include(
             binary_candidates, category, package, usepkg_exclude, usepkg_include
         )
+
+    # Real avoid_update's own EARLY return for a dependency atom (see
+    # _dependency_avoid_update_candidate's own docstring for the full
+    # citation) genuinely happens before real portage ever tries to
+    # find a "best available" candidate at all -- so it's checked here
+    # too, before this pilot's own visibility/USE-dep-against-the-tree
+    # filtering below gets a chance to (wrongly) bail out with
+    # no_visible_candidate for an atom whose installed version already
+    # satisfies it. Confirmed live: sys-fs/fuse's own real
+    # sys-libs/liburing:=[abi_x86_64(-)?,...] dependency needs exactly
+    # this -- the tree's only *visible* liburing candidate doesn't even
+    # have the right USE profile to satisfy the atom (nothing enables
+    # it there), while the real, installed version does (its own real
+    # vdb USE). --exclude deliberately keeps this pilot's own
+    # pre-existing, narrower behavior instead (see the later,
+    # is_top_level-aware "not update" shortcut's own comment) --
+    # skipped here so that block still gets a chance to run. Mirrors
+    # portage-repo/src/lib.rs's resolve_pretend exactly.
+    if not update and not is_top_level and not excluded:
+        installed = installed_versions(root, category, package)
+        installed_best = _dependency_avoid_update_candidate(
+            root, atom, atom_str, category, package, candidates, installed
+        )
+        if installed_best is not None:
+            return _already_installed_or_reinstall(
+                root,
+                repos,
+                config,
+                category,
+                package,
+                installed_best,
+                newuse,
+                changed_use,
+                changed_deps,
+                with_bdeps,
+                changed_slot,
+                usepkg,
+                usepkgonly,
+                rebuilt_binaries,
+                rebuilt_binaries_timestamp,
+                newrepo,
+            )
+
     visible = [c for c in candidates if is_visible(c, category, package, config)]
     if not visible:
         return ("no_visible_candidate",)
@@ -3002,46 +3142,48 @@ def resolve_pretend(
             ):
                 return ("already_installed", installed_best["version"])
 
+    # --update/-u: see this function's own docstring. Skipped entirely
+    # for a top-level atom without selective, so version selection
+    # falls through to the ordinary best-visible-candidate comparison
+    # below too.
+    #
+    # For a DEPENDENCY atom, the early, pre-visibility-filtering
+    # shortcut above (_dependency_avoid_update_candidate) already
+    # handles the common case (see its own docstring for the full real-
+    # portage citation). It deliberately skips when --exclude is
+    # active, though, to preserve this pilot's own pre-existing
+    # --exclude-vs-matched interaction exactly -- so this block still
+    # needs its own not-is_top_level branch, reusing the same broader
+    # (not is_visible-filtered) lookup, for that one remaining
+    # combination. Mirrors portage-repo/src/lib.rs's resolve_pretend
+    # exactly.
     if not update and (not is_top_level or selective):
-        installed_matched = [c for c in matched if c["version"] in installed]
-        if installed_matched:
-            installed_best = _best_candidate(installed_matched)
-            changed_flags = (
-                _reinstall_flags_for_use_change(
-                    root, category, package, installed_best, config, newuse
-                )
-                if newuse or changed_use
-                else None
-            ) or []
-            deps_changed_flag = changed_deps and _deps_changed(
-                root, repos, category, package, installed_best["version"], with_bdeps
+        if not is_top_level:
+            installed_best = _dependency_avoid_update_candidate(
+                root, atom, atom_str, category, package, candidates, installed
             )
-            slot_changed_flag = changed_slot and _slot_changed(
-                root, repos, category, package, installed_best["version"]
+        else:
+            installed_matched = [c for c in matched if c["version"] in installed]
+            installed_best = _best_candidate(installed_matched) if installed_matched else None
+        if installed_best is not None:
+            return _already_installed_or_reinstall(
+                root,
+                repos,
+                config,
+                category,
+                package,
+                installed_best,
+                newuse,
+                changed_use,
+                changed_deps,
+                with_bdeps,
+                changed_slot,
+                usepkg,
+                usepkgonly,
+                rebuilt_binaries,
+                rebuilt_binaries_timestamp,
+                newrepo,
             )
-            rebuilt_binary_flag = (usepkg or usepkgonly) and rebuilt_binaries and _rebuilt_binary_changed(
-                root, config["pkgdir"], category, package, installed_best["version"], rebuilt_binaries_timestamp
-            )
-            new_repo_flag = newrepo and _new_repo_changed(
-                root, category, package, installed_best["version"], installed_best["repo_name"]
-            )
-            if (
-                changed_flags
-                or deps_changed_flag
-                or slot_changed_flag
-                or rebuilt_binary_flag
-                or new_repo_flag
-            ):
-                return (
-                    "reinstall",
-                    installed_best["version"],
-                    changed_flags,
-                    deps_changed_flag,
-                    slot_changed_flag,
-                    rebuilt_binary_flag,
-                    new_repo_flag,
-                )
-            return ("already_installed", installed_best["version"])
 
     # --exclude/-X: an excluded candidate is never eligible to become
     # the new/upgrade "best visible candidate" either -- see this

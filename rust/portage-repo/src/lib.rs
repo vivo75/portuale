@@ -2612,6 +2612,158 @@ fn atom_currently_satisfiable(
     })
 }
 
+/// Real `_select_pkg_highest_available_imp`'s own early `avoid_update`
+/// return for a DEPENDENCY atom (`lib/_emerge/depgraph.py` ~8440: `if
+/// inst_pkg is not None and parent is not None and not self.
+/// _want_update_pkg(parent, inst_pkg): return inst_pkg`) -- the highest
+/// installed version of `category/package` that matches `atom_str`
+/// (version/slot/repo, via the FULL `candidates` list, deliberately
+/// NOT `is_visible`-filtered) and, if the atom carries a USE-dep
+/// (`pkg[flag]`), satisfies it against that version's own real,
+/// installed vdb `USE`/`IUSE` -- NOT the current tree's, matching real
+/// `_iter_match_pkgs`'s own vardb-sourced USE-dep check for an already-
+/// installed package. `None` when no installed version qualifies.
+/// Called from two places in `resolve_pretend` below: once *before*
+/// visibility/USE-dep filtering against the tree even begins (so a
+/// dependency reached only via a keyword-masked-but-installed version
+/// never spuriously hits `NoVisibleCandidate` in the first place), and
+/// once more from the ordinary `!update` shortcut further down (the
+/// only place this can still matter once `--exclude` is in play -- see
+/// that call site's own comment).
+fn dependency_avoid_update_candidate<'a>(
+    root: &Path,
+    atom: &portage_dep::Atom,
+    atom_str: &str,
+    candidates: &'a [Candidate],
+    installed: &[String],
+) -> Option<&'a Candidate> {
+    let all_candidates_by_str: HashMap<String, &Candidate> = candidates
+        .iter()
+        .map(|c| {
+            (
+                format!(
+                    "{}/{}-{}:{}/{}::{}",
+                    atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+                ),
+                c,
+            )
+        })
+        .collect();
+    let all_refs: Vec<&str> = all_candidates_by_str.keys().map(String::as_str).collect();
+    portage_dep::match_from_list(atom_str, &all_refs)?
+        .into_iter()
+        .filter_map(|m| all_candidates_by_str.get(m).copied())
+        .filter(|c| installed.iter().any(|v| v == &c.version))
+        .filter(|c| match &atom.use_deps {
+            Some(use_deps) if !use_deps.is_empty() => {
+                let vdb_iuse =
+                    read_vdb_flag_set(root, &atom.category, &atom.package, &c.version, "IUSE");
+                let vdb_use =
+                    read_vdb_flag_set(root, &atom.category, &atom.package, &c.version, "USE");
+                portage_dep::use_deps_satisfied(use_deps, &vdb_iuse, &vdb_use)
+            }
+            _ => true,
+        })
+        .max_by(|a, b| {
+            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+        })
+}
+
+/// Shared by both of `resolve_pretend`'s own `!update` shortcut call
+/// sites (the early, dependency-only one above `dependency_avoid_
+/// update_candidate` feeds, and the later, `matched`-based one further
+/// down `resolve_pretend` itself): once an installed version has been
+/// chosen to keep, decides between `AlreadyInstalled` and `Reinstall`
+/// exactly the same way -- `newuse`/`changed_use`/`changed_deps`/
+/// `changed_slot`/`rebuilt_binaries`/`newrepo` each independently able
+/// to trigger a reinstall even though no real version change is
+/// happening at all.
+#[allow(clippy::too_many_arguments)]
+fn already_installed_or_reinstall(
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    atom: &portage_dep::Atom,
+    installed_best: &Candidate,
+    newuse: bool,
+    changed_use: bool,
+    changed_deps: bool,
+    with_bdeps: bool,
+    changed_slot: bool,
+    usepkg: bool,
+    usepkgonly: bool,
+    rebuilt_binaries: bool,
+    rebuilt_binaries_timestamp: Option<u64>,
+    newrepo: bool,
+) -> Result<PretendOutcome, String> {
+    let changed_flags = if newuse || changed_use {
+        reinstall_flags_for_use_change(
+            root,
+            &atom.category,
+            &atom.package,
+            installed_best,
+            config,
+            newuse,
+        )
+        .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let deps_changed_flag = changed_deps
+        && deps_changed(
+            root,
+            repos,
+            &atom.category,
+            &atom.package,
+            &installed_best.version,
+            with_bdeps,
+        );
+    let slot_changed_flag = changed_slot
+        && slot_changed(
+            root,
+            repos,
+            &atom.category,
+            &atom.package,
+            &installed_best.version,
+        );
+    let rebuilt_binary_flag = (usepkg || usepkgonly)
+        && rebuilt_binaries
+        && rebuilt_binary_changed(
+            root,
+            Path::new(&config.pkgdir),
+            &atom.category,
+            &atom.package,
+            &installed_best.version,
+            rebuilt_binaries_timestamp,
+        );
+    let new_repo_flag = newrepo
+        && new_repo_changed(
+            root,
+            &atom.category,
+            &atom.package,
+            &installed_best.version,
+            &installed_best.repo_name,
+        );
+    if !changed_flags.is_empty()
+        || deps_changed_flag
+        || slot_changed_flag
+        || rebuilt_binary_flag
+        || new_repo_flag
+    {
+        return Ok(PretendOutcome::Reinstall {
+            version: installed_best.version.clone(),
+            changed_flags,
+            deps_changed: deps_changed_flag,
+            slot_changed: slot_changed_flag,
+            rebuilt_binary: rebuilt_binary_flag,
+            new_repo: new_repo_flag,
+        });
+    }
+    Ok(PretendOutcome::AlreadyInstalled {
+        version: installed_best.version.clone(),
+    })
+}
+
 // 11 args trips clippy::too_many_arguments; a bundled options struct
 // would touch every one of this function's own call sites (production
 // and test) for a single-slice-sized addition of one more CLI flag
@@ -2675,6 +2827,48 @@ pub fn resolve_pretend(
             usepkg_include,
         ));
     }
+
+    // Real avoid_update's own EARLY return for a dependency atom (see
+    // `dependency_avoid_update_candidate`'s own doc comment for the
+    // full citation) genuinely happens before real portage ever tries
+    // to find a "best available" candidate at all -- so it's checked
+    // here too, before this pilot's own visibility/USE-dep-against-the-
+    // tree filtering below gets a chance to (wrongly) bail out with
+    // `NoVisibleCandidate` for an atom whose installed version already
+    // satisfies it. Confirmed live: `sys-fs/fuse`'s own real
+    // `sys-libs/liburing:=[abi_x86_64(-)?,...]` dependency needs
+    // exactly this -- the tree's only *visible* `liburing` candidate
+    // doesn't even have the right USE profile to satisfy the atom
+    // (nothing enables it there), while the real, installed version
+    // does (its own real vdb `USE`). `--exclude` deliberately keeps
+    // this pilot's own pre-existing, narrower behavior instead (see the
+    // later, `!is_top_level`-aware `!update` shortcut's own comment) --
+    // skipped here so that block still gets a chance to run.
+    if !update && !is_top_level && excluded.is_empty() {
+        let installed = installed_versions(root, &atom.category, &atom.package);
+        if let Some(installed_best) =
+            dependency_avoid_update_candidate(root, &atom, atom_str, &candidates, &installed)
+        {
+            return already_installed_or_reinstall(
+                root,
+                repos,
+                config,
+                &atom,
+                installed_best,
+                newuse,
+                changed_use,
+                changed_deps,
+                with_bdeps,
+                changed_slot,
+                usepkg,
+                usepkgonly,
+                rebuilt_binaries,
+                rebuilt_binaries_timestamp,
+                newrepo,
+            );
+        }
+    }
+
     let visible: Vec<&Candidate> = candidates
         .iter()
         .filter(|c| is_visible(c, &atom.category, &atom.package, config))
@@ -2839,81 +3033,47 @@ pub fn resolve_pretend(
     // without `selective` -- see the doc comment's own `selective`/
     // `is_top_level` paragraph -- so version selection falls through to
     // the ordinary best-visible-candidate comparison below too.
+    //
+    // For a DEPENDENCY atom, the early, pre-visibility-filtering
+    // shortcut above (`dependency_avoid_update_candidate`) already
+    // handles the common case (see its own doc comment for the full
+    // real-portage citation). It deliberately skips when `--exclude` is
+    // active, though, to preserve this pilot's own pre-existing
+    // `--exclude`-vs-`matched` interaction exactly -- so this block
+    // still needs its own `!is_top_level` branch, reusing the same
+    // broader (not `is_visible`-filtered) lookup, for that one
+    // remaining combination.
     if !update && (!is_top_level || selective) {
-        if let Some(installed_best) = matched
-            .iter()
-            .filter_map(|m| by_str.get(m).copied())
-            .filter(|c| installed.iter().any(|v| v == &c.version))
-            .max_by(|a, b| {
-                vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
-            })
-        {
-            let changed_flags = if newuse || changed_use {
-                reinstall_flags_for_use_change(
-                    root,
-                    &atom.category,
-                    &atom.package,
-                    installed_best,
-                    config,
-                    newuse,
-                )
-                .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-            let deps_changed_flag = changed_deps
-                && deps_changed(
-                    root,
-                    repos,
-                    &atom.category,
-                    &atom.package,
-                    &installed_best.version,
-                    with_bdeps,
-                );
-            let slot_changed_flag = changed_slot
-                && slot_changed(
-                    root,
-                    repos,
-                    &atom.category,
-                    &atom.package,
-                    &installed_best.version,
-                );
-            let rebuilt_binary_flag = (usepkg || usepkgonly)
-                && rebuilt_binaries
-                && rebuilt_binary_changed(
-                    root,
-                    Path::new(&config.pkgdir),
-                    &atom.category,
-                    &atom.package,
-                    &installed_best.version,
-                    rebuilt_binaries_timestamp,
-                );
-            let new_repo_flag = newrepo
-                && new_repo_changed(
-                    root,
-                    &atom.category,
-                    &atom.package,
-                    &installed_best.version,
-                    &installed_best.repo_name,
-                );
-            if !changed_flags.is_empty()
-                || deps_changed_flag
-                || slot_changed_flag
-                || rebuilt_binary_flag
-                || new_repo_flag
-            {
-                return Ok(PretendOutcome::Reinstall {
-                    version: installed_best.version.clone(),
-                    changed_flags,
-                    deps_changed: deps_changed_flag,
-                    slot_changed: slot_changed_flag,
-                    rebuilt_binary: rebuilt_binary_flag,
-                    new_repo: new_repo_flag,
-                });
-            }
-            return Ok(PretendOutcome::AlreadyInstalled {
-                version: installed_best.version.clone(),
-            });
+        let installed_best = if !is_top_level {
+            dependency_avoid_update_candidate(root, &atom, atom_str, &candidates, &installed)
+        } else {
+            matched
+                .iter()
+                .filter_map(|m| by_str.get(m).copied())
+                .filter(|c| installed.iter().any(|v| v == &c.version))
+                .max_by(|a, b| {
+                    vercmp_ordering(&a.version, &b.version)
+                        .then(a.repo_priority.cmp(&b.repo_priority))
+                })
+        };
+        if let Some(installed_best) = installed_best {
+            return already_installed_or_reinstall(
+                root,
+                repos,
+                config,
+                &atom,
+                installed_best,
+                newuse,
+                changed_use,
+                changed_deps,
+                with_bdeps,
+                changed_slot,
+                usepkg,
+                usepkgonly,
+                rebuilt_binaries,
+                rebuilt_binaries_timestamp,
+                newrepo,
+            );
         }
     }
 
@@ -4563,6 +4723,41 @@ mod tests {
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
 
+    /// Like `resolve`, but `is_top_level=false` -- exercises the
+    /// avoid_update shortcut's own DEPENDENCY-atom code path (this
+    /// slice's own fix), distinct from `resolve`'s top-level one.
+    /// `selective`'s own value doesn't matter here: `is_top_level=false`
+    /// alone already satisfies the `!is_top_level || selective` gate.
+    fn resolve_as_dependency(category: &str, package: &str) -> PretendOutcome {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &test_config(),
+            false,
+            false,
+            false,
+            &[],
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
     /// Like `resolve`, but with `selective=false` -- real portage's own
     /// default for a bare top-level atom with no other flags given (see
     /// `resolve_pretend`'s own `selective`/`is_top_level` doc comment
@@ -4831,6 +5026,49 @@ mod tests {
         // candidate.
         assert_eq!(
             resolve("dev-libs", "downgradepkg"),
+            PretendOutcome::Downgrade {
+                from: "2.0".to_string(),
+                to: "1.0".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn keyword_masked_but_installed_dependency_is_kept_not_downgraded() {
+        // dev-libs/keywordmaskedpkg is installed at 2.0, whose own
+        // KEYWORDS ("~amd64") are no longer accepted under the fixture
+        // profile's own default ACCEPT_KEYWORDS ("amd64") -- only 1.0
+        // (KEYWORDS="amd64") is currently visible. Reached as a
+        // DEPENDENCY atom (is_top_level=false, via `resolve_as_
+        // dependency`), real depgraph.py's own early `avoid_update`
+        // return (`_select_pkg_highest_available_imp`, ~8440: `if
+        // inst_pkg is not None and parent is not None and not self.
+        // _want_update_pkg(...)`) requires NO visibility check at all --
+        // confirmed live against a real system (`sys-libs/liburing`,
+        // installed ~amd64-only, real emerge --pretend never even
+        // considers downgrading it). Before this slice's own fix, this
+        // pilot incorrectly required the installed version to also be
+        // in the visible-filtered candidate set, so this fixture would
+        // have (wrongly) resolved to `Downgrade { from: "2.0", to:
+        // "1.0" }` instead.
+        assert_eq!(
+            resolve_as_dependency("dev-libs", "keywordmaskedpkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "2.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn keyword_masked_but_installed_dependency_still_requires_visibility_as_a_top_level_atom() {
+        // Same fixture, but reached as a TOP-LEVEL atom instead (real
+        // depgraph.py's own SEPARATE, later `if avoid_update: ... self.
+        // _pkg_visibility_check(...)` block, which DOES require
+        // visibility) -- `resolve`'s own `is_top_level=true` exercises
+        // this, unaffected by this slice's own fix, matching real
+        // portage's real distinction between the two code paths.
+        assert_eq!(
+            resolve("dev-libs", "keywordmaskedpkg"),
             PretendOutcome::Downgrade {
                 from: "2.0".to_string(),
                 to: "1.0".to_string(),
@@ -6572,6 +6810,75 @@ mod tests {
                     "dev-libs/upgradepkg".to_string(),
                     PretendOutcome::AlreadyInstalled {
                         version: "1.0".to_string()
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn recursion_keeps_a_keyword_masked_but_installed_dependency_instead_of_downgrading() {
+        // dev-libs/needskeywordmasked (New) RDEPENDs on dev-libs/
+        // keywordmaskedpkg, installed at 2.0 (KEYWORDS="~amd64", not
+        // accepted under the fixture profile's own default
+        // ACCEPT_KEYWORDS="amd64") -- reached only as a dependency,
+        // never a top-level atom, so this exercises the exact real
+        // resolve_pretend_graph BFS path a real `sys-fs/fuse`'s own
+        // `sys-libs/liburing` dependency takes, confirmed live against
+        // a real system (see this slice's own resolve_pretend-level
+        // keyword_masked_but_installed_dependency_is_kept_not_downgraded
+        // test for the full citation). Before this slice's own fix,
+        // this would have (wrongly) shown a Downgrade entry to 1.0.
+        let entries = graph("dev-libs/needskeywordmasked");
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/needskeywordmasked".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/keywordmaskedpkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "2.0".to_string()
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn recursion_keeps_a_keyword_masked_but_installed_dependency_with_a_satisfied_use_dep() {
+        // dev-libs/needskeywordmaskeduse (New) RDEPENDs on
+        // dev-libs/keywordmaskedusepkg[flag] -- a real USE-dep on top of
+        // the same keyword-masked-but-installed situation as the test
+        // above. Installed at 2.0 with real vdb USE="flag" (see the
+        // fixture's own IUSE/USE files) -- checked against that real
+        // vdb-recorded USE, not the current tree's, via
+        // `use_deps_satisfied` -- so this is kept exactly as installed,
+        // matching real `sys-fs/fuse`'s own real
+        // `sys-libs/liburing:=[abi_x86_64(-)?,...]` dependency (the
+        // actual real-world case this slice's own fix was built for,
+        // confirmed live: without checking USE-deps against vdb data,
+        // an earlier version of this fix would have (wrongly) fallen
+        // back to the old, visibility-gated lookup for ANY USE-decorated
+        // atom, missing this exact case entirely).
+        let entries = graph("dev-libs/needskeywordmaskeduse");
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/needskeywordmaskeduse".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/keywordmaskedusepkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "2.0".to_string()
                     }
                 ),
             ]
