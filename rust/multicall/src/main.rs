@@ -15,6 +15,7 @@
 
 mod ebuild;
 mod ebuild_options;
+mod ebuild_phases;
 mod emerge_options;
 mod pretend;
 

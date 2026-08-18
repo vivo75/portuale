@@ -1,18 +1,22 @@
-// `ebuild <file> <command> [command...]`: still a pure dry-run stub --
-// real phase execution is explicitly deferred (see PROMPT.md's
-// "Deferred: ebuild phase execution", which requires shelling out to a
-// real bash, a deliberate dynamic dependency this pilot isn't taking on
-// yet). What this file *does* implement is CLI-surface recognition,
-// mirroring emerge's own pretend.rs/emerge_options.rs treatment: real
-// options (see ebuild_options.rs, transcribed from bin/ebuild's own
-// argparse setup) and real commands (from doebuild()'s own
-// `validcommands` list) are recognized and accepted -- still a no-op,
-// still exits 0, still prints the "ebuild (pilot stub)" marker -- while
-// genuinely invalid input (an unrecognized option, a filename not
-// ending in ".ebuild", an unrecognized command, or a missing
-// file/command) is now rejected with a specific, accurate message
-// instead of silently accepted the way the original bare-bones stub
-// accepted literally anything.
+// `ebuild <file> <command> [command...]`: CLI-surface recognition
+// (mirroring emerge's own pretend.rs/emerge_options.rs treatment -- real
+// options, see ebuild_options.rs, transcribed from bin/ebuild's own
+// argparse setup, and real commands, from doebuild()'s own
+// `validcommands` list, are recognized and accepted; genuinely invalid
+// input -- an unrecognized option, a filename not ending in ".ebuild",
+// an unrecognized command, or a missing file/command -- is rejected with
+// a specific, accurate message), PLUS, as of task #54, real execution
+// for the `actionmap_deps`-chained phase commands (`pretend`/`setup`/
+// `unpack`/`prepare`/`configure`/`compile`/`test`/`install` -- see
+// `ebuild_phases`'s own module doc comment for the full architecture and
+// v1 scope cuts). Every other real command (`merge`/`qmerge`/`unmerge`/
+// `package`/`preinst`/`postinst`/`prerm`/`postrm`/`config`/`info`/
+// `nofetch`/`depend`/`fetch`/`fetchall`/`digest`/`manifest`/`rpm`/
+// `instprep`/`clean`/`cleanrm`) still falls through to the pre-existing
+// dry-run stub message below unchanged -- most notably `merge`, which
+// needs the real vdb/CONTENTS merge machinery task #55 explicitly defers
+// (`dblink.merge()`/`treewalk()`/`mergeme()` in
+// `lib/portage/dbapi/vartree.py`, ~6500 lines).
 //
 // Exit codes mirror real `ebuild`'s own conventions: 2 for "missing
 // required args" (real bin/ebuild's argparse `parser.error()`), 1 for
@@ -40,6 +44,7 @@
 // of real formatting" precedent `emerge --help` already set.
 
 use crate::ebuild_options::{self, Kind};
+use crate::ebuild_phases;
 use std::process::ExitCode;
 
 /// Whether `--help`/`-h` appears anywhere in `args` -- unlike `emerge`'s
@@ -135,6 +140,42 @@ pub fn run(args: &[String]) -> ExitCode {
             eprintln!("ebuild: {cmd:?} is not one of the valid ebuild commands");
             return ExitCode::from(1);
         }
+    }
+
+    // Real execution (task #54, ebuild_phases's own module doc comment)
+    // only when EVERY requested command is one this pilot actually
+    // implements for real (the actionmap_deps-chained phase subset) --
+    // a deliberate, simple v1 boundary: no partial-real-execution
+    // ambiguity when a request mixes a real phase command with one this
+    // pilot still only dry-runs (e.g. `ebuild foo.ebuild compile merge`).
+    // A purely dry-run request (the common case today, since `merge` is
+    // what most real workflows actually want, and that's still task
+    // #55's own deferred territory) keeps the exact pre-existing stub
+    // message unchanged.
+    if commands
+        .iter()
+        .all(|cmd| ebuild_phases::is_real_phase_command(cmd))
+    {
+        let root = portage_repo::root_from_env();
+        // Real portage's own make.globals default -- see
+        // ebuild_phases::run_commands's own doc comment for why this is
+        // read here, at the CLI boundary, rather than internally.
+        let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+        return match ebuild_phases::run_commands(
+            std::path::Path::new(ebuild_file),
+            &commands,
+            &root,
+            &portage_tmpdir,
+        ) {
+            Ok(0) => ExitCode::SUCCESS,
+            Ok(_) => ExitCode::from(1),
+            Err(e) => {
+                eprintln!("ebuild: {e}");
+                ExitCode::from(1)
+            }
+        };
     }
 
     println!(

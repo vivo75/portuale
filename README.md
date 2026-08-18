@@ -3488,6 +3488,81 @@ the pre-existing `samepkg` (no `repository` file at all -- fires via the
 `"__unknown__"` sentinel, a real, sometimes-surprising consequence of
 that missing-tolerant-fallback design worth demonstrating explicitly).
 
+### Real ebuild phase execution (task #54): the first slice
+
+A genuinely different kind of slice from everything above: not a new
+`emerge --pretend` flag, but the first working piece of the *next major
+phase* this pilot's own `PORTING/PROMPT-next.md` had investigated but
+never started in code -- running real ebuild phase functions
+(`pkg_setup`, `src_unpack`, `src_prepare`, `src_configure`, `src_compile`,
+`src_test`, `src_install`) and landing real files under a real `${D}`,
+via `ebuild <file> install` (`multicall/src/ebuild.rs`, previously a pure
+dry-run stub).
+
+**Bash-execution backend**: an embedded [`brush`](https://github.com/reubeno/brush)
+shell (`brush_core::Shell`, pinned to a fork -- `vivo75/brush`, branch
+`fix/function-body-extended-test` -- carrying a real parser fix for
+bash's brace-less function-definition form, `name() [[ ... ]]`, used 60
+times by `bin/eapi.sh`; submitted upstream as
+[reubeno/brush#1274](https://github.com/reubeno/brush/pull/1274), open,
+unmerged as of this writing). A deliberate, accepted departure from this
+pilot's own near-zero-dependencies discipline elsewhere -- the
+alternative (shelling out to the system's real bash) was rejected
+earlier for tension with the "runs on even the most minimal Linux
+system" hard goal.
+
+**What's real, what's Rust**: `multicall/src/ebuild_phases.rs` computes
+the environment `doebuild_environment()` would (`CATEGORY`/`PN`/`PV`/
+`PR`/`PVR`/`P`/`PF`, the real `${PORTAGE_TMPDIR}/portage/${CATEGORY}/
+${PF}` directory layout) and drives the same per-command phase
+sequencing real `doebuild()` does (`actionmap_deps`,
+`lib/portage/package/ebuild/doebuild.py:871-884` -- `ebuild file.ebuild
+install` runs the whole `pretend → setup → unpack → prepare → configure
+→ compile → test → install` prerequisite chain, not just the one named
+phase, confirmed by reading it). Everything else is real, unmodified
+bash: `bin/ebuild.sh` (sourced directly, which itself sources
+`bin/phase-functions.sh`/`bin/phase-helpers.sh`/
+`bin/isolated-functions.sh`/`bin/bashrc-functions.sh`/
+`bin/save-ebuild-env.sh`, and the ebuild file itself) drives each real
+`__ebuild_main <phase>` call. Real EAPI-default phase functions
+(`default_src_install` etc.) are themselves ordinary bash functions in
+`phase-functions.sh`/`phase-helpers.sh` -- ported here for free by
+sourcing those files, not reimplemented -- so even a fixture ebuild that
+defines *no* phase functions at all still gets real `unpack`/`econf`/
+`emake`/`emake install`-driven behavior automatically. Real
+`insinto`/`doins` (themselves real bash wrapping a real `doins.py`
+subprocess) really do write real files.
+
+**A fresh embedded shell per phase, not one shared across a whole
+invocation**: confirmed necessary the hard way -- real `bin/ebuild.sh`'s
+own tail makes `EBUILD_PHASE` (among other variables) `readonly`, so a
+*second* phase in one shared shell can't `export EBUILD_PHASE=<next>` at
+all. A fresh shell per phase mirrors what real `doebuild()` itself does
+(a fresh `bin/ebuild.sh` *process* per phase, via `spawnebuild()`) far
+more literally than sharing one shell ever would have; real
+`PORTAGE_BUILDDIR`-relative resume markers (`.pretended`/`.setuped`/
+`.unpacked`/etc., written by `__dyn_*` themselves) are what make
+re-"running" an already-done prerequisite phase from a fresh shell
+cheap, exactly like real portage's own separate `spawnebuild()` calls
+rely on -- not a mechanism invented for this pilot. Also confirmed the
+hard way: the embedding tokio runtime **must** be multi-threaded
+(`rt-multi-thread`) -- a single-threaded one deadlocks partway through a
+real multi-phase run, consistent with `brush-core`'s own `Cargo.toml`
+requiring that exact feature.
+
+**v1 scope cuts** (see `ebuild_phases.rs`'s own module doc comment for
+the full list): only the `actionmap_deps`-chained phases run for real
+(`pretend` through `install`) -- `merge`/`qmerge`/`unmerge`/`package`
+and friends still fall through to the pre-existing dry-run stub
+unchanged, since real merge/vdb/`CONTENTS` machinery is task #55's own,
+separately-scoped, much bigger piece (`dblink.merge()`/`treewalk()`/
+`mergeme()` in `lib/portage/dbapi/vartree.py`, ~6500 lines). No
+sandboxing. No fetch/unpack of a real `SRC_URI` (`${S}` is pre-created
+empty rather than populated by a real `unpack`). `EAPI` is read directly
+from the ebuild's own text via the real PMS 7.3.1 rule (`parse_eapi`),
+since `ebuild <file> <command>` operates on an arbitrary standalone
+ebuild file, not necessarily one indexed in a configured repo.
+
 ## Running it
 
 Build both Rust binaries:
@@ -4738,4 +4813,23 @@ bash PORTING/musl/smoke_test.sh
 # same gate, wrapped as a pytest for CI (skipped by default -- see
 # PORTING/tests/test_musl_smoke.py)
 PORTING_RUN_MUSL_SMOKE=1 python3 -m pytest PORTING/tests/test_musl_smoke.py -v -s
+```
+
+Real ebuild phase execution (task #54 -- see "What this proves" above for
+the full writeup): `ebuild <file> install` runs the real `pretend` through
+`install` phase sequence via an embedded `brush` shell, landing real files
+under a real `${D}`. Uses `PORTING/fixtures/repo/dev-libs/phasepkg`, whose
+own `src_install` calls real `insinto`/`doins`:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/multicall ebuild \
+    PORTING/fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild install
+# (real phase output, including some known-nonfatal noise -- see
+# ebuild_phases.rs's own "KNOWN, DOCUMENTED GAPS" -- then:)
+#  * Final size of build directory: 0 KiB
+#  * Final size of installed tree:  4 KiB
+cat "${PORTAGE_TMPDIR}"/portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/hello.txt
+# hello from phasepkg
 ```

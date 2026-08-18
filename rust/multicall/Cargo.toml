@@ -7,3 +7,20 @@ edition.workspace = true
 portage-dep = { path = "../portage-dep" }
 portage-repo = { path = "../portage-repo" }
 portage-profile = { path = "../portage-profile" }
+# Real ebuild phase execution (task #54, PORTING/PROMPT-next.md's own
+# "Real ebuild phase execution" section): a deliberate, accepted dynamic
+# dependency (this pilot's own "near-zero dependencies" discipline is
+# explicitly waived here, see that doc's own "bash-execution-backend
+# question" writeup) -- pinned to an exact commit on a fork
+# (vivo75/brush, branch fix/function-body-extended-test) carrying a real
+# parser fix (brace-less function bodies, e.g. `name() [[ ... ]]`, used
+# 60 times by bin/eapi.sh) submitted upstream as reubeno/brush#1274 but
+# not yet merged as of this writing.
+brush-core = { git = "https://github.com/vivo75/brush", rev = "879d963458a3ee84124d839f922e19552881ae2c" }
+brush-builtins = { git = "https://github.com/vivo75/brush", rev = "879d963458a3ee84124d839f922e19552881ae2c" }
+# "rt-multi-thread", not just "rt": a single-threaded runtime deadlocks
+# partway through a real multi-phase run (confirmed empirically -- see
+# ebuild_phases::run_commands's own doc comment) -- brush-core's own
+# Cargo.toml requires this exact feature under unix too.
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+regex = "1"
