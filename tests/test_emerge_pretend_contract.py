@@ -286,6 +286,21 @@ CASES = [
         ["--pretend", "dev-libs/overlayusemaskpkg"],
         0,
     ),
+    (
+        "--usepkg-exclude: rejects the only binary candidate for an atom",
+        ["--pretend", "--usepkg", "--usepkg-exclude", "dev-libs/binaryonlypkg", "dev-libs/binaryonlypkg"],
+        1,
+    ),
+    (
+        "--usepkg-include: a non-matching include list rejects the only binary candidate",
+        ["--pretend", "--usepkg", "--usepkg-include", "dev-libs/doesnotexist-anywhere", "dev-libs/binaryonlypkg"],
+        1,
+    ),
+    (
+        "--usepkg-include: a matching include list keeps the binary candidate eligible",
+        ["--pretend", "--usepkg", "--usepkg-include", "dev-libs/binaryonlypkg", "dev-libs/binaryonlypkg"],
+        0,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -2055,6 +2070,57 @@ def test_overlay_own_package_use_mask_blocks_a_dependency(emerge_binary, fixture
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/overlayusemaskpkg-1.0"]
+
+
+def test_usepkg_exclude_drops_the_only_binary_candidate(emerge_binary, fixture_env):
+    """dev-libs/binaryonlypkg exists only as a binary build -- --usepkg
+    alone makes it eligible ([binary N]), but real depgraph.py's own
+    per-candidate check ("in_usepkg_exclude = have_usepkg_exclude and
+    usepkg_exclude.findAtomForPackage(pkg, ...)", "if in_usepkg_exclude
+    ...: break") drops it from the binary pool entirely once
+    --usepkg-exclude names it -- with no ebuild fallback, the atom
+    becomes entirely unsatisfiable."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--usepkg", "--usepkg-exclude", "dev-libs/binaryonlypkg", "dev-libs/binaryonlypkg"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.strip() == (
+        'emerge: there are no ebuilds to satisfy "dev-libs/binaryonlypkg".'
+    )
+
+
+def test_usepkg_include_gates_binary_eligibility_both_ways(emerge_binary, fixture_env):
+    """--usepkg-include's own real semantics are inverted from
+    --usepkg-exclude's: "in_usepkg_include = not have_usepkg_include or
+    usepkg_include.findAtomForPackage(pkg, ...)" -- once ANY
+    --usepkg-include atom is given, a binary candidate must match one of
+    them to stay eligible at all. A non-matching include list rejects
+    dev-libs/binaryonlypkg exactly like --usepkg-exclude does; a
+    matching one leaves it eligible."""
+    non_matching = _run(
+        [str(emerge_binary)],
+        [
+            "--pretend",
+            "--usepkg",
+            "--usepkg-include",
+            "dev-libs/doesnotexist-anywhere",
+            "dev-libs/binaryonlypkg",
+        ],
+        fixture_env,
+    )
+    assert non_matching.returncode == 1
+    assert non_matching.stdout == ""
+
+    matching = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--usepkg", "--usepkg-include", "dev-libs/binaryonlypkg", "dev-libs/binaryonlypkg"],
+        fixture_env,
+    )
+    assert matching.returncode == 0
+    assert matching.stdout.splitlines() == ["[binary  N] dev-libs/binaryonlypkg-1.0"]
 
 
 def test_slot_conflict_is_reported_between_two_incompatible_version_constraints(

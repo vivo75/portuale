@@ -925,6 +925,13 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut update = false;
     let mut deep = portage_repo::Deep::NotRequested;
     let mut excluded: Vec<String> = Vec::new();
+    // --usepkg-exclude/--usepkg-include: same "action": "append",
+    // space-separated-per-occurrence shape as --exclude/-X above (real
+    // main.py: "A space separated list of package names or slot atoms"),
+    // but scoped to binary-candidate eligibility specifically -- see
+    // `filter_usepkg_exclude_include`'s own doc comment, portage-repo.
+    let mut usepkg_exclude: Vec<String> = Vec::new();
+    let mut usepkg_include: Vec<String> = Vec::new();
     let mut json = false;
     let mut deselect = false;
     let mut with_bdeps = true;
@@ -1052,6 +1059,29 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 2;
         } else if let Some(value) = arg.strip_prefix("--exclude=") {
             excluded.extend(value.split_whitespace().map(String::from));
+            i += 1;
+        } else if arg == "--usepkg-exclude" {
+            // Same "action": "append", space-separated-per-occurrence
+            // shape as --exclude above -- no short alias, real main.py
+            // never gives it one.
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--usepkg-exclude\" requires an argument");
+                return ExitCode::from(2);
+            };
+            usepkg_exclude.extend(value.split_whitespace().map(String::from));
+            i += 2;
+        } else if let Some(value) = arg.strip_prefix("--usepkg-exclude=") {
+            usepkg_exclude.extend(value.split_whitespace().map(String::from));
+            i += 1;
+        } else if arg == "--usepkg-include" {
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--usepkg-include\" requires an argument");
+                return ExitCode::from(2);
+            };
+            usepkg_include.extend(value.split_whitespace().map(String::from));
+            i += 2;
+        } else if let Some(value) = arg.strip_prefix("--usepkg-include=") {
+            usepkg_include.extend(value.split_whitespace().map(String::from));
             i += 1;
         } else if arg == "--json" {
             // NOT a real emerge option at all -- real portage has no
@@ -1712,6 +1742,8 @@ pub fn run(args: &[String]) -> ExitCode {
         usepkg,
         usepkgonly,
         binpkg_respect_use,
+        &usepkg_exclude,
+        &usepkg_include,
     ) {
         Ok(result) => result,
         Err(e) => {

@@ -3198,6 +3198,31 @@ bracket word itself mirrors real `RootConfig.py`'s own
 `--getbinpkgonly` (remote fetching) are out of scope -- local `PKGDIR`
 only.
 
+`--usepkg-exclude`/`--usepkg-include`: a direct follow-on, grounded
+against real `main.py` ("a space separated list of package names or
+slot atoms", the identical grammar `--exclude`/`-X` already uses) and
+real `depgraph.py`'s own per-candidate binary-eligibility check
+(`in_usepkg_exclude = have_usepkg_exclude and usepkg_exclude.
+findAtomForPackage(pkg, ...)`; `in_usepkg_include = not
+have_usepkg_include or usepkg_include.findAtomForPackage(pkg, ...)`;
+`if in_usepkg_exclude or not in_usepkg_include: break`) -- confirmed by
+reading it during the original binary-package slice's own research, but
+deliberately not acted on until now. A matching `--usepkg-exclude` atom,
+or a non-empty `--usepkg-include` list a candidate doesn't match, drops
+that binary candidate from the pool entirely, before it's ever
+considered alongside ebuilds -- reusing the exact same
+`matches_config_entry` two-tier (plain atom or `*`-wildcard) matcher
+`--exclude`/`package.mask`/`.unmask` already share.
+`dev-libs/binaryonlypkg` (the existing binary-only fixture) proves it:
+`--usepkg-exclude dev-libs/binaryonlypkg` makes its only candidate
+disappear entirely (`"there are no ebuilds to satisfy"`, since there's
+no ebuild to fall back to either); `--usepkg-include` with a
+non-matching atom does the same, while a matching one leaves it
+eligible. `--rebuilt-binaries` was deliberately left out of this slice:
+it needs comparing a binary's own baked-in dependency versions against
+the current best plus a `--rebuilt-binaries-timestamp` cutoff, a
+meaningfully fuzzier scope than a straightforward include/exclude list.
+
 A real bug fix, found by grounding against real `output.py`'s own
 `PkgAttrDisplay` logic (around line 750): before this slice, any version
 change for an already-installed package was unconditionally labeled
@@ -4255,6 +4280,18 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg dev-libs/bina
 # fallback to reject *to*) -- the same mismatched binary is now accepted
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkgonly dev-libs/binaryusemismatchpkg
 # [binary  N] dev-libs/binaryusemismatchpkg-1.0
+
+# --usepkg-exclude: drops a binary candidate from the pool entirely --
+# binaryonlypkg has no ebuild to fall back to, so it disappears completely
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --usepkg-exclude dev-libs/binaryonlypkg dev-libs/binaryonlypkg
+# emerge: there are no ebuilds to satisfy "dev-libs/binaryonlypkg".  (exit 1)
+# --usepkg-include: the inverse -- once given, a binary candidate must
+# match one of the listed atoms to stay eligible; a non-matching list
+# rejects it exactly like --usepkg-exclude does
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --usepkg-include dev-libs/doesnotexist-anywhere dev-libs/binaryonlypkg
+# emerge: there are no ebuilds to satisfy "dev-libs/binaryonlypkg".  (exit 1)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --usepkg-include dev-libs/binaryonlypkg dev-libs/binaryonlypkg
+# [binary  N] dev-libs/binaryonlypkg-1.0
 
 # downgrade vs upgrade: downgradepkg is installed at 2.0, but only 1.0 is
 # visible in the tree -- a genuine downgrade, distinct from an upgrade,

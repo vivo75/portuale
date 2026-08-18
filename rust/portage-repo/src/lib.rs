@@ -506,6 +506,51 @@ pub fn list_binary_candidates(pkgdir: &Path, category: &str, package: &str) -> V
     candidates
 }
 
+/// `--usepkg-exclude`/`--usepkg-include` (real `main.py`: "a space
+/// separated list of package names or slot atoms", real `WildcardSet`
+/// grammar, same "plain atom or `*`-wildcard" two-tier matcher
+/// `matches_config_entry` already backs `--exclude`/`.mask`/`.unmask`
+/// with -- see `resolve_pretend`'s own doc comment on `excluded`).
+/// Ports real `depgraph.py`'s own per-candidate binary-eligibility check
+/// (`in_usepkg_exclude = have_usepkg_exclude and usepkg_exclude.
+/// findAtomForPackage(pkg, ...)`; `in_usepkg_include = not
+/// have_usepkg_include or usepkg_include.findAtomForPackage(pkg, ...)`;
+/// `if in_usepkg_exclude or not in_usepkg_include: break` -- the
+/// candidate is dropped from the binary pool entirely, never considered
+/// alongside ebuilds at all) -- confirmed by reading it during the
+/// original binary-package slice's own research, deliberately not acted
+/// on then. Applied only to binary candidates: real `usepkg_exclude`/
+/// `usepkg_include` gate binary-candidate eligibility specifically
+/// (`built and not installed`), never ebuild candidates.
+fn filter_usepkg_exclude_include(
+    binary_candidates: Vec<Candidate>,
+    category: &str,
+    package: &str,
+    usepkg_exclude: &[String],
+    usepkg_include: &[String],
+) -> Vec<Candidate> {
+    if usepkg_exclude.is_empty() && usepkg_include.is_empty() {
+        return binary_candidates;
+    }
+    binary_candidates
+        .into_iter()
+        .filter(|c| {
+            let candidate_str = format!(
+                "{category}/{package}-{}:{}/{}::{}",
+                c.version, c.slot, c.sub_slot, c.repo_name
+            );
+            let is_excluded = usepkg_exclude
+                .iter()
+                .any(|ex| matches_config_entry(ex, &candidate_str, category, package));
+            let is_included = usepkg_include.is_empty()
+                || usepkg_include
+                    .iter()
+                    .any(|inc| matches_config_entry(inc, &candidate_str, category, package));
+            !is_excluded && is_included
+        })
+        .collect()
+}
+
 /// Re-reads `<pkgdir>/Packages` looking for `category/package-version`'s
 /// own entry -- the binary-candidate counterpart to `read_md5_cache`,
 /// used once a binary candidate has actually been chosen and its own
@@ -2332,6 +2377,8 @@ pub fn resolve_pretend(
     usepkg: bool,
     usepkgonly: bool,
     binpkg_respect_use: bool,
+    usepkg_exclude: &[String],
+    usepkg_include: &[String],
 ) -> Result<PretendOutcome, String> {
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
@@ -2346,17 +2393,25 @@ pub fn resolve_pretend(
     // reuse `is_visible` completely unchanged -- it only ever consults
     // fields every `Candidate` carries regardless of `source`
     // (package.mask/license/keywords/properties/restrict), never
-    // anything ebuild-specific.
+    // anything ebuild-specific. `--usepkg-exclude`/`--usepkg-include`
+    // (see `filter_usepkg_exclude_include`'s own doc comment) drop a
+    // binary candidate from the pool entirely before it's ever
+    // considered alongside ebuilds, matching real depgraph.py's own
+    // `break`-out-of-the-loop rejection.
     let mut candidates = if usepkgonly {
         Vec::new()
     } else {
         list_candidates(repos, &atom.category, &atom.package)?
     };
     if usepkg || usepkgonly {
-        candidates.extend(list_binary_candidates(
-            Path::new(&config.pkgdir),
+        let binary_candidates =
+            list_binary_candidates(Path::new(&config.pkgdir), &atom.category, &atom.package);
+        candidates.extend(filter_usepkg_exclude_include(
+            binary_candidates,
             &atom.category,
             &atom.package,
+            usepkg_exclude,
+            usepkg_include,
         ));
     }
     let visible: Vec<&Candidate> = candidates
@@ -3274,6 +3329,8 @@ pub fn resolve_pretend_graph(
     usepkg: bool,
     usepkgonly: bool,
     binpkg_respect_use: bool,
+    usepkg_exclude: &[String],
+    usepkg_include: &[String],
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -3388,6 +3445,8 @@ pub fn resolve_pretend_graph(
             usepkg,
             usepkgonly,
             binpkg_respect_use,
+            usepkg_exclude,
+            usepkg_include,
         )?;
 
         // `--changed-deps-report`: real portage stays "completely
@@ -3563,10 +3622,14 @@ pub fn resolve_pretend_graph(
             c
         };
         if usepkg || usepkgonly {
-            repo_candidates.extend(list_binary_candidates(
-                Path::new(&config.pkgdir),
+            let binary_candidates =
+                list_binary_candidates(Path::new(&config.pkgdir), &key.0, &key.1);
+            repo_candidates.extend(filter_usepkg_exclude_include(
+                binary_candidates,
                 &key.0,
                 &key.1,
+                usepkg_exclude,
+                usepkg_include,
             ));
         }
         let Some(resolved) = repo_candidates
@@ -4065,6 +4128,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4094,6 +4159,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4124,6 +4191,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4201,6 +4270,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4280,6 +4351,8 @@ mod tests {
                 false,
                 false,
                 false,
+                &[],
+                &[],
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -4403,6 +4476,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4437,6 +4512,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4470,6 +4547,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4568,6 +4647,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4641,6 +4722,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -4750,6 +4833,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -4812,6 +4897,8 @@ mod tests {
                 false,
                 false,
                 false,
+                &[],
+                &[],
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -4869,6 +4956,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -4903,6 +4992,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
@@ -4943,6 +5034,8 @@ mod tests {
                 false,
                 false,
                 false,
+                &[],
+                &[],
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::Reinstall {
@@ -5072,6 +5165,8 @@ mod tests {
                 false,
                 false,
                 false,
+                &[],
+                &[],
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -5096,6 +5191,8 @@ mod tests {
                 false,
                 false,
                 false,
+                &[],
+                &[],
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::NoVisibleCandidate
@@ -5427,6 +5524,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5459,6 +5558,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5493,6 +5594,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5531,6 +5634,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -5586,6 +5691,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5689,6 +5796,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -5794,6 +5903,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -5935,6 +6046,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -6014,6 +6127,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6159,6 +6274,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -6251,6 +6368,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6290,6 +6409,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6388,6 +6509,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -6425,6 +6548,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6464,6 +6589,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6503,6 +6630,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -6757,6 +6886,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -6808,6 +6939,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -6836,6 +6969,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -6901,6 +7036,8 @@ mod tests {
             false,
             false,
             false,
+            &[],
+            &[],
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

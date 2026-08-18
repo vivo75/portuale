@@ -593,6 +593,37 @@ def list_binary_candidates(pkgdir, category, package):
     return candidates
 
 
+def _filter_usepkg_exclude_include(binary_candidates, category, package, usepkg_exclude, usepkg_include):
+    """--usepkg-exclude/--usepkg-include (real main.py: "a space
+    separated list of package names or slot atoms", same "plain atom or
+    *-wildcard" two-tier matcher _matches_config_entry already backs
+    --exclude/.mask/.unmask with). Ports real depgraph.py's own per-
+    candidate binary-eligibility check: in_usepkg_exclude =
+    have_usepkg_exclude and usepkg_exclude.findAtomForPackage(pkg, ...);
+    in_usepkg_include = not have_usepkg_include or usepkg_include.
+    findAtomForPackage(pkg, ...); if in_usepkg_exclude or not
+    in_usepkg_include: break -- the candidate is dropped from the binary
+    pool entirely. Applied only to binary candidates, never ebuilds.
+    Mirrors portage-repo/src/lib.rs's filter_usepkg_exclude_include
+    exactly."""
+    if not usepkg_exclude and not usepkg_include:
+        return binary_candidates
+    result = []
+    for c in binary_candidates:
+        candidate_str = (
+            f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+        )
+        is_excluded = any(
+            _matches_config_entry(ex, candidate_str, category, package) for ex in usepkg_exclude
+        )
+        is_included = not usepkg_include or any(
+            _matches_config_entry(inc, candidate_str, category, package) for inc in usepkg_include
+        )
+        if not is_excluded and is_included:
+            result.append(c)
+    return result
+
+
 def read_binary_metadata(pkgdir, category, package, version):
     """Re-reads <pkgdir>/Packages for category/package-version's own
     entry -- the binary-candidate counterpart to read_md5_cache, giving
@@ -2558,6 +2589,8 @@ def resolve_pretend(
     usepkg=False,
     usepkgonly=False,
     binpkg_respect_use=False,
+    usepkg_exclude=(),
+    usepkg_include=(),
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -2706,7 +2739,10 @@ def resolve_pretend(
     # resolve_pretend exactly.
     candidates = [] if usepkgonly else list_candidates(repos, category, package)
     if usepkg or usepkgonly:
-        candidates = candidates + list_binary_candidates(config["pkgdir"], category, package)
+        binary_candidates = list_binary_candidates(config["pkgdir"], category, package)
+        candidates = candidates + _filter_usepkg_exclude_include(
+            binary_candidates, category, package, usepkg_exclude, usepkg_include
+        )
     visible = [c for c in candidates if is_visible(c, category, package, config)]
     if not visible:
         return ("no_visible_candidate",)
@@ -2999,6 +3035,8 @@ def resolve_pretend_graph(
     usepkg=False,
     usepkgonly=False,
     binpkg_respect_use=False,
+    usepkg_exclude=(),
+    usepkg_include=(),
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -3197,6 +3235,8 @@ def resolve_pretend_graph(
             usepkg,
             usepkgonly,
             binpkg_respect_use,
+            usepkg_exclude,
+            usepkg_include,
         )
 
         # --changed-deps-report: real portage stays "completely silent"
@@ -3325,8 +3365,9 @@ def resolve_pretend_graph(
         # wins the tie. Mirrors portage-repo/src/lib.rs exactly.
         repo_candidates = [] if usepkgonly else list_candidates(repos, category, package)
         if usepkg or usepkgonly:
-            repo_candidates = repo_candidates + list_binary_candidates(
-                config["pkgdir"], category, package
+            binary_candidates = list_binary_candidates(config["pkgdir"], category, package)
+            repo_candidates = repo_candidates + _filter_usepkg_exclude_include(
+                binary_candidates, category, package, usepkg_exclude, usepkg_include
             )
         repo_candidates = [c for c in repo_candidates if c["version"] == version]
         if not repo_candidates:
@@ -4401,6 +4442,8 @@ def run(args):
     update = False
     deep = 0
     excluded = []
+    usepkg_exclude = []
+    usepkg_include = []
     json_output = False
     deselect = False
     with_bdeps = True
@@ -4503,6 +4546,27 @@ def run(args):
             i += 2
         elif arg.startswith("--exclude="):
             excluded.extend(arg[len("--exclude=") :].split())
+            i += 1
+        elif arg == "--usepkg-exclude":
+            # Same "action": "append", space-separated-per-occurrence
+            # shape as --exclude above -- no short alias, real main.py
+            # never gives it one.
+            if i + 1 >= len(args):
+                print('emerge: option "--usepkg-exclude" requires an argument', file=sys.stderr)
+                return 2
+            usepkg_exclude.extend(args[i + 1].split())
+            i += 2
+        elif arg.startswith("--usepkg-exclude="):
+            usepkg_exclude.extend(arg[len("--usepkg-exclude=") :].split())
+            i += 1
+        elif arg == "--usepkg-include":
+            if i + 1 >= len(args):
+                print('emerge: option "--usepkg-include" requires an argument', file=sys.stderr)
+                return 2
+            usepkg_include.extend(args[i + 1].split())
+            i += 2
+        elif arg.startswith("--usepkg-include="):
+            usepkg_include.extend(arg[len("--usepkg-include=") :].split())
             i += 1
         elif arg == "--json":
             # NOT a real emerge option at all -- real portage has no
@@ -5085,6 +5149,8 @@ def run(args):
             usepkg,
             usepkgonly,
             resolved_binpkg_respect_use,
+            usepkg_exclude,
+            usepkg_include,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
