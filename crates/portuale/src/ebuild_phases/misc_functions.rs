@@ -239,3 +239,36 @@ pub(crate) struct RunMiscFunctionArgs<'a> {
     pub(crate) config_root: &'a Path,
     pub(crate) shell: ShellBackend,
 }
+
+/// Sync entry point for `ebuild_package`'s `__dyn_package` call; mirrors
+/// `run_single_phase`.
+pub(crate) fn run_misc_function(args: RunMiscFunctionArgs<'_>) -> Result<i32, String> {
+    let RunMiscFunctionArgs {
+        ebuild_path,
+        portage_tmpdir,
+        root,
+        ebuild_phase_value,
+        dyn_command,
+        extra_env,
+        debug,
+        config_root,
+        shell,
+    } = args;
+    let runtime = shared_runtime()?;
+    runtime.block_on(async {
+        let env = compute_environment(ebuild_path, portage_tmpdir)?;
+        create_directories(&env)?;
+        run_misc_functions(RunMiscFunctionsArgs {
+            env: &env,
+            root,
+            ebuild_phase_value,
+            dyn_command,
+            extra_env,
+            debug,
+            config_root,
+            shell,
+            log_file: None,
+        })
+        .await
+    })
+}
