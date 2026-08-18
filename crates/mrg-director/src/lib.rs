@@ -65,6 +65,46 @@ pub trait PackagesDb {
 }
 
 // ---------------------------------------------------------------------------
+// BinpkgFetch
+// ---------------------------------------------------------------------------
+
+/// A source that can materialize a package's files locally so a merge or
+/// build can consume them. The implementation is [`WgetFetcher`].
+/// Portage: `portage/package/ebuild/fetch.py` (see notes for the seam's
+/// narrowing: no Manifest verification, no `fsmirror` copy).
+///
+/// The trait takes one already-assembled [`FetchRequest`]: candidate
+/// assembly and the `mirror+`/`fetch+` override policy stay at the call
+/// site; the transport owns only the download. The Manifest-derived
+/// `DIGESTS` variable travels pre-formatted in [`FetchRequest::vars`].
+pub trait Fetcher {
+    /// Download `request.uri` to `request.dest` (resume when
+    /// `request.resume` is set); digest verification is the caller's.
+    fn fetch(&self, request: &FetchRequest<'_>) -> Result<(), String>;
+}
+
+/// One resolved candidate download for a [`Fetcher`]: the URI, the local
+/// distfile path it must land in, and whether to resume a partial.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FetchRequest<'a> {
+    /// The `SRC_URI` filename this candidate serves (the `dest` basename).
+    pub filename: &'a str,
+    /// The fully resolved URI to download.
+    pub uri: &'a str,
+    /// The local path the download must be written to (the call site's
+    /// already-computed `distdir/<filename>`; never re-derived here).
+    pub dest: &'a Path,
+    /// Resume a non-empty partial at `dest` (Portage `RESUMECOMMAND`).
+    pub resume: bool,
+    /// The `FETCHCOMMAND`/`RESUMECOMMAND` family; `None` uses the
+    /// `make.globals` defaults (`portage_fetch::default_commands`).
+    pub commands: Option<&'a portage_fetch::FetchCommands>,
+    /// Portage `DIGESTS` and `PORTAGE_SSH_OPTS` inputs, pre-formatted by
+    /// the caller; unset variables expand to empty, same as Portage.
+    pub vars: portage_fetch::FetchCommandVars<'a>,
+}
+
+// ---------------------------------------------------------------------------
 // MergeEngine
 // ---------------------------------------------------------------------------
 
