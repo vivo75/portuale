@@ -3431,6 +3431,34 @@ provenance for). A new `dev-libs/autounmaskdepconsumer` fixture (RDEPEND
 on the existing keyword-masked-only package) proves it live, both with
 and without `--autounmask`, and in both plain-text and `--json` form.
 
+`--columns`: real `output.py`'s own `_set_root_columns`, a purely
+display-layer alternate rendering of the same New/Upgrade/Downgrade/
+Reinstall entries the default bracket format already shows -- no new
+resolution logic, just a different layout, and mutually exclusive with
+`--tree` (real `actions.py`: `"can't specify both of \"--tree\" and
+\"--columns\"."`, checked once parsing finishes -- this pilot reports it
+via its own established CLI-usage-error convention, exit 2 on stderr,
+rather than real portage's own literal exit 1 on stdout, same deviation
+every other CLI-usage error in this pilot already makes). The
+`"[{bracket}  {code}]"` segment is untouched -- only what comes after it
+changes: bare `category/package` (no version) padded out to
+`columnwidth - 60`, then `[version]` right-padded to `columnwidth - 30`,
+then an `Upgrade`/`Downgrade`'s own old version in brackets (`Reinstall`
+gets no such column -- it has no "old" version distinct from the new
+one, and, unlike the non-columns format, `--columns` mode has no room
+for a `(reinstall for ...)` reason at all, matching real portage's own
+`_set_root_columns` exactly, which never surfaces one either). `--v`'s
+own `USE="..."` suffix still applies, appended after everything else,
+same as always. `columnwidth` itself defaults to 130, overridable via
+the `COLUMNWIDTH` environment variable exactly like real portage (an
+unparsable value warns and falls back to the default rather than
+erroring) -- except the warning text itself: real portage's own message
+echoes the raw exception's `str()`, which Rust's `ParseIntError` and
+Python's `ValueError` never render identically, so this pilot uses one
+fixed, pilot-authored line instead, the same "never leak a language-
+specific parse-error string into pinned output" precedent `--deep`'s own
+invalid-value handling already set.
+
 ## Running it
 
 Build both Rust binaries:
@@ -3551,6 +3579,20 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --tree --unordered-dis
 # [ebuild  N] dev-libs/treeorderpkg-1.0
 # [ebuild  N]   dev-libs/ztreechild-1.0
 # [ebuild  N]   dev-libs/atreechild-1.0
+
+# --columns: the version moves out of the inline "-1.0" suffix into its
+# own right-aligned column instead (COLUMNWIDTH here trimmed to 70 for a
+# readable example -- the real default is 130)
+COLUMNWIDTH=70 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --columns dev-libs/newpkg
+# [ebuild  N] dev-libs/newpkg [1.0]
+# an Upgrade's own old version appears in its own trailing column too --
+# the same information the default format's own "(upgrade from X)"
+# parenthetical carries, just repositioned
+COLUMNWIDTH=70 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --columns dev-libs/upgradepkg
+# [ebuild  U] dev-libs/upgradepkg [2.0]   [1.0]
+# --tree and --columns can't be combined, matching real portage
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --tree --columns dev-libs/newpkg
+# emerge: can't specify both of "--tree" and "--columns".  (exit 2)
 
 # BDEPEND/PDEPEND/IDEPEND are walked too, not just DEPEND/RDEPEND -- v1
 # makes no distinction between any of the five real dependency-string

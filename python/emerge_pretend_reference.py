@@ -4702,6 +4702,63 @@ def _reinstall_reason(changed_flags, deps_changed, slot_changed, rebuilt_binary)
     return "; ".join(reasons)
 
 
+def _columnwidth_from_env():
+    """Real output_helpers.py's own columnwidth resolution
+    (MergeListItem.__init__): 130 by default, overridden by a
+    COLUMNWIDTH setting -- this pilot only ever reads it as a plain
+    environment variable (real portage's own frozen_config.settings is
+    env + make.conf + profile merged together; parsing COLUMNWIDTH out
+    of make.conf too would need a new generic scalar-lookup path through
+    the config dict, which nothing else in this pilot needs yet -- a
+    deliberate v1 narrowing, same spirit as every other scope cut in
+    this codebase). An unparsable value warns and falls back to the
+    default, exactly like real portage's own except ValueError branch,
+    rather than treating it as a hard error. Real portage's own warning
+    has a first line echoing the raw exception text -- omitted here,
+    same as every other parse-error message in this pilot (see
+    --deep's own invalid-value handling): Rust's ParseIntError and
+    Python's ValueError never stringify identically, so echoing either
+    verbatim would make this the one message the two implementations
+    could never agree on byte-for-byte. Mirrors pretend.rs's own
+    columnwidth_from_env exactly."""
+    value = os.environ.get("COLUMNWIDTH")
+    if value is None:
+        return 130
+    try:
+        return int(value)
+    except ValueError:
+        print(f'!!! Unable to parse COLUMNWIDTH="{value}"', file=sys.stderr)
+        return 130
+
+
+def _columns_line(bracket, code, indent, category, package, version, oldbest, columnwidth):
+    """One --columns line: real _set_root_columns's own layout algorithm
+    (the pkg_info.merge == True branch only -- the "not merging" branch
+    never applies to any outcome this pilot prints in brackets at all),
+    with color stripped (this pilot has no ANSI color output anywhere).
+    bracket/code reproduce the exact same "[{bracket}  {code}]" segment
+    the non-columns format already prints unchanged -- only what comes
+    after it differs: category/package (no version -- that's the whole
+    point of --columns) padded out to columnwidth - 60 (newlp), then
+    [version] right-padded to columnwidth - 30 (oldlp), then oldbest
+    ("[from]" for an Upgrade/Downgrade, empty otherwise -- real
+    pkg_info.oldbest_list, mirrored here via data this pilot already
+    has). Padding is skipped once the line's already past the target
+    width, exactly like real portage's own guard -- never truncates,
+    just doesn't pad further. Mirrors pretend.rs's own columns_line
+    exactly."""
+    newlp = max(columnwidth - 60, 0)
+    oldlp = max(columnwidth - 30, 0)
+    line = f"[{bracket}  {code}] {indent}{category}/{package}"
+    if newlp > len(line):
+        line += " " * (newlp - len(line))
+    line += f" [{version}] "
+    if oldlp > len(line):
+        line += " " * (oldlp - len(line))
+    line += oldbest
+    return line
+
+
 def run(args):
     if _wants_help(args):
         _print_help()
@@ -4719,6 +4776,10 @@ def run(args):
     # for the full pilot-specific design this needed.
     tree = False
     unordered_display = False
+    # --columns: display-only, same "entirely independent of resolution"
+    # shape as --tree above -- mutually exclusive with --tree, checked
+    # once parsing finishes.
+    columns = False
     update = False
     deep = 0
     excluded = []
@@ -4776,6 +4837,9 @@ def run(args):
             i += 1
         elif arg == "--unordered-display":
             unordered_display = True
+            i += 1
+        elif arg == "--columns":
+            columns = True
             i += 1
         elif arg in ("--update", "-u"):
             update = True
@@ -5312,6 +5376,25 @@ def run(args):
         else:
             return _report_option(arg)
 
+    # Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
+    # in emerge_config.opts: print(...); return 1" -- checked once
+    # parsing finishes (order-independent), right after option parsing
+    # and before any other validation, matching real portage's own
+    # placement. This pilot's own CLI-usage-error convention (exit 2,
+    # stderr) differs deliberately from real portage's literal `return
+    # 1`/stdout here, matching every other CLI-usage error this pilot
+    # already reports. Mirrors pretend.rs exactly.
+    if tree and columns:
+        print('emerge: can\'t specify both of "--tree" and "--columns".', file=sys.stderr)
+        return 2
+
+    # Real portage resolves COLUMNWIDTH (and warns on an unparsable
+    # value) as part of general display setup, unconditionally -- never
+    # gated on --columns itself actually being given. Mirrored here the
+    # same way, even though the value only ever affects anything below
+    # when `columns` is True.
+    columnwidth = _columnwidth_from_env()
+
     if not pretend:
         print(
             "emerge (pilot v1): only --pretend is implemented "
@@ -5564,30 +5647,75 @@ def run(args):
         bracket = "binary" if source == "binary" else "ebuild"
         if tag == "new":
             if not onlydeps_suppressed:
-                print(
-                    f"[{bracket}  N] {indent}{category}/{package}-{outcome[1]}{use_suffix(use_display)}"
-                )
+                if columns:
+                    print(
+                        _columns_line(
+                            bracket, "N", indent, category, package, outcome[1], "", columnwidth
+                        )
+                        + use_suffix(use_display)
+                    )
+                else:
+                    print(
+                        f"[{bracket}  N] {indent}{category}/{package}-{outcome[1]}{use_suffix(use_display)}"
+                    )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
             if not onlydeps_suppressed:
-                print(
-                    f"[{bracket}  U] {indent}{category}/{package}-{outcome[2]} "
-                    f"(upgrade from {outcome[1]}){use_suffix(use_display)}"
-                )
+                if columns:
+                    print(
+                        _columns_line(
+                            bracket,
+                            "U",
+                            indent,
+                            category,
+                            package,
+                            outcome[2],
+                            f"[{outcome[1]}]",
+                            columnwidth,
+                        )
+                        + use_suffix(use_display)
+                    )
+                else:
+                    print(
+                        f"[{bracket}  U] {indent}{category}/{package}-{outcome[2]} "
+                        f"(upgrade from {outcome[1]}){use_suffix(use_display)}"
+                    )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "downgrade":
             if not onlydeps_suppressed:
-                print(
-                    f"[{bracket}  D] {indent}{category}/{package}-{outcome[2]} "
-                    f"(downgrade from {outcome[1]}){use_suffix(use_display)}"
-                )
+                if columns:
+                    print(
+                        _columns_line(
+                            bracket,
+                            "D",
+                            indent,
+                            category,
+                            package,
+                            outcome[2],
+                            f"[{outcome[1]}]",
+                            columnwidth,
+                        )
+                        + use_suffix(use_display)
+                    )
+                else:
+                    print(
+                        f"[{bracket}  D] {indent}{category}/{package}-{outcome[2]} "
+                        f"(downgrade from {outcome[1]}){use_suffix(use_display)}"
+                    )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "reinstall":
             changed_flags = outcome[2]
             deps_changed_flag = outcome[3]
             slot_changed_flag = outcome[4]
             rebuilt_binary_flag = outcome[5]
-            if not onlydeps_suppressed:
+            if not onlydeps_suppressed and columns:
+                print(
+                    _columns_line(
+                        bracket, "r", indent, category, package, outcome[1], "", columnwidth
+                    )
+                    + use_suffix(use_display)
+                )
+            elif not onlydeps_suppressed:
                 reason = _reinstall_reason(
                     changed_flags, deps_changed_flag, slot_changed_flag, rebuilt_binary_flag
                 )

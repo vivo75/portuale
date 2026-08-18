@@ -230,6 +230,78 @@ use std::process::ExitCode;
 /// installed version's IUSE (`*`/`%` markers) and groups by USE_EXPAND;
 /// this pilot shows none of that, just the plain enabled/disabled set,
 /// alphabetically sorted.
+/// Real `output_helpers.py`'s own `columnwidth` resolution
+/// (`MergeListItem.__init__`): 130 by default, overridden by a
+/// `COLUMNWIDTH` setting -- this pilot only ever reads it as a plain
+/// environment variable (real portage's own `frozen_config.settings` is
+/// env + `make.conf` + profile merged together; parsing `COLUMNWIDTH`
+/// out of `make.conf` too would need a new generic scalar-lookup path
+/// through `portage_profile::Config`, which nothing else in this pilot
+/// needs yet -- a deliberate v1 narrowing, same spirit as every other
+/// scope cut in this codebase). An unparsable value warns and falls back
+/// to the default, exactly like real portage's own `except ValueError`
+/// branch, rather than treating it as a hard error. Real portage's own
+/// warning has a first line echoing the raw exception text
+/// (`f"!!! {e!s}\n"`) -- omitted here, same as every other parse-error
+/// message in this pilot (see `--deep`'s own invalid-value handling):
+/// Rust's `ParseIntError` and Python's `ValueError` never stringify
+/// identically, so echoing either verbatim would make this the one
+/// message the two implementations could never agree on byte-for-byte.
+fn columnwidth_from_env() -> i64 {
+    match std::env::var("COLUMNWIDTH") {
+        Ok(value) => match value.parse::<i64>() {
+            Ok(width) => width,
+            Err(_) => {
+                eprintln!("!!! Unable to parse COLUMNWIDTH={value:?}");
+                130
+            }
+        },
+        Err(_) => 130,
+    }
+}
+
+/// One `--columns` line: real `_set_root_columns`'s own layout algorithm
+/// (the `pkg_info.merge == True` branch only -- see this function's own
+/// call sites' doc comments for why the "not merging" branch never
+/// applies to any outcome this pilot prints in brackets at all), with
+/// color stripped (this pilot has no ANSI color output anywhere, so
+/// real's `nc_len`/plain `len()` distinction collapses to just `len()`).
+/// `bracket`/`code` reproduce the exact same `"[{bracket}  {code}]"`
+/// segment the non-columns format already prints unchanged -- only what
+/// comes after it differs: `category/package` (no version -- that's the
+/// whole point of `--columns`) padded out to `columnwidth - 60`
+/// (`newlp`), then `[version]` right-padded to `columnwidth - 30`
+/// (`oldlp`), then `oldbest` (`"[from]"` for an `Upgrade`/`Downgrade`,
+/// empty otherwise -- real `pkg_info.oldbest_list`, mirrored here via
+/// data this pilot already has rather than a new installed-candidate
+/// lookup). Padding is skipped once the line's already past the target
+/// width, exactly like real portage's own `if (newlp - nc_len(myprint))
+/// > 0` guard -- never truncates, just doesn't pad further.
+#[allow(clippy::too_many_arguments)]
+fn columns_line(
+    bracket: &str,
+    code: &str,
+    indent: &str,
+    category: &str,
+    package: &str,
+    version: &str,
+    oldbest: &str,
+    columnwidth: i64,
+) -> String {
+    let newlp = (columnwidth - 60).max(0) as usize;
+    let oldlp = (columnwidth - 30).max(0) as usize;
+    let mut line = format!("[{bracket}  {code}] {indent}{category}/{package}");
+    if newlp > line.len() {
+        line.push_str(&" ".repeat(newlp - line.len()));
+    }
+    line.push_str(&format!(" [{version}] "));
+    if oldlp > line.len() {
+        line.push_str(&" ".repeat(oldlp - line.len()));
+    }
+    line.push_str(oldbest);
+    line
+}
+
 fn use_suffix(entry: &GraphEntry, verbose: bool) -> String {
     if !verbose || entry.use_flags_display.is_empty() {
         return String::new();
@@ -309,12 +381,23 @@ fn print_blockers(entry: &GraphEntry, owner_version: &str) {
 /// apart. `onlydeps`/`top_level_pkgs` decide suppression exactly as
 /// before: a directly-requested top-level atom's own line (not its
 /// dependencies) is hidden under `--onlydeps`, whatever its outcome.
+/// `columns`/`columnwidth` switch the New/Upgrade/Downgrade/Reinstall
+/// arms below to `columns_line`'s own layout instead of the default
+/// inline `"...-version (upgrade from X)"` format -- see its own doc
+/// comment. Never both `columns` and a non-empty `indent` at once: the
+/// CLI layer refuses `--tree`+`--columns` together (the only source of a
+/// non-empty `indent`), so `columns_line`'s own `indent` parameter is
+/// always `""` in practice here, still threaded through for symmetry
+/// with the non-columns arms.
+#[allow(clippy::too_many_arguments)]
 fn print_entry_line(
     entry: &GraphEntry,
     indent: &str,
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
     verbose: bool,
+    columns: bool,
+    columnwidth: i64,
 ) {
     let onlydeps_suppressed =
         onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
@@ -330,34 +413,85 @@ fn print_entry_line(
     match &entry.outcome {
         PretendOutcome::New { version } => {
             if !onlydeps_suppressed {
-                println!(
-                    "[{bracket}  N] {indent}{}/{}-{version}{}",
-                    entry.category,
-                    entry.package,
-                    use_suffix(entry, verbose)
-                );
+                if columns {
+                    println!(
+                        "{}{}",
+                        columns_line(
+                            bracket,
+                            "N",
+                            indent,
+                            &entry.category,
+                            &entry.package,
+                            version,
+                            "",
+                            columnwidth
+                        ),
+                        use_suffix(entry, verbose)
+                    );
+                } else {
+                    println!(
+                        "[{bracket}  N] {indent}{}/{}-{version}{}",
+                        entry.category,
+                        entry.package,
+                        use_suffix(entry, verbose)
+                    );
+                }
             }
             print_blockers(entry, version);
         }
         PretendOutcome::Upgrade { from, to } => {
             if !onlydeps_suppressed {
-                println!(
-                    "[{bracket}  U] {indent}{}/{}-{to} (upgrade from {from}){}",
-                    entry.category,
-                    entry.package,
-                    use_suffix(entry, verbose)
-                );
+                if columns {
+                    println!(
+                        "{}{}",
+                        columns_line(
+                            bracket,
+                            "U",
+                            indent,
+                            &entry.category,
+                            &entry.package,
+                            to,
+                            &format!("[{from}]"),
+                            columnwidth
+                        ),
+                        use_suffix(entry, verbose)
+                    );
+                } else {
+                    println!(
+                        "[{bracket}  U] {indent}{}/{}-{to} (upgrade from {from}){}",
+                        entry.category,
+                        entry.package,
+                        use_suffix(entry, verbose)
+                    );
+                }
             }
             print_blockers(entry, to);
         }
         PretendOutcome::Downgrade { from, to } => {
             if !onlydeps_suppressed {
-                println!(
-                    "[{bracket}  D] {indent}{}/{}-{to} (downgrade from {from}){}",
-                    entry.category,
-                    entry.package,
-                    use_suffix(entry, verbose)
-                );
+                if columns {
+                    println!(
+                        "{}{}",
+                        columns_line(
+                            bracket,
+                            "D",
+                            indent,
+                            &entry.category,
+                            &entry.package,
+                            to,
+                            &format!("[{from}]"),
+                            columnwidth
+                        ),
+                        use_suffix(entry, verbose)
+                    );
+                } else {
+                    println!(
+                        "[{bracket}  D] {indent}{}/{}-{to} (downgrade from {from}){}",
+                        entry.category,
+                        entry.package,
+                        use_suffix(entry, verbose)
+                    );
+                }
             }
             print_blockers(entry, to);
         }
@@ -369,20 +503,41 @@ fn print_entry_line(
             rebuilt_binary,
         } => {
             if !onlydeps_suppressed {
-                match reinstall_reason(changed_flags, *deps_changed, *slot_changed, *rebuilt_binary)
-                {
-                    Some(reason) => println!(
-                        "[{bracket}  r] {indent}{}/{}-{version} (reinstall for {reason}){}",
-                        entry.category,
-                        entry.package,
+                if columns {
+                    println!(
+                        "{}{}",
+                        columns_line(
+                            bracket,
+                            "r",
+                            indent,
+                            &entry.category,
+                            &entry.package,
+                            version,
+                            "",
+                            columnwidth
+                        ),
                         use_suffix(entry, verbose)
-                    ),
-                    None => println!(
-                        "[{bracket}  r] {indent}{}/{}-{version}{}",
-                        entry.category,
-                        entry.package,
-                        use_suffix(entry, verbose)
-                    ),
+                    );
+                } else {
+                    match reinstall_reason(
+                        changed_flags,
+                        *deps_changed,
+                        *slot_changed,
+                        *rebuilt_binary,
+                    ) {
+                        Some(reason) => println!(
+                            "[{bracket}  r] {indent}{}/{}-{version} (reinstall for {reason}){}",
+                            entry.category,
+                            entry.package,
+                            use_suffix(entry, verbose)
+                        ),
+                        None => println!(
+                            "[{bracket}  r] {indent}{}/{}-{version}{}",
+                            entry.category,
+                            entry.package,
+                            use_suffix(entry, verbose)
+                        ),
+                    }
                 }
             }
             print_blockers(entry, version);
@@ -511,12 +666,18 @@ fn print_tree(
             return;
         }
         let indent = "  ".repeat(depth as usize);
+        // `columns` is always false here -- the CLI layer refuses
+        // --tree+--columns together, so print_tree only ever runs with
+        // --columns off; `columnwidth` is a dummy value, unused whenever
+        // `columns` is false.
         print_entry_line(
             &ctx.entries[i],
             &indent,
             ctx.top_level_pkgs,
             ctx.onlydeps,
             ctx.verbose,
+            false,
+            130,
         );
         let key = (
             ctx.entries[i].category.clone(),
@@ -548,7 +709,7 @@ fn print_tree(
     // somehow never reached, flat, rather than silently dropping it.
     for (i, entry) in entries.iter().enumerate() {
         if !rendered.contains(&i) {
-            print_entry_line(entry, "", top_level_pkgs, onlydeps, verbose);
+            print_entry_line(entry, "", top_level_pkgs, onlydeps, verbose, false, 130);
         }
     }
 }
@@ -1227,6 +1388,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // comment for the full pilot-specific design this needed.
     let mut tree = false;
     let mut unordered_display = false;
+    // --columns: display-only, same "entirely independent of resolution"
+    // shape as --tree above (real output_helpers.py's own
+    // MergeListItem.conf.columns is a display-layer flag, never consulted
+    // anywhere in depgraph.py) -- mutually exclusive with --tree, checked
+    // once parsing finishes (see the "can't specify both" check below).
+    let mut columns = false;
     let mut update = false;
     let mut deep = portage_repo::Deep::NotRequested;
     let mut excluded: Vec<String> = Vec::new();
@@ -1302,6 +1469,9 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--unordered-display" {
             unordered_display = true;
+            i += 1;
+        } else if arg == "--columns" {
+            columns = true;
             i += 1;
         } else if arg == "--update" || arg == "-u" {
             update = true;
@@ -1904,6 +2074,23 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     }
 
+    // Real actions.py: "if '--tree' in emerge_config.opts and '--columns'
+    // in emerge_config.opts: print(...); return 1" -- checked once
+    // parsing finishes (order-independent: works whichever flag came
+    // first in argv), right after option parsing and before any other
+    // validation, matching real portage's own placement. This pilot's
+    // own CLI-usage-error convention (see the contract suite's own doc
+    // comment: exit 2, stderr) differs deliberately from real portage's
+    // literal `return 1`/stdout here, matching every other CLI-usage
+    // error this pilot already reports (`--exclude` requires an
+    // argument, an invalid `--deep` value, etc.) rather than real
+    // portage's own inconsistent mix of exit codes for different
+    // usage errors.
+    if tree && columns {
+        eprintln!("emerge: can't specify both of \"--tree\" and \"--columns\".");
+        return ExitCode::from(2);
+    }
+
     if !pretend {
         eprintln!(
             "emerge (pilot v1): only --pretend is implemented \
@@ -2161,6 +2348,12 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // Real portage resolves COLUMNWIDTH (and warns on an unparsable
+    // value) as part of general display setup, unconditionally --
+    // never gated on --columns itself actually being given. Mirrored
+    // here the same way, even though the value only ever affects
+    // anything below when `columns` is true.
+    let columnwidth = columnwidth_from_env();
     if tree {
         print_tree(
             entries,
@@ -2171,7 +2364,15 @@ pub fn run(args: &[String]) -> ExitCode {
         );
     } else {
         for entry in entries {
-            print_entry_line(entry, "", &top_level_pkgs, onlydeps, verbose);
+            print_entry_line(
+                entry,
+                "",
+                &top_level_pkgs,
+                onlydeps,
+                verbose,
+                columns,
+                columnwidth,
+            );
         }
     }
 

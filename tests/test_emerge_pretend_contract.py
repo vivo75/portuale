@@ -369,6 +369,21 @@ CASES = [
         ["--pretend", "--tree", "--unordered-display", "dev-libs/treeorderpkg"],
         0,
     ),
+    (
+        "--columns: new install right-aligns the version into a fixed column",
+        ["--pretend", "--columns", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--columns: upgrade shows both the new and old version, each in its own column",
+        ["--pretend", "--update", "--columns", "dev-libs/upgradepkg"],
+        0,
+    ),
+    (
+        "--tree and --columns together is a usage error",
+        ["--pretend", "--tree", "--columns", "dev-libs/newpkg"],
+        2,
+    ),
     ("profile config: real USE flag gates a dependency", ["--pretend", "dev-libs/useflagpkg"], 0),
     (
         "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
@@ -2500,6 +2515,75 @@ def test_tree_onlydeps_suppresses_only_the_root_line(emerge_binary, fixture_env)
         "[ebuild  N]     dev-libs/common-1.0",
         "[ebuild  N]   dev-libs/shared-b-1.0",
     ]
+
+
+def test_columns_right_aligns_the_version_into_a_fixed_column(emerge_binary, fixture_env):
+    """--columns: real _set_root_columns's own layout (this pilot's own
+    port, see columns_line's docstring) -- category/package with no
+    version, padded to columnwidth - 60, then "[version]" padded to
+    columnwidth - 30. COLUMNWIDTH is pinned in the test's own env (70,
+    picked small enough for a readable exact-string assertion) rather
+    than relying on the real default of 130."""
+    env = dict(fixture_env)
+    env["COLUMNWIDTH"] = "70"
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--columns", "dev-libs/newpkg"], env
+    )
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  N] dev-libs/newpkg [1.0]       \n"
+
+
+def test_columns_shows_both_new_and_old_version_for_an_upgrade(emerge_binary, fixture_env):
+    """An Upgrade's own "oldbest" column (real pkg_info.oldbest_list) is
+    the installed version in brackets -- the same information the
+    non-columns format's own "(upgrade from X)" parenthetical carries,
+    just repositioned into a fixed trailing column instead."""
+    env = dict(fixture_env)
+    env["COLUMNWIDTH"] = "70"
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "--columns", "dev-libs/upgradepkg"],
+        env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  U] dev-libs/upgradepkg [2.0]   [1.0]\n"
+
+
+def test_columns_and_tree_together_is_a_usage_error(emerge_binary, fixture_env):
+    """Real actions.py: "can't specify both of --tree and --columns" --
+    this pilot's own CLI-usage-error convention (exit 2, stderr) rather
+    than real portage's own literal exit 1/stdout, matching every other
+    CLI-usage error this pilot already reports."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--tree", "--columns", "dev-libs/newpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr.strip() == (
+        'emerge: can\'t specify both of "--tree" and "--columns".'
+    )
+
+
+def test_columns_columnwidth_falls_back_to_default_on_an_unparsable_value(
+    emerge_binary, fixture_env
+):
+    """An unparsable COLUMNWIDTH warns (a fixed, pilot-authored message,
+    not either language's own raw parse-error text -- see
+    columnwidth_from_env's own docstring for why) and falls back to the
+    real default of 130, rather than treating it as a hard error."""
+    env = dict(fixture_env)
+    env["COLUMNWIDTH"] = "notanumber"
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--columns", "dev-libs/newpkg"], env
+    )
+    assert result.returncode == 0
+    assert result.stderr.strip() == '!!! Unable to parse COLUMNWIDTH="notanumber"'
+    assert result.stdout == (
+        "[ebuild  N] dev-libs/newpkg                                            "
+        "[1.0]                        \n"
+    )
 
 
 def test_slot_conflict_is_reported_between_two_incompatible_version_constraints(
