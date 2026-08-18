@@ -30,3 +30,14 @@ regex = "1"
 # deliberate, documented dependency, same waiver as brush-core/regex
 # above.
 md-5 = "0.10"
+# Real merge: real movefile() explicitly preserves the source's own
+# mtime onto the merged destination (`newmtime=thismtime`) -- std::fs::
+# copy doesn't (the destination gets a fresh "now" mtime), which would
+# otherwise make CONTENTS's own recorded mtime never match the real file
+# on disk, silently breaking unmerge's own real "!mtime" staleness
+# check (see ebuild_unmerge.rs's own module doc comment). No std
+# equivalent exists (stable std::fs has no mtime setter at all, let
+# alone one for symlinks specifically -- filetime::set_symlink_file_times
+# is used for those); another deliberate, documented dependency, same
+# waiver as brush-core/regex/md-5 above.
+filetime = "0.2"

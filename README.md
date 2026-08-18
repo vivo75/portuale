@@ -3643,15 +3643,65 @@ only then, on success, removes the vdb entry itself (real
 `dblink.delete()`'s own `shutil.rmtree()` plus a best-effort `rmdir` of
 the parent `<category>` directory if it's now empty).
 
+A locally-modified file is protected on removal too, via real
+`_unmerge_pkgfiles()`'s own actual mechanism: an `obj`/`sym` entry whose
+live, on-disk mtime no longer matches what `CONTENTS` recorded at merge
+time is left in place instead of deleted (real `!mtime` skip -- broader
+than `CONFIG_PROTECT` alone, since it applies to every unmerge
+regardless of path, and it's what actually protects a CONFIG_PROTECT'd
+file on removal too, since its own recorded mtime reflects the
+`._cfgNNNN_`-diverted write, never the real file a user edited).
+
 **v1 scope cuts** (see `ebuild_unmerge.rs`'s own module doc comment for
-the full list): no `CONFIG_PROTECT` handling (nothing to protect against
-yet, since `merge` doesn't implement it either). No preserve-libs /
-"others in this slot" reverse-dependency checking. No
-`unmerge-orphans`/`bsd_chflags`/`INFOPATH` handling. Coarser failure
-tolerance: a genuine I/O error (not "already gone" or "directory not
+the full list): no preserve-libs / "others in this slot"
+reverse-dependency checking. No `unmerge-orphans`/`bsd_chflags`/
+`INFOPATH` handling. Coarser failure tolerance: a genuine I/O error (not
+"already gone" or "directory not
 empty", both tolerated) is a hard failure here, rather than real
 `_unmerge_pkgfiles()`'s own per-file failure counter that keeps going
 regardless.
+
+### Real `CONFIG_PROTECT`: a locally-edited config file survives an upgrade
+
+`ebuild <file> merge` now really implements `CONFIG_PROTECT` for `obj`
+(regular file) entries, closing what was previously merge's own biggest
+documented gap: real `ConfigProtect.isprotected()` path matching
+(`is_protected` -- longest-prefix match against `CONFIG_PROTECT` minus
+`CONFIG_PROTECT_MASK`, both env-var-sourced at the CLI boundary the same
+way `PORTAGE_TMPDIR` already is, defaulting to real `make.globals`'s own
+`CONFIG_PROTECT="/etc"`/`CONFIG_PROTECT_MASK="/etc/env.d"`), the real
+MD5-comparison rename-instead-of-overwrite decision (real
+`dblink._protect()`: a protected file whose real on-disk content differs
+from what's about to be merged is diverted to the next
+`._cfgNNNN_<name>` sibling -- real `new_protect_filename()` -- instead of
+being overwritten), and real `vardbapi._conf_mem_file` persistence
+(`<root>/var/lib/portage/config`, a real, persisted "which update has
+already been offered for this path" memory, so re-merging an
+already-protected update applies it directly instead of spawning a fresh
+`._cfgNNNN_` file every time). `CONTENTS` still always records the
+package's own logical path with the *new* content's own MD5 -- never the
+`._cfgNNNN_` variant a protected write may have actually landed at --
+exactly matching real `dblink.mergeme()`'s own behavior (the vdb
+considers this package the owner of the logical path either way, real
+content notwithstanding). `unmerge`'s own real `!mtime` staleness check
+(above) is what protects the same file symmetrically on removal.
+
+Real `movefile()` also explicitly preserves the source's own mtime onto
+the merged destination; `std::fs::copy` doesn't (a fresh copy gets its
+own "now" mtime), which would otherwise silently break both this
+MD5-based comparison's own correctness *and* `unmerge`'s `!mtime` check
+-- fixed by adding a small `filetime` dependency (no stable `std::fs`
+mtime setter exists, symlinks included) and explicitly setting it after
+every merged `obj`/`sym` write.
+
+**v1 scope cuts** (see `ebuild_merge.rs`'s own module doc comment for the
+full list): `CONFIG_PROTECT` is `obj`-only (a protected symlink is a
+genuinely rare real-world case). No `--noconfmem` support at all (this
+pilot's own `ebuild` CLI has no such flag, so behavior always matches
+real portage's own default). `new_protect_filename` always allocates a
+fresh number rather than reusing the last one when its content already
+matches (a purely cosmetic difference). No `FEATURES=collision-protect`/
+`preserve-libs`.
 
 ### `--debug`: real `PORTAGE_DEBUG` plumbing (task #56)
 
@@ -5020,6 +5070,24 @@ test -e "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0 && echo "still there" || echo
 # gone
 test -e "${ROOT}"/var/db/pkg/dev-libs && echo "still there" || echo "gone"
 # gone (the now-empty category directory is removed too)
+```
+
+Real `CONFIG_PROTECT` (see "What this proves" above for the full
+writeup): a locally-edited `/etc` file survives a merge. Uses
+`PORTING/fixtures/repo/dev-libs/configpkg`, whose own `src_install`
+installs a *new* `/etc/configpkg.conf`:
+
+```sh
+mkdir -p "${ROOT}"/etc
+echo "admin's own edits" > "${ROOT}"/etc/configpkg.conf
+PORTING/rust/target/release/multicall ebuild \
+    PORTING/fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild merge
+cat "${ROOT}"/etc/configpkg.conf
+# admin's own edits          <- untouched
+cat "${ROOT}"/etc/._cfg0000_configpkg.conf
+# new content from configpkg  <- diverted here instead
+grep configpkg "${ROOT}"/var/db/pkg/dev-libs/configpkg-1.0/CONTENTS
+# obj /etc/configpkg.conf <md5-of-the-new-content> <mtime>
 ```
 
 `--debug` (task #56 -- see "What this proves" above for the full

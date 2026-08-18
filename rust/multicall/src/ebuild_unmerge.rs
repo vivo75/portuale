@@ -19,14 +19,19 @@
 // install/reinstall/removal cycle -- every merge would just accumulate
 // vdb entries and files forever.
 //
+// Locally-modified files are protected on removal too, real `_unmerge_
+// pkgfiles()`'s own actual mechanism for it: an `obj`/`sym` entry whose
+// live, on-disk mtime no longer matches what `CONTENTS` recorded at
+// merge time is left in place instead of deleted (real `!mtime` skip --
+// broader than `CONFIG_PROTECT` alone, since it applies to *every*
+// unmerge regardless of path, and it's what actually protects a
+// CONFIG_PROTECT'd file on removal too: real `dblink._protect()`
+// diverts a changed write to a `._cfgNNNN_` sibling while `CONTENTS`
+// still records the *original* file's own now-stale mtime, so the real
+// `/etc/foo.conf` a user edited never matches and is never touched).
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching `ebuild_merge`'s own
 // "narrow v1, document the cut" pattern):
-//   - No `CONFIG_PROTECT` handling: real `_unmerge_pkgfiles()` skips
-//     removing a config-protected file whose on-disk content no longer
-//     matches what was recorded at merge time (a local edit survives an
-//     uninstall too, not just an upgrade) -- `ebuild_merge`'s own merge
-//     slice doesn't implement `CONFIG_PROTECT` either, so there's
-//     nothing to protect against yet.
 //   - No preserve-libs / "others in this slot" reverse-dependency
 //     checking at all -- real `unmerge()` consults every other version
 //     installed in the same slot before deciding whether a shared
@@ -49,6 +54,7 @@
 //     prior merge left behind when present; this pilot doesn't attempt
 //     that distinction.
 
+use crate::ebuild_merge;
 use crate::ebuild_phases;
 use std::path::Path;
 
@@ -63,22 +69,27 @@ pub fn is_real_unmerge_command(command: &str) -> bool {
 struct ContentsEntry {
     node_type: String,
     abs_path: String,
+    /// Present for `obj`/`sym` lines (real `ebuild_merge::
+    /// format_contents_line`'s own trailing field) -- `None` for `dir`
+    /// (which has no trailing field at all: its own last
+    /// whitespace-separated token is `abs_path` itself, non-numeric, so
+    /// parsing it as an mtime naturally fails into `None`).
+    mtime: Option<i64>,
 }
 
 /// Parses a real `CONTENTS` file's own lines (see `ebuild_merge::
-/// format_contents_line` for the exact format written) -- only
-/// `node_type` and `abs_path` matter for removal purposes; a real
-/// `md5`/`-> target`/`mtime` trailing field, if present, is simply
-/// ignored.
+/// format_contents_line` for the exact format written).
 fn parse_contents(text: &str) -> Vec<ContentsEntry> {
     text.lines()
         .filter_map(|line| {
-            let mut parts = line.splitn(3, ' ');
-            let node_type = parts.next()?.to_string();
-            let abs_path = parts.next()?.to_string();
+            let fields: Vec<&str> = line.split(' ').collect();
+            let node_type = (*fields.first()?).to_string();
+            let abs_path = (*fields.get(1)?).to_string();
+            let mtime = fields.last().and_then(|s| s.parse::<i64>().ok());
             Some(ContentsEntry {
                 node_type,
                 abs_path,
+                mtime,
             })
         })
         .collect()
@@ -86,7 +97,11 @@ fn parse_contents(text: &str) -> Vec<ContentsEntry> {
 
 /// Deletes every `CONTENTS`-listed entry from `root`, deepest paths
 /// first (see this module's own doc comment for why, and for the v1
-/// failure-tolerance simplification).
+/// failure-tolerance simplification) -- except an `obj`/`sym` entry
+/// whose live mtime no longer matches what `CONTENTS` recorded, which is
+/// left in place instead (real `!mtime` skip -- see this module's own
+/// doc comment for why this is also what protects a CONFIG_PROTECT'd
+/// file on removal).
 fn remove_contents(root: &Path, contents_text: &str) -> Result<(), String> {
     let mut entries = parse_contents(contents_text);
     entries.sort_by(|a, b| b.abs_path.cmp(&a.abs_path));
@@ -96,6 +111,16 @@ fn remove_contents(root: &Path, contents_text: &str) -> Result<(), String> {
         let dest = root.join(relative);
         match entry.node_type.as_str() {
             "obj" | "sym" => {
+                if let (Some(recorded_mtime), Ok(meta)) =
+                    (entry.mtime, std::fs::symlink_metadata(&dest))
+                {
+                    let current_mtime = ebuild_merge::mtime_secs(&meta)?;
+                    if current_mtime != recorded_mtime {
+                        // Locally modified since the merge that recorded
+                        // this entry -- leave it in place.
+                        continue;
+                    }
+                }
                 if let Err(e) = std::fs::remove_file(&dest) {
                     if e.kind() != std::io::ErrorKind::NotFound {
                         return Err(format!("{}: {e}", dest.display()));
@@ -208,13 +233,23 @@ mod tests {
         std::fs::write(root.join("usr/share/x/hello.txt"), b"hello").unwrap();
         std::os::unix::fs::symlink("hello.txt", root.join("usr/share/x/link.txt")).unwrap();
 
-        let contents = "dir /usr\n\
+        let file_mtime = ebuild_merge::mtime_secs(
+            &std::fs::metadata(root.join("usr/share/x/hello.txt")).unwrap(),
+        )
+        .unwrap();
+        let link_mtime = ebuild_merge::mtime_secs(
+            &std::fs::symlink_metadata(root.join("usr/share/x/link.txt")).unwrap(),
+        )
+        .unwrap();
+        let contents = format!(
+            "dir /usr\n\
              dir /usr/share\n\
              dir /usr/share/x\n\
-             obj /usr/share/x/hello.txt abc123 100\n\
-             sym /usr/share/x/link.txt -> hello.txt 100\n";
+             obj /usr/share/x/hello.txt abc123 {file_mtime}\n\
+             sym /usr/share/x/link.txt -> hello.txt {link_mtime}\n"
+        );
 
-        remove_contents(&root, contents).expect("remove_contents succeeds");
+        remove_contents(&root, &contents).expect("remove_contents succeeds");
 
         assert!(!root.join("usr/share/x/hello.txt").exists());
         assert!(root
@@ -224,6 +259,30 @@ mod tests {
         assert!(!root.join("usr/share/x").exists());
         assert!(!root.join("usr/share").exists());
         assert!(!root.join("usr").exists());
+    }
+
+    #[test]
+    fn remove_contents_leaves_a_locally_modified_file_in_place() {
+        // Real "!mtime" staleness check (see this module's own doc
+        // comment): a file whose live mtime no longer matches what
+        // CONTENTS recorded is treated as locally modified and left
+        // alone -- the same real mechanism that also protects a
+        // CONFIG_PROTECT'd file on removal (its own recorded mtime
+        // reflects the ._cfg-diverted write, never the real file's own).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("etc.conf"), b"user's own edits").unwrap();
+
+        // A recorded mtime that can never match the file just written
+        // above (created "now").
+        let contents = "obj /etc.conf abc123 1\n";
+        remove_contents(&root, contents).expect("remove_contents succeeds");
+
+        assert!(
+            root.join("etc.conf").is_file(),
+            "a locally-modified file must survive unmerge"
+        );
     }
 
     #[test]
@@ -262,8 +321,13 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
 
-        let merge_status = crate::ebuild_merge::run_merge(&ebuild, &root, &portage_tmpdir, false)
-            .expect("run_merge succeeds");
+        let merge_status = crate::ebuild_merge::run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &crate::ebuild_merge::MergeOptions::default(),
+        )
+        .expect("run_merge succeeds");
         assert_eq!(merge_status, 0);
         assert!(root.join("usr/share/mergepkg/hello.txt").is_file());
         let vdb_dir = root.join("var/db/pkg/dev-libs/mergepkg-1.0");

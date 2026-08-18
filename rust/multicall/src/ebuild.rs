@@ -180,6 +180,18 @@ pub fn run(args: &[String]) -> ExitCode {
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+        // Same env-var-not-full-config-resolution shortcut as
+        // PORTAGE_TMPDIR above -- real make.globals's own defaults (see
+        // ebuild_merge::MergeOptions's own Default impl) apply when
+        // unset.
+        let default_merge_options = ebuild_merge::MergeOptions::default();
+        let merge_options = ebuild_merge::MergeOptions {
+            debug,
+            config_protect: std::env::var("CONFIG_PROTECT")
+                .unwrap_or(default_merge_options.config_protect),
+            config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
+                .unwrap_or(default_merge_options.config_protect_mask),
+        };
         let ebuild_path = std::path::Path::new(ebuild_file);
         // One command at a time here, not the whole slice at once --
         // neither `merge` nor `unmerge` is itself an ebuild_phases-
@@ -192,7 +204,7 @@ pub fn run(args: &[String]) -> ExitCode {
         // command argument.
         for &cmd in &commands {
             let result = if ebuild_merge::is_real_merge_command(cmd) {
-                ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, debug)
+                ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options)
             } else if ebuild_unmerge::is_real_unmerge_command(cmd) {
                 ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, debug)
             } else {
