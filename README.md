@@ -3372,6 +3372,36 @@ being silently dropped -- this pilot's own "never silently lose
 information" invariant, already established for slot conflicts and
 unresolvable dependencies.
 
+`--json`'s own state-change trace: each entry now carries a
+`"provenance"` object (`{"mask_entry", "unmask_entry", "keyword_entry"}`)
+recording which `package.mask`/`.unmask`/`package.accept_keywords`
+config entries, if any, were actually load-bearing for that candidate to
+be visible at all -- this pilot's own feature, not a port of any real
+emerge output (see `--json`'s own module doc comment for why `--json`
+exists in the first place). `mask_entry` is set even when a matching
+`unmask_entry` goes on to cancel it, so the trace shows the mask was
+there, not just that it didn't end up mattering; `keyword_entry` names
+the *specific* `package.accept_keywords` entry needed, found by walking
+matching entries in the same least-to-most-specific order
+`specificity_ordered_flags` already applies them in and reporting the
+first one whose own addition actually flips visibility from false to
+true -- not merely the most specific matching entry, which might not
+have been the one that mattered. All three fields are `null` (not
+omitted) when nothing special was needed. `dev-libs/maskedandunmaskedpkg`
+(already-established: masked then unmasked by identical entries) proves
+the mask/unmask half live; `dev-libs/wildcardkeywordpkg`
+(already-established: `~amd64`-only, visible only via a
+`*/wildcardkeywordpkg ~amd64` `package.accept_keywords` entry) proves the
+keyword half. Deliberately duplicates a small, stable chunk of
+`is_visible`'s own body (`mask_entry`/`unmask_entry`) rather than
+threading a reason out of its own hot per-candidate filtering loop --
+the same precedent `keyword_masked_only` (the `--autounmask` keyword-
+suggestion feature) already set. Computed once per finally-chosen
+candidate, not for every candidate considered; `AlreadyInstalled`/
+`NoVisibleCandidate` entries never pick a fresh repo/`PKGDIR` candidate
+to trace at all, so their own `provenance` is always all-`null`, same
+scope cut as `slot`/`use_flags_display`.
+
 ## Running it
 
 Build both Rust binaries:
@@ -4114,16 +4144,27 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --exclude "de
 # above, including "requested" and "required_by" -- two fields no
 # plain-text line has ever carried
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/newpkg
-# {"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new","version":"1.0","slot":"0","source":"ebuild","requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[]}
+# {"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new","version":"1.0","slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[]}
 # a binary candidate's own "source" is "binary", not "ebuild" -- entry_to_json
 # used to hardcode the literal "ebuild" regardless of the entry's actual
 # source, a real bug only caught once a binary candidate could resolve at all
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json --usepkg dev-libs/binaryonlypkg
-# {"entries":[{"category":"dev-libs","package":"binaryonlypkg","outcome":"new","version":"1.0","slot":"0","source":"binary","requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[]}
+# {"entries":[{"category":"dev-libs","package":"binaryonlypkg","outcome":"new","version":"1.0","slot":"0","source":"binary","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[]}
 # dev-libs/common is a diamond dependency (both shared-a and shared-b
 # RDEPEND on it) -- required_by lists both owners, sorted
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/diamond | python3 -c 'import json,sys; print(next(e["required_by"] for e in json.load(sys.stdin)["entries"] if e["package"] == "common"))'
 # [{'category': 'dev-libs', 'package': 'shared-a'}, {'category': 'dev-libs', 'package': 'shared-b'}]
+# --json's own state-change trace: dev-libs/maskedandunmaskedpkg is
+# matched by a package.mask entry that an identical package.unmask
+# entry then cancels -- provenance records both, not just that the
+# package ended up visible
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/maskedandunmaskedpkg | python3 -c 'import json,sys; print(json.load(sys.stdin)["entries"][0]["provenance"])'
+# {'mask_entry': 'dev-libs/maskedandunmaskedpkg', 'unmask_entry': 'dev-libs/maskedandunmaskedpkg', 'keyword_entry': None}
+# dev-libs/wildcardkeywordpkg is ~amd64-only, visible only via the
+# "*/wildcardkeywordpkg ~amd64" package.accept_keywords entry --
+# provenance names that specific entry, not just "some entry helped"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/wildcardkeywordpkg | python3 -c 'import json,sys; print(json.load(sys.stdin)["entries"][0]["provenance"])'
+# {'mask_entry': None, 'unmask_entry': None, 'keyword_entry': '*/wildcardkeywordpkg'}
 
 # LICENSE/ACCEPT_LICENSE/package.license masking (PMS 7.3.2) is real and
 # implemented: neither the fixture profile chain nor make.conf sets

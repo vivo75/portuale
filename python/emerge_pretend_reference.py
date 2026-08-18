@@ -966,6 +966,81 @@ def _suggested_keyword(candidate):
     return None
 
 
+def _visibility_provenance(candidate, category, package, config):
+    """--json's own "state-change trace" (this pilot's own feature, not
+    a port of any real emerge output): which config entries, if any,
+    were actually load-bearing for an already-is_visible candidate to
+    end up visible. Mirrors portage-repo/src/lib.rs's
+    visibility_provenance/VisibilityProvenance exactly -- see their own
+    docstrings for the full rationale, including why this duplicates a
+    small, stable chunk of is_visible's own body (same precedent
+    _keyword_masked_only above already set) rather than threading a
+    reason out of is_visible's own hot filtering loop. Returns a dict
+    with "mask_entry"/"unmask_entry"/"keyword_entry", each None or the
+    specific config entry string responsible. Only meaningful to call on
+    a candidate already known is_visible."""
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}/{candidate['sub_slot']}"
+        f"::{candidate['repo_name']}"
+    )
+
+    mask_entry = next(
+        (m for m in config["package_mask"] if _matches_config_entry(m, candidate_str, category, package)),
+        None,
+    )
+    unmask_entry = None
+    if mask_entry is not None:
+        unmask_entry = next(
+            (
+                u
+                for u in config["package_unmask"]
+                if _matches_config_entry(u, candidate_str, category, package)
+            ),
+            None,
+        )
+    keyword_entry = _keyword_provenance(
+        candidate["keywords"],
+        candidate_str,
+        category,
+        package,
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+    )
+    return {
+        "mask_entry": mask_entry,
+        "unmask_entry": unmask_entry,
+        "keyword_entry": keyword_entry,
+    }
+
+
+def _keyword_provenance(
+    keywords, candidate_str, category, package, accept_keywords, package_accept_keywords
+):
+    """The specific package.accept_keywords entry (if any) responsible
+    for keywords being accepted -- mirrors portage-repo/src/lib.rs's
+    keyword_provenance exactly. None if the plain global accept_keywords
+    set alone already accepts it (checked via _keywords_accepted with no
+    package entries at all); otherwise walks package_accept_keywords in
+    the same least-to-most-specific order _specificity_ordered_flags
+    itself applies them in, accumulating onto a copy of the global set,
+    and reports the first entry whose own addition flips
+    _keywords_accepted from false to true."""
+    if _keywords_accepted(keywords, candidate_str, category, package, accept_keywords, []):
+        return None
+    matching = [
+        (entry, tokens)
+        for entry, tokens in package_accept_keywords
+        if _matches_config_entry(entry, candidate_str, category, package)
+    ]
+    matching.sort(key=lambda et: _atom_specificity(et[0]))
+    seed = set(accept_keywords)
+    for entry, tokens in matching:
+        _apply_incremental(" ".join(tokens), seed)
+        if _keywords_accepted(keywords, candidate_str, category, package, seed, []):
+            return entry
+    return None
+
+
 def _keywords_accepted(
     keywords, candidate_str, category, package, accept_keywords, package_accept_keywords
 ):
@@ -3005,7 +3080,17 @@ def resolve_blockers(root, pending, entries):
         candidates = list(
             installed_candidates(root, pb["target_category"], pb["target_package"])
         )
-        for category, package, outcome, _blockers, slot, _use_display, _required_by, _source in entries:
+        for (
+            category,
+            package,
+            outcome,
+            _blockers,
+            slot,
+            _use_display,
+            _required_by,
+            _source,
+            _provenance,
+        ) in entries:
             if (category, package) != target_key:
                 continue
             if outcome[0] == "new":
@@ -3430,7 +3515,19 @@ def resolve_pretend_graph(
                     outcome[1],
                     with_bdeps,
                 )
-            entries.append((category, package, outcome, [], None, [], [], "ebuild"))
+            entries.append(
+                (
+                    category,
+                    package,
+                    outcome,
+                    [],
+                    None,
+                    [],
+                    [],
+                    "ebuild",
+                    {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
+                )
+            )
             continue
 
         # The resolved version may have come from any of `repos`, or
@@ -3489,7 +3586,10 @@ def resolve_pretend_graph(
             continue
         entry_idx = len(entries)
         resolved_slots[slot_key] = entry_idx
-        entries.append((category, package, outcome, [], slot, [], [], candidate_source))
+        provenance = _visibility_provenance(resolved, category, package, config)
+        entries.append(
+            (category, package, outcome, [], slot, [], [], candidate_source, provenance)
+        )
 
         pf = f"{package}-{version}"
         if candidate_source == "binary":
@@ -3596,7 +3696,17 @@ def resolve_pretend_graph(
                 (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
                 for flag in metadata["IUSE"].split()
             )
-            entries[entry_idx] = (category, package, outcome, [], slot, display, [], candidate_source)
+            entries[entry_idx] = (
+                category,
+                package,
+                outcome,
+                [],
+                slot,
+                display,
+                [],
+                candidate_source,
+                entries[entry_idx][8],
+            )
 
         # --nodeps: skip this package's own DEPEND/RDEPEND/etc entirely --
         # see this function's own docstring.
@@ -3648,8 +3758,18 @@ def resolve_pretend_graph(
     # (immutable), so this rebuilds each one rather than mutating in
     # place.
     entries = [
-        (category, package, outcome, blockers, slot, use_display, sorted(required_by_map.get((category, package), ())), source)
-        for category, package, outcome, blockers, slot, use_display, _required_by, source in entries
+        (
+            category,
+            package,
+            outcome,
+            blockers,
+            slot,
+            use_display,
+            sorted(required_by_map.get((category, package), ())),
+            source,
+            provenance,
+        )
+        for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance in entries
     ]
 
     # setdefault (not a dict comprehension) so the *first* entry for a
@@ -3658,7 +3778,17 @@ def resolve_pretend_graph(
     # `entries.iter_mut().find(...)`, which also attaches to the first
     # match.
     blockers_by_owner = {}
-    for category, package, _o, blockers, _slot, _use_display, _required_by, _source in entries:
+    for (
+        category,
+        package,
+        _o,
+        blockers,
+        _slot,
+        _use_display,
+        _required_by,
+        _source,
+        _provenance,
+    ) in entries:
         blockers_by_owner.setdefault((category, package), blockers)
     for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
         blockers_by_owner[owner_key].append(conflict)
@@ -4050,7 +4180,7 @@ def _json_bool(b):
     return "true" if b else "false"
 
 
-def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, top_level_pkgs, verbose):
+def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, provenance, top_level_pkgs, verbose):
     """One JSON object per entry -- a structured mirror of the plain-text
     "[ebuild ...]"/"[binary ...]"/"already installed"/blocker lines in
     run(), plus two fields no plain-text line carries at all: "requested"
@@ -4064,9 +4194,15 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
     Deliberately NOT affected by --onlydeps's own suppression (a
     display-only concern for the plain-text loop in run()): --json
     always dumps the whole resolved graph, letting a consumer filter on
-    "requested" itself if they want the --onlydeps view. Mirrors
-    pretend.rs's own entry_to_json exactly, field for field, in the same
-    order."""
+    "requested" itself if they want the --onlydeps view. "provenance"
+    (alongside "source", so also absent for "no_visible_candidate")
+    mirrors this pilot's own state-change trace -- which package.mask/
+    .unmask/package.accept_keywords entries, if any, were actually
+    load-bearing for this candidate to be visible at all -- always
+    present (each of its three sub-fields null rather than omitted when
+    not applicable), no verbose gate, unlike use_flags above; see
+    _visibility_provenance's own docstring. Mirrors pretend.rs's own
+    entry_to_json exactly, field for field, in the same order."""
     requested = (category, package) in top_level_pkgs
     fields = [
         f'"category":{_json_string(category)}',
@@ -4089,6 +4225,15 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
     fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
     if tag != "no_visible_candidate":
         fields.append(f'"source":{_json_string(source)}')
+
+        def _opt_str(v):
+            return _json_string(v) if v is not None else "null"
+
+        fields.append(
+            f'"provenance":{{"mask_entry":{_opt_str(provenance["mask_entry"])},'
+            f'"unmask_entry":{_opt_str(provenance["unmask_entry"])},'
+            f'"keyword_entry":{_opt_str(provenance["keyword_entry"])}}}'
+        )
     fields.append(f'"requested":{_json_bool(requested)}')
     required_by_json = ",".join(
         f'{{"category":{_json_string(c)},"package":{_json_string(p)}}}' for c, p in required_by
@@ -4130,9 +4275,9 @@ def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, ve
     own --json handling). Mirrors pretend.rs's own print_json exactly."""
     entries_json = ",".join(
         _entry_to_json(
-            category, package, outcome, blockers, slot, use_display, required_by, source, top_level_pkgs, verbose
+            category, package, outcome, blockers, slot, use_display, required_by, source, provenance, top_level_pkgs, verbose
         )
-        for category, package, outcome, blockers, slot, use_display, required_by, source in entries
+        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance in entries
     )
     conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)
     changed_deps_report_json = ",".join(
@@ -5360,7 +5505,7 @@ def run(args):
         # out so both display modes share one implementation rather than
         # drifting apart. Mirrors pretend.rs's own print_entry_line
         # exactly.
-        category, package, outcome, blockers, _slot, use_display, _required_by, source = entry
+        category, package, outcome, blockers, _slot, use_display, _required_by, source, _provenance = entry
         tag = outcome[0]
         # --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
         # dependencies of the packages specified, not the packages

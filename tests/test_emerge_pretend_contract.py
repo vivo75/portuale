@@ -90,6 +90,16 @@ CASES = [
     ("--json: blocker match", ["--pretend", "--json", "dev-libs/blockerpkg"], 0),
     ("--json: slot conflict", ["--pretend", "--json", "dev-libs/slotconflictparent"], 0),
     ("--json: combined with --deep", ["--pretend", "--update", "--deep", "--json", "dev-libs/deeppkg"], 0),
+    (
+        "--json: provenance records a mask cancelled by a matching unmask",
+        ["--pretend", "--json", "dev-libs/maskedandunmaskedpkg"],
+        0,
+    ),
+    (
+        "--json: provenance records the package.accept_keywords entry actually needed",
+        ["--pretend", "--json", "dev-libs/wildcardkeywordpkg"],
+        0,
+    ),
     ("only ~keyword, not visible", ["--pretend", "dev-libs/maskedpkg"], 1),
     ("package does not exist", ["--pretend", "dev-libs/does-not-exist"], 1),
     ("LICENSE in @EULA group, masked by the real default ACCEPT_LICENSE", ["--pretend", "dev-libs/eulapkg"], 1),
@@ -4219,7 +4229,9 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
     assert result.stderr == ""
     assert result.stdout == (
         '{"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new",'
-        '"version":"1.0","slot":"0","source":"ebuild","requested":true,'
+        '"version":"1.0","slot":"0","source":"ebuild",'
+        '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
+        '"requested":true,'
         '"required_by":[],"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[]}\n'
     )
 
@@ -4234,6 +4246,7 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
     assert result.stdout == (
         '{"entries":[{"category":"dev-libs","package":"upgradepkg","outcome":"upgrade",'
         '"version":"2.0","from_version":"1.0","slot":"0","source":"ebuild",'
+        '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[],'
         '"changed_deps_report":[]}\n'
     )
@@ -4251,6 +4264,62 @@ def test_json_diamond_dependency_lists_both_required_by_owners(emerge_binary, fi
         {"category": "dev-libs", "package": "shared-a"},
         {"category": "dev-libs", "package": "shared-b"},
     ]
+
+
+def test_json_provenance_records_mask_and_unmask_entries(emerge_binary, fixture_env):
+    """dev-libs/maskedandunmaskedpkg is matched by a package.mask entry
+    that an identical package.unmask entry then cancels (see
+    fixtures/etc/portage/package.mask and .unmask) -- --json's own
+    "provenance" must record both, not just the fact that the package
+    ended up visible."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--json", "dev-libs/maskedandunmaskedpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["entries"][0]["provenance"] == {
+        "mask_entry": "dev-libs/maskedandunmaskedpkg",
+        "unmask_entry": "dev-libs/maskedandunmaskedpkg",
+        "keyword_entry": None,
+    }
+
+
+def test_json_provenance_records_the_keyword_entry_actually_needed(emerge_binary, fixture_env):
+    """dev-libs/wildcardkeywordpkg is ~amd64-only and only visible via the
+    "*/wildcardkeywordpkg ~amd64" package.accept_keywords entry (see
+    fixtures/etc/portage/package.accept_keywords) -- --json's own
+    "provenance" must name that specific entry, not just report the
+    package as visible."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--json", "dev-libs/wildcardkeywordpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["entries"][0]["provenance"] == {
+        "mask_entry": None,
+        "unmask_entry": None,
+        "keyword_entry": "*/wildcardkeywordpkg",
+    }
+
+
+def test_json_provenance_is_all_null_when_nothing_special_was_needed(emerge_binary, fixture_env):
+    """dev-libs/newpkg needs no package.mask/.unmask/.accept_keywords help
+    at all -- --json's own "provenance" is present but every field is
+    null, not omitted."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--json", "dev-libs/newpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["entries"][0]["provenance"] == {
+        "mask_entry": None,
+        "unmask_entry": None,
+        "keyword_entry": None,
+    }
 
 
 def test_json_requested_reflects_top_level_vs_dependency(emerge_binary, fixture_env):

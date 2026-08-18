@@ -1452,6 +1452,129 @@ fn suggested_keyword(candidate: &Candidate) -> Option<&str> {
         .map(String::as_str)
 }
 
+/// `--json`'s own "state-change trace" (this pilot's own feature -- see
+/// the `--json` module doc comment; not a port of any real emerge
+/// output): which config entries, if any, were actually load-bearing for
+/// an already-`is_visible` candidate to end up visible. `None` in every
+/// field means "visible with no help needed" (no matching package.mask,
+/// no matching package.accept_keywords entry). Computed once per
+/// finally-chosen candidate in `resolve_pretend_graph`, not in
+/// `is_visible`'s own hot filtering loop over every candidate -- same
+/// "duplicate a small, stable chunk of `is_visible` rather than thread a
+/// reason out of its own filtering fast path" precedent `keyword_masked_
+/// only` above already set.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VisibilityProvenance {
+    /// The `package.mask` entry that matched this candidate, if any --
+    /// set even when `unmask_entry` goes on to cancel it (the point is
+    /// to show the mask was there at all, not just that it didn't end up
+    /// mattering).
+    pub mask_entry: Option<String>,
+    /// The `package.unmask` entry that cancelled `mask_entry`, if
+    /// `mask_entry` is `Some` and something actually cancelled it. Always
+    /// `None` when `mask_entry` is `None`.
+    pub unmask_entry: Option<String>,
+    /// The specific `package.accept_keywords` entry whose own tokens were
+    /// needed for this candidate's `KEYWORDS` to be accepted, or `None`
+    /// if the global `ACCEPT_KEYWORDS` set alone already sufficed (no
+    /// package-scoped help needed at all).
+    pub keyword_entry: Option<String>,
+}
+
+/// Computes `candidate`'s own `VisibilityProvenance` -- only meaningful
+/// to call on a candidate already known `is_visible` (an invisible one
+/// would just report "no entry helped," which isn't a useful trace of
+/// anything).
+fn visibility_provenance(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> VisibilityProvenance {
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+
+    let mask_entry = config
+        .package_mask
+        .iter()
+        .find(|m| matches_config_entry(m, &candidate_str, category, package))
+        .cloned();
+    let unmask_entry = if mask_entry.is_some() {
+        config
+            .package_unmask
+            .iter()
+            .find(|u| matches_config_entry(u, &candidate_str, category, package))
+            .cloned()
+    } else {
+        None
+    };
+    let keyword_entry = keyword_provenance(
+        &candidate.keywords,
+        &candidate_str,
+        category,
+        package,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
+    );
+
+    VisibilityProvenance {
+        mask_entry,
+        unmask_entry,
+        keyword_entry,
+    }
+}
+
+/// The specific `package.accept_keywords` entry (if any) responsible for
+/// `keywords` being accepted: `None` if the plain global `accept_keywords`
+/// set alone already accepts it (checked by calling `keywords_accepted`
+/// with no package entries at all -- reuses its exact matching logic
+/// rather than a second implementation). Otherwise walks
+/// `package_accept_keywords` in the same least-to-most-specific order
+/// `specificity_ordered_flags` itself applies them in, accumulating onto
+/// a copy of the global set exactly like `specificity_ordered_flags`
+/// does, and reports the first entry whose own addition flips
+/// `keywords_accepted` from false to true -- the one actually load-
+/// bearing for this candidate, not merely the most specific matching
+/// entry (a less-specific entry earlier in the accumulation may already
+/// have been enough, e.g. a `*` wildcard reached before a slot-scoped
+/// `~arch` grant). `None` if even every matching entry together somehow
+/// isn't enough -- shouldn't happen for a candidate already confirmed
+/// `is_visible`, but a safe fallback rather than a panic.
+fn keyword_provenance(
+    keywords: &[String],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+    accept_keywords: &HashSet<String>,
+    package_accept_keywords: &[(String, Vec<String>)],
+) -> Option<String> {
+    if keywords_accepted(
+        keywords,
+        candidate_str,
+        category,
+        package,
+        accept_keywords,
+        &[],
+    ) {
+        return None;
+    }
+    let mut matching: Vec<&(String, Vec<String>)> = package_accept_keywords
+        .iter()
+        .filter(|(entry, _)| matches_config_entry(entry, candidate_str, category, package))
+        .collect();
+    matching.sort_by_key(|(entry, _)| atom_specificity(entry));
+    let mut seed = accept_keywords.clone();
+    for (entry, tokens) in matching {
+        portage_profile::apply_incremental(&tokens.join(" "), &mut seed);
+        if keywords_accepted(keywords, candidate_str, category, package, &seed, &[]) {
+            return Some(entry.clone());
+        }
+    }
+    None
+}
+
 /// The keyword-matching half of `is_visible` (everything except the
 /// `package.mask`/`.unmask` check), factored out so `is_stable` below
 /// can reuse it against an artificially-unstabilized keyword list
@@ -2881,6 +3004,12 @@ pub struct GraphEntry {
     /// `CandidateSource`'s own doc comment; `pretend.rs` uses this to
     /// print `"[binary"` instead of `"[ebuild"`.
     pub source: CandidateSource,
+    /// `--json`'s own state-change trace -- see `VisibilityProvenance`'s
+    /// own doc comment. `Default` (every field `None`) for
+    /// `AlreadyInstalled`/`NoVisibleCandidate` entries, which never pick
+    /// a fresh repo/PKGDIR candidate to trace at all, same scope cut as
+    /// `slot`/`use_flags_display` above.
+    pub provenance: VisibilityProvenance,
 }
 
 /// A blocker atom found while flattening one package's own dependency strings,
@@ -3706,6 +3835,7 @@ pub fn resolve_pretend_graph(
                 use_flags_display: Vec::new(),
                 required_by: Vec::new(),
                 source: CandidateSource::Ebuild,
+                provenance: VisibilityProvenance::default(),
             });
             continue;
         };
@@ -3795,6 +3925,7 @@ pub fn resolve_pretend_graph(
         let entry_idx = entries.len();
         resolved_slots.insert(slot_key, entry_idx);
         let candidate_source = resolved.source;
+        let provenance = visibility_provenance(resolved, &key.0, &key.1, config);
         entries.push(GraphEntry {
             category: key.0.clone(),
             package: key.1.clone(),
@@ -3804,6 +3935,7 @@ pub fn resolve_pretend_graph(
             use_flags_display: Vec::new(),
             required_by: Vec::new(),
             source: candidate_source,
+            provenance,
         });
 
         let metadata = if candidate_source == CandidateSource::Binary {
@@ -5502,6 +5634,47 @@ mod tests {
                 version: "1.0".to_string()
             }
         );
+    }
+
+    #[test]
+    fn fixture_provenance_records_the_matching_mask_and_unmask_entries() {
+        let entries = graph_entries_real("dev-libs/maskedandunmaskedpkg");
+        assert_eq!(
+            entries[0].provenance.mask_entry.as_deref(),
+            Some("dev-libs/maskedandunmaskedpkg")
+        );
+        assert_eq!(
+            entries[0].provenance.unmask_entry.as_deref(),
+            Some("dev-libs/maskedandunmaskedpkg")
+        );
+    }
+
+    #[test]
+    fn fixture_provenance_records_no_mask_entry_when_never_masked() {
+        let entries = graph_entries_real("dev-libs/wildcardkeywordpkg");
+        assert_eq!(entries[0].provenance.mask_entry, None);
+        assert_eq!(entries[0].provenance.unmask_entry, None);
+    }
+
+    #[test]
+    fn fixture_provenance_records_the_keyword_entry_that_was_actually_needed() {
+        // dev-libs/wildcardkeywordpkg is ~amd64-only, accepted only via
+        // the "*/wildcardkeywordpkg ~amd64" package.accept_keywords entry
+        // (see fixtures/etc/portage/package.accept_keywords) -- the
+        // global ACCEPT_KEYWORDS alone doesn't accept it.
+        let entries = graph_entries_real("dev-libs/wildcardkeywordpkg");
+        assert_eq!(
+            entries[0].provenance.keyword_entry.as_deref(),
+            Some("*/wildcardkeywordpkg")
+        );
+    }
+
+    #[test]
+    fn fixture_provenance_records_no_keyword_entry_when_global_keywords_suffice() {
+        // dev-libs/newpkg is a plain stable-amd64 package needing no
+        // package.accept_keywords help at all.
+        let entries = graph_entries_real("dev-libs/newpkg");
+        assert_eq!(entries[0].provenance.keyword_entry, None);
     }
 
     #[test]
@@ -8400,6 +8573,7 @@ mod tests {
             use_flags_display: Vec::new(),
             required_by: Vec::new(),
             source: CandidateSource::Ebuild,
+            provenance: VisibilityProvenance::default(),
         }
     }
 

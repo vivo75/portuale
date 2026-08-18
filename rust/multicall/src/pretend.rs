@@ -582,7 +582,17 @@ fn json_string(s: &str) -> String {
 /// Deliberately NOT affected by `--onlydeps`'s own suppression (a
 /// display-only concern for the plain-text loop below): `--json` always
 /// dumps the whole resolved graph, letting a consumer filter on
-/// `requested` itself if they want the `--onlydeps` view.
+/// `requested` itself if they want the `--onlydeps` view. `provenance`
+/// (alongside `source`, so also absent for `NoVisibleCandidate`) mirrors
+/// `entry.provenance`/`VisibilityProvenance` (portage-repo) directly --
+/// this pilot's own state-change trace: which `package.mask`/`.unmask`/
+/// `package.accept_keywords` entries, if any, were actually load-bearing
+/// for this candidate to be visible at all. Each of its three fields is
+/// `null` rather than omitted when not applicable, unlike `use_flags`
+/// above -- there's no `verbose` gate here (this is exactly the kind of
+/// detail `--json` exists to expose unconditionally, see this module's
+/// own doc comment) and a consumer scripting against this output
+/// shouldn't have to branch on whether the key is even present.
 fn entry_to_json(
     entry: &GraphEntry,
     top_level_pkgs: &HashSet<(String, String)>,
@@ -640,6 +650,17 @@ fn entry_to_json(
             portage_repo::CandidateSource::Ebuild => "ebuild",
         };
         fields.push(format!("\"source\":{}", json_string(source_tag)));
+        let opt_str = |v: &Option<String>| {
+            v.as_deref()
+                .map(json_string)
+                .unwrap_or_else(|| "null".to_string())
+        };
+        fields.push(format!(
+            "\"provenance\":{{\"mask_entry\":{},\"unmask_entry\":{},\"keyword_entry\":{}}}",
+            opt_str(&entry.provenance.mask_entry),
+            opt_str(&entry.provenance.unmask_entry),
+            opt_str(&entry.provenance.keyword_entry),
+        ));
     }
     fields.push(format!("\"requested\":{requested}"));
     let required_by: Vec<String> = entry
