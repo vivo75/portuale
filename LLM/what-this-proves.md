@@ -4596,3 +4596,111 @@ from the ebuild's own text via the real PMS 7.3.1 rule (`parse_eapi`),
 since `ebuild <file> <command>` operates on an arbitrary standalone
 ebuild file, not necessarily one indexed in a configured repo.
 
+### Real merge/filesystem mutation (task #55): the first slice, plus real `pkg_preinst`/`pkg_postinst` hooks
+
+The natural next step after task #54: `ebuild <file> merge`
+(`portuale/src/ebuild_merge.rs`) now really copies `${D}` into `${ROOT}`
+and writes a real vdb entry, instead of falling through to the dry-run
+stub. Runs the real `install` phase chain first (task #54's own
+`ebuild_phases::run_commands`), then really runs `pkg_preinst`
+(`ebuild_phases::run_single_phase`, not `run_commands` -- real
+`dblink.treewalk()` invokes `pkg_preinst`/`pkg_postinst` directly,
+`EbuildPhase(phase="preinst"/"postinst")`, not through `doebuild()`'s own
+`actionmap_deps` chain the way `pretend`..`install` are), then walks
+`${D}` and, for every regular file, directory, and symlink found, really
+merges it into `${ROOT}` -- matching real `dblink.mergeme()`'s own
+`_format_contents_line` format exactly: `dir <path>`, `obj <path> <md5>
+<mtime>`, `sym <path> -> <target> <mtime>`. Writes that `CONTENTS` text,
+plus `CATEGORY`/`SLOT`/`repository`/`COUNTER`, into a real
+`${ROOT}/var/db/pkg/<category>/<pf>/` directory -- the same
+one-value-per-file vdb layout portuale's own fixtures and
+`portage_repo`'s own vdb readers (`installed_candidates`,
+`read_vdb_string`, etc.) already use, so a package merged this way is
+immediately visible to every other slice in portuale (`emerge
+--pretend`'s own `AlreadyInstalled`/`Reinstall` detection, `--deselect`,
+and so on) -- then really runs `pkg_postinst`, only once the vdb entry is
+fully written, matching real `treewalk()`'s own relative ordering.
+`bin/phase-functions.sh`'s own `__ebuild_main` already accepts
+`preinst`/`postinst` as literal phase arguments directly, and silently
+no-ops when the ebuild defines neither function at all -- no new
+bash-side gap, this is exactly the same real, unmodified toolchain task
+#54 already drives.
+
+The vdb write is real and atomic, not a direct write: `write_vdb_entry`
+builds the whole entry (`CATEGORY`/`SLOT`/`repository`/`CONTENTS`/
+`COUNTER`) in a `-MERGING-<pf>`-prefixed temporary sibling directory
+(real `lib/portage/const.py`'s own `MERGING_IDENTIFIER`) under the same
+`<category>` directory, then `std::fs::rename`s it into place -- the
+same same-filesystem atomicity guarantee real `dblink.merge()`'s own
+`dbtmpdir`-then-`_movefile()` approach relies on, so a crash mid-write
+leaves at most a harmless leftover temp directory, never a half-written
+*final* vdb entry. `COUNTER` is a real, monotonically-increasing global
+merge counter too: `next_counter` reads/increments/writes
+`${ROOT}/var/cache/edb/counter` (real `vardbapi.counter_tick_core()`'s
+own mechanism -- a missing or corrupt file is treated as `-1`, so the
+very first merge anywhere gets `COUNTER=0`).
+
+`SLOT` is read directly from the ebuild's own text (a literal
+`SLOT=...` assignment, scanned anywhere in the file -- unlike `EAPI`,
+real PMS doesn't restrict where `SLOT` may appear), the same
+direct-text-parsing shortcut `parse_eapi` already established.
+`repository` is resolved by walking up from the ebuild's own package
+directory looking for a `profiles/repo_name` file (real portage's own
+mechanism for naming a repo), falling back to the same `"__unknown__"`
+sentinel `portage_repo::new_repo_changed` already uses when none is
+found.
+
+**v1 scope cuts** (see `ebuild_merge.rs`'s own module doc comment for
+the full list): no `CONFIG_PROTECT`/collision-protect/preserve-libs. No
+`env_update()`/`ldconfig` triggering. Directory-entry merge order is
+sorted by filename for deterministic tests, rather than real
+`os.listdir()`'s own arbitrary/OS-dependent order (`CONTENTS` line order
+has no real semantic meaning portage itself relies on).
+
+### `--debug`: real `PORTAGE_DEBUG` plumbing (task #56)
+
+Real `emerge --debug` (`lib/_emerge/main.py:1234-1239`) does two things:
+sets `PORTAGE_DEBUG=1` in the environment, and bumps Python's own
+`logging` level to `DEBUG`. Grounding both against portuale's own
+real-execution surface (`ebuild_phases.rs`/`ebuild_merge.rs`) found they
+split into two unrelated features: the logging-level bump has *zero*
+effect on `doebuild.py`/`vartree.py` (they route messages through
+`writemsg_level()`, gated by `PORTAGE_VERBOSE`, not the logging level at
+all) -- the real content there lives in `lib/_emerge/depgraph.py`'s own
+~60 `logging.DEBUG`-level dependency-resolution trace calls, a much
+bigger, separately-scoped port into `pretend.rs`'s own resolution logic,
+not attempted here. `PORTAGE_DEBUG=1` itself, though, is exactly what
+real `bin/ebuild.sh:479` and friends (`phase-functions.sh`,
+`phase-helpers.sh`, `misc-functions.sh`) check to `set -x` -- real bash
+xtrace of every phase command as it runs -- and that part *is* real
+execution portuale already drives.
+
+`ebuild.rs`'s option-parsing loop now captures `--debug` instead of
+silently discarding it like every other real `Kind::Boolean` option
+still does, threading a `debug: bool` through
+`ebuild_phases::run_commands`/`run_single_phase` and
+`ebuild_merge::run_merge` down to `run_one_phase`'s own environment-setup
+block, which now always explicitly `export`s `PORTAGE_DEBUG=1` or `=0`
+(never leaving it unset, so the real bash guard's behavior doesn't
+depend on whatever happened to be in the host environment already).
+Real, unmodified `bin/ebuild.sh` does the rest -- brush-core already has
+full `xtrace` support (`set -x`'s own `namedoptions.rs` mapping to
+`options.print_commands_and_arguments`, real `trace_command` call
+sites), so nothing needed fixing on the shell-backend side, this was
+pure plumbing.
+
+Proven via a new `dev-libs/debugpkg` fixture whose `src_install` writes
+the `PORTAGE_DEBUG` value it actually observed to a file under `${T}`,
+run once with `debug: true` and once with `debug: false`, asserting `"1"`
+and `"0"` respectively (`ebuild_phases::tests::
+debug_flag_exports_real_portage_debug`) -- a marker-file proof rather
+than one that captures the real `set -x` trace text itself (which would
+need redirecting the whole test process's stdout/stderr, a much heavier
+mechanism for the same underlying claim: that the export reaches the
+phase, real `bin/ebuild.sh`'s own already-real guard does the rest).
+`emerge`'s own `--debug` deliberately stays unchanged, still routed to
+`pretend.rs`'s `report_option()` "not implemented" bucket -- `emerge`
+never calls `ebuild_phases`/`ebuild_merge` at all (it's still pure
+dry-run/`--pretend`), so there's no real phase-execution path there yet
+to make `PORTAGE_DEBUG`/xtrace observable.
+
