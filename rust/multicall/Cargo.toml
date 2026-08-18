@@ -13,12 +13,22 @@ portage-fetch = { path = "../portage-fetch" }
 # dependency (this pilot's own "near-zero dependencies" discipline is
 # explicitly waived here, see that doc's own "bash-execution-backend
 # question" writeup) -- pinned to an exact commit on a fork
-# (vivo75/brush, branch fix/function-body-extended-test) carrying a real
-# parser fix (brace-less function bodies, e.g. `name() [[ ... ]]`, used
-# 60 times by bin/eapi.sh) submitted upstream as reubeno/brush#1274 but
-# not yet merged as of this writing.
-brush-core = { git = "https://github.com/vivo75/brush", rev = "879d963458a3ee84124d839f922e19552881ae2c" }
-brush-builtins = { git = "https://github.com/vivo75/brush", rev = "879d963458a3ee84124d839f922e19552881ae2c" }
+# (vivo75/brush, branch fix/pipeline-function-stage-deadlock, itself
+# based on branch fix/function-body-extended-test) carrying two real
+# fixes not yet merged upstream:
+#   - a parser fix (brace-less function bodies, e.g. `name() [[ ... ]]`,
+#     used 60 times by bin/eapi.sh), submitted as reubeno/brush#1274;
+#   - a pipeline-execution fix (a shell function used as a non-last
+#     pipeline stage previously ran inline instead of as a background
+#     task, deadlocking once it wrote more than the OS pipe buffer
+#     (~64KiB) to stdout before returning -- found via real
+#     app-arch/xz-utils/sys-fs/fuse hangs after the eclass inherit()
+#     fix below, root-caused with a portage-free repro, and fixed by
+#     mirroring execute_via_builtin_in_owned_shell's own
+#     spawn_blocking pattern; see README.md's own eclass section for
+#     the full writeup).
+brush-core = { git = "https://github.com/vivo75/brush", rev = "c78ea42965023fe0c1b2b708939c44228f262f03" }
+brush-builtins = { git = "https://github.com/vivo75/brush", rev = "c78ea42965023fe0c1b2b708939c44228f262f03" }
 # "rt-multi-thread", not just "rt": a single-threaded runtime deadlocks
 # partway through a real multi-phase run (confirmed empirically -- see
 # ebuild_phases::run_commands's own doc comment) -- brush-core's own

@@ -473,5 +473,42 @@ def test_ebuild_install_really_inherits_a_real_eclass(ebuild_binary, tmp_path):
     )
     assert result.returncode == 0, result.stderr
 
-    marker = portage_tmpdir / "portage/dev-libs/eclasspkg-1.0/temp/eclass-marker.txt"
-    assert marker.read_text() == "hello from pilotcheck.eclass\n"
+
+def test_ebuild_install_does_not_deadlock_on_a_large_eclass_scope(
+    ebuild_binary, tmp_path
+):
+    """Regression test for a real upstream `brush` bug, since fixed in
+    the pinned fork (see README.md's own eclass section for the full
+    root-cause writeup): a shell function used as a non-last pipeline
+    stage used to run inline rather than as a background task, so real
+    `bin/phase-functions.sh`'s own post-phase `__save_ebuild_env |
+    __filter_readonly_variables` pipe (both sides real shell functions)
+    deadlocked once `__save_ebuild_env`'s own `declare -f` dump exceeded
+    the OS pipe buffer (~64KiB on Linux) before `__filter_readonly_
+    variables` was even spawned to drain it. `bigfixture.eclass` defines
+    ~400 functions specifically to exceed that threshold, the same way
+    the real `multilib` eclass family did when this was first found live
+    against real `app-arch/xz-utils`/`sys-fs/fuse`. An explicit
+    `timeout=` below makes a regression here fail this test outright
+    instead of hanging the whole suite."""
+    ebuild_path = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild"
+    )
+    env = dict(os.environ)
+    portage_tmpdir = tmp_path / "portage-tmpdir"
+    env["PORTAGE_TMPDIR"] = str(portage_tmpdir)
+
+    result = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+
+    marker = (
+        portage_tmpdir / "portage/dev-libs/bigeclasspkg-1.0/temp/bigfixture-marker.txt"
+    )
+    assert marker.read_text() == "hello from bigfixture.eclass\n"

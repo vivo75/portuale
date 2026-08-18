@@ -1,0 +1,8 @@
+DEFINED_PHASES=install
+DESCRIPTION=fixture package: real inherit()'s own __save_ebuild_env pipe must not deadlock on a large scope
+EAPI=8
+INHERITED=bigfixture
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

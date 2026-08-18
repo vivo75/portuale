@@ -1133,6 +1133,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
 
+    /// Regression test for a real upstream brush bug (fixed in the pinned
+    /// fork, see README.md's own eclass section for the full writeup):
+    /// `bigfixture.eclass` defines ~400 functions so that real
+    /// `bin/phase-functions.sh`'s own post-phase `__save_ebuild_env |
+    /// __filter_readonly_variables` pipe (both sides real shell
+    /// functions) carries well over the OS pipe buffer size (~64KiB on
+    /// Linux) worth of `declare -f` output. Before the fix, brush ran a
+    /// function used as a non-last pipeline stage inline rather than as
+    /// a background task, so the pipeline-spawning loop blocked on
+    /// `__save_ebuild_env` fully returning before even spawning
+    /// `__filter_readonly_variables` to drain it -- a real, reproducible
+    /// deadlock, not a slow completion (confirmed against real
+    /// app-arch/xz-utils and sys-fs/fuse before the fix, which both
+    /// inherit the real `multilib` eclass family). Run on a background
+    /// thread with a hard deadline so a regression here fails this test
+    /// outright instead of hanging the whole suite.
+    #[test]
+    fn install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-{}",
+            std::process::id(),
+            "install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer"
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let thread_ebuild_path = ebuild_path.clone();
+        let thread_portage_tmpdir = portage_tmpdir.clone();
+        std::thread::spawn(move || {
+            let result = run_commands(
+                &thread_ebuild_path,
+                &["install"],
+                Path::new("/"),
+                &thread_portage_tmpdir,
+                &thread_portage_tmpdir.join("distfiles"),
+                false,
+            );
+            let _ = tx.send(result);
+        });
+        let status = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("run_commands should complete well within the deadline, not deadlock")
+            .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+
+        let marker =
+            portage_tmpdir.join("portage/dev-libs/bigeclasspkg-1.0/temp/bigfixture-marker.txt");
+        let observed = std::fs::read_to_string(&marker)
+            .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
+        assert_eq!(observed, "hello from bigfixture.eclass\n");
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
     #[test]
     fn eclass_locations_value_quotes_the_containing_repo_root() {
         // Canonicalized first, matching what `compute_environment`

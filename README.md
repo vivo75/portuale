@@ -4119,19 +4119,67 @@ gap for every case demonstrated so far. Exported unconditionally
 (like `DISTDIR`), not just for phases that happen to need it, matching
 real `doebuild()`'s own environment.
 
-**A new, separate gap surfaced while live-verifying this**: after
-`inherit()` itself stopped `die`ing, `app-arch/xz-utils` and
-`sys-fs/fuse` (but not `app-editors/nano`) hung indefinitely during
-real phase execution. Bisected live (a scratch fixture repo, copying
-in real eclasses one at a time under a timeout) to the `multilib`
-eclass family specifically: `flag-o-matic` + `toolchain-funcs` alone
-(the pair `nano` doesn't need but both hanging packages do) complete
-fine; adding `multilib-minimal` (which pulls in `multilib-build` ->
-`multibuild`/`multilib`) reproduces the hang. Not root-caused further
--- deferred as a separately-scoped, real, documented gap (likely a
-real `multilib.eclass`-internal construct this pilot's embedded
-`brush` shell handles differently from real bash) rather than chased
-down within this slice.
+**A new, separate gap surfaced while live-verifying this -- since
+fixed upstream**: after `inherit()` itself stopped `die`ing,
+`app-arch/xz-utils` and `sys-fs/fuse` (but not `app-editors/nano`)
+hung indefinitely during real phase execution. Bisected live (a
+scratch fixture repo, copying in real eclasses one at a time under a
+timeout) to the `multilib` eclass family specifically: `flag-o-matic`
++ `toolchain-funcs` alone (the pair `nano` doesn't need but both
+hanging packages do) complete fine; adding `multilib-minimal` (which
+pulls in `multilib-build` -> `multibuild`/`multilib`) reproduces the
+hang.
+
+Root-caused down to a real bug in the pinned `brush` fork itself, not
+this pilot's own code, confirmed with a minimal, portage-free repro
+against the standalone `brush` binary (nothing eclass- or
+ebuild-related):
+
+```sh
+big() { for i in $(seq 1 5000); do echo "padding line ${i}"; done; }
+big | cat > out.txt   # hung forever before the fix
+```
+
+`brush-core/src/interp.rs`'s `spawn_pipeline_processes` spawns each
+pipeline stage in a loop, `.await`ing `execute_in_pipeline` before
+moving to the next stage. For external processes and builtins run in
+an owned (non-last-stage) shell, that's fine -- `execute_via_builtin_
+in_owned_shell` wraps the builtin in `tokio::task::spawn_blocking`, so
+the `.await` resolves as soon as the task is *spawned*, not when it
+*finishes*. But `commands.rs`'s `execute_via_function` had no such
+wrapping: it ran a shell function's body inline, so `spawn_pipeline_
+processes`'s loop genuinely blocked until the function fully returned
+-- meaning the *next* pipeline stage (the one that would actually
+drain the function's stdout pipe) was never even spawned yet. A
+function that writes more to stdout than the OS pipe buffer holds
+(~64KiB on Linux) before returning then blocks on that `write()`
+forever. This is exactly what real `bin/phase-functions.sh`'s
+`__save_ebuild_env | __filter_readonly_variables` hits during the
+post-phase "save the env" step (`bin/phase-functions.sh`'s own
+`pretend|setup` case arm) -- both sides are shell functions, and
+`__save_ebuild_env` dumps every function and variable in scope. The
+tiny `pilotcheck.eclass` fixture stays under 64KiB so it never
+triggered this; the multilib family (dozens of functions,
+`toolchain-funcs.eclass` alone is ~1300 lines) easily does.
+
+Fixed upstream in the pinned fork (`brush-core/src/commands.rs`) by
+splitting `execute_via_function` the same way `execute_via_builtin`
+already was: an owned-shell path that spawns the function's body as a
+background task (`tokio::task::spawn_blocking` + `rt.block_on`,
+mirroring `execute_via_builtin_in_owned_shell` exactly) so pipeline
+spawning can proceed to the next stage immediately, and an unchanged
+parent-shell path (used only for a pipeline's own last stage) that
+still awaits inline. Verified: the `big | cat` repro above now
+completes instantly; real `xz-utils`/`fuse` `pretend` now exit `0`
+instead of hanging; the fork's own 2,174-case bash-compatibility test
+suite (`cargo test -p brush-shell --test brush-compat-tests`) passes
+identically before and after (1795 succeeded / 0 failed / 379 known-
+to-fail / 28 skipped in both cases) -- confirmed by rebuilding from a
+clean `cargo clean` on both sides of the fix, not just trusting a
+cached binary. A new regression case (`brush-shell/tests/cases/
+compat/pipeline.yaml`'s own "Function stage writing more than a pipe
+buffer before the next stage is spawned") reproduces the original
+hang under the suite's own 15s per-test timeout.
 
 Proven via a new `dev-libs/eclasspkg` fixture with a real (if fixture-
 only) `eclass/pilotcheck.eclass` defining one real function,
@@ -5649,4 +5697,22 @@ PORTING/rust/target/release/multicall ebuild \
 # task #54 example, then exit 0)
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/eclasspkg-1.0/temp/eclass-marker.txt
 # hello from pilotcheck.eclass
+```
+
+The pipeline-deadlock fix (see "What this proves" above for the full
+writeup): `dev-libs/bigeclasspkg` inherits `bigfixture.eclass` (~400
+functions, deliberately large enough that real `bin/phase-functions.
+sh`'s own post-phase `__save_ebuild_env | __filter_readonly_variables`
+pipe exceeds the OS pipe buffer) and used to hang here indefinitely
+before the fix:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/multicall ebuild \
+    PORTING/fixtures/repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild install
+# (real phase output, including the same known-nonfatal noise as the
+# task #54 example, then exit 0 -- promptly, not after a hang)
+cat "${PORTAGE_TMPDIR}"/portage/dev-libs/bigeclasspkg-1.0/temp/bigfixture-marker.txt
+# hello from bigfixture.eclass
 ```
