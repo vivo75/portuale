@@ -714,3 +714,197 @@ pub fn verify_digests(path: &Path, digests: &DistfileDigests) -> Result<(), Erro
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+    use std::fs;
+
+    fn tempdir() -> std::path::PathBuf {
+        // Unique per call across parallel test threads (pid + counter);
+        // the timestamp is a run marker only (see notes).
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = TempDir::new(&format!("portage_fetch_test_{}_{}", std::process::id(), n)).keep();
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn parse_manifest_reads_a_real_dist_line_with_both_hashes() {
+        let dir = tempdir();
+        let manifest = dir.join("Manifest");
+        fs::write(
+            &manifest,
+            "DIST fuse-3.18.2.tar.gz 4933779 BLAKE2B aaaa SHA512 bbbb\n\
+             EBUILD fuse-3.18.2.ebuild 123 BLAKE2B cccc SHA512 dddd\n",
+        )
+        .unwrap();
+        let parsed = parse_manifest(&manifest).unwrap();
+        assert_eq!(parsed.len(), 1, "EBUILD lines must not be parsed as DIST");
+        let entry = &parsed["fuse-3.18.2.tar.gz"];
+        assert_eq!(entry.size, 4933779);
+        assert_eq!(entry.hashes["BLAKE2B"], "aaaa");
+        assert_eq!(entry.hashes["SHA512"], "bbbb");
+    }
+
+    #[test]
+    fn parse_manifest_is_empty_for_a_missing_file() {
+        let dir = tempdir();
+        let parsed = parse_manifest(&dir.join("Manifest")).unwrap();
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn flatten_src_uri_handles_plain_uris_with_no_conditionals() {
+        let entries = flatten_src_uri("https://example.com/a-1.0.tar.gz", |_, _| true).unwrap();
+        assert_eq!(
+            entries,
+            vec![SrcUriEntry {
+                uri: "https://example.com/a-1.0.tar.gz".to_string(),
+                filename: "a-1.0.tar.gz".to_string(),
+                override_mirror: false,
+                override_fetch: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn flatten_src_uri_honors_the_arrow_rename() {
+        let entries =
+            flatten_src_uri("https://example.com/dl?id=1 -> a-1.0.tar.gz", |_, _| true).unwrap();
+        assert_eq!(entries[0].filename, "a-1.0.tar.gz");
+        assert_eq!(entries[0].uri, "https://example.com/dl?id=1");
+    }
+
+    #[test]
+    fn flatten_src_uri_strips_a_mirror_prefix_and_records_both_overrides() {
+        let entries =
+            flatten_src_uri("mirror+https://example.com/a-1.0.tar.gz", |_, _| true).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].uri, "https://example.com/a-1.0.tar.gz");
+        assert_eq!(entries[0].filename, "a-1.0.tar.gz");
+        assert!(entries[0].override_mirror);
+        assert!(entries[0].override_fetch, "mirror+ implies fetch+");
+    }
+
+    #[test]
+    fn flatten_src_uri_includes_a_positive_conditional_only_when_active() {
+        let src = "unconditional-1.0.tar.gz test? ( test-only-1.0.tar.gz )";
+        let with_test = flatten_src_uri(src, |negated, flag| !negated && flag == "test").unwrap();
+        assert_eq!(with_test.len(), 2);
+
+        let without_test = flatten_src_uri(src, |_, _| false).unwrap();
+        assert_eq!(without_test.len(), 1);
+        assert_eq!(without_test[0].filename, "unconditional-1.0.tar.gz");
+    }
+
+    #[test]
+    fn flatten_src_uri_negated_conditional_is_active_when_the_flag_is_unset() {
+        // Portuale's always-empty USE set means every `!flag?` group is
+        // active -- the common way an optional dependency's SRC_URI still
+        // gets fetched by default.
+        let is_set = |_flag: &str| false;
+        let active = |negated: bool, flag: &str| {
+            if negated { !is_set(flag) } else { is_set(flag) }
+        };
+        let entries = flatten_src_uri("!test? ( a-1.0.tar.gz )", active).unwrap();
+        assert_eq!(entries.len(), 1);
+
+        let entries = flatten_src_uri("test? ( a-1.0.tar.gz )", active).unwrap();
+        assert_eq!(
+            entries.len(),
+            0,
+            "a positive conditional on an unset flag must not fire"
+        );
+    }
+
+    #[test]
+    fn flatten_src_uri_supports_nested_groups() {
+        let src = "outer? ( a-1.0.tar.gz inner? ( b-1.0.tar.gz ) )";
+        let all_active = flatten_src_uri(src, |_, _| true).unwrap();
+        assert_eq!(all_active.len(), 2);
+
+        let outer_only = flatten_src_uri(src, |_, flag| flag == "outer").unwrap();
+        assert_eq!(outer_only.len(), 1);
+        assert_eq!(outer_only[0].filename, "a-1.0.tar.gz");
+    }
+
+    #[test]
+    fn flatten_src_uri_rejects_a_double_bar_any_of_group() {
+        // Portage's SRC_URI grammar has no `||` at all (PMS 8.2.6.5):
+        // `"||"` is an ordinary URI token, and `"("` with no preceding
+        // `"flag?"` is the syntax error.
+        let entries = flatten_src_uri("|| ( a-1.0.tar.gz )", |_, _| true);
+        assert!(
+            entries.is_err(),
+            "\"(\" with no preceding \"flag?\" token is a real syntax error"
+        );
+    }
+
+    #[test]
+    fn flatten_src_uri_reports_an_unterminated_group() {
+        assert!(flatten_src_uri("test? ( a-1.0.tar.gz", |_, _| true).is_err());
+    }
+
+    #[test]
+    fn flatten_src_uri_reports_a_dangling_arrow() {
+        assert!(flatten_src_uri("https://example.com/a ->", |_, _| true).is_err());
+    }
+
+    #[test]
+    fn verify_digests_accepts_a_real_matching_file() {
+        let dir = tempdir();
+        let path = dir.join("hello.txt");
+        fs::write(&path, b"hello world").unwrap();
+        // Standard BLAKE2b-512 / SHA-512 test vectors for "hello world".
+        let mut hashes = HashMap::new();
+        hashes.insert(
+            "BLAKE2B".to_string(),
+            "021ced8799296ceca557832ab941a50b4a11f83478cf141f51f933f653ab9fbcc05a037cddbed06e309bf334942c4e58cdf1a46e237911ccd7fcf9787cbc7fd0".to_string(),
+        );
+        hashes.insert(
+            "SHA512".to_string(),
+            "309ecc489c12d6eb4cc40f50c902f2b4d0ed77ee511a7c7a9bcd3ca86d4cd86f989dd35bc5ff499670da34255b45b0cfd830e81f605dcf7dc5542e93ae9cd76f".to_string(),
+        );
+        let digests = DistfileDigests { size: 11, hashes };
+        assert!(verify_digests(&path, &digests).is_ok());
+    }
+
+    #[test]
+    fn verify_digests_rejects_a_size_mismatch_without_hashing() {
+        let dir = tempdir();
+        let path = dir.join("hello.txt");
+        fs::write(&path, b"hello world").unwrap();
+        let digests = DistfileDigests {
+            size: 999,
+            hashes: HashMap::new(),
+        };
+        let err = verify_digests(&path, &digests).unwrap_err();
+        assert!(err.to_string().contains("size mismatch"), "{err}");
+    }
+
+    #[test]
+    fn verify_digests_rejects_a_hash_mismatch() {
+        let dir = tempdir();
+        let path = dir.join("hello.txt");
+        fs::write(&path, b"hello world").unwrap();
+        let mut hashes = HashMap::new();
+        hashes.insert("SHA512".to_string(), "0".repeat(128));
+        let digests = DistfileDigests { size: 11, hashes };
+        let err = verify_digests(&path, &digests).unwrap_err();
+        assert!(err.to_string().contains("SHA512 mismatch"), "{err}");
+    }
+
+    #[test]
+    fn verify_digests_ignores_an_unrecognized_hash_name() {
+        let dir = tempdir();
+        let path = dir.join("hello.txt");
+        fs::write(&path, b"hello world").unwrap();
+        let mut hashes = HashMap::new();
+        hashes.insert("MD5".to_string(), "not-even-hex".to_string());
+        let digests = DistfileDigests { size: 11, hashes };
+        assert!(verify_digests(&path, &digests).is_ok());
+    }
+}

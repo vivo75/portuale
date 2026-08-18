@@ -4944,3 +4944,82 @@ still match byte-for-byte, but it has no real ebuild-execution
 machinery to mirror the actual building with, consistent with every
 other real-execution slice in portuale staying Rust-only.
 
+### Real `SRC_URI` fetch: `emerge --buildpkgonly`/`ebuild <file> install` now really download real distfiles
+
+The previous slice's own "known, documented gap" -- no fetch/unpack
+machinery at all, a real `SRC_URI` silently produced an empty install
+image -- is now real: a real, unmodified `wget` subprocess (real
+`make.globals`'s own default `FETCHCOMMAND` template, invoked verbatim)
+downloads each file `SRC_URI` names into a real `DISTDIR`, verified
+against the real, unmodified `Manifest` file's own `BLAKE2B`/`SHA512`
+digests (`MANIFEST2_HASH_DEFAULTS`) before `unpack` ever runs. A new
+crate, `portage-fetch`, implements the non-network half as pure,
+100%-offline-testable logic: a recursive-descent `SRC_URI` parser
+supporting the real grammar (arrow-rename, `flag?`/`!flag?`
+USE-conditional groups, nested -- real `SRC_URI` has no `||` any-of
+groups at all, PMS 8.2.6.5, so none are implemented), a `Manifest`
+`DIST`-line parser, and digest verification via the real, standard
+`blake2`/`sha2` crates (not reimplemented from scratch, same precedent
+`ebuild_merge.rs`'s own real MD5 `CONTENTS` digest already set). A new
+module, `portuale/src/fetch.rs`, adds the one network-touching piece:
+spawning `wget` and orchestrating the "already verified, skip" vs
+"fetch then verify" decision. `ebuild_phases.rs`'s own `run_commands`
+now runs this once per invocation, right before the phase loop,
+whenever the real prerequisite chain includes `unpack` -- matching real
+`pkg_pretend`'s own PMS-mandated position *before* fetching -- and
+exports the real `A`/`AA` variables (and `DISTDIR` itself, unconditionally)
+into every phase, exactly like real `doebuild()`'s own environment.
+
+A real, load-bearing bug this surfaced, found only by testing against a
+real, live package rather than trusting the design on paper: the first
+working version never actually `export`ed `DISTDIR` itself into the
+phase environment (only used it internally to decide where to fetch
+to) -- real `unpack` (a `bin/ebuild-helpers/` script, unmodified) reads
+`${DISTDIR}` itself to resolve `${A}`'s own filenames, so a real,
+successfully fetched-and-verified distfile still failed with `"either
+does not exist or is not a regular file"` until this was fixed.
+
+**Live-verified against the real system** (not just fixtures): running
+`emerge --buildpkgonly` against real packages from this machine's own
+live Gentoo tree confirmed, for real: `app-arch/unzip`'s first
+`SRC_URI` entry was genuinely downloaded from `sourceforge.net` over
+real HTTPS and its real SHA-512 digest matched the tree's own real
+`Manifest` exactly; `sys-apps/which`/`app-arch/unzip`'s own *second*
+`SRC_URI` entry (a real `mirror://gnu/...`/`mirror://debian/...` URI)
+correctly hit the documented `mirror://` gap below with a clear,
+specific error rather than silently misbehaving; after manually
+pre-fetching that one `mirror://`-gated file by hand into the real
+system `DISTDIR`, `app-arch/unzip` went on to really fetch, really
+verify, really unpack, and produce a real, genuine `.tbz2` binary
+package end-to-end.
+
+**v1 scope cuts** (see `portage-fetch`'s own and `fetch.rs`'s own
+module doc comments for the full lists): no `mirror://` resolution at
+all (a real, live, documented gap confirmed above) -- real
+`thirdpartymirrors`/`GENTOO_MIRRORS` config resolution is a
+separately-scoped follow-up. No resume support (real `RESUMECOMMAND`'s
+own `-c`/retry behavior) -- a failed download is removed and retried
+from scratch. No GPG verification (`FEATURES=verify-sig`). No
+`FEATURES=distlocks` (portuale's own single-invocation-at-a-time CLI
+usage never races a concurrent fetch of the same file). A file with no
+`Manifest` entry at all is refused outright (unverifiable content is
+worse than a loud failure) rather than fetched-but-unverified.
+
+Proven via `portage-fetch`'s own 14 unit tests (`Manifest` parsing,
+`SRC_URI` flattening including nested/negated conditionals and arrow-
+rename, and digest verification against real, independently-confirmed
+BLAKE2b-512/SHA-512 test vectors), `fetch.rs`'s own 5 unit tests
+(including two genuine `wget` subprocess downloads over real loopback
+HTTP -- this system's own `wget` build has no `file://` support at all,
+confirmed empirically, so a tiny real HTTP server stands in for a truly
+external one, fully offline and deterministic), and a new
+`dev-libs/verifiedfetchpkg` fixture whose real, checked-in `Manifest`
+matches a pre-seeded `DISTDIR` payload -- exercising the full real
+`SRC_URI` grammar (arrow-rename plus a `test?` group that must stay
+excluded from `A` but still appear in `AA`) through the real CLI with
+no network access at all, both as a Rust unit test
+(`ebuild_phases::tests::
+install_computes_real_a_and_aa_from_a_verified_distfile_with_no_network`)
+and a black-box one
+(`test_ebuild_install_really_fetches_via_the_already_verified_skip_path`).
+
