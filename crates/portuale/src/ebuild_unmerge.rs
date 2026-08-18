@@ -15,6 +15,51 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+/// Whether `command` is the unmerge command this module implements --
+/// `ebuild.rs` checks this before routing to execution.
+pub fn is_unmerge_command(command: &str) -> bool {
+    command == "unmerge"
+}
+
+struct ContentsEntry {
+    node_type: String,
+    abs_path: String,
+    /// Present for `obj`/`sym` lines; `None` for `dir` (no trailing field).
+    mtime: Option<i64>,
+}
+
+/// Parses a `CONTENTS` file's lines (see `ebuild_merge::format_contents_line`).
+fn parse_contents(text: &str) -> Vec<ContentsEntry> {
+    text.lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split(' ').collect();
+            let node_type = (*fields.first()?).to_string();
+            let abs_path = (*fields.get(1)?).to_string();
+            let mtime = fields.last().and_then(|s| s.parse::<i64>().ok());
+            Some(ContentsEntry {
+                node_type,
+                abs_path,
+                mtime,
+            })
+        })
+        .collect()
+}
+
+/// Arguments of [`remove_contents`].
+struct RemoveContentsArgs<'a> {
+    root: &'a Path,
+    category: &'a str,
+    others_in_slot: &'a [String],
+    config_protect: &'a str,
+    config_protect_mask: &'a str,
+    unmerge_orphans: bool,
+    infodirs_inodes: &'a BTreeSet<(u64, u64)>,
+    cfgfiledict: &'a BTreeMap<String, String>,
+    stale_confmem: &'a mut Vec<String>,
+    preserved_paths: &'a BTreeSet<String>,
+    contents_text: &'a str,
+}
+
 /// Removes the vdb entry directory itself, then best-effort `rmdir`s its
 /// now-maybe-empty parent category directory (ignored on failure). Split
 /// out so the binpkg replace path can drop an old entry phaselessly.
@@ -40,5 +85,24 @@ pub(crate) fn retire_entry(
     match retire {
         Some(writes) => writes.commit(root, &portage_vdb::EntryKey::new(category, pf)),
         None => delete_vdb_dir(root, category, pf),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+
+    #[test]
+    fn parse_contents_reads_type_and_path_ignoring_trailing_fields() {
+        let text = "dir /usr\nobj /usr/hello.txt abc123 100\nsym /usr/link -> hello.txt 100\n";
+        let entries = parse_contents(text);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].node_type, "dir");
+        assert_eq!(entries[0].abs_path, "/usr");
+        assert_eq!(entries[1].node_type, "obj");
+        assert_eq!(entries[1].abs_path, "/usr/hello.txt");
+        assert_eq!(entries[2].node_type, "sym");
+        assert_eq!(entries[2].abs_path, "/usr/link");
     }
 }

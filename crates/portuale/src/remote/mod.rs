@@ -17,11 +17,15 @@
 //! `mrg` path; `emerge`/`ebuild` keep their own local xpak support).
 
 use clap::ArgMatches;
+
+mod binpkg_flow;
 mod ledger;
 mod preflight;
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+pub(crate) use binpkg_flow::*;
 pub(crate) use ledger::*;
 pub(crate) use preflight::*;
 

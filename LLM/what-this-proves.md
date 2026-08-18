@@ -4657,6 +4657,44 @@ sorted by filename for deterministic tests, rather than real
 `os.listdir()`'s own arbitrary/OS-dependent order (`CONTENTS` line order
 has no real semantic meaning portage itself relies on).
 
+### Real package removal: `unmerge` (task #55's own natural complement)
+
+`ebuild <file> unmerge` (`portuale/src/ebuild_unmerge.rs`) really
+removes a package `merge` previously installed, instead of falling
+through to the dry-run stub -- without this, `merge` alone could never be
+exercised through a real install/reinstall/removal cycle; every merge
+would just accumulate vdb entries and files forever. Mirrors real
+`dblink.unmerge()` plus the top-level `unmerge()` function's own
+success-gated `dblink.delete()` call: really runs `pkg_prerm`
+(`ebuild_phases::run_single_phase`, the same non-`actionmap_deps`
+mechanism `pkg_preinst`/`pkg_postinst` already use), really deletes every
+file/dir/symlink the vdb entry's own `CONTENTS` lists from `${ROOT}` --
+in real `_unmerge_pkgfiles()`'s own reverse-sorted order (`mykeys.sort();
+mykeys.reverse()`), deepest paths first, so a directory always empties
+out before its own removal is attempted -- really runs `pkg_postrm`, and
+only then, on success, removes the vdb entry itself (real
+`dblink.delete()`'s own `shutil.rmtree()` plus a best-effort `rmdir` of
+the parent `<category>` directory if it's now empty).
+
+A locally-modified file is protected on removal too, via real
+`_unmerge_pkgfiles()`'s own actual mechanism: an `obj`/`sym` entry whose
+live, on-disk mtime no longer matches what `CONTENTS` recorded at merge
+time is left in place instead of deleted (real `!mtime` skip -- broader
+than `CONFIG_PROTECT` alone, since it applies to every unmerge
+regardless of path, and it's what actually protects a CONFIG_PROTECT'd
+file on removal too, since its own recorded mtime reflects the
+`._cfgNNNN_`-diverted write, never the real file a user edited).
+
+**v1 scope cuts** (see `ebuild_unmerge.rs`'s own module doc comment for
+the full list): no `bsd_chflags` handling -- confirmed dead code on
+Linux (`lib/portage/__init__.py:311` sets it to `None` unconditionally
+on non-BSD), not a real gap. Coarser failure tolerance: a genuine I/O
+error (not "already gone" or "directory not empty", both tolerated) is
+a hard failure here, rather than real `_unmerge_pkgfiles()`'s own
+per-file failure counter that keeps going regardless. (`unmerge-orphans`
+and `INFOPATH` handling have since shipped -- see their own sections
+below; so has the "others in this slot" reverse-dependency check.)
+
 ### `--debug`: real `PORTAGE_DEBUG` plumbing (task #56)
 
 Real `emerge --debug` (`lib/_emerge/main.py:1234-1239`) does two things:
