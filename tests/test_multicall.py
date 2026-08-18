@@ -366,11 +366,13 @@ def test_emerge_buildpkgonly_with_pretend_stays_dry_run(emerge_binary, tmp_path)
     assert not (Path(env["PKGDIR"]) / "dev-libs").exists()
 
 
-def test_emerge_buildpkgonly_refuses_a_real_src_uri(emerge_binary, tmp_path):
-    """`fetchpkg` has a real, nonempty `SRC_URI` this pilot has no
-    fetch/unpack machinery for -- see emerge_build.rs's own module doc
-    comment for why this must be a loud refusal (exit 1) rather than
-    silently producing a real but functionally empty binary package."""
+def test_emerge_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry(
+    emerge_binary, tmp_path
+):
+    """`fetchpkg` has a real, nonempty `SRC_URI` but no `Manifest` entry
+    at all -- refused before any network access is even attempted (see
+    `crate::fetch::fetch_src_uri`'s own doc comment: unverifiable
+    content is worse than a loud failure)."""
     env = _real_build_env(tmp_path)
     result = subprocess.run(
         [str(emerge_binary), "--buildpkgonly", "dev-libs/fetchpkg"],
@@ -381,7 +383,7 @@ def test_emerge_buildpkgonly_refuses_a_real_src_uri(emerge_binary, tmp_path):
     )
     assert result.returncode == 1
     assert "dev-libs/fetchpkg-1.0" in result.stderr
-    assert "SRC_URI" in result.stderr
+    assert "no Manifest entry" in result.stderr
     assert not (Path(env["PKGDIR"]) / "dev-libs").exists()
 
 
@@ -397,3 +399,48 @@ def test_emerge_without_pretend_or_buildpkgonly_still_refuses(emerge_binary):
     )
     assert result.returncode == 2
     assert "only --pretend" in result.stderr or "--buildpkgonly without --pretend" in result.stderr
+
+
+def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(
+    ebuild_binary, tmp_path
+):
+    """`dev-libs/verifiedfetchpkg` has a real SRC_URI using the full real
+    grammar this slice implements: an arrow-rename and a `test?`
+    USE-conditional group. Pre-seeding DISTDIR with a real, correctly-
+    digested payload (the same real BLAKE2b-512/SHA-512 values the
+    fixture's own checked-in Manifest records) exercises the real
+    already-verified skip-fetch path end-to-end through the compiled
+    CLI, with no live network access needed at all -- the fixture's own
+    `src_install` records the real `A`/`AA` it observed, proving the
+    conditional group is excluded from `A` but still present in `AA`."""
+    ebuild_path = str(
+        Path(FIXTURES_ROOT)
+        / "repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild"
+    )
+    env = dict(os.environ)
+    portage_tmpdir = tmp_path / "portage-tmpdir"
+    distdir = tmp_path / "distdir"
+    env["PORTAGE_TMPDIR"] = str(portage_tmpdir)
+    env["DISTDIR"] = str(distdir)
+    distdir.mkdir()
+    (distdir / "verifiedfetchpkg-1.0.tar.gz").write_bytes(
+        b"hello from verifiedfetchpkg\n"
+    )
+
+    result = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+
+    marker = (
+        portage_tmpdir
+        / "portage/dev-libs/verifiedfetchpkg-1.0/temp/fetch-vars.txt"
+    )
+    assert marker.read_text() == (
+        "A=verifiedfetchpkg-1.0.tar.gz\n"
+        "AA=verifiedfetchpkg-1.0.tar.gz verifiedfetchpkg-tests-1.0.tar.gz\n"
+    )

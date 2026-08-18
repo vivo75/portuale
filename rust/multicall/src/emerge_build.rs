@@ -13,35 +13,24 @@
 // IS the real, unmodified `doebuild()` action `--buildpkgonly` itself is
 // built on (see `resolve_pretend_graph`'s own doc comment -- real
 // `--buildpkgonly` is a resolution-time depgraph check, not a distinct
-// execution mode of its own).
+// execution mode of its own). `run_package`'s own `install` chain now
+// really fetches a nonempty `SRC_URI` too (see `ebuild_phases::
+// fetch_sources`/`crate::fetch`'s own module doc comments) -- this
+// module used to refuse any entry with a real `SRC_URI` outright (no
+// fetch machinery existed yet); that refusal is gone now that fetching
+// is real, and a fetch/digest failure simply surfaces as an ordinary
+// `run_package` error like any other build failure would.
 //
 // `GraphEntry` doesn't carry the winning candidate's own repo location
 // (see its own doc comment -- deliberately not threaded through the
 // whole graph-resolution/Python-mirror pair, which has no real-execution
-// need for it at all). `locate_ebuild` re-derives it via
+// need for it at all). `locate_candidate` re-derives it via
 // `portage_repo::list_candidates`, the same repo/version lookup
 // `resolve_pretend_graph` already did internally to pick this entry's
 // winning version in the first place.
 //
 // KNOWN, DOCUMENTED GAPS (same "narrow v1, document the cut" pattern as
 // every other real-execution slice in this pilot):
-//   - No real `SRC_URI` fetch/unpack at all (see `ebuild_phases.rs`'s own
-//     doc comment). Empirically checked (not assumed) what this actually
-//     does to a real ebuild with a nonempty `SRC_URI`: this pilot's own
-//     environment setup never populates `A`/`AA` from `SRC_URI` at all,
-//     so real EAPI 0's own default `src_unpack` (`unpack ${A}`) runs
-//     with nothing to unpack and silently *succeeds* -- it does NOT fail
-//     the way real portage's own separate pre-phase fetch/distfile check
-//     would (real `doebuild()` checks `SRC_URI` against `DISTDIR`
-//     *before* ever running the ebuild's own phases at all, a mechanism
-//     this pilot has no equivalent of). Left uncaught, this would
-//     silently produce a real, valid-looking but functionally empty
-//     binary package instead of erroring -- worse than a loud failure,
-//     so `locate_ebuild`'s own caller refuses outright (see
-//     `run_buildpkgonly`'s own real `SRC_URI` check) rather than letting
-//     that happen. Real fetch+Manifest verification is a
-//     separately-scoped follow-up; until then this is a hard refusal,
-//     not a silent gap.
 //   - A `CandidateSource::Binary` entry (would only appear via
 //     `--usepkg`) is skipped outright -- it's already a binary, there is
 //     nothing to build.
@@ -130,25 +119,6 @@ pub fn run_buildpkgonly(
                 entry.category, entry.package
             ));
         };
-        // See the module doc comment's own "KNOWN, DOCUMENTED GAPS"
-        // entry on SRC_URI: silently letting this through would build a
-        // real but functionally empty binary package instead of failing
-        // loudly, so it's refused here instead.
-        let pf = format!("{}-{version}", entry.package);
-        let src_uri_nonempty =
-            portage_repo::read_md5_cache(&candidate.repo_location, &entry.category, &pf)
-                .ok()
-                .and_then(|metadata| metadata.get("SRC_URI").cloned())
-                .is_some_and(|s| !s.trim().is_empty());
-        if src_uri_nonempty {
-            return Err(format!(
-                "{}/{}-{version}: has a real SRC_URI, but this pilot has no \
-                 real fetch/unpack machinery (see emerge_build.rs's own \
-                 module doc comment) -- refusing rather than silently \
-                 building an empty package",
-                entry.category, entry.package
-            ));
-        }
         let path = ebuild_path(&candidate, &entry.category, &entry.package, version);
         println!(
             ">>> Building binary for {}/{}-{version}...",
@@ -257,6 +227,7 @@ mod tests {
             &PackageOptions {
                 debug: false,
                 pkgdir: bogus.clone(),
+                distdir: bogus.clone(),
             },
         );
         assert!(result.is_ok());
@@ -293,6 +264,7 @@ mod tests {
             &PackageOptions {
                 debug: false,
                 pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
             },
         );
         assert!(result.is_ok(), "{result:?}");
@@ -310,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn real_buildpkgonly_refuses_a_real_src_uri_instead_of_building_an_empty_package() {
+    fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
         let config_root = fixtures_root();
         let repos = find_repos(&config_root).unwrap();
         let root = tempdir();
@@ -340,11 +312,15 @@ mod tests {
             &PackageOptions {
                 debug: false,
                 pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
             },
         );
-        let err = result.expect_err("a real SRC_URI must be refused, not silently built");
-        assert!(err.contains("dev-libs/fetchpkg-1.0"), "{err}");
-        assert!(err.contains("SRC_URI"), "{err}");
+        // `fetchpkg`'s own fixture has a real, nonempty SRC_URI but no
+        // Manifest entry at all -- refused before any network access is
+        // even attempted (see `crate::fetch::fetch_src_uri`'s own doc
+        // comment: unverifiable content is worse than a loud failure).
+        let err = result.expect_err("an unverifiable SRC_URI must be refused");
+        assert!(err.contains("no Manifest entry"), "{err}");
         assert!(
             !pkgdir.join("dev-libs/fetchpkg-1.0.tbz2").exists(),
             "must not have built anything"

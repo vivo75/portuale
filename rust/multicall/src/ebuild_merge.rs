@@ -98,6 +98,7 @@ pub struct MergeOptions {
     pub debug: bool,
     pub config_protect: String,
     pub config_protect_mask: String,
+    pub distdir: PathBuf,
 }
 
 impl Default for MergeOptions {
@@ -106,6 +107,7 @@ impl Default for MergeOptions {
             debug: false,
             config_protect: "/etc".to_string(),
             config_protect_mask: "/etc/env.d".to_string(),
+            distdir: PathBuf::from("/var/cache/distfiles"),
         }
     }
 }
@@ -525,6 +527,7 @@ pub fn run_merge(
         &["install"],
         root,
         portage_tmpdir,
+        &options.distdir,
         options.debug,
     )?;
     if status != 0 {

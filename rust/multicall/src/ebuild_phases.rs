@@ -124,6 +124,7 @@
 //     `FILESDIR` entirely (writes its own scratch file under `${T}`
 //     instead) rather than needing that copy step ported too.
 
+use crate::fetch::{self, FetchOptions};
 use brush_builtins::ShellBuilderExt as _;
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -407,6 +408,62 @@ pub(crate) fn repo_root() -> PathBuf {
         .expect("repo root resolves (multicall is always built from within the real checkout)")
 }
 
+/// Real portage's own mechanism for locating a repo from one of its own
+/// ebuild files: walks up from `pkg_dir` looking for a `profiles/
+/// repo_name` file, returning the *ancestor directory itself* (the real
+/// repo root, suitable for `portage_repo::read_md5_cache`) -- `None` for
+/// a standalone ebuild file outside any repo checkout. Shared by
+/// `fetch_sources` below and `ebuild_package.rs`'s own `Packages`-index
+/// metadata lookup (moved here rather than duplicated, since both need
+/// exactly the same walk).
+pub(crate) fn repo_root_for(pkg_dir: &Path) -> Option<PathBuf> {
+    for ancestor in pkg_dir.ancestors() {
+        if ancestor.join("profiles").join("repo_name").is_file() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+/// Real `doebuild()`'s own `SRC_URI`-vs-`DISTDIR` fetch check (see
+/// `crate::fetch`'s own module doc comment for the real mechanics),
+/// run once per `run_commands_async` call rather than per-phase.
+/// `SRC_URI` itself is read from the ebuild's own repo's real
+/// `metadata/md5-cache` entry (the same source `ebuild_package.rs`
+/// already trusts for `Packages`-index metadata) -- absent entirely
+/// (no fetch attempted, `A`/`AA` both empty) for a standalone ebuild
+/// file outside any repo checkout, the same tolerance `repo_root_for`
+/// already established. Returns `(A, AA)`: `A` is the real, actually-
+/// fetched filename list (this pilot's own always-empty USE set, see
+/// `crate::fetch::fetch_src_uri`'s own doc comment); `AA` is every
+/// filename `SRC_URI` could ever reference regardless of USE (real
+/// PMS's own definition), computed but never itself fetched.
+fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<String>), String> {
+    let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let src_uri = portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf)
+        .ok()
+        .and_then(|metadata| metadata.get("SRC_URI").cloned())
+        .unwrap_or_default();
+    if src_uri.trim().is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let aa = portage_fetch::flatten_src_uri(&src_uri, |_, _| true)
+        .map_err(|e| format!("{}: {e}", env.pkg_dir.display()))?
+        .into_iter()
+        .map(|entry| entry.filename)
+        .collect();
+    let a = fetch::fetch_src_uri(
+        &env.pkg_dir,
+        &src_uri,
+        &FetchOptions {
+            distdir: distdir.to_path_buf(),
+        },
+    )?;
+    Ok((a, aa))
+}
+
 /// The real environment-variable block every real phase and every real
 /// `bin/misc-functions.sh` `__dyn_*` command alike needs -- shared by
 /// `run_one_phase` and `run_misc_function` so the two don't duplicate
@@ -508,6 +565,7 @@ async fn run_one_phase(
     root: &Path,
     phase: &str,
     debug: bool,
+    extra_env: &[(String, String)],
 ) -> Result<i32, String> {
     let bin_dir = repo_root().join("bin");
     let helpers_dir = bin_dir.join("ebuild-helpers");
@@ -519,7 +577,7 @@ async fn run_one_phase(
         .map_err(|e| format!("brush shell failed to start: {e}"))?;
     let params = shell.default_exec_params();
 
-    let setup = phase_setup_script(env, root, phase, debug, &bin_dir, &helpers_dir, &[]);
+    let setup = phase_setup_script(env, root, phase, debug, &bin_dir, &helpers_dir, extra_env);
     shell
         .run_string(&setup, &brush_core::SourceInfo::default(), &params)
         .await
@@ -650,19 +708,52 @@ pub(crate) fn run_misc_function(
 /// shell per phase, not one shared across the whole invocation, is the
 /// real, not simplified, model here) sourcing real `bin/ebuild.sh` (see
 /// this module's own doc comment) and the ebuild file itself.
+///
+/// Real `doebuild()`'s own `SRC_URI`-vs-`DISTDIR` fetch check (see
+/// `fetch_sources`'s own doc comment) runs exactly once here, before
+/// the phase loop, whenever the combined prerequisite chain includes
+/// `unpack` -- matching real portage's own ordering (real `pkg_pretend`
+/// explicitly runs *before* fetching, PMS's whole point for that phase
+/// being a fast sanity check that shouldn't need network access at
+/// all; `setup` likewise precedes it). The resulting `A`/`AA` are
+/// exported into *every* phase this call runs, not just `unpack`
+/// itself, matching real portage's own environment (every phase sees
+/// the same `A`/`AA`, whether or not it happens to reference them).
+/// `DISTDIR` itself is always exported too (regardless of whether
+/// `unpack` is in the chain at all), matching real portage's own
+/// unconditional environment -- real `unpack` (a `bin/ebuild-helpers/`
+/// script, not reimplemented) resolves `${A}`'s own files relative to
+/// `${DISTDIR}` itself, not anything this Rust code passes it
+/// directly, so omitting the export here would silently break real
+/// unpacking even after a real, successful fetch (caught empirically:
+/// a real fetched-and-verified distfile still made `unpack` report
+/// `"either does not exist or is not a regular file"` before this was
+/// added).
 async fn run_commands_async(
     ebuild_path: &Path,
     commands: &[&str],
     root: &Path,
     portage_tmpdir: &Path,
+    distdir: &Path,
     debug: bool,
 ) -> Result<i32, String> {
     let env = compute_environment(ebuild_path, portage_tmpdir)?;
     create_directories(&env)?;
 
+    let chain: Vec<&str> = commands
+        .iter()
+        .flat_map(|&c| phase_prerequisites(c))
+        .collect();
+    let mut extra_env = vec![("DISTDIR".to_string(), distdir.display().to_string())];
+    if chain.contains(&"unpack") {
+        let (a, aa) = fetch_sources(&env, distdir)?;
+        extra_env.push(("A".to_string(), a.join(" ")));
+        extra_env.push(("AA".to_string(), aa.join(" ")));
+    }
+
     for &command in commands {
         for phase in phase_prerequisites(command) {
-            let status = run_one_phase(&env, root, phase, debug).await?;
+            let status = run_one_phase(&env, root, phase, debug, &extra_env).await?;
             if status != 0 {
                 return Ok(status);
             }
@@ -694,6 +785,7 @@ pub fn run_commands(
     commands: &[&str],
     root: &Path,
     portage_tmpdir: &Path,
+    distdir: &Path,
     debug: bool,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -705,6 +797,7 @@ pub fn run_commands(
         commands,
         root,
         portage_tmpdir,
+        distdir,
         debug,
     ))
 }
@@ -738,7 +831,13 @@ pub(crate) fn run_single_phase(
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;
         create_directories(&env)?;
-        run_one_phase(&env, root, phase, debug).await
+        // No `A`/`AA` here: real `pkg_preinst`/`pkg_postinst` run after
+        // `install`'s own real `unpack` already completed (real
+        // `dblink.treewalk()` invokes them directly, never through
+        // `doebuild()`'s own fetch-then-phases sequence at all -- see
+        // this function's own doc comment), so there's nothing to
+        // re-fetch or re-export here.
+        run_one_phase(&env, root, phase, debug, &[]).await
     })
 }
 
@@ -875,6 +974,7 @@ mod tests {
             &["install"],
             Path::new("/"),
             &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
             false,
         )
         .expect("run_commands should not itself error");
@@ -887,6 +987,96 @@ mod tests {
         assert_eq!(contents, "hello from phasepkg\n");
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Real, end-to-end proof of `fetch_sources`'s own `A`/`AA`
+    /// computation through the real CLI path, deterministic and
+    /// offline: `dev-libs/verifiedfetchpkg`'s own real, checked-in
+    /// `Manifest` entry matches a payload file this test pre-seeds into
+    /// `DISTDIR` (the real, valid BLAKE2b-512/SHA-512 digests of the
+    /// literal bytes `"hello from verifiedfetchpkg\n"`, confirmed via
+    /// the real `b2sum`/`sha512sum` system tools) -- so the "already
+    /// verified" skip-fetch path fires and no real network access is
+    /// attempted at all, while still exercising the full real SRC_URI
+    /// grammar: an arrow-rename (`-> verifiedfetchpkg-1.0.tar.gz`) and a
+    /// `test?` USE-conditional group that must stay excluded from `A`
+    /// (this pilot's own always-empty USE set) but still appear in
+    /// `AA` (real PMS's own "every file regardless of USE" definition).
+    #[test]
+    fn install_computes_real_a_and_aa_from_a_verified_distfile_with_no_network() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-{}",
+            std::process::id(),
+            "install_computes_real_a_and_aa_from_a_verified_distfile_with_no_network"
+        ));
+        let distdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-distdir-{}-{}",
+            std::process::id(),
+            "install_computes_real_a_and_aa_from_a_verified_distfile_with_no_network"
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let _ = std::fs::remove_dir_all(&distdir);
+        std::fs::create_dir_all(&distdir).unwrap();
+        std::fs::write(
+            distdir.join("verifiedfetchpkg-1.0.tar.gz"),
+            b"hello from verifiedfetchpkg\n",
+        )
+        .unwrap();
+
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &distdir,
+            false,
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+
+        let marker =
+            portage_tmpdir.join("portage/dev-libs/verifiedfetchpkg-1.0/temp/fetch-vars.txt");
+        let observed = std::fs::read_to_string(&marker)
+            .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
+        assert_eq!(
+            observed,
+            "A=verifiedfetchpkg-1.0.tar.gz\n\
+             AA=verifiedfetchpkg-1.0.tar.gz verifiedfetchpkg-tests-1.0.tar.gz\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+        let _ = std::fs::remove_dir_all(&distdir);
+    }
+
+    #[test]
+    fn repo_root_for_finds_the_nearest_ancestor_repo_root() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-repo_root_for_finds",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let repo = tmp.join("myrepo");
+        let pkg_dir = repo.join("dev-libs/foo");
+        std::fs::create_dir_all(repo.join("profiles")).unwrap();
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(repo.join("profiles/repo_name"), "myrepo\n").unwrap();
+        assert_eq!(repo_root_for(&pkg_dir), Some(repo));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn repo_root_for_is_none_when_no_ancestor_has_one() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-repo_root_for_none",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let pkg_dir = tmp.join("dev-libs/foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        assert_eq!(repo_root_for(&pkg_dir), None);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Real, not simulated (task #56): passing `debug: true` really
@@ -919,6 +1109,7 @@ mod tests {
                 &["install"],
                 Path::new("/"),
                 &portage_tmpdir,
+                &portage_tmpdir.join("distfiles"),
                 debug,
             )
             .expect("run_commands should not itself error");
@@ -958,6 +1149,7 @@ mod tests {
             &["pretend"],
             Path::new("/"),
             &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
             false,
         )
         .expect("run_commands should not itself error");

@@ -1,0 +1,12 @@
+[package]
+name = "portage-fetch"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+# Real Manifest2 digest verification (lib/portage/manifest.py's own
+# MANIFEST2_HASH_DEFAULTS = {"BLAKE2B", "SHA512"}) -- another deliberate,
+# documented dependency, same waiver as brush-core/regex/md-5/filetime in
+# multicall's own Cargo.toml.
+blake2 = "0.10"
+sha2 = "0.10"

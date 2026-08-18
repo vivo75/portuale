@@ -77,6 +77,7 @@ pub fn is_real_package_command(command: &str) -> bool {
 pub struct PackageOptions {
     pub debug: bool,
     pub pkgdir: PathBuf,
+    pub distdir: PathBuf,
 }
 
 impl Default for PackageOptions {
@@ -84,23 +85,9 @@ impl Default for PackageOptions {
         Self {
             debug: false,
             pkgdir: PathBuf::from("/var/cache/binpkgs"),
+            distdir: PathBuf::from("/var/cache/distfiles"),
         }
     }
-}
-
-/// Real portage's own mechanism for locating a repo from one of its own
-/// ebuild files: walks up from `pkg_dir` looking for a `profiles/
-/// repo_name` file, returning the *ancestor directory itself* (the real
-/// repo root, suitable for `portage_repo::read_md5_cache`) rather than
-/// just the name the way `ebuild_merge::repository_name_for` does --
-/// `None` for a standalone ebuild file outside any repo checkout.
-fn repo_root_for(pkg_dir: &Path) -> Option<PathBuf> {
-    for ancestor in pkg_dir.ancestors() {
-        if ancestor.join("profiles").join("repo_name").is_file() {
-            return Some(ancestor.to_path_buf());
-        }
-    }
-    None
 }
 
 fn now_unix_time() -> Result<u64, String> {
@@ -193,6 +180,7 @@ pub fn run_package(
         &["install"],
         root,
         portage_tmpdir,
+        &options.distdir,
         options.debug,
     )?;
     if status != 0 {
@@ -255,7 +243,7 @@ pub fn run_package(
     }
 
     let cpv = format!("{}/{}", env.category, env.split.pf);
-    let metadata: HashMap<String, String> = repo_root_for(&env.pkg_dir)
+    let metadata: HashMap<String, String> = ebuild_phases::repo_root_for(&env.pkg_dir)
         .and_then(|repo_root| {
             portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok()
         })
@@ -311,24 +299,9 @@ mod tests {
         assert!(!is_real_package_command("install"));
     }
 
-    #[test]
-    fn repo_root_for_finds_the_nearest_ancestor_repo_root() {
-        let tmp = tempdir();
-        let repo = tmp.join("myrepo");
-        let pkg_dir = repo.join("dev-libs/foo");
-        std::fs::create_dir_all(repo.join("profiles")).unwrap();
-        std::fs::create_dir_all(&pkg_dir).unwrap();
-        std::fs::write(repo.join("profiles/repo_name"), "myrepo\n").unwrap();
-        assert_eq!(repo_root_for(&pkg_dir), Some(repo));
-    }
-
-    #[test]
-    fn repo_root_for_is_none_when_no_ancestor_has_one() {
-        let tmp = tempdir();
-        let pkg_dir = tmp.join("dev-libs/foo");
-        std::fs::create_dir_all(&pkg_dir).unwrap();
-        assert_eq!(repo_root_for(&pkg_dir), None);
-    }
+    // `repo_root_for` itself now lives in, and is tested in,
+    // `ebuild_phases.rs` (shared with `fetch_sources`'s own repo lookup
+    // -- see that module's own doc comment on why it moved).
 
     #[test]
     fn write_packages_index_entry_creates_a_header_then_the_entry() {
@@ -407,6 +380,7 @@ mod tests {
         let options = PackageOptions {
             debug: false,
             pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
         };
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(&portage_tmpdir).unwrap();

@@ -1,0 +1,8 @@
+DEFINED_PHASES=install
+DESCRIPTION=fixture package: real SRC_URI grammar (arrow-rename + USE-conditional group), verified-in-place so no live network is needed
+EAPI=8
+IUSE=test
+KEYWORDS=amd64
+SLOT=0
+SRC_URI=https://example.invalid/payload.bin -> verifiedfetchpkg-1.0.tar.gz test? ( https://example.invalid/tests.bin -> verifiedfetchpkg-tests-1.0.tar.gz )
+_md5_=0000000000000000000000000000000

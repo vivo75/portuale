@@ -191,6 +191,14 @@ pub fn run(args: &[String]) -> ExitCode {
         // PORTAGE_TMPDIR above -- real make.globals's own defaults (see
         // ebuild_merge::MergeOptions's own Default impl) apply when
         // unset.
+        // Real make.globals's own DISTDIR default -- same env-var-not-
+        // full-config-resolution shortcut as PORTAGE_TMPDIR/PKGDIR/
+        // CONFIG_PROTECT, shared by both real-execution paths below
+        // that run the real `install` chain (and therefore a real
+        // `unpack`, see `ebuild_phases::fetch_sources`).
+        let distdir = std::env::var_os("DISTDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
         let default_merge_options = ebuild_merge::MergeOptions::default();
         let merge_options = ebuild_merge::MergeOptions {
             debug,
@@ -198,6 +206,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 .unwrap_or(default_merge_options.config_protect),
             config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
                 .unwrap_or(default_merge_options.config_protect_mask),
+            distdir: distdir.clone(),
         };
         // Real make.globals's own PKGDIR default -- see
         // ebuild_package::PackageOptions's own Default impl.
@@ -206,6 +215,7 @@ pub fn run(args: &[String]) -> ExitCode {
             pkgdir: std::env::var_os("PKGDIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| ebuild_package::PackageOptions::default().pkgdir),
+            distdir: distdir.clone(),
         };
         let ebuild_path = std::path::Path::new(ebuild_file);
         // One command at a time here, not the whole slice at once --
@@ -225,7 +235,14 @@ pub fn run(args: &[String]) -> ExitCode {
             } else if ebuild_package::is_real_package_command(cmd) {
                 ebuild_package::run_package(ebuild_path, &root, &portage_tmpdir, &package_options)
             } else {
-                ebuild_phases::run_commands(ebuild_path, &[cmd], &root, &portage_tmpdir, debug)
+                ebuild_phases::run_commands(
+                    ebuild_path,
+                    &[cmd],
+                    &root,
+                    &portage_tmpdir,
+                    &distdir,
+                    debug,
+                )
             };
             match result {
                 Ok(0) => {}

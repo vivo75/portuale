@@ -2503,6 +2503,9 @@ pub fn run(args: &[String]) -> ExitCode {
             pkgdir: std::env::var_os("PKGDIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| ebuild_package::PackageOptions::default().pkgdir),
+            distdir: std::env::var_os("DISTDIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| ebuild_package::PackageOptions::default().distdir),
         };
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
