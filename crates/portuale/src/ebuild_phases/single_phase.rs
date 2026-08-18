@@ -42,6 +42,40 @@ pub(crate) struct RunSinglePhaseArgs<'a> {
     pub(crate) log_file: Option<&'a Path>,
 }
 
+/// Runs exactly `phase`, with no `actionmap_deps` prerequisite chain.
+/// Portage: dbapi/vartree.py, dblink.treewalk.
+/// Safe to call even when the ebuild defines neither hook function.
+pub(crate) fn run_single_phase(args: RunSinglePhaseArgs<'_>) -> Result<i32, String> {
+    let RunSinglePhaseArgs {
+        ebuild_path,
+        phase,
+        root,
+        portage_tmpdir,
+        debug,
+        config_root,
+        shell,
+        build_env,
+        log_file,
+    } = args;
+    let runtime = shared_runtime()?;
+    runtime.block_on(async {
+        let env = compute_environment(ebuild_path, portage_tmpdir)?;
+        create_directories(&env)?;
+        // No `A`/`AA` here: these hooks run after `unpack` completed.
+        run_one_phase(RunOnePhaseArgs {
+            env: &env,
+            root,
+            phase,
+            debug,
+            extra_env: build_env,
+            config_root,
+            shell,
+            log_file,
+        })
+        .await
+    })
+}
+
 /// Arguments of [`run_clean`].
 pub(crate) struct RunCleanArgs<'a> {
     pub(crate) ebuild_path: &'a Path,
@@ -52,6 +86,33 @@ pub(crate) struct RunCleanArgs<'a> {
     pub(crate) config_root: &'a Path,
     pub(crate) shell: ShellBackend,
     pub(crate) log_file: Option<&'a Path>,
+}
+
+/// The `clean` phase: removes the image, the resume markers, `${T}` and
+/// `WORKDIR`/`build-info`/`files` unless `FEATURES=keeptemp`/`keepwork`.
+/// Portage: bin/phase-functions.sh, __dyn_clean.
+pub(crate) fn run_clean(args: RunCleanArgs<'_>) -> Result<i32, String> {
+    let RunCleanArgs {
+        ebuild_path,
+        root,
+        portage_tmpdir,
+        build_env,
+        debug,
+        config_root,
+        shell,
+        log_file,
+    } = args;
+    run_single_phase(RunSinglePhaseArgs {
+        ebuild_path,
+        phase: "clean",
+        root,
+        portage_tmpdir,
+        debug,
+        config_root,
+        shell,
+        build_env,
+        log_file,
+    })
 }
 
 /// Seeds `${T}/environment` from a binpkg's saved env, plus the `.raw` marker.
@@ -105,6 +166,49 @@ pub(crate) struct RunInstprepArgs<'a> {
     pub(crate) log_file: Option<&'a Path>,
 }
 
+/// The `instprep` internal phase on every merge, before `INSTALL_MASK`,
+/// collision-protect, `pkg_preinst` or any file copy (Portage:
+/// dblink.treewalk + `__dyn_instprep`). `saved_env_bz2` seeds binary
+/// merges; `build_env` carries the phase env the gates read.
+pub(crate) fn run_instprep(args: RunInstprepArgs<'_>) -> Result<i32, String> {
+    let RunInstprepArgs {
+        ebuild_path,
+        saved_env_bz2,
+        seed,
+        root,
+        portage_tmpdir,
+        build_env,
+        debug,
+        config_root,
+        shell,
+        log_file,
+    } = args;
+    let runtime = shared_runtime()?;
+    runtime.block_on(async {
+        let env = compute_environment(ebuild_path, portage_tmpdir)?;
+        create_directories(&env)?;
+        let mut extra_env = build_env.to_vec();
+        if let Some(saved) = saved_env_bz2 {
+            if seed {
+                seed_saved_environment(&env, saved)?;
+            }
+            extra_env.extend(binary_merge_env());
+        }
+        run_misc_functions(RunMiscFunctionsArgs {
+            env: &env,
+            root,
+            ebuild_phase_value: "instprep",
+            dyn_command: "__dyn_instprep",
+            extra_env: &extra_env,
+            debug,
+            config_root,
+            shell,
+            log_file,
+        })
+        .await
+    })
+}
+
 /// Arguments of [`run_phase_from_saved_env`].
 pub(crate) struct RunPhaseFromSavedEnvArgs<'a> {
     pub(crate) ebuild_path: &'a Path,
@@ -128,4 +232,57 @@ pub(crate) struct RunPhaseFromSavedEnvArgs<'a> {
     /// Threaded into the hook env for binary-merge hooks; `None` for unmerge
     /// hooks (see `ebuild_merge::replacing_versions` for the source).
     pub(crate) replacing_versions: Option<&'a str>,
+}
+
+/// Like `run_single_phase`, but seeds `${T}/environment` from a binary
+/// package's saved env, so hooks run against the build-time environment.
+/// `EMERGE_FROM=binary` keeps `pkg_setup` on the saved env.
+/// Portage: _emerge/BinpkgEnvExtractor.
+pub(crate) fn run_phase_from_saved_env(args: RunPhaseFromSavedEnvArgs<'_>) -> Result<i32, String> {
+    let RunPhaseFromSavedEnvArgs {
+        ebuild_path,
+        saved_env_bz2,
+        seed,
+        phase,
+        root,
+        portage_tmpdir,
+        debug,
+        config_root,
+        shell,
+        log_file,
+        update_env,
+        refresh_features,
+        replacing_versions,
+    } = args;
+    let runtime = shared_runtime()?;
+    runtime.block_on(async {
+        let env = compute_environment(ebuild_path, portage_tmpdir)?;
+        create_directories(&env)?;
+        if seed {
+            seed_saved_environment(&env, saved_env_bz2)?;
+        }
+
+        let mut extra_env = binary_merge_env();
+        if let Some(version) = replacing_versions {
+            extra_env.push(("REPLACING_VERSIONS".to_string(), version.to_string()));
+        }
+        if let Some(p) = update_env {
+            extra_env.push(("PORTAGE_UPDATE_ENV".to_string(), p.display().to_string()));
+            if let Some(features) = refresh_features.filter(|f| !f.is_empty()) {
+                extra_env.push(("FEATURES".to_string(), features.to_string()));
+                extra_env.push(("PORTAGE_FEATURES".to_string(), features.to_string()));
+            }
+        }
+        run_one_phase(RunOnePhaseArgs {
+            env: &env,
+            root,
+            phase,
+            debug,
+            extra_env: &extra_env,
+            config_root,
+            shell,
+            log_file,
+        })
+        .await
+    })
 }

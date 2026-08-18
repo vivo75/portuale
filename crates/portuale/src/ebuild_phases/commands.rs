@@ -18,6 +18,130 @@ pub(crate) struct RunCommandsAsyncArgs<'a> {
     pub(crate) build_env: &'a [(String, String)],
 }
 
+/// Drives `commands` against `ebuild_path`: environment once, then each
+/// command's `phase_prerequisites` chain in a fresh shell per phase.
+/// Fetch runs once up front when the chain includes `unpack`; a successful
+/// `install` is followed by post-install metadata, the `install_qa_check ...`
+/// sequence (`EBUILD_PHASE` still `"install"`), and the soname deps.
+// Portage: doebuild.py, EbuildPhase.py, config.py, bin/ebuild.sh
+pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result<i32, String> {
+    let RunCommandsAsyncArgs {
+        ebuild_path,
+        commands,
+        root,
+        portage_tmpdir,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        log_file,
+        build_env,
+    } = args;
+    let env = compute_environment(ebuild_path, portage_tmpdir)?;
+    create_directories(&env)?;
+
+    let chain: Vec<&str> = commands
+        .iter()
+        .flat_map(|&c| phase_prerequisites(c))
+        .collect();
+    // The actual distdir goes in as `DISTDIR`; `phase_env_vars` remaps it the
+    // way Portage's `config.environ` does: the actual directory becomes
+    // `PORTAGE_ACTUAL_DISTDIR` and `DISTDIR` the per-package fake.
+    let mut extra_env = vec![("DISTDIR".to_string(), distdir.display().to_string())];
+    extra_env.extend(build_env.iter().cloned());
+    // The resolved `USE` the caller threaded through, so `A` names exactly the
+    // distfiles `use()` will expect.
+    let use_flags = extra_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "USE")
+        .map_or("", |(_, v)| v.as_str())
+        .to_string();
+    let features = features_string(&extra_env);
+    let a = if chain.contains(&"unpack") {
+        let (a, _aa) = fetch_sources(FetchSourcesArgs {
+            env: &env,
+            root,
+            distdir,
+            debug,
+            config_root,
+            shell,
+            features: &features,
+            use_flags: &use_flags,
+        })
+        .await?;
+        // Portage exports `A` for EAPI 4+ but never `AA`; the floor here is EAPI 5+.
+        extra_env.push(("A".to_string(), a.join(" ")));
+        Some(a)
+    } else {
+        None
+    };
+    // Portage: doebuild.py, doebuild — the fake distdir is prepared unless the
+    // command is bare `setup` (FEATURES=noauto excepted); `install`/`unpack`
+    // chains always need it. The first test is over the command, not the chain.
+    if (commands.iter().any(|&c| c != "setup")
+        && !features.split_whitespace().any(|f| f == "noauto"))
+        || chain.iter().any(|&p| p == "install" || p == "unpack")
+    {
+        let alist = match a {
+            Some(a) => a,
+            None => package_a(&env, &use_flags)?,
+        };
+        prepare_fake_distdir(&env, distdir, &alist)?;
+    }
+
+    for &command in commands {
+        for phase in phase_prerequisites(command) {
+            let status = run_one_phase(RunOnePhaseArgs {
+                env: &env,
+                root,
+                phase,
+                debug,
+                extra_env: &extra_env,
+                config_root,
+                shell,
+                log_file,
+            })
+            .await?;
+            if status != 0 {
+                return Ok(status);
+            }
+            // Portage: EbuildPhase.py, _post_phase_cmds — after a successful
+            // `install`, run `install_qa_check install_symlink_html_docs
+            // install_hooks` here: unconditional, and never part of
+            // `phase_prerequisites`' own chain. `misc-functions.sh`
+            // re-splits its args on whitespace, so one space-joined string
+            // equals three argv entries.
+            if phase == "install" {
+                // Portage: EbuildPhase.py, _ebuild_exit_unlocked — metadata and the
+                // uid fix run before the QA sequence, so `SIZE` describes the
+                // pre-transform image.
+                write_post_install_metadata(&env, root, build_env)?;
+                let qa_status = run_misc_functions(RunMiscFunctionsArgs {
+                    env: &env,
+                    root,
+                    ebuild_phase_value: "install",
+                    dyn_command: "install_qa_check install_symlink_html_docs install_hooks",
+                    extra_env: &extra_env,
+                    debug,
+                    config_root,
+                    shell,
+                    log_file,
+                })
+                .await?;
+                if qa_status != 0 {
+                    return Ok(qa_status);
+                }
+                // Portage: EbuildPhase.py, _commands_exit — soname symlinks,
+                // `PROVIDES`/`REQUIRES` and the implicit libc dep run right
+                // after the QA sequence above.
+                write_post_install_soname_deps(&env, root)?;
+            }
+        }
+    }
+    Ok(0)
+}
+
 pub struct RunCommandsArgs<'a> {
     pub ebuild_path: &'a Path,
     pub commands: &'a [&'a str],
@@ -28,6 +152,35 @@ pub struct RunCommandsArgs<'a> {
     pub config_root: &'a Path,
     pub shell: ShellBackend,
     pub build_env: &'a [(String, String)],
+}
+
+/// Synchronous entry point for `ebuild.rs`: spins up a multi-threaded tokio
+/// runtime for the call (a single-threaded one deadlocks mid-run).
+/// `PORTAGE_TMPDIR` is read by the caller, so tests can pass it directly.
+pub fn run_commands(args: RunCommandsArgs<'_>) -> Result<i32, String> {
+    let RunCommandsArgs {
+        ebuild_path,
+        commands,
+        root,
+        portage_tmpdir,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        build_env,
+    } = args;
+    run_commands_logged(RunCommandsLoggedArgs {
+        ebuild_path,
+        commands,
+        root,
+        portage_tmpdir,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        log_file: None,
+        build_env,
+    })
 }
 
 pub struct RunCommandsLoggedArgs<'a> {
@@ -41,6 +194,37 @@ pub struct RunCommandsLoggedArgs<'a> {
     pub shell: ShellBackend,
     pub log_file: Option<&'a Path>,
     pub build_env: &'a [(String, String)],
+}
+
+/// Like `run_commands`, but every phase appends stdout+stderr to `log_file`
+/// instead of the terminal, so parallel builds don't interleave.
+// Portage: _emerge/EbuildPhase.py (`PORTAGE_LOG_FILE`)
+pub fn run_commands_logged(args: RunCommandsLoggedArgs<'_>) -> Result<i32, String> {
+    let RunCommandsLoggedArgs {
+        ebuild_path,
+        commands,
+        root,
+        portage_tmpdir,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        log_file,
+        build_env,
+    } = args;
+    let runtime = shared_runtime()?;
+    runtime.block_on(run_commands_async(RunCommandsAsyncArgs {
+        ebuild_path,
+        commands,
+        root,
+        portage_tmpdir,
+        distdir,
+        debug,
+        config_root,
+        shell,
+        log_file,
+        build_env,
+    }))
 }
 
 /// Opens `log_file` for append (creating parents): directly, or through a gzip

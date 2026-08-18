@@ -214,6 +214,18 @@ pub(crate) fn restrict_and_properties(
     )
 }
 
+/// The resolved chain value below the calling env for a global scalar.
+/// `None` when the chain names no value. Deliberately not `package.env`-matched.
+pub(crate) fn resolve_standalone_chain_scalar(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+    key: &str,
+) -> Option<String> {
+    let (config, _) = standalone_package_env_lookup(ebuild_path, config_root, eroot)?;
+    config.other_vars.get(key).cloned()
+}
+
 /// The resolved global `Config` for the config-less `emerge -C` path.
 /// `None` when no config resolves; the caller keeps its default.
 pub(crate) fn resolve_unmerge_config(
