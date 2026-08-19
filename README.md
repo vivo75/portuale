@@ -3739,8 +3739,88 @@ genuinely rare real-world case). No `--noconfmem` support at all (this
 pilot's own `ebuild` CLI has no such flag, so behavior always matches
 real portage's own default). `new_protect_filename` always allocates a
 fresh number rather than reusing the last one when its content already
-matches (a purely cosmetic difference). No `FEATURES=collision-protect`/
-`preserve-libs`.
+matches (a purely cosmetic difference).
+
+### `FEATURES=collision-protect`: a merge that would overwrite another package's file aborts
+
+CONFIG_PROTECT's own sibling real merge-track feature: real
+`dblink._collision_protect` (`lib/portage/dbapi/vartree.py:3836`) is now
+real too. Before `pkg_preinst` ever runs (matching real `merge()`'s own
+exact ordering -- confirmed by reading it, the real abort happens
+strictly before the real `EbuildPhase(phase="preinst")` block, not
+after), `find_collisions` walks the real install image (`${D}`) the
+same way `merge_tree` does, read-only, checking every real file/symlink
+entry (never directories -- real `_collision_protect` only ever checks
+`file_list`/`symlink_list`) against the real, on-disk destination:
+
+- Real PMS 13.4's own symlink-over-directory ban is checked
+  **unconditionally**, regardless of `FEATURES` -- a symlink this
+  package would install landing exactly where an existing directory
+  already sits always aborts the merge.
+- An ordinary collision (the destination already exists, isn't owned by
+  an older installed version of this exact package in the same slot --
+  the one this merge is about to replace -- and isn't `CONFIG_PROTECT`'d,
+  which diverts instead of colliding) only aborts when real
+  `FEATURES=collision-protect` itself is set (read once via
+  `std::env::var("FEATURES")` at the `ebuild.rs` CLI boundary, the same
+  "env var, not full config resolution" shortcut every other real
+  setting there already uses) -- matching real portage's own default:
+  without it, the merge proceeds and silently overwrites the file, same
+  as before this slice.
+
+`find_owners` (real `vardbapi._owners.get_owners()`, narrowed to a
+fresh scan of every installed package's own real `CONTENTS` rather than
+a persistent reverse index -- acceptable for a real, but not
+performance-critical, error-reporting path only reached when a merge is
+about to abort anyway) names which other real installed package(s)
+actually claim each colliding path in the abort message.
+
+Deliberately not attempted (see `ebuild_merge.rs`'s own module doc
+comment for the full list): `preserve-libs` exclusion (a collision
+against a library real portage is about to unregister and hand over is
+a real, separately-scoped subsystem this pilot doesn't implement
+anywhere yet), blocker exclusion (real `mypkglist = others_in_slot +
+blockers` -- blockers are a real, broad gap this pilot doesn't attempt
+anywhere else either), and `FEATURES=protect-owned` (a separate real
+feature: abort only when an owner was actually identified, regardless
+of `collision-protect`).
+
+Proven via three new, real, end-to-end tests in `ebuild_merge.rs`
+against two new fixture packages (`dev-libs/collisionpkg-a`, the
+already-installed half; `dev-libs/collisionpkg-c`, an unrelated package
+that collides with it on an ordinary file) plus a third
+(`dev-libs/collisionpkg-b`, which collides via a symlink over
+`collisionpkg-a`'s own real directory): collision-protect off merges
+over the collision as before; collision-protect on aborts and names
+`collisionpkg-a` as the real owning package, leaving the file
+byte-for-byte untouched; the symlink-over-directory case aborts
+unconditionally regardless of `collision_protect`. Live-verified
+against the compiled binary first, with fresh `ROOT`s per scenario (an
+earlier attempt that reused one `ROOT` across sequential merges without
+unmerging in between produced a stale, misleading result -- a leftover
+vdb entry from an earlier merge made a later package look like it
+already "owned" a path it didn't actually still own on disk; not a bug
+in the collision logic itself, a reminder that this pilot's own
+`unmerge` is what real portage relies on to keep vdb ownership in sync,
+not just overwriting files in place).
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/multicall ebuild \
+    PORTING/fixtures/repo/dev-libs/collisionpkg-a/collisionpkg-a-1.0.ebuild merge
+FEATURES="collision-protect" PORTING/rust/target/release/multicall ebuild \
+    PORTING/fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
+# ebuild: This package will overwrite one or more files that may belong to other packages:
+# dev-libs/collisionpkg-a-1.0:
+#         /usr/share/collisiontest/shared.txt
+# Package 'dev-libs/collisionpkg-c-1.0' NOT merged due to file collisions.
+cat "${ROOT}"/usr/share/collisiontest/shared.txt
+# hello from collisionpkg-a
+```
 
 ### `--debug`: real `PORTAGE_DEBUG` plumbing (task #56)
 

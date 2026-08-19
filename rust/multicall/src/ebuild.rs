@@ -232,6 +232,16 @@ pub fn run(args: &[String]) -> ExitCode {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
         let default_merge_options = ebuild_merge::MergeOptions::default();
+        // Real `"collision-protect" in self.settings.features` -- same
+        // env-var-not-full-config-resolution shortcut every other real
+        // setting at this CLI boundary already uses.
+        let collision_protect = std::env::var("FEATURES")
+            .map(|features| {
+                features
+                    .split_whitespace()
+                    .any(|tok| tok == "collision-protect")
+            })
+            .unwrap_or(default_merge_options.collision_protect);
         let merge_options = ebuild_merge::MergeOptions {
             debug,
             config_protect: std::env::var("CONFIG_PROTECT")
@@ -240,6 +250,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 .unwrap_or(default_merge_options.config_protect_mask),
             distdir: distdir.clone(),
             shell,
+            collision_protect,
         };
         // Real make.globals's own PKGDIR default -- see
         // ebuild_package::PackageOptions's own Default impl.

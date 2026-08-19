@@ -29,7 +29,41 @@
 // globals`'s own `CONFIG_PROTECT="/etc"`/`CONFIG_PROTECT_MASK="/etc/
 // env.d"`.
 //
+// `FEATURES=collision-protect` is real too: real `dblink.
+// _collision_protect` (`lib/portage/dbapi/vartree.py:3836`), narrowed --
+// before `pkg_preinst` ever runs (matching real `merge()`'s own
+// ordering exactly: the real abort happens before the real
+// `EbuildPhase(phase="preinst")` block, not after), walks the real
+// install image (`${D}`) the same way `merge_tree` does but read-only,
+// checking each real file/symlink entry (never directories -- real
+// `_collision_protect` only ever checks `file_list`/`symlink_list`)
+// against the real, on-disk destination: real PMS 13.4's own
+// symlink-over-directory ban is checked unconditionally (regardless of
+// `FEATURES`); an ordinary collision (destination exists, isn't owned
+// by an older installed version of this exact package in the same slot
+// -- the one this merge is about to replace -- and isn't
+// `CONFIG_PROTECT`'d) only aborts when `FEATURES=collision-protect`
+// itself is set (`find_owners` -- real `vardbapi._owners.get_owners()`,
+// narrowed to a fresh scan of every installed package's own `CONTENTS`
+// rather than a persistent reverse index -- names which other real
+// installed package(s) actually claim each colliding path, for the
+// abort message).
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope):
+//   - No `preserve-libs` exclusion (real `_collision_protect`'s own
+//     `plib_inodes`/`plib_collisions` handling: a collision against a
+//     library real portage is about to unregister from its preserved-
+//     libs registry is excluded, since the new package is legitimately
+//     taking over that file) -- a real, separately-scoped subsystem
+//     this pilot doesn't implement anywhere yet.
+//   - No blocker exclusion (real `mypkglist = others_in_slot +
+//     blockers` -- a package this ebuild's own dependencies block is
+//     also excluded from collision reporting) -- blockers are a real,
+//     broad gap this pilot doesn't attempt anywhere else either.
+//   - `FEATURES=protect-owned` (a separate real feature: abort only
+//     when an owning package was actually identified, regardless of
+//     `collision-protect`) is not implemented -- this pilot only ever
+//     checks `collision-protect` itself.
 //   - CONFIG_PROTECT is `obj`-only: a `sym` (symlink) entry under a
 //     protected path is never protected here -- real `dblink._protect()`
 //     handles symlinks too (comparing the *target string*'s own MD5),
@@ -46,8 +80,6 @@
 //     cosmetic difference: this pilot may leave a few more distinct
 //     `._cfgNNNN_` files behind than real portage would for repeated,
 //     never-remembered identical content).
-//   - No `FEATURES=collision-protect`/`preserve-libs` handling -- both
-//     real, separately-scoped features this slice doesn't attempt.
 //   - No `env_update()`/`ldconfig` triggering -- real `merge()` runs
 //     `env_update()` (`/etc/ld.so.cache`-equivalent regeneration,
 //     `/etc/env.d` processing) after a successful merge; this pilot has
@@ -100,6 +132,10 @@ pub struct MergeOptions {
     pub config_protect_mask: String,
     pub distdir: PathBuf,
     pub shell: ebuild_phases::ShellBackend,
+    /// Real `"collision-protect" in self.settings.features` -- `FEATURES`
+    /// itself isn't in `FEATURES` by default (real `make.globals` never
+    /// sets it), so `Default` matches that: `false`.
+    pub collision_protect: bool,
 }
 
 impl Default for MergeOptions {
@@ -110,6 +146,7 @@ impl Default for MergeOptions {
             config_protect_mask: "/etc/env.d".to_string(),
             distdir: PathBuf::from("/var/cache/distfiles"),
             shell: ebuild_phases::ShellBackend::default(),
+            collision_protect: false,
         }
     }
 }
@@ -509,6 +546,223 @@ fn write_vdb_entry(
     Ok(())
 }
 
+fn read_installed_slot(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<String> {
+    let path = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{package}-{version}"))
+        .join("SLOT");
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|text| text.trim().split('/').next().unwrap_or("").to_string())
+}
+
+/// Whether the installed package at `<root>/var/db/pkg/<category>/
+/// <package>-<version>` already claims `abs_path` in its own real
+/// `CONTENTS` (second whitespace-separated field of any line, the same
+/// format `format_contents_line` writes).
+fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path: &str) -> bool {
+    let path = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(format!("{package}-{version}"))
+        .join("CONTENTS");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        parts.next();
+        parts.next() == Some(abs_path)
+    })
+}
+
+/// Real PMS 13.4's own symlink-over-directory ban (checked
+/// unconditionally, regardless of `FEATURES`) plus real `FEATURES=
+/// collision-protect`'s own ordinary-collision detection -- see this
+/// module's own module doc comment for the exact real mechanics and the
+/// real ones this pilot doesn't attempt (`preserve-libs`/blocker
+/// exclusion). Walks `d` (the real install image, `${D}`) the same way
+/// `merge_tree` does, but read-only and file/symlink-only (real
+/// `_collision_protect` never checks directories at all -- a directory
+/// merging into an existing directory is normal, not a collision).
+/// Returns `(collisions, symlink_collisions)` as real, `ROOT`-relative
+/// absolute paths; the caller decides whether `collisions` alone should
+/// abort the merge (gated on `FEATURES=collision-protect`) --
+/// `symlink_collisions` always should.
+#[allow(clippy::too_many_arguments)]
+fn find_collisions(
+    d: &Path,
+    root: &Path,
+    category: &str,
+    package: &str,
+    slot: &str,
+    config_protect: &str,
+    config_protect_mask: &str,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let own_versions: Vec<String> = portage_repo::installed_versions(root, category, package)
+        .into_iter()
+        .filter(|version| {
+            read_installed_slot(root, category, package, version).as_deref() == Some(slot)
+        })
+        .collect();
+
+    let mut collisions = Vec::new();
+    let mut symlink_collisions = Vec::new();
+    let mut stack: Vec<PathBuf> = vec![PathBuf::new()];
+    while let Some(relative_dir) = stack.pop() {
+        let src_dir = d.join(&relative_dir);
+        let mut children: Vec<PathBuf> = std::fs::read_dir(&src_dir)
+            .map_err(|e| format!("{}: {e}", src_dir.display()))?
+            .filter_map(|e| e.ok())
+            .map(|e| relative_dir.join(e.file_name()))
+            .collect();
+        children.sort();
+
+        for relative_path in children {
+            let src = d.join(&relative_path);
+            let dest = root.join(&relative_path);
+            let abs_path = format!("/{}", relative_path.display());
+            let file_type = std::fs::symlink_metadata(&src)
+                .map_err(|e| format!("{}: {e}", src.display()))?
+                .file_type();
+
+            if file_type.is_dir() {
+                stack.push(relative_path);
+                continue;
+            }
+
+            let Ok(dest_meta) = std::fs::symlink_metadata(&dest) else {
+                continue;
+            };
+
+            if file_type.is_symlink() && dest_meta.is_dir() {
+                symlink_collisions.push(abs_path);
+                continue;
+            }
+
+            let owned = own_versions
+                .iter()
+                .any(|version| owns_path(root, category, package, version, &abs_path));
+            if owned || is_protected(root, config_protect, config_protect_mask, &dest) {
+                continue;
+            }
+            collisions.push(abs_path);
+        }
+    }
+    Ok((collisions, symlink_collisions))
+}
+
+/// Real `vardbapi._owners.get_owners()`, narrowed: for each of
+/// `collisions`, walks every installed package under `<root>/var/db/
+/// pkg` (all categories, all packages -- real portage keeps a
+/// persistent reverse index for this; this pilot just scans fresh every
+/// time, acceptable for a real, but not performance-critical, error-
+/// reporting path only reached when a merge is about to abort anyway)
+/// and returns the `category/pf` -> claimed-paths map for whichever
+/// ones actually claim it.
+fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<String>> {
+    let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let pkg_root = root.join("var/db/pkg");
+    let Ok(categories) = std::fs::read_dir(&pkg_root) else {
+        return owners;
+    };
+    for category_entry in categories.filter_map(|e| e.ok()) {
+        let category_path = category_entry.path();
+        if !category_path.is_dir() {
+            continue;
+        }
+        let category_name = category_entry.file_name().to_string_lossy().to_string();
+        let Ok(packages) = std::fs::read_dir(&category_path) else {
+            continue;
+        };
+        for pkg_entry in packages.filter_map(|e| e.ok()) {
+            let pkg_path = pkg_entry.path();
+            if !pkg_path.is_dir() {
+                continue;
+            }
+            let pf = pkg_entry.file_name().to_string_lossy().to_string();
+            let Ok(text) = std::fs::read_to_string(pkg_path.join("CONTENTS")) else {
+                continue;
+            };
+            let mut claimed = Vec::new();
+            for line in text.lines() {
+                let mut parts = line.split_whitespace();
+                parts.next();
+                if let Some(path) = parts.next() {
+                    if collisions.iter().any(|c| c == path) {
+                        claimed.push(path.to_string());
+                    }
+                }
+            }
+            if !claimed.is_empty() {
+                owners
+                    .entry(format!("{category_name}/{pf}"))
+                    .or_default()
+                    .extend(claimed);
+            }
+        }
+    }
+    owners
+}
+
+/// Real "package NOT merged due to file collisions" abort message,
+/// narrowed to what this pilot can cheaply compute (see this module's
+/// own module doc comment): every colliding path, annotated with
+/// whichever other real installed package(s) `find_owners` found
+/// actually claiming it (`(unclaimed)` when none did -- a real,
+/// possible outcome: a stray file on disk with no owner at all, real
+/// portage's own "None of the installed packages claim the file(s)"
+/// case).
+fn collision_message(
+    root: &Path,
+    cpv: &str,
+    collisions: &[String],
+    symlink_collisions: &[String],
+) -> String {
+    let mut lines = Vec::new();
+    if !symlink_collisions.is_empty() {
+        lines.push(format!(
+            "Package '{cpv}' NOT merged: one or more collisions between \
+             symlinks and directories, forbidden by PMS section 13.4:"
+        ));
+        for f in symlink_collisions {
+            lines.push(format!("\t{f}"));
+        }
+    }
+    if !collisions.is_empty() {
+        lines.push(
+            "This package will overwrite one or more files that may belong \
+             to other packages:"
+                .to_string(),
+        );
+        let owners = find_owners(root, collisions);
+        for (owner, paths) in &owners {
+            lines.push(format!("{owner}:"));
+            for f in paths {
+                lines.push(format!("\t{f}"));
+            }
+        }
+        let claimed: std::collections::HashSet<&String> = owners.values().flatten().collect();
+        let unclaimed: Vec<&String> = collisions.iter().filter(|f| !claimed.contains(f)).collect();
+        if !unclaimed.is_empty() {
+            lines.push("(unclaimed):".to_string());
+            for f in unclaimed {
+                lines.push(format!("\t{f}"));
+            }
+        }
+        lines.push(format!(
+            "Package '{cpv}' NOT merged due to file collisions."
+        ));
+    }
+    lines.join("\n")
+}
+
 /// Real `merge()`'s own first step is always the real `install` phase
 /// chain having already completed (`actionmap_deps["merge"] ==
 /// ["install"]`) -- run here directly rather than requiring the caller
@@ -537,6 +791,36 @@ pub fn run_merge(
         return Ok(status);
     }
 
+    let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
+    let ebuild_text = std::fs::read_to_string(&env.ebuild_abs)
+        .map_err(|e| format!("{}: {e}", env.ebuild_abs.display()))?;
+    let slot = parse_slot(&ebuild_text);
+    let repository = repository_name_for(&env.pkg_dir).unwrap_or_else(|| "__unknown__".to_string());
+
+    // Real `merge()`'s own ordering: the collision-protect abort check
+    // (`_collision_protect`) happens before `pkg_preinst` ever runs, not
+    // after -- confirmed by reading it, the real `EbuildPhase(phase=
+    // "preinst")` block sits strictly after the real `if abort: return
+    // 1` check.
+    let (collisions, symlink_collisions) = find_collisions(
+        &env.d(),
+        root,
+        &env.category,
+        &env.split.pn,
+        &slot,
+        &options.config_protect,
+        &options.config_protect_mask,
+    )?;
+    if !symlink_collisions.is_empty() || (options.collision_protect && !collisions.is_empty()) {
+        let cpv = format!("{}/{}", env.category, env.split.pf);
+        return Err(collision_message(
+            root,
+            &cpv,
+            &collisions,
+            &symlink_collisions,
+        ));
+    }
+
     // Real `dblink.treewalk()`'s own order: `pkg_preinst` runs before
     // anything is copied, `pkg_postinst` only after the vdb entry is
     // fully written -- `run_single_phase` (not `run_commands`) since
@@ -553,12 +837,6 @@ pub fn run_merge(
     if preinst_status != 0 {
         return Ok(preinst_status);
     }
-
-    let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
-    let ebuild_text = std::fs::read_to_string(&env.ebuild_abs)
-        .map_err(|e| format!("{}: {e}", env.ebuild_abs.display()))?;
-    let slot = parse_slot(&ebuild_text);
-    let repository = repository_name_for(&env.pkg_dir).unwrap_or_else(|| "__unknown__".to_string());
 
     let mut cfgfiledict = read_cfgfiledict(root);
     let contents = merge_tree(
@@ -1036,5 +1314,129 @@ mod tests {
             .lines()
             .any(|l| l.starts_with("obj /etc/configpkg.conf ")));
         assert!(!contents.contains("._cfg0000_configpkg.conf"));
+    }
+
+    fn collision_fixture(name: &str) -> PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs")
+            .join(name)
+            .join(format!("{name}-1.0.ebuild"))
+    }
+
+    /// `FEATURES=collision-protect` off (`MergeOptions::default()`):
+    /// real portage's own default behavior -- an ordinary file
+    /// collision is merged over anyway (`collisionpkg-c` overwrites
+    /// `collisionpkg-a`'s own `shared.txt`), matching every pre-existing
+    /// test in this file that never set `collision_protect` at all.
+    #[test]
+    fn ordinary_collision_is_merged_over_when_collision_protect_is_off() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        run_merge(
+            &collision_fixture("collisionpkg-a"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("collisionpkg-a merges cleanly");
+
+        let status = run_merge(
+            &collision_fixture("collisionpkg-c"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("run_merge should not itself error");
+        assert_eq!(status, 0);
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/share/collisiontest/shared.txt")).unwrap(),
+            "hello from collisionpkg-c\n"
+        );
+    }
+
+    /// `FEATURES=collision-protect` on: real `dblink._collision_
+    /// protect`'s own abort -- `collisionpkg-c` would overwrite
+    /// `collisionpkg-a`'s own, different-package `shared.txt`, so the
+    /// merge aborts *before* writing anything (the file is left exactly
+    /// as `collisionpkg-a` installed it) and the error names
+    /// `collisionpkg-a` as the real owning package (`find_owners`).
+    #[test]
+    fn ordinary_collision_aborts_the_merge_and_names_the_owner_when_collision_protect_is_on() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        run_merge(
+            &collision_fixture("collisionpkg-a"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("collisionpkg-a merges cleanly");
+
+        let options = MergeOptions {
+            collision_protect: true,
+            ..MergeOptions::default()
+        };
+        let err = run_merge(
+            &collision_fixture("collisionpkg-c"),
+            &root,
+            &portage_tmpdir,
+            &options,
+        )
+        .expect_err("collision-protect should abort the merge");
+        assert!(err.contains("dev-libs/collisionpkg-a-1.0"), "{err}");
+        assert!(err.contains("/usr/share/collisiontest/shared.txt"), "{err}");
+        assert!(err.contains("NOT merged due to file collisions"), "{err}");
+
+        // Nothing was written: the file is still collisionpkg-a's own,
+        // and collisionpkg-c's own vdb entry was never created.
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/share/collisiontest/shared.txt")).unwrap(),
+            "hello from collisionpkg-a\n"
+        );
+        assert!(!root.join("var/db/pkg/dev-libs/collisionpkg-c-1.0").exists());
+    }
+
+    /// Real PMS 13.4's own symlink-over-directory ban: unconditional,
+    /// regardless of `FEATURES` -- `collisionpkg-b` installs a symlink
+    /// exactly where `collisionpkg-a` already installed a real
+    /// directory (`adir`), which aborts the merge even with
+    /// `collision_protect: false` (`MergeOptions::default()`).
+    #[test]
+    fn symlink_over_directory_always_aborts_regardless_of_collision_protect() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        run_merge(
+            &collision_fixture("collisionpkg-a"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("collisionpkg-a merges cleanly");
+
+        let err = run_merge(
+            &collision_fixture("collisionpkg-b"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect_err("a symlink-over-directory violation should always abort");
+        assert!(err.contains("PMS section 13.4"), "{err}");
+        assert!(err.contains("/usr/share/collisiontest/adir"), "{err}");
+
+        // The real directory collisionpkg-a installed is still a real
+        // directory -- never replaced by collisionpkg-b's own symlink.
+        assert!(root.join("usr/share/collisiontest/adir").is_dir());
     }
 }
