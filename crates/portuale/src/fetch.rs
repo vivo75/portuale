@@ -1098,6 +1098,86 @@ mod tests {
         handle.join().unwrap();
     }
 
+    /// End-to-end `mirror://` resolution through a fixture repo checkout's own
+    /// `thirdpartymirrors`, fetched and digest-verified.
+    #[test]
+    fn fetch_src_uri_resolves_a_real_mirror_uri_via_thirdpartymirrors() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        // The stub handler ignores the request path, so appending a
+        // `mirror://`-style extra segment is safe.
+        let mirror_root = uri_base.trim_end_matches("/file");
+
+        let repo_root = tempdir();
+        fs::write(repo_root.join("profiles/repo_name"), "mirrortest\n").unwrap_or_else(|_| {
+            fs::create_dir_all(repo_root.join("profiles")).unwrap();
+            fs::write(repo_root.join("profiles/repo_name"), "mirrortest\n").unwrap();
+        });
+        fs::write(
+            repo_root.join("profiles/thirdpartymirrors"),
+            format!("testmirror {mirror_root}\n"),
+        )
+        .unwrap();
+        let pkg_dir = repo_root.join("dev-libs/mirrorpkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
+
+        let distdir = tempdir();
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "mirror://testmirror/foo-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["foo-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("foo-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    /// End-to-end `custommirrors` proof: resolves with no `thirdpartymirrors`
+    /// entry for the name, proving independent consultation.
+    #[test]
+    fn fetch_src_uri_resolves_a_real_mirror_uri_via_custommirrors() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let mirror_root = uri_base.trim_end_matches("/file");
+
+        let config_root = tempdir();
+        fs::create_dir_all(config_root.join("etc/portage")).unwrap();
+        fs::write(
+            config_root.join("etc/portage/mirrors"),
+            format!("testmirror {mirror_root}\n"),
+        )
+        .unwrap();
+
+        let pkg_dir = tempdir();
+        write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
+
+        let distdir = tempdir();
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "mirror://testmirror/foo-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                config_root: config_root.clone(),
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["foo-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("foo-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+        handle.join().unwrap();
+    }
+
     /// The default `config_root` sentinel fails with `ENOTDIR`, not `NotFound`:
     /// must still degrade to "no custommirrors" with a clean error.
     #[test]
@@ -1152,6 +1232,125 @@ mod tests {
         // Unblock the still-parked server thread so it can exit cleanly.
         let _ = std::net::TcpStream::connect(&mirror_addr);
         handle.join().unwrap();
+    }
+
+    /// `RESTRICT=mirror` bars only the public list: a `mirror://` URI's own
+    /// `custommirrors` expansion is still tried.
+    #[test]
+    fn fetch_src_uri_restrict_mirror_still_allows_a_custommirror() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let mirror_root = uri_base.trim_end_matches("/file");
+
+        let config_root = tempdir();
+        fs::create_dir_all(config_root.join("etc/portage")).unwrap();
+        fs::write(
+            config_root.join("etc/portage/mirrors"),
+            format!("testmirror {mirror_root}\n"),
+        )
+        .unwrap();
+
+        let pkg_dir = tempdir();
+        write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
+
+        let distdir = tempdir();
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "mirror://testmirror/foo-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                config_root: config_root.clone(),
+                restrict_mirror: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["foo-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("foo-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    /// A `/`-rooted `GENTOO_MIRRORS` entry is a local directory the missing
+    /// file is copied from -- before any download, whatever the restrictions.
+    #[test]
+    fn fetch_src_uri_copies_a_missing_file_from_an_on_filesystem_mirror() {
+        for (layout_conf, rel) in [
+            (None, "hello-1.0.tar.gz"),
+            (
+                Some("[structure]\n0=filename-hash BLAKE2B 8\n"),
+                "ce/hello-1.0.tar.gz",
+            ),
+        ] {
+            for restrict_fetch in [false, true] {
+                let mirror_dir = tempdir();
+                if let Some(conf) = layout_conf {
+                    fs::write(mirror_dir.join("layout.conf"), conf).unwrap();
+                }
+                fs::create_dir_all(mirror_dir.join(rel).parent().unwrap()).unwrap();
+                fs::write(mirror_dir.join(rel), "hello world").unwrap();
+                let pkg_dir = tempdir();
+                let distdir = tempdir();
+                write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+                let filenames = fetch_src_uri(
+                    &pkg_dir,
+                    "http://127.0.0.1:1/hello-1.0.tar.gz",
+                    &FetchOptions {
+                        distdir: distdir.clone(),
+                        gentoo_mirrors: vec![format!("{}/", mirror_dir.display())],
+                        restrict_fetch,
+                        ..FetchOptions::default()
+                    },
+                )
+                .unwrap_or_else(|e| panic!("{rel} restrict_fetch={restrict_fetch}: {e}"));
+                assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+                assert_eq!(
+                    fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+                    "hello world"
+                );
+                assert!(!distdir.join(".mirror-cache.json").exists());
+            }
+        }
+    }
+
+    /// `custommirrors["local"]` `/` entries come before `/`-rooted
+    /// `GENTOO_MIRRORS`; first mirror with a digest-satisfying copy wins.
+    #[test]
+    fn fetch_src_uri_tries_local_fsmirrors_before_gentoo_mirrors_dirs() {
+        let empty_local = tempdir();
+        let local = tempdir();
+        fs::write(local.join("hello-1.0.tar.gz"), "hello world").unwrap();
+        let public = tempdir();
+        fs::write(public.join("hello-1.0.tar.gz"), "HELLO WORLD").unwrap();
+        let config_root = tempdir();
+        fs::create_dir_all(config_root.join("etc/portage")).unwrap();
+        fs::write(
+            config_root.join("etc/portage/mirrors"),
+            format!("local {} {}\n", empty_local.display(), local.display()),
+        )
+        .unwrap();
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![public.display().to_string()],
+                config_root,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
     }
 
     /// A `/`-rooted entry is never handed to `wget`: only the download
@@ -1310,5 +1509,50 @@ mod tests {
         )
         .unwrap();
         assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+    }
+
+    /// A definitely-closed localhost port, so the failure text pins the tried
+    /// order without any server.
+    fn closed_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    /// A twice-listed third-party expansion is still attempted exactly once,
+    /// in both primaryuri modes.
+    #[test]
+    fn fetch_src_uri_attempts_a_repeated_candidate_only_once() {
+        let mirror_root = format!("http://127.0.0.1:{}", closed_port());
+        let expanded = format!("{mirror_root}/foo-1.0.tar.gz");
+        for restrict_primaryuri in [false, true] {
+            let repo_root = tempdir();
+            fs::create_dir_all(repo_root.join("profiles")).unwrap();
+            fs::write(repo_root.join("profiles/repo_name"), "mirrortest\n").unwrap();
+            fs::write(
+                repo_root.join("profiles/thirdpartymirrors"),
+                format!("testmirror {mirror_root}\n"),
+            )
+            .unwrap();
+            let pkg_dir = repo_root.join("dev-libs/mirrorpkg");
+            fs::create_dir_all(&pkg_dir).unwrap();
+            write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
+
+            let err = fetch_src_uri(
+                &pkg_dir,
+                "mirror://testmirror/foo-1.0.tar.gz",
+                &FetchOptions {
+                    distdir: tempdir(),
+                    gentoo_mirrors: vec![],
+                    restrict_primaryuri,
+                    ..FetchOptions::default()
+                },
+            )
+            .unwrap_err();
+            assert_eq!(
+                err.matches(&expanded).count(),
+                1,
+                "primaryuri={restrict_primaryuri}: one attempt, one error: {err}"
+            );
+        }
     }
 }

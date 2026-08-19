@@ -907,4 +907,96 @@ mod tests {
         let digests = DistfileDigests { size: 11, hashes };
         assert!(verify_digests(&path, &digests).is_ok());
     }
+
+    #[test]
+    fn parse_thirdpartymirrors_reads_a_real_grabdict_style_file() {
+        let dir = tempdir();
+        let path = dir.join("thirdpartymirrors");
+        fs::write(
+            &path,
+            "# a comment line, skipped entirely\n\
+             gentoo\thttps://distfiles.gentoo.org/distfiles https://gentoo.osuosl.org/distfiles\n\
+             \n\
+             gnu https://ftp.gnu.org/gnu/ # trailing comment truncates the rest\n\
+             bare-name-no-urls\n",
+        )
+        .unwrap();
+        let mirrors = parse_thirdpartymirrors(&path).unwrap();
+        assert_eq!(
+            mirrors.get("gentoo").unwrap(),
+            &vec![
+                "https://distfiles.gentoo.org/distfiles".to_string(),
+                "https://gentoo.osuosl.org/distfiles".to_string(),
+            ]
+        );
+        assert_eq!(
+            mirrors.get("gnu").unwrap(),
+            &vec!["https://ftp.gnu.org/gnu/".to_string()]
+        );
+        assert!(
+            !mirrors.contains_key("bare-name-no-urls"),
+            "a name with zero URLs must be skipped, matching real grabdict's own empty=0 default"
+        );
+    }
+
+    #[test]
+    fn parse_thirdpartymirrors_is_empty_for_a_missing_file() {
+        let dir = tempdir();
+        let mirrors = parse_thirdpartymirrors(&dir.join("does-not-exist")).unwrap();
+        assert!(mirrors.is_empty());
+    }
+
+    #[test]
+    fn resolve_mirror_candidates_expands_every_root_under_the_named_mirror() {
+        let mut mirrors = HashMap::new();
+        mirrors.insert(
+            "gentoo".to_string(),
+            vec![
+                "https://distfiles.gentoo.org/distfiles".to_string(),
+                "https://gentoo.osuosl.org/distfiles/".to_string(),
+            ],
+        );
+        let candidates = resolve_mirror_candidates(
+            "mirror://gentoo/app-arch/foo-1.0.tar.gz",
+            &HashMap::new(),
+            &mirrors,
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                "https://distfiles.gentoo.org/distfiles/app-arch/foo-1.0.tar.gz".to_string(),
+                "https://gentoo.osuosl.org/distfiles/app-arch/foo-1.0.tar.gz".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_mirror_candidates_is_empty_for_an_unknown_mirror_name() {
+        let candidates = resolve_mirror_candidates(
+            "mirror://unknown/foo.tar.gz",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn resolve_mirror_candidates_is_empty_for_a_malformed_mirror_uri() {
+        let candidates =
+            resolve_mirror_candidates("mirror://gentoo", &HashMap::new(), &HashMap::new());
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn resolve_mirror_candidates_returns_a_non_mirror_uri_unchanged() {
+        let candidates = resolve_mirror_candidates(
+            "https://example.com/foo.tar.gz",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(
+            candidates,
+            vec!["https://example.com/foo.tar.gz".to_string()]
+        );
+    }
 }
