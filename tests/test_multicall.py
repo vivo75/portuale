@@ -512,3 +512,77 @@ def test_ebuild_install_does_not_deadlock_on_a_large_eclass_scope(
         portage_tmpdir / "portage/dev-libs/bigeclasspkg-1.0/temp/bigfixture-marker.txt"
     )
     assert marker.read_text() == "hello from bigfixture.eclass\n"
+
+
+def test_ebuild_shell_bash_produces_the_same_real_result_as_the_brush_default(
+    ebuild_binary, tmp_path
+):
+    """`--shell bash|brush` (default `brush`) selects which real shell
+    backend executes every phase: the default embedded `brush_core::
+    Shell`, or a genuine `bash <bin_dir>/ebuild.sh <phase>` subprocess
+    (matching real portage's own `_doebuild_spawn()` invocation shape --
+    see `ebuild_phases::ShellBackend`'s own doc comment and README.md's
+    own eclass section for the full writeup). Both backends run the same
+    real `dev-libs/phasepkg` fixture's own `src_install`, so this
+    asserts they produce an identical real file, not just a zero exit
+    code each."""
+    ebuild_path = str(Path(FIXTURES_ROOT) / "repo/dev-libs/phasepkg/phasepkg-1.0.ebuild")
+    installed_relative = "portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/hello.txt"
+
+    for shell, subdir in [("brush", "brush-run"), ("bash", "bash-run")]:
+        env = dict(os.environ)
+        portage_tmpdir = tmp_path / subdir
+        env["PORTAGE_TMPDIR"] = str(portage_tmpdir)
+
+        result = subprocess.run(
+            [str(ebuild_binary), "--shell", shell, ebuild_path, "install"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, (shell, result.stderr)
+        assert (portage_tmpdir / installed_relative).read_text() == "hello from phasepkg\n"
+
+
+def test_ebuild_shell_accepts_the_inline_equals_form(ebuild_binary, tmp_path):
+    """`--shell=bash`, not just `--shell bash` -- same inline-`=` form
+    every real `Kind::Value` ebuild option already accepts (see
+    `ebuild.rs`'s own CLI-parsing loop)."""
+    ebuild_path = str(Path(FIXTURES_ROOT) / "repo/dev-libs/phasepkg/phasepkg-1.0.ebuild")
+    env = dict(os.environ)
+    portage_tmpdir = tmp_path / "portage-tmpdir"
+    env["PORTAGE_TMPDIR"] = str(portage_tmpdir)
+
+    result = subprocess.run(
+        [str(ebuild_binary), "--shell=bash", ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_ebuild_shell_rejects_an_invalid_value(ebuild_binary):
+    """A pilot-only flag, not a real `bin/ebuild` option -- so unlike
+    every real `Kind::Value` option (which accepts any string, unchecked)
+    `--shell` validates its own value against exactly `"bash"`/
+    `"brush"`."""
+    result = subprocess.run(
+        [str(ebuild_binary), "--shell", "zsh", "foo-1.0.ebuild", "pretend"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert result.stderr.strip() == (
+        'ebuild: --shell: "zsh" is not "bash" or "brush"'
+    )
+
+
+def test_ebuild_shell_requires_a_value(ebuild_binary):
+    result = subprocess.run(
+        [str(ebuild_binary), "--shell"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert result.stderr.strip() == "ebuild: option '--shell' requires a value"

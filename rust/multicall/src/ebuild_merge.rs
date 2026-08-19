@@ -99,6 +99,7 @@ pub struct MergeOptions {
     pub config_protect: String,
     pub config_protect_mask: String,
     pub distdir: PathBuf,
+    pub shell: ebuild_phases::ShellBackend,
 }
 
 impl Default for MergeOptions {
@@ -108,6 +109,7 @@ impl Default for MergeOptions {
             config_protect: "/etc".to_string(),
             config_protect_mask: "/etc/env.d".to_string(),
             distdir: PathBuf::from("/var/cache/distfiles"),
+            shell: ebuild_phases::ShellBackend::default(),
         }
     }
 }
@@ -529,6 +531,7 @@ pub fn run_merge(
         portage_tmpdir,
         &options.distdir,
         options.debug,
+        options.shell,
     )?;
     if status != 0 {
         return Ok(status);
@@ -545,6 +548,7 @@ pub fn run_merge(
         root,
         portage_tmpdir,
         options.debug,
+        options.shell,
     )?;
     if preinst_status != 0 {
         return Ok(preinst_status);
@@ -567,7 +571,14 @@ pub fn run_merge(
     write_cfgfiledict(root, &cfgfiledict)?;
     write_vdb_entry(root, &env, &slot, &repository, &contents)?;
 
-    ebuild_phases::run_single_phase(ebuild_path, "postinst", root, portage_tmpdir, options.debug)
+    ebuild_phases::run_single_phase(
+        ebuild_path,
+        "postinst",
+        root,
+        portage_tmpdir,
+        options.debug,
+        options.shell,
+    )
 }
 
 #[cfg(test)]

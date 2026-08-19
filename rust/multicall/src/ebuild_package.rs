@@ -78,6 +78,7 @@ pub struct PackageOptions {
     pub debug: bool,
     pub pkgdir: PathBuf,
     pub distdir: PathBuf,
+    pub shell: ebuild_phases::ShellBackend,
 }
 
 impl Default for PackageOptions {
@@ -86,6 +87,7 @@ impl Default for PackageOptions {
             debug: false,
             pkgdir: PathBuf::from("/var/cache/binpkgs"),
             distdir: PathBuf::from("/var/cache/distfiles"),
+            shell: ebuild_phases::ShellBackend::default(),
         }
     }
 }
@@ -182,6 +184,7 @@ pub fn run_package(
         portage_tmpdir,
         &options.distdir,
         options.debug,
+        options.shell,
     )?;
     if status != 0 {
         return Ok(status);
@@ -237,6 +240,7 @@ pub fn run_package(
         "__dyn_package",
         &extra_env,
         options.debug,
+        options.shell,
     )?;
     if package_status != 0 {
         return Ok(package_status);
@@ -381,6 +385,7 @@ mod tests {
             debug: false,
             pkgdir: tmp.join("pkgdir"),
             distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
         };
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(&portage_tmpdir).unwrap();

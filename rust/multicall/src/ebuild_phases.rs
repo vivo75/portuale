@@ -464,12 +464,45 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
     Ok((a, aa))
 }
 
+/// Which real shell executes a phase, and every real `bin/*.sh` this
+/// pilot sources unmodified along with it: `Brush` (the default -- an
+/// embedded `brush_core::Shell`, see this module's own doc comment for
+/// why) or `Bash`, a genuine `bash <bin_dir>/ebuild.sh <phase>`
+/// subprocess -- matching real portage's own `_doebuild_spawn()`
+/// invocation shape almost exactly (`lib/portage/package/ebuild/
+/// doebuild.py`'s own `cmd = "{ebuild.sh} {phase}"`, spawned via
+/// `portage.process.spawn()`; real `bin/ebuild.sh:153`'s own
+/// `EBUILD_SH_ARGS="$*"` picks up `<phase>` from the subprocess's own
+/// positional args, which its own tail, `bin/ebuild.sh:830-843`, then
+/// really uses to call `__ebuild_main ${EBUILD_SH_ARGS}` and `exit` --
+/// the brush backend deliberately never sets `EBUILD_SH_ARGS` at all,
+/// since a bare `exit` inside an *embedded* shell would kill the whole
+/// hosting Rust process rather than just return control, see this
+/// module's own doc comment; a real subprocess has no such problem, so
+/// `Bash` uses that real mechanism directly instead of brush's own
+/// "source, then separately `invoke_function`" two-step). Selectable
+/// via `ebuild --shell bash|brush` (see `ebuild.rs`'s own CLI wiring)
+/// -- a pilot-only flag, not a real `bin/ebuild` option, so it's
+/// deliberately NOT in `ebuild_options::OPTIONS` (that table is
+/// specifically a transcription of real bin/ebuild's own argparse
+/// setup).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShellBackend {
+    #[default]
+    Brush,
+    Bash,
+}
+
 /// The real environment-variable block every real phase and every real
-/// `bin/misc-functions.sh` `__dyn_*` command alike needs -- shared by
-/// `run_one_phase` and `run_misc_function` so the two don't duplicate
-/// this. `extra_env` is appended verbatim as more `export NAME=value`
-/// lines (already-shell-quoted by the caller), for anything specific to
-/// one call site (e.g. `ebuild_package`'s own `PKGDIR`/
+/// `bin/misc-functions.sh` `__dyn_*` command alike needs, as raw
+/// `(name, value)` pairs -- shared by both shell backends (`Brush`
+/// formats these into `export NAME=value` bash source text, see
+/// `phase_setup_script` below; `Bash` passes them directly as real
+/// subprocess environment variables, `std::process::Command::envs`,
+/// with no shell-quoting step -- and so no `$`/backtick-expansion risk
+/// -- at all) and by `run_one_phase`/`run_misc_functions` so the two
+/// don't duplicate this. `extra_env` is appended verbatim, for anything
+/// specific to one call site (e.g. `ebuild_package`'s own `PKGDIR`/
 /// `PORTAGE_BINPKG_TMPFILE`).
 /// Real `bin/ebuild.sh`'s own `eval "PORTAGE_ECLASS_LOCATIONS=(${{PORTAGE_ECLASS_LOCATIONS}})"`
 /// (line ~611, run once, unconditionally, right after being sourced)
@@ -513,6 +546,84 @@ fn eclass_locations_value(pkg_dir: &Path) -> String {
     }
 }
 
+fn phase_env_vars(
+    env: &Environment,
+    root: &Path,
+    ebuild_phase_value: &str,
+    debug: bool,
+    bin_dir: &Path,
+    helpers_dir: &Path,
+    extra_env: &[(String, String)],
+) -> Vec<(String, String)> {
+    // Real EPREFIX support is never enabled here (`EPREFIX=""`
+    // unconditionally below), so real `ED="${D}"` (no prefix-relative
+    // adjustment) collapses to exactly `D`'s own value -- no separate
+    // computation needed.
+    let d = format!("{}/", env.d().display());
+    let path = format!(
+        "{}:{}",
+        helpers_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut vars = vec![
+        ("EAPI".to_string(), env.eapi.clone()),
+        ("PN".to_string(), env.split.pn.clone()),
+        ("PV".to_string(), env.split.pv.clone()),
+        ("PR".to_string(), env.split.pr.clone()),
+        ("PVR".to_string(), env.split.pvr.clone()),
+        ("P".to_string(), env.split.p.clone()),
+        ("PF".to_string(), env.split.pf.clone()),
+        ("CATEGORY".to_string(), env.category.clone()),
+        ("EBUILD".to_string(), env.ebuild_abs.display().to_string()),
+        ("O".to_string(), env.pkg_dir.display().to_string()),
+        ("ROOT".to_string(), root.display().to_string()),
+        ("EROOT".to_string(), root.display().to_string()),
+        (
+            "PORTAGE_BUILDDIR".to_string(),
+            env.portage_builddir.display().to_string(),
+        ),
+        ("WORKDIR".to_string(), env.workdir().display().to_string()),
+        ("S".to_string(), env.s().display().to_string()),
+        ("D".to_string(), d.clone()),
+        ("ED".to_string(), d),
+        ("T".to_string(), env.t().display().to_string()),
+        ("HOME".to_string(), env.home().display().to_string()),
+        ("FILESDIR".to_string(), env.filesdir().display().to_string()),
+        (
+            "PORTAGE_BIN_PATH".to_string(),
+            bin_dir.display().to_string(),
+        ),
+        (
+            "PORTAGE_ECLASS_LOCATIONS".to_string(),
+            eclass_locations_value(&env.pkg_dir),
+        ),
+        ("PORTAGE_PYTHON".to_string(), "/usr/bin/python".to_string()),
+        ("PATH".to_string(), path),
+        ("SANDBOX_DISABLED".to_string(), "1".to_string()),
+        ("FEATURES".to_string(), String::new()),
+        ("USE".to_string(), String::new()),
+        ("EPREFIX".to_string(), String::new()),
+        ("EMERGE_FROM".to_string(), "ebuild".to_string()),
+        ("PORTAGE_QUIET".to_string(), "1".to_string()),
+        (
+            "PORTAGE_DEBUG".to_string(),
+            if debug { "1" } else { "0" }.to_string(),
+        ),
+        ("EBUILD_PHASE".to_string(), ebuild_phase_value.to_string()),
+    ];
+    vars.extend(extra_env.iter().cloned());
+    vars
+}
+
+/// `Brush`-backend-only: `phase_env_vars` formatted as real `export
+/// NAME=value` bash source text (Rust's own `{:?}` Debug-format
+/// double-quoted escaping -- not a full shell-quoting implementation,
+/// so a value containing `$`/backtick isn't protected against
+/// expansion, but every value here is this pilot's own computed path/
+/// metadata text, never arbitrary ebuild-controlled content). `Bash`
+/// backend needs no such text at all -- `phase_env_vars`'s own pairs
+/// are passed directly as real subprocess environment variables
+/// instead, see `run_one_phase_bash`/`run_misc_functions_bash`.
 fn phase_setup_script(
     env: &Environment,
     root: &Path,
@@ -522,66 +633,16 @@ fn phase_setup_script(
     helpers_dir: &Path,
     extra_env: &[(String, String)],
 ) -> String {
-    let mut script = format!(
-        r#"
-export EAPI={eapi:?}
-export PN={pn:?}
-export PV={pv:?}
-export PR={pr:?}
-export PVR={pvr:?}
-export P={p:?}
-export PF={pf:?}
-export CATEGORY={category:?}
-export EBUILD={ebuild:?}
-export O={o:?}
-export ROOT={root:?}
-export EROOT={root:?}
-export PORTAGE_BUILDDIR={builddir:?}
-export WORKDIR={workdir:?}
-export S={s:?}
-export D={d:?}/
-export ED="${{D}}"
-export T={t:?}
-export HOME={home:?}
-export FILESDIR={filesdir:?}
-export PORTAGE_BIN_PATH={bin_dir:?}
-export PORTAGE_ECLASS_LOCATIONS={eclass_locations:?}
-export PORTAGE_PYTHON=/usr/bin/python
-export PATH={helpers_dir:?}:$PATH
-export SANDBOX_DISABLED=1
-export FEATURES=""
-export USE=""
-export EPREFIX=""
-export EMERGE_FROM=ebuild
-export PORTAGE_QUIET=1
-export PORTAGE_DEBUG={portage_debug}
-export EBUILD_PHASE={ebuild_phase_value:?}
-"#,
-        eapi = env.eapi,
-        pn = env.split.pn,
-        pv = env.split.pv,
-        pr = env.split.pr,
-        pvr = env.split.pvr,
-        p = env.split.p,
-        pf = env.split.pf,
-        category = env.category,
-        ebuild = env.ebuild_abs.display(),
-        o = env.pkg_dir.display(),
-        root = root.display(),
-        builddir = env.portage_builddir.display(),
-        workdir = env.workdir().display(),
-        s = env.s().display(),
-        d = env.d().display(),
-        t = env.t().display(),
-        home = env.home().display(),
-        filesdir = env.filesdir().display(),
-        bin_dir = bin_dir.display(),
-        eclass_locations = eclass_locations_value(&env.pkg_dir),
-        helpers_dir = helpers_dir.display(),
-        portage_debug = if debug { "1" } else { "0" },
-        ebuild_phase_value = ebuild_phase_value,
-    );
-    for (name, value) in extra_env {
+    let mut script = String::new();
+    for (name, value) in phase_env_vars(
+        env,
+        root,
+        ebuild_phase_value,
+        debug,
+        bin_dir,
+        helpers_dir,
+        extra_env,
+    ) {
         script.push_str(&format!("export {name}={value:?}\n"));
     }
     script
@@ -610,10 +671,30 @@ async fn run_one_phase(
     phase: &str,
     debug: bool,
     extra_env: &[(String, String)],
+    shell: ShellBackend,
 ) -> Result<i32, String> {
     let bin_dir = repo_root().join("bin");
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
+    match shell {
+        ShellBackend::Brush => {
+            run_one_phase_brush(env, root, phase, debug, extra_env, &bin_dir, &helpers_dir).await
+        }
+        ShellBackend::Bash => {
+            run_one_phase_bash(env, root, phase, debug, extra_env, &bin_dir, &helpers_dir)
+        }
+    }
+}
+
+async fn run_one_phase_brush(
+    env: &Environment,
+    root: &Path,
+    phase: &str,
+    debug: bool,
+    extra_env: &[(String, String)],
+    bin_dir: &Path,
+    helpers_dir: &Path,
+) -> Result<i32, String> {
     let mut shell = brush_core::Shell::builder()
         .default_builtins(brush_builtins::BuiltinSet::BashMode)
         .build()
@@ -621,7 +702,7 @@ async fn run_one_phase(
         .map_err(|e| format!("brush shell failed to start: {e}"))?;
     let params = shell.default_exec_params();
 
-    let setup = phase_setup_script(env, root, phase, debug, &bin_dir, &helpers_dir, extra_env);
+    let setup = phase_setup_script(env, root, phase, debug, bin_dir, helpers_dir, extra_env);
     shell
         .run_string(&setup, &brush_core::SourceInfo::default(), &params)
         .await
@@ -655,6 +736,39 @@ async fn run_one_phase(
         .map(u8::into)
 }
 
+/// `--shell bash`: spawns a genuine `bash <bin_dir>/ebuild.sh <phase>`
+/// subprocess instead of the embedded `brush_core::Shell` `run_one_
+/// phase_brush` above uses -- see `ShellBackend`'s own doc comment for
+/// why this mirrors real portage's own `_doebuild_spawn()` invocation
+/// shape (`EBUILD_SH_ARGS="$*"` picking `<phase>` up from real argv)
+/// far more directly than the brush path's own two-step "source, then
+/// separately `invoke_function`" dance does. Environment variables are
+/// real subprocess env vars (`phase_env_vars`), not shell `export`
+/// source text, so there's no shell-quoting step -- and so no `$`/
+/// backtick-expansion risk -- at all, unlike `phase_setup_script`'s own
+/// Rust-Debug escaping. A blocking `std::process::Command`, not a
+/// `tokio::process` one: matches `fetch.rs`'s own precedent for
+/// spawning a real subprocess (`wget`) from inside an `async fn`
+/// without pulling in tokio's own "process" feature.
+fn run_one_phase_bash(
+    env: &Environment,
+    root: &Path,
+    phase: &str,
+    debug: bool,
+    extra_env: &[(String, String)],
+    bin_dir: &Path,
+    helpers_dir: &Path,
+) -> Result<i32, String> {
+    let vars = phase_env_vars(env, root, phase, debug, bin_dir, helpers_dir, extra_env);
+    let status = std::process::Command::new("bash")
+        .arg(bin_dir.join("ebuild.sh"))
+        .arg(phase)
+        .envs(vars)
+        .status()
+        .map_err(|e| format!("spawning real bash for phase {phase} failed: {e}"))?;
+    Ok(status.code().unwrap_or(1))
+}
+
 /// Real `bin/misc-functions.sh`'s own invocation shape -- unlike
 /// `run_one_phase`'s own `bin/ebuild.sh` + `__ebuild_main <phase>`, real
 /// `doebuild()` invokes commands like `"package"` as a *separate*
@@ -679,10 +793,49 @@ async fn run_misc_functions(
     dyn_command: &str,
     extra_env: &[(String, String)],
     debug: bool,
+    shell: ShellBackend,
 ) -> Result<i32, String> {
     let bin_dir = repo_root().join("bin");
     let helpers_dir = bin_dir.join("ebuild-helpers");
 
+    match shell {
+        ShellBackend::Brush => {
+            run_misc_functions_brush(
+                env,
+                root,
+                ebuild_phase_value,
+                dyn_command,
+                extra_env,
+                debug,
+                &bin_dir,
+                &helpers_dir,
+            )
+            .await
+        }
+        ShellBackend::Bash => run_misc_functions_bash(
+            env,
+            root,
+            ebuild_phase_value,
+            dyn_command,
+            extra_env,
+            debug,
+            &bin_dir,
+            &helpers_dir,
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_misc_functions_brush(
+    env: &Environment,
+    root: &Path,
+    ebuild_phase_value: &str,
+    dyn_command: &str,
+    extra_env: &[(String, String)],
+    debug: bool,
+    bin_dir: &Path,
+    helpers_dir: &Path,
+) -> Result<i32, String> {
     let mut shell = brush_core::Shell::builder()
         .default_builtins(brush_builtins::BuiltinSet::BashMode)
         .build()
@@ -695,8 +848,8 @@ async fn run_misc_functions(
         root,
         ebuild_phase_value,
         debug,
-        &bin_dir,
-        &helpers_dir,
+        bin_dir,
+        helpers_dir,
         extra_env,
     );
     shell
@@ -715,8 +868,43 @@ async fn run_misc_functions(
         .map(|result| i32::from(u8::from(result.exit_code)))
 }
 
+/// `--shell bash`: spawns a genuine `bash <bin_dir>/misc-functions.sh
+/// <dyn_command>` subprocess -- matching real `doebuild.py`'s own
+/// `misc_sh = shlex.quote(misc_sh_binary) + " __dyn_%s"` invocation
+/// shape exactly. See `run_one_phase_bash`'s own doc comment for why a
+/// blocking `std::process::Command` here too.
+#[allow(clippy::too_many_arguments)]
+fn run_misc_functions_bash(
+    env: &Environment,
+    root: &Path,
+    ebuild_phase_value: &str,
+    dyn_command: &str,
+    extra_env: &[(String, String)],
+    debug: bool,
+    bin_dir: &Path,
+    helpers_dir: &Path,
+) -> Result<i32, String> {
+    let vars = phase_env_vars(
+        env,
+        root,
+        ebuild_phase_value,
+        debug,
+        bin_dir,
+        helpers_dir,
+        extra_env,
+    );
+    let status = std::process::Command::new("bash")
+        .arg(bin_dir.join("misc-functions.sh"))
+        .arg(dyn_command)
+        .envs(vars)
+        .status()
+        .map_err(|e| format!("spawning real bash for {dyn_command} failed: {e}"))?;
+    Ok(status.code().unwrap_or(1))
+}
+
 /// Synchronous entry point mirroring `run_single_phase`'s own shape, for
 /// `ebuild_package`'s own real `__dyn_package` call.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_misc_function(
     ebuild_path: &Path,
     portage_tmpdir: &Path,
@@ -725,6 +913,7 @@ pub(crate) fn run_misc_function(
     dyn_command: &str,
     extra_env: &[(String, String)],
     debug: bool,
+    shell: ShellBackend,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -740,6 +929,7 @@ pub(crate) fn run_misc_function(
             dyn_command,
             extra_env,
             debug,
+            shell,
         )
         .await
     })
@@ -780,6 +970,7 @@ async fn run_commands_async(
     portage_tmpdir: &Path,
     distdir: &Path,
     debug: bool,
+    shell: ShellBackend,
 ) -> Result<i32, String> {
     let env = compute_environment(ebuild_path, portage_tmpdir)?;
     create_directories(&env)?;
@@ -797,7 +988,7 @@ async fn run_commands_async(
 
     for &command in commands {
         for phase in phase_prerequisites(command) {
-            let status = run_one_phase(&env, root, phase, debug, &extra_env).await?;
+            let status = run_one_phase(&env, root, phase, debug, &extra_env, shell).await?;
             if status != 0 {
                 return Ok(status);
             }
@@ -824,6 +1015,7 @@ async fn run_commands_async(
 /// once at the CLI boundary" shape `emerge`'s own `pretend.rs` already
 /// uses for `ROOT`/`PORTAGE_CONFIGROOT` via `root_from_env`/
 /// `config_root_from_env`.
+#[allow(clippy::too_many_arguments)]
 pub fn run_commands(
     ebuild_path: &Path,
     commands: &[&str],
@@ -831,6 +1023,7 @@ pub fn run_commands(
     portage_tmpdir: &Path,
     distdir: &Path,
     debug: bool,
+    shell: ShellBackend,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -843,6 +1036,7 @@ pub fn run_commands(
         portage_tmpdir,
         distdir,
         debug,
+        shell,
     ))
 }
 
@@ -867,6 +1061,7 @@ pub(crate) fn run_single_phase(
     root: &Path,
     portage_tmpdir: &Path,
     debug: bool,
+    shell: ShellBackend,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -881,7 +1076,7 @@ pub(crate) fn run_single_phase(
         // `doebuild()`'s own fetch-then-phases sequence at all -- see
         // this function's own doc comment), so there's nothing to
         // re-fetch or re-export here.
-        run_one_phase(&env, root, phase, debug, &[]).await
+        run_one_phase(&env, root, phase, debug, &[], shell).await
     })
 }
 
@@ -1020,6 +1215,44 @@ mod tests {
             &portage_tmpdir,
             &portage_tmpdir.join("distfiles"),
             false,
+            ShellBackend::Brush,
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+
+        let installed =
+            portage_tmpdir.join("portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/hello.txt");
+        let contents = std::fs::read_to_string(&installed)
+            .unwrap_or_else(|e| panic!("{} should have been installed: {e}", installed.display()));
+        assert_eq!(contents, "hello from phasepkg\n");
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// `ShellBackend::Bash` counterpart of `install_lands_a_real_file_
+    /// under_a_real_d` above -- same fixture, same assertions, proving
+    /// the real `bash <bin_dir>/ebuild.sh <phase>` subprocess backend
+    /// (`run_one_phase_bash`) produces an identical real result to the
+    /// embedded-brush backend, not just that it runs without erroring.
+    #[test]
+    fn install_lands_a_real_file_under_a_real_d_via_real_bash() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-{}",
+            std::process::id(),
+            "install_lands_a_real_file_under_a_real_d_via_real_bash"
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
+            false,
+            ShellBackend::Bash,
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
@@ -1076,6 +1309,7 @@ mod tests {
             &portage_tmpdir,
             &distdir,
             false,
+            ShellBackend::Brush,
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
@@ -1121,6 +1355,7 @@ mod tests {
             &portage_tmpdir,
             &portage_tmpdir.join("distfiles"),
             false,
+            ShellBackend::Brush,
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
@@ -1171,6 +1406,7 @@ mod tests {
                 &thread_portage_tmpdir,
                 &thread_portage_tmpdir.join("distfiles"),
                 false,
+                ShellBackend::Brush,
             );
             let _ = tx.send(result);
         });
@@ -1281,6 +1517,7 @@ mod tests {
                 &portage_tmpdir,
                 &portage_tmpdir.join("distfiles"),
                 debug,
+                ShellBackend::Brush,
             )
             .expect("run_commands should not itself error");
             assert_eq!(status, 0);
@@ -1321,6 +1558,7 @@ mod tests {
             &portage_tmpdir,
             &portage_tmpdir.join("distfiles"),
             false,
+            ShellBackend::Brush,
         )
         .expect("run_commands should not itself error");
         assert_eq!(status, 0);

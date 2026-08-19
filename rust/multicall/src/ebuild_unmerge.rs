@@ -151,6 +151,7 @@ pub fn run_unmerge(
     root: &Path,
     portage_tmpdir: &Path,
     debug: bool,
+    shell: ebuild_phases::ShellBackend,
 ) -> Result<i32, String> {
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
     let vdb_dir = root
@@ -162,7 +163,7 @@ pub fn run_unmerge(
         .map_err(|e| format!("{}: not installed ({e})", vdb_dir.display()))?;
 
     let prerm_status =
-        ebuild_phases::run_single_phase(ebuild_path, "prerm", root, portage_tmpdir, debug)?;
+        ebuild_phases::run_single_phase(ebuild_path, "prerm", root, portage_tmpdir, debug, shell)?;
     if prerm_status != 0 {
         return Ok(prerm_status);
     }
@@ -170,7 +171,7 @@ pub fn run_unmerge(
     remove_contents(root, &contents_text)?;
 
     let postrm_status =
-        ebuild_phases::run_single_phase(ebuild_path, "postrm", root, portage_tmpdir, debug)?;
+        ebuild_phases::run_single_phase(ebuild_path, "postrm", root, portage_tmpdir, debug, shell)?;
     if postrm_status != 0 {
         return Ok(postrm_status);
     }
@@ -333,8 +334,14 @@ mod tests {
         let vdb_dir = root.join("var/db/pkg/dev-libs/mergepkg-1.0");
         assert!(vdb_dir.is_dir());
 
-        let unmerge_status =
-            run_unmerge(&ebuild, &root, &portage_tmpdir, false).expect("run_unmerge succeeds");
+        let unmerge_status = run_unmerge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            false,
+            ebuild_phases::ShellBackend::default(),
+        )
+        .expect("run_unmerge succeeds");
         assert_eq!(unmerge_status, 0);
 
         assert!(!root.join("usr/share/mergepkg/hello.txt").exists());
@@ -356,7 +363,13 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
 
-        let result = run_unmerge(&ebuild, &root, &portage_tmpdir, false);
+        let result = run_unmerge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            false,
+            ebuild_phases::ShellBackend::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not installed"));
     }

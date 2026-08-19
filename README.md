@@ -4192,6 +4192,63 @@ two narrower ones directly exercising `eclass_locations_value`) and a
 black-box one against the compiled `ebuild` binary
 (`test_ebuild_install_really_inherits_a_real_eclass`).
 
+### `ebuild --shell bash|brush`: a second, real shell execution backend
+
+Every phase, hook, and `bin/misc-functions.sh` `__dyn_*` call this
+pilot runs (`ebuild_phases::run_one_phase`/`run_misc_functions`) had
+exactly one real execution backend until now: an embedded
+`brush_core::Shell` (see this module's own doc comment for why brush
+at all). `--shell bash|brush` (default `brush`, matching the pre-
+existing behavior unchanged) adds a second, genuinely different real
+backend: a plain `bash <bin_dir>/ebuild.sh <phase>` subprocess --
+matching real portage's own `_doebuild_spawn()` invocation shape
+almost exactly (`lib/portage/package/ebuild/doebuild.py`'s own `cmd =
+"{ebuild.sh} {phase}"`, spawned via `portage.process.spawn()`; real
+`bin/ebuild.sh:153`'s own `EBUILD_SH_ARGS="$*"` picks `<phase>` up
+from the subprocess's own positional args, which its own tail
+(`bin/ebuild.sh:830-843`) then really uses to call `__ebuild_main
+${EBUILD_SH_ARGS}` and `exit` -- the exact real mechanism the brush
+backend's own doc comment explains it deliberately avoids, since a
+bare `exit` inside an *embedded* shell would kill the whole hosting
+Rust process; a real subprocess has no such problem, so `--shell bash`
+uses that real mechanism directly instead of brush's own "source, then
+separately `invoke_function`" two-step). `bin/misc-functions.sh` gets
+the same treatment (`bash misc-functions.sh __dyn_<mydo>`, matching
+real `doebuild.py`'s own `misc_sh` invocation shape exactly).
+
+Both backends are built from the exact same `phase_env_vars` (name,
+value) pairs -- `--shell brush` formats them into `export NAME=value`
+bash source text first (`phase_setup_script`); `--shell bash` passes
+them directly as real subprocess environment variables
+(`std::process::Command::envs`), with no shell-quoting step -- and so
+no `$`/backtick-expansion risk -- at all, arguably simpler and safer
+than the brush path's own `{value:?}` Rust-Debug escaping.
+
+A pilot-only flag, not a real `bin/ebuild` option at all -- checked
+directly in `ebuild.rs`'s own CLI-parsing loop (the same "special-
+cased outside the real-options table" treatment `--help`/`-h` already
+get), deliberately not added to `ebuild_options::OPTIONS` (a
+transcription of real bin/ebuild's own argparse setup). Threaded down
+through every real-execution call site this pilot has (`ebuild_
+phases::run_commands`/`run_single_phase`/`run_misc_function`,
+`ebuild_merge::MergeOptions`, `ebuild_package::PackageOptions`,
+`ebuild_unmerge::run_unmerge`) -- `emerge --buildpkgonly`'s own real
+build path (`emerge_build.rs` -> `ebuild_package::run_package`)
+inherits it too via `PackageOptions`, though `emerge`'s own CLI
+doesn't expose a `--shell` flag of its own yet (matching `--debug`'s
+own pre-existing, identical non-wiring at that exact call site).
+
+Proven identical, not just "also exits 0": a new Rust unit test
+(`ebuild_phases::tests::
+install_lands_a_real_file_under_a_real_d_via_real_bash`) runs the same
+`dev-libs/phasepkg` fixture `install_lands_a_real_file_under_a_real_d`
+already covers via brush, asserting the exact same real file lands
+with the exact same content; a black-box pytest test
+(`test_ebuild_shell_bash_produces_the_same_real_result_as_the_brush_
+default`) does the same via the compiled binary, running both `--shell
+brush` and `--shell bash` against the identical fixture and comparing
+results directly.
+
 ## Running it
 
 Build both Rust binaries:
@@ -5715,4 +5772,19 @@ PORTING/rust/target/release/multicall ebuild \
 # task #54 example, then exit 0 -- promptly, not after a hang)
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/bigeclasspkg-1.0/temp/bigfixture-marker.txt
 # hello from bigfixture.eclass
+```
+
+`--shell bash|brush` (see "What this proves" above for the full
+writeup): the same `dev-libs/phasepkg` fixture task #54's own example
+already uses, run via a real `bash` subprocess instead of the default
+embedded brush shell:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/multicall ebuild --shell bash \
+    PORTING/fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild install
+# (real phase output, then exit 0)
+cat "${PORTAGE_TMPDIR}"/portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/hello.txt
+# hello from phasepkg
 ```

@@ -86,13 +86,17 @@ fn print_help() {
     println!("   --debug              show debug output");
     println!("   --ignore-default-opts  do not use the EBUILD_DEFAULT_OPTS environment variable");
     println!("   --skip-manifest      skip all manifest checks");
+    println!(
+        "   --shell bash|brush   real shell backend for phase/hook execution (default: brush)"
+    );
     println!("   -h, --help           show this message and exit");
     println!();
     println!(
         "Every other real ebuild option is recognized by name (see bin/ebuild) but \
          not implemented -- using one reports which option it is, instead of a \
          generic error. Real commands (doebuild()'s own validcommands list) are \
-         recognized and accepted, still as a no-op."
+         recognized and accepted, still as a no-op. --shell is this pilot's own \
+         flag, not a real bin/ebuild option at all."
     );
     println!("See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.");
 }
@@ -113,11 +117,39 @@ pub fn run(args: &[String]) -> ExitCode {
     // this module's own long-documented v1 scope; `--debug` is the first
     // one wired to something real.
     let mut debug = false;
+    // `--shell bash|brush` (default `brush`): selects which real shell
+    // backend executes every phase/hook/misc-function below -- see
+    // `ebuild_phases::ShellBackend`'s own doc comment. A pilot-only flag,
+    // not a real `bin/ebuild` option at all, so it's checked here
+    // directly rather than through `ebuild_options::lookup_option`
+    // (deliberately NOT added to `ebuild_options::OPTIONS`, which is
+    // specifically a transcription of real bin/ebuild's own argparse
+    // setup) -- the same "special-cased outside the real-options table"
+    // treatment `wants_help` above already gets.
+    let mut shell = ebuild_phases::ShellBackend::default();
 
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
-        if arg.starts_with('-') {
+        if arg == "--shell" || arg.starts_with("--shell=") {
+            let value = if let Some(v) = arg.strip_prefix("--shell=") {
+                v
+            } else if i + 1 < args.len() {
+                i += 1;
+                args[i].as_str()
+            } else {
+                eprintln!("ebuild: option '--shell' requires a value");
+                return ExitCode::from(2);
+            };
+            shell = match value {
+                "brush" => ebuild_phases::ShellBackend::Brush,
+                "bash" => ebuild_phases::ShellBackend::Bash,
+                other => {
+                    eprintln!("ebuild: --shell: {other:?} is not \"bash\" or \"brush\"");
+                    return ExitCode::from(1);
+                }
+            };
+        } else if arg.starts_with('-') {
             match ebuild_options::lookup_option(arg) {
                 Some(Kind::Value) => {
                     // "--opt=value" carries its value inline; "--opt value"
@@ -207,6 +239,7 @@ pub fn run(args: &[String]) -> ExitCode {
             config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
                 .unwrap_or(default_merge_options.config_protect_mask),
             distdir: distdir.clone(),
+            shell,
         };
         // Real make.globals's own PKGDIR default -- see
         // ebuild_package::PackageOptions's own Default impl.
@@ -216,6 +249,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| ebuild_package::PackageOptions::default().pkgdir),
             distdir: distdir.clone(),
+            shell,
         };
         let ebuild_path = std::path::Path::new(ebuild_file);
         // One command at a time here, not the whole slice at once --
@@ -231,7 +265,7 @@ pub fn run(args: &[String]) -> ExitCode {
             let result = if ebuild_merge::is_real_merge_command(cmd) {
                 ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options)
             } else if ebuild_unmerge::is_real_unmerge_command(cmd) {
-                ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, debug)
+                ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, debug, shell)
             } else if ebuild_package::is_real_package_command(cmd) {
                 ebuild_package::run_package(ebuild_path, &root, &portage_tmpdir, &package_options)
             } else {
@@ -242,6 +276,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &portage_tmpdir,
                     &distdir,
                     debug,
+                    shell,
                 )
             };
             match result {
@@ -306,6 +341,35 @@ mod tests {
     fn accepts_the_inline_equals_form_of_a_value_option() {
         let code = run(&args(&["--color=y", "foo-1.0.ebuild", "qmerge"]));
         assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn accepts_shell_bash_and_shell_brush() {
+        // "qmerge" is dry-run-only (see `accepts_a_real_command_and_
+        // still_prints_the_stub_marker` above), so this only exercises
+        // `--shell`'s own CLI parsing, not real phase execution.
+        let code = run(&args(&["--shell", "brush", "foo-1.0.ebuild", "qmerge"]));
+        assert_eq!(code, ExitCode::SUCCESS);
+        let code = run(&args(&["--shell", "bash", "foo-1.0.ebuild", "qmerge"]));
+        assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn accepts_the_inline_equals_form_of_shell() {
+        let code = run(&args(&["--shell=bash", "foo-1.0.ebuild", "qmerge"]));
+        assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn rejects_an_invalid_shell_value() {
+        let code = run(&args(&["--shell", "zsh", "foo-1.0.ebuild", "qmerge"]));
+        assert_eq!(code, ExitCode::from(1));
+    }
+
+    #[test]
+    fn rejects_a_missing_shell_value() {
+        let code = run(&args(&["--shell"]));
+        assert_eq!(code, ExitCode::from(2));
     }
 
     #[test]

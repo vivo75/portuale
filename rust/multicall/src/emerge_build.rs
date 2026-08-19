@@ -228,6 +228,7 @@ mod tests {
                 debug: false,
                 pkgdir: bogus.clone(),
                 distdir: bogus.clone(),
+                shell: PackageOptions::default().shell,
             },
         );
         assert!(result.is_ok());
@@ -265,6 +266,7 @@ mod tests {
                 debug: false,
                 pkgdir: pkgdir.clone(),
                 distdir: tempdir(),
+                shell: PackageOptions::default().shell,
             },
         );
         assert!(result.is_ok(), "{result:?}");
@@ -313,6 +315,7 @@ mod tests {
                 debug: false,
                 pkgdir: pkgdir.clone(),
                 distdir: tempdir(),
+                shell: PackageOptions::default().shell,
             },
         );
         // `fetchpkg`'s own fixture has a real, nonempty SRC_URI but no
