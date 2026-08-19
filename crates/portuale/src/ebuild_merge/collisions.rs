@@ -268,3 +268,78 @@ pub(crate) fn find_collisions(args: FindCollisionsArgs<'_>) -> CollisionsResult 
     }
     Ok((collisions, symlink_collisions, plib_collisions))
 }
+
+/// For each collision, the installed packages claiming it. A fresh scan
+/// of every installed `CONTENTS` per abort (an error path only); no
+/// persistent reverse index.
+///
+/// Above `portage-vdb`, two behaviours stay here: an entry name that is
+/// not `<package>-<version>` claims nothing, and the result is regrouped
+/// as `category/pf` -> matched collision strings. `owns_path` reads
+/// through the `PackagesDb` seam.
+pub(crate) fn find_owners(root: &Path, collisions: &[String]) -> BTreeMap<String, Vec<String>> {
+    let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let paths: Vec<&[u8]> = collisions.iter().map(|c| c.as_bytes()).collect();
+    let Ok(claims) = portage_vdb::for_root(root).owners(&paths) else {
+        return owners;
+    };
+    for (path, key) in claims {
+        // The old walk skipped a non-`<package>-<version>` entry name
+        // before reading its `CONTENTS`.
+        if portage_repo::split_pf(&key.pf).is_none() {
+            continue;
+        }
+        owners
+            .entry(format!("{}/{}", key.category, key.pf))
+            .or_default()
+            .push(String::from_utf8_lossy(&path).into_owned());
+    }
+    owners
+}
+
+/// The "package NOT merged due to file collisions" abort message: every
+/// colliding path, annotated with the installed packages claiming it
+/// (`(unclaimed)` when none did -- e.g. a stray file with no owner).
+pub(crate) fn collision_message(
+    root: &Path,
+    cpv: &str,
+    collisions: &[String],
+    symlink_collisions: &[String],
+) -> String {
+    let mut lines = Vec::new();
+    if !symlink_collisions.is_empty() {
+        lines.push(format!(
+            "Package '{cpv}' NOT merged: one or more collisions between \
+             symlinks and directories, forbidden by PMS section 13.4:"
+        ));
+        for f in symlink_collisions {
+            lines.push(format!("\t{f}"));
+        }
+    }
+    if !collisions.is_empty() {
+        lines.push(
+            "This package will overwrite one or more files that may belong \
+             to other packages:"
+                .to_string(),
+        );
+        let owners = find_owners(root, collisions);
+        for (owner, paths) in &owners {
+            lines.push(format!("{owner}:"));
+            for f in paths {
+                lines.push(format!("\t{f}"));
+            }
+        }
+        let claimed: std::collections::HashSet<&String> = owners.values().flatten().collect();
+        let unclaimed: Vec<&String> = collisions.iter().filter(|f| !claimed.contains(f)).collect();
+        if !unclaimed.is_empty() {
+            lines.push("(unclaimed):".to_string());
+            for f in unclaimed {
+                lines.push(format!("\t{f}"));
+            }
+        }
+        lines.push(format!(
+            "Package '{cpv}' NOT merged due to file collisions."
+        ));
+    }
+    lines.join("\n")
+}

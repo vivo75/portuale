@@ -104,4 +104,38 @@ mod tests {
         });
         (format!("http://127.0.0.1:{port}"), handle)
     }
+
+    /// A writable copy of the committed GnuPG test keyring (see `binpkg.rs`).
+    /// `gpg` refuses a homedir it doesn't own, so the tree itself is never used.
+    fn test_gpg_home() -> std::path::PathBuf {
+        fn copy_dir(src: &std::path::Path, dest: &std::path::Path) {
+            std::fs::create_dir_all(dest).unwrap();
+            for entry in portage_util::read_dir_entries(src).unwrap() {
+                let to = dest.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy_dir(&entry.path(), &to);
+                } else {
+                    std::fs::copy(entry.path(), &to).unwrap();
+                }
+            }
+        }
+        let dest = tempdir().join("gpg-home");
+        copy_dir(
+            &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/helpers/gpg-keyring"),
+            &dest,
+        );
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o700)).unwrap();
+        dest
+    }
+
+    fn test_gpg_verify(home: &std::path::Path) -> crate::binpkg::GpgVerify {
+        crate::binpkg::GpgVerify {
+            verify_signature: true,
+            request_signature: false,
+            base_command: crate::binpkg::DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string(),
+            gpg_home: home.display().to_string(),
+        }
+    }
 }

@@ -6,6 +6,20 @@ fn tempdir() -> std::path::PathBuf {
     TempDir::new("portuale-ebuild-merge-test").keep()
 }
 
+fn collision_fixture(name: &str) -> PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs")
+        .join(name)
+        .join(format!("{name}-1.0.ebuild"))
+}
+
+fn versioned_fixture(name: &str, version: &str) -> PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs")
+        .join(name)
+        .join(format!("{name}-{version}.ebuild"))
+}
+
 fn fixtures_root() -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
