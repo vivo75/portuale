@@ -459,6 +459,7 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
         &src_uri,
         &FetchOptions {
             distdir: distdir.to_path_buf(),
+            gentoo_mirrors: fetch::gentoo_mirrors_from_env(),
         },
     )?;
     Ok((a, aa))

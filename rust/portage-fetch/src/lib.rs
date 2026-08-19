@@ -5,8 +5,9 @@
 // deliberately has nothing to do with, kept out of this crate so its
 // own logic stays 100% testable offline).
 //
-// SRC_URI grammar supported (PMS 3.1.6, minus mirror:// resolution --
-// see this module's own "KNOWN, DOCUMENTED GAPS" below): a whitespace-
+// SRC_URI grammar supported (PMS 3.1.6, real `mirror://` resolution
+// included -- see `resolve_mirror_candidates`/`gentoo_mirror_fallback`
+// below): a whitespace-
 // separated list of plain URIs, each optionally followed by `-> name`
 // (real "arrow" rename -- PMS's own local-filename override), grouped
 // under `flag? ( ... )` / `!flag? ( ... )` USE-conditional groups,
@@ -26,10 +27,48 @@
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
 // "narrow v1, document the cut" pattern):
-//   - No `mirror://` URI resolution (real `thirdpartymirrors`/
-//     `GENTOO_MIRRORS` config) -- a `mirror://` token is treated as an
-//     ordinary (unfetchable) URI, which will simply fail to fetch. Real
-//     multi-mirror fallback/retry is a separately-scoped follow-up.
+//   - `mirror://` resolution (`resolve_mirror_candidates`) only
+//     consults real `profiles/thirdpartymirrors` (the ebuild's own
+//     repo's copy, via `ebuild_phases::repo_root_for` at the call site
+//     in `multicall/src/fetch.rs`) -- real `custommirrors` (an admin-
+//     configured `/etc/portage/mirrors` file this pilot has no
+//     `PORTAGE_CONFIGROOT` concept for at all) is never consulted.
+//     Real portage's own `random.shuffle`s the resulting candidate
+//     list (load-balancing across equally-valid mirrors) -- not
+//     replicated here: this pilot's own "pinned, reproducible" test
+//     philosophy already rules out non-determinism elsewhere, and
+//     shuffling only affects *which* mirror is tried first, not
+//     correctness (every candidate is still real-digest-verified after
+//     fetching regardless).
+//   - `gentoo_mirror_fallback` (real `async_mirror_url`'s own fallback
+//     path, applied to *every* file real portage fetches, not just
+//     `mirror://` ones) only ever assumes the real "flat" mirror
+//     layout (`<mirror>/distfiles/<filename>`, real `FlatLayout.
+//     get_path`) -- real portage negotiates a per-mirror `layout.conf`
+//     live over the network (itself cached in `.mirror-cache.json`)
+//     that can describe a hashed directory layout instead
+//     (`filename-hash`/`content-hash`); this pilot never attempts that
+//     live negotiation, which matches real `MirrorLayoutConfig.get_
+//     best_supported_layout`'s own fallback whenever a mirror's
+//     `layout.conf` can't be reached at all, and is what the real,
+//     well-known `GENTOO_MIRRORS` entries (`distfiles.gentoo.org` and
+//     its mirrors) actually use. Real portage also URL-quotes the
+//     flat-layout filename for `ftp`/`http`/`https` mirrors -- not
+//     replicated here (no URL-encoding dependency in this crate, and
+//     real distfile filenames essentially never contain characters
+//     that would need it).
+//   - Real fetch ordering interleaves `GENTOO_MIRRORS` fallback,
+//     `mirror://`-expanded candidates, and the literal `SRC_URI` URI
+//     itself in a specific, somewhat subtle order (real `fetch.py`'s
+//     own comment: "Prefer thirdpartymirrors over normal mirrors in
+//     cases when the file does not yet exist on the normal mirrors").
+//     This pilot instead tries the most-specific candidate first,
+//     deterministically: `mirror://`-expanded (or the literal URI for
+//     a non-`mirror://` token) first, `gentoo_mirror_fallback` last --
+//     a real, deliberate deviation from real portage's own precise
+//     ordering, not a bug; every candidate is still tried and real-
+//     digest-verified regardless of order, so this only affects which
+//     mirror is attempted first, never correctness.
 //   - Only `BLAKE2B`/`SHA512` are verified (real `MANIFEST2_HASH_DEFAULTS`
 //     exactly) -- any other hash name appearing in a Manifest entry is
 //     silently ignored, the same "real, standard hash, not reimplemented
@@ -174,6 +213,91 @@ pub fn flatten_src_uri(
         ));
     }
     Ok(entries)
+}
+
+/// Real `grabdict()` (`lib/portage/util/__init__.py`), narrowed to what
+/// this pilot needs: real `profiles/thirdpartymirrors`'s own format --
+/// one `<name> <url1> [<url2> ...]` entry per line. A whole line
+/// starting with `#`, or any token from the first `#`-prefixed one
+/// onward, is a comment (real `grabdict`'s own per-token truncation,
+/// not just whole-line); a line left with fewer than 2 tokens after
+/// that (a bare name with zero URLs, or a blank line) is skipped (real
+/// `grabdict`'s own `empty=0` default). A missing file is an empty
+/// map, not an error -- the same tolerance `parse_manifest` already
+/// gives a missing `Manifest`.
+pub fn parse_thirdpartymirrors(path: &Path) -> Result<HashMap<String, Vec<String>>, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+
+    let mut out = HashMap::new();
+    for line in text.lines() {
+        let tokens: Vec<&str> = line
+            .split_whitespace()
+            .take_while(|t| !t.starts_with('#'))
+            .collect();
+        if tokens.len() < 2 {
+            continue;
+        }
+        out.insert(
+            tokens[0].to_string(),
+            tokens[1..].iter().map(|s| (*s).to_string()).collect(),
+        );
+    }
+    Ok(out)
+}
+
+/// Real `mirror://<name>/<path>` resolution (real `fetch.py`'s own
+/// thirdpartymirrors branch, `custommirrors` deliberately excluded --
+/// see this module's own doc comment): `<name>` is looked up in
+/// `thirdpartymirrors`, expanding to `<mirror_root>/<path>` for every
+/// root under that name (real `locmirr.rstrip("/") + "/" + path`
+/// string-built exactly, in the thirdpartymirrors file's own order --
+/// real portage `random.shuffle`s this, deliberately not replicated
+/// here, see this module's own doc comment). A `mirror://` token whose
+/// name isn't known to `thirdpartymirrors` at all, or that's malformed
+/// (`mirror://` with no further `/` at all), yields no candidates --
+/// real portage's own `writemsg` warning, not a hard error; the caller
+/// still fails loudly if this leaves a file with no working candidate
+/// at all, the same real end result. A non-`mirror://` URI is returned
+/// unchanged, as its own single candidate -- so every `SrcUriEntry.uri`
+/// can be passed through this function uniformly, regardless of
+/// whether it's actually a `mirror://` token.
+pub fn resolve_mirror_candidates(
+    uri: &str,
+    thirdpartymirrors: &HashMap<String, Vec<String>>,
+) -> Vec<String> {
+    let Some(rest) = uri.strip_prefix("mirror://") else {
+        return vec![uri.to_string()];
+    };
+    let Some(slash) = rest.find('/') else {
+        return Vec::new();
+    };
+    let name = &rest[..slash];
+    let path = &rest[slash + 1..];
+    thirdpartymirrors
+        .get(name)
+        .map(|roots| {
+            roots
+                .iter()
+                .map(|root| format!("{}/{}", root.trim_end_matches('/'), path))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Real `async_mirror_url`'s own flat-layout fallback path, applied to
+/// *every* file real portage fetches (not just `mirror://` ones) --
+/// see this module's own doc comment for the real `layout.conf`
+/// negotiation this pilot doesn't attempt, and why flat is the right
+/// default anyway.
+pub fn gentoo_mirror_fallback(filename: &str, gentoo_mirrors: &[String]) -> Vec<String> {
+    gentoo_mirrors
+        .iter()
+        .map(|root| format!("{}/distfiles/{filename}", root.trim_end_matches('/')))
+        .collect()
 }
 
 fn to_hex(bytes: &[u8]) -> String {
@@ -409,5 +533,102 @@ mod tests {
         hashes.insert("MD5".to_string(), "not-even-hex".to_string());
         let digests = DistfileDigests { size: 11, hashes };
         assert!(verify_digests(&path, &digests).is_ok());
+    }
+
+    #[test]
+    fn parse_thirdpartymirrors_reads_a_real_grabdict_style_file() {
+        let dir = tempdir();
+        let path = dir.join("thirdpartymirrors");
+        fs::write(
+            &path,
+            "# a comment line, skipped entirely\n\
+             gentoo\thttps://distfiles.gentoo.org/distfiles https://gentoo.osuosl.org/distfiles\n\
+             \n\
+             gnu https://ftp.gnu.org/gnu/ # trailing comment truncates the rest\n\
+             bare-name-no-urls\n",
+        )
+        .unwrap();
+        let mirrors = parse_thirdpartymirrors(&path).unwrap();
+        assert_eq!(
+            mirrors.get("gentoo").unwrap(),
+            &vec![
+                "https://distfiles.gentoo.org/distfiles".to_string(),
+                "https://gentoo.osuosl.org/distfiles".to_string(),
+            ]
+        );
+        assert_eq!(
+            mirrors.get("gnu").unwrap(),
+            &vec!["https://ftp.gnu.org/gnu/".to_string()]
+        );
+        assert!(
+            !mirrors.contains_key("bare-name-no-urls"),
+            "a name with zero URLs must be skipped, matching real grabdict's own empty=0 default"
+        );
+    }
+
+    #[test]
+    fn parse_thirdpartymirrors_is_empty_for_a_missing_file() {
+        let dir = tempdir();
+        let mirrors = parse_thirdpartymirrors(&dir.join("does-not-exist")).unwrap();
+        assert!(mirrors.is_empty());
+    }
+
+    #[test]
+    fn resolve_mirror_candidates_expands_every_root_under_the_named_mirror() {
+        let mut mirrors = HashMap::new();
+        mirrors.insert(
+            "gentoo".to_string(),
+            vec![
+                "https://distfiles.gentoo.org/distfiles".to_string(),
+                "https://gentoo.osuosl.org/distfiles/".to_string(),
+            ],
+        );
+        let candidates =
+            resolve_mirror_candidates("mirror://gentoo/app-arch/foo-1.0.tar.gz", &mirrors);
+        assert_eq!(
+            candidates,
+            vec![
+                "https://distfiles.gentoo.org/distfiles/app-arch/foo-1.0.tar.gz".to_string(),
+                "https://gentoo.osuosl.org/distfiles/app-arch/foo-1.0.tar.gz".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_mirror_candidates_is_empty_for_an_unknown_mirror_name() {
+        let candidates = resolve_mirror_candidates("mirror://unknown/foo.tar.gz", &HashMap::new());
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn resolve_mirror_candidates_is_empty_for_a_malformed_mirror_uri() {
+        let candidates = resolve_mirror_candidates("mirror://gentoo", &HashMap::new());
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn resolve_mirror_candidates_returns_a_non_mirror_uri_unchanged() {
+        let candidates =
+            resolve_mirror_candidates("https://example.com/foo.tar.gz", &HashMap::new());
+        assert_eq!(
+            candidates,
+            vec!["https://example.com/foo.tar.gz".to_string()]
+        );
+    }
+
+    #[test]
+    fn gentoo_mirror_fallback_builds_the_real_flat_layout_path() {
+        let mirrors = vec![
+            "http://distfiles.gentoo.org".to_string(),
+            "https://gentoo.osuosl.org/".to_string(),
+        ];
+        let candidates = gentoo_mirror_fallback("foo-1.0.tar.gz", &mirrors);
+        assert_eq!(
+            candidates,
+            vec![
+                "http://distfiles.gentoo.org/distfiles/foo-1.0.tar.gz".to_string(),
+                "https://gentoo.osuosl.org/distfiles/foo-1.0.tar.gz".to_string(),
+            ]
+        );
     }
 }

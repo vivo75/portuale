@@ -16,27 +16,60 @@
 //   - No resume support (real `RESUMECOMMAND`'s own retry-with-`-c`
 //     behavior) -- a failed download is simply removed and retried from
 //     scratch next time, never resumed.
-//   - No `mirror://` fallback (see `portage_fetch`'s own doc comment).
+//   - `mirror://` resolution is real now (`portage_fetch::
+//     resolve_mirror_candidates`/`gentoo_mirror_fallback`, see that
+//     crate's own module doc comment for the exact real mechanics
+//     covered and the real ones deliberately not attempted:
+//     `custommirrors`, live per-mirror `layout.conf` negotiation, real
+//     candidate-ordering/shuffling, `RESTRICT=mirror`/`primaryuri`).
 //   - No GPG verification (real `FEATURES=verify-sig`).
 //   - No `FEATURES=distlocks` -- this pilot's own single-invocation-at-
 //     a-time CLI usage never races a concurrent fetch of the same file.
 
-use portage_fetch::{flatten_src_uri, parse_manifest, verify_digests};
+use portage_fetch::{
+    flatten_src_uri, gentoo_mirror_fallback, parse_manifest, parse_thirdpartymirrors,
+    resolve_mirror_candidates, verify_digests,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Real `make.globals`'s own `GENTOO_MIRRORS="http://distfiles.gentoo.
+/// org"` default. Used only by `ebuild_phases::fetch_sources`'s own
+/// `FetchOptions` construction, NOT read inside `fetch_src_uri` itself
+/// -- unlike `DISTDIR`/`ROOT`/`PORTAGE_TMPDIR`, `GENTOO_MIRRORS` has no
+/// dedicated CLI flag of its own yet, but the same "explicit parameter,
+/// not an ambient env read inside library code" reasoning still applies
+/// here: `FetchOptions.gentoo_mirrors` lets each test control it
+/// directly (most tests set it to `vec![]`, so a deliberately-failing
+/// fetch doesn't silently reach out to the real `distfiles.gentoo.org`
+/// as an unintended fallback) without needing `std::env::set_var`'s own
+/// unsoundness under parallel test execution.
+pub fn gentoo_mirrors_from_env() -> Vec<String> {
+    match std::env::var("GENTOO_MIRRORS") {
+        Ok(value) if !value.trim().is_empty() => {
+            value.split_whitespace().map(String::from).collect()
+        }
+        _ => vec!["http://distfiles.gentoo.org".to_string()],
+    }
+}
 
 /// `distdir` is env-var-sourced at the `ebuild.rs`/`pretend.rs` CLI
 /// boundary (`DISTDIR`, same "env var/hardcoded default" shortcut
 /// `PKGDIR`/`CONFIG_PROTECT` already use); `Default` matches real
 /// `make.globals`'s own `DISTDIR="/var/cache/distfiles"` exactly.
+/// `gentoo_mirrors` real make.globals default, see `gentoo_mirrors_
+/// from_env`'s own doc comment for why it's a field here rather than
+/// read directly inside `fetch_src_uri`.
 pub struct FetchOptions {
     pub distdir: PathBuf,
+    pub gentoo_mirrors: Vec<String>,
 }
 
 impl Default for FetchOptions {
     fn default() -> Self {
         Self {
             distdir: PathBuf::from("/var/cache/distfiles"),
+            gentoo_mirrors: vec!["http://distfiles.gentoo.org".to_string()],
         }
     }
 }
@@ -103,6 +136,18 @@ pub fn fetch_src_uri(
     std::fs::create_dir_all(&options.distdir)
         .map_err(|e| format!("{}: {e}", options.distdir.display()))?;
 
+    // Real `mirror://` resolution (`profiles/thirdpartymirrors`, the
+    // ebuild's own repo's copy -- `repo_root_for` tolerates a
+    // standalone ebuild outside any repo checkout the same way it
+    // already does for eclass resolution, yielding an empty map, i.e.
+    // no thirdpartymirror candidates at all) plus the real `GENTOO_
+    // MIRRORS` flat-layout fallback -- see this module's own doc
+    // comment for the exact real mechanics covered/not covered.
+    let thirdpartymirrors = crate::ebuild_phases::repo_root_for(pkg_dir)
+        .map(|repo_root| parse_thirdpartymirrors(&repo_root.join("profiles/thirdpartymirrors")))
+        .transpose()?
+        .unwrap_or_default();
+
     let mut filenames = Vec::new();
     for entry in &entries {
         let dest = options.distdir.join(&entry.filename);
@@ -120,12 +165,52 @@ pub fn fetch_src_uri(
                     entry.filename
                 ));
             };
-            wget_fetch(&entry.uri, &dest)?;
-            if let Err(e) = verify_digests(&dest, digests) {
-                let _ = std::fs::remove_file(&dest);
+
+            // Real portage's own dedicated `mirror://` candidates
+            // (or, for a plain URI, the URI itself) tried first, the
+            // real `GENTOO_MIRRORS` flat-layout fallback tried last --
+            // a real, deliberate deviation from real portage's own
+            // precise interleaving, not a bug (see `portage_fetch`'s
+            // own doc comment). The first candidate that both fetches
+            // *and* real-digest-verifies wins; every candidate's own
+            // fetch error is collected so the final failure message
+            // (if all of them fail) mentions every URL actually tried,
+            // not just the last one.
+            let mut candidates = resolve_mirror_candidates(&entry.uri, &thirdpartymirrors);
+            candidates.extend(gentoo_mirror_fallback(
+                &entry.filename,
+                &options.gentoo_mirrors,
+            ));
+            if candidates.is_empty() {
                 return Err(format!(
-                    "{}: digest verification failed after fetch: {e}",
-                    entry.filename
+                    "{}: no working candidate mirror for {:?} (unknown mirror name, \
+                     and GENTOO_MIRRORS is empty)",
+                    entry.filename, entry.uri
+                ));
+            }
+
+            let mut errors = Vec::new();
+            let mut fetched = false;
+            for candidate in &candidates {
+                match wget_fetch(candidate, &dest) {
+                    Ok(()) => match verify_digests(&dest, digests) {
+                        Ok(()) => {
+                            fetched = true;
+                            break;
+                        }
+                        Err(e) => {
+                            let _ = std::fs::remove_file(&dest);
+                            errors.push(format!("{candidate}: digest verification failed: {e}"));
+                        }
+                    },
+                    Err(e) => errors.push(e),
+                }
+            }
+            if !fetched {
+                return Err(format!(
+                    "{}: every candidate failed:\n{}",
+                    entry.filename,
+                    errors.join("\n")
                 ));
             }
         }
@@ -206,6 +291,7 @@ mod tests {
             "",
             &FetchOptions {
                 distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
             },
         )
         .unwrap();
@@ -232,6 +318,7 @@ mod tests {
             "https://192.0.2.1/hello-1.0.tar.gz",
             &FetchOptions {
                 distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
             },
         )
         .unwrap();
@@ -248,6 +335,7 @@ mod tests {
             "https://192.0.2.1/nowhere-1.0.tar.gz",
             &FetchOptions {
                 distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
             },
         )
         .unwrap_err();
@@ -269,6 +357,7 @@ mod tests {
             &uri,
             &FetchOptions {
                 distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
             },
         )
         .unwrap();
@@ -297,6 +386,7 @@ mod tests {
             &uri,
             &FetchOptions {
                 distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
             },
         )
         .unwrap_err();
@@ -304,6 +394,93 @@ mod tests {
         assert!(
             !distdir.join("wrong-1.0.tar.gz").exists(),
             "a failed-verification download must not be left behind"
+        );
+        handle.join().unwrap();
+    }
+
+    /// Real, end-to-end `mirror://` resolution: `pkg_dir` sits under a
+    /// real (if fixture-only) repo checkout (`profiles/repo_name` +
+    /// `profiles/thirdpartymirrors`, exactly the layout `repo_root_for`
+    /// already looks for), whose own `thirdpartymirrors` names a mirror
+    /// pointing at a real local HTTP server -- a genuine `mirror://
+    /// testmirror/foo-1.0.tar.gz` SRC_URI is resolved through that file,
+    /// fetched via a real `wget` subprocess, and digest-verified,
+    /// proving the whole chain (`repo_root_for` -> `parse_
+    /// thirdpartymirrors` -> `resolve_mirror_candidates` -> `wget_fetch`
+    /// -> `verify_digests`) works together, not just each piece in
+    /// isolation.
+    #[test]
+    fn fetch_src_uri_resolves_a_real_mirror_uri_via_thirdpartymirrors() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        // `serve_once`'s own handler doesn't look at the request path at
+        // all, so appending an extra path segment (the way a real
+        // `mirror://` expansion would: `<mirror_root>/<path>`) is safe.
+        let mirror_root = uri_base.trim_end_matches("/file");
+
+        let repo_root = tempdir();
+        fs::write(repo_root.join("profiles/repo_name"), "mirrortest\n").unwrap_or_else(|_| {
+            fs::create_dir_all(repo_root.join("profiles")).unwrap();
+            fs::write(repo_root.join("profiles/repo_name"), "mirrortest\n").unwrap();
+        });
+        fs::write(
+            repo_root.join("profiles/thirdpartymirrors"),
+            format!("testmirror {mirror_root}\n"),
+        )
+        .unwrap();
+        let pkg_dir = repo_root.join("dev-libs/mirrorpkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
+
+        let distdir = tempdir();
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "mirror://testmirror/foo-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["foo-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("foo-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    /// Real, end-to-end `GENTOO_MIRRORS` flat-layout fallback: the
+    /// literal `SRC_URI` itself is deliberately unreachable (port 1,
+    /// which real, unprivileged `wget` gets an immediate real
+    /// "Connection refused" for -- fast and deterministic, unlike a
+    /// black-holed address that would make this test hang for real
+    /// `wget -t 3 -T 60`'s own full multi-minute retry budget), so the
+    /// fetch only succeeds because `FetchOptions.gentoo_mirrors` names
+    /// a real local HTTP server that `gentoo_mirror_fallback` expands
+    /// into `<root>/distfiles/<filename>` and that candidate is tried
+    /// next.
+    #[test]
+    fn fetch_src_uri_falls_back_to_gentoo_mirrors_when_the_primary_uri_is_unreachable() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let mirror_root = uri_base.trim_end_matches("/file").to_string();
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root],
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            "hello world"
         );
         handle.join().unwrap();
     }

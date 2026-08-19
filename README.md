@@ -4249,6 +4249,73 @@ default`) does the same via the compiled binary, running both `--shell
 brush` and `--shell bash` against the identical fixture and comparing
 results directly.
 
+### Real `mirror://` resolution: `profiles/thirdpartymirrors` + `GENTOO_MIRRORS`
+
+The fetch slice's own documented gap -- a `mirror://<name>/<path>`
+`SRC_URI` token was treated as an ordinary, unfetchable URI -- is now
+real. `portage_fetch::resolve_mirror_candidates` looks `<name>` up in
+the ebuild's own repo's real `profiles/thirdpartymirrors` file (a real
+`grabdict()`-format file, `<name> <url1> [<url2> ...]` per line --
+`parse_thirdpartymirrors` replicates real `grabdict`'s own per-token
+`#`-comment truncation and "a name with zero URLs is skipped" default
+exactly), expanding to `<mirror_root>/<path>` for every root under that
+name (real `.rstrip("/") + "/" + path` string-built exactly).
+`portage_fetch::gentoo_mirror_fallback` adds real portage's *second*
+mirror mechanism on top: even a plain (non-`mirror://`) URI gets a
+`GENTOO_MIRRORS`-root + `/distfiles/<filename>` fallback candidate
+appended, real `async_mirror_url`'s own flat-layout path (this pilot
+never negotiates a live, per-mirror `layout.conf` the way real portage
+can -- confirmed by reading `MirrorLayoutConfig.get_best_supported_
+layout`'s own fallback, this is exactly what real portage itself falls
+back to whenever a mirror's `layout.conf` isn't reachable, and is what
+every well-known `GENTOO_MIRRORS` entry actually uses).
+`multicall/src/fetch.rs`'s own `fetch_src_uri` tries every candidate in
+order (`mirror://`-expanded/literal-URI candidates first, `GENTOO_
+MIRRORS` fallback last -- a real, deliberate deviation from real
+portage's own more elaborate interleaving, documented in
+`portage_fetch`'s own module doc comment; every candidate is still
+real-digest-verified regardless of order, so this only affects which
+mirror is attempted first, never correctness), stopping at the first
+one that both fetches *and* verifies.
+
+Deliberately not attempted (see `portage_fetch`'s own "KNOWN,
+DOCUMENTED GAPS" for the full list): real `custommirrors` (an
+admin-configured `/etc/portage/mirrors` file this pilot has no
+`PORTAGE_CONFIGROOT` concept for at all), live `layout.conf`
+negotiation, real candidate-list shuffling (`random.shuffle`, pure
+load-balancing, not correctness), and `RESTRICT=mirror`/`primaryuri`
+interactions.
+
+Live-verified against the real system: `app-arch/unzip-6.0_p31`'s own
+real `SRC_URI` (`https://downloads.sourceforge.net/infozip/${MY_P}.
+tar.gz mirror://debian/pool/main/u/${PN}/...debian.tar.xz`) -- the
+exact package/entry this whole gap was originally found on -- now
+really fetches *both* files, including the `mirror://debian/...` one,
+resolved through the real `gentoo` main repo's own `profiles/
+thirdpartymirrors` `debian` entry against a real Debian mirror.
+`GENTOO_MIRRORS` itself is read once via `std::env::var` at exactly one
+call site (`ebuild_phases::fetch_sources`'s own `FetchOptions`
+construction), not inside `fetch_src_uri` -- `FetchOptions.gentoo_
+mirrors` is an explicit field precisely so tests can set it to `vec![]`
+(no real fallback attempted) or a scratch local server, matching this
+pilot's own established "explicit parameter, not an ambient env read
+inside library code" reasoning for anything a parallel test might need
+to vary.
+
+Proven via two new, real, end-to-end integration tests in
+`multicall/src/fetch.rs` (a real local HTTP server, a real `wget`
+subprocess, real digest verification -- no mocking): one builds a
+scratch repo checkout (`profiles/repo_name` + `profiles/
+thirdpartymirrors`) and fetches a real `mirror://testmirror/...` URI
+through it; the other points `FetchOptions.gentoo_mirrors` at that same
+local server while the literal `SRC_URI` itself is a real, immediately-
+refused address (`127.0.0.1:1` -- deliberately *not* a black-holed
+address like `192.0.2.1`, which would make real `wget -t 3 -T 60`
+actually hang for its full multi-minute retry budget instead of failing
+fast), proving the fallback path alone. Plus seven new, pure, offline
+unit tests in `portage-fetch` for `parse_thirdpartymirrors`/
+`resolve_mirror_candidates`/`gentoo_mirror_fallback` individually.
+
 ## Running it
 
 Build both Rust binaries:
@@ -5787,4 +5854,19 @@ PORTING/rust/target/release/multicall ebuild --shell bash \
 # (real phase output, then exit 0)
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/hello.txt
 # hello from phasepkg
+```
+
+Real `mirror://` resolution (see "What this proves" above for the full
+writeup): a real `mirror://debian/...` `SRC_URI` entry on the real
+system's own `gentoo` repo checkout, previously unfetchable:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export DISTDIR="$(mktemp -d)"
+PORTING/rust/target/release/multicall ebuild \
+    /.gentoo/repos/gentoo/app-arch/unzip/unzip-6.0_p31.ebuild unpack
+# (real phase output, then exit 0)
+ls "${DISTDIR}"
+# unzip60.tar.gz  unzip_6.0-31.debian.tar.xz
 ```
