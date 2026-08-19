@@ -981,6 +981,7 @@ mod tests_166;
 
 mod blockers;
 mod candidates;
+mod conflict_use_display;
 mod graph;
 mod license;
 mod masked_deps;

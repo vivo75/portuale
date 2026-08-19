@@ -5083,3 +5083,254 @@ paths stay genuinely distinct) and
 real USE-dep on the atom, checked against real vdb `USE` -- the actual
 `liburing:=[...]`-shaped case).
 
+### Real eclass `inherit()` support: `PORTAGE_ECLASS_LOCATIONS`
+
+The single biggest real blocker to "a real ebuild actually builds",
+found by running `emerge --buildpkgonly` against real packages
+(`app-editors/nano`, `app-arch/xz-utils`, `sys-fs/fuse`) after the
+`avoid_update` fix above: real `bin/ebuild.sh`'s own `inherit()`
+function (unmodified bash) walks a real bash array,
+`PORTAGE_ECLASS_LOCATIONS`, looking for `<location>/eclass/
+<name>.eclass` for every eclass an ebuild's own top-level `inherit
+...` line names -- and portuale never populated that variable at
+all, so `inherit()` `die`d immediately for literally any eclass,
+before this fix. Nearly every real-world ebuild inherits *something*
+(`nano` needed `verify-sig`; `xz-utils` needed `dot-a`/`flag-o-matic`/
+`libtool`/`multilib`/`multilib-minimal`/`preserve-libs`/
+`toolchain-funcs`; `fuse` needed `flag-o-matic`/`meson-multilib`/
+`toolchain-funcs`/`udev`/`python-any-r1`), so this alone made
+real compilation of almost any real package impossible.
+
+Real `doebuild.py` sets this variable from `repo.eclass_db.
+eclass_locations_string` -- a real, `shlex`-quoted, priority-ordered
+list of the ebuild's own repo *plus every one of its master repos*
+(real masters-chain resolution, `config.py:1256-1266`/`eclass_cache.
+py:177-179`: `eclass_locations = [master.location for master in repo.
+masters] + [repo.location]` unless already present, exported
+`reversed()` -- the ebuild's own containing repo searched first, its
+masters after, in real declared order). `eclass_locations_value`
+(`ebuild_phases.rs`) originally implemented only the narrower half of
+this -- the ebuild's own containing repo alone, no masters chain at
+all -- a real, separately-scoped gap for an overlay ebuild that
+inherits a main-repo-only eclass without redeclaring it locally. The
+masters chain is real now too: `RepoConfig::masters` (already resolved
+elsewhere -- `ebuild_merge::blocked_installed_packages`/`pretend.rs`
+already consult it for profile/USE config stacking) is looked up via
+`portage_repo::find_repos(config_root)`, matched against the ebuild's
+own containing repo by location; `config_root` itself is threaded all
+the way down from each real caller's own CLI-boundary `PORTAGE_
+CONFIGROOT` resolution (`ebuild.rs`'s `merge_options.config_root`,
+`MergeOptions`/`UnmergeOptions`/`PackageOptions`'s own `config_root`
+field, mirroring `MergeOptions::config_root`'s own established
+"explicit field, deliberately-inert `Default`" shape) through the
+whole phase-execution call chain (`run_commands`/`run_single_phase` ->
+... -> `phase_env_vars`). Any resolution failure (missing `repos.conf`,
+the containing repo not listed in it, etc.) degrades to the original
+v1 behavior -- the same graceful-degrade precedent `blocked_installed_
+packages` established. Every real eclass portuale had live-verified
+before this fix happened to live in the *same* repo as the ebuild that
+inherits it (`nano`'s/`xz-utils`'s/`fuse`'s own eclasses are all real
+files under the real `gentoo` main repo's own `eclass/` directory,
+that repo's own real `metadata/layout.conf` declaring `masters =`
+empty), so the gap was real but never yet hit live -- now closed
+directly, with a real, end-to-end fixture (an overlay ebuild inheriting
+an eclass that only exists in its own master repo) proving it.
+Exported unconditionally (like `DISTDIR`), not just for phases that
+happen to need it, matching real `doebuild()`'s own environment.
+
+```sh
+CFGROOT="$(mktemp -d)"
+MAIN="${CFGROOT}/repos/main"
+OVERLAY="${CFGROOT}/repos/overlay"
+mkdir -p "${MAIN}"/profiles "${MAIN}"/eclass "${OVERLAY}"/profiles \
+    "${OVERLAY}"/dev-libs/overlaypkg
+echo main > "${MAIN}"/profiles/repo_name
+echo overlay > "${OVERLAY}"/profiles/repo_name
+cat > "${MAIN}"/eclass/mastershared.eclass <<'ECLASS'
+mastershared_hello() {
+	echo "hello from mastershared.eclass"
+}
+ECLASS
+cat > "${OVERLAY}"/dev-libs/overlaypkg/overlaypkg-1.0.ebuild <<'EBUILD'
+EAPI=8
+DESCRIPTION="cross-repo masters-chain eclass inherit"
+SLOT="0"
+KEYWORDS="amd64"
+inherit mastershared
+src_install() {
+	mastershared_hello > "${T}/eclass-marker.txt" || die
+}
+EBUILD
+mkdir -p "${CFGROOT}"/etc/portage
+cat > "${CFGROOT}"/etc/portage/repos.conf <<EOF
+[DEFAULT]
+main-repo = main
+
+[main]
+location = ${MAIN}
+
+[overlay]
+location = ${OVERLAY}
+masters = main
+EOF
+
+export PORTAGE_CONFIGROOT="$CFGROOT"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+rust/target/release/portuale ebuild \
+    "${OVERLAY}/dev-libs/overlaypkg/overlaypkg-1.0.ebuild" install
+cat "${PORTAGE_TMPDIR}"/portage/dev-libs/overlaypkg-1.0/temp/eclass-marker.txt
+# hello from mastershared.eclass -- found via the overlay's own masters
+# chain, even though the eclass itself never lived in the overlay repo.
+unset PORTAGE_CONFIGROOT
+```
+
+**A new, separate gap surfaced while live-verifying this -- since
+fixed upstream**: after `inherit()` itself stopped `die`ing,
+`app-arch/xz-utils` and `sys-fs/fuse` (but not `app-editors/nano`)
+hung indefinitely during real phase execution. Bisected live (a
+scratch fixture repo, copying in real eclasses one at a time under a
+timeout) to the `multilib` eclass family specifically: `flag-o-matic`
++ `toolchain-funcs` alone (the pair `nano` doesn't need but both
+hanging packages do) complete fine; adding `multilib-minimal` (which
+pulls in `multilib-build` -> `multibuild`/`multilib`) reproduces the
+hang.
+
+Root-caused down to a real bug in the pinned `brush` fork itself, not
+portuale's own code, confirmed with a minimal, portage-free repro
+against the standalone `brush` binary (nothing eclass- or
+ebuild-related):
+
+```sh
+big() { for i in $(seq 1 5000); do echo "padding line ${i}"; done; }
+big | cat > out.txt   # hung forever before the fix
+```
+
+`brush-core/src/interp.rs`'s `spawn_pipeline_processes` spawns each
+pipeline stage in a loop, `.await`ing `execute_in_pipeline` before
+moving to the next stage. For external processes and builtins run in
+an owned (non-last-stage) shell, that's fine -- `execute_via_builtin_
+in_owned_shell` wraps the builtin in `tokio::task::spawn_blocking`, so
+the `.await` resolves as soon as the task is *spawned*, not when it
+*finishes*. But `commands.rs`'s `execute_via_function` had no such
+wrapping: it ran a shell function's body inline, so `spawn_pipeline_
+processes`'s loop genuinely blocked until the function fully returned
+-- meaning the *next* pipeline stage (the one that would actually
+drain the function's stdout pipe) was never even spawned yet. A
+function that writes more to stdout than the OS pipe buffer holds
+(~64KiB on Linux) before returning then blocks on that `write()`
+forever. This is exactly what real `bin/phase-functions.sh`'s
+`__save_ebuild_env | __filter_readonly_variables` hits during the
+post-phase "save the env" step (`bin/phase-functions.sh`'s own
+`pretend|setup` case arm) -- both sides are shell functions, and
+`__save_ebuild_env` dumps every function and variable in scope. The
+tiny `pilotcheck.eclass` fixture stays under 64KiB so it never
+triggered this; the multilib family (dozens of functions,
+`toolchain-funcs.eclass` alone is ~1300 lines) easily does.
+
+Fixed in the pinned `vivo75/brush` fork (`brush-core/src/commands.rs`),
+and submitted upstream as
+[reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276) (open,
+no review yet; see `brush-pin.md`). The fix splits
+`execute_via_function` the same way `execute_via_builtin`
+already was: an owned-shell path that spawns the function's body as a
+background task (`tokio::task::spawn_blocking` + `rt.block_on`,
+mirroring `execute_via_builtin_in_owned_shell` exactly) so pipeline
+spawning can proceed to the next stage immediately, and an unchanged
+parent-shell path (used only for a pipeline's own last stage) that
+still awaits inline. Verified: the `big | cat` repro above now
+completes instantly; real `xz-utils`/`fuse` `pretend` now exit `0`
+instead of hanging; the fork's own 2,174-case bash-compatibility test
+suite (`cargo test -p brush-shell --test brush-compat-tests`) passes
+identically before and after (1795 succeeded / 0 failed / 379 known-
+to-fail / 28 skipped in both cases) -- confirmed by rebuilding from a
+clean `cargo clean` on both sides of the fix, not just trusting a
+cached binary. A new regression case (`brush-shell/tests/cases/
+compat/pipeline.yaml`'s own "Function stage writing more than a pipe
+buffer before the next stage is spawned") reproduces the original
+hang under the suite's own 15s per-test timeout.
+
+**Update (2026-09-01):** the pin no longer carries this brush-side fix
+at all — `brush strategy #2` (see the "brush strategy #2" section near
+the end) rewrote the three sites so `__save_ebuild_env` is never a
+pipeline stage, in a vendored `bin/phase-functions.sh` (the
+upstream file stays pristine), and the pin moved to real upstream
+`reubeno/brush` `main` (`a04b09dc`), no fork. The `bigeclasspkg`
+regression fixture below is the guard; it hangs the deadline (confirmed
+against an unpatched-for-#1276 brush) only when
+`bin/phase-functions.sh` is reverted to the pipe form.
+
+Proven via a new `dev-libs/eclasspkg` fixture with a real (if fixture-
+only) `eclass/pilotcheck.eclass` defining one real function,
+`pilotcheck_hello` -- `src_install` calls it directly, proving the
+eclass's own *content*, not just its own presence, is real and usable
+after `inherit()` finds it. Both as a Rust unit test
+(`ebuild_phases::tests::
+install_really_inherits_a_real_eclass_and_calls_its_own_function`, plus
+two narrower ones directly exercising `eclass_locations_value`) and a
+black-box one against the compiled `ebuild` binary
+(`test_ebuild_install_really_inherits_a_real_eclass`).
+
+### `ebuild --shell bash|brush`: a second, real shell execution backend
+
+Every phase, hook, and `bin/misc-functions.sh` `__dyn_*` call this
+portuale runs (`ebuild_phases::run_one_phase`/`run_misc_functions`) had
+exactly one real execution backend until now: an embedded
+`brush_core::Shell` (see this module's own doc comment for why brush
+at all). `--shell bash|brush` (default `brush`, matching the pre-
+existing behavior unchanged) adds a second, genuinely different real
+backend: a plain `bash <bin_dir>/ebuild.sh <phase>` subprocess --
+matching real portage's own `_doebuild_spawn()` invocation shape
+almost exactly (`lib/portage/package/ebuild/doebuild.py`'s own `cmd =
+"{ebuild.sh} {phase}"`, spawned via `portage.process.spawn()`; real
+`bin/ebuild.sh:153`'s own `EBUILD_SH_ARGS="$*"` picks `<phase>` up
+from the subprocess's own positional args, which its own tail
+(`bin/ebuild.sh:830-843`) then really uses to call `__ebuild_main
+${EBUILD_SH_ARGS}` and `exit` -- the exact real mechanism the brush
+backend's own doc comment explains it deliberately avoids, since a
+bare `exit` inside an *embedded* shell would kill the whole hosting
+Rust process; a real subprocess has no such problem, so `--shell bash`
+uses that real mechanism directly instead of brush's own "source, then
+separately `invoke_function`" two-step). `bin/misc-functions.sh` gets
+the same treatment (`bash misc-functions.sh __dyn_<mydo>`, matching
+real `doebuild.py`'s own `misc_sh` invocation shape exactly).
+
+Both backends are built from the exact same `phase_env_vars` (name,
+value) pairs -- `--shell brush` formats them into `export NAME=value`
+bash source text first (`phase_setup_script`); `--shell bash` passes
+them directly as real subprocess environment variables
+(`std::process::Command::envs`), with no shell-quoting step -- and so
+no `$`/backtick-expansion risk -- at all, arguably simpler and safer
+than the brush path's own `{value:?}` Rust-Debug escaping.
+
+A portuale-only flag, not a real `bin/ebuild` option at all -- checked
+directly in `ebuild.rs`'s own CLI-parsing loop (the same "special-
+cased outside the real-options table" treatment `--help`/`-h` already
+get), deliberately not added to `ebuild_options::OPTIONS` (a
+transcription of real bin/ebuild's own argparse setup). Threaded down
+through every real-execution call site portuale has (`ebuild_
+phases::run_commands`/`run_single_phase`/`run_misc_function`,
+`ebuild_merge::MergeOptions`, `ebuild_package::PackageOptions`,
+`ebuild_unmerge::run_unmerge`) -- `emerge --buildpkgonly`'s own real
+build path (`emerge_build.rs` -> `ebuild_package::run_package`)
+inherits it too via `PackageOptions`, though `emerge`'s own CLI
+doesn't expose a `--shell` flag of its own yet (matching `--debug`'s
+own pre-existing, identical non-wiring at that exact call site).
+
+Proven identical, not just "also exits 0": a new Rust unit test
+(`ebuild_phases::tests::
+install_lands_a_real_file_under_a_real_d_via_real_bash`) runs the same
+`dev-libs/phasepkg` fixture `install_lands_a_real_file_under_a_real_d`
+already covers via brush, asserting the exact same real file lands
+with the exact same content; a black-box pytest test
+(`test_ebuild_shell_bash_and_brush_produce_the_same_real_result`) does
+the same via the compiled binary, running both `--shell brush` and
+`--shell bash` against the identical fixture and comparing results
+directly.
+
+> **Update (2026-09-01):** the default flipped from `brush` to `bash`,
+> and `emerge` gained its own `--shell bash|brush` flag -- see
+> "`--shell` default is now `bash`" below. The paragraph above documents
+> the slice that first added the `bash` backend; only the "default
+> `brush`" / "`emerge` doesn't expose `--shell` yet" details are now
+> superseded.
+
