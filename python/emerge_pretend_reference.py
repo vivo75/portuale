@@ -76,7 +76,7 @@ right granularity: portage.versions.vercmp for version ordering,
 portage.dep.Atom/match_from_list for atom parsing and matching, and
 portage.dep.use_reduce for dependency-string flattening.
 
-Usage mirrors the real emerge CLI (and the Rust multicall's `emerge`
+Usage mirrors the real emerge CLI (and the Rust portuale's `emerge`
 applet) directly:
     emerge_pretend_reference.py --pretend <category/package>
 
@@ -4189,7 +4189,7 @@ def _parse_atom(atom_str):
 # below); every table
 # here exists purely for recognition, not behavior.
 # Mirrors
-# PORTING/rust/multicall/src/emerge_options.rs's own copy of these same
+# PORTING/rust/portuale/src/emerge_options.rs's own copy of these same
 # three tables exactly, so both sides report identical text for
 # identical input (verified by the shared contract suite).
 #
@@ -5630,7 +5630,7 @@ def run(args):
 
     # `--buildpkgonly` without `--pretend` is the one real, non-dry-run
     # execution path the Rust side implements for `emerge` itself (see
-    # multicall's own emerge_build.rs module doc comment): it only ever
+    # portuale's own emerge_build.rs module doc comment): it only ever
     # builds a binary package, never merges anything, so it's let through
     # here too even though this reference implementation never actually
     # builds anything itself -- it has no real ebuild-execution machinery

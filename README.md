@@ -2,7 +2,7 @@
 
 This started as the "Suggested first execution step" pilot from
 [`PROMPT.md`](PROMPT.md): a small, complete run of the whole pipeline (Rust
-port, Python harness, shared black-box contract suite, multicall dispatch
+port, Python harness, shared black-box contract suite, portuale dispatch
 skeleton) on the smallest meaningful slice. It has since grown three slices
 further into depgraph/config-resolution territory: atom matching (the
 foundational building block both subsystems are built on), USE-conditional
@@ -73,7 +73,7 @@ PORTING/
     versions-harness/          CLI harness over portage-versions
     atom-harness/               CLI harness over portage-dep
     use-reduce-harness/         CLI harness over portage-use-reduce
-    multicall/                 the real emerge/ebuild dispatch binary; `emerge`
+    portuale/                  the real emerge/ebuild dispatch binary; `emerge`
                                  implements --pretend + dependency recursion +
                                  real profile/make.conf config (pretend.rs),
                                  recognizes every real emerge option/action by
@@ -115,7 +115,7 @@ PORTING/
     test_use_reduce_contract.py asserts identical output, Python vs. Rust
     test_emerge_pretend_contract.py  real emerge binary vs. the Python
                                  reference, against PORTING/fixtures
-    test_multicall.py           tests the compiled dispatch binary via symlinks
+    test_portuale.py            tests the compiled dispatch binary via symlinks
     test_benchmark_gate.py      opt-in wrapper around run_benchmark.py for CI
     test_musl_smoke.py          opt-in wrapper around musl/smoke_test.sh for CI
 ```
@@ -126,7 +126,7 @@ PORTING/
   checked against the real Python implementation through a neutral CLI
   contract (not a product CLI, not FFI/PyO3 bindings) -- see `PROMPT.md`
   hard goal 4 and the "black-box via CLI/API" decision.
-- **`multicall`**: proves the `argv[0]`-based dispatch mechanism for
+- **`portuale`**: proves the `argv[0]`-based dispatch mechanism for
   shipping `emerge`+`ebuild` as one static binary (`PROMPT.md`,
   "emerge/ebuild binary shape"). `ebuild` and everything about `emerge`
   beyond the slice below are still dry-run stubs, per the first-port scope
@@ -598,7 +598,7 @@ PORTING/
   neither silently dropped just because they're inside an unresolvable
   `||` group.
 
-  **CLI surface recognition**: `multicall/src/emerge_options.rs`
+  **CLI surface recognition**: `portuale/src/emerge_options.rs`
   transcribes real emerge's entire option surface from
   `lib/_emerge/main.py` into three tables -- boolean flags (the
   `options` list), value-taking options (the `argument_options` dict,
@@ -622,7 +622,7 @@ PORTING/
   each got its own, later follow-up -- see below).
 
   **`ebuild`'s own CLI surface**: the same treatment, applied to
-  `ebuild`'s much smaller real surface -- `multicall/src/ebuild_options.rs`
+  `ebuild`'s much smaller real surface -- `portuale/src/ebuild_options.rs`
   transcribes `bin/ebuild`'s own `argparse` setup (six options:
   `--force`/`--color`/`--debug`/`--version`/`--ignore-default-opts`/
   `--skip-manifest`, none with short aliases) and, more usefully,
@@ -633,7 +633,7 @@ PORTING/
   `depend`/`fetch`/`fetchall`/`cleanrm`/`help`). Unlike `emerge`, where
   a recognized-but-unimplemented flag is fatal, `ebuild`'s pre-existing
   behavior was to accept *anything at all* as a silent no-op -- and
-  `PORTING/tests/test_multicall.py`'s own dispatch-proof tests (`ebuild
+  `PORTING/tests/test_portuale.py`'s own dispatch-proof tests (`ebuild
   foo-1.0.ebuild merge`, asserting success) depend on that continuing to
   work. So the split here is different: a real option/command (even
   though none of them do anything) still succeeds, still prints the
@@ -658,7 +658,7 @@ PORTING/
   instead, matching `emerge`'s own clearer philosophy. `ebuild` still has
   no Python reference implementation to contract-test against -- it has
   no real behavior to keep in sync between two implementations, so
-  `test_multicall.py`'s black-box tests against the real compiled binary
+  `test_portuale.py`'s black-box tests against the real compiled binary
   are the only test surface, same as before this slice.
 
   **`ebuild`'s own `--help`/`-h`**. Real bin/ebuild is pure `argparse`,
@@ -3535,7 +3535,7 @@ phase* this pilot's own `PORTING/PROMPT-next.md` had investigated but
 never started in code -- running real ebuild phase functions
 (`pkg_setup`, `src_unpack`, `src_prepare`, `src_configure`, `src_compile`,
 `src_test`, `src_install`) and landing real files under a real `${D}`,
-via `ebuild <file> install` (`multicall/src/ebuild.rs`, previously a pure
+via `ebuild <file> install` (`portuale/src/ebuild.rs`, previously a pure
 dry-run stub).
 
 **Bash-execution backend**: an embedded [`brush`](https://github.com/reubeno/brush)
@@ -3550,7 +3550,7 @@ alternative (shelling out to the system's real bash) was rejected
 earlier for tension with the "runs on even the most minimal Linux
 system" hard goal.
 
-**What's real, what's Rust**: `multicall/src/ebuild_phases.rs` computes
+**What's real, what's Rust**: `portuale/src/ebuild_phases.rs` computes
 the environment `doebuild_environment()` would (`CATEGORY`/`PN`/`PV`/
 `PR`/`PVR`/`P`/`PF`, the real `${PORTAGE_TMPDIR}/portage/${CATEGORY}/
 ${PF}` directory layout) and drives the same per-command phase
@@ -3605,7 +3605,7 @@ ebuild file, not necessarily one indexed in a configured repo.
 ### Real merge/filesystem mutation (task #55): the first slice, plus real `pkg_preinst`/`pkg_postinst` hooks
 
 The natural next step after task #54: `ebuild <file> merge`
-(`multicall/src/ebuild_merge.rs`) now really copies `${D}` into `${ROOT}`
+(`portuale/src/ebuild_merge.rs`) now really copies `${D}` into `${ROOT}`
 and writes a real vdb entry, instead of falling through to the dry-run
 stub. Runs the real `install` phase chain first (task #54's own
 `ebuild_phases::run_commands`), then really runs `pkg_preinst`
@@ -3665,7 +3665,7 @@ has no real semantic meaning portage itself relies on).
 
 ### Real package removal: `unmerge` (task #55's own natural complement)
 
-`ebuild <file> unmerge` (`multicall/src/ebuild_unmerge.rs`) really
+`ebuild <file> unmerge` (`portuale/src/ebuild_unmerge.rs`) really
 removes a package `merge` previously installed, instead of falling
 through to the dry-run stub -- without this, `merge` alone could never be
 exercised through a real install/reinstall/removal cycle; every merge
@@ -3810,9 +3810,9 @@ Running it:
 cd PORTING/rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/collisionpkg-a/collisionpkg-a-1.0.ebuild merge
-FEATURES="collision-protect" PORTING/rust/target/release/multicall ebuild \
+FEATURES="collision-protect" PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
 # ebuild: This package will overwrite one or more files that may belong to other packages:
 # dev-libs/collisionpkg-a-1.0:
@@ -4013,7 +4013,7 @@ nothing gets built), both as Rust unit tests
 (`emerge_build::tests::real_buildpkgonly_builds_a_real_binary_package_end_to_end`/
 `real_buildpkgonly_refuses_a_real_src_uri_instead_of_building_an_empty_package`)
 and as black-box CLI tests against the compiled `emerge` binary
-(`test_multicall.py`'s own
+(`test_portuale.py`'s own
 `test_emerge_buildpkgonly_without_pretend_really_builds_a_binary_package`/
 `test_emerge_buildpkgonly_with_pretend_stays_dry_run`/
 `test_emerge_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry`)
@@ -4041,7 +4041,7 @@ groups at all, PMS 8.2.6.5, so none are implemented), a `Manifest`
 `DIST`-line parser, and digest verification via the real, standard
 `blake2`/`sha2` crates (not reimplemented from scratch, same precedent
 `ebuild_merge.rs`'s own real MD5 `CONTENTS` digest already set). A new
-module, `multicall/src/fetch.rs`, adds the one network-touching piece:
+module, `portuale/src/fetch.rs`, adds the one network-touching piece:
 spawning `wget` and orchestrating the "already verified, skip" vs
 "fetch then verify" decision. `ebuild_phases.rs`'s own `run_commands`
 now runs this once per invocation, right before the phase loop,
@@ -4349,7 +4349,7 @@ can -- confirmed by reading `MirrorLayoutConfig.get_best_supported_
 layout`'s own fallback, this is exactly what real portage itself falls
 back to whenever a mirror's `layout.conf` isn't reachable, and is what
 every well-known `GENTOO_MIRRORS` entry actually uses).
-`multicall/src/fetch.rs`'s own `fetch_src_uri` tries every candidate in
+`portuale/src/fetch.rs`'s own `fetch_src_uri` tries every candidate in
 order (`mirror://`-expanded/literal-URI candidates first, `GENTOO_
 MIRRORS` fallback last -- a real, deliberate deviation from real
 portage's own more elaborate interleaving, documented in
@@ -4383,7 +4383,7 @@ inside library code" reasoning for anything a parallel test might need
 to vary.
 
 Proven via two new, real, end-to-end integration tests in
-`multicall/src/fetch.rs` (a real local HTTP server, a real `wget`
+`portuale/src/fetch.rs` (a real local HTTP server, a real `wget`
 subprocess, real digest verification -- no mocking): one builds a
 scratch repo checkout (`profiles/repo_name` + `profiles/
 thirdpartymirrors`) and fetches a real `mirror://testmirror/...` URI
@@ -4484,7 +4484,7 @@ PORTING/rust/target/release/required-use-harness check a a,b "^^" "(" a b ")"
 Try `emerge --pretend` against the fixture tree:
 
 ```sh
-ln -sf "$(realpath PORTING/rust/target/release/multicall)" /tmp/emerge
+ln -sf "$(realpath PORTING/rust/target/release/portuale)" /tmp/emerge
 FX="$(realpath PORTING/fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg              # -> [ebuild  N] ...
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg # -> [ebuild  U] ...
@@ -5603,7 +5603,7 @@ execution -- but it now recognizes real ebuild syntax; see
 ebuild.rs/ebuild_options.rs):
 
 ```sh
-ln -sf "$(realpath PORTING/rust/target/release/multicall)" /tmp/ebuild
+ln -sf "$(realpath PORTING/rust/target/release/portuale)" /tmp/ebuild
 
 # a real, valid ebuild command -- still just a no-op stub
 /tmp/ebuild foo-1.0.ebuild merge
@@ -5690,7 +5690,7 @@ own `src_install` calls real `insinto`/`doins`:
 ```sh
 cd PORTING/rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild install
 # (real phase output, including some known-nonfatal noise -- see
 # ebuild_phases.rs's own "KNOWN, DOCUMENTED GAPS" -- then:)
@@ -5713,7 +5713,7 @@ ordering (preinst before the merge is visible, postinst only after):
 cd PORTING/rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export ROOT="$(mktemp -d)"
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0)
@@ -5740,7 +5740,7 @@ Real package removal: `ebuild <file> unmerge` (see "What this proves"
 above for the full writeup) really deletes what `merge` just installed:
 
 ```sh
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
 # (real prerm/postrm phase output, then exit 0)
 test -e "${ROOT}"/usr/share/mergepkg && echo "still there" || echo "gone"
@@ -5759,7 +5759,7 @@ installs a *new* `/etc/configpkg.conf`:
 ```sh
 mkdir -p "${ROOT}"/etc
 echo "admin's own edits" > "${ROOT}"/etc/configpkg.conf
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild merge
 cat "${ROOT}"/etc/configpkg.conf
 # admin's own edits          <- untouched
@@ -5778,7 +5778,7 @@ the `PORTAGE_DEBUG` value it actually observed to `${T}/portage-debug-value.txt`
 ```sh
 cd PORTING/rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/debugpkg/debugpkg-1.0.ebuild install --debug
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, PLUS real bash xtrace not present without --debug, e.g.:)
@@ -5805,7 +5805,7 @@ cd PORTING/rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export ROOT="$(mktemp -d)"
 export PKGDIR="$(mktemp -d)"
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0)
@@ -5833,7 +5833,7 @@ export PORTAGE_CONFIGROOT="$(realpath PORTING/fixtures)"
 export ROOT="$(realpath PORTING/fixtures)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export PKGDIR="$(mktemp -d)"
-ln -sf "$(realpath PORTING/rust/target/release/multicall)" /tmp/emerge
+ln -sf "$(realpath PORTING/rust/target/release/portuale)" /tmp/emerge
 /tmp/emerge --buildpkgonly dev-libs/packagepkg
 # [ebuild  N] dev-libs/packagepkg-1.0
 # >>> Building binary for dev-libs/packagepkg-1.0...
@@ -5878,7 +5878,7 @@ cd PORTING/rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export DISTDIR="$(mktemp -d)"
 printf 'hello from verifiedfetchpkg\n' > "${DISTDIR}"/verifiedfetchpkg-1.0.tar.gz
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild install
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0 -- no network access, since the
@@ -5895,7 +5895,7 @@ fixture-only) eclass and calls a real function it defines:
 ```sh
 cd PORTING/rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/eclasspkg/eclasspkg-1.0.ebuild install
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0)
@@ -5913,7 +5913,7 @@ before the fix:
 ```sh
 cd PORTING/rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild install
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0 -- promptly, not after a hang)
@@ -5929,7 +5929,7 @@ embedded brush shell:
 ```sh
 cd PORTING/rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/multicall ebuild --shell bash \
+PORTING/rust/target/release/portuale ebuild --shell bash \
     PORTING/fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild install
 # (real phase output, then exit 0)
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/hello.txt
@@ -5944,7 +5944,7 @@ system's own `gentoo` repo checkout, previously unfetchable:
 cd PORTING/rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export DISTDIR="$(mktemp -d)"
-PORTING/rust/target/release/multicall ebuild \
+PORTING/rust/target/release/portuale ebuild \
     /.gentoo/repos/gentoo/app-arch/unzip/unzip-6.0_p31.ebuild unpack
 # (real phase output, then exit 0)
 ls "${DISTDIR}"

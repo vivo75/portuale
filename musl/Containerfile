@@ -24,7 +24,7 @@ WORKDIR /work
 COPY rust/ rust/
 RUN cd rust && cargo build --release --target x86_64-alpine-linux-musl \
     --package versions-harness --package atom-harness \
-    --package use-reduce-harness --package required-use-harness --package multicall
+    --package use-reduce-harness --package required-use-harness --package portuale
 
 FROM scratch AS runtime
 COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/versions-harness /bin/versions-harness
@@ -33,13 +33,13 @@ COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/use-reduc
 COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/required-use-harness /bin/required-use-harness
 # Real deployment would install this binary once and create `emerge`/
 # `ebuild` symlinks (proven on the host filesystem by
-# PORTING/tests/test_multicall.py); scratch has no shell to `ln` at image
+# PORTING/tests/test_portuale.py); scratch has no shell to `ln` at image
 # build time, so the smoke test copies the same binary under each applet
 # name instead. Dispatch is by argv[0] basename either way -- the binary
 # can't tell a symlink from a hardlink from a separate copy.
-COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/multicall /bin/multicall
-COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/multicall /bin/emerge
-COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/multicall /bin/ebuild
+COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/portuale /bin/portuale
+COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/portuale /bin/emerge
+COPY --from=builder /work/rust/target/x86_64-alpine-linux-musl/release/portuale /bin/ebuild
 # The synthetic repo/vdb tree emerge --pretend is exercised against inside
 # the container (see PORTING/fixtures and PORTING/rust/portage-repo).
 COPY fixtures/ /fixtures/

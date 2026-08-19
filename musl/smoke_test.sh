@@ -7,7 +7,7 @@
 # `FROM scratch` runtime stage) and runs the resulting binaries with
 # literally nothing else in the image -- no libc, no shell, no busybox --
 # proving both the static-linking requirement (hard goal 3: "must run on
-# even the most minimal Linux system") and that the multicall dispatch
+# even the most minimal Linux system") and that the portuale dispatch
 # mechanism works when invoked as `emerge`/`ebuild`.
 #
 # Requires podman or docker. Exits nonzero on any failure, so it's usable
@@ -183,7 +183,7 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend reports a REQUIRED_USE violation inside the scratch container" \
     grep -q 'REQUIRED_USE not satisfied for dev-libs/requiredusebadpkg-1.0' <<<"${actual}"
 
-# CLI surface recognition (see multicall/src/emerge_options.rs): a real
+# CLI surface recognition (see portuale/src/emerge_options.rs): a real
 # emerge option this pilot doesn't implement gets a specific message,
 # not a generic one, even with nothing else in the image to fall back on.
 actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge "${IMAGE}" --jobs dev-libs/newpkg 2>&1 || true)
@@ -194,7 +194,7 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/ebuild "${IMAGE}" foo-1.0.ebuild
 check "ebuild dispatch prints the ebuild stub" \
     grep -q "ebuild (pilot stub)" <<<"${actual}"
 
-# ebuild CLI surface recognition (see multicall/src/ebuild_options.rs): a
+# ebuild CLI surface recognition (see portuale/src/ebuild_options.rs): a
 # real ebuild command this pilot doesn't implement is still accepted as
 # a no-op (real phase execution is deferred, not this), but a genuinely
 # invalid command name is rejected clearly, even with nothing else in

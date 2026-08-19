@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Real-world spot check: runs this pilot's own `emerge --pretend` (the Rust
-# multicall binary, dispatched via a real `emerge` symlink -- argv[0]-based,
-# same mechanism a real installation uses, see multicall/src/main.rs) against
+# portuale binary, dispatched via a real `emerge` symlink -- argv[0]-based,
+# same mechanism a real installation uses, see portuale/src/main.rs) against
 # the REAL system's own `/usr/bin/emerge`, on the REAL live ROOT/
 # PORTAGE_CONFIGROOT (whatever this machine actually has installed) rather
 # than the synthetic PORTING/fixtures tree every other test in this repo
@@ -40,7 +40,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORTING_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUST_DIR="${PORTING_DIR}/rust"
-PILOT_BIN="${RUST_DIR}/target/release/multicall"
+PILOT_BIN="${RUST_DIR}/target/release/portuale"
 
 REAL_EMERGE="$(command -v emerge || true)"
 if [ -z "${REAL_EMERGE}" ]; then

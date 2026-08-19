@@ -1156,22 +1156,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "multicall"
-version = "0.1.0"
-dependencies = [
- "brush-builtins",
- "brush-core",
- "filetime",
- "md-5",
- "portage-dep",
- "portage-fetch",
- "portage-profile",
- "portage-repo",
- "regex",
- "tokio",
-]
-
-[[package]]
 name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1410,6 +1394,22 @@ name = "portage-versions"
 version = "0.1.0"
 dependencies = [
  "regex",
+]
+
+[[package]]
+name = "portuale"
+version = "0.1.0"
+dependencies = [
+ "brush-builtins",
+ "brush-core",
+ "filetime",
+ "md-5",
+ "portage-dep",
+ "portage-fetch",
+ "portage-profile",
+ "portage-repo",
+ "regex",
+ "tokio",
 ]
 
 [[package]]

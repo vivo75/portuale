@@ -1772,7 +1772,7 @@ fn vercmp_ordering(a: &str, b: &str) -> Ordering {
 /// slotted blocker atoms -- `installed_versions` below doesn't need this
 /// and stays a plain version list for its existing callers. `pub`
 /// (unlike most of this crate's own internal helpers) so
-/// `multicall/src/pretend.rs`'s own `--deselect`/`-W` implementation can
+/// `portuale/src/pretend.rs`'s own `--deselect`/`-W` implementation can
 /// reuse it directly -- real `action_deselect` (`lib/_emerge/actions.py`)
 /// only ever consults `vardb`/the world file, never repos/config at
 /// all, so this is the one real feature in this pilot with no need for
@@ -3467,7 +3467,7 @@ pub struct GraphResult {
 /// `--deep` at all, since `create_depgraph_params.py`'s own `!= 0` check
 /// excludes it from `myparams` either way (`Bounded(0)` is never
 /// constructed here for the same reason -- see the CLI parsing in
-/// `multicall/src/pretend.rs`).
+/// `portuale/src/pretend.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Deep {
     #[default]

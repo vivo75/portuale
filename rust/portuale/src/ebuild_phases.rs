@@ -6,7 +6,7 @@
 // `mergeme()` in `lib/portage/dbapi/vartree.py`, ~6500 lines).
 //
 // Bash-execution backend: an embedded `brush_core::Shell` (see
-// `multicall/Cargo.toml`'s own doc comment for the pinned fork/commit and
+// `portuale/Cargo.toml`'s own doc comment for the pinned fork/commit and
 // why), driving the REAL, unmodified `bin/ebuild.sh` and the phase
 // functions it sources (`bin/phase-functions.sh`/`bin/phase-helpers.sh`/
 // `bin/isolated-functions.sh`/`bin/bashrc-functions.sh`/
@@ -401,11 +401,11 @@ fn create_directories(env: &Environment) -> Result<(), String> {
 }
 
 pub(crate) fn repo_root() -> PathBuf {
-    // multicall/src/ebuild_phases.rs -> multicall -> rust -> PORTING -> repo root
+    // portuale/src/ebuild_phases.rs -> portuale -> rust -> PORTING -> repo root
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../")
         .canonicalize()
-        .expect("repo root resolves (multicall is always built from within the real checkout)")
+        .expect("repo root resolves (portuale is always built from within the real checkout)")
 }
 
 /// Real portage's own mechanism for locating a repo from one of its own

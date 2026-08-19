@@ -12,7 +12,7 @@ members = [
     "atom-harness",
     "use-reduce-harness",
     "required-use-harness",
-    "multicall",
+    "portuale",
 ]
 
 [workspace.package]

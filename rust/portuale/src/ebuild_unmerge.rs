@@ -194,7 +194,7 @@ mod tests {
 
     fn tempdir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "multicall-ebuild-unmerge-test-{}-{}",
+            "portuale-ebuild-unmerge-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

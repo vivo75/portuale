@@ -13,7 +13,7 @@ existing machinery -- and the CLI-surface-recognition follow-up, which
 enumerates every real emerge option/action from lib/_emerge/main.py so
 each one gets a specific "recognized, not implemented" message instead
 of a generic "unsupported option" one). Drives the real compiled
-`emerge` binary (multicall, dispatched via a real symlink
+`emerge` binary (portuale, dispatched via a real symlink
 -- not a neutral harness, since emerge is an actual product surface per
 PROMPT.md's testing decision) and the Python reference implementation
 identically, against the synthetic fixture tree at PORTING/fixtures

@@ -76,29 +76,29 @@ def required_use_harness_python() -> list[str]:
 
 
 @pytest.fixture(scope="session")
-def multicall_binary() -> Path:
+def portuale_binary() -> Path:
     if shutil.which("cargo") is None:
         pytest.skip("cargo not available")
-    return _cargo_build("multicall")
+    return _cargo_build("portuale")
 
 
 @pytest.fixture(scope="session")
-def emerge_binary(multicall_binary: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A real `emerge` symlink to the multicall binary, so tests exercise
+def emerge_binary(portuale_binary: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A real `emerge` symlink to the portuale binary, so tests exercise
     the same argv[0]-dispatch path a real installation would use."""
     link_dir = tmp_path_factory.mktemp("emerge-symlink")
     link = link_dir / "emerge"
-    link.symlink_to(multicall_binary)
+    link.symlink_to(portuale_binary)
     return link
 
 
 @pytest.fixture(scope="session")
-def ebuild_binary(multicall_binary: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """A real `ebuild` symlink to the multicall binary, so tests exercise
+def ebuild_binary(portuale_binary: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A real `ebuild` symlink to the portuale binary, so tests exercise
     the same argv[0]-dispatch path a real installation would use."""
     link_dir = tmp_path_factory.mktemp("ebuild-symlink")
     link = link_dir / "ebuild"
-    link.symlink_to(multicall_binary)
+    link.symlink_to(portuale_binary)
     return link
 
 

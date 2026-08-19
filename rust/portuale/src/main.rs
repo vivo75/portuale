@@ -1,9 +1,9 @@
-// Multicall binary proving the emerge/ebuild dispatch mechanism described
-// in PORTING/PROMPT.md ("emerge/ebuild binary shape"): a single static
-// binary that behaves differently depending on how it is invoked,
-// busybox-style. Real dispatch installs this binary once and creates
-// `emerge` / `ebuild` symlinks (or hardlinks) pointing at it; argv[0] tells
-// it which applet to run.
+// Portuale: a multicall-style binary proving the emerge/ebuild dispatch
+// mechanism described in PORTING/PROMPT.md ("emerge/ebuild binary
+// shape"): a single static binary that behaves differently depending on
+// how it is invoked, busybox-style. Real dispatch installs this binary
+// once and creates `emerge` / `ebuild` symlinks (or hardlinks) pointing
+// at it; argv[0] tells it which applet to run.
 //
 // `emerge` implements one real slice: `--pretend <category/package>` (see
 // pretend.rs). Everything else -- real merges, phase execution via
@@ -65,7 +65,7 @@ fn main() -> ExitCode {
     let invoked_as = basename(&argv[0]);
 
     // Primary dispatch: argv[0] (how a real emerge/ebuild symlink invokes
-    // us). Fallback: an explicit first argument, e.g. `multicall emerge
+    // us). Fallback: an explicit first argument, e.g. `portuale emerge
     // --pretend ...`, matching busybox's own dual invocation style so the
     // binary is still exercisable without symlinks set up.
     if let Some(applet) = Applet::from_name(invoked_as) {
@@ -76,9 +76,9 @@ fn main() -> ExitCode {
         Some(applet) => run(applet, &argv[2..]),
         None => {
             eprintln!(
-                "multicall: unrecognized applet (invoked as {invoked_as:?}); \
+                "portuale: unrecognized applet (invoked as {invoked_as:?}); \
                  expected a symlink named 'emerge' or 'ebuild', or \
-                 `multicall <emerge|ebuild> ...`"
+                 `portuale <emerge|ebuild> ...`"
             );
             ExitCode::from(1)
         }

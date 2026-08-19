@@ -13,7 +13,7 @@
 // all", the same distinction `emerge_options.rs` draws for `emerge`.
 // Unlike `emerge --pretend`, `ebuild` has no Python reference
 // implementation at all -- it's Rust-only, tested directly against the
-// compiled binary by `PORTING/tests/test_multicall.py` (see that
+// compiled binary by `PORTING/tests/test_portuale.py` (see that
 // file's own doc comment).
 //
 // `-h`/`--help` IS implemented now, deliberately excluded from

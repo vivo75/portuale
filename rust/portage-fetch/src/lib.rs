@@ -1,6 +1,6 @@
 // Real SRC_URI flattening, real Manifest digest parsing, and real
 // content-digest verification -- the non-network half of "actually
-// fetch a package's real sources" (see multicall's own `fetch.rs` for
+// fetch a package's real sources" (see portuale's own `fetch.rs` for
 // the network half, the real `wget` subprocess invocation this crate
 // deliberately has nothing to do with, kept out of this crate so its
 // own logic stays 100% testable offline).
@@ -30,7 +30,7 @@
 //   - `mirror://` resolution (`resolve_mirror_candidates`) only
 //     consults real `profiles/thirdpartymirrors` (the ebuild's own
 //     repo's copy, via `ebuild_phases::repo_root_for` at the call site
-//     in `multicall/src/fetch.rs`) -- real `custommirrors` (an admin-
+//     in `portuale/src/fetch.rs`) -- real `custommirrors` (an admin-
 //     configured `/etc/portage/mirrors` file this pilot has no
 //     `PORTAGE_CONFIGROOT` concept for at all) is never consulted.
 //     Real portage's own `random.shuffle`s the resulting candidate

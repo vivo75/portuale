@@ -1807,7 +1807,7 @@ mod tests {
         // The fixture's own default/parent has a real cross-repo entry
         // ("overlay:crossrepo-parent"), so this test needs "overlay" in
         // its own repo list too -- mirroring exactly what production
-        // (multicall's pretend.rs, built from real find_repos) already
+        // (portuale's pretend.rs, built from real find_repos) already
         // passes for this same fixture tree.
         let overlay_repos = [("overlay".to_string(), root.join("overlay"))];
         let config = resolve_config(&root, &root.join("repo"), &overlay_repos, "testrepo")
