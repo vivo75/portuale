@@ -406,6 +406,28 @@ pub fn generate_soname_deps(
     (provides, requires)
 }
 
+/// For every installed package, its vdb-stored `NEEDED.ELF.2` parsed via
+/// `NeededEntry::parse_file`. A package with no such file still yields a
+/// `cpv`, with an empty `Vec`. Returns `(cpv, entries)` pairs in sorted vdb
+/// directory-listing order, for determinism.
+// Portage: LinkageMapELF.py, rebuild (initial data-gathering loop)
+pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
+    // The old walk, moved into `FilesDb` unchanged (the `-MERGING-` skip
+    // included); a missing, unreadable or non-UTF-8 file is an empty row.
+    portage_vdb::for_root(root)
+        .read_file_all("NEEDED.ELF.2")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key, data)| {
+            let entries = data
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .map(|text| NeededEntry::parse_file(&text))
+                .unwrap_or_default();
+            (format!("{}/{}", key.category, key.pf), entries)
+        })
+        .collect()
+}
+
 /// Lexical, non-symlink-resolving path normalizer: collapses `.`/empty
 /// segments, resolves `..` against already-collapsed segments, never touches
 /// the filesystem.
@@ -442,6 +464,104 @@ fn expand_origin(rpath: &str, origin: &str) -> String {
     rpath
         .replace("${ORIGIN}", origin)
         .replace("$ORIGIN", origin)
+}
+
+/// Preserved libraries are in no `NEEDED.ELF.2` file, so run `scanelf -BF
+/// '%a;%F;%S;%r;%n'` over them (without `-q`, so soname-less libraries are
+/// not omitted) and index every reported line like `NEEDED.ELF.2` data,
+/// owned by the preserving cpv.
+///
+/// `preserved` maps preserving cpv -> paths. Only still-existing regular
+/// files and symlinks are scanned. Each line's `EM_`-prefixed arch is
+/// stripped before parsing, and the multilib category comes from a live ELF
+/// header read, falling back to the approximate table in `rebuild`.
+///
+/// Deliberate cuts (no fixture instance): no dummy line for a preserved
+/// path `scanelf` reports nothing for (`find_consumers` returns `Err` there
+/// and callers treat that as "no consumers"); no implicit-soname inference
+/// for an empty-soname object; a missing `scanelf` degrades to no entries
+/// with a loud stderr warning, while a `scanelf` that runs but fails
+/// degrades silently.
+///
+/// Returns `(owner, entries)` groups ready to append to
+/// `read_all_needed_entries`'s output before `rebuild`.
+pub fn scan_preserved_lib_entries(
+    root: &Path,
+    preserved: &BTreeMap<String, Vec<String>>,
+) -> Vec<(String, Vec<NeededEntry>)> {
+    let mut targets: Vec<(String, String)> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for (cpv, paths) in preserved {
+        for p in paths {
+            // First-wins on a duplicate path across cpvs.
+            if !seen.insert(p.clone()) {
+                continue;
+            }
+            let full = root.join(p.trim_start_matches('/'));
+            let is_scannable = std::fs::symlink_metadata(&full)
+                .map(|m| m.file_type().is_file() || m.file_type().is_symlink())
+                .unwrap_or(false);
+            if is_scannable {
+                targets.push((cpv.clone(), full.to_string_lossy().into_owned()));
+            }
+        }
+    }
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let mut args = vec!["-BF".to_string(), "%a;%F;%S;%r;%n".to_string()];
+    args.extend(targets.iter().map(|(_, full)| full.clone()));
+    // `/usr/bin/scanelf` first (empty `EPREFIX` assumed, like every other
+    // live-execution path), then a `PATH` lookup.
+    let scanelf_bin = if std::path::Path::new("/usr/bin/scanelf").is_file() {
+        "/usr/bin/scanelf".to_string()
+    } else {
+        "scanelf".to_string()
+    };
+    let output = std::process::Command::new(&scanelf_bin)
+        .args(&args)
+        .output();
+    let Ok(output) = output else {
+        eprintln!(
+            "!!! Command Not Found: {scanelf_bin} -- preserved-library orphan scan skipped, preserve-libs decisions may miss consumers"
+        );
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let root_str = root.to_string_lossy();
+    let root_prefix = format!("{}/", root_str.trim_end_matches('/'));
+    // Which preserving cpv each scanned absolute path belongs to, so a
+    // reported line is grouped under its owner.
+    let mut path_owner: BTreeMap<String, String> = BTreeMap::new();
+    for (cpv, full) in &targets {
+        path_owner
+            .entry(full.clone())
+            .or_insert_with(|| cpv.clone());
+    }
+    let mut by_owner: BTreeMap<String, Vec<NeededEntry>> = BTreeMap::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        // Strip scanelf's `EM_`-prefixed arch (`EM_X86_64` -> `X86_64`).
+        let Some(line) = line.get(3..) else {
+            continue;
+        };
+        let Some(mut entry) = NeededEntry::parse(line) else {
+            continue;
+        };
+        let full = entry.filename.clone();
+        let Some(rel) = full.strip_prefix(&root_prefix) else {
+            continue;
+        };
+        entry.filename = format!("/{rel}");
+        entry.multilib_category = compute_multilib_category(Path::new(&full));
+        if let Some(owner) = path_owner.get(&full) {
+            by_owner.entry(owner.clone()).or_default().push(entry);
+        }
+    }
+    by_owner.into_iter().collect()
 }
 
 /// Like `os.path.dirname`: everything before the last `/`, or `""`; unlike

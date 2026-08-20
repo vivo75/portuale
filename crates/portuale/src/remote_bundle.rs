@@ -17,6 +17,22 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Parsed `remote-manifest` (client- and server-side shape).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleManifest {
+    /// Manifest format version; only `1` exists.
+    pub format: u64,
+    /// `category/package-version`.
+    pub cpv: String,
+    /// Full `slot/sub_slot` (`SLOT` metadata verbatim).
+    pub slot: String,
+    /// Binpkg `repository`/`REPO` metadata (`__unknown__` fallback, same
+    /// as the local merge).
+    pub repo: String,
+    /// Whether `environment` is in the bundle.
+    pub has_environment: bool,
+}
+
 /// EAPI for the driver exports: `build-info/EAPI` first, else the
 /// `EAPI=` line of the ebuild itself. `None` when neither exists.
 pub fn read_eapi(build_info: &Path, ebuild_file: &Path) -> Option<String> {

@@ -84,6 +84,19 @@ pub(crate) fn plib_entries_to_vdb(
         .collect()
 }
 
+/// Stores the registry unless unchanged since load (then not even the directory is
+/// created); an empty registry serializes as `{}` with no trailing newline.
+// Portage: PreservedLibsRegistry.py, PreservedLibsRegistry.store
+pub(crate) fn write_plib_registry(root: &Path, registry: &PlibRegistry) -> Result<(), String> {
+    let Some(libs) = plib_store(registry) else {
+        return Ok(());
+    };
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.set_preserved_libs(&libs).map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
+}
+
 /// What [`write_plib_registry`] stores: `None` when unchanged since load.
 pub(crate) fn plib_store(registry: &PlibRegistry) -> Option<portage_vdb::PreservedLibs> {
     (registry.entries != registry.orig_entries).then(|| portage_vdb::PreservedLibs {
