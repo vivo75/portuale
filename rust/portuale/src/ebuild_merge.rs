@@ -49,13 +49,48 @@
 // installed package(s) actually claim each colliding path, for the
 // abort message).
 //
+// `preserve-libs` collision exclusion is real too, for the "consult and
+// exclude" half only: real `dblink._collision_protect`'s own
+// `plib_inodes`/`plib_collisions` handling (`lib/portage/dbapi/
+// vartree.py:3860-3985`) -- a colliding path whose real, on-disk
+// `(st_dev, st_ino)` matches a path the real `preserved_libs_registry`
+// JSON already lists for some other package is excluded from ordinary
+// collision reporting *unconditionally* (real `_plib_registry` is
+// constructed unconditionally in `vardbapi.__init__`, not gated by
+// `FEATURES=preserve-libs` at all -- that flag only gates the
+// *registration* side, see below), since the just-merged package
+// legitimately takes over that file. After a successful merge, real
+// `merge()`'s own post-copy step (`:5095-5159`) is mirrored too:
+// `unregister_preserved_libs` drops the taken-over paths from the
+// registry (removing the owning `cp:slot` entry entirely once its own
+// path list empties) and from the previous owner's own real vdb
+// `CONTENTS` (real `removeFromContents`), skipped when the previous
+// owner *is* the package just merged (real `if cpv != self.mycpv`). The
+// registry itself is a narrow, fixed-shape JSON document (`{"cp:slot":
+// [cpv, counter, [paths...]]}`, real `PreservedLibsRegistry.store()`'s
+// own `json.dumps(indent="\t", sort_keys=True)`) -- read/written with a
+// small hand-rolled parser/writer (`read_plib_registry`/
+// `write_plib_registry`) rather than a new `serde_json` dependency,
+// matching this pilot's own "small, format-specific parser over a
+// generic dependency" precedent (`--json` output, `SRC_URI`'s grammar,
+// `grabdict`-format `thirdpartymirrors`).
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope):
-//   - No `preserve-libs` exclusion (real `_collision_protect`'s own
-//     `plib_inodes`/`plib_collisions` handling: a collision against a
-//     library real portage is about to unregister from its preserved-
-//     libs registry is excluded, since the new package is legitimately
-//     taking over that file) -- a real, separately-scoped subsystem
-//     this pilot doesn't implement anywhere yet.
+//   - No preserve-libs *registration*/detection side at all: real
+//     `_find_libs_to_preserve`/`_linkmap_rebuild` use `LinkageMap`
+//     (`scanelf`-based ELF `NEEDED`/soname introspection) to decide
+//     *what* a merge should start preserving in the first place -- a
+//     real, separately-scoped subsystem (ELF parsing, a persistent
+//     linkage graph) this pilot doesn't implement anywhere yet. This
+//     slice only ever consults and unregisters a registry some other,
+//     unimplemented mechanism (or a hand-seeded fixture, for testing)
+//     already populated.
+//   - No real `NEEDED`/`LinkageMap` bookkeeping in
+//     `unregister_preserved_libs` (real `removeFromContents` also
+//     strips matching `NEEDED` lines so stale linkage data doesn't
+//     corrupt a future preserve-libs decision) -- moot without the
+//     registration side above ever writing `NEEDED` data in the first
+//     place.
 //   - No blocker exclusion (real `mypkglist = others_in_slot +
 //     blockers` -- a package this ebuild's own dependencies block is
 //     also excluded from collision reporting) -- blockers are a real,
@@ -109,7 +144,8 @@
 
 use crate::ebuild_phases;
 use md5::{Digest, Md5};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// Whether `command` is the one real merge command this module implements
@@ -251,6 +287,300 @@ fn write_cfgfiledict(root: &Path, map: &BTreeMap<String, String>) -> Result<(), 
         text.push_str(&format!("{k} {v}\n"));
     }
     std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Real `PreservedLibsRegistry`'s own in-memory shape
+/// (`lib/portage/util/_dyn_libs/PreservedLibsRegistry.py`): `"cp:slot"`
+/// -> `(cpv, counter, paths)`. `preserved_libs()` mirrors real
+/// `getPreservedLibs()` (cpv -> paths, last entry wins on a duplicate
+/// cpv across keys -- a corner case with no real relevance here).
+type PlibEntries = BTreeMap<String, (String, String, Vec<String>)>;
+
+struct PlibRegistry {
+    entries: PlibEntries,
+}
+
+impl PlibRegistry {
+    fn preserved_libs(&self) -> BTreeMap<String, Vec<String>> {
+        let mut out = BTreeMap::new();
+        for (cpv, _counter, paths) in self.entries.values() {
+            out.insert(cpv.clone(), paths.clone());
+        }
+        out
+    }
+}
+
+/// Real `lib/portage/const.py`'s own `PRIVATE_PATH` (`"var/lib/portage"`)
+/// joined with `PreservedLibsRegistry`'s own hardcoded filename.
+fn plib_registry_path(root: &Path) -> PathBuf {
+    root.join("var/lib/portage/preserved_libs_registry")
+}
+
+/// A minimal hand-rolled JSON string-literal reader (handling the
+/// `\"`/`\\`/`\/`/`\n`/`\t`/`\r`/`\b`/`\f`/`\uXXXX` escapes real
+/// `json.dumps` may emit for a path), used only by `parse_plib_registry`
+/// below -- narrow by design, not a general JSON parser.
+fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars>) -> Option<String> {
+    if chars.next()? != '"' {
+        return None;
+    }
+    let mut out = String::new();
+    loop {
+        match chars.next()? {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                '"' => out.push('"'),
+                '\\' => out.push('\\'),
+                '/' => out.push('/'),
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                'b' => out.push('\u{8}'),
+                'f' => out.push('\u{C}'),
+                'u' => {
+                    let hex: String = (0..4).map(|_| chars.next()).collect::<Option<String>>()?;
+                    let code = u32::from_str_radix(&hex, 16).ok()?;
+                    out.push(char::from_u32(code)?);
+                }
+                _ => return None,
+            },
+            c => out.push(c),
+        }
+    }
+}
+
+fn skip_json_ws(chars: &mut std::iter::Peekable<std::str::Chars>) {
+    while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
+        chars.next();
+    }
+}
+
+fn parse_json_string_array(
+    chars: &mut std::iter::Peekable<std::str::Chars>,
+) -> Option<Vec<String>> {
+    skip_json_ws(chars);
+    if chars.next()? != '[' {
+        return None;
+    }
+    let mut out = Vec::new();
+    skip_json_ws(chars);
+    if chars.peek() == Some(&']') {
+        chars.next();
+        return Some(out);
+    }
+    loop {
+        skip_json_ws(chars);
+        out.push(parse_json_string(chars)?);
+        skip_json_ws(chars);
+        match chars.next()? {
+            ',' => continue,
+            ']' => return Some(out),
+            _ => return None,
+        }
+    }
+}
+
+/// Parses exactly the shape real `PreservedLibsRegistry.store()` writes:
+/// `{"cp:slot": [cpv, counter, [paths...]], ...}`. Returns `None` on any
+/// deviation -- the caller treats that the same as a missing file (real
+/// `load()`'s own graceful degrade to `{}` on a corrupt/unreadable file).
+fn parse_plib_registry(text: &str) -> Option<PlibEntries> {
+    let mut chars = text.chars().peekable();
+    let mut entries = BTreeMap::new();
+    skip_json_ws(&mut chars);
+    if chars.next()? != '{' {
+        return None;
+    }
+    skip_json_ws(&mut chars);
+    if chars.peek() == Some(&'}') {
+        chars.next();
+        return Some(entries);
+    }
+    loop {
+        skip_json_ws(&mut chars);
+        let key = parse_json_string(&mut chars)?;
+        skip_json_ws(&mut chars);
+        if chars.next()? != ':' {
+            return None;
+        }
+        skip_json_ws(&mut chars);
+        if chars.next()? != '[' {
+            return None;
+        }
+        skip_json_ws(&mut chars);
+        let cpv = parse_json_string(&mut chars)?;
+        skip_json_ws(&mut chars);
+        if chars.next()? != ',' {
+            return None;
+        }
+        skip_json_ws(&mut chars);
+        let counter = parse_json_string(&mut chars)?;
+        skip_json_ws(&mut chars);
+        if chars.next()? != ',' {
+            return None;
+        }
+        let paths = parse_json_string_array(&mut chars)?;
+        skip_json_ws(&mut chars);
+        if chars.next()? != ']' {
+            return None;
+        }
+        entries.insert(key, (cpv, counter, paths));
+        skip_json_ws(&mut chars);
+        match chars.next()? {
+            ',' => continue,
+            '}' => return Some(entries),
+            _ => return None,
+        }
+    }
+}
+
+/// Real `load()`: a missing or unparseable registry file degrades
+/// gracefully to an empty registry rather than an error.
+fn read_plib_registry(root: &Path) -> PlibRegistry {
+    let entries = std::fs::read_to_string(plib_registry_path(root))
+        .ok()
+        .and_then(|text| parse_plib_registry(&text))
+        .unwrap_or_default();
+    PlibRegistry { entries }
+}
+
+fn json_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Real `store()`'s own `json.dumps(..., indent="\t", sort_keys=True)`
+/// layout -- `BTreeMap` already keeps keys sorted.
+fn write_plib_registry(root: &Path, registry: &PlibRegistry) -> Result<(), String> {
+    let path = plib_registry_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let mut out = String::from("{\n");
+    let n = registry.entries.len();
+    for (i, (key, (cpv, counter, paths))) in registry.entries.iter().enumerate() {
+        out.push_str(&format!("\t{}: [\n", json_quote(key)));
+        out.push_str(&format!("\t\t{},\n", json_quote(cpv)));
+        out.push_str(&format!("\t\t{},\n", json_quote(counter)));
+        if paths.is_empty() {
+            out.push_str("\t\t[]\n");
+        } else {
+            out.push_str("\t\t[\n");
+            for (j, p) in paths.iter().enumerate() {
+                out.push_str(&format!("\t\t\t{}", json_quote(p)));
+                out.push_str(if j + 1 < paths.len() { ",\n" } else { "\n" });
+            }
+            out.push_str("\t\t]\n");
+        }
+        out.push_str("\t]");
+        out.push_str(if i + 1 < n { ",\n" } else { "\n" });
+    }
+    out.push_str("}\n");
+    std::fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Real `_lstat_inode_map`: `(st_dev, st_ino)` -> every registered
+/// `(cpv, path)` pair currently lstat-able at that inode (multiple paths
+/// may share an inode via hardlinks). A path the registry names but that
+/// no longer exists on disk is silently skipped, matching real
+/// `_lstat_inode_map`'s own `except OSError` -> `continue`.
+fn plib_inode_map(
+    root: &Path,
+    preserved: &BTreeMap<String, Vec<String>>,
+) -> HashMap<(u64, u64), Vec<(String, String)>> {
+    let mut map: HashMap<(u64, u64), Vec<(String, String)>> = HashMap::new();
+    for (cpv, paths) in preserved {
+        for p in paths {
+            let full = root.join(p.trim_start_matches('/'));
+            if let Ok(meta) = std::fs::symlink_metadata(&full) {
+                map.entry((meta.dev(), meta.ino()))
+                    .or_default()
+                    .push((cpv.clone(), p.clone()));
+            }
+        }
+    }
+    map
+}
+
+/// Real `dblink.merge()`'s own post-copy step (`lib/portage/dbapi/
+/// vartree.py:5095-5159`): any path this merge's own `find_collisions`
+/// matched against a currently-registered preserved lib is now
+/// legitimately owned by the just-merged package instead of its
+/// previous, registered owner. Drops the taken-over paths from the
+/// registry (removing the owning `cp:slot` entry entirely once its own
+/// path list empties) and from the previous owner's own real vdb
+/// `CONTENTS` (real `removeFromContents`) -- skipped when the previous
+/// owner *is* the package that was just merged (real `if cpv !=
+/// self.mycpv`: re-merging the exact same cpv already replaces its own
+/// vdb entry wholesale, so there's nothing stale left to strip).
+fn unregister_preserved_libs(
+    root: &Path,
+    merging_cpv: &str,
+    mut registry: PlibRegistry,
+    plib_collisions: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<(), String> {
+    for (cpv, paths) in plib_collisions {
+        let mut empty_key = None;
+        for (key, (entry_cpv, _counter, entry_paths)) in registry.entries.iter_mut() {
+            if entry_cpv == cpv {
+                entry_paths.retain(|p| !paths.contains(p));
+                if entry_paths.is_empty() {
+                    empty_key = Some(key.clone());
+                }
+                break;
+            }
+        }
+        if let Some(key) = empty_key {
+            registry.entries.remove(&key);
+        }
+
+        if cpv != merging_cpv {
+            remove_from_contents(root, cpv, paths)?;
+        }
+    }
+    write_plib_registry(root, &registry)
+}
+
+/// Real `vardbapi.removeFromContents`, narrowed to the `CONTENTS`-line
+/// removal itself (real `NEEDED`-line stripping is a documented gap --
+/// see this module's own doc comment). A missing vdb entry for `cpv`
+/// (already unmerged some other way) is silently a no-op, matching real
+/// `removeFromContents`'s own tolerance of a stale registry entry.
+fn remove_from_contents(root: &Path, cpv: &str, paths: &BTreeSet<String>) -> Result<(), String> {
+    let Some((category, pf)) = cpv.split_once('/') else {
+        return Ok(());
+    };
+    let contents_path = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(pf)
+        .join("CONTENTS");
+    let Ok(text) = std::fs::read_to_string(&contents_path) else {
+        return Ok(());
+    };
+    let new_text: String = text
+        .lines()
+        .filter(|line| {
+            let mut parts = line.split_whitespace();
+            parts.next();
+            !matches!(parts.next(), Some(p) if paths.contains(p))
+        })
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(&contents_path, new_text)
+        .map_err(|e| format!("{}: {e}", contents_path.display()))
 }
 
 /// Real PMS: unlike `EAPI` (restricted to the ebuild's own first real
@@ -584,17 +914,24 @@ fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path
 
 /// Real PMS 13.4's own symlink-over-directory ban (checked
 /// unconditionally, regardless of `FEATURES`) plus real `FEATURES=
-/// collision-protect`'s own ordinary-collision detection -- see this
-/// module's own module doc comment for the exact real mechanics and the
-/// real ones this pilot doesn't attempt (`preserve-libs`/blocker
-/// exclusion). Walks `d` (the real install image, `${D}`) the same way
-/// `merge_tree` does, but read-only and file/symlink-only (real
-/// `_collision_protect` never checks directories at all -- a directory
-/// merging into an existing directory is normal, not a collision).
-/// Returns `(collisions, symlink_collisions)` as real, `ROOT`-relative
-/// absolute paths; the caller decides whether `collisions` alone should
+/// collision-protect`'s own ordinary-collision detection, plus real
+/// preserve-libs collision exclusion (see this module's own module doc
+/// comment for the exact real mechanics and the ones this pilot still
+/// doesn't attempt: blocker exclusion, `FEATURES=protect-owned`). Walks
+/// `d` (the real install image, `${D}`) the same way `merge_tree` does,
+/// but read-only and file/symlink-only (real `_collision_protect` never
+/// checks directories at all -- a directory merging into an existing
+/// directory is normal, not a collision). Returns `(collisions,
+/// symlink_collisions, plib_collisions)` as real, `ROOT`-relative
+/// absolute paths (`plib_collisions` keyed by the preserved lib's own
+/// owning cpv); the caller decides whether `collisions` alone should
 /// abort the merge (gated on `FEATURES=collision-protect`) --
-/// `symlink_collisions` always should.
+/// `symlink_collisions` always should, and `plib_collisions` never does
+/// (real `_collision_protect` excludes those from `collisions`
+/// unconditionally, regardless of `FEATURES`).
+type CollisionsResult =
+    Result<(Vec<String>, Vec<String>, BTreeMap<String, BTreeSet<String>>), String>;
+
 #[allow(clippy::too_many_arguments)]
 fn find_collisions(
     d: &Path,
@@ -604,7 +941,8 @@ fn find_collisions(
     slot: &str,
     config_protect: &str,
     config_protect_mask: &str,
-) -> Result<(Vec<String>, Vec<String>), String> {
+    plib_inodes: &HashMap<(u64, u64), Vec<(String, String)>>,
+) -> CollisionsResult {
     let own_versions: Vec<String> = portage_repo::installed_versions(root, category, package)
         .into_iter()
         .filter(|version| {
@@ -614,6 +952,7 @@ fn find_collisions(
 
     let mut collisions = Vec::new();
     let mut symlink_collisions = Vec::new();
+    let mut plib_collisions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut stack: Vec<PathBuf> = vec![PathBuf::new()];
     while let Some(relative_dir) = stack.pop() {
         let src_dir = d.join(&relative_dir);
@@ -646,6 +985,16 @@ fn find_collisions(
                 continue;
             }
 
+            if let Some(plibs) = plib_inodes.get(&(dest_meta.dev(), dest_meta.ino())) {
+                for (cpv, path) in plibs {
+                    plib_collisions
+                        .entry(cpv.clone())
+                        .or_default()
+                        .insert(path.clone());
+                }
+                continue;
+            }
+
             let owned = own_versions
                 .iter()
                 .any(|version| owns_path(root, category, package, version, &abs_path));
@@ -655,7 +1004,7 @@ fn find_collisions(
             collisions.push(abs_path);
         }
     }
-    Ok((collisions, symlink_collisions))
+    Ok((collisions, symlink_collisions, plib_collisions))
 }
 
 /// Real `vardbapi._owners.get_owners()`, narrowed: for each of
@@ -801,8 +1150,13 @@ pub fn run_merge(
     // (`_collision_protect`) happens before `pkg_preinst` ever runs, not
     // after -- confirmed by reading it, the real `EbuildPhase(phase=
     // "preinst")` block sits strictly after the real `if abort: return
-    // 1` check.
-    let (collisions, symlink_collisions) = find_collisions(
+    // 1` check. The preserve-libs registry is consulted unconditionally
+    // here too (real `_plib_registry` is never `None` in practice --
+    // see this module's own doc comment), regardless of
+    // `FEATURES=collision-protect`.
+    let plib_registry = read_plib_registry(root);
+    let plib_inodes = plib_inode_map(root, &plib_registry.preserved_libs());
+    let (collisions, symlink_collisions, plib_collisions) = find_collisions(
         &env.d(),
         root,
         &env.category,
@@ -810,6 +1164,7 @@ pub fn run_merge(
         &slot,
         &options.config_protect,
         &options.config_protect_mask,
+        &plib_inodes,
     )?;
     if !symlink_collisions.is_empty() || (options.collision_protect && !collisions.is_empty()) {
         let cpv = format!("{}/{}", env.category, env.split.pf);
@@ -848,6 +1203,11 @@ pub fn run_merge(
     )?;
     write_cfgfiledict(root, &cfgfiledict)?;
     write_vdb_entry(root, &env, &slot, &repository, &contents)?;
+
+    if !plib_collisions.is_empty() {
+        let cpv = format!("{}/{}", env.category, env.split.pf);
+        unregister_preserved_libs(root, &cpv, plib_registry, &plib_collisions)?;
+    }
 
     ebuild_phases::run_single_phase(
         ebuild_path,
@@ -1438,5 +1798,182 @@ mod tests {
         // The real directory collisionpkg-a installed is still a real
         // directory -- never replaced by collisionpkg-b's own symlink.
         assert!(root.join("usr/share/collisiontest/adir").is_dir());
+    }
+
+    #[test]
+    fn plib_registry_round_trips_through_json() {
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "dev-libs/preservepkg-old:0".to_string(),
+            (
+                "dev-libs/preservepkg-old-1.0".to_string(),
+                "5".to_string(),
+                vec![
+                    "/usr/lib/preservedtest/libfoo.so.1".to_string(),
+                    "/usr/lib/preservedtest/libfoo.so".to_string(),
+                ],
+            ),
+        );
+        let tmp = tempdir();
+        write_plib_registry(
+            &tmp,
+            &PlibRegistry {
+                entries: entries.clone(),
+            },
+        )
+        .expect("write succeeds");
+
+        let text = std::fs::read_to_string(plib_registry_path(&tmp)).unwrap();
+        let parsed = parse_plib_registry(&text).expect("real json.dumps-shaped output parses back");
+        assert_eq!(parsed, entries);
+    }
+
+    #[test]
+    fn read_plib_registry_degrades_gracefully_when_missing_or_corrupt() {
+        let tmp = tempdir();
+        // No file at all -- real load()'s own ENOENT -> {} degrade.
+        assert!(read_plib_registry(&tmp).entries.is_empty());
+
+        std::fs::create_dir_all(plib_registry_path(&tmp).parent().unwrap()).unwrap();
+        std::fs::write(plib_registry_path(&tmp), b"not json at all").unwrap();
+        assert!(read_plib_registry(&tmp).entries.is_empty());
+    }
+
+    #[test]
+    fn plib_inode_map_skips_paths_that_no_longer_exist_on_disk() {
+        let tmp = tempdir();
+        std::fs::create_dir_all(tmp.join("usr/lib")).unwrap();
+        std::fs::write(tmp.join("usr/lib/real.so"), b"x").unwrap();
+
+        let mut preserved = BTreeMap::new();
+        preserved.insert(
+            "dev-libs/foo-1.0".to_string(),
+            vec![
+                "/usr/lib/real.so".to_string(),
+                "/usr/lib/gone.so".to_string(),
+            ],
+        );
+        let map = plib_inode_map(&tmp, &preserved);
+        assert_eq!(
+            map.len(),
+            1,
+            "only the still-existing path gets an inode entry"
+        );
+        let meta = std::fs::symlink_metadata(tmp.join("usr/lib/real.so")).unwrap();
+        assert_eq!(
+            map.get(&(meta.dev(), meta.ino())),
+            Some(&vec![(
+                "dev-libs/foo-1.0".to_string(),
+                "/usr/lib/real.so".to_string()
+            )])
+        );
+    }
+
+    /// Sanity baseline (this pilot's own "fixtures must actually
+    /// distinguish the new behavior" rule): with no preserve-libs
+    /// registry entry at all, `preservepkg-new` colliding with
+    /// `preservepkg-old` on the exact same path is an ordinary
+    /// collision-protect abort, same as `collisionpkg-a`/`-c` above --
+    /// proving the fixture pair is a genuine collision before the next
+    /// test shows the registry excluding it.
+    #[test]
+    fn preservepkg_new_collides_ordinarily_without_a_registry_entry() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        run_merge(
+            &collision_fixture("preservepkg-old"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("preservepkg-old merges cleanly");
+
+        let options = MergeOptions {
+            collision_protect: true,
+            ..MergeOptions::default()
+        };
+        let err = run_merge(
+            &collision_fixture("preservepkg-new"),
+            &root,
+            &portage_tmpdir,
+            &options,
+        )
+        .expect_err("without a registry entry this is an ordinary collision");
+        assert!(err.contains("dev-libs/preservepkg-old-1.0"), "{err}");
+        assert!(err.contains("/usr/lib/preservedtest/libfoo.so.1"), "{err}");
+    }
+
+    /// Real `_collision_protect`'s own preserve-libs exclusion: with
+    /// `preservepkg-old`'s own already-merged file registered in
+    /// `preserved_libs_registry` (hand-seeded here -- this pilot has no
+    /// registration/detection side yet, see this module's own doc
+    /// comment), `preservepkg-new` colliding on that exact path is
+    /// excluded from collision-protect's abort entirely (even with
+    /// `collision_protect: true`) and takes over the file; afterwards
+    /// the registry no longer lists the path (its only entry, so the
+    /// whole `cp:slot` key is dropped) and `preservepkg-old`'s own vdb
+    /// `CONTENTS` no longer claims it either.
+    #[test]
+    fn preserve_libs_registry_entry_excludes_the_collision_and_hands_ownership_over() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        run_merge(
+            &collision_fixture("preservepkg-old"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("preservepkg-old merges cleanly");
+
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "dev-libs/preservepkg-old:0".to_string(),
+            (
+                "dev-libs/preservepkg-old-1.0".to_string(),
+                "0".to_string(),
+                vec!["/usr/lib/preservedtest/libfoo.so.1".to_string()],
+            ),
+        );
+        write_plib_registry(&root, &PlibRegistry { entries })
+            .expect("seeding the registry succeeds");
+
+        let options = MergeOptions {
+            collision_protect: true,
+            ..MergeOptions::default()
+        };
+        let status = run_merge(
+            &collision_fixture("preservepkg-new"),
+            &root,
+            &portage_tmpdir,
+            &options,
+        )
+        .expect("a preserved-lib collision is excluded, not aborted");
+        assert_eq!(status, 0);
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/lib/preservedtest/libfoo.so.1")).unwrap(),
+            "new library content\n"
+        );
+
+        // preservepkg-old's own CONTENTS no longer claims the path
+        // preservepkg-new just took over.
+        let old_contents =
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/preservepkg-old-1.0/CONTENTS"))
+                .unwrap();
+        assert!(!old_contents.contains("/usr/lib/preservedtest/libfoo.so.1"));
+
+        // The registry entry is gone entirely -- it had exactly one
+        // path, and that path is no longer preserved.
+        let registry_text = std::fs::read_to_string(plib_registry_path(&root)).unwrap();
+        let registry = parse_plib_registry(&registry_text).unwrap();
+        assert!(registry.is_empty());
     }
 }

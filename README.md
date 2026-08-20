@@ -4396,6 +4396,102 @@ fast), proving the fallback path alone. Plus seven new, pure, offline
 unit tests in `portage-fetch` for `parse_thirdpartymirrors`/
 `resolve_mirror_candidates`/`gentoo_mirror_fallback` individually.
 
+### `preserve-libs` collision exclusion: a merge can take over a registered preserved lib without aborting
+
+`FEATURES=collision-protect`'s own documented gap is real now, for the
+"consult and exclude" half: real `dblink._collision_protect`'s own
+`plib_inodes`/`plib_collisions` handling (`lib/portage/dbapi/
+vartree.py:3860-3985`). A colliding path whose real, on-disk `(st_dev,
+st_ino)` matches a path the real `preserved_libs_registry` JSON already
+lists for some other package is excluded from ordinary collision
+reporting **unconditionally** -- real `_plib_registry` is constructed
+unconditionally in `vardbapi.__init__`, never gated by
+`FEATURES=preserve-libs` itself (that flag only gates the separate
+*registration* side, not consulted here at all -- see below), so this
+exclusion applies the same whether or not `FEATURES=collision-protect`
+is set. After a successful merge, real `merge()`'s own post-copy step
+(`:5095-5159`) is mirrored too: `unregister_preserved_libs` drops the
+taken-over paths from the registry (removing the owning `cp:slot` entry
+entirely once its own path list empties) and from the previous owner's
+own real vdb `CONTENTS` (real `removeFromContents`), skipped only when
+the previous owner *is* the package that was just merged.
+
+The registry itself (`<root>/var/lib/portage/preserved_libs_registry`)
+is a narrow, fixed-shape JSON document (real `PreservedLibsRegistry.
+store()`'s own `{"cp:slot": [cpv, counter, [paths...]]}`,
+`json.dumps(indent="\t", sort_keys=True)`) -- read and written with a
+small hand-rolled parser/writer rather than a new `serde_json`
+dependency, matching this pilot's own "small, format-specific parser
+over a generic dependency" precedent (`--json` output's own hand-rolled
+emitter, `SRC_URI`'s recursive-descent grammar, `grabdict`-format
+`thirdpartymirrors`).
+
+Deliberately not attempted (see `ebuild_merge.rs`'s own module doc
+comment for the full list): the preserve-libs *registration*/detection
+side itself -- real `_find_libs_to_preserve`/`_linkmap_rebuild` use
+`LinkageMap` (`scanelf`-based ELF `NEEDED`/soname introspection) to
+decide *what* a merge should start preserving in the first place, a
+real, separately-scoped subsystem (ELF parsing, a persistent linkage
+graph) this pilot doesn't implement anywhere yet. This slice only ever
+consults and unregisters a registry some other, unimplemented mechanism
+(or a hand-seeded fixture, for testing) already populated. Also not
+attempted: real `NEEDED`/`LinkageMap` bookkeeping in
+`unregister_preserved_libs` (moot without the registration side ever
+writing `NEEDED` data), and (as already documented in the
+`collision-protect` section above) blocker exclusion and
+`FEATURES=protect-owned`.
+
+Proven via five new Rust unit tests in `ebuild_merge.rs`: a JSON
+round-trip test for the hand-rolled registry parser/writer; a
+"missing/corrupt file degrades to an empty registry" test (real
+`load()`'s own tolerance); an inode-map test confirming a registry path
+that no longer exists on disk is silently skipped (real
+`_lstat_inode_map`'s own `except OSError` -> `continue`); a sanity
+baseline proving the new `dev-libs/preservepkg-old`/`dev-libs/
+preservepkg-new` fixture pair is a genuine ordinary collision-protect
+abort with **no** registry entry present (this pilot's own "a fixture
+must actually distinguish the new behavior" rule); and the main
+end-to-end proof -- with `preservepkg-old`'s own already-merged file
+hand-registered in a seeded `preserved_libs_registry`,
+`preservepkg-new` colliding on that exact path merges successfully even
+with `collision_protect: true`, takes over the file's real content, and
+afterwards neither `preservepkg-old`'s own vdb `CONTENTS` nor the
+registry still list the path.
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/preservepkg-old/preservepkg-old-1.0.ebuild merge
+mkdir -p "${ROOT}/var/lib/portage"
+cat > "${ROOT}/var/lib/portage/preserved_libs_registry" <<'EOF'
+{
+	"dev-libs/preservepkg-old:0": [
+		"dev-libs/preservepkg-old-1.0",
+		"0",
+		[
+			"/usr/lib/preservedtest/libfoo.so.1"
+		]
+	]
+}
+EOF
+FEATURES="collision-protect" PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/preservepkg-new/preservepkg-new-1.0.ebuild merge
+echo "exit: $?"
+# exit: 0 -- no collision-protect abort, even though the destination
+# path was already claimed by another package's own vdb CONTENTS
+cat "${ROOT}"/usr/lib/preservedtest/libfoo.so.1
+# new library content
+cat "${ROOT}"/var/db/pkg/dev-libs/preservepkg-old-1.0/CONTENTS
+# no longer lists /usr/lib/preservedtest/libfoo.so.1
+cat "${ROOT}"/var/lib/portage/preserved_libs_registry
+# {
+# }
+```
+
 ## Running it
 
 Build both Rust binaries:
