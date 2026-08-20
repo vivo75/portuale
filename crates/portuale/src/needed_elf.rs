@@ -633,4 +633,10 @@ mod tests {
     fn tempdir() -> std::path::PathBuf {
         TempDir::new("portuale-needed-elf-test").keep()
     }
+
+    #[test]
+    fn read_all_needed_entries_degrades_gracefully_when_var_db_pkg_is_missing() {
+        let root = tempdir();
+        assert_eq!(read_all_needed_entries(&root), Vec::new());
+    }
 }

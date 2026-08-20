@@ -33,6 +33,39 @@ pub struct BundleManifest {
     pub has_environment: bool,
 }
 
+impl BundleManifest {
+    /// Parse back; `None` on missing keys, bad `FORMAT`, or multiline
+    /// values (fail-closed: a forged manifest never parses half-way).
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut map = HashMap::new();
+        for line in text.lines() {
+            let (key, value) = line.split_once('=')?;
+            if !key.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+                || value.contains('\n')
+                || value.contains('\r')
+            {
+                return None;
+            }
+            map.insert(key.to_string(), value.to_string());
+        }
+        let format: u64 = map.get("FORMAT")?.parse().ok()?;
+        if format != 1 {
+            return None;
+        }
+        Some(Self {
+            format,
+            cpv: map.get("CPV")?.clone(),
+            slot: map.get("SLOT")?.clone(),
+            repo: map.get("REPO")?.clone(),
+            has_environment: match map.get("HAS_ENVIRONMENT")?.as_str() {
+                "yes" => true,
+                "no" => false,
+                _ => return None,
+            },
+        })
+    }
+}
+
 /// EAPI for the driver exports: `build-info/EAPI` first, else the
 /// `EAPI=` line of the ebuild itself. `None` when neither exists.
 pub fn read_eapi(build_info: &Path, ebuild_file: &Path) -> Option<String> {

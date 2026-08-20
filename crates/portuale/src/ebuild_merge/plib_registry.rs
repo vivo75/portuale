@@ -45,6 +45,16 @@ impl RetireWrites {
     }
 }
 
+impl PlibRegistry {
+    pub(crate) fn preserved_libs(&self) -> BTreeMap<String, Vec<String>> {
+        let mut out = BTreeMap::new();
+        for (cpv, _counter, paths) in self.entries.values() {
+            out.insert(cpv.clone(), paths.clone());
+        }
+        out
+    }
+}
+
 /// Files-backend registry path. Tests only.
 #[cfg(test)]
 pub(crate) fn plib_registry_path(root: &Path) -> PathBuf {
@@ -103,4 +113,24 @@ pub(crate) fn plib_store(registry: &PlibRegistry) -> Option<portage_vdb::Preserv
         entries: plib_entries_to_vdb(&registry.entries),
         loaded: plib_entries_to_vdb(&registry.orig_entries),
     })
+}
+
+/// `(st_dev, st_ino)` -> registered `(cpv, path)` pairs; un-lstat-able paths are skipped.
+// Portage: vartree.py, dblink._lstat_inode_map
+pub(crate) fn plib_inode_map(
+    root: &Path,
+    preserved: &BTreeMap<String, Vec<String>>,
+) -> HashMap<(u64, u64), Vec<(String, String)>> {
+    let mut map: HashMap<(u64, u64), Vec<(String, String)>> = HashMap::new();
+    for (cpv, paths) in preserved {
+        for p in paths {
+            let full = root.join(p.trim_start_matches('/'));
+            if let Ok(meta) = std::fs::symlink_metadata(&full) {
+                map.entry((meta.dev(), meta.ino()))
+                    .or_default()
+                    .push((cpv.clone(), p.clone()));
+            }
+        }
+    }
+    map
 }
