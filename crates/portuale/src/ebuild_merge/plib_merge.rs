@@ -233,6 +233,56 @@ pub(crate) struct FindPreservePathsForMergeArgs<'a> {
     pub(crate) new_image_paths: &'a BTreeSet<String>,
 }
 
+/// Selects the installed same-slot instance's still-needed libraries before the replace
+/// loop; `None` on a first-ever install or when it owns no files. Runs after `merge_tree`
+/// and `populate_vdb_tmp`, before `write_vdb_tmp_contents`.
+// Portage: vartree.py, dblink.treewalk
+pub(crate) fn find_preserve_paths_for_merge(
+    args: FindPreservePathsForMergeArgs<'_>,
+) -> Option<(BTreeSet<String>, String)> {
+    let FindPreservePathsForMergeArgs {
+        root,
+        category,
+        package,
+        new_pf,
+        main_slot,
+        new_image_paths,
+    } = args;
+    let old_pf = installed_instance_pf(root, category, package, main_slot)?;
+    let old_contents_text =
+        read_entry_text(root, category, &old_pf, "CONTENTS").unwrap_or_default();
+    let old_contents: Vec<String> = old_contents_text
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+        .collect();
+    if old_contents.is_empty() {
+        return None;
+    }
+
+    let preserved = read_plib_registry(root).preserved_libs();
+    let replacement_needed = replacement_needed_entries(root, category, new_pf);
+    let owner_entries =
+        linkage_owner_entries(root, &preserved, &[], &BTreeMap::new(), &replacement_needed);
+    let map = crate::needed_elf::rebuild(root, &owner_entries);
+    let defpath =
+        crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
+
+    let old_owner_is_owner = |p: &str| owns_path_pf(root, category, &old_pf, p);
+    let new_owner_is_owner = |p: &str| new_image_paths.contains(p);
+
+    Some((
+        crate::needed_elf::find_libs_to_preserve(crate::needed_elf::FindLibsToPreserveArgs {
+            root,
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &old_owner_is_owner,
+            new_owner_is_owner: &new_owner_is_owner,
+        }),
+        old_contents_text,
+    ))
+}
+
 /// Copies preserved paths' entries from the replaced instance's `CONTENTS` into the
 /// merging package's; a path missing there is dropped with a warning.
 // Portage: vartree.py, dblink._add_preserve_libs_to_contents

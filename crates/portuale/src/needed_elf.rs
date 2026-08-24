@@ -1007,6 +1007,125 @@ pub struct FindLibsToPreserveArgs<'a> {
     pub new_owner_is_owner: &'a dyn Fn(&str) -> bool,
 }
 
+/// `_find_libs_to_preserve`'s pure computation: the gating conditions are
+/// the *caller's* responsibility. `old_contents` is the previous same-slot
+/// instance's `CONTENTS` paths; the two closures say whether the old / new
+/// instance owns a path (an unmerge-only caller passes `false` always).
+///
+/// Build a dependency graph from `find_consumers` results (provider ->
+/// consumers, skipping a consumer being removed that isn't also a
+/// provider); walk from every "root" consumer to find every transitively
+/// reachable provider -- the preserve candidates. Hardlink/soname-symlink
+/// classification then decides what to actually preserve (skipping a
+/// candidate the *new* package already replaces).
+// Portage: vartree.py, _find_libs_to_preserve
+pub fn find_libs_to_preserve(args: FindLibsToPreserveArgs<'_>) -> BTreeSet<String> {
+    let FindLibsToPreserveArgs {
+        root,
+        map,
+        defpath,
+        old_contents,
+        old_owner_is_owner,
+        new_owner_is_owner,
+    } = args;
+    let mut graph = LibGraph::default();
+    let mut consumer_map: BTreeMap<ObjKey, BTreeSet<String>> = BTreeMap::new();
+    let mut provider_nodes: BTreeSet<ObjKey> = BTreeSet::new();
+
+    for f in old_contents {
+        let Ok(consumers) = find_consumers(FindConsumersArgs {
+            root,
+            map,
+            defpath,
+            obj: f,
+            exclude_provider: Some(old_owner_is_owner),
+            greedy: true,
+        }) else {
+            continue;
+        };
+        if consumers.is_empty() {
+            continue;
+        }
+        let provider_node = graph.path_to_node(root, f);
+        graph.add(&provider_node, None);
+        provider_nodes.insert(provider_node.clone());
+        consumer_map.insert(provider_node, consumers);
+    }
+
+    for (provider_node, consumers) in &consumer_map {
+        for c in consumers {
+            let consumer_node = graph.path_to_node(root, c);
+            if old_owner_is_owner(c) && !provider_nodes.contains(&consumer_node) {
+                continue;
+            }
+            graph.add(provider_node, Some(&consumer_node));
+        }
+    }
+
+    let mut preserve_nodes: BTreeSet<ObjKey> = BTreeSet::new();
+    for consumer_node in graph.root_nodes() {
+        if provider_nodes.contains(&consumer_node) {
+            continue;
+        }
+        let mut node_stack = graph.child_nodes(&consumer_node);
+        while let Some(provider_node) = node_stack.pop() {
+            if preserve_nodes.contains(&provider_node) {
+                continue;
+            }
+            preserve_nodes.insert(provider_node.clone());
+            node_stack.extend(graph.child_nodes(&provider_node));
+        }
+    }
+
+    let mut preserve_paths: BTreeSet<String> = BTreeSet::new();
+    for preserve_node in &preserve_nodes {
+        let Some(alt_paths) = graph.alt_paths.get(preserve_node) else {
+            continue;
+        };
+        let mut hardlinks: BTreeSet<String> = BTreeSet::new();
+        let mut soname_symlinks: BTreeSet<String> = BTreeSet::new();
+        let soname = map
+            .obj_properties
+            .get(preserve_node)
+            .map(|p| p.soname.clone())
+            .unwrap_or_default();
+        let mut have_replacement_soname_link = false;
+        let mut have_replacement_hardlink = false;
+
+        for f in alt_paths {
+            let f_abs = root.join(f.trim_start_matches('/'));
+            let Ok(meta) = std::fs::symlink_metadata(&f_abs) else {
+                continue;
+            };
+            if meta.file_type().is_file() {
+                hardlinks.insert(f.clone());
+                if new_owner_is_owner(f) {
+                    have_replacement_hardlink = true;
+                    if basename(f) == soname {
+                        have_replacement_soname_link = true;
+                    }
+                }
+            } else if basename(f) == soname {
+                soname_symlinks.insert(f.clone());
+                if new_owner_is_owner(f) {
+                    have_replacement_soname_link = true;
+                }
+            }
+        }
+
+        if have_replacement_hardlink && have_replacement_soname_link {
+            continue;
+        }
+
+        if !hardlinks.is_empty() {
+            preserve_paths.extend(hardlinks);
+            preserve_paths.extend(soname_symlinks);
+        }
+    }
+
+    preserve_paths
+}
+
 /// Soname-keyed reverse lookup across all multilib categories: every recorded
 /// path of every object listing `soname` in `DT_NEEDED`. Used as the fallback
 /// consumer scan for a preserved library whose owning package already left

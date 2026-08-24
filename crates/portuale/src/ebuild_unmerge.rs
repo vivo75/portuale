@@ -348,6 +348,157 @@ pub(crate) struct UnmergePkgfilesIntoArgs<'a> {
     pub(crate) retire: Option<&'a mut ebuild_merge::RetireWrites>,
 }
 
+/// [`unmerge_pkgfiles`] collecting the registry/config-memory/other-entry
+/// writes into `retire` instead of committing one by one; `None` commits
+/// directly. See [`retire_entry`].
+pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result<(), String> {
+    let UnmergePkgfilesIntoArgs {
+        root,
+        category,
+        pn,
+        pf,
+        also_keep,
+        options,
+        is_replacement,
+        replacement_preserved,
+        replacement_needed,
+        mut retire,
+    } = args;
+    // Through the root's installed-database backend. The error keeps the
+    // underlying text: the io error, `ENOENT` for a missing entry, the
+    // UTF-8 text for a non-UTF-8 `CONTENTS`.
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let db = portage_vdb::for_root(root);
+    let not_installed = |e: &dyn std::fmt::Display| {
+        format!(
+            "{}: not installed ({e})",
+            entry_path_for_message(root, category, pf).display()
+        )
+    };
+    let contents_text = match db.read_file(&key, "CONTENTS") {
+        Ok(Some(bytes)) => String::from_utf8(bytes).map_err(|_| {
+            not_installed(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            ))
+        })?,
+        Ok(None) => return Err(not_installed(&std::io::Error::from_raw_os_error(2))),
+        Err(portage_vdb::Error::Io { source, .. }) => return Err(not_installed(&source)),
+        Err(e) => return Err(not_installed(&e)),
+    };
+
+    // Every other installed version of this same category/PN in the same
+    // SLOT, excluding self.
+    let version = &pf[pn.len() + 1..];
+    let own_slot = ebuild_merge::read_installed_slot(root, category, pn, version);
+    let mut others_in_slot: Vec<String> = match &own_slot {
+        Some(slot) => portage_repo::installed_versions(root, category, pn)
+            .into_iter()
+            .map(|version| format!("{pn}-{version}"))
+            .filter(|other_pf| other_pf != pf && !options.already_unmerged.contains(other_pf))
+            .filter(|other_pf| {
+                let version = &other_pf[pn.len() + 1..];
+                ebuild_merge::read_installed_slot(root, category, pn, version).as_deref()
+                    == Some(slot.as_str())
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    for keep_pf in also_keep {
+        if !others_in_slot.contains(keep_pf) {
+            others_in_slot.push(keep_pf.clone());
+        }
+    }
+
+    // `INFOPATH`/`INFODIR`, collated from `/etc/env.d/*`; see
+    // `env_update::info_dirs_inodes` for why this stays a separate computation.
+    let infodirs_inodes = env_update::info_dirs_inodes(root);
+
+    // The `_conf_mem_file` memory `ebuild_merge` writes on merge, read once
+    // up front, then pruned of every path this unmerge removes and rewritten.
+    let cfgfiledict = ebuild_merge::read_cfgfiledict(root);
+    let mut stale_confmem: Vec<String> = Vec::new();
+
+    // Portage: _prune_plib_registry with unmerge=True (see
+    // `ebuild_merge::preserve_libs_on_unmerge`). `own_slot` defaults to
+    // `"0"` like the installed-slot fallback for a package with no slot.
+    let preserved_paths =
+        ebuild_merge::preserve_libs_on_unmerge_into(ebuild_merge::PreserveLibsOnUnmergeIntoArgs {
+            root,
+            category,
+            pn,
+            pf,
+            slot: own_slot.as_deref().unwrap_or("0"),
+            contents_text: &contents_text,
+            is_replacement,
+            retire: retire.as_deref_mut(),
+        })?;
+
+    remove_contents(RemoveContentsArgs {
+        root,
+        category,
+        others_in_slot: &others_in_slot,
+        config_protect: &options.config_protect,
+        config_protect_mask: &options.config_protect_mask,
+        unmerge_orphans: options.unmerge_orphans,
+        infodirs_inodes: &infodirs_inodes,
+        cfgfiledict: &cfgfiledict,
+        stale_confmem: &mut stale_confmem,
+        preserved_paths: &preserved_paths,
+        contents_text: &contents_text,
+    })?;
+    if !stale_confmem.is_empty() {
+        let mut updated = cfgfiledict;
+        for filename in &stale_confmem {
+            updated.remove(filename);
+        }
+        match retire.as_deref_mut() {
+            Some(retire) => retire.set_config_memory(updated),
+            None => ebuild_merge::write_cfgfiledict(root, &updated)?,
+        }
+    }
+
+    // A preserved library whose last surviving consumer is the package now
+    // being removed is orphaned: delete it and drop it from the registry.
+    // In replacement mode a consumer owned by the old instance still counts,
+    // the old instance's linkmap data is excluded, and the replacing
+    // package's `NEEDED` lines feed explicitly (see
+    // `ebuild_merge::find_unused_preserved_libs`).
+    let being_unmerged: std::collections::BTreeSet<String> = contents_text
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+        .collect();
+    // The unmerged instance itself, plus (database backends) the same-slot
+    // instances this replace loop already unmerged: their entries stay
+    // installed until the publishing commit, so they must not feed the
+    // linkage map of the later instances' prune.
+    let exclude_cpvs: Vec<String> = if is_replacement {
+        std::iter::once(format!("{category}/{pf}"))
+            .chain(
+                options
+                    .already_unmerged
+                    .iter()
+                    .map(|gone| format!("{category}/{gone}")),
+            )
+            .collect()
+    } else {
+        Vec::new()
+    };
+    ebuild_merge::prune_unused_preserved_libs_into(
+        ebuild_merge::PruneUnusedPreservedLibsIntoArgs {
+            root,
+            unmerge_no_replacement: !is_replacement,
+            being_unmerged: &|p| being_unmerged.contains(p),
+            exclude_cpvs: &exclude_cpvs,
+            replacement_preserved,
+            replacement_needed,
+            retire,
+        },
+    )?;
+
+    Ok(())
+}
+
 /// Removes the vdb entry directory itself, then best-effort `rmdir`s its
 /// now-maybe-empty parent category directory (ignored on failure). Split
 /// out so the binpkg replace path can drop an old entry phaselessly.

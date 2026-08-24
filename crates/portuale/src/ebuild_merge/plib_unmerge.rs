@@ -26,6 +26,86 @@ pub(crate) struct PreserveLibsOnUnmergeIntoArgs<'a> {
     pub(crate) retire: Option<&'a mut RetireWrites>,
 }
 
+/// [`preserve_libs_on_unmerge`], keeping the registry in `retire` instead of writing it.
+pub(crate) fn preserve_libs_on_unmerge_into(
+    args: PreserveLibsOnUnmergeIntoArgs<'_>,
+) -> Result<BTreeSet<String>, String> {
+    let PreserveLibsOnUnmergeIntoArgs {
+        root,
+        category,
+        pn,
+        pf,
+        slot,
+        contents_text,
+        is_replacement,
+        retire,
+    } = args;
+    let instance_owns_files = !contents_text.trim().is_empty();
+
+    let counter = read_entry_text(root, category, pf, "COUNTER").unwrap_or_else(|| "0".to_string());
+    let cpv = format!("{category}/{pf}");
+
+    let mut registry = read_plib_registry(root);
+    // The orphan scan must see the registry before this package's entry is unregistered.
+    let preserved = if is_replacement || !instance_owns_files {
+        BTreeSet::new()
+    } else {
+        let old_contents: Vec<String> = contents_text
+            .lines()
+            .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+            .collect();
+
+        let owner_entries = owner_entries_with_preserved_orphans(root, &registry.preserved_libs());
+        let map = crate::needed_elf::rebuild(root, &owner_entries);
+        let defpath =
+            crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
+
+        let old_owner_is_owner = |p: &str| owns_path_pf(root, category, pf, p);
+        let new_owner_is_owner = |_: &str| false;
+
+        crate::needed_elf::find_libs_to_preserve(crate::needed_elf::FindLibsToPreserveArgs {
+            root,
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &old_owner_is_owner,
+            new_owner_is_owner: &new_owner_is_owner,
+        })
+    };
+
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: &cpv,
+        category,
+        pn,
+        slot,
+        counter: &counter,
+        paths: &[],
+    });
+    if !is_replacement && !preserved.is_empty() {
+        let paths_vec: Vec<String> = preserved.iter().cloned().collect();
+        register_preserved_libs(RegisterPreservedLibsArgs {
+            registry: &mut registry,
+            cpv: &cpv,
+            category,
+            pn,
+            slot,
+            counter: &counter,
+            paths: &paths_vec,
+        });
+    }
+    match retire {
+        Some(retire) => retire.registry = Some(registry),
+        None => write_plib_registry(root, &registry)?,
+    }
+
+    Ok(if is_replacement {
+        BTreeSet::new()
+    } else {
+        preserved
+    })
+}
+
 /// Arguments of [`find_unused_preserved_libs`].
 #[cfg(test)]
 pub(crate) struct FindUnusedPreservedLibsArgs<'a> {
