@@ -30,6 +30,17 @@ fn plib_registry_round_trips_through_json() {
 }
 
 #[test]
+fn read_plib_registry_degrades_gracefully_when_missing_or_corrupt() {
+    let tmp = tempdir();
+    // No file at all: Portage's `load` degrades to empty.
+    assert!(read_plib_registry(&tmp).entries.is_empty());
+
+    std::fs::create_dir_all(plib_registry_path(&tmp).parent().unwrap()).unwrap();
+    std::fs::write(plib_registry_path(&tmp), b"not json at all").unwrap();
+    assert!(read_plib_registry(&tmp).entries.is_empty());
+}
+
+#[test]
 fn plib_inode_map_skips_paths_that_no_longer_exist_on_disk() {
     let tmp = tempdir();
     std::fs::create_dir_all(tmp.join("usr/lib")).unwrap();

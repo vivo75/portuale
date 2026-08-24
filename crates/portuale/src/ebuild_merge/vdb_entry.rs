@@ -15,6 +15,62 @@ pub(crate) fn create_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<()
     txn.commit().map_err(|e| e.to_string())
 }
 
+/// Arguments of [`populate_vdb_tmp`].
+pub(crate) struct PopulateVdbTmpArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) build_info_dir: &'a Path,
+    pub(crate) slot: &'a str,
+    pub(crate) repository: &'a str,
+}
+
+/// Copies every regular file directly under `build_info_dir` into the
+/// temporary vdb entry, then re-asserts `CATEGORY`/`SLOT`/`repository` and
+/// ticks `COUNTER` via `WriteTxn::next_counter` (Portage: vartree.py,
+/// dblink.treewalk). The directory must already exist (see [`create_vdb_tmp`]).
+pub(crate) fn populate_vdb_tmp(args: PopulateVdbTmpArgs<'_>) -> Result<(), String> {
+    let PopulateVdbTmpArgs {
+        root,
+        category,
+        pf,
+        build_info_dir,
+        slot,
+        repository,
+    } = args;
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    if let Ok(entries) = portage_util::read_dir_entries(build_info_dir) {
+        for entry in entries {
+            let src = entry.path();
+            if src.is_file()
+                && let Some(name) = src.file_name()
+            {
+                // Entry file names are UTF-8 in the interface; every
+                // build-info name is a fixed ASCII key or `<PF>.ebuild`.
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| format!("{}: file name is not UTF-8", src.display()))?;
+                txn.copy_entry_file(&key, name, &src)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    let counter = txn.next_counter().map_err(|e| e.to_string())?;
+    for (name, value) in [
+        ("CATEGORY", category),
+        ("SLOT", slot),
+        ("repository", repository),
+    ] {
+        txn.put_entry_file(&key, name, format!("{value}\n").as_bytes())
+            .map_err(|e| e.to_string())?;
+    }
+    txn.put_entry_file(&key, "COUNTER", counter.to_string().as_bytes())
+        .map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
+}
+
 /// Records `CONTENTS` in the temporary entry, then folds every per-field
 /// file into the consolidated `metadata` file (`seal_entry`; Portage:
 /// vartree.py, dblink.treewalk). Runs after the file copy; the rename into
@@ -46,6 +102,84 @@ pub(crate) fn publish_vdb_tmp(root: &Path, category: &str, pf: &str) -> Result<(
     let db = portage_vdb::for_root(root);
     let mut txn = db.begin_write().map_err(|e| e.to_string())?;
     txn.finish_entry(&key).map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
+}
+
+/// Arguments of [`publish_merged_entry`].
+pub(crate) struct PublishMergedEntryArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) main_slot: &'a str,
+    pub(crate) preserve_paths: &'a BTreeSet<String>,
+    pub(crate) replaced: &'a [String],
+}
+
+/// The merge's publish step: the new entry goes live, the replaced
+/// same-slot entries go away, and the preserved-libs registration is stored
+/// (Portage: vartree.py, dblink.treewalk).
+///
+/// - `files`: [`publish_vdb_tmp`] then [`register_merge_preserved_libs`].
+/// - database backends: one transaction deleting `replaced`'s rows and
+///   publishing the pending row (raising the counter high-water mark to its
+///   `COUNTER`), with the registry update riding along. Until this commit
+///   readers still see the old instances; a crash before it leaves them
+///   installed and the new row `merging`.
+pub(crate) fn publish_merged_entry(args: PublishMergedEntryArgs<'_>) -> Result<(), String> {
+    let PublishMergedEntryArgs {
+        root,
+        category,
+        pn,
+        pf,
+        main_slot,
+        preserve_paths,
+        replaced,
+    } = args;
+    let db = portage_vdb::for_root(root);
+    if !db.replace_in_publish() {
+        publish_vdb_tmp(root, category, pf)?;
+        return register_merge_preserved_libs(RegisterMergePreservedLibsArgs {
+            root,
+            category,
+            pn,
+            new_pf: pf,
+            main_slot,
+            preserve_paths,
+        });
+    }
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let libs = if preserve_paths.is_empty() {
+        None
+    } else {
+        let counter = db
+            .read_pending_file(&key, "COUNTER")
+            .ok()
+            .flatten()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_else(|| "0".to_string());
+        plib_store(&merge_plib_registration(MergePlibRegistrationArgs {
+            root,
+            category,
+            pn,
+            new_pf: pf,
+            main_slot,
+            preserve_paths,
+            new_counter: &counter,
+        }))
+    };
+    let old: Vec<portage_vdb::EntryKey> = replaced
+        .iter()
+        .map(|old_pf| portage_vdb::EntryKey::new(category, old_pf.as_str()))
+        .collect();
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.finish_entry_replacing(&key, &old)
+        .map_err(|e| e.to_string())?;
+    if let Some(libs) = &libs {
+        txn.set_preserved_libs(libs).map_err(|e| e.to_string())?;
+    }
+    #[cfg(test)]
+    tests::publish_hook(root);
     txn.commit().map_err(|e| e.to_string())
 }
 

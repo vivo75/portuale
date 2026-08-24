@@ -20,6 +20,10 @@ fn versioned_fixture(name: &str, version: &str) -> PathBuf {
         .join(format!("{name}-{version}.ebuild"))
 }
 
+fn env_update_fixture() -> PathBuf {
+    collision_fixture("envupdatepkg")
+}
+
 fn fixtures_root() -> PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
