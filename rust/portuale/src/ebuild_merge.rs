@@ -143,6 +143,7 @@
 //     uses when no such file is found at all.
 
 use crate::ebuild_phases;
+use crate::env_update;
 use md5::{Digest, Md5};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::os::unix::fs::MetadataExt;
@@ -1209,14 +1210,25 @@ pub fn run_merge(
         unregister_preserved_libs(root, &cpv, plib_registry, &plib_collisions)?;
     }
 
-    ebuild_phases::run_single_phase(
+    // Real `merge()`'s own ordering: `postinst` runs, but its own exit
+    // status never gates anything after it ("It's stupid to bail out
+    // here, so keep going regardless of phase return code") -- real
+    // `env_update()` always runs next, as long as anything was actually
+    // installed (real `if contents:`).
+    let postinst_status = ebuild_phases::run_single_phase(
         ebuild_path,
         "postinst",
         root,
         portage_tmpdir,
         options.debug,
         options.shell,
-    )
+    )?;
+
+    if !contents.is_empty() {
+        env_update::run_env_update(root)?;
+    }
+
+    Ok(postinst_status)
 }
 
 #[cfg(test)]
@@ -1975,5 +1987,105 @@ mod tests {
         let registry_text = std::fs::read_to_string(plib_registry_path(&root)).unwrap();
         let registry = parse_plib_registry(&registry_text).unwrap();
         assert!(registry.is_empty());
+    }
+
+    fn env_update_fixture() -> PathBuf {
+        collision_fixture("envupdatepkg")
+    }
+
+    /// Real `merge()`'s own ordering: `env_update()` runs after
+    /// `postinst`, so it sees the merge's *own* just-installed
+    /// `/etc/env.d/50-envupdatetest` (the fixture installs its own env.d
+    /// entry, not a separately-merged package's) and regenerates
+    /// `/etc/profile.env`/`/etc/csh.env`/`/etc/environment.d/
+    /// 10-gentoo-env.conf`/`/etc/ld.so.conf` from it.
+    #[test]
+    fn real_merge_regenerates_env_update_outputs_from_its_own_env_d_entry() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let status = run_merge(
+            &env_update_fixture(),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("run_merge succeeds");
+        assert_eq!(status, 0);
+
+        assert!(root.join("etc/env.d/50-envupdatetest").is_file());
+
+        let ld_so_conf = std::fs::read_to_string(root.join("etc/ld.so.conf")).unwrap();
+        assert!(
+            ld_so_conf.contains("/usr/lib/envupdatetest"),
+            "{ld_so_conf}"
+        );
+
+        let profile_env = std::fs::read_to_string(root.join("etc/profile.env")).unwrap();
+        assert!(
+            profile_env.contains("export ENVUPDATETEST_VAR='hello from envupdatetest'"),
+            "{profile_env}"
+        );
+        // LDPATH itself never appears in profile.env -- only ld.so.conf.
+        assert!(!profile_env.contains("LDPATH"));
+
+        let csh_env = std::fs::read_to_string(root.join("etc/csh.env")).unwrap();
+        assert!(
+            csh_env.contains("setenv ENVUPDATETEST_VAR 'hello from envupdatetest'"),
+            "{csh_env}"
+        );
+
+        let systemd_env =
+            std::fs::read_to_string(root.join("etc/environment.d/10-gentoo-env.conf")).unwrap();
+        assert!(
+            systemd_env.contains("ENVUPDATETEST_VAR=hello from envupdatetest"),
+            "{systemd_env}"
+        );
+    }
+
+    /// Real `env_update()` invokes the *target `ROOT`'s own*
+    /// `<ROOT>/sbin/ldconfig` (never a host `PATH` lookup -- see
+    /// `env_update.rs`'s own module doc comment). Seeding a fake,
+    /// marker-writing executable there before merging proves this
+    /// pilot's own real subprocess invocation, the same "prove it with a
+    /// marker file" style already used for `pkg_preinst`/`pkg_postinst`
+    /// ordering elsewhere in this file.
+    #[test]
+    fn real_merge_invokes_a_real_root_scoped_ldconfig_when_one_is_present() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        std::fs::create_dir_all(root.join("sbin")).unwrap();
+        std::fs::write(
+            root.join("sbin/ldconfig"),
+            "#!/bin/sh\necho \"$@\" > \"$3/ldconfig-was-invoked\"\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            root.join("sbin/ldconfig"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+
+        let status = run_merge(
+            &env_update_fixture(),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("run_merge succeeds");
+        assert_eq!(status, 0);
+
+        let marker = std::fs::read_to_string(root.join("ldconfig-was-invoked"))
+            .expect("the real ROOT-scoped ldconfig binary was really invoked");
+        assert!(marker.contains("-X"), "{marker}");
+        assert!(marker.contains("-r"), "{marker}");
     }
 }

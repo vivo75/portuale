@@ -4492,6 +4492,107 @@ cat "${ROOT}"/var/lib/portage/preserved_libs_registry
 # }
 ```
 
+### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`
+
+The last item on `ebuild_merge.rs`'s own gap list from the "Real merge/
+filesystem mutation" section above is real now: real `env_update()`
+(`lib/portage/util/env_update.py`). New `portuale/src/env_update.rs`,
+wired into `ebuild_merge.rs::run_merge` right after `pkg_postinst` --
+matching real `merge()`'s own exact ordering (`lib/portage/dbapi/
+vartree.py:5198-5209`), including running unconditionally even when
+`postinst` itself failed ("It's stupid to bail out here, so keep going
+regardless of phase return code"), gated only on whether the merge
+actually installed anything (real `if contents:`).
+
+It parses real `/etc/env.d/*` files (the real numeric-prefix filename
+filter, real cumulative `SPACE_SEPARATED`/`COLON_SEPARATED` variable
+handling for the two real hardcoded default sets --
+`CONFIG_PROTECT`/`CONFIG_PROTECT_MASK`; `PATH`/`LDPATH`/`MANPATH`/etc.)
+and regenerates all four real output files: `/etc/ld.so.conf`,
+`/etc/profile.env` (bash `export`), `/etc/csh.env` (tcsh `setenv`), and
+the real systemd `/etc/environment.d/10-gentoo-env.conf`. It then
+really runs `ldconfig` -- specifically the *target `ROOT`'s own*
+`<ROOT>/sbin/ldconfig` (real `env_update()`'s own `else` branch when no
+`CHOST`/`CBUILD` cross-compile is configured, which this pilot never
+is), invoked exactly as real portage does: `ldconfig -X -r <ROOT>`,
+`cwd="/"` -- a real, unmodified subprocess, the same "real subprocess,
+accepted dependency" pattern already established for `wget` in the
+fetch slice.
+
+**v1 scope, confirmed with the user before implementing** (see
+`env_update.rs`'s own module doc comment for the full list): the
+biggest cut is real `ldconfig`-triggering's own persistent, cross-
+process mtime cache (real `portage.mtimedb["ldpath"]`, which lets a
+long-lived real portage session skip `ldconfig` on a merge that didn't
+touch any lib directory). This pilot's own CLI is a fresh process per
+command, so there's no such cache to persist -- every merge is instead
+treated as a first run: any candidate lib dir (`LDPATH` entries from
+env.d, an existing `usr/lib*`/`lib*` directory, excluding `libexec`)
+found on disk *after* the merge triggers `ldconfig`, exactly matching
+real portage's own genuine first-run behavior (empty `prev_mtimes`).
+The only real divergence is a *repeat* merge into the same `ROOT` that
+didn't touch any lib dir, where real portage would skip `ldconfig` and
+this pilot re-runs it anyway -- never wrong, just occasionally extra,
+cheap, idempotent invocations. Also cut: real `getlibpaths()`'s own
+`/etc/ld.so.conf.d/*.conf` `include`-directive parsing (a rare,
+admin-configured mechanism no fixture needs); real `EPREFIX`/bfd-linker
+`/usr/etc/ld.so.conf` (no `EPREFIX` concept anywhere in this pilot);
+env.d-declared extra `SPACE_SEPARATED`/`COLON_SEPARATED` keys (a rare
+escape hatch); real `getconfig()`'s own shlex-based parser (env.d files
+are parsed with the same simple per-line `KEY="value"` shortcut
+`ebuild_merge::parse_slot` already takes for `SLOT`); and always
+rewriting `/etc/ld.so.conf` rather than only when its content actually
+changed (moot here since it isn't vdb-tracked and this pilot's own
+`ldconfig`-triggering decision doesn't depend on that comparison at
+all).
+
+Proven via seven pure, offline unit tests in `env_update.rs` itself
+(env.d line parsing, the filename filter, candidate-lib-dir detection
+including the real `libexec` exclusion, the four generated files, and
+`ldconfig` invocation vs. a present-but-non-executable one correctly
+staying a no-op) plus two new real, end-to-end tests in
+`ebuild_merge.rs` against a new fixture, `dev-libs/envupdatepkg` (which
+installs its own `/etc/env.d/50-envupdatetest` and a `/usr/lib/
+envupdatetest` directory): one proves the four generated files really
+reflect the merge's own just-installed env.d entry; the other seeds a
+fake, marker-writing executable at `<ROOT>/sbin/ldconfig` before
+merging and proves it's really invoked as a subprocess with the real
+`-X -r <ROOT>` arguments -- the same "prove it with a marker file"
+style already used for `pkg_preinst`/`pkg_postinst` ordering elsewhere
+in this file. (An earlier fixture draft used a `cat > file <<-'EOF'`
+heredoc to write the env.d file from `src_install` -- silently produced
+an *empty* `${D}` under brush, caught by live-verifying against the
+built binary before trusting the Rust test suite alone; switched to
+plain `echo`/`>>` redirection, the same style every other fixture in
+this pilot already uses, which works correctly.)
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/envupdatepkg/envupdatepkg-1.0.ebuild merge
+cat "${ROOT}"/etc/ld.so.conf
+# /usr/lib/envupdatetest (plus the autogenerated header)
+cat "${ROOT}"/etc/profile.env
+# export ENVUPDATETEST_VAR='hello from envupdatetest'
+cat "${ROOT}"/etc/csh.env
+# setenv ENVUPDATETEST_VAR 'hello from envupdatetest'
+
+# Seed a fake, marker-writing ldconfig into a fresh ROOT to prove the
+# real subprocess invocation:
+export ROOT="$(mktemp -d)"
+mkdir -p "${ROOT}/sbin"
+printf '#!/bin/sh\necho "$@" > "$3/ldconfig-was-invoked"\n' > "${ROOT}/sbin/ldconfig"
+chmod +x "${ROOT}/sbin/ldconfig"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/envupdatepkg/envupdatepkg-1.0.ebuild merge
+cat "${ROOT}"/ldconfig-was-invoked
+# -X -r /tmp/tmp.XXXXXXXXXX
+```
+
 ## Running it
 
 Build both Rust binaries:

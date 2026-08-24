@@ -21,6 +21,7 @@ mod ebuild_phases;
 mod ebuild_unmerge;
 mod emerge_build;
 mod emerge_options;
+mod env_update;
 mod fetch;
 mod pretend;
 
