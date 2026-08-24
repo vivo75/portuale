@@ -47,3 +47,214 @@ pub(crate) struct FindUnusedPreservedLibsInArgs<'a> {
     pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
     pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
 }
+
+/// [`find_unused_preserved_libs`] over an explicit in-memory registry.
+pub(crate) fn find_unused_preserved_libs_in(
+    args: FindUnusedPreservedLibsInArgs<'_>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let FindUnusedPreservedLibsInArgs {
+        root,
+        registry,
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+    } = args;
+    let plib_dict = registry.preserved_libs();
+    if plib_dict.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let owner_entries = linkage_owner_entries(
+        root,
+        &plib_dict,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+    );
+    let map = crate::needed_elf::rebuild(root, &owner_entries);
+    let defpath =
+        crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
+
+    let all_preserved: BTreeSet<String> = plib_dict.values().flatten().cloned().collect();
+    let mut path_cpv: BTreeMap<String, String> = BTreeMap::new();
+    for (cpv, paths) in &plib_dict {
+        for p in paths {
+            path_cpv.insert(p.clone(), cpv.clone());
+        }
+    }
+
+    let exists = |p: &str| std::fs::symlink_metadata(root.join(p.trim_start_matches('/'))).is_ok();
+
+    let mut consumers_by_preserved: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for path in &all_preserved {
+        if !exists(path) {
+            continue;
+        }
+        let indexed = crate::needed_elf::find_consumers(crate::needed_elf::FindConsumersArgs {
+            root,
+            map: &map,
+            defpath: &defpath,
+            obj: path,
+            exclude_provider: None,
+            greedy: true,
+        });
+        let mut consumers: BTreeSet<String> = match indexed {
+            Ok(set) => set,
+            // Owning package gone from the vdb: match by soname instead.
+            Err(_) => {
+                let soname = path.rsplit('/').next().unwrap_or(path);
+                crate::needed_elf::soname_consumers(&map, soname)
+            }
+        };
+        if unmerge_no_replacement {
+            consumers.retain(|c| !being_unmerged(c));
+        }
+        consumers_by_preserved.insert(path.clone(), consumers);
+    }
+
+    let unneeded =
+        crate::needed_elf::find_unneeded_preserved(root, &consumers_by_preserved, &all_preserved);
+
+    let mut cpv_lib_map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for path in unneeded {
+        if let Some(cpv) = path_cpv.get(&path) {
+            cpv_lib_map.entry(cpv.clone()).or_default().insert(path);
+        }
+    }
+    cpv_lib_map
+}
+
+/// Arguments of [`prune_unused_preserved_libs`].
+pub(crate) struct PruneUnusedPreservedLibsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) unmerge_no_replacement: bool,
+    pub(crate) being_unmerged: &'a dyn Fn(&str) -> bool,
+    pub(crate) exclude_cpvs: &'a [String],
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+}
+
+/// Deletes the libraries `find_unused_preserved_libs` reports as unneeded, strips them
+/// from owners' `CONTENTS`, and reprunes the registry. Returns the removed paths.
+// Portage: vartree.py, dblink._prune_plib_registry
+pub(crate) fn prune_unused_preserved_libs(
+    args: PruneUnusedPreservedLibsArgs<'_>,
+) -> Result<Vec<String>, String> {
+    let PruneUnusedPreservedLibsArgs {
+        root,
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+    } = args;
+    prune_unused_preserved_libs_into(PruneUnusedPreservedLibsIntoArgs {
+        root,
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+        retire: None,
+    })
+}
+
+/// Arguments of [`prune_unused_preserved_libs_into`].
+pub(crate) struct PruneUnusedPreservedLibsIntoArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) unmerge_no_replacement: bool,
+    pub(crate) being_unmerged: &'a dyn Fn(&str) -> bool,
+    pub(crate) exclude_cpvs: &'a [String],
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+    pub(crate) retire: Option<&'a mut RetireWrites>,
+}
+
+/// [`prune_unused_preserved_libs`], leaving registry and rewrites in `retire`.
+/// The files themselves are removed at once either way.
+pub(crate) fn prune_unused_preserved_libs_into(
+    args: PruneUnusedPreservedLibsIntoArgs<'_>,
+) -> Result<Vec<String>, String> {
+    let PruneUnusedPreservedLibsIntoArgs {
+        root,
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+        mut retire,
+    } = args;
+    let cpv_lib_map = find_unused_preserved_libs_in(FindUnusedPreservedLibsInArgs {
+        root,
+        registry: plib_registry_for(root, retire.as_deref()),
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+    });
+
+    let mut removed: Vec<String> = Vec::new();
+    let mut parent_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+    let all_removed: BTreeSet<String> = cpv_lib_map.values().flatten().cloned().collect();
+    for path in &all_removed {
+        let abs = root.join(path.trim_start_matches('/'));
+        let obj_type = match std::fs::symlink_metadata(&abs) {
+            Ok(m) if m.file_type().is_symlink() => "sym",
+            _ => "obj",
+        };
+        match std::fs::remove_file(&abs) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", abs.display())),
+        }
+        if let Some(parent) = abs.parent() {
+            parent_dirs.insert(parent.to_path_buf());
+        }
+        println!("<<< !needed  {obj_type} {}", abs.display());
+        removed.push(path.clone());
+    }
+
+    // Remove newly-emptied parent directories, stopping at the first non-empty one.
+    for mut dir in parent_dirs {
+        while dir.starts_with(root) && dir != root {
+            if std::fs::remove_dir(&dir).is_err() {
+                break;
+            }
+            match dir.parent() {
+                Some(p) => dir = p.to_path_buf(),
+                None => break,
+            }
+        }
+    }
+
+    let mut registry = plib_registry_for(root, retire.as_deref());
+    for (cpv, paths) in &cpv_lib_map {
+        let cat_pf = cpv.split_once('/');
+        let still_installed = cat_pf
+            .map(|(cat, pf)| {
+                portage_vdb::for_root(root)
+                    .has_entry(&portage_vdb::EntryKey::new(cat, pf))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if still_installed {
+            remove_from_contents_into(root, cpv, paths, retire.as_deref_mut())?;
+        }
+        for (entry_cpv, _counter, entry_paths) in registry.entries.values_mut() {
+            if entry_cpv == cpv {
+                entry_paths.retain(|p| !paths.contains(p));
+            }
+        }
+    }
+
+    prune_non_existing(root, &mut registry);
+    match retire {
+        Some(retire) => retire.registry = Some(registry),
+        None => write_plib_registry(root, &registry)?,
+    }
+
+    Ok(removed)
+}
