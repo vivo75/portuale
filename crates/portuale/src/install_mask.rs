@@ -5,6 +5,129 @@
 
 use std::path::Path;
 
+/// Fold the `no{man,info,doc}` `FEATURES` tokens into the configured mask
+/// (each becomes `/usr/share/<man|info|doc>`; empty `EPREFIX` assumed).
+/// Returns the mask plus whether a `no*` token was folded in, which gates
+/// the caller's `rmdir(ED/usr/share)`.
+pub(crate) fn resolve<S: AsRef<str>>(configured: &str, features: &[S]) -> (String, bool) {
+    let mut tokens: Vec<String> = configured.split_whitespace().map(String::from).collect();
+    let mut prunes_usr_share = false;
+    for (feature, subdir) in [("noman", "man"), ("noinfo", "info"), ("nodoc", "doc")] {
+        if features.iter().any(|f| f.as_ref() == feature) {
+            tokens.push(format!("/usr/share/{subdir}"));
+            prunes_usr_share = true;
+        }
+    }
+    (tokens.join(" "), prunes_usr_share)
+}
+
+struct Pattern {
+    is_inclusive: bool,
+    leading_slash: bool,
+    /// The pattern with any leading `-` stripped.
+    pattern: String,
+}
+
+/// Mask pattern list: `install_mask.split()`, a leading `-` flips a token
+/// non-inclusive.
+pub(crate) struct InstallMask {
+    patterns: Vec<Pattern>,
+}
+
+impl InstallMask {
+    /// One `install_mask.split()` token: a leading `-` flips it non-inclusive.
+    pub(crate) fn new(install_mask: &str) -> Self {
+        let patterns = install_mask
+            .split_whitespace()
+            .map(|tok| {
+                let is_inclusive = !tok.starts_with('-');
+                let pattern = if is_inclusive { tok } else { &tok[1..] }.to_string();
+                let leading_slash = pattern.starts_with('/');
+                Pattern {
+                    is_inclusive,
+                    leading_slash,
+                    pattern,
+                }
+            })
+            .collect();
+        Self { patterns }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.patterns.is_empty()
+    }
+
+    /// `path` is relative to `${ED}`, ending with `/` for a directory. The
+    /// result is the last matching pattern's inclusiveness, in order.
+    pub(crate) fn matches(&self, path: &str) -> bool {
+        let mut ret = false;
+        for p in &self.patterns {
+            let hit = if p.leading_slash {
+                let pattern = if path.ends_with('/') {
+                    format!("{}/", p.pattern.trim_end_matches('/'))
+                } else {
+                    p.pattern.clone()
+                };
+                let body = &pattern[1..];
+                fnmatch(path, body) || fnmatch(path, &format!("{}/*", body.trim_end_matches('/')))
+            } else {
+                let base = path
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(path);
+                fnmatch(base, &p.pattern)
+            };
+            if hit {
+                ret = p.is_inclusive;
+            }
+        }
+        ret
+    }
+}
+
+/// Delete every masked file under `base_dir`, then remove masked directories
+/// left empty. Per-path `unlink`/`rmdir` errors are swallowed.
+pub(crate) fn install_mask_dir(base_dir: &Path, mask: &InstallMask) -> std::io::Result<()> {
+    let rel_of = |p: &Path| -> String {
+        p.strip_prefix(base_dir)
+            .map(|r| r.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
+
+    // Remove masked files (iterative DFS).
+    let mut dir_stack: Vec<std::path::PathBuf> = Vec::new();
+    let mut todo: Vec<std::path::PathBuf> = vec![base_dir.to_path_buf()];
+    while let Some(parent) = todo.pop() {
+        dir_stack.push(parent.clone());
+        let entries = match portage_util::read_dir_entries(&parent) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries {
+            let abs_path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if file_type.is_dir() {
+                todo.push(abs_path);
+            } else if mask.matches(&rel_of(&abs_path)) {
+                let _ = std::fs::remove_file(&abs_path);
+            }
+        }
+    }
+
+    // Remove masked dirs, deepest first. `rmdir` silently fails on a
+    // non-empty dir, which is what makes exclusion (`-`) patterns work.
+    while let Some(dir_path) = dir_stack.pop() {
+        if mask.matches(&format!("{}/", rel_of(&dir_path))) {
+            let _ = std::fs::remove_dir(&dir_path);
+        }
+    }
+    Ok(())
+}
+
 /// Python `fnmatch.fnmatch` semantics (case-sensitive, `/` not special, `*`
 /// spans everything), as an anchored regex. Supports `*`, `?` and
 /// `[...]`/`[!...]` classes. Also reused by `needed_elf`'s

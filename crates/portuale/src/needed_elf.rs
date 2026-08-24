@@ -428,6 +428,34 @@ pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
         .collect()
 }
 
+/// Map an ELF `e_machine` value (the `NEEDED.ELF.2` `arch` field without its
+/// `EM_` prefix) to an approximate multilib category, for entries with no
+/// `multilib_category` field of their own. Unknown values pass through
+/// unchanged.
+// Portage: LinkageMapELF.py, _approx_multilib_categories
+fn approx_multilib_category(arch: &str) -> String {
+    match arch {
+        "386" => "x86_32",
+        "68K" => "m68k_32",
+        "AARCH64" => "arm_64",
+        "ALPHA" => "alpha_64",
+        "ARM" => "arm_32",
+        "IA_64" => "ia64_64",
+        "MIPS" => "mips_o32",
+        "PARISC" => "hppa_64",
+        "PPC" => "ppc_32",
+        "PPC64" => "ppc_64",
+        "S390" => "s390_64",
+        "SH" => "sh_32",
+        "SPARC" => "sparc_32",
+        "SPARC32PLUS" => "sparc_32",
+        "SPARCV9" => "sparc_64",
+        "X86_64" => "x86_64",
+        other => other,
+    }
+    .to_string()
+}
+
 /// Lexical, non-symlink-resolving path normalizer: collapses `.`/empty
 /// segments, resolves `..` against already-collapsed segments, never touches
 /// the filesystem.
@@ -564,6 +592,181 @@ pub fn scan_preserved_lib_entries(
     by_owner.into_iter().collect()
 }
 
+/// Object identity for the index: a `(dev, ino)` pair when the object still
+/// exists on disk (follows symlinks), so one file reachable via several
+/// paths collapses to one entry with every path kept as `alt_paths`.
+/// Falls back to the literal path string when it doesn't exist.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ObjKey {
+    Inode(u64, u64),
+    Path(String),
+}
+
+pub fn obj_key(root: &Path, obj: &str) -> ObjKey {
+    let abs = root.join(obj.trim_start_matches('/'));
+    match std::fs::metadata(&abs) {
+        Ok(meta) => {
+            use std::os::unix::fs::MetadataExt;
+            ObjKey::Inode(meta.dev(), meta.ino())
+        }
+        Err(_) => ObjKey::Path(obj.to_string()),
+    }
+}
+
+/// Everything `rebuild()` records about one indexed object, keyed by its
+/// `ObjKey`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjProperties {
+    /// The multilib category (indexed, or approximated).
+    pub category: String,
+    pub needed: BTreeSet<String>,
+    pub runpaths: Vec<String>,
+    pub soname: String,
+    /// Every filename this exact object was indexed under -- always
+    /// non-empty (the first-seen one; created once per `ObjKey`).
+    pub alt_paths: Vec<String>,
+    /// The owning `cpv` (`category/pf`).
+    pub owner: String,
+}
+
+/// Every object providing a soname (`DT_SONAME` matches it), and every
+/// object needing it -- within one multilib category's map.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SonameMap {
+    pub providers: BTreeSet<ObjKey>,
+    pub consumers: BTreeSet<ObjKey>,
+}
+
+/// The `libs`/`obj_properties` index, populated by `rebuild`.
+#[derive(Debug, Clone, Default)]
+pub struct LinkageMap {
+    /// Multilib category -> soname -> providers/consumers.
+    pub libs: BTreeMap<String, BTreeMap<String, SonameMap>>,
+    pub obj_properties: BTreeMap<ObjKey, ObjProperties>,
+}
+
+/// Consume `owner_entries` (every installed package's `NEEDED.ELF.2`
+/// entries, as `read_all_needed_entries` returns) and build the soname
+/// providers/consumers map.
+///
+/// Per entry: the multilib category (its own field, or the approximate
+/// fallback), the normalized filename, and `$ORIGIN`-expanded normalized
+/// runpaths. Then implicit-runpath inference for bundled libraries: within
+/// the *same* owner's entries, if a needed soname is provided by another
+/// entry from that owner and that provider's directory isn't in the
+/// runpaths, it is added.
+///
+/// Finally, per-object indexing: an object already indexed under the same
+/// `ObjKey` (a hardlink/symlink alias, or listed twice) only gains an extra
+/// `alt_paths` entry and is never re-indexed. A newly-seen object's soname
+/// (if non-empty) is added as a provider, and each needed soname as a
+/// consumer, keyed by multilib category.
+// Portage: LinkageMapELF.py, rebuild (indexing logic)
+pub fn rebuild(root: &Path, owner_entries: &[(String, Vec<NeededEntry>)]) -> LinkageMap {
+    struct Resolved {
+        owner: String,
+        category: String,
+        filename: String,
+        soname: String,
+        runpaths: Vec<String>,
+        needed: Vec<String>,
+    }
+
+    let mut resolved_by_owner: Vec<Vec<Resolved>> = Vec::new();
+    for (owner, entries) in owner_entries {
+        let mut resolved: Vec<Resolved> = Vec::new();
+        for entry in entries {
+            let category = entry
+                .multilib_category
+                .clone()
+                .unwrap_or_else(|| approx_multilib_category(&entry.arch));
+            let filename = normalize_path(&entry.filename);
+            let origin = Path::new(&filename)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let runpaths = entry
+                .runpaths
+                .iter()
+                .map(|r| normalize_path(&expand_origin(r, &origin)))
+                .collect();
+            resolved.push(Resolved {
+                owner: owner.clone(),
+                category,
+                filename,
+                soname: entry.soname.clone(),
+                runpaths,
+                needed: entry.needed.clone(),
+            });
+        }
+        resolved_by_owner.push(resolved);
+    }
+
+    for entries in &mut resolved_by_owner {
+        let providers: BTreeMap<(String, String), String> = entries
+            .iter()
+            .filter(|e| !e.soname.is_empty())
+            .map(|e| ((e.category.clone(), e.soname.clone()), e.filename.clone()))
+            .collect();
+        for entry in entries.iter_mut() {
+            let mut implicit = Vec::new();
+            for soname in &entry.needed {
+                if let Some(provider_filename) =
+                    providers.get(&(entry.category.clone(), soname.clone()))
+                {
+                    let provider_dir = Path::new(provider_filename)
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if !entry.runpaths.contains(&provider_dir) {
+                        implicit.push(provider_dir);
+                    }
+                }
+            }
+            entry.runpaths.extend(implicit);
+        }
+    }
+
+    let mut map = LinkageMap::default();
+    for entries in &resolved_by_owner {
+        for entry in entries {
+            let key = obj_key(root, &entry.filename);
+            if let Some(existing) = map.obj_properties.get_mut(&key) {
+                existing.alt_paths.push(entry.filename.clone());
+                continue;
+            }
+            map.obj_properties.insert(
+                key.clone(),
+                ObjProperties {
+                    category: entry.category.clone(),
+                    needed: entry.needed.iter().cloned().collect(),
+                    runpaths: entry.runpaths.clone(),
+                    soname: entry.soname.clone(),
+                    alt_paths: vec![entry.filename.clone()],
+                    owner: entry.owner.clone(),
+                },
+            );
+
+            let arch_map = map.libs.entry(entry.category.clone()).or_default();
+            if !entry.soname.is_empty() {
+                arch_map
+                    .entry(entry.soname.clone())
+                    .or_default()
+                    .providers
+                    .insert(key.clone());
+            }
+            for needed_soname in &entry.needed {
+                arch_map
+                    .entry(needed_soname.clone())
+                    .or_default()
+                    .consumers
+                    .insert(key.clone());
+            }
+        }
+    }
+    map
+}
+
 /// Like `os.path.dirname`: everything before the last `/`, or `""`; unlike
 /// `Path::parent()`, `dirname("/foo")` is `"/"` (both rely on that here).
 fn dirname(path: &str) -> String {
@@ -623,6 +826,263 @@ pub fn getlibpaths(root: &Path, ld_library_path: Option<&str>) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(|s| normalize_path(&s))
         .collect()
+}
+
+/// `portage.util.digraph`, narrowed to what `_find_libs_to_preserve` uses:
+/// `add(node, parent)` (an edge where `parent` depends on `node`),
+/// `root_nodes()` (nodes nothing depends on) and `child_nodes()` (what a
+/// node depends on). Nodes are `ObjKey`s; `alt_paths` are tracked alongside.
+#[derive(Debug, Clone, Default)]
+struct LibGraph {
+    children: BTreeMap<ObjKey, BTreeSet<ObjKey>>,
+    parents: BTreeMap<ObjKey, BTreeSet<ObjKey>>,
+    alt_paths: BTreeMap<ObjKey, BTreeSet<String>>,
+}
+
+impl LibGraph {
+    fn ensure_node(&mut self, key: &ObjKey) {
+        self.children.entry(key.clone()).or_default();
+        self.parents.entry(key.clone()).or_default();
+    }
+
+    fn add(&mut self, node: &ObjKey, parent: Option<&ObjKey>) {
+        self.ensure_node(node);
+        if let Some(parent) = parent {
+            self.ensure_node(parent);
+            self.children.get_mut(parent).unwrap().insert(node.clone());
+            self.parents.get_mut(node).unwrap().insert(parent.clone());
+        }
+    }
+
+    fn root_nodes(&self) -> Vec<ObjKey> {
+        self.parents
+            .iter()
+            .filter(|(_, parents)| parents.is_empty())
+            .map(|(node, _)| node.clone())
+            .collect()
+    }
+}
+
+/// Arguments of [`find_consumers`].
+pub struct FindConsumersArgs<'a> {
+    pub root: &'a Path,
+    pub map: &'a LinkageMap,
+    pub defpath: &'a [String],
+    pub obj: &'a str,
+    pub exclude_provider: Option<&'a dyn Fn(&str) -> bool>,
+    pub greedy: bool,
+}
+
+/// `findConsumers`, narrowed to the one calling convention
+/// `_find_libs_to_preserve` uses: `obj` is always a path string, and
+/// `exclude_provider` is a single callable.
+///
+/// A consumer is dropped when some *other*, non-excluded provider of the
+/// same soname already satisfies it (found in its runpath or `defpath`), so
+/// only consumers that would actually break stay. Only consumers that can
+/// reach `obj` (its directory is in their runpath or `defpath`) are returned.
+/// `Err` when `obj` is not an indexed object at all.
+// Portage: LinkageMapELF.py, findConsumers
+pub fn find_consumers(args: FindConsumersArgs<'_>) -> Result<BTreeSet<String>, String> {
+    let FindConsumersArgs {
+        root,
+        map,
+        defpath,
+        obj,
+        exclude_provider,
+        greedy,
+    } = args;
+    let obj_key_val = obj_key(root, obj);
+    let Some(obj_props) = map.obj_properties.get(&obj_key_val) else {
+        return Err(format!("{obj_key_val:?} ({obj}) not in object list"));
+    };
+
+    // A same-directory soname link pointing elsewhere: no consumers.
+    if !obj_props.soname.is_empty() {
+        let soname_link = root
+            .join(dirname(obj).trim_start_matches('/'))
+            .join(&obj_props.soname);
+        let obj_path = root.join(obj.trim_start_matches('/'));
+        if let (Ok(soname_st), Ok(obj_st)) = (
+            std::fs::metadata(&soname_link),
+            std::fs::metadata(&obj_path),
+        ) {
+            use std::os::unix::fs::MetadataExt;
+            if (obj_st.dev(), obj_st.ino()) != (soname_st.dev(), soname_st.ino()) {
+                return Ok(BTreeSet::new());
+            }
+        }
+    }
+
+    let category = &obj_props.category;
+    let soname = &obj_props.soname;
+    let soname_node = map
+        .libs
+        .get(category)
+        .and_then(|arch_map| arch_map.get(soname));
+
+    let defpath_keys: BTreeSet<ObjKey> = defpath.iter().map(|p| obj_key(root, p)).collect();
+    let mut satisfied_consumer_keys: BTreeSet<ObjKey> = BTreeSet::new();
+
+    if let Some(soname_node) = soname_node
+        && (exclude_provider.is_some() || !greedy)
+    {
+        let mut relevant_dir_keys: BTreeSet<ObjKey> = BTreeSet::new();
+        for provider_key in &soname_node.providers {
+            if !greedy && *provider_key == obj_key_val {
+                continue;
+            }
+            let Some(provider_props) = map.obj_properties.get(provider_key) else {
+                continue;
+            };
+            for p in &provider_props.alt_paths {
+                let excluded = exclude_provider.is_some_and(|f| f(p));
+                if !excluded {
+                    relevant_dir_keys.insert(obj_key(root, &dirname(p)));
+                }
+            }
+        }
+
+        if !relevant_dir_keys.is_empty() {
+            for consumer_key in &soname_node.consumers {
+                let Some(consumer_props) = map.obj_properties.get(consumer_key) else {
+                    continue;
+                };
+                let mut path_keys = defpath_keys.clone();
+                path_keys.extend(consumer_props.runpaths.iter().map(|p| obj_key(root, p)));
+                if relevant_dir_keys.intersection(&path_keys).next().is_some() {
+                    satisfied_consumer_keys.insert(consumer_key.clone());
+                }
+            }
+        }
+    }
+
+    let mut result = BTreeSet::new();
+    if let Some(soname_node) = soname_node {
+        let objs_dir_key = obj_key(root, &dirname(obj));
+        for consumer_key in &soname_node.consumers {
+            if satisfied_consumer_keys.contains(consumer_key) {
+                continue;
+            }
+            let Some(consumer_props) = map.obj_properties.get(consumer_key) else {
+                continue;
+            };
+            let mut path_keys = defpath_keys.clone();
+            path_keys.extend(consumer_props.runpaths.iter().map(|p| obj_key(root, p)));
+            if path_keys.contains(&objs_dir_key) {
+                result.extend(consumer_props.alt_paths.iter().cloned());
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Arguments of [`find_libs_to_preserve`].
+pub struct FindLibsToPreserveArgs<'a> {
+    pub root: &'a Path,
+    pub map: &'a LinkageMap,
+    pub defpath: &'a [String],
+    pub old_contents: &'a [String],
+    pub old_owner_is_owner: &'a dyn Fn(&str) -> bool,
+    pub new_owner_is_owner: &'a dyn Fn(&str) -> bool,
+}
+
+/// Soname-keyed reverse lookup across all multilib categories: every recorded
+/// path of every object listing `soname` in `DT_NEEDED`. Used as the fallback
+/// consumer scan for a preserved library whose owning package already left
+/// the vdb (so the library itself is no longer indexed).
+pub fn soname_consumers(map: &LinkageMap, soname: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for arch_map in map.libs.values() {
+        let Some(node) = arch_map.get(soname) else {
+            continue;
+        };
+        for consumer_key in &node.consumers {
+            if let Some(props) = map.obj_properties.get(consumer_key) {
+                out.extend(props.alt_paths.iter().cloned());
+            }
+        }
+    }
+    out
+}
+
+/// Given `consumers_by_preserved` (preserved path -> linking paths, both
+/// sides already filtered to files on disk), return the subset of
+/// `preserved_paths` that nothing needs.
+///
+/// A preserved library is *needed* iff it has a consumer that is not itself
+/// preserved, or transitively through one that is. Everything else is
+/// unneeded -- including a cycle of preserved libraries with no outside
+/// consumer. Paths deduplicate by `ObjKey`, so a hardlink alias counts once.
+// Portage: vartree.py, _find_unneeded_preserved_nodes
+pub fn find_unneeded_preserved(
+    root: &Path,
+    consumers_by_preserved: &BTreeMap<String, BTreeSet<String>>,
+    preserved_paths: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let exists = |p: &str| std::fs::symlink_metadata(root.join(p.trim_start_matches('/'))).is_ok();
+
+    let mut alt_paths: BTreeMap<ObjKey, BTreeSet<String>> = BTreeMap::new();
+    let mut preserved_nodes: BTreeSet<ObjKey> = BTreeSet::new();
+    for p in preserved_paths {
+        if !exists(p) {
+            continue;
+        }
+        let key = obj_key(root, p);
+        alt_paths.entry(key.clone()).or_default().insert(p.clone());
+        preserved_nodes.insert(key);
+    }
+
+    // `children[c]` = preserved libs consumed by `c`; `parents[p]` = the
+    // consumers of preserved lib `p`.
+    let mut children: BTreeMap<ObjKey, BTreeSet<ObjKey>> = BTreeMap::new();
+    let mut parents: BTreeMap<ObjKey, BTreeSet<ObjKey>> = BTreeMap::new();
+    for (pres, consumers) in consumers_by_preserved {
+        let pk = obj_key(root, pres);
+        if !preserved_nodes.contains(&pk) {
+            continue;
+        }
+        for c in consumers {
+            if !exists(c) {
+                continue;
+            }
+            let ck = obj_key(root, c);
+            alt_paths.entry(ck.clone()).or_default().insert(c.clone());
+            children.entry(ck.clone()).or_default().insert(pk.clone());
+            parents.entry(pk.clone()).or_default().insert(ck.clone());
+        }
+    }
+
+    let mut needed: BTreeSet<ObjKey> = BTreeSet::new();
+    let mut stack: Vec<ObjKey> = Vec::new();
+    for pn in &preserved_nodes {
+        let has_outside_consumer = parents
+            .get(pn)
+            .into_iter()
+            .flatten()
+            .any(|c| !preserved_nodes.contains(c));
+        if has_outside_consumer {
+            needed.insert(pn.clone());
+            stack.push(pn.clone());
+        }
+    }
+    while let Some(node) = stack.pop() {
+        for child in children.get(&node).into_iter().flatten() {
+            if preserved_nodes.contains(child) && needed.insert(child.clone()) {
+                stack.push(child.clone());
+            }
+        }
+    }
+
+    let mut out = BTreeSet::new();
+    for pn in &preserved_nodes {
+        if !needed.contains(pn)
+            && let Some(paths) = alt_paths.get(pn)
+        {
+            out.extend(paths.iter().cloned());
+        }
+    }
+    out
 }
 
 #[cfg(test)]

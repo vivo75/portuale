@@ -83,6 +83,58 @@ impl Default for MergeOptions {
 }
 
 impl MergeOptions {
+    /// Merge configuration from the process environment, falling back
+    /// to `make.globals` defaults. Shared by `ebuild <file> merge`,
+    /// `qmerge` and `emerge <atom>`.
+    pub fn from_env(shell: ebuild_phases::ShellBackend, debug: bool) -> Self {
+        let d = Self::default();
+        let has_feature = |tok: &str| {
+            std::env::var("FEATURES")
+                .map(|f| f.split_whitespace().any(|t| t == tok))
+                .unwrap_or(false)
+        };
+        let env_features: Vec<String> = std::env::var("FEATURES")
+            .map(|f| f.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        let (install_mask, install_mask_prunes_usr_share) = crate::install_mask::resolve(
+            &std::env::var("INSTALL_MASK").unwrap_or_default(),
+            &env_features,
+        );
+        Self {
+            debug,
+            shell,
+            resolved_config: None,
+            config_protect: std::env::var("CONFIG_PROTECT").unwrap_or(d.config_protect),
+            config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
+                .unwrap_or(d.config_protect_mask),
+            distdir: std::env::var_os("DISTDIR")
+                .map(PathBuf::from)
+                .unwrap_or(d.distdir),
+            collision_protect: has_feature("collision-protect"),
+            protect_owned: std::env::var("FEATURES")
+                .map(|f| f.split_whitespace().any(|t| t == "protect-owned"))
+                .unwrap_or(d.protect_owned),
+            protect_if_modified: std::env::var("FEATURES")
+                .map(|f| {
+                    f.split_whitespace()
+                        .any(|t| t == "config-protect-if-modified")
+                })
+                .unwrap_or(d.protect_if_modified),
+            noconfmem: std::env::var_os("NOCONFMEM").is_some(),
+            config_root: portage_repo::config_root_from_env(),
+            build_env: Vec::new(),
+            package_env_vars: Vec::new(),
+            log_file: d.log_file,
+            install_mask,
+            install_mask_prunes_usr_share,
+            gpg_verify: crate::binpkg::GpgVerify::from_env(),
+            features: std::env::var("FEATURES").unwrap_or_default(),
+            process_tmpdir: std::env::var_os("PORTAGE_TMPDIR").map(PathBuf::from),
+        }
+    }
+}
+
+impl MergeOptions {
     /// Re-derive every `FEATURES`-following token from the resolved list.
     /// The `emerge` paths call this right after `from_env`.
     pub fn set_resolved_features(&mut self, features: &str) {

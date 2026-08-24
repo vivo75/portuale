@@ -2,6 +2,41 @@
 
 use crate::ebuild_merge::*;
 
+/// `treewalk()`'s `preinst_mask` + `install_mask_dir` step, before the
+/// collision check and before any copy: apply `options.install_mask` to
+/// the staged image, then -- when a `no{man,info,doc}` feature folded a
+/// `/usr/share/*` entry in -- `rmdir` a now-empty `<d>/usr/share`. The
+/// resolved mask is also written to `<build_info>/INSTALL_MASK`. A no-op
+/// with an empty mask -- and then no file, matching the `[[ -n ${x} ]]`
+/// guard.
+///
+/// Shared with the remote-merge server (`remote_bundle::build_bundle`).
+// Portage: vartree.py, treewalk
+pub(crate) fn apply_install_mask(
+    d: &Path,
+    build_info: &Path,
+    options: &MergeOptions,
+) -> Result<(), String> {
+    let value = options.install_mask.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    if build_info.is_dir() {
+        std::fs::write(build_info.join("INSTALL_MASK"), format!("{value}\n"))
+            .map_err(|e| format!("{}: {e}", build_info.join("INSTALL_MASK").display()))?;
+    }
+    let mask = crate::install_mask::InstallMask::new(value);
+    if mask.is_empty() {
+        return Ok(());
+    }
+    crate::install_mask::install_mask_dir(d, &mask)
+        .map_err(|e| format!("{}: install_mask_dir: {e}", d.display()))?;
+    if options.install_mask_prunes_usr_share {
+        let _ = std::fs::remove_dir(d.join("usr/share"));
+    }
+    Ok(())
+}
+
 /// The installed `SLOT` (main slot only) of an installed
 /// `<category>/<package>-<version>`, through the shared
 /// `vdb_entry_slot` seam. A missing or empty `SLOT` reads as `"0"`.
