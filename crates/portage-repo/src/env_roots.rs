@@ -14,6 +14,18 @@ pub fn root_from_env() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// Fallback when neither the environment nor the config sets one.
+/// Portage: cnf/make.globals `PORTAGE_TMPDIR="/var/tmp"`
+pub const PORTAGE_TMPDIR_DEFAULT: &str = "/var/tmp";
+
+/// `PORTAGE_TMPDIR` for a CLI boundary with no resolved config: the calling
+/// environment (Portage's highest config layer) if set, else the default.
+pub fn portage_tmpdir_from_env() -> PathBuf {
+    std::env::var_os("PORTAGE_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(PORTAGE_TMPDIR_DEFAULT))
+}
+
 /// `--root-deps`' running-root default: `/`, since ESYSROOT resolves to the
 /// build machine's own `/` when SYSROOT is unset. `PORTAGE_RUNNING_ROOT` is
 /// not a Portage variable -- a portuale-only test override for fixture vdb

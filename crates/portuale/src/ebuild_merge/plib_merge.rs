@@ -182,3 +182,33 @@ pub(crate) fn replacement_needed_entries(
     }
     vec![(format!("{category}/{new_pf}"), entries)]
 }
+
+/// Copies preserved paths' entries from the replaced instance's `CONTENTS` into the
+/// merging package's; a path missing there is dropped with a warning.
+// Portage: vartree.py, dblink._add_preserve_libs_to_contents
+pub(crate) fn inject_preserved_libs_into_contents(
+    old_contents_text: &str,
+    preserve_paths: &BTreeSet<String>,
+    new_image_paths: &BTreeSet<String>,
+) -> (String, BTreeSet<String>) {
+    let mut lines = String::new();
+    let mut surviving = BTreeSet::new();
+    for f in preserve_paths {
+        let Some(entry) = old_contents_text.lines().find(|line| {
+            let mut parts = line.split_whitespace();
+            parts.next();
+            parts.next() == Some(f.as_str())
+        }) else {
+            eprintln!("!!! File '{f}' will not be preserved due to missing contents entry");
+            continue;
+        };
+        surviving.insert(f.clone());
+        let obj_type = entry.split_whitespace().next().unwrap_or("obj");
+        println!(">>> needed    {obj_type} {f}");
+        if !new_image_paths.contains(f) {
+            lines.push_str(entry);
+            lines.push('\n');
+        }
+    }
+    (lines, surviving)
+}

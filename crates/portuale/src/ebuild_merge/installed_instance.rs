@@ -50,6 +50,14 @@ pub(crate) fn installed_instance_pf(
         .map(|(pf, _)| pf)
 }
 
+/// The versions of the installed same-slot instances this merge
+/// replaces, for `REPLACING_VERSIONS`. `None` for a first-ever install.
+/// Portage: vartree.py, treewalk; doebuild.py, doebuild_environment
+pub(crate) fn replacing_versions(pn: &str, installed_instance_pf: Option<&str>) -> Option<String> {
+    let version = installed_instance_pf?.strip_prefix(pn)?.strip_prefix('-')?;
+    (!version.is_empty()).then(|| version.to_string())
+}
+
 /// Whether the installed `<package>-<version>` already claims `abs_path`
 /// in its `CONTENTS`, through the `PackagesDb` seam. `abs_path` is a
 /// logical absolute path; the leading `/` is stripped to meet the seam's
@@ -83,6 +91,16 @@ pub(crate) fn read_contents_pf(root: &Path, category: &str, pf: &str) -> Option<
         .ok()
         .flatten()
         .and_then(|bytes| String::from_utf8(bytes).ok())
+}
+
+/// One `stat` through the installed-db seam; a missing entry, file or
+/// error is `false`.
+pub(crate) fn entry_file_is_regular(root: &Path, category: &str, pf: &str, name: &str) -> bool {
+    portage_vdb::for_root(root)
+        .file_meta(&portage_vdb::EntryKey::new(category, pf), name)
+        .ok()
+        .flatten()
+        .is_some_and(|meta| meta.mode & 0o170000 == 0o100000)
 }
 
 /// One file of the live entry `category/pf` as UTF-8 text. `None` when

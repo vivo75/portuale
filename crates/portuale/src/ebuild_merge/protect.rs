@@ -346,3 +346,26 @@ pub(crate) fn protect_decision(args: ProtectDecisionArgs<'_>) -> Result<(PathBuf
     cfgfiledict.insert(abs_path.to_string(), src_md5.to_string());
     Ok((write_dest, true))
 }
+
+/// Portage's `vardbapi._conf_mem_file` (`<root>/var/lib/portage/config`):
+/// which src MD5 was already offered for each path, so re-merges don't
+/// spawn a fresh `._cfgNNNN_` file every time. Also read by
+/// `ebuild_unmerge`'s stale-confmem cleanup; missing/unreadable is empty.
+pub(crate) fn read_cfgfiledict(root: &Path) -> BTreeMap<String, String> {
+    portage_vdb::for_root(root)
+        .config_memory()
+        .map(|memory| memory.entries)
+        .unwrap_or_default()
+}
+
+/// Replace the config memory, unconditionally (one `WriteTxn`, committed
+/// at once; on `files` a plain in-place write).
+pub(crate) fn write_cfgfiledict(root: &Path, map: &BTreeMap<String, String>) -> Result<(), String> {
+    let db = portage_vdb::for_root(root);
+    let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+    txn.set_config_memory(&portage_vdb::ConfigMemory {
+        entries: map.clone(),
+    })
+    .map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())
+}

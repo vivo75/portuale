@@ -214,6 +214,102 @@ pub(crate) fn restrict_and_properties(
     )
 }
 
+/// Resolves a per-package `PORTAGE_TMPDIR` match, re-deriving the tmpdir.
+/// The calling environment wins when it carries the key; a matched
+/// directory that does not exist fails like Portage's `_check_temp_dir`.
+/// `run_tmpdir` stands whenever nothing matched. The caller maps the
+/// `Err` to exit 1.
+pub(crate) fn resolve_entry_portage_tmpdir(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    run_tmpdir: &Path,
+    process_tmpdir: Option<&Path>,
+) -> Result<PathBuf, String> {
+    if let Some(process) = process_tmpdir {
+        return Ok(process.to_path_buf());
+    }
+    let matched = match_package_env_scalar_raw(package_env_vars, cpv_slot, "PORTAGE_TMPDIR");
+    let Some(dir) = matched.as_deref().filter(|v| !v.is_empty()) else {
+        return Ok(run_tmpdir.to_path_buf());
+    };
+    if !Path::new(dir).is_dir() {
+        return Err(format!(
+            "The directory specified in your PORTAGE_TMPDIR variable, '{dir}',\n\
+             does not exist.  Please create this directory or correct your PORTAGE_TMPDIR setting."
+        ));
+    }
+    Ok(PathBuf::from(dir))
+}
+
+/// Standalone half of the above, for an `ebuild <file>` run with no
+/// resolved graph entry. Keeps `run_tmpdir` when nothing resolves.
+pub(crate) fn resolve_standalone_portage_tmpdir(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+    run_tmpdir: &Path,
+    process_tmpdir: Option<&Path>,
+) -> Result<PathBuf, String> {
+    if process_tmpdir.is_some() {
+        return Ok(run_tmpdir.to_path_buf());
+    }
+    let Some((config, cpv_slot)) = standalone_package_env_lookup(ebuild_path, config_root, eroot)
+    else {
+        return Ok(run_tmpdir.to_path_buf());
+    };
+    resolve_entry_portage_tmpdir(&config.package_env_vars, &cpv_slot, run_tmpdir, None)
+}
+
+/// Folds a matched per-package `FEATURES` onto `run_wide_features`.
+/// `None` when nothing resolves or nothing matched.
+pub(crate) fn resolve_standalone_resolved_features(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+    run_wide_features: &str,
+    calling_features: &str,
+) -> Option<String> {
+    let (config, cpv_slot) = standalone_package_env_lookup(ebuild_path, config_root, eroot)?;
+    let pkg_raw =
+        match_package_env_incremental_raw(&config.package_env_vars, &cpv_slot, "FEATURES");
+    if pkg_raw.is_empty() {
+        return None;
+    }
+    Some(fold_package_env_incremental(
+        run_wide_features,
+        &pkg_raw,
+        calling_features,
+    ))
+}
+
+/// The matched `(compress, flags, bzip2_command)` triple for a
+/// standalone `ebuild <file> package`; `None` when nothing matched.
+/// Per-key calling-env-wins precedence stays the caller's job.
+pub(crate) fn resolve_standalone_binpkg_compress(
+    ebuild_path: &Path,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<(String, Option<String>, Option<String>)> {
+    let (config, cpv_slot) = standalone_package_env_lookup(ebuild_path, config_root, eroot)?;
+    let profile_only = config
+        .resolved_incremental("PROFILE_ONLY_VARIABLES")
+        .unwrap_or_default();
+    let matched = |key: &str| {
+        if !package_env_key_allowed(key, &profile_only) {
+            return None;
+        }
+        match_package_env_scalar_raw(&config.package_env_vars, &cpv_slot, key)
+    };
+    let compress = matched("BINPKG_COMPRESS")?;
+    let flags = matched(&format!(
+        "BINPKG_COMPRESS_FLAGS_{}",
+        compress.to_uppercase()
+    ))
+    .or_else(|| matched("BINPKG_COMPRESS_FLAGS"));
+    let bzip2 = matched("PORTAGE_BZIP2_COMMAND");
+    Some((compress, flags, bzip2))
+}
+
 /// The resolved chain value below the calling env for a global scalar.
 /// `None` when the chain names no value. Deliberately not `package.env`-matched.
 pub(crate) fn resolve_standalone_chain_scalar(

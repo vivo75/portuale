@@ -45,6 +45,11 @@ fn parse_contents(text: &str) -> Vec<ContentsEntry> {
         .collect()
 }
 
+/// Orphaned symlinks by live target directory `(dev, ino)`; grouped so
+/// `remove_dirs` can look them up by inode.
+/// Portage: dbapi/vartree.py, _unmerge_dirs.
+type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
+
 /// Arguments of [`remove_contents`].
 struct RemoveContentsArgs<'a> {
     root: &'a Path,
@@ -58,6 +63,225 @@ struct RemoveContentsArgs<'a> {
     stale_confmem: &'a mut Vec<String>,
     preserved_paths: &'a BTreeSet<String>,
     contents_text: &'a str,
+}
+
+/// Deletes every `CONTENTS`-listed entry from `root`, deepest paths first.
+/// Skips entries another same-slot instance owns, `obj`/`sym` entries whose
+/// live mtime changed (unless `unmerge_orphans`), and defers literal `dir`
+/// entries to `remove_dirs`. Removed paths still remembered by `cfgfiledict`
+/// are collected into `stale_confmem`; `preserved_paths` are filtered first.
+/// Portage: dbapi/vartree.py, _unmerge_pkgfiles.
+fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
+    let RemoveContentsArgs {
+        root,
+        category,
+        others_in_slot,
+        config_protect,
+        config_protect_mask,
+        unmerge_orphans,
+        infodirs_inodes,
+        cfgfiledict,
+        stale_confmem,
+        preserved_paths,
+        contents_text,
+    } = args;
+    let mut entries = parse_contents(contents_text);
+    entries.retain(|e| !preserved_paths.contains(&e.abs_path));
+    entries.sort_by(|a, b| b.abs_path.cmp(&a.abs_path));
+
+    let mut protected_symlinks: ProtectedSymlinks = BTreeMap::new();
+    let mut dirs: Vec<(PathBuf, (u64, u64))> = Vec::new();
+
+    for entry in entries {
+        let is_owned = others_in_slot
+            .iter()
+            .any(|other_pf| ebuild_merge::owns_path_pf(root, category, other_pf, &entry.abs_path));
+
+        let relative = entry.abs_path.trim_start_matches('/');
+        let dest = root.join(relative);
+
+        // A live symlink-to-directory claimed as a literal `dir` entry
+        // elsewhere defers to `remove_dirs` (Portage: _unmerge_pkgfiles).
+        if is_owned
+            && (entry.node_type == "sym" || entry.node_type == "dir")
+            && let Ok(link_meta) = std::fs::symlink_metadata(&dest)
+            && link_meta.file_type().is_symlink()
+            && let Ok(target_meta) = std::fs::metadata(&dest)
+            && target_meta.is_dir()
+        {
+            let symlink_orphan = others_in_slot.iter().any(|other_pf| {
+                ebuild_merge::owned_node_type_pf(root, category, other_pf, &entry.abs_path)
+                    .as_deref()
+                    == Some("dir")
+            });
+            if symlink_orphan {
+                protected_symlinks
+                    .entry((target_meta.dev(), target_meta.ino()))
+                    .or_default()
+                    .push(entry.abs_path.clone());
+            }
+        }
+
+        if is_owned {
+            // Another same-slot instance claims this path: skip before
+            // the mtime check (most often an in-place upgrade).
+            continue;
+        } else if cfgfiledict.contains_key(&entry.abs_path) {
+            // Going away and still remembered: its config-memory entry is stale too.
+            stale_confmem.push(entry.abs_path.clone());
+        }
+
+        // `FEATURES=unmerge-orphans`: delete a non-protected `obj`/`sym`
+        // entry unconditionally, except a symlink to a directory (which
+        // falls through to the mtime-checked removal instead).
+        if unmerge_orphans
+            && matches!(entry.node_type.as_str(), "obj" | "sym")
+            && !ebuild_merge::is_protected(root, config_protect, config_protect_mask, &dest)
+        {
+            let symlink_to_dir = entry.node_type == "sym"
+                && std::fs::metadata(&dest)
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false);
+            if !symlink_to_dir {
+                if let Err(e) = std::fs::remove_file(&dest)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    return Err(format!("{}: {e}", dest.display()));
+                }
+                continue;
+            }
+        }
+
+        match entry.node_type.as_str() {
+            "obj" | "sym" => {
+                if let (Some(recorded_mtime), Ok(meta)) =
+                    (entry.mtime, std::fs::symlink_metadata(&dest))
+                {
+                    let current_mtime = ebuild_merge::mtime_secs(&meta)?;
+                    if current_mtime != recorded_mtime {
+                        // Locally modified since the merge that recorded
+                        // this entry -- leave it in place.
+                        continue;
+                    }
+                }
+                if let Err(e) = std::fs::remove_file(&dest)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    return Err(format!("{}: {e}", dest.display()));
+                }
+            }
+            "dir" => {
+                if let Ok(meta) = std::fs::symlink_metadata(&dest) {
+                    dirs.push((dest, (meta.dev(), meta.ino())));
+                }
+            }
+            _ => {
+                // `fif`/`dev` entries are never unlinked, matching Portage.
+            }
+        }
+    }
+    remove_dirs(root, dirs, &mut protected_symlinks, infodirs_inodes);
+    // Entries `remove_dirs` didn't resolve stay in place with no warning.
+    Ok(())
+}
+
+/// Filenames the install-info index leaves behind.
+/// Portage: dbapi/vartree.py, _infodir_cleanup.
+const INFODIR_CLEANUP: [&str; 2] = ["dir", "dir.old"];
+
+/// Removes leftover install-info index files so the `rmdir` can succeed.
+/// Fires for a literal `info` name or an `INFOPATH`/`INFODIR` inode match;
+/// only regular files are deleted.
+/// Portage: dbapi/vartree.py, _unmerge_dirs.
+fn cleanup_info_dir(dest: &Path, inode_key: (u64, u64), infodirs_inodes: &BTreeSet<(u64, u64)>) {
+    let is_info_dir = infodirs_inodes.contains(&inode_key)
+        || dest.file_name().and_then(|n| n.to_str()) == Some("info");
+    if !is_info_dir {
+        return;
+    }
+    let Ok(entries) = portage_util::read_dir_entries(dest) else {
+        return;
+    };
+    let names: Vec<String> = entries
+        .into_iter()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    if names.is_empty()
+        || names.len() > INFODIR_CLEANUP.len()
+        || !names.iter().all(|n| INFODIR_CLEANUP.contains(&n.as_str()))
+    {
+        return;
+    }
+    for name in &names {
+        let child = dest.join(name);
+        if std::fs::symlink_metadata(&child).is_ok_and(|m| m.is_file()) {
+            let _ = std::fs::remove_file(&child);
+        }
+    }
+}
+
+/// Removes this package's literal `dir` entries, tolerating "already gone"
+/// and "not empty". Deleting a directory also deletes orphaned symlinks
+/// pointing at it and re-queues newly-emptied parents. `dirs` is a LIFO
+/// stack so a directory can be pushed back after popping.
+/// Portage: dbapi/vartree.py, _unmerge_dirs.
+fn remove_dirs(
+    root: &Path,
+    dirs: Vec<(PathBuf, (u64, u64))>,
+    protected_symlinks: &mut ProtectedSymlinks,
+    infodirs_inodes: &BTreeSet<(u64, u64)>,
+) {
+    // Sorted ascending so `pop()` visits deepest paths first (a path
+    // sorts after its own ancestor).
+    let mut stack = dirs;
+    stack.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut revisit: BTreeMap<PathBuf, (u64, u64)> = BTreeMap::new();
+
+    while let Some((dest, inode_key)) = stack.pop() {
+        cleanup_info_dir(&dest, inode_key, infodirs_inodes);
+        match std::fs::remove_dir(&dest) {
+            Ok(()) => {
+                let Some(unmerge_syms) = protected_symlinks.remove(&inode_key) else {
+                    continue;
+                };
+                let mut parents: BTreeSet<PathBuf> = BTreeSet::new();
+                for relative_path in &unmerge_syms {
+                    let sym_dest = root.join(relative_path.trim_start_matches('/'));
+                    if std::fs::remove_file(&sym_dest).is_ok()
+                        && let Some(parent) = sym_dest.parent()
+                    {
+                        parents.insert(parent.to_path_buf());
+                    }
+                }
+                // Walk each newly-emptied ancestor chain, re-queuing failed
+                // rmdirs now that the symlink is gone.
+                let mut recursive_parents: BTreeSet<PathBuf> = BTreeSet::new();
+                for parent in parents {
+                    let mut cur = parent;
+                    while revisit.contains_key(&cur) {
+                        recursive_parents.insert(cur.clone());
+                        match cur.parent() {
+                            Some(p) => cur = p.to_path_buf(),
+                            None => break,
+                        }
+                    }
+                }
+                for parent in recursive_parents {
+                    if let Some(key) = revisit.remove(&parent) {
+                        stack.push((parent, key));
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Already gone: tolerate, no revisit needed.
+            }
+            Err(_) => {
+                // Any other tolerated failure (chiefly "not empty") is
+                // tracked for a possible later revisit.
+                revisit.insert(dest, inode_key);
+            }
+        }
+    }
 }
 
 /// Options for `run_unmerge`. `config_protect`/`config_protect_mask`
@@ -136,6 +360,14 @@ pub(crate) fn retire_entry(
         Some(writes) => writes.commit(root, &portage_vdb::EntryKey::new(category, pf)),
         None => delete_vdb_dir(root, category, pf),
     }
+}
+
+/// The directory of the installed entry `category/pf` as messages print
+/// it; the bare `category/pf` on a backend with no such directory.
+pub(crate) fn entry_path_for_message(root: &Path, category: &str, pf: &str) -> std::path::PathBuf {
+    portage_vdb::for_root(root)
+        .entry_path(&portage_vdb::EntryKey::new(category, pf))
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("{category}/{pf}")))
 }
 
 #[cfg(test)]

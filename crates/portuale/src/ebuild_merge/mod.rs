@@ -54,6 +54,12 @@ pub fn is_merge_command(command: &str) -> bool {
     command == "merge"
 }
 
+/// Whether `command` is `qmerge` (routed to `run_qmerge`, which skips
+/// the `install` phase).
+pub fn is_qmerge_command(command: &str) -> bool {
+    command == "qmerge"
+}
+
 /// `token` in the merge's own `FEATURES`: the resolved incremental list
 /// when set, else the raw `$FEATURES` process env. Kept private to the
 /// merge path so its `noclean` gate and the phase env can never disagree.
@@ -94,4 +100,43 @@ pub struct RunMergeWithHookArgs<'a> {
     pub options: &'a MergeOptions,
     pub buildpkg: Option<&'a crate::ebuild_package::PackageOptions>,
     pub before_merge: Option<&'a dyn Fn()>,
+}
+
+/// The `merge()` body shared by `merge` (after a fresh `install`) and
+/// `qmerge` (assuming `install` already ran).
+/// `configdict["pkg"]["A"]`: the use-reduced, unique distfile basenames
+/// of `SRC_URI`, re-supplied here because the filtered `${T}/environment`
+/// drops `A`. `None` outside a repo checkout, with no `SRC_URI`, or on
+/// an unparsable one.
+fn source_distfiles(
+    env: &ebuild_phases::Environment,
+    hook_env: &[(String, String)],
+) -> Option<String> {
+    let repo_root = crate::ebuild_phases::repo_root_for(&env.pkg_dir)?;
+    let metadata =
+        portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok()?;
+    // Portage sets `A` unconditionally (`""` for an SRC_URI-less
+    // package), so empty yields `Some("")`, not `None`.
+    let src_uri = metadata.get("SRC_URI").map(String::as_str).unwrap_or("");
+    if src_uri.trim().is_empty() {
+        return Some(String::new());
+    }
+    let use_value = hook_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "USE")
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+    let use_flags: std::collections::HashSet<String> =
+        use_value.split_whitespace().map(String::from).collect();
+    let mut a: Vec<String> = Vec::new();
+    for entry in
+        portage_fetch::flatten_src_uri(src_uri, |negated, flag| use_flags.contains(flag) != negated)
+            .ok()?
+    {
+        if !a.contains(&entry.filename) {
+            a.push(entry.filename);
+        }
+    }
+    Some(a.join(" "))
 }

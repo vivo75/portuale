@@ -210,6 +210,49 @@ pub(crate) fn makeopts_to_job_count(makeopts: &str) -> String {
     cpu_count()
 }
 
+/// `PKGDIR` from the resolved config: the chain value when set anywhere, else
+/// the default `/var/cache/binpkgs`. An empty value falls back (Portage has
+/// no `PKGDIR`-empty die; an empty pkgdir only ever yields broken paths).
+pub fn resolve_pkgdir(lookup: impl Fn(&str) -> Option<String>) -> std::path::PathBuf {
+    lookup("PKGDIR")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| PackageOptions::default().pkgdir.clone())
+}
+
+/// `BINPKG_COMPRESS` from the resolved config: the chain value when set
+/// anywhere, else the default `"zstd"`. The caller picks the lookup per
+/// format: the full chain for `xpak`, the files-only chain (no calling env)
+/// for `gpkg`. An empty value is honored verbatim (disables compression);
+/// only an *unset* chain falls back.
+pub fn resolve_binpkg_compress(lookup: impl Fn(&str) -> Option<String>) -> String {
+    lookup("BINPKG_COMPRESS").unwrap_or_else(|| PackageOptions::default().binpkg_compress.clone())
+}
+
+/// `BINPKG_COMPRESS_FLAGS_<NAME>` (per-compressor override) if set, else
+/// `BINPKG_COMPRESS_FLAGS`, over the caller's `lookup` (full chain for
+/// `xpak`, files-only for `gpkg`, as above). Default is empty.
+pub fn resolve_binpkg_compress_flags(
+    lookup: impl Fn(&str) -> Option<String>,
+    binpkg_compress: &str,
+) -> String {
+    lookup(&format!(
+        "BINPKG_COMPRESS_FLAGS_{}",
+        binpkg_compress.to_uppercase()
+    ))
+    .or_else(|| lookup("BINPKG_COMPRESS_FLAGS"))
+    .unwrap_or_default()
+}
+
+/// `PORTAGE_BZIP2_COMMAND` from the resolved config: the chain value when set
+/// anywhere, else the default `"bzip2"`. Unlike the compression pair, the
+/// calling env wins for both formats. Only substituted when
+/// `binpkg_compress == "bzip2"`.
+pub fn resolve_portage_bzip2_command(lookup: impl Fn(&str) -> Option<String>) -> String {
+    lookup("PORTAGE_BZIP2_COMMAND")
+        .unwrap_or_else(|| PackageOptions::default().portage_bzip2_command.clone())
+}
+
 fn resolve_compression_command_jobs(
     binpkg_compress: &str,
     binpkg_compress_flags: &str,
@@ -1051,6 +1094,31 @@ fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
         config_root: &options.config_root,
         shell: options.shell,
     })
+}
+
+/// Recursively copy `src` -> `dst` (files, symlinks-as-symlinks,
+/// subdirs), creating `dst`. Used to stage the vdb dir as
+/// `${PORTAGE_BUILDDIR}/build-info` for `quickpkg_from_vdb`.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+    for entry in
+        portage_util::read_dir_entries(src).map_err(|e| format!("{}: {e}", src.display()))?
+    {
+        let ft = entry.file_type().map_err(|e| format!("{e}"))?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if ft.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if ft.is_symlink() {
+            let target =
+                std::fs::read_link(&from).map_err(|e| format!("{}: {e}", from.display()))?;
+            std::os::unix::fs::symlink(&target, &to)
+                .map_err(|e| format!("{}: {e}", to.display()))?;
+        } else {
+            std::fs::copy(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

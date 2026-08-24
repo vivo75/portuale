@@ -53,6 +53,35 @@ impl Default for GpgVerify {
     }
 }
 
+impl GpgVerify {
+    /// The `settings`-derived verify configuration, via the same "read the
+    /// env var, fall back to `make.globals`' default" shortcut every other
+    /// execution CLI boundary here takes. A per-binrepo
+    /// `verify-signature` (`binrepos.conf`) is **not** consulted here;
+    /// use [`GpgVerify::from_binrepo`] on the `--getbinpkg` path, which
+    /// knows which repo the download came from; this fallback is for a
+    /// local `$PKGDIR` file that has no binrepo at all.
+    pub fn from_env() -> Self {
+        Self::default()
+    }
+
+    /// The same policy from a **resolved** `FEATURES` list:
+    /// `set_resolved_features` replaces `from_env`'s raw read on the
+    /// `emerge` paths, so a `make.conf`
+    /// `binpkg-request-signature`/`binpkg-ignore-signature` takes effect.
+    pub fn from_features(features: &str) -> Self {
+        let (verify_signature, request_signature) = gpg_policy_for_features(features);
+        Self {
+            verify_signature,
+            request_signature,
+            base_command: std::env::var("BINPKG_GPG_VERIFY_BASE_COMMAND")
+                .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_BASE_COMMAND.to_string()),
+            gpg_home: std::env::var("BINPKG_GPG_VERIFY_GPG_HOME")
+                .unwrap_or_else(|_| DEFAULT_GPG_VERIFY_GPG_HOME.to_string()),
+        }
+    }
+}
+
 /// The `request_signature` / `verify_signature` derivation as a pure
 /// function of the `FEATURES` string, so it can be unit-tested without
 /// mutating the process environment. Returns `(verify_signature,

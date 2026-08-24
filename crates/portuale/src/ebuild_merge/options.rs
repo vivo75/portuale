@@ -82,6 +82,19 @@ impl Default for MergeOptions {
     }
 }
 
+impl MergeOptions {
+    /// Re-derive every `FEATURES`-following token from the resolved list.
+    /// The `emerge` paths call this right after `from_env`.
+    pub fn set_resolved_features(&mut self, features: &str) {
+        let has = |token: &str| features.split_whitespace().any(|t| t == token);
+        self.collision_protect = has("collision-protect");
+        self.protect_owned = has("protect-owned");
+        self.protect_if_modified = has("config-protect-if-modified");
+        self.gpg_verify = crate::binpkg::GpgVerify::from_features(features);
+        self.features = features.to_string();
+    }
+}
+
 /// A merged file's extended attributes: same-device rename keeps every
 /// xattr; cross-device copy carries them only under `FEATURES=xattr`,
 /// minus `PORTAGE_XATTR_EXCLUDE`.
@@ -92,4 +105,25 @@ pub(crate) struct XattrPolicy {
     pub enabled: bool,
     /// `PORTAGE_XATTR_EXCLUDE` patterns.
     pub exclude: String,
+}
+
+impl XattrPolicy {
+    /// From the merge's resolved `FEATURES` and `PORTAGE_XATTR_EXCLUDE`.
+    pub(crate) fn from_options(options: &MergeOptions) -> Self {
+        let features = if options.features.is_empty() {
+            std::env::var("FEATURES").unwrap_or_default()
+        } else {
+            options.features.clone()
+        };
+        let exclude = options
+            .resolved_config
+            .as_deref()
+            .and_then(|c| c.other_vars.get("PORTAGE_XATTR_EXCLUDE").cloned())
+            .or_else(|| std::env::var("PORTAGE_XATTR_EXCLUDE").ok())
+            .unwrap_or_default();
+        Self {
+            enabled: features.split_whitespace().any(|t| t == "xattr"),
+            exclude,
+        }
+    }
 }

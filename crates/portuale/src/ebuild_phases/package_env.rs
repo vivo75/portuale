@@ -140,6 +140,29 @@ pub(crate) fn match_package_env_vars(
         .collect()
 }
 
+/// One `package.env` key, raw: scalars replace (last match wins), incrementals
+/// append — matching entries in list order, files of one entry in order. No
+/// acceptance gate, no folding: for per-key recomputes a flat pair would corrupt.
+/// Portage: config.py, _grab_pkg_env
+pub(crate) fn match_package_env_scalar_raw(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    key: &str,
+) -> Option<String> {
+    let mut matched: Option<&str> = None;
+    for (atom, vars) in package_env_vars {
+        if !portage_dep::match_from_list(atom, &[cpv_slot]).is_some_and(|m| !m.is_empty()) {
+            continue;
+        }
+        for (k, v) in vars {
+            if k == key {
+                matched = Some(v.as_str());
+            }
+        }
+    }
+    matched.map(String::from)
+}
+
 pub(crate) fn match_package_env_incremental_raw(
     package_env_vars: &[(String, Vec<(String, String)>)],
     cpv_slot: &str,

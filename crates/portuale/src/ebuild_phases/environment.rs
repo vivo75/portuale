@@ -97,6 +97,11 @@ pub(crate) fn compute_environment(
 }
 
 impl Environment {
+    /// `${PORTAGE_BUILDDIR}` (`${PORTAGE_TMPDIR}/portage/<cat>/<pf>`): callers hang
+    /// their own temp subdirectories off it.
+    pub(crate) fn portage_builddir(&self) -> &Path {
+        &self.portage_builddir
+    }
     /// `${PORTAGE_TMPDIR}`: must be an exported var when `FEATURES=sandbox` is on,
     /// for `bin/ebuild.sh`'s `addwrite`.
     pub(crate) fn portage_tmpdir(&self) -> &Path {

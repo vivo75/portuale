@@ -36,7 +36,7 @@ pub use error::{Error, Result};
 pub use files::FilesDb;
 pub use files_write::{format_preserved_libs, parse_preserved_libs};
 pub use registry::for_root;
-pub use scratch::absorb_file;
+pub use scratch::{absorb_file, materialize_entry, materialize_files};
 pub use types::*;
 
 use std::path::{Path, PathBuf};

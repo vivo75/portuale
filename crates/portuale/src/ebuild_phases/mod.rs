@@ -159,3 +159,12 @@ fn phase_prerequisites(mydo: &str) -> Vec<&'static str> {
 pub fn is_phase_command(command: &str) -> bool {
     phase_prerequisites(command).last() == Some(&command)
 }
+
+/// Whether `command` is a standalone single-phase `ebuild` command with no
+/// prerequisite chain: `config`/`info`/`prerm`/`postrm`. `preinst`/`postinst`
+/// stay merge-internal (ordering-tied to the file copy); `pretend` is already
+/// chained; `ebuild.rs` handles `help`. `run_single_phase` fits all four.
+/// Portage: doebuild.py
+pub fn is_standalone_phase_command(command: &str) -> bool {
+    matches!(command, "config" | "info" | "prerm" | "postrm")
+}
