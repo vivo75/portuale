@@ -70,3 +70,134 @@ pub(crate) struct QueueItem {
 /// `(parent_cat, parent_pkg, parent_version, atom_text)`. A top-level atom is
 /// recorded with empty parent fields.
 pub(crate) type SlotPullers = HashMap<(String, String), Vec<(String, String, String, String)>>;
+
+/// Arguments of [`enqueue_flat_deps`].
+pub(crate) struct EnqueueFlatDepsArgs<'a> {
+    pub(crate) flat_deps: Vec<String>,
+    pub(crate) key: &'a (String, String),
+    pub(crate) version: &'a str,
+    pub(crate) depth: u32,
+    pub(crate) parent_use: &'a HashSet<String>,
+    pub(crate) queue: &'a mut VecDeque<QueueItem>,
+    pub(crate) pending_blockers: &'a mut Vec<PendingBlocker>,
+    /// The same string re-flattened over just the build-time keys and just the
+    /// run-time keys: an atom in the first but not the second is a
+    /// `QueueItem::buildtime_hard` edge. `&[]` (all soft) at the `--with-test-deps`
+    /// call site.
+    pub(crate) buildtime_atoms: &'a HashSet<String>,
+    pub(crate) runtime_atoms: &'a HashSet<String>,
+    /// `BDEPEND` alone (subset of `buildtime_atoms`): a running-root `BDEPEND`
+    /// edge is soft, a running `DEPEND` edge stays hard. Empty at the
+    /// `--with-test-deps` call sites.
+    // Portage: DepPriority
+    pub(crate) bdepend_atoms: &'a HashSet<String>,
+    pub(crate) or_universe: &'a HashSet<String>,
+    /// `dep_running_tags` over the same string: atoms in this set resolve against
+    /// the running root. Empty at the `--with-test-deps` call sites and wherever
+    /// the roots coincide (strict no-op).
+    pub(crate) running_atoms: &'a HashSet<String>,
+    /// The expanding entry's own root flag. `false` for the `--with-test-deps`
+    /// call sites and wherever the owner is target-rooted.
+    pub(crate) owner_targets_running_root: bool,
+}
+
+/// Queues every atom in `flat_deps` onto `queue` at `depth + 1`, owned by
+/// `key`/`version`, splitting blockers into `pending_blockers` instead. Shared
+/// by the normal-deps queueing and the `--with-test-deps` follow-up so the two
+/// can't drift apart.
+///
+/// `parent_use` (the owner's effective USE, the same set passed as
+/// `use_reduce_flat`'s `uselist`) evaluates each token's conditional use-deps
+/// before queueing, blockers included. A token failing re-evaluation is queued
+/// unevaluated rather than dropped.
+// Portage: use_reduce per-token integration point; PMS 8.3.4
+pub(crate) fn enqueue_flat_deps(args: EnqueueFlatDepsArgs<'_>) {
+    let EnqueueFlatDepsArgs {
+        flat_deps,
+        key,
+        version,
+        depth,
+        parent_use,
+        queue,
+        pending_blockers,
+        buildtime_atoms,
+        runtime_atoms,
+        bdepend_atoms,
+        or_universe,
+        running_atoms,
+        owner_targets_running_root,
+    } = args;
+    // Plains in reverse declaration order first, then the `||`-chosen tokens
+    // (same stack discipline one level out): Portage drains every plain dep
+    // before touching a `||` group, so a blanket `.rev()` would schedule a
+    // `||` choice ahead of a later-declared plain dep.
+    // Portage: depgraph.py _dep_disjunctive_stack
+    let (mut disj, mut plains): (Vec<String>, Vec<String>) = flat_deps
+        .into_iter()
+        .partition(|t| t != "||" && or_universe.contains(t));
+    plains.reverse();
+    disj.reverse();
+    for (tok, from_disjunction) in plains
+        .into_iter()
+        .map(|t| (t, false))
+        .chain(disj.into_iter().map(|t| (t, true)))
+    {
+        if tok == "||" {
+            continue;
+        }
+        // A running-root `BDEPEND` edge is soft (its bootstrap cycle terminates
+        // instead of reporting) while a running `DEPEND` edge stays hard. Bound on
+        // the raw token, like `buildtime_hard`/`targets_running` below.
+        let targets_running_first = running_atoms.contains(&tok);
+        // The running-`BDEPEND`-soft exception does not apply to a self-naming
+        // atom (Portage never relaxes a build-time edge in `_serialize_tasks`,
+        // so a self loop dead-ends and aborts either way).
+        // Portage: depgraph.py
+        let self_naming = portage_dep::parse_atom(&tok).is_some_and(|at| {
+            at.blocker == portage_dep::Blocker::None && at.category == key.0 && at.package == key.1
+        });
+        let buildtime_hard = buildtime_atoms.contains(&tok)
+            && !runtime_atoms.contains(&tok)
+            && !(targets_running_first && bdepend_atoms.contains(&tok) && !self_naming);
+        // The per-group root travels with the atom, bound on the raw token before
+        // evaluation moves it, like `buildtime_hard`.
+        let targets_running = targets_running_first;
+        // Only a genuine rewrite populates `unevaluated` (compare text, not
+        // `Option`): `evaluate_atom_conditionals` returns `Some` even when
+        // nothing changed.
+        let evaluated = portage_dep::evaluate_atom_conditionals(&tok, parent_use)
+            .unwrap_or_else(|| tok.clone());
+        let unevaluated = if evaluated != tok { Some(tok) } else { None };
+        let tok = evaluated;
+        if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+            && dep_atom.blocker != portage_dep::Blocker::None
+        {
+            // The token survived the build-time-keys flatten.
+            // Portage: blocker.priority.buildtime
+            let buildtime = buildtime_atoms.contains(&tok);
+            pending_blockers.push(PendingBlocker {
+                atom_str: tok,
+                strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                buildtime,
+                target_category: dep_atom.category,
+                target_package: dep_atom.package,
+                owner_key: key.clone(),
+                owner_version: version.to_string(),
+                owner_merging: true,
+                // A merged candidate's own dependency string, not the vdb-scan producer.
+                owner_installed: false,
+            });
+            continue;
+        }
+        queue.push_back(QueueItem {
+            atom: tok,
+            depth: depth + 1,
+            owner: Some(key.clone()),
+            owner_targets_running_root,
+            unevaluated,
+            targets_running_root: targets_running,
+            buildtime_hard,
+            from_disjunction,
+        });
+    }
+}

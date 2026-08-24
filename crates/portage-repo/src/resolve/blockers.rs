@@ -187,6 +187,53 @@ pub(crate) fn owner_set_parent(
     blocker_retry_closure.contains(owner_key)
 }
 
+/// The `GraphEntry` for an installed package a blocker removes: version is
+/// the removed installed version, `required_by` the ordering anchors.
+/// `deps` stays empty -- the removal has no dependency walk.
+// Portage: depgraph.py, _validate_blockers (uninstall task)
+pub(crate) fn uninstall_entry(
+    root: &Path,
+    category: String,
+    package: String,
+    version: String,
+    anchors: Vec<(String, String)>,
+) -> GraphEntry {
+    // The removed instance's own slot/sub-slot/repo, so `-pv` decorates the
+    // row like the vardb-backed uninstall package does.
+    let (slot, sub_slot) = read_vdb_slot(root, &category, &package, &version);
+    let repo_name = installed_pkg_repo(root, &category, &package, &version);
+    GraphEntry {
+        discovery: 0,
+        category,
+        package,
+        outcome: PretendOutcome::Uninstall { version },
+        blockers: Vec::new(),
+        slot: Some(slot),
+        sub_slot: Some(sub_slot),
+        repo_name: Some(repo_name),
+        oldbest: Vec::new(),
+        use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: anchors,
+        source: CandidateSource::Ebuild,
+        provenance: VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    }
+}
+
 /// Working set for `file_blocker_conflicts`: one removed `cpv`, its ordering
 /// anchors and the blocker rows that ride it when the owner has no entry.
 pub(crate) struct PendingRemoval {

@@ -5,6 +5,26 @@ use portage_dep::Atom;
 use portage_profile::Config;
 use std::ops::ControlFlow;
 
+/// What [`compute_nvc_suggestions`] hands back to its caller.
+pub(crate) struct NvcSuggestionsOut {
+    pub(crate) keyword_suggestion: Option<(String, String)>,
+    pub(crate) use_suggestion: Option<(String, Vec<(String, bool)>)>,
+    pub(crate) parent_use_suggestion: Option<ParentUseSuggestion>,
+}
+
+/// The values [`compute_nvc_suggestions`] reads from its caller.
+pub(crate) struct ComputeNvcSuggestionsArgs<'a> {
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) key: &'a (String, String),
+    pub(crate) atom: &'a Atom,
+    pub(crate) config: &'a Config,
+    pub(crate) owner: Option<&'a (String, String)>,
+    pub(crate) unevaluated_atom: &'a Option<String>,
+    pub(crate) entries: &'a [GraphEntry],
+}
+
 /// The values [`push_unresolved_entry`] reads from its caller.
 pub(crate) struct PushUnresolvedEntryArgs<'a> {
     pub(crate) key: (String, String),

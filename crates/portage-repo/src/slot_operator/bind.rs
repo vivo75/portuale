@@ -46,3 +46,23 @@ pub(crate) fn strip_libc_atoms(
     });
     atoms
 }
+
+/// The tree ebuild's md5-cache metadata for `cp` at `version`.
+/// `None` when it cannot be read: the rebuild is kept (conservative).
+pub(crate) fn tree_metadata_for(
+    repos: &[RepoConfig],
+    cp: &(String, String),
+    version: &str,
+) -> Option<std::sync::Arc<HashMap<String, String>>> {
+    let candidates = list_candidates(repos, &cp.0, &cp.1).ok()?;
+    let resolved = candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)?;
+    repo_aux_metadata(
+        &resolved.repo_location,
+        &cp.0,
+        &format!("{}-{version}", cp.1),
+    )
+    .ok()
+}
