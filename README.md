@@ -3431,6 +3431,70 @@ provenance for). A new `dev-libs/autounmaskdepconsumer` fixture (RDEPEND
 on the existing keyword-masked-only package) proves it live, both with
 and without `--autounmask`, and in both plain-text and `--json` form.
 
+**`--autounmask-use`, the plain-dependency-atom half.** Real
+`create_depgraph_params.py`'s own `--autounmask` family also covers the
+far more common real-world case the KEYWORDS-only v1 above deliberately
+narrowed away: a candidate that's otherwise the best match except a
+parent's plain `pkg[flag]`/`pkg[-flag]` dependency atom doesn't match
+its current USE state. Grounded against real `_wrapped_select_pkg_
+highest_available_imp` (`lib/_emerge/depgraph.py:8093-8158`, the
+`autounmask_level.allow_use_changes` branch) and the real engine behind
+it, `_pkg_use_enabled` (`:7657-7785`): a direct, deterministic
+one-shot flag flip built straight from the failing atom's own USE-dep,
+*not* a search over flag combinations, refused outright if the needed
+flag is `package.use.mask`/`.force`'d (masked/forced IUSE can never be
+adjusted). Ported as a new sibling to `keyword_masked_only`/
+`suggested_keyword_candidate`: `use_masked_only` (candidate is
+`is_visible`, including KEYWORDS this time — unlike `keyword_masked_
+only`, which explicitly skips that check — but its own USE-deps don't
+match), `suggested_use_flip` (the flag-flip computation itself, refusing
+the *whole* suggestion rather than a partial one if any needed flag
+isn't genuinely IUSE-declared or turns out unfixable), and `flag_is_
+settable` — this last one a genuinely reusable trick worth naming: rather
+than re-deriving `use.mask`/`.force`/`package.use.mask`/`.force`
+matching logic a second time, it recomputes `effective_use_flags` with a
+synthetic, exact-version `package.use` entry appended and checks whether
+the result actually reflects the desired state, piggy-backing on already-
+correct, already-tested logic instead of duplicating it. A first attempt
+built that synthetic entry from the fully slot/repo-qualified
+`candidate_str` itself (matching real `match_from_list`'s own atom-vs-
+candidate-string convention everywhere *else* in this codebase) —
+silently always returned "not settable" until caught by a failing new
+test, root-caused to `match_from_list` needing a real *atom pattern* on
+the left, not a candidate string used as both sides at once; fixed by
+using a plain `=category/package-version` atom instead. `GraphEntry`
+gains a new `use_suggestion: Option<(version, Vec<(flag, enabled)>)>`
+field, computed and surfaced at exactly the same two call sites as
+`keyword_suggestion` (a top-level atom's own fatal message, and a
+dependency's own `NoVisibleCandidate` entry), with its own real
+`package.use`-suggestion message syntax
+(`=category/package-version flag -flag`). Real `autounmask_use` has no
+"suppressed unless `--autounmask` was explicitly given" asymmetry the
+way `autounmask_keep_keywords` does — `autounmask_suggest_use` is on by
+default whenever `autounmask` itself is (which itself defaults on), only
+suppressed by an explicit `--autounmask-use=n` — confirmed by reading
+real `create_depgraph_params.py`'s own `myparams["autounmask_keep_use"]
+= True if autounmask_use == "n" else False` directly. Deliberately still
+out (confirmed with the user before implementing, given real portage's
+own considerably bigger machinery here — cross-parent conflict
+detection, a full backtrack-restart when a USE change cascades into
+other packages' own dependencies, no equivalent of which exists anywhere
+in this pilot): the real `binpkg_respect_use == "y"` interaction (a rare
+corner case: an *explicit* `--binpkg-respect-use=y` forcing `autounmask_
+use` to `"n"`, not reproduced since this pilot's own `binpkg_respect_use`
+is already a resolved bool with no way to distinguish "explicit y" from
+the "auto" default by the time it's available), and the separate
+`opt?`/REQUIRED_USE-conditional mechanism (real `_show_unsatisfied_dep`
+flipping the *requesting parent's own* flag rather than the candidate's
+— a different code path, covered in its own dedicated section below).
+Reuses existing fixtures rather than adding new ones:
+`dev-libs/useflagpkg[-foo]` (top-level) and `dev-libs/usedeprejectedpkg`
+→ `dev-libs/useflagpkg[-foo]` (dependency-level), both already
+established for real USE-dep enforcement itself, now also proving the
+suggestion — Rust and Python byte-identical, confirmed both via the
+shared pytest contract suite and a direct manual diff against both
+built binaries.
+
 `--columns`: real `output.py`'s own `_set_root_columns`, a purely
 display-layer alternate rendering of the same New/Upgrade/Downgrade/
 Reinstall entries the default bracket format already shows -- no new
@@ -4921,6 +4985,26 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/
 # occupy on every other outcome
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask --json dev-libs/autounmaskdepconsumer | python3 -c 'import json,sys; print(next(e["keyword_suggestion"] for e in json.load(sys.stdin)["entries"] if e["package"] == "autounmaskkeywordpkg"))'
 # {'version': '1.0', 'keyword': '~amd64'}
+
+# --autounmask-use: on by default (unlike the keyword sub-feature
+# above), so useflagpkg's own real "foo" (globally enabled, but this
+# atom demands "-foo") gets a suggestion with no flag at all
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend "dev-libs/useflagpkg[-foo]"
+# emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".
+# note: dev-libs/useflagpkg-1.0 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=dev-libs/useflagpkg-1.0 -foo" to package.use  (exit 1)
+# --autounmask-use=n is the only way to suppress it (no "ambient
+# default" asymmetry the keyword sub-feature has)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask-use=n "dev-libs/useflagpkg[-foo]"
+# emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".  (exit 1)
+# the same suggestion, for a *dependency's* own no-visible-candidate
+# (dev-libs/usedeprejectedpkg RDEPENDs on the exact atom above)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeprejectedpkg
+# [ebuild  N] dev-libs/usedeprejectedpkg-1.0
+# !!! no visible ebuild for dependency "dev-libs/useflagpkg"
+# !!! note: dev-libs/useflagpkg-1.0 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=dev-libs/useflagpkg-1.0 -foo" to package.use  (exit 0)
+# --json's own mirror: "use_suggestion" ({"version", "flags"} or null)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/usedeprejectedpkg | python3 -c 'import json,sys; print(next(e["use_suggestion"] for e in json.load(sys.stdin)["entries"] if e["package"] == "useflagpkg"))'
+# {'version': '1.0', 'flags': [{'flag': 'foo', 'enabled': False}]}
 
 # IUSE's own "+"/"-" default markers are honored now: "+enableddefault"
 # defaults on, "-disableddefault" stays off (own REQUIRED_USE requires

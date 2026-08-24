@@ -586,6 +586,30 @@ fn print_entry_line(
                     entry.category, entry.package, entry.category, entry.package,
                 );
             }
+            // `--autounmask-use`'s own suggestion sub-feature -- see
+            // GraphEntry::use_suggestion's own doc comment.
+            if let Some((version, flip)) = &entry.use_suggestion {
+                let adjustments: Vec<String> = flip
+                    .iter()
+                    .map(|(flag, enabled)| {
+                        if *enabled {
+                            flag.clone()
+                        } else {
+                            format!("-{flag}")
+                        }
+                    })
+                    .collect();
+                eprintln!(
+                    "!!! note: {}/{}-{version} exists but its USE flags don't satisfy \
+                     this atom; --autounmask-use suggests adding \"={}/{}-{version} {}\" \
+                     to package.use",
+                    entry.category,
+                    entry.package,
+                    entry.category,
+                    entry.package,
+                    adjustments.join(" "),
+                );
+            }
         }
     }
 }
@@ -863,6 +887,26 @@ fn entry_to_json(
                     json_string(version),
                     json_string(keyword)
                 ))
+                .unwrap_or_else(|| "null".to_string())
+        ));
+        fields.push(format!(
+            "\"use_suggestion\":{}",
+            entry
+                .use_suggestion
+                .as_ref()
+                .map(|(version, flip)| {
+                    let flags: Vec<String> = flip
+                        .iter()
+                        .map(|(flag, enabled)| {
+                            format!("{{\"flag\":{},\"enabled\":{enabled}}}", json_string(flag))
+                        })
+                        .collect();
+                    format!(
+                        "{{\"version\":{},\"flags\":[{}]}}",
+                        json_string(version),
+                        flags.join(",")
+                    )
+                })
                 .unwrap_or_else(|| "null".to_string())
         ));
     }
@@ -1438,6 +1482,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // autounmask/autounmask_keep_keywords computation.
     let mut autounmask: Option<bool> = None;
     let mut autounmask_keep_keywords: Option<bool> = None;
+    let mut autounmask_use: Option<bool> = None;
     // --usepkg/-k, --usepkgonly/-K, --binpkg-respect-use: all three real
     // "true_y_or_n" (bare flag, "=y", or "=n"), same shape --autounmask
     // already has. --binpkg-respect-use's own real default ("auto",
@@ -1937,6 +1982,44 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 }
             }
+        } else if arg == "--autounmask-use" {
+            // Real "--autounmask-use": plain y_or_n, a REQUIRED value --
+            // same shape as "--autounmask-keep-keywords" above (real
+            // `lib/_emerge/main.py`'s own `"choices": y_or_n`, not
+            // `true_y_or_n`).
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--autounmask-use\" requires an argument");
+                return ExitCode::from(2);
+            };
+            match value.as_str() {
+                "y" => {
+                    autounmask_use = Some(true);
+                    i += 2;
+                }
+                "n" => {
+                    autounmask_use = Some(false);
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--autounmask-use\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--autounmask-use=") {
+            match value {
+                "y" => {
+                    autounmask_use = Some(true);
+                    i += 1;
+                }
+                "n" => {
+                    autounmask_use = Some(false);
+                    i += 1;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--autounmask-use\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
         } else if arg == "--usepkg" || arg == "-k" {
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
@@ -2287,33 +2370,56 @@ pub fn run(args: &[String]) -> ExitCode {
         update || newuse || changed_use || changed_deps || changed_slot || noreplace || newrepo,
     );
 
-    // --autounmask/--autounmask-keep-keywords: real create_depgraph_
-    // params.py's own default-resolution logic, simplified for this
-    // pilot's own v1 scope (only the keyword-suggestion sub-feature is
-    // implemented at all -- --autounmask-use/-license/-masks aren't
-    // read here, matching every real fixture/user who also never
-    // touches them getting the exact same outcome this simplification
-    // produces). Real logic: `autounmask` itself defaults to enabled
-    // (only `--autounmask=n` turns the whole feature off -- with
-    // `--autounmask-use`/`-license` unread, the "is autounmask_use/
-    // license itself what makes autounmask default true" branch in real
-    // create_depgraph_params.py always takes the "yes" arm, so this
-    // simplifies to exactly that). `autounmask_keep_keywords` (real:
-    // "suppress keyword suggestions") is subtler: it defaults to
-    // suppressed (true) when `--autounmask` itself was NOT explicitly
-    // given at all, but defaults to *not* suppressed (false, i.e.
-    // keyword suggestions ARE generated) once `--autounmask` itself WAS
-    // explicitly given (any value) -- real portage's own "explicitly
+    // --autounmask/--autounmask-keep-keywords/--autounmask-use: real
+    // create_depgraph_params.py's own default-resolution logic,
+    // simplified for this pilot's own v1 scope (--autounmask-license/
+    // -masks still aren't read at all, matching every real fixture/user
+    // who never touches them getting the exact same outcome this
+    // simplification produces). Real logic: `autounmask` itself defaults
+    // to enabled (only `--autounmask=n` turns the whole feature off --
+    // with `--autounmask-use` now read but `--autounmask-license`
+    // still not, the "is autounmask_use/license itself what makes
+    // autounmask default true" branch in real create_depgraph_params.py
+    // takes the "yes" arm whenever `--autounmask-use` isn't explicitly
+    // "n", which this pilot's own `autounmask_enabled` below still
+    // simplifies to the same "only `--autounmask=n` turns it off"
+    // shortcut -- a real, narrow gap only when `--autounmask-use=n` is
+    // given *without* `--autounmask` itself, which real portage would
+    // still leave `autounmask` enabled for (since keywords/masks aren't
+    // read either) but is close enough in practice to be the same
+    // pre-existing simplification, not a new one). `autounmask_keep_
+    // keywords` (real: "suppress keyword suggestions") is subtler: it
+    // defaults to suppressed (true) when `--autounmask` itself was NOT
+    // explicitly given at all, but defaults to *not* suppressed (false,
+    // i.e. keyword suggestions ARE generated) once `--autounmask` itself
+    // WAS explicitly given (any value) -- real portage's own "explicitly
     // asking for autounmask implies wanting its keyword suggestions
     // too, but the ambient always-on default doesn't" asymmetry, ported
-    // exactly. Either way, an explicit `--autounmask-keep-keywords=y`/
-    // `=n` always wins outright.
+    // exactly. `autounmask_use` (real: "allow autounmask to change
+    // package.use") has no such asymmetry at all -- real
+    // `myparams["autounmask_keep_use"] = True if autounmask_use == "n"
+    // else False`, unconditionally on (not suppressed) whenever
+    // `--autounmask-use` isn't explicitly "n", regardless of whether
+    // `--autounmask` itself was ever explicitly given. Either way, an
+    // explicit `--autounmask-keep-keywords=y`/`=n` or
+    // `--autounmask-use=y`/`=n` always wins outright.
+    //
+    // KNOWN GAP: real `autounmask_use` is also forced to `"n"` whenever
+    // `myparams["binpkg_respect_use"] == "y"` (an explicit, literal
+    // `--binpkg-respect-use=y`, not the "auto" default) -- this pilot's
+    // own `binpkg_respect_use` below is already a resolved bool by the
+    // time it's available, with no way to distinguish "explicitly y"
+    // from "auto-resolved to true", so that interaction isn't
+    // reproduced. A real, narrow corner case: giving both
+    // `--binpkg-respect-use=y` and relying on `--autounmask-use`'s own
+    // default (rather than an explicit `=n`) at once.
     let autounmask_enabled = autounmask != Some(false);
     let autounmask_suggest_keywords = autounmask_enabled
         && match autounmask_keep_keywords {
             Some(keep) => !keep,
             None => autounmask.is_some(),
         };
+    let autounmask_suggest_use = autounmask_enabled && autounmask_use != Some(false);
 
     // --binpkg-respect-use: real default is "auto" (effectively on)
     // whenever --usepkgonly is NOT given, left off (unset/falsy) when it
@@ -2354,6 +2460,7 @@ pub fn run(args: &[String]) -> ExitCode {
         changed_deps_report,
         selective,
         autounmask_suggest_keywords,
+        autounmask_suggest_use,
         usepkg,
         usepkgonly,
         binpkg_respect_use,

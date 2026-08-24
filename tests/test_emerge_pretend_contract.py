@@ -967,15 +967,20 @@ def test_use_dep_rejected_dependency_atom_reports_no_visible_ebuild(
     don't fail the whole graph" spirit as an unresolvable dependency
     (test_unresolvable_dependency_is_reported_not_silently_dropped
     above): the parent still resolves, the rejected dependency is
-    reported on stderr, not silently dropped or silently accepted."""
+    reported on stderr, not silently dropped or silently accepted. Also
+    carries a --autounmask-use suggestion (on by default, unlike the
+    keyword one -- see the autounmask_suggest_use tests below) since
+    "foo" is genuinely settable via package.use here."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/usedeprejectedpkg"], fixture_env
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/usedeprejectedpkg-1.0"]
-    assert (
-        result.stderr.strip()
-        == '!!! no visible ebuild for dependency "dev-libs/useflagpkg"'
+    assert result.stderr.strip() == (
+        '!!! no visible ebuild for dependency "dev-libs/useflagpkg"\n'
+        '!!! note: dev-libs/useflagpkg-1.0 exists but its USE flags don\'t satisfy '
+        'this atom; --autounmask-use suggests adding "=dev-libs/useflagpkg-1.0 -foo" '
+        'to package.use'
     )
 
 
@@ -1002,15 +1007,19 @@ def test_use_dep_enforcement_negated_flag_declared_but_enabled_does_not_match(
 ):
     """Same fixture as above, but "[-foo]": "foo" IS declared, but it's
     enabled, not disabled -- genuinely unsatisfied, so there's no visible
-    candidate for this atom at all."""
+    candidate for this atom at all. Also carries a --autounmask-use
+    suggestion (on by default) since "foo" is genuinely settable via
+    package.use here."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg[-foo]"], fixture_env
     )
     assert result.returncode == 1
     assert result.stdout == ""
-    assert (
-        result.stderr.strip()
-        == 'emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".'
+    assert result.stderr.strip() == (
+        'emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".\n'
+        'note: dev-libs/useflagpkg-1.0 exists but its USE flags don\'t satisfy this '
+        'atom; --autounmask-use suggests adding "=dev-libs/useflagpkg-1.0 -foo" to '
+        'package.use'
     )
 
 
@@ -1396,6 +1405,54 @@ def test_autounmask_dependency_keyword_suggestion_appears_in_json(emerge_binary,
     consumer = next(e for e in payload["entries"] if e["package"] == "autounmaskdepconsumer")
     assert consumer["outcome"] == "new"
     assert "keyword_suggestion" not in consumer
+
+
+def test_autounmask_use_dependency_suggestion_is_suppressed_by_autounmask_use_n(
+    emerge_binary, fixture_env
+):
+    """--autounmask-use has no "suppressed unless --autounmask itself was
+    explicitly given" asymmetry the way --autounmask-keep-keywords does
+    (see resolve_pretend_graph's own docstring) -- it's on by default
+    whenever autounmask itself is (which itself defaults on), so
+    dev-libs/usedeprejectedpkg's own dependency-level suggestion (see the
+    plain-text test above) already appears with no flag at all. An
+    explicit --autounmask-use=n is the only way to suppress it."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-use=n", "dev-libs/usedeprejectedpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/usedeprejectedpkg-1.0"]
+    assert (
+        result.stderr.strip()
+        == '!!! no visible ebuild for dependency "dev-libs/useflagpkg"'
+    )
+
+
+def test_autounmask_use_dependency_suggestion_appears_in_json(emerge_binary, fixture_env):
+    """--json's own mirror of the plain-text note above: a
+    "no_visible_candidate" entry carries a "use_suggestion" field
+    (present only for that one outcome, the mirror image of
+    "provenance") -- {"version", "flags": [{"flag", "enabled"}, ...]}
+    when --autounmask-use found something to suggest, null otherwise."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--json", "dev-libs/usedeprejectedpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    dep = next(e for e in payload["entries"] if e["package"] == "useflagpkg")
+    assert dep["outcome"] == "no_visible_candidate"
+    assert "provenance" not in dep
+    assert dep["use_suggestion"] == {
+        "version": "1.0",
+        "flags": [{"flag": "foo", "enabled": False}],
+    }
+    parent = next(e for e in payload["entries"] if e["package"] == "usedeprejectedpkg")
+    assert parent["outcome"] == "new"
+    assert "use_suggestion" not in parent
 
 
 def test_unresolvable_dependency_is_reported_not_silently_dropped(
@@ -2669,15 +2726,21 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
     eqflag, so the dependency is reported unresolvable (same "genuinely
     unresolvable, but doesn't fail the whole call" precedent
     dev-libs/missingdep already established), not silently dropped or
-    incorrectly satisfied."""
+    incorrectly satisfied. Also carries a --autounmask-use suggestion (on
+    by default) since "eqflag" is genuinely settable via package.use here
+    -- this is Part A's own plain per-candidate flip, unrelated to the
+    "opt=" conditional mechanism itself (which operates on the *parent's*
+    own flag, a different, not-yet-implemented code path)."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/useeqparentoffpkg"], fixture_env
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "[ebuild  N] dev-libs/useeqparentoffpkg-1.0"
-    assert (
-        result.stderr.strip()
-        == '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
+    assert result.stderr.strip() == (
+        '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"\n'
+        '!!! note: dev-libs/useeqchildpkg-1.0 exists but its USE flags don\'t satisfy '
+        'this atom; --autounmask-use suggests adding "=dev-libs/useeqchildpkg-1.0 '
+        '-eqflag" to package.use'
     )
 
 

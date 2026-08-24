@@ -990,6 +990,138 @@ def _suggested_keyword_candidate(repos, category, package, config):
     return candidate["version"], _suggested_keyword(candidate)
 
 
+def _use_masked_only(candidate, category, package, atom, config):
+    """Real --autounmask-use's own v1 slice: true iff candidate would be
+    is_visible (package.mask/license/properties/restrict/KEYWORDS all
+    pass -- unlike _keyword_masked_only, which explicitly *skips* the
+    keywords check, this one requires it) but atom's own use-deps don't
+    match its current IUSE/effective-USE state (_use_deps_satisfied).
+    KEYWORDS and USE-deps are two genuinely independent reasons a
+    candidate can be rejected; a candidate masked by KEYWORDS too gets no
+    USE suggestion here, matching real portage's own "only suggest a
+    change that would actually fix it" spirit _keyword_masked_only's own
+    docstring already established. Mirrors portage-repo/src/lib.rs's
+    use_masked_only exactly."""
+    if not is_visible(candidate, category, package, config):
+        return False
+    iuse, use_flags = _candidate_iuse_and_use(candidate, category, package, config)
+    return not _use_deps_satisfied(atom, iuse, use_flags)
+
+
+def _flag_is_settable(candidate, category, package, flag, desired, config):
+    """Whether `flag` can actually be forced to `desired` via a
+    package.use entry for `candidate` -- real pkg.use.mask/pkg.use.force
+    (global use.mask/use.force folded in) always override package.use
+    regardless of what it says, so a masked/forced flag can never really
+    be "fixed" this way. Rather than re-deriving use.mask/.force/
+    package.use.mask/.force matching logic separately, this recomputes
+    effective_use_flags with a synthetic, exact-version package.use entry
+    appended and checks whether the result actually reflects `desired` --
+    if mask/force override it, the synthetic entry's own effect is
+    silently discarded the same way a real one would be. Mirrors
+    portage-repo/src/lib.rs's flag_is_settable exactly, including its own
+    "a plain =category/package-version atom, not the fully-qualified
+    slot/repo-suffixed candidate_str" fix (match_from_list expects an
+    atom pattern on the left, not a candidate string used as both)."""
+    try:
+        metadata = read_md5_cache(
+            candidate["repo_location"], category, f"{package}-{candidate['version']}"
+        )
+    except OSError:
+        return False
+    iuse = metadata.get("IUSE", "")
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}/{candidate['sub_slot']}::"
+        f"{candidate['repo_name']}"
+    )
+    synthetic_token = flag if desired else f"-{flag}"
+    synthetic_atom = f"={category}/{package}-{candidate['version']}"
+    package_use = [*config["package_use"], (synthetic_atom, [synthetic_token])]
+    use_flags = effective_use_flags(
+        iuse,
+        config["use_tokens"],
+        package_use,
+        config["package_use_force"],
+        config["package_use_mask"],
+        config["use_force"],
+        config["use_mask"],
+        config["use_stable_force"],
+        config["use_stable_mask"],
+        config["package_use_stable_force"],
+        config["package_use_stable_mask"],
+        candidate["keywords"],
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+        candidate_str,
+        category,
+        package,
+    )
+    return (flag in use_flags) == desired
+
+
+def _suggested_use_flip(candidate, category, package, atom, config):
+    """The best --autounmask-use flag-flip suggestion for `candidate`
+    against `atom`'s own use-deps (only the two unconditional forms,
+    real atom.use.enabled/.disabled, are ever consulted -- the four
+    conditional forms are a wholly different, unimplemented-here
+    mechanism, see _use_deps_satisfied's own docstring). None when
+    nothing needs to change, when a needed flag isn't even in the
+    candidate's own IUSE at all (real "flag not in IUSE" unfixability --
+    no package.use entry could address it), or when any needed change is
+    blocked by _flag_is_settable -- a partially-fixable atom (some flags
+    adjustable, one masked/forced) suggests nothing at all rather than a
+    change that wouldn't actually resolve the mismatch. Mirrors
+    portage-repo/src/lib.rs's suggested_use_flip exactly."""
+    iuse, use_flags = _candidate_iuse_and_use(candidate, category, package, config)
+    use = atom.use
+    wanted = [(flag, True) for flag in use.enabled] + [(flag, False) for flag in use.disabled]
+    changes = []
+    for flag, desired in wanted:
+        if flag not in iuse:
+            return None
+        if (flag in use_flags) != desired:
+            changes.append((flag, desired))
+    if not changes:
+        return None
+    if any(
+        not _flag_is_settable(candidate, category, package, flag, desired, config)
+        for flag, desired in changes
+    ):
+        return None
+    changes.sort()
+    return changes
+
+
+def _suggested_use_candidate(repos, category, package, atom, config):
+    """The best --autounmask-use suggestion for category/package against
+    atom, if any: among every candidate masked by a plain USE-dep
+    mismatch alone (_use_masked_only) that also has a real
+    _suggested_use_flip, the highest-versioned one (repo priority
+    breaking a tie, same as _best_candidate). None when atom has no
+    use-deps at all, category/package isn't listable at all, or no
+    candidate qualifies. Mirrors portage-repo/src/lib.rs's
+    suggested_use_candidate exactly, shared by the same two call sites as
+    _suggested_keyword_candidate."""
+    if atom.use is None:
+        return None
+    candidates = list_candidates(repos, category, package)
+    qualifying = []
+    for c in candidates:
+        if not _use_masked_only(c, category, package, atom, config):
+            continue
+        flip = _suggested_use_flip(c, category, package, atom, config)
+        if flip is not None:
+            qualifying.append((c, flip))
+    if not qualifying:
+        return None
+    best_candidate, best_flip = qualifying[0]
+    for c, flip in qualifying[1:]:
+        cmp = vercmp(c["version"], best_candidate["version"]) or 0
+        if cmp > 0 or (cmp == 0 and c["repo_priority"] > best_candidate["repo_priority"]):
+            best_candidate, best_flip = c, flip
+    return best_candidate["version"], best_flip
+
+
 def _visibility_provenance(candidate, category, package, config):
     """--json's own "state-change trace" (this pilot's own feature, not
     a port of any real emerge output): which config entries, if any,
@@ -3299,6 +3431,7 @@ def resolve_blockers(root, pending, entries):
             _source,
             _provenance,
             _keyword_suggestion,
+            _use_suggestion,
         ) in entries:
             if (category, package) != target_key:
                 continue
@@ -3403,6 +3536,7 @@ def resolve_pretend_graph(
     changed_deps_report=False,
     selective=False,
     autounmask_suggest_keywords=False,
+    autounmask_suggest_use=False,
     usepkg=False,
     usepkgonly=False,
     binpkg_respect_use=False,
@@ -3685,6 +3819,23 @@ def resolve_pretend_graph(
                         f"masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding "
                         f'"{category}/{package} {keyword}" to package.accept_keywords'
                     )
+            # --autounmask-use's own suggestion sub-feature -- same
+            # gating/"only suggest a fix that would actually work"
+            # spirit as the keyword one just above. Message format
+            # mirrors real package.use suggestion syntax
+            # (=category/package-version flag -flag).
+            if autounmask_suggest_use:
+                use_suggestion = _suggested_use_candidate(repos, category, package, atom, config)
+                if use_suggestion is not None:
+                    version, flip = use_suggestion
+                    adjustments = " ".join(
+                        flag if enabled else f"-{flag}" for flag, enabled in flip
+                    )
+                    message += (
+                        f"\nnote: {category}/{package}-{version} exists but its USE flags "
+                        f"don't satisfy this atom; --autounmask-use suggests adding "
+                        f'"={category}/{package}-{version} {adjustments}" to package.use'
+                    )
             raise ResolutionError(message)
 
         if outcome[0] == "new":
@@ -3728,6 +3879,15 @@ def resolve_pretend_graph(
             keyword_suggestion = None
             if outcome[0] == "no_visible_candidate" and autounmask_suggest_keywords:
                 keyword_suggestion = _suggested_keyword_candidate(repos, category, package, config)
+            # --autounmask-use's own suggestion sub-feature -- see
+            # portage-repo/src/lib.rs's GraphEntry::use_suggestion own
+            # doc comment. `atom.use` is the dependency atom's own
+            # use-dep spec (already conditional-evaluated by
+            # _enqueue_flat_deps before this atom was ever queued, so
+            # only plain flag/-flag forms survive to be checked here).
+            use_suggestion = None
+            if outcome[0] == "no_visible_candidate" and autounmask_suggest_use:
+                use_suggestion = _suggested_use_candidate(repos, category, package, atom, config)
             entries.append(
                 (
                     category,
@@ -3740,6 +3900,7 @@ def resolve_pretend_graph(
                     "ebuild",
                     {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
                     keyword_suggestion,
+                    use_suggestion,
                 )
             )
             continue
@@ -3802,7 +3963,7 @@ def resolve_pretend_graph(
         resolved_slots[slot_key] = entry_idx
         provenance = _visibility_provenance(resolved, category, package, config)
         entries.append(
-            (category, package, outcome, [], slot, [], [], candidate_source, provenance, None)
+            (category, package, outcome, [], slot, [], [], candidate_source, provenance, None, None)
         )
 
         pf = f"{package}-{version}"
@@ -3921,6 +4082,7 @@ def resolve_pretend_graph(
                 candidate_source,
                 entries[entry_idx][8],
                 entries[entry_idx][9],
+                entries[entry_idx][10],
             )
 
         # --nodeps: skip this package's own DEPEND/RDEPEND/etc entirely --
@@ -3984,8 +4146,9 @@ def resolve_pretend_graph(
             source,
             provenance,
             keyword_suggestion,
+            use_suggestion,
         )
-        for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance, keyword_suggestion in entries
+        for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance, keyword_suggestion, use_suggestion in entries
     ]
 
     # setdefault (not a dict comprehension) so the *first* entry for a
@@ -4005,6 +4168,7 @@ def resolve_pretend_graph(
         _source,
         _provenance,
         _keyword_suggestion,
+        _use_suggestion,
     ) in entries:
         blockers_by_owner.setdefault((category, package), blockers)
     for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
@@ -4413,7 +4577,7 @@ def _json_bool(b):
     return "true" if b else "false"
 
 
-def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, top_level_pkgs, verbose):
+def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, top_level_pkgs, verbose):
     """One JSON object per entry -- a structured mirror of the plain-text
     "[ebuild ...]"/"[binary ...]"/"already installed"/blocker lines in
     run(), plus two fields no plain-text line carries at all: "requested"
@@ -4482,6 +4646,17 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
             )
         else:
             fields.append('"keyword_suggestion":null')
+        if use_suggestion is not None:
+            version, flip = use_suggestion
+            flags_json = ",".join(
+                f'{{"flag":{_json_string(flag)},"enabled":{_json_bool(enabled)}}}'
+                for flag, enabled in flip
+            )
+            fields.append(
+                f'"use_suggestion":{{"version":{_json_string(version)},"flags":[{flags_json}]}}'
+            )
+        else:
+            fields.append('"use_suggestion":null')
     fields.append(f'"requested":{_json_bool(requested)}')
     required_by_json = ",".join(
         f'{{"category":{_json_string(c)},"package":{_json_string(p)}}}' for c, p in required_by
@@ -4523,9 +4698,9 @@ def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, ve
     own --json handling). Mirrors pretend.rs's own print_json exactly."""
     entries_json = ",".join(
         _entry_to_json(
-            category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, top_level_pkgs, verbose
+            category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, top_level_pkgs, verbose
         )
-        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion in entries
+        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion in entries
     )
     conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)
     changed_deps_report_json = ",".join(
@@ -5011,6 +5186,7 @@ def run(args):
     # these are actually consumed, mirroring pretend.rs exactly.
     autounmask = None
     autounmask_keep_keywords = None
+    autounmask_use = None
     usepkg = False
     usepkgonly = False
     binpkg_respect_use = None
@@ -5445,6 +5621,46 @@ def run(args):
                     file=sys.stderr,
                 )
                 return 2
+        elif arg == "--autounmask-use":
+            # Real "--autounmask-use": plain y_or_n, a REQUIRED value --
+            # same shape as "--autounmask-keep-keywords" above (real
+            # lib/_emerge/main.py's own "choices": y_or_n, not
+            # true_y_or_n).
+            if i + 1 >= len(args):
+                print(
+                    'emerge: option "--autounmask-use" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
+            value = args[i + 1]
+            if value == "y":
+                autounmask_use = True
+                i += 2
+            elif value == "n":
+                autounmask_use = False
+                i += 2
+            else:
+                print(
+                    f'emerge: option "--autounmask-use": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
+        elif arg.startswith("--autounmask-use="):
+            value = arg[len("--autounmask-use=") :]
+            if value == "y":
+                autounmask_use = True
+                i += 1
+            elif value == "n":
+                autounmask_use = False
+                i += 1
+            else:
+                print(
+                    f'emerge: option "--autounmask-use": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
         elif arg == "--usepkg" or arg == "-k":
             nxt = args[i + 1] if i + 1 < len(args) else None
             if nxt == "y":
@@ -5766,27 +5982,34 @@ def run(args):
     else:
         selective = selective_flag
 
-    # --autounmask/--autounmask-keep-keywords: real create_depgraph_
-    # params.py's own default-resolution logic, simplified for this
-    # pilot's own v1 scope (only the keyword-suggestion sub-feature is
-    # implemented at all -- --autounmask-use/-license/-masks aren't
-    # read here, matching every real fixture/user who also never
-    # touches them getting the exact same outcome this simplification
-    # produces). Real logic: autounmask itself defaults to enabled
-    # (only --autounmask=n turns the whole feature off). autounmask_
-    # keep_keywords (real: "suppress keyword suggestions") defaults to
-    # suppressed (True) when --autounmask itself was NOT explicitly
-    # given at all, but defaults to *not* suppressed (False, i.e.
-    # keyword suggestions ARE generated) once --autounmask itself WAS
-    # explicitly given (any value) -- real portage's own "explicitly
-    # asking for autounmask implies wanting its keyword suggestions
-    # too, but the ambient always-on default doesn't" asymmetry, ported
-    # exactly. Mirrors pretend.rs exactly.
+    # --autounmask/--autounmask-keep-keywords/--autounmask-use: real
+    # create_depgraph_params.py's own default-resolution logic,
+    # simplified for this pilot's own v1 scope (--autounmask-license/
+    # -masks still aren't read at all). Real logic: autounmask itself
+    # defaults to enabled (only --autounmask=n turns the whole feature
+    # off). autounmask_keep_keywords (real: "suppress keyword
+    # suggestions") defaults to suppressed (True) when --autounmask
+    # itself was NOT explicitly given at all, but defaults to *not*
+    # suppressed (False, i.e. keyword suggestions ARE generated) once
+    # --autounmask itself WAS explicitly given (any value) -- real
+    # portage's own "explicitly asking for autounmask implies wanting
+    # its keyword suggestions too, but the ambient always-on default
+    # doesn't" asymmetry, ported exactly. autounmask_use (real: "allow
+    # autounmask to change package.use") has no such asymmetry at all --
+    # real myparams["autounmask_keep_use"] = True if autounmask_use ==
+    # "n" else False, unconditionally on whenever --autounmask-use isn't
+    # explicitly "n", regardless of whether --autounmask itself was ever
+    # explicitly given. Mirrors pretend.rs exactly, including its own
+    # documented gap: real autounmask_use is also forced to "n" whenever
+    # myparams["binpkg_respect_use"] == "y" (an explicit, literal
+    # --binpkg-respect-use=y, not the "auto" default) -- not reproduced
+    # here either, same reasoning.
     autounmask_enabled = autounmask is not False
     if autounmask_keep_keywords is not None:
         autounmask_suggest_keywords = autounmask_enabled and not autounmask_keep_keywords
     else:
         autounmask_suggest_keywords = autounmask_enabled and autounmask is not None
+    autounmask_suggest_use = autounmask_enabled and autounmask_use is not False
 
     # --binpkg-respect-use: real default is "auto" (effectively on)
     # whenever --usepkgonly is NOT given, left off (unset/falsy) when it
@@ -5830,6 +6053,7 @@ def run(args):
             changed_deps_report,
             selective,
             autounmask_suggest_keywords,
+            autounmask_suggest_use,
             usepkg,
             usepkgonly,
             resolved_binpkg_respect_use,
@@ -5888,7 +6112,7 @@ def run(args):
         # out so both display modes share one implementation rather than
         # drifting apart. Mirrors pretend.rs's own print_entry_line
         # exactly.
-        category, package, outcome, blockers, _slot, use_display, _required_by, source, _provenance, keyword_suggestion = entry
+        category, package, outcome, blockers, _slot, use_display, _required_by, source, _provenance, keyword_suggestion, use_suggestion = entry
         tag = outcome[0]
         # --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
         # dependencies of the packages specified, not the packages
@@ -6018,6 +6242,18 @@ def run(args):
                     f'!!! note: {category}/{package}-{version} exists but is masked by '
                     f"KEYWORDS; --autounmask-keep-keywords=n suggests adding "
                     f'"{category}/{package} {keyword}" to package.accept_keywords',
+                    file=sys.stderr,
+                )
+            # --autounmask-use's own suggestion sub-feature -- see
+            # portage-repo/src/lib.rs's GraphEntry::use_suggestion own
+            # doc comment.
+            if use_suggestion is not None:
+                version, flip = use_suggestion
+                adjustments = " ".join(flag if enabled else f"-{flag}" for flag, enabled in flip)
+                print(
+                    f'!!! note: {category}/{package}-{version} exists but its USE flags '
+                    f"don't satisfy this atom; --autounmask-use suggests adding "
+                    f'"={category}/{package}-{version} {adjustments}" to package.use',
                     file=sys.stderr,
                 )
 

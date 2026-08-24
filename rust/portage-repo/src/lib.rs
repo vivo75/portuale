@@ -1483,6 +1483,182 @@ fn suggested_keyword_candidate(
         .map(|(c, k)| (c.version.clone(), k.to_string()))
 }
 
+/// Real `--autounmask-use`'s own v1 slice: true iff `candidate` would be
+/// `is_visible` (package.mask/license/properties/restrict/KEYWORDS all
+/// pass -- unlike `keyword_masked_only`, which explicitly *skips* the
+/// keywords check, this one requires it) but the atom's own `use_deps`
+/// don't match its current IUSE/effective-USE state
+/// (`use_deps_satisfied`). KEYWORDS and USE-deps are two genuinely
+/// independent reasons a candidate can be rejected; a candidate masked
+/// by KEYWORDS too gets no USE suggestion here, matching real portage's
+/// own "only suggest a change that would actually fix it" spirit
+/// `keyword_masked_only`'s own doc comment already established.
+fn use_masked_only(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    use_deps: &[portage_dep::UseDep],
+    config: &portage_profile::Config,
+) -> bool {
+    if !is_visible(candidate, category, package, config) {
+        return false;
+    }
+    let Some((iuse, use_flags)) = candidate_iuse_and_use(candidate, category, package, config)
+    else {
+        return false;
+    };
+    !portage_dep::use_deps_satisfied(use_deps, &iuse, &use_flags)
+}
+
+/// Whether `flag` can actually be forced to `desired` via a
+/// `package.use` entry for `candidate` -- real `pkg.use.mask`/`pkg.use.
+/// force` (global `use.mask`/`use.force` folded in) always override
+/// `package.use` regardless of what it says (real `_wrapped_select_pkg_
+/// highest_available_imp`'s own `can_adjust_use` hard block), so a
+/// masked/forced flag can never really be "fixed" this way. Rather than
+/// re-deriving `use.mask`/`.force`/`package.use.mask`/`.force` matching
+/// logic separately (a second copy of what `effective_use_flags`
+/// already does), this recomputes `effective_use_flags` with a
+/// synthetic, maximally-specific `package.use` entry for this exact
+/// candidate appended and checks whether the result actually reflects
+/// `desired` -- if mask/force override it, the synthetic entry's own
+/// effect is silently discarded the same way a real one would be.
+fn flag_is_settable(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    flag: &str,
+    desired: bool,
+    config: &portage_profile::Config,
+) -> bool {
+    let pf = format!("{package}-{}", candidate.version);
+    let Ok(metadata) = read_md5_cache(&candidate.repo_location, category, &pf) else {
+        return false;
+    };
+    let iuse = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let synthetic_token = if desired {
+        flag.to_string()
+    } else {
+        format!("-{flag}")
+    };
+    // A real, plain `=category/package-version` atom -- not
+    // `candidate_str` itself, which carries a `:slot/subslot::repo`
+    // suffix `match_from_list` can't parse back as an atom pattern (it
+    // expects an atom on the left, a candidate string on the right, not
+    // a fully-qualified candidate string used as both).
+    let synthetic_atom = format!("={category}/{package}-{}", candidate.version);
+    let mut package_use = config.package_use.clone();
+    package_use.push((synthetic_atom, vec![synthetic_token]));
+    let use_flags = effective_use_flags(
+        iuse,
+        &config.use_tokens,
+        &package_use,
+        &config.package_use_force,
+        &config.package_use_mask,
+        &config.use_force,
+        &config.use_mask,
+        &config.use_stable_force,
+        &config.use_stable_mask,
+        &config.package_use_stable_force,
+        &config.package_use_stable_mask,
+        &candidate.keywords,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
+        &candidate_str,
+        category,
+        package,
+    );
+    use_flags.contains(flag) == desired
+}
+
+/// The best `--autounmask-use` flag-flip suggestion for `candidate`
+/// against `use_deps` (an atom's own use-dep spec, already conditional-
+/// evaluated -- only plain `flag`/`-flag` (`UseDepOp::Enabled`/
+/// `Disabled`) forms are ever consulted, matching what
+/// `use_deps_satisfied` itself checks). `None` when nothing needs to
+/// change, when a needed flag isn't even in the candidate's own IUSE at
+/// all (real "flag not in IUSE" unfixability -- no `package.use` entry
+/// could address it), or when any needed change is blocked by
+/// `flag_is_settable` -- real portage's own "only suggest a change that
+/// would actually fix it" spirit again: a partially-fixable atom (some
+/// flags adjustable, one masked/forced) suggests nothing at all rather
+/// than a change that wouldn't actually resolve the mismatch, mirroring
+/// real `can_adjust_use`'s own whole-atom rejection.
+fn suggested_use_flip(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    use_deps: &[portage_dep::UseDep],
+    config: &portage_profile::Config,
+) -> Option<Vec<(String, bool)>> {
+    let (iuse, use_flags) = candidate_iuse_and_use(candidate, category, package, config)?;
+    let mut changes = Vec::new();
+    for ud in use_deps {
+        let desired = match ud.op {
+            portage_dep::UseDepOp::Enabled => true,
+            portage_dep::UseDepOp::Disabled => false,
+            // Conditional forms (flag?/!flag?/flag=/!flag=) are already
+            // evaluated away into concrete Enabled/Disabled (or dropped
+            // entirely) before an atom is ever queued -- see
+            // `enqueue_flat_deps`'s own doc comment. Real portage's own
+            // separate opt?-driven suggestion mechanism (a *parent's*
+            // own flag, not the candidate's) is a different code path
+            // entirely -- see this module's own doc comment.
+            _ => continue,
+        };
+        if !iuse.contains(&ud.flag) {
+            return None;
+        }
+        let currently_enabled = use_flags.contains(&ud.flag);
+        if currently_enabled != desired {
+            changes.push((ud.flag.clone(), desired));
+        }
+    }
+    if changes.is_empty() {
+        return None;
+    }
+    if changes.iter().any(|(flag, desired)| {
+        !flag_is_settable(candidate, category, package, flag, *desired, config)
+    }) {
+        return None;
+    }
+    changes.sort();
+    Some(changes)
+}
+
+/// The best `--autounmask-use` suggestion for `category/package` against
+/// `use_deps`, if any: among every candidate masked by a plain USE-dep
+/// mismatch alone (`use_masked_only`), the highest-versioned one (repo
+/// priority breaking a tie), paired with its own `suggested_use_flip`.
+/// `None` when `use_deps` is empty/absent (nothing to suggest fixing),
+/// `category/package` isn't listable at all, or no candidate qualifies.
+/// Mirrors `suggested_keyword_candidate`'s own "best near-miss" shape
+/// exactly, shared by the same two call sites (a top-level atom's own
+/// fatal `NoVisibleCandidate` and a dependency's own, see
+/// `GraphEntry::use_suggestion`'s own doc comment).
+fn suggested_use_candidate(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    use_deps: Option<&[portage_dep::UseDep]>,
+    config: &portage_profile::Config,
+) -> Option<(String, Vec<(String, bool)>)> {
+    let use_deps = use_deps.filter(|ud| !ud.is_empty())?;
+    let candidates = list_candidates(repos, category, package).ok()?;
+    candidates
+        .iter()
+        .filter(|c| use_masked_only(c, category, package, use_deps, config))
+        .filter_map(|c| suggested_use_flip(c, category, package, use_deps, config).map(|f| (c, f)))
+        .max_by(|(a, _), (b, _)| {
+            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+        })
+        .map(|(c, flip)| (c.version.clone(), flip))
+}
+
 /// `--json`'s own "state-change trace" (this pilot's own feature -- see
 /// the `--json` module doc comment; not a port of any real emerge
 /// output): which config entries, if any, were actually load-bearing for
@@ -3273,6 +3449,14 @@ pub struct GraphEntry {
     /// `NoVisibleCandidate` entry -- every other outcome had a visible
     /// candidate, so there's nothing to suggest unmasking.
     pub keyword_suggestion: Option<(String, String)>,
+    /// `--autounmask-use`'s own suggestion sub-feature (see
+    /// `resolve_pretend_graph`'s own doc comment): `(version, [(flag,
+    /// desired_state)])` from the best `suggested_use_candidate` result,
+    /// or `None` under the same gating `keyword_suggestion` already has
+    /// (`autounmask_suggest_use` off, or no real candidate masked by a
+    /// plain USE-dep mismatch alone). Only ever `Some` for a
+    /// `NoVisibleCandidate` entry, same as `keyword_suggestion`.
+    pub use_suggestion: Option<(String, Vec<(String, bool)>)>,
 }
 
 /// A blocker atom found while flattening one package's own dependency strings,
@@ -3845,6 +4029,7 @@ pub fn resolve_pretend_graph(
     changed_deps_report: bool,
     selective: bool,
     autounmask_suggest_keywords: bool,
+    autounmask_suggest_use: bool,
     usepkg: bool,
     usepkgonly: bool,
     binpkg_respect_use: bool,
@@ -4051,6 +4236,41 @@ pub fn resolve_pretend_graph(
                     ));
                 }
             }
+            // `--autounmask-use`'s own suggestion sub-feature -- same
+            // gating/"only suggest a fix that would actually work"
+            // spirit as the keyword one just above. Message format
+            // mirrors real `package.use` suggestion syntax
+            // (`=category/package-version flag -flag`).
+            if autounmask_suggest_use {
+                if let Some((version, flip)) = suggested_use_candidate(
+                    &repos,
+                    &atom.category,
+                    &atom.package,
+                    atom.use_deps.as_deref(),
+                    config,
+                ) {
+                    let adjustments: Vec<String> = flip
+                        .iter()
+                        .map(|(flag, enabled)| {
+                            if *enabled {
+                                flag.clone()
+                            } else {
+                                format!("-{flag}")
+                            }
+                        })
+                        .collect();
+                    message.push_str(&format!(
+                        "\nnote: {}/{}-{version} exists but its USE flags don't satisfy \
+                         this atom; --autounmask-use suggests adding \"={}/{}-{version} {}\" \
+                         to package.use",
+                        atom.category,
+                        atom.package,
+                        atom.category,
+                        atom.package,
+                        adjustments.join(" "),
+                    ));
+                }
+            }
             return Err(message);
         }
 
@@ -4103,6 +4323,19 @@ pub fn resolve_pretend_graph(
             } else {
                 None
             };
+            // `--autounmask-use`'s own suggestion sub-feature -- see
+            // `GraphEntry::use_suggestion`'s own doc comment. `atom.
+            // use_deps` is the dependency atom's own use-dep spec
+            // (already conditional-evaluated by `enqueue_flat_deps`
+            // before this atom was ever queued, so only plain `flag`/
+            // `-flag` forms survive to be checked here).
+            let use_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                && autounmask_suggest_use
+            {
+                suggested_use_candidate(&repos, &key.0, &key.1, atom.use_deps.as_deref(), config)
+            } else {
+                None
+            };
             entries.push(GraphEntry {
                 category: key.0,
                 package: key.1,
@@ -4114,6 +4347,7 @@ pub fn resolve_pretend_graph(
                 source: CandidateSource::Ebuild,
                 provenance: VisibilityProvenance::default(),
                 keyword_suggestion,
+                use_suggestion,
             });
             continue;
         };
@@ -4215,6 +4449,7 @@ pub fn resolve_pretend_graph(
             source: candidate_source,
             provenance,
             keyword_suggestion: None,
+            use_suggestion: None,
         });
 
         let metadata = if candidate_source == CandidateSource::Binary {
@@ -5387,6 +5622,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -6356,6 +6592,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -6390,6 +6627,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -6434,6 +6672,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -6474,6 +6713,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -6535,6 +6775,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -6648,6 +6889,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -6755,6 +6997,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -6975,6 +7218,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -7056,6 +7300,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -7211,6 +7456,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -7309,6 +7555,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -7350,6 +7597,7 @@ mod tests {
             true,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -7458,6 +7706,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -7497,6 +7746,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -7546,6 +7796,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -7587,6 +7838,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -7853,6 +8105,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -7910,6 +8163,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -7941,6 +8195,7 @@ mod tests {
             false,
             true,
             true,
+            false,
             false,
             false,
             false,
@@ -8010,6 +8265,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -8026,6 +8282,167 @@ mod tests {
         assert_eq!(
             dep.keyword_suggestion,
             Some(("1.0".to_string(), "~amd64".to_string()))
+        );
+    }
+
+    #[test]
+    fn autounmask_use_suggests_a_flag_flip_only_when_enabled() {
+        // dev-libs/useflagpkg's own "foo" flag is enabled globally by
+        // the fixture profile's own make.conf (see use_dep_enforcement's
+        // own tests above -- "-foo" is genuinely unsatisfiable against
+        // it). "dev-libs/useflagpkg[-foo]" is masked by this one USE-dep
+        // alone (package.mask/license/KEYWORDS all pass), the exact
+        // "use_masked_only" shape --autounmask-use's own v1 suggestion
+        // targets. With autounmask_suggest_use off (the real default),
+        // no suggestion is appended, matching this pilot's own
+        // pre-existing behavior exactly.
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
+        let atoms = vec!["dev-libs/useflagpkg[-foo]".to_string()];
+        let err_without_suggestion = resolve_pretend_graph(
+            &root,
+            &root,
+            &atoms,
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+        )
+        .expect_err("no visible candidate at all");
+        assert_eq!(
+            err_without_suggestion,
+            "there are no ebuilds to satisfy \"dev-libs/useflagpkg[-foo]\"."
+        );
+
+        let err_with_suggestion = resolve_pretend_graph(
+            &root,
+            &root,
+            &atoms,
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+        )
+        .expect_err("no visible candidate at all");
+        assert_eq!(
+            err_with_suggestion,
+            "there are no ebuilds to satisfy \"dev-libs/useflagpkg[-foo]\".\n\
+             note: dev-libs/useflagpkg-1.0 exists but its USE flags don't satisfy this atom; \
+             --autounmask-use suggests adding \"=dev-libs/useflagpkg-1.0 -foo\" to package.use"
+        );
+    }
+
+    #[test]
+    fn fixture_dependency_no_visible_candidate_gets_no_use_suggestion_by_default() {
+        // dev-libs/usedeprejectedpkg RDEPENDs on
+        // "dev-libs/useflagpkg[-foo]" (the same fixture the top-level
+        // test above uses), a *dependency's* own NoVisibleCandidate --
+        // able to carry a use_suggestion, but only once
+        // autounmask_suggest_use is on.
+        let entries = graph_entries_real("dev-libs/usedeprejectedpkg");
+        let dep = entries
+            .iter()
+            .find(|e| e.package == "useflagpkg")
+            .expect("dependency entry present");
+        assert_eq!(dep.outcome, PretendOutcome::NoVisibleCandidate);
+        assert_eq!(dep.use_suggestion, None);
+    }
+
+    #[test]
+    fn fixture_dependency_no_visible_candidate_gets_a_use_suggestion_once_enabled() {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+        )
+        .expect("fixture config resolves");
+        let atoms = vec!["dev-libs/usedeprejectedpkg".to_string()];
+        let result = resolve_pretend_graph(
+            &root,
+            &root,
+            &atoms,
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+        )
+        .expect("dependency's own NoVisibleCandidate is never fatal");
+        let dep = result
+            .entries
+            .iter()
+            .find(|e| e.package == "useflagpkg")
+            .expect("dependency entry present");
+        assert_eq!(
+            dep.use_suggestion,
+            Some(("1.0".to_string(), vec![("foo".to_string(), false)]))
         );
     }
 
@@ -8083,6 +8500,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -8123,6 +8541,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -9317,6 +9736,7 @@ mod tests {
             source: CandidateSource::Ebuild,
             provenance: VisibilityProvenance::default(),
             keyword_suggestion: None,
+            use_suggestion: None,
         }
     }
 
