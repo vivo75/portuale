@@ -61,4 +61,13 @@ mod tests {
     fn tempdir() -> std::path::PathBuf {
         TempDir::new("portuale-privileges-test").keep()
     }
+
+    #[test]
+    fn a_dir_the_caller_owns_is_unprivileged_mode() {
+        let dir = tempdir();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_privileged(&dir));
+        assert!(is_privileged(&dir.join("root/deeper")));
+    }
 }

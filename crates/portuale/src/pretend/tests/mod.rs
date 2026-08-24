@@ -2,6 +2,22 @@ use super::*;
 
 use portage_util::TempDir;
 
+/// A stub `eselect` on `PATH`, logging its argv to a marker file. Returns the
+/// stub dir (to prepend to `PATH`) and the marker path.
+#[cfg(unix)]
+fn eselect_stub(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new(&format!("eselect_stub_{tag}")).keep();
+    let marker = dir.join("eselect.log");
+    std::fs::write(
+        dir.join("eselect"),
+        format!("#!/bin/sh\necho \"$@\" >> {}\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(dir.join("eselect"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    (dir, marker)
+}
+
 /// An unowned ROOT for the privilege tests; `None` for a root caller, whose test
 /// returns early.
 #[cfg(unix)]
