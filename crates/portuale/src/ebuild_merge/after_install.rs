@@ -2,6 +2,293 @@
 
 use crate::ebuild_merge::*;
 
+pub(crate) fn merge_after_install(
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    env: &ebuild_phases::Environment,
+    options: &MergeOptions,
+) -> Result<i32, String> {
+    // `treewalk()` starts with the `instprep` phase.
+    // Portage: vartree.py, dblink.treewalk
+    let instprep_status = ebuild_phases::run_instprep(ebuild_phases::RunInstprepArgs {
+        ebuild_path,
+        saved_env_bz2: None,
+        seed: false,
+        root,
+        portage_tmpdir,
+        build_env: &options.build_env,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        log_file: options.log_file.as_deref(),
+    })?;
+    if instprep_status != 0 {
+        eprintln!("!!! instprep failed");
+        return Ok(1);
+    }
+
+    // The evaluated slot comes from `build-info/SLOT` (written by
+    // `__dyn_install`, so a computed `SLOT` is already evaluated),
+    // falling back to the resolved settings value and back into the
+    // inforoot; still empty aborts. A known settings value differing
+    // from the inforoot value gets a QA Notice. Guarded on a non-empty
+    // settings value so the fixture path (empty `build_env`) stays quiet.
+    // Portage: vartree.py, treewalk
+    let info_root_slot = std::fs::read_to_string(env.build_info().join("SLOT"))
+        .ok()
+        .and_then(|text| text.lines().next().map(str::to_string))
+        .map(|line| line.trim().to_string())
+        .unwrap_or_default();
+    let settings_slot = options
+        .build_env
+        .iter()
+        .find(|(name, _)| name == "SLOT")
+        .map(|(_, value)| value.clone())
+        .unwrap_or_default();
+    let full_slot = if info_root_slot.is_empty() {
+        if settings_slot.is_empty() {
+            eprintln!("!!! SLOT is undefined");
+            return Ok(1);
+        }
+        let _ = std::fs::write(env.build_info().join("SLOT"), format!("{settings_slot}\n"));
+        settings_slot
+    } else {
+        if !settings_slot.is_empty() && info_root_slot != settings_slot {
+            eprintln!("QA Notice: Expected SLOT='{settings_slot}', got '{info_root_slot}'");
+        }
+        info_root_slot
+    };
+    let repository = repository_name_for(&env.pkg_dir).unwrap_or_else(|| "__unknown__".to_string());
+
+    // The installed instance is computed before the vdb write touches
+    // this category/pf's `CONTENTS`.
+    // The slot comparisons below use the main slot (`"0"` for `"0/6"`);
+    // the vdb write records the full `slot/sub_slot`. Passing the full
+    // slot here orphaned every sub-slotted package's files.
+    let main_slot = full_slot.split('/').next().unwrap_or("0");
+    let installed_instance_pf =
+        installed_instance_pf(root, &env.category, &env.split.pn, main_slot);
+    // `REPLACING_VERSIONS` is set for `pkg_preinst` (and `postinst`).
+    // Portage: vartree.py, treewalk; doebuild.py, doebuild_environment
+    let replacing_versions = replacing_versions(&env.split.pn, installed_instance_pf.as_deref());
+    let mut preinst_env = options.build_env.clone();
+    if let Some(version) = &replacing_versions {
+        preinst_env.push(("REPLACING_VERSIONS".to_string(), version.clone()));
+    }
+
+    // The install mask runs before the collision check and before any
+    // file is copied; masked paths never reach `${ROOT}` nor `CONTENTS`.
+    apply_install_mask(&env.d(), &env.build_info(), options)?;
+
+    // The collision abort runs before `pkg_preinst`, and the
+    // preserve-libs registry is consulted unconditionally.
+    let plib_registry = read_plib_registry(root);
+    let plib_inodes = plib_inode_map(root, &plib_registry.preserved_libs());
+    // `mypkglist = others_in_slot + blockers`; standalone `ebuild
+    // <file> merge` has no depgraph, so blockers resolve self-contained.
+    let blocked =
+        blocked_installed_packages(root, &options.config_root, env, main_slot, &repository);
+    let (collisions, symlink_collisions, plib_collisions) = find_collisions(FindCollisionsArgs {
+        d: &env.d(),
+        root,
+        category: &env.category,
+        package: &env.split.pn,
+        slot: main_slot,
+        config_protect: &options.config_protect,
+        config_protect_mask: &options.config_protect_mask,
+        plib_inodes: &plib_inodes,
+        blocked: &blocked,
+    })?;
+    // Abort condition: a symlink-over-directory violation always aborts;
+    // otherwise `collision_protect` aborts on any collision while
+    // `protect_owned` aborts only when an owner was identified.
+    // `find_owners` runs only when `protect_owned` might need it.
+    // Portage: vartree.py, dblink.merge
+    let protect_owned_abort = options.protect_owned
+        && !collisions.is_empty()
+        && !find_owners(root, &collisions).is_empty();
+    if !symlink_collisions.is_empty()
+        || (options.collision_protect && !collisions.is_empty())
+        || protect_owned_abort
+    {
+        let cpv = format!("{}/{}", env.category, env.split.pf);
+        return Err(collision_message(
+            root,
+            &cpv,
+            &collisions,
+            &symlink_collisions,
+        ));
+    }
+
+    // The `-MERGING-<pf>` temporary is created before `pkg_preinst`,
+    // populated after it, and renamed into place only after every
+    // replaced same-slot version is unmerged; `pkg_postinst` runs last.
+    // `run_single_phase` since neither hook is in the `install` chain.
+    create_vdb_tmp(root, &env.category, &env.split.pf)?;
+    let preinst_status = ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
+        ebuild_path,
+        phase: "preinst",
+        root,
+        portage_tmpdir,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        build_env: &preinst_env,
+        log_file: options.log_file.as_deref(),
+    })?;
+    if preinst_status != 0 {
+        return Ok(preinst_status);
+    }
+    populate_vdb_tmp(PopulateVdbTmpArgs {
+        root,
+        category: &env.category,
+        pf: &env.split.pf,
+        build_info_dir: &env.build_info(),
+        slot: &full_slot,
+        repository: &repository,
+    })?;
+
+    let mut cfgfiledict = read_cfgfiledict(root);
+    let mut contents = merge_tree(MergeTreeArgs {
+        d: &env.d(),
+        root,
+        category: &env.category,
+        installed_instance_pf: installed_instance_pf.as_deref(),
+        protect_if_modified: options.protect_if_modified,
+        config_protect: &options.config_protect,
+        config_protect_mask: &options.config_protect_mask,
+        noconfmem: options.noconfmem,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::from_options(options),
+    })?;
+    // Pre-replace-loop preserve-libs: the replaced instance's
+    // still-needed libraries are selected now (the new entry still sits
+    // in its temporary) and carried into the new `CONTENTS`; the record
+    // lands after the replace loop.
+    let new_image_paths: BTreeSet<String> = contents
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+        .collect();
+    let mut preserve_paths = BTreeSet::new();
+    if let Some((paths, old_contents_text)) =
+        find_preserve_paths_for_merge(FindPreservePathsForMergeArgs {
+            root,
+            category: &env.category,
+            package: &env.split.pn,
+            new_pf: &env.split.pf,
+            main_slot,
+            new_image_paths: &new_image_paths,
+        })
+    {
+        let (injected, surviving) =
+            inject_preserved_libs_into_contents(&old_contents_text, &paths, &new_image_paths);
+        contents.push_str(&injected);
+        preserve_paths = surviving;
+    }
+    write_cfgfiledict(root, &cfgfiledict)?;
+    write_vdb_tmp_contents(root, &env.category, &env.split.pf, &contents)?;
+
+    if !plib_collisions.is_empty() {
+        let cpv = format!("{}/{}", env.category, env.split.pf);
+        unregister_preserved_libs(root, &cpv, plib_registry, &plib_collisions)?;
+    }
+
+    // Replace loop: unmerge every same-slot version while the new entry
+    // still sits in its temporary. The just-preserved set travels with
+    // the loop into the post-unmerge prune.
+    let replacement_preserved: BTreeMap<String, Vec<String>> = if preserve_paths.is_empty() {
+        BTreeMap::new()
+    } else {
+        BTreeMap::from([(
+            format!("{}/{}", env.category, env.split.pf),
+            preserve_paths.iter().cloned().collect(),
+        )])
+    };
+    let replaced = unmerge_replaced_same_slot(UnmergeReplacedSameSlotArgs {
+        root,
+        category: &env.category,
+        package: &env.split.pn,
+        new_pf: &env.split.pf,
+        main_slot,
+        scratch_dir: &env.portage_builddir().join("unmerge-src"),
+        portage_tmpdir,
+        options,
+        replacement_preserved: &replacement_preserved,
+    })?;
+
+    // Post-replace-loop registration: the one `cp:slot` record is
+    // replaced by the merging package's own entry. Publish, deletion of
+    // replaced entries and registration commit together on a database
+    // backend.
+    publish_merged_entry(PublishMergedEntryArgs {
+        root,
+        category: &env.category,
+        pn: &env.split.pn,
+        pf: &env.split.pf,
+        main_slot,
+        preserve_paths: &preserve_paths,
+        replaced: &replaced,
+    })?;
+
+    // `postinst` runs, but its exit never gates what follows. `A` is
+    // re-supplied (the filtered `${T}/environment` drops it); the target
+    // is the live entry's own file, or a scratch copy on a database
+    // backend stored back after the phase.
+    // Portage: vartree.py, treewalk; doebuild.py, doebuild_environment
+    let update_env = update_env_target(
+        root,
+        &env.category,
+        &env.split.pf,
+        &env.portage_builddir().join("vdb-update-env"),
+    )?;
+    let mut postinst_env = options.build_env.clone();
+    if let Some(version) = &replacing_versions {
+        postinst_env.push(("REPLACING_VERSIONS".to_string(), version.clone()));
+    }
+    postinst_env.push((
+        "PORTAGE_UPDATE_ENV".to_string(),
+        update_env.path.display().to_string(),
+    ));
+    if let Some(a) = source_distfiles(env, &postinst_env) {
+        postinst_env.push(("A".to_string(), a));
+    }
+    let postinst_status = ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
+        ebuild_path,
+        phase: "postinst",
+        root,
+        portage_tmpdir,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        build_env: &postinst_env,
+        log_file: options.log_file.as_deref(),
+    })?;
+    absorb_update_env(root, &env.category, &env.split.pf, &update_env)?;
+
+    if !contents.is_empty() || !replaced.is_empty() {
+        env_update::run_env_update(root)?;
+        // Prune preserved libs orphaned by this merge (no include feed:
+        // the new entry is already renamed into place).
+        // Portage: vartree.py, _prune_plib_registry
+        prune_unused_preserved_libs(PruneUnusedPreservedLibsArgs {
+            root,
+            unmerge_no_replacement: false,
+            being_unmerged: &|_| false,
+            exclude_cpvs: &[],
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+        })?;
+    }
+
+    // `elog_process` runs here, after the merge body and before the
+    // clean removes `${T}`; it must not be deferred to a batch after
+    // the whole `emerge` returns.
+    process_merge_elog(env, root, options);
+
+    Ok(postinst_status)
+}
+
 /// Arguments of [`unmerge_replaced_same_slot`].
 pub(crate) struct UnmergeReplacedSameSlotArgs<'a> {
     pub(crate) root: &'a Path,

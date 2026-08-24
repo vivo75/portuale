@@ -105,3 +105,70 @@ fn plib_registry_serialization_is_byte_identical_to_python_json_dumps() {
         "registry bytes must match Python json.dumps exactly (no trailing newline)"
     );
 }
+
+/// A path in the preserved-libs registry is excluded from collision-protect
+/// and handed over; the emptied record and the old `CONTENTS` claim go with it.
+/// Portage: `vartree.py`, `_collision_protect`.
+#[test]
+fn preserve_libs_registry_entry_excludes_the_collision_and_hands_ownership_over() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let portage_tmpdir = tmp.join("tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+    run_merge(
+        &collision_fixture("preservepkg-old"),
+        &root,
+        &portage_tmpdir,
+        &MergeOptions::default(),
+        None,
+    )
+    .expect("preservepkg-old merges cleanly");
+
+    let mut entries = BTreeMap::new();
+    entries.insert(
+        "dev-libs/preservepkg-old:0".to_string(),
+        (
+            "dev-libs/preservepkg-old-1.0".to_string(),
+            "0".to_string(),
+            vec!["/usr/lib/preservedtest/libfoo.so.1".to_string()],
+        ),
+    );
+    write_plib_registry(
+        &root,
+        &PlibRegistry {
+            entries,
+            orig_entries: BTreeMap::new(),
+        },
+    )
+    .expect("seeding the registry succeeds");
+
+    let options = MergeOptions {
+        collision_protect: true,
+        ..MergeOptions::default()
+    };
+    let status = run_merge(
+        &collision_fixture("preservepkg-new"),
+        &root,
+        &portage_tmpdir,
+        &options,
+        None,
+    )
+    .expect("a preserved-lib collision is excluded, not aborted");
+    assert_eq!(status, 0);
+
+    assert_eq!(
+        std::fs::read_to_string(root.join("usr/lib/preservedtest/libfoo.so.1")).unwrap(),
+        "new library content\n"
+    );
+
+    let old_contents =
+        std::fs::read_to_string(root.join("var/db/pkg/dev-libs/preservepkg-old-1.0/CONTENTS"))
+            .unwrap();
+    assert!(!old_contents.contains("/usr/lib/preservedtest/libfoo.so.1"));
+
+    let registry_text = std::fs::read_to_string(plib_registry_path(&root)).unwrap();
+    let registry = parse_plib_registry(&registry_text).unwrap();
+    assert!(registry.is_empty());
+}
