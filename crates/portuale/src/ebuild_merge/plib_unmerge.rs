@@ -14,10 +14,33 @@ pub(crate) struct PreserveLibsOnUnmergeArgs<'a> {
     pub(crate) is_replacement: bool,
 }
 
+/// Arguments of [`preserve_libs_on_unmerge_into`].
+pub(crate) struct PreserveLibsOnUnmergeIntoArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) contents_text: &'a str,
+    pub(crate) is_replacement: bool,
+    pub(crate) retire: Option<&'a mut RetireWrites>,
+}
+
 /// Arguments of [`find_unused_preserved_libs`].
 #[cfg(test)]
 pub(crate) struct FindUnusedPreservedLibsArgs<'a> {
     pub(crate) root: &'a Path,
+    pub(crate) unmerge_no_replacement: bool,
+    pub(crate) being_unmerged: &'a dyn Fn(&str) -> bool,
+    pub(crate) exclude_cpvs: &'a [String],
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+}
+
+/// Arguments of [`find_unused_preserved_libs_in`].
+pub(crate) struct FindUnusedPreservedLibsInArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) registry: PlibRegistry,
     pub(crate) unmerge_no_replacement: bool,
     pub(crate) being_unmerged: &'a dyn Fn(&str) -> bool,
     pub(crate) exclude_cpvs: &'a [String],

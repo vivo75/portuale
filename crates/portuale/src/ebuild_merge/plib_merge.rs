@@ -273,6 +273,37 @@ pub(crate) struct RegisterMergePreservedLibsArgs<'a> {
     pub(crate) preserve_paths: &'a BTreeSet<String>,
 }
 
+/// Records the merge-side preserve set under the merging package; a no-op when empty,
+/// leaving the replace loop's unregistration as the final state.
+// Portage: vartree.py, dblink.treewalk
+pub(crate) fn register_merge_preserved_libs(
+    args: RegisterMergePreservedLibsArgs<'_>,
+) -> Result<(), String> {
+    let RegisterMergePreservedLibsArgs {
+        root,
+        category,
+        pn,
+        new_pf,
+        main_slot,
+        preserve_paths,
+    } = args;
+    if preserve_paths.is_empty() {
+        return Ok(());
+    }
+    let new_counter =
+        read_entry_text(root, category, new_pf, "COUNTER").unwrap_or_else(|| "0".to_string());
+    let registry = merge_plib_registration(MergePlibRegistrationArgs {
+        root,
+        category,
+        pn,
+        new_pf,
+        main_slot,
+        preserve_paths,
+        new_counter: &new_counter,
+    });
+    write_plib_registry(root, &registry)
+}
+
 /// Arguments of [`merge_plib_registration`].
 pub(crate) struct MergePlibRegistrationArgs<'a> {
     pub(crate) root: &'a Path,
