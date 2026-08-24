@@ -1455,6 +1455,61 @@ def test_autounmask_use_dependency_suggestion_appears_in_json(emerge_binary, fix
     assert "use_suggestion" not in parent
 
 
+def test_autounmask_use_parent_flip_suggestion_appears_in_json(emerge_binary, fixture_env):
+    """--autounmask-use's own second, architecturally distinct mechanism
+    (real _show_unsatisfied_dep's own opt=/opt? handling, flipping the
+    *requesting parent's* own flag rather than the candidate's):
+    dev-libs/useeqparentoffpkg's own RDEPEND on dev-libs/useeqchildpkg
+    "[eqflag=]" was originally conditional on the parent's own eqflag
+    (currently off) -- carries both use_suggestion (Part A, flip the
+    child's own eqflag) and the new parent_use_suggestion field (Part B,
+    flip the parent's own eqflag instead) simultaneously, matching real
+    portage's own missing_use_reasons allowing both fixes for the same
+    mismatch."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--json", "dev-libs/useeqparentoffpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    dep = next(e for e in payload["entries"] if e["package"] == "useeqchildpkg")
+    assert dep["outcome"] == "no_visible_candidate"
+    assert dep["use_suggestion"] == {
+        "version": "1.0",
+        "flags": [{"flag": "eqflag", "enabled": False}],
+    }
+    assert dep["parent_use_suggestion"] == {
+        "category": "dev-libs",
+        "package": "useeqparentoffpkg",
+        "version": "1.0",
+        "flags": [{"flag": "eqflag", "enabled": True}],
+    }
+    parent = next(e for e in payload["entries"] if e["package"] == "useeqparentoffpkg")
+    assert parent["outcome"] == "new"
+    assert "parent_use_suggestion" not in parent
+
+
+def test_autounmask_use_parent_flip_suggestion_is_suppressed_by_autounmask_use_n(
+    emerge_binary, fixture_env
+):
+    """Both --autounmask-use mechanisms (Part A's plain candidate flip
+    and Part B's opt=-aware parent flip) share the same
+    autounmask_suggest_use gate -- an explicit --autounmask-use=n
+    suppresses both at once."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-use=n", "dev-libs/useeqparentoffpkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/useeqparentoffpkg-1.0"
+    assert (
+        result.stderr.strip()
+        == '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
+    )
+
+
 def test_unresolvable_dependency_is_reported_not_silently_dropped(
     emerge_binary, fixture_env
 ):
@@ -2726,11 +2781,14 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
     eqflag, so the dependency is reported unresolvable (same "genuinely
     unresolvable, but doesn't fail the whole call" precedent
     dev-libs/missingdep already established), not silently dropped or
-    incorrectly satisfied. Also carries a --autounmask-use suggestion (on
-    by default) since "eqflag" is genuinely settable via package.use here
-    -- this is Part A's own plain per-candidate flip, unrelated to the
-    "opt=" conditional mechanism itself (which operates on the *parent's*
-    own flag, a different, not-yet-implemented code path)."""
+    incorrectly satisfied. Also carries *two* --autounmask-use
+    suggestions: Part A's own plain per-candidate flip (flip the child's
+    own eqflag off), and Part B's own opt=-aware parent flip (flip the
+    parent's own eqflag on instead, which would re-evaluate the RDEPEND's
+    own "[eqflag=]" to "[eqflag]", satisfied by the child's own
+    default-on eqflag) -- both real, independent fixes for the same
+    mismatch, matching real portage's own missing_use_reasons allowing
+    both at once."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/useeqparentoffpkg"], fixture_env
     )
@@ -2740,7 +2798,10 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
         '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"\n'
         '!!! note: dev-libs/useeqchildpkg-1.0 exists but its USE flags don\'t satisfy '
         'this atom; --autounmask-use suggests adding "=dev-libs/useeqchildpkg-1.0 '
-        '-eqflag" to package.use'
+        '-eqflag" to package.use\n'
+        "!!! note: dev-libs/useeqparentoffpkg-1.0's own USE flags need to change to "
+        'satisfy this dependency; --autounmask-use suggests adding '
+        '"=dev-libs/useeqparentoffpkg-1.0 eqflag" to package.use'
     )
 
 

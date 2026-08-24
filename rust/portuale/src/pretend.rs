@@ -610,6 +610,31 @@ fn print_entry_line(
                     adjustments.join(" "),
                 );
             }
+            // `--autounmask-use`'s own second, architecturally distinct
+            // suggestion sub-feature -- see
+            // GraphEntry::parent_use_suggestion's own doc comment: flips
+            // the *requesting parent's* own flag, not the candidate's.
+            if let Some((parent_category, parent_package, parent_version, flip)) =
+                &entry.parent_use_suggestion
+            {
+                let adjustments: Vec<String> = flip
+                    .iter()
+                    .map(|(flag, enabled)| {
+                        if *enabled {
+                            flag.clone()
+                        } else {
+                            format!("-{flag}")
+                        }
+                    })
+                    .collect();
+                eprintln!(
+                    "!!! note: {parent_category}/{parent_package}-{parent_version}'s own USE \
+                     flags need to change to satisfy this dependency; --autounmask-use \
+                     suggests adding \"={parent_category}/{parent_package}-{parent_version} {}\" \
+                     to package.use",
+                    adjustments.join(" "),
+                );
+            }
         }
     }
 }
@@ -904,6 +929,28 @@ fn entry_to_json(
                     format!(
                         "{{\"version\":{},\"flags\":[{}]}}",
                         json_string(version),
+                        flags.join(",")
+                    )
+                })
+                .unwrap_or_else(|| "null".to_string())
+        ));
+        fields.push(format!(
+            "\"parent_use_suggestion\":{}",
+            entry
+                .parent_use_suggestion
+                .as_ref()
+                .map(|(parent_category, parent_package, parent_version, flip)| {
+                    let flags: Vec<String> = flip
+                        .iter()
+                        .map(|(flag, enabled)| {
+                            format!("{{\"flag\":{},\"enabled\":{enabled}}}", json_string(flag))
+                        })
+                        .collect();
+                    format!(
+                        "{{\"category\":{},\"package\":{},\"version\":{},\"flags\":[{}]}}",
+                        json_string(parent_category),
+                        json_string(parent_package),
+                        json_string(parent_version),
                         flags.join(",")
                     )
                 })

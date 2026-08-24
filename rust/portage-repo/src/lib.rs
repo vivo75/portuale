@@ -1659,6 +1659,235 @@ fn suggested_use_candidate(
         .map(|(c, flip)| (c.version.clone(), flip))
 }
 
+/// Real `config.py`'s own `_get_implicit_iuse()`: a package's own
+/// declared `IUSE` (default markers stripped) folded together with
+/// `PORTAGE_ARCHLIST` (`profiles/arch.list`), `use.mask ∪ use.force`,
+/// and the literal `build`/`bootstrap` flags -- real `pkg.iuse.
+/// is_valid_flag`'s own full domain, not a package's own literal `IUSE`
+/// alone. Without this, a `REQUIRED_USE` (or, here, a conditional
+/// use-dep) referencing an implicit flag never mentioned in a package's
+/// own `IUSE` (e.g. real `media-libs/mesa`'s own `REQUIRED_USE`
+/// referencing `"x86"`) spuriously reports "not in IUSE" -- confirmed
+/// live against the real, installed system. See `portage_profile::
+/// Config::archlist`'s own doc comment for the full grounding.
+fn implicit_iuse_set(iuse: &str, config: &portage_profile::Config) -> HashSet<String> {
+    let mut iuse_set: HashSet<String> = iuse
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    iuse_set.extend(config.archlist.iter().cloned());
+    iuse_set.extend(config.use_mask.iter().cloned());
+    iuse_set.extend(config.use_force.iter().cloned());
+    iuse_set.insert("build".to_string());
+    iuse_set.insert("bootstrap".to_string());
+    iuse_set
+}
+
+/// The requesting parent's own current resolved `Candidate`, IUSE
+/// (implicit-folded, see `implicit_iuse_set`), and effective USE --
+/// looked up via its own already-resolved entry in `entries`. The parent
+/// is always already present there by the time any of its own
+/// dependencies are dequeued (BFS processes a package's own entry before
+/// ever enqueueing its dependencies). `None` when the parent isn't found,
+/// has no version to look up by (`AlreadyInstalled`/`NoVisibleCandidate`
+/// -- moot anyway, since `enqueue_dependencies`'s own `AlreadyInstalled`
+/// recursion path never conditional-evaluates deps at all, so `--
+/// autounmask-use`'s own `opt?` mechanism never triggers for it), or its
+/// own metadata can't be read.
+/// `(candidate, implicit_iuse, effective_use, REQUIRED_USE)`.
+type ParentUseState = (Candidate, HashSet<String>, HashSet<String>, Option<String>);
+
+fn parent_use_state(
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+    owner: &(String, String),
+    config: &portage_profile::Config,
+) -> Option<ParentUseState> {
+    let parent_entry = entries
+        .iter()
+        .find(|e| e.category == owner.0 && e.package == owner.1)?;
+    let version: String = match &parent_entry.outcome {
+        PretendOutcome::New { version } => version,
+        PretendOutcome::Upgrade { to, .. } => to,
+        PretendOutcome::Downgrade { to, .. } => to,
+        PretendOutcome::Reinstall { version, .. } => version,
+        _ => return None,
+    }
+    .clone();
+    let candidates = list_candidates(repos, &owner.0, &owner.1).ok()?;
+    let resolved = candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)?
+        .clone();
+    let (_iuse, use_flags) = candidate_iuse_and_use(&resolved, &owner.0, &owner.1, config)?;
+    let pf = format!("{}-{version}", owner.1);
+    let metadata = read_md5_cache(&resolved.repo_location, &owner.0, &pf).ok()?;
+    let full_iuse = implicit_iuse_set(
+        metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+        config,
+    );
+    Some((
+        resolved,
+        full_iuse,
+        use_flags,
+        metadata.get("REQUIRED_USE").cloned(),
+    ))
+}
+
+/// Which of `unevaluated_atom`'s own use-deps are conditional on the
+/// *requesting parent's* own USE (`opt?`/`!opt?`/`opt=`/`!opt=` --
+/// `UseDepOp::IfParentEnabled`/`IfParentDisabled`/`EqualParent`/
+/// `OppositeParent`), deduplicated. Empty when `unevaluated_atom` has no
+/// conditional use-deps at all (shouldn't happen for anything this
+/// module ever populates `unevaluated_atom` for in the first place, but
+/// defensive either way).
+fn conditional_flags(unevaluated_atom: &str) -> Vec<String> {
+    let Some(atom) = portage_dep::parse_atom(unevaluated_atom) else {
+        return Vec::new();
+    };
+    let Some(use_deps) = atom.use_deps else {
+        return Vec::new();
+    };
+    let mut flags: Vec<String> = use_deps
+        .into_iter()
+        .filter(|ud| {
+            matches!(
+                ud.op,
+                portage_dep::UseDepOp::IfParentEnabled
+                    | portage_dep::UseDepOp::IfParentDisabled
+                    | portage_dep::UseDepOp::EqualParent
+                    | portage_dep::UseDepOp::OppositeParent
+            )
+        })
+        .map(|ud| ud.flag)
+        .collect();
+    flags.sort();
+    flags.dedup();
+    flags
+}
+
+/// Real `--autounmask-use`'s own second, architecturally distinct
+/// mechanism (real `_show_unsatisfied_dep`, `lib/_emerge/depgraph.py:
+/// 6756-6846): unlike `suggested_use_candidate` (which flips the
+/// *candidate's* own flag), this one flips the *requesting parent's* own
+/// flag, for the case where a dependency atom's use-dep was originally
+/// conditional (`opt?`/`!opt?`/`opt=`/`!opt=`) on the parent's own USE
+/// state -- `enqueue_flat_deps` already evaluated it away into a
+/// concrete form (or dropped it) before this atom was ever queued, using
+/// the parent's own *current* USE; this asks "if the parent's own
+/// involved flag(s) were toggled together instead, would the
+/// re-evaluated atom now actually resolve?"
+///
+/// Deliberately narrower than real `Atom.violated_conditionals` (~150
+/// lines of per-token-operator partitioning this pilot doesn't
+/// reproduce): instead of determining exactly *which* conditional
+/// use-deps were violated, this toggles *every* flag the unevaluated
+/// atom's own conditional use-deps reference, together, in one
+/// hypothetical -- matching real portage's own `target_use` (which also
+/// flips every `involved_flags` member at once) for the common case (an
+/// atom whose conditional use-deps are the *only* USE-deps present, all
+/// referencing flags that need to move the same direction to fix it),
+/// but diverging from it for more exotic mixed cases (concrete *and*
+/// conditional use-deps on the same atom, or independent conditional
+/// flags where only a subset actually needs flipping). Confirmed with
+/// the user before implementing.
+///
+/// Gated on: every involved flag must be real, valid IUSE on the parent
+/// (`implicit_iuse_set`); none may be `package.use.mask`/`.force`'d on
+/// the parent (`flag_is_settable`, reused as-is -- its own logic doesn't
+/// assume anything child-specific); the re-evaluated atom must actually
+/// become satisfiable (`atom_currently_satisfiable`) against the
+/// hypothetical flip; and the flip must not newly violate the parent's
+/// own `REQUIRED_USE` (mirrors real `_show_unsatisfied_dep`'s own
+/// `collect_use_changes and not required_use_warning` gate -- a flip
+/// that already-violated `REQUIRED_USE` before the change is not
+/// disqualified by it, only one that goes from satisfied to violated
+/// is). Returns `(parent_category, parent_package, parent_version,
+/// [(flag, desired_state)])`, attached to the *dependency's* own
+/// `GraphEntry` (`parent_use_suggestion`) rather than the parent's own
+/// entry, unlike real portage's own `missing_use_reasons.append
+/// ((myparent, ...))` -- a pragmatic simplification: this pilot's
+/// `GraphEntry` model has no per-parent "reasons" list to attach it to
+/// instead, and the dependency's own entry is where the "no visible
+/// ebuild for dependency" note already lives.
+/// `(parent_category, parent_package, parent_version, [(flag, desired_state)])`.
+pub type ParentUseSuggestion = (String, String, String, Vec<(String, bool)>);
+
+fn suggested_parent_use_candidate(
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+    unevaluated_atom: &str,
+    owner: &(String, String),
+    config: &portage_profile::Config,
+) -> Option<ParentUseSuggestion> {
+    let involved_flags = conditional_flags(unevaluated_atom);
+    if involved_flags.is_empty() {
+        return None;
+    }
+    let (parent_candidate, parent_iuse, parent_use, parent_required_use) =
+        parent_use_state(repos, entries, owner, config)?;
+    if involved_flags.iter().any(|f| !parent_iuse.contains(f)) {
+        return None;
+    }
+
+    let target_use: Vec<(String, bool)> = involved_flags
+        .iter()
+        .map(|f| (f.clone(), !parent_use.contains(f)))
+        .collect();
+    if target_use.iter().any(|(flag, desired)| {
+        !flag_is_settable(
+            &parent_candidate,
+            &owner.0,
+            &owner.1,
+            flag,
+            *desired,
+            config,
+        )
+    }) {
+        return None;
+    }
+
+    let mut hypothetical_use = parent_use.clone();
+    for (flag, desired) in &target_use {
+        if *desired {
+            hypothetical_use.insert(flag.clone());
+        } else {
+            hypothetical_use.remove(flag);
+        }
+    }
+
+    let re_evaluated =
+        portage_dep::evaluate_atom_conditionals(unevaluated_atom, &hypothetical_use)?;
+    if !atom_currently_satisfiable(repos, &re_evaluated, config) {
+        return None;
+    }
+
+    if let Some(required_use) = &parent_required_use {
+        if !required_use.trim().is_empty() {
+            let old_sat =
+                portage_required_use::check_required_use(required_use, &parent_use, &parent_iuse)
+                    .unwrap_or(false);
+            let new_sat = portage_required_use::check_required_use(
+                required_use,
+                &hypothetical_use,
+                &parent_iuse,
+            )
+            .unwrap_or(false);
+            if old_sat && !new_sat {
+                return None;
+            }
+        }
+    }
+
+    Some((
+        owner.0.clone(),
+        owner.1.clone(),
+        parent_candidate.version.clone(),
+        target_use,
+    ))
+}
+
 /// `--json`'s own "state-change trace" (this pilot's own feature -- see
 /// the `--json` module doc comment; not a port of any real emerge
 /// output): which config entries, if any, were actually load-bearing for
@@ -3457,6 +3686,18 @@ pub struct GraphEntry {
     /// plain USE-dep mismatch alone). Only ever `Some` for a
     /// `NoVisibleCandidate` entry, same as `keyword_suggestion`.
     pub use_suggestion: Option<(String, Vec<(String, bool)>)>,
+    /// `--autounmask-use`'s own second, architecturally distinct
+    /// suggestion sub-feature -- see `suggested_parent_use_candidate`'s
+    /// own doc comment for the full real grounding (`opt?`/REQUIRED_USE-
+    /// conditional atoms, flipping the *requesting parent's* own flag,
+    /// not the candidate's). `(parent_category, parent_package,
+    /// parent_version, [(flag, desired_state)])`, or `None` under the
+    /// same gating `use_suggestion` has. Independent of `use_suggestion`
+    /// -- both mechanisms are gated on `autounmask_suggest_use` alone and
+    /// can in principle both be `Some` at once (real portage's own
+    /// `missing_use_reasons` allows the same), though no fixture in this
+    /// pilot currently exercises that combination.
+    pub parent_use_suggestion: Option<ParentUseSuggestion>,
 }
 
 /// A blocker atom found while flattening one package's own dependency strings,
@@ -3679,11 +3920,19 @@ impl Deep {
 }
 
 /// One BFS-queued dependency-walk item: the atom text, its own depth
-/// (see `Deep`), and the `(category, package)` that pushed it, if any
-/// (`None` for a directly-requested top-level atom) -- the latter only
-/// consulted by `resolve_pretend_graph`'s own `required_by_map`, for
-/// `GraphEntry::required_by`.
-type QueueItem = (String, u32, Option<(String, String)>);
+/// (see `Deep`), the `(category, package)` that pushed it, if any (`None`
+/// for a directly-requested top-level atom) -- consulted by
+/// `resolve_pretend_graph`'s own `required_by_map`, for `GraphEntry::
+/// required_by` -- and the atom's own *unevaluated* text, if
+/// `evaluate_atom_conditionals` actually rewrote it (`None` when nothing
+/// changed, or when this atom was never conditional-evaluated at all --
+/// see `enqueue_flat_deps`'s own doc comment). Consulted only by
+/// `--autounmask-use`'s own `opt?`/REQUIRED_USE-conditional suggestion
+/// mechanism (real `_show_unsatisfied_dep`'s own `atom.unevaluated_atom`
+/// -- see `suggested_parent_use_candidate`'s own doc comment) to recover
+/// the original conditional form after evaluation has already replaced
+/// it in the queued atom text itself.
+type QueueItem = (String, u32, Option<(String, String)>, Option<String>);
 
 /// Queues every atom in `flat_deps` (a `use_reduce_flat`/
 /// `use_reduce_flat_subset` result) onto `queue` at `depth + 1`, owned by
@@ -3719,7 +3968,18 @@ fn enqueue_flat_deps(
         if tok == "||" {
             continue;
         }
-        let tok = portage_dep::evaluate_atom_conditionals(&tok, parent_use).unwrap_or(tok);
+        // `evaluate_atom_conditionals` returns `Some(...)` even when
+        // nothing changed (the common case: no conditional use-deps at
+        // all) -- only `None` on a genuinely unparseable atom. So
+        // "was this atom actually rewritten" has to compare the
+        // before/after text, not just match on `Option` -- a real
+        // rewrite is exactly what `unevaluated` (the real
+        // "unevaluated_atom" `_show_unsatisfied_dep` consults) should
+        // ever be populated for.
+        let evaluated = portage_dep::evaluate_atom_conditionals(&tok, parent_use)
+            .unwrap_or_else(|| tok.clone());
+        let unevaluated = if evaluated != tok { Some(tok) } else { None };
+        let tok = evaluated;
         if let Some(dep_atom) = portage_dep::parse_atom(&tok) {
             if dep_atom.blocker != portage_dep::Blocker::None {
                 pending_blockers.push(PendingBlocker {
@@ -3733,7 +3993,7 @@ fn enqueue_flat_deps(
                 continue;
             }
         }
-        queue.push_back((tok, depth + 1, Some(key.clone())));
+        queue.push_back((tok, depth + 1, Some(key.clone()), unevaluated));
     }
 }
 
@@ -4104,7 +4364,11 @@ pub fn resolve_pretend_graph(
     // own `required_by` field.
     let mut queue: VecDeque<QueueItem> = VecDeque::new();
     for a in atoms {
-        queue.push_back((a.clone(), 0, None));
+        // A top-level atom has no "unevaluated" form distinct from
+        // itself (no parent to ever flip a flag on), matching real
+        // portage, which never suggests a parent-flag fix for a
+        // top-level atom either.
+        queue.push_back((a.clone(), 0, None, None));
     }
 
     let mut pending_blockers: Vec<PendingBlocker> = Vec::new();
@@ -4118,7 +4382,7 @@ pub fn resolve_pretend_graph(
     // "accumulate now, merge once the whole graph is known" shape.
     let mut required_by_map: HashMap<(String, String), HashSet<(String, String)>> = HashMap::new();
 
-    while let Some((current_atom, depth, owner)) = queue.pop_front() {
+    while let Some((current_atom, depth, owner, unevaluated_atom)) = queue.pop_front() {
         let Some(atom) = portage_dep::parse_atom(&current_atom) else {
             continue;
         };
@@ -4126,7 +4390,7 @@ pub fn resolve_pretend_graph(
             continue;
         }
         let key = (atom.category.clone(), atom.package.clone());
-        if let Some(owner) = owner {
+        if let Some(owner) = owner.clone() {
             required_by_map
                 .entry(key.clone())
                 .or_default()
@@ -4336,6 +4600,28 @@ pub fn resolve_pretend_graph(
             } else {
                 None
             };
+            // `--autounmask-use`'s own second, architecturally distinct
+            // suggestion sub-feature -- see `suggested_parent_use_
+            // candidate`'s own doc comment. Only ever attempted when
+            // this atom actually had a conditional use-dep evaluated
+            // away (`unevaluated_atom.is_some()`) and has a real parent
+            // to flip a flag on (`owner.is_some()`, always true here: a
+            // top-level atom's own `NoVisibleCandidate` already aborted
+            // the whole call via the fatal check above, so any
+            // `NoVisibleCandidate` reaching this point is necessarily a
+            // dependency's own, which always has an `owner`).
+            let parent_use_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                && autounmask_suggest_use
+            {
+                owner
+                    .as_ref()
+                    .zip(unevaluated_atom.as_deref())
+                    .and_then(|(owner, unevaluated)| {
+                        suggested_parent_use_candidate(&repos, &entries, unevaluated, owner, config)
+                    })
+            } else {
+                None
+            };
             entries.push(GraphEntry {
                 category: key.0,
                 package: key.1,
@@ -4348,6 +4634,7 @@ pub fn resolve_pretend_graph(
                 provenance: VisibilityProvenance::default(),
                 keyword_suggestion,
                 use_suggestion,
+                parent_use_suggestion,
             });
             continue;
         };
@@ -4450,6 +4737,7 @@ pub fn resolve_pretend_graph(
             provenance,
             keyword_suggestion: None,
             use_suggestion: None,
+            parent_use_suggestion: None,
         });
 
         let metadata = if candidate_source == CandidateSource::Binary {
@@ -4541,18 +4829,10 @@ pub fn resolve_pretend_graph(
                 // Config::archlist`'s own doc comment for the full
                 // grounding and the deliberate USE_EXPAND_HIDDEN
                 // (elibc_*/kernel_*/userland_*) simplification.
-                let mut iuse_set: HashSet<String> = metadata
-                    .get("IUSE")
-                    .map(String::as_str)
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
-                    .collect();
-                iuse_set.extend(config.archlist.iter().cloned());
-                iuse_set.extend(config.use_mask.iter().cloned());
-                iuse_set.extend(config.use_force.iter().cloned());
-                iuse_set.insert("build".to_string());
-                iuse_set.insert("bootstrap".to_string());
+                let iuse_set = implicit_iuse_set(
+                    metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+                    config,
+                );
                 match portage_required_use::check_required_use(required_use, &use_flags, &iuse_set)
                 {
                     Ok(true) => {}
@@ -4863,7 +5143,13 @@ fn enqueue_dependencies(
                 continue;
             }
         }
-        queue.push_back((tok, child_depth, Some(owner_key.clone())));
+        // This path never calls `evaluate_atom_conditionals` at all (a
+        // real, pre-existing gap unrelated to `--autounmask-use`: an
+        // `AlreadyInstalled` package's own further-dependency walk under
+        // `--deep` doesn't evaluate conditional use-deps against its own
+        // USE either) -- so there's never an "unevaluated" form to
+        // preserve here.
+        queue.push_back((tok, child_depth, Some(owner_key.clone()), None));
     }
 }
 
@@ -9737,6 +10023,7 @@ mod tests {
             provenance: VisibilityProvenance::default(),
             keyword_suggestion: None,
             use_suggestion: None,
+            parent_use_suggestion: None,
         }
     }
 

@@ -3495,6 +3495,101 @@ suggestion — Rust and Python byte-identical, confirmed both via the
 shared pytest contract suite and a direct manual diff against both
 built binaries.
 
+**`--autounmask-use`, the `opt?`/REQUIRED_USE-conditional half.** Real
+`_show_unsatisfied_dep` (`lib/_emerge/depgraph.py:6756-6846`) has a
+second, architecturally distinct mechanism from the plain-atom flip
+above: when a dependency atom's own use-dep was originally conditional
+on the *requesting parent's* own USE state (`opt?`/`!opt?`/`opt=`/
+`!opt=`), the fix isn't a change to the candidate at all — it's a
+change to the *parent's* own USE. This pilot's own conditional-use-dep
+evaluation (`enqueue_flat_deps`/`_enqueue_flat_deps`, using the real
+`Atom.evaluate_conditionals`/`portage_dep::evaluate_atom_conditionals`
+already ported for `opt=`/`opt?` support) happens eagerly, at
+dependency-queueing time, using the parent's own *current* USE — and
+until this slice, the original conditional atom text was discarded
+immediately afterward, so there was nothing left to reconsider once a
+dependency turned out unsatisfiable.
+
+**Data-flow change, confirmed with the user before implementing**: the
+BFS queue item (Rust's own `QueueItem` type alias; Python's own bare
+tuple) grows a fourth field, the atom's own *unevaluated* text —
+`Some`/non-`None` only when `evaluate_atom_conditionals`/
+`evaluate_conditionals` actually rewrote something (real `Atom.
+unevaluated_atom`, which the Python side gets for free by checking
+`is not` identity against the evaluated result — real
+`evaluate_conditionals` is a documented no-op, returning `self`
+unchanged, whenever nothing conditional is present at all; only a
+genuine rewrite ever constructs a new `Atom` with its own
+`unevaluated_atom` pointing back at the original). Threaded through
+every queue-push site: `enqueue_flat_deps`'s own normal-deps queueing,
+the top-level atom seed (always `None` — no parent to ever flip a flag
+on), and the `AlreadyInstalled`/`--deep` recursion path (also always
+`None` there — a real, pre-existing, unrelated gap this slice didn't
+introduce: that path never evaluates conditional use-deps against its
+own USE at all, in either language).
+
+**The suggestion itself**: a new `suggested_parent_use_candidate`/
+`_suggested_parent_use_candidate`, attempted only when a dependency's
+own `NoVisibleCandidate` carries an unevaluated atom. `conditional_
+flags`/`_conditional_flags` reads the *unevaluated* atom's own
+conditional use-dep flags (real `Atom.use.conditional`'s own
+`.enabled`/`.disabled`/`.equal`/`.not_equal` frozensets); the parent's
+own current resolved candidate, IUSE, and effective USE come from
+`parent_use_state`/`_parent_use_state`, looked up via the parent's own
+already-built graph entry (always present by the time any of its own
+dependencies are dequeued — BFS processes a package's own entry before
+ever enqueueing its dependencies). Every involved flag must be real,
+valid IUSE on the parent and not `package.use.mask`/`.force`'d there
+(`flag_is_settable`/`_flag_is_settable`, the exact same helper Part A
+already built, reused as-is — its own logic never assumed anything
+child-specific). All involved flags are toggled together into one
+hypothetical parent USE state (matching real `target_use`'s own
+"flip everything involved at once" shape), the atom is re-evaluated
+against it, and the result must actually become satisfiable
+(`atom_currently_satisfiable`/`_atom_currently_satisfiable`, the same
+helper the pre-existing `AlreadyInstalled` recursion path already uses
+to skip unsatisfiable disjunctions) — and must not newly violate the
+parent's own `REQUIRED_USE` (mirrors real `_show_unsatisfied_dep`'s own
+`collect_use_changes and not required_use_warning` gate: a change that
+was *already* `REQUIRED_USE`-violating before isn't disqualified by it,
+only one that flips from satisfied to violated is).
+
+**Deliberately narrower than real `Atom.violated_conditionals`** (~150
+lines of per-token-operator partitioning this pilot doesn't reproduce
+in either language): instead of determining exactly *which* conditional
+use-deps were violated, this toggles *every* flag the unevaluated
+atom's own conditional use-deps reference, together, in one
+hypothetical. Matches real portage's own behavior for the common case
+(an atom whose conditional use-deps are the only USE-deps present, all
+referencing flags that need to move the same direction to fix it) but
+diverges from it for more exotic mixed cases (concrete *and*
+conditional use-deps on the same atom, or independent conditional flags
+where only a subset actually needs flipping) — confirmed with the user
+before implementing. The suggestion attaches to the *dependency's* own
+entry (`parent_use_suggestion`, a new field alongside `use_suggestion`
+— both can be `Some`/non-`None` at once, and often are: they're
+genuinely independent, alternative fixes for the same mismatch) rather
+than the parent's own entry the way real `missing_use_reasons.append
+((myparent, ...))` does — a pragmatic simplification, since this
+pilot's own entry model has no per-parent "reasons" list to attach it
+to instead, and the dependency's own entry is where the "no visible
+ebuild for dependency" note already lives.
+
+Proven against the existing `dev-libs/useeqparentonpkg`/
+`useeqparentoffpkg` → `dev-libs/useeqchildpkg` fixtures (already
+established for `opt=` support itself, PMS 8.3.4): `useeqparentoffpkg`'s
+own `IUSE="eqflag"` (no `+`, defaults off) makes its own RDEPEND
+`dev-libs/useeqchildpkg[eqflag=]` evaluate to `[-eqflag]`, mismatching
+the child's own default-on `eqflag` — both suggestions fire at once
+(flip the child's `eqflag` off, *or* flip the parent's `eqflag` on;
+either genuinely resolves the mismatch), gated on the same
+`autounmask_suggest_use` flag as Part A, and suppressed together by the
+same explicit `--autounmask-use=n`. Rust and Python byte-identical,
+confirmed both via the shared pytest contract suite (including a new
+dedicated `--json` test asserting both suggestion fields at once) and a
+direct manual diff of stdout/stderr/exit-code/`--json` against both
+built binaries.
+
 `--columns`: real `output.py`'s own `_set_root_columns`, a purely
 display-layer alternate rendering of the same New/Upgrade/Downgrade/
 Reinstall entries the default bracket format already shows -- no new
@@ -5005,6 +5100,25 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeprejecte
 # --json's own mirror: "use_suggestion" ({"version", "flags"} or null)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/usedeprejectedpkg | python3 -c 'import json,sys; print(next(e["use_suggestion"] for e in json.load(sys.stdin)["entries"] if e["package"] == "useflagpkg"))'
 # {'version': '1.0', 'flags': [{'flag': 'foo', 'enabled': False}]}
+
+# --autounmask-use's own opt?/REQUIRED_USE-conditional half (Part B):
+# useeqparentoffpkg's own IUSE="eqflag" defaults off, so its RDEPEND
+# "dev-libs/useeqchildpkg[eqflag=]" evaluates to "[-eqflag]", mismatching
+# the child's own default-on eqflag -- both a candidate-flip (Part A)
+# and a parent-flip (Part B) suggestion fire at once, two independent
+# real fixes for the same mismatch
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useeqparentoffpkg
+# [ebuild  N] dev-libs/useeqparentoffpkg-1.0
+# !!! no visible ebuild for dependency "dev-libs/useeqchildpkg"
+# !!! note: dev-libs/useeqchildpkg-1.0 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=dev-libs/useeqchildpkg-1.0 -eqflag" to package.use
+# !!! note: dev-libs/useeqparentoffpkg-1.0's own USE flags need to change to satisfy this dependency; --autounmask-use suggests adding "=dev-libs/useeqparentoffpkg-1.0 eqflag" to package.use  (exit 0)
+# --autounmask-use=n suppresses both suggestions together (one shared gate)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask-use=n dev-libs/useeqparentoffpkg
+# [ebuild  N] dev-libs/useeqparentoffpkg-1.0
+# !!! no visible ebuild for dependency "dev-libs/useeqchildpkg"  (exit 0)
+# --json's own mirror: "parent_use_suggestion" ({"category", "package", "version", "flags"} or null), alongside "use_suggestion"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/useeqparentoffpkg | python3 -c 'import json,sys; print(next(e["parent_use_suggestion"] for e in json.load(sys.stdin)["entries"] if e["package"] == "useeqchildpkg"))'
+# {'category': 'dev-libs', 'package': 'useeqparentoffpkg', 'version': '1.0', 'flags': [{'flag': 'eqflag', 'enabled': True}]}
 
 # IUSE's own "+"/"-" default markers are honored now: "+enableddefault"
 # defaults on, "-disableddefault" stays off (own REQUIRED_USE requires

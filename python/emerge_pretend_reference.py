@@ -1122,6 +1122,172 @@ def _suggested_use_candidate(repos, category, package, atom, config):
     return best_candidate["version"], best_flip
 
 
+def _implicit_iuse_set(iuse, config):
+    """Real config.py's own _get_implicit_iuse(): a package's own
+    declared IUSE (default markers stripped) folded together with
+    PORTAGE_ARCHLIST (profiles/arch.list), use.mask ∪ use.force, and the
+    literal "build"/"bootstrap" flags -- real pkg.iuse.is_valid_flag's
+    own full domain, not a package's own literal IUSE alone. Mirrors
+    portage-repo/src/lib.rs's implicit_iuse_set exactly."""
+    iuse_set = {tok.lstrip("+-") for tok in iuse.split()}
+    iuse_set |= config["archlist"]
+    iuse_set |= config["use_mask"]
+    iuse_set |= config["use_force"]
+    iuse_set |= {"build", "bootstrap"}
+    return iuse_set
+
+
+def _parent_use_state(repos, entries, owner, config):
+    """The requesting parent's own current resolved candidate, implicit
+    IUSE, and effective USE -- looked up via its own already-resolved
+    entry in `entries`. The parent is always already present there by
+    the time any of its own dependencies are dequeued (BFS processes a
+    package's own entry before ever enqueueing its dependencies). None
+    when the parent isn't found or has no version to look up by
+    (already_installed/no_visible_candidate -- moot anyway, since the
+    already_installed recursion path never conditional-evaluates deps at
+    all). Mirrors portage-repo/src/lib.rs's parent_use_state exactly."""
+    category, package = owner
+    parent_entry = next(
+        (e for e in entries if e[0] == category and e[1] == package), None
+    )
+    if parent_entry is None:
+        return None
+    outcome = parent_entry[2]
+    tag = outcome[0]
+    if tag == "new":
+        version = outcome[1]
+    elif tag in ("upgrade", "downgrade"):
+        version = outcome[2]
+    elif tag == "reinstall":
+        version = outcome[1]
+    else:
+        return None
+    candidates = list_candidates(repos, category, package)
+    matching = [c for c in candidates if c["version"] == version]
+    if not matching:
+        return None
+    resolved = max(matching, key=lambda c: c["repo_priority"])
+    _iuse, use_flags = _candidate_iuse_and_use(resolved, category, package, config)
+    try:
+        metadata = read_md5_cache(resolved["repo_location"], category, f"{package}-{version}")
+    except OSError:
+        return None
+    full_iuse = _implicit_iuse_set(metadata.get("IUSE", ""), config)
+    return (resolved, full_iuse, use_flags, metadata.get("REQUIRED_USE"))
+
+
+def _conditional_flags(unevaluated_atom_str):
+    """Which of `unevaluated_atom_str`'s own use-deps are conditional on
+    the *requesting parent's* own USE (opt?/!opt?/opt=/!opt= -- real
+    Atom.use.conditional's own .enabled/.disabled/.equal/.not_equal
+    frozensets), deduplicated and sorted. Empty when the atom has no
+    conditional use-deps at all. Mirrors portage-repo/src/lib.rs's
+    conditional_flags exactly."""
+    atom = _parse_atom(unevaluated_atom_str)
+    if atom is None or atom.use is None or atom.use.conditional is None:
+        return []
+    c = atom.use.conditional
+    flags = set(c.equal) | set(c.not_equal) | set(c.enabled) | set(c.disabled)
+    return sorted(flags)
+
+
+def _suggested_parent_use_candidate(repos, entries, unevaluated_atom, owner, config):
+    """Real --autounmask-use's own second, architecturally distinct
+    mechanism (real _show_unsatisfied_dep, lib/_emerge/depgraph.py:
+    6756-6846): unlike _suggested_use_candidate (which flips the
+    *candidate's* own flag), this one flips the *requesting parent's* own
+    flag, for the case where a dependency atom's use-dep was originally
+    conditional on the parent's own USE state -- _enqueue_flat_deps
+    already evaluated it away into a concrete form (or dropped it) before
+    this atom was ever queued, using the parent's own *current* USE;
+    this asks "if the parent's own involved flag(s) were toggled together
+    instead, would the re-evaluated atom now actually resolve?"
+
+    Deliberately narrower than real Atom.violated_conditionals (~150
+    lines of per-token-operator partitioning this pilot doesn't
+    reproduce): instead of determining exactly *which* conditional
+    use-deps were violated, this toggles *every* flag the unevaluated
+    atom's own conditional use-deps reference, together, in one
+    hypothetical -- matching real portage's own target_use (which also
+    flips every involved_flags member at once) for the common case, but
+    diverging from it for more exotic mixed cases (concrete *and*
+    conditional use-deps on the same atom, or independent conditional
+    flags where only a subset actually needs flipping). Confirmed with
+    the user before implementing.
+
+    Gated on: every involved flag must be real, valid IUSE on the parent;
+    none may be package.use.mask/.force'd on the parent
+    (_flag_is_settable, reused as-is); the re-evaluated atom must
+    actually become satisfiable (_atom_currently_satisfiable) against the
+    hypothetical flip; and the flip must not newly violate the parent's
+    own REQUIRED_USE (mirrors real _show_unsatisfied_dep's own
+    "collect_use_changes and not required_use_warning" gate). Returns
+    (parent_category, parent_package, parent_version, [(flag,
+    desired_state)]), attached to the *dependency's* own entry
+    (parent_use_suggestion) rather than the parent's own entry, unlike
+    real portage's own missing_use_reasons.append((myparent, ...)) -- a
+    pragmatic simplification, same as the Rust side. Mirrors
+    portage-repo/src/lib.rs's suggested_parent_use_candidate exactly."""
+    involved_flags = _conditional_flags(unevaluated_atom)
+    if not involved_flags:
+        return None
+    parent_state = _parent_use_state(repos, entries, owner, config)
+    if parent_state is None:
+        return None
+    parent_candidate, parent_iuse, parent_use, parent_required_use = parent_state
+    if any(f not in parent_iuse for f in involved_flags):
+        return None
+
+    category, package = owner
+    target_use = [(f, f not in parent_use) for f in involved_flags]
+    if any(
+        not _flag_is_settable(parent_candidate, category, package, flag, desired, config)
+        for flag, desired in target_use
+    ):
+        return None
+
+    hypothetical_use = set(parent_use)
+    for flag, desired in target_use:
+        if desired:
+            hypothetical_use.add(flag)
+        else:
+            hypothetical_use.discard(flag)
+
+    dep_atom = _parse_atom(unevaluated_atom)
+    if dep_atom is None:
+        return None
+    re_evaluated = str(dep_atom.evaluate_conditionals(hypothetical_use))
+    if not _atom_currently_satisfiable(repos, re_evaluated, config):
+        return None
+
+    if parent_required_use and parent_required_use.strip():
+        try:
+            old_sat = bool(
+                check_required_use(
+                    parent_required_use,
+                    parent_use,
+                    lambda flag: flag in parent_iuse,
+                    eapi="8",
+                )
+            )
+            new_sat = bool(
+                check_required_use(
+                    parent_required_use,
+                    hypothetical_use,
+                    lambda flag: flag in parent_iuse,
+                    eapi="8",
+                )
+            )
+        except InvalidDependString:
+            old_sat = new_sat = False
+        if old_sat and not new_sat:
+            return None
+
+    target_use.sort()
+    return (category, package, parent_candidate["version"], target_use)
+
+
 def _visibility_provenance(candidate, category, package, config):
     """--json's own "state-change trace" (this pilot's own feature, not
     a port of any real emerge output): which config entries, if any,
@@ -3432,6 +3598,7 @@ def resolve_blockers(root, pending, entries):
             _provenance,
             _keyword_suggestion,
             _use_suggestion,
+            _parent_use_suggestion,
         ) in entries:
             if (category, package) != target_key:
                 continue
@@ -3499,10 +3666,24 @@ def _enqueue_flat_deps(flat_deps, key, version, depth, parent_use, queue, pendin
     for tok in flat_deps:
         if tok == "||":
             continue
+        unevaluated = None
         dep_atom = _parse_atom(tok)
         if dep_atom is not None:
+            original_atom = dep_atom
             dep_atom = dep_atom.evaluate_conditionals(set(parent_use))
             tok = str(dep_atom)
+            # Real Atom.evaluate_conditionals is a no-op (returns self)
+            # when there's no conditional use-dep at all -- only a
+            # genuine rewrite constructs a new Atom with its own
+            # unevaluated_atom pointing back at the original. This is
+            # exactly real _show_unsatisfied_dep's own
+            # "atom.unevaluated_atom" -- --autounmask-use's own opt?/
+            # REQUIRED_USE-conditional suggestion mechanism (see
+            # _suggested_parent_use_candidate's own docstring) needs it
+            # to recover the original conditional form after evaluation
+            # has already replaced it in the queued atom text itself.
+            if dep_atom is not original_atom:
+                unevaluated = str(dep_atom.unevaluated_atom)
         if dep_atom is not None and dep_atom.blocker:
             pending_blockers.append(
                 {
@@ -3515,7 +3696,7 @@ def _enqueue_flat_deps(flat_deps, key, version, depth, parent_use, queue, pendin
                 }
             )
             continue
-        queue.append((tok, depth + 1, key))
+        queue.append((tok, depth + 1, key, unevaluated))
 
 
 def resolve_pretend_graph(
@@ -3698,7 +3879,9 @@ def resolve_pretend_graph(
     # and the (category, package) that pushed it, if any (None for a
     # directly-requested top-level atom), only consulted by
     # required_by_map below, for each entry's own required_by.
-    queue = deque((a, 0, None) for a in atoms)
+    # A top-level atom has no "unevaluated" form distinct from itself (no
+    # parent to ever flip a flag on).
+    queue = deque((a, 0, None, None) for a in atoms)
     pending_blockers = []
     # (category, package) -> set of every distinct owner that reached it
     # via a dependency string, accumulated separately from the BFS's own
@@ -3713,7 +3896,7 @@ def resolve_pretend_graph(
     required_by_map = {}
 
     while queue:
-        current_atom_str, depth, owner = queue.popleft()
+        current_atom_str, depth, owner, unevaluated_atom = queue.popleft()
         atom = _parse_atom(current_atom_str)
         if atom is None:
             continue
@@ -3888,6 +4071,26 @@ def resolve_pretend_graph(
             use_suggestion = None
             if outcome[0] == "no_visible_candidate" and autounmask_suggest_use:
                 use_suggestion = _suggested_use_candidate(repos, category, package, atom, config)
+            # --autounmask-use's own second, architecturally distinct
+            # suggestion sub-feature -- see
+            # _suggested_parent_use_candidate's own docstring. Only ever
+            # attempted when this atom actually had a conditional
+            # use-dep evaluated away (unevaluated_atom is not None) and
+            # has a real parent to flip a flag on (owner is always set
+            # here: a top-level atom's own no_visible_candidate already
+            # aborted the whole call via the fatal check above, so any
+            # no_visible_candidate reaching this point is necessarily a
+            # dependency's own, which always has an owner).
+            parent_use_suggestion = None
+            if (
+                outcome[0] == "no_visible_candidate"
+                and autounmask_suggest_use
+                and owner is not None
+                and unevaluated_atom is not None
+            ):
+                parent_use_suggestion = _suggested_parent_use_candidate(
+                    repos, entries, unevaluated_atom, owner, config
+                )
             entries.append(
                 (
                     category,
@@ -3901,6 +4104,7 @@ def resolve_pretend_graph(
                     {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
                     keyword_suggestion,
                     use_suggestion,
+                    parent_use_suggestion,
                 )
             )
             continue
@@ -3963,7 +4167,20 @@ def resolve_pretend_graph(
         resolved_slots[slot_key] = entry_idx
         provenance = _visibility_provenance(resolved, category, package, config)
         entries.append(
-            (category, package, outcome, [], slot, [], [], candidate_source, provenance, None, None)
+            (
+                category,
+                package,
+                outcome,
+                [],
+                slot,
+                [],
+                [],
+                candidate_source,
+                provenance,
+                None,
+                None,
+                None,
+            )
         )
 
         pf = f"{package}-{version}"
@@ -4034,11 +4251,7 @@ def resolve_pretend_graph(
             # own IUSE declares. Mirrors portage-repo/src/lib.rs's own
             # resolve_pretend_graph exactly -- see portage_profile::
             # Config::archlist's own doc comment for the full grounding.
-            iuse_set = {tok.lstrip("+-") for tok in metadata.get("IUSE", "").split()}
-            iuse_set |= config["archlist"]
-            iuse_set |= config["use_mask"]
-            iuse_set |= config["use_force"]
-            iuse_set |= {"build", "bootstrap"}
+            iuse_set = _implicit_iuse_set(metadata.get("IUSE", ""), config)
             try:
                 satisfied = bool(
                     check_required_use(
@@ -4083,6 +4296,7 @@ def resolve_pretend_graph(
                 entries[entry_idx][8],
                 entries[entry_idx][9],
                 entries[entry_idx][10],
+                entries[entry_idx][11],
             )
 
         # --nodeps: skip this package's own DEPEND/RDEPEND/etc entirely --
@@ -4147,8 +4361,9 @@ def resolve_pretend_graph(
             provenance,
             keyword_suggestion,
             use_suggestion,
+            parent_use_suggestion,
         )
-        for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance, keyword_suggestion, use_suggestion in entries
+        for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion in entries
     ]
 
     # setdefault (not a dict comprehension) so the *first* entry for a
@@ -4169,6 +4384,7 @@ def resolve_pretend_graph(
         _provenance,
         _keyword_suggestion,
         _use_suggestion,
+        _parent_use_suggestion,
     ) in entries:
         blockers_by_owner.setdefault((category, package), blockers)
     for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
@@ -4322,7 +4538,13 @@ def _enqueue_dependencies(
                 }
             )
             continue
-        queue.append((tok, child_depth, owner_key))
+        # This path never calls evaluate_conditionals at all (a real,
+        # pre-existing gap unrelated to --autounmask-use: an
+        # AlreadyInstalled package's own further-dependency walk under
+        # --deep doesn't evaluate conditional use-deps against its own
+        # USE either) -- so there's never an "unevaluated" form to
+        # preserve here.
+        queue.append((tok, child_depth, owner_key, None))
 
 
 def _parse_atom(atom_str):
@@ -4577,7 +4799,7 @@ def _json_bool(b):
     return "true" if b else "false"
 
 
-def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, top_level_pkgs, verbose):
+def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, top_level_pkgs, verbose):
     """One JSON object per entry -- a structured mirror of the plain-text
     "[ebuild ...]"/"[binary ...]"/"already installed"/blocker lines in
     run(), plus two fields no plain-text line carries at all: "requested"
@@ -4657,6 +4879,19 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
             )
         else:
             fields.append('"use_suggestion":null')
+        if parent_use_suggestion is not None:
+            parent_category, parent_package, parent_version, flip = parent_use_suggestion
+            flags_json = ",".join(
+                f'{{"flag":{_json_string(flag)},"enabled":{_json_bool(enabled)}}}'
+                for flag, enabled in flip
+            )
+            fields.append(
+                f'"parent_use_suggestion":{{"category":{_json_string(parent_category)},'
+                f'"package":{_json_string(parent_package)},'
+                f'"version":{_json_string(parent_version)},"flags":[{flags_json}]}}'
+            )
+        else:
+            fields.append('"parent_use_suggestion":null')
     fields.append(f'"requested":{_json_bool(requested)}')
     required_by_json = ",".join(
         f'{{"category":{_json_string(c)},"package":{_json_string(p)}}}' for c, p in required_by
@@ -4698,9 +4933,9 @@ def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, ve
     own --json handling). Mirrors pretend.rs's own print_json exactly."""
     entries_json = ",".join(
         _entry_to_json(
-            category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, top_level_pkgs, verbose
+            category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, top_level_pkgs, verbose
         )
-        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion in entries
+        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion in entries
     )
     conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)
     changed_deps_report_json = ",".join(
@@ -6112,7 +6347,7 @@ def run(args):
         # out so both display modes share one implementation rather than
         # drifting apart. Mirrors pretend.rs's own print_entry_line
         # exactly.
-        category, package, outcome, blockers, _slot, use_display, _required_by, source, _provenance, keyword_suggestion, use_suggestion = entry
+        category, package, outcome, blockers, _slot, use_display, _required_by, source, _provenance, keyword_suggestion, use_suggestion, parent_use_suggestion = entry
         tag = outcome[0]
         # --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
         # dependencies of the packages specified, not the packages
@@ -6254,6 +6489,20 @@ def run(args):
                     f'!!! note: {category}/{package}-{version} exists but its USE flags '
                     f"don't satisfy this atom; --autounmask-use suggests adding "
                     f'"={category}/{package}-{version} {adjustments}" to package.use',
+                    file=sys.stderr,
+                )
+            # --autounmask-use's own second, architecturally distinct
+            # suggestion sub-feature -- see
+            # _suggested_parent_use_candidate's own docstring: flips the
+            # *requesting parent's* own flag, not the candidate's.
+            if parent_use_suggestion is not None:
+                parent_category, parent_package, parent_version, flip = parent_use_suggestion
+                adjustments = " ".join(flag if enabled else f"-{flag}" for flag, enabled in flip)
+                print(
+                    f"!!! note: {parent_category}/{parent_package}-{parent_version}'s own USE "
+                    f"flags need to change to satisfy this dependency; --autounmask-use "
+                    f'suggests adding "={parent_category}/{parent_package}-{parent_version} '
+                    f'{adjustments}" to package.use',
                     file=sys.stderr,
                 )
 
