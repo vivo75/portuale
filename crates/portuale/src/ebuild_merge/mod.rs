@@ -15,6 +15,8 @@
 //! `CONTENTS` line order has no semantic meaning.
 
 use crate::ebuild_phases;
+
+mod after_install;
 mod collisions;
 mod installed_instance;
 mod options;
@@ -27,6 +29,8 @@ mod vdb_entry;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use after_install::*;
 pub(crate) use collisions::*;
 pub(crate) use installed_instance::*;
 pub use options::*;
