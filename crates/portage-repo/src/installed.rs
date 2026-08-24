@@ -608,6 +608,12 @@ pub(crate) fn resolve_vdb_entry(
     direct
 }
 
+/// Whether the resolved vdb entry exists (tests the resolved entry again).
+pub(crate) fn vdb_entry_is_dir(root: &Path, category: &str, package: &str, version: &str) -> bool {
+    let key = resolve_vdb_entry(root, category, package, version);
+    portage_vdb::for_root(root).has_entry(&key).unwrap_or(false)
+}
+
 /// Reads a vdb aux file as a raw string (e.g. `DEPEND`/`RDEPEND`) -- unlike `read_vdb_flag_set`,
 /// the value stays intact for `use_reduce_flat`. A missing file is an empty string.
 /// Whitespace-normalised like `_aux_get`; line-oriented keys (`CONTENTS`, `NEEDED.*`) bypass

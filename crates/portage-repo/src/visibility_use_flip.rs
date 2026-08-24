@@ -167,6 +167,140 @@ pub(crate) fn implicit_iuse_set(iuse: &str, config: &portage_profile::Config) ->
     iuse_set
 }
 
+/// The requesting parent's current resolved `Candidate`, implicit-folded
+/// IUSE, effective USE and REQUIRED_USE -- via its already-resolved entry
+/// in `entries` (a package's entry always precedes its dependencies).
+/// `(candidate, implicit_iuse, effective_use, REQUIRED_USE)`.
+/// `None` when the parent isn't found, has no version to look up by, or
+/// its metadata can't be read.
+pub(crate) type ParentUseState = (
+    Candidate,
+    HashSet<String>,
+    Rc<HashSet<String>>,
+    Option<String>,
+);
+
+/// Which of the unevaluated atom's conditional use-deps are violated by
+/// the parent's current USE (i.e. flipping the parent's flag changes the
+/// evaluation), given the child's IUSE-filtered effective USE. `child_use`
+/// must already be intersected with `child_valid`.
+/// Portage: dep/__init__.py, Atom.violated_conditionals (parent arm)
+///
+/// Per operator (`P` = parent-has, `C` = child-has; valid flags reduce to
+/// `P && !C`, `P != C`, `P == C`, `!P && C`): `flag?` violates iff `P && !C` (and
+/// valid or `(-)`); `flag=` iff `P != C` (with the invalid-`(+)`
+/// `missing_enabled` corners); `flag!=` is the mirror; `!flag?` iff
+/// `!P && C` (plus the invalid-`(+)` parent-lacks-child-lacks corner).
+///
+/// Empty means "no parent flip helps": no conditional is parent-active,
+/// or the concrete gate fails (the unevaluated unconditional deps must
+/// already hold for this candidate). Narrowing: a conditional flag that
+/// is neither valid child IUSE nor defaulted poisons the candidate --
+/// end-to-end identical to Portage's `missing_iuse` early skip.
+pub(crate) fn violated_parent_flags(
+    unevaluated: &portage_dep::Atom,
+    parent_use: &HashSet<String>,
+    child_use: &HashSet<String>,
+    child_valid: &HashSet<String>,
+) -> Vec<String> {
+    use portage_dep::{UseDepDefault, UseDepOp};
+    let is_conditional = |op: &UseDepOp| {
+        matches!(
+            op,
+            UseDepOp::IfParentEnabled
+                | UseDepOp::IfParentDisabled
+                | UseDepOp::EqualParent
+                | UseDepOp::OppositeParent
+        )
+    };
+    let use_deps = unevaluated.use_deps.as_deref().unwrap_or_default();
+    let conds: Vec<&portage_dep::UseDep> = use_deps
+        .iter()
+        .filter(|ud| is_conditional(&ud.op))
+        .collect();
+    if conds.is_empty() {
+        return Vec::new();
+    }
+    // Invalid-undefaulted conditionals poison the candidate (Portage's
+    // `missing_iuse` early skip).
+    if conds
+        .iter()
+        .any(|ud| !child_valid.contains(&ud.flag) && ud.default.is_none())
+    {
+        return Vec::new();
+    }
+    // Unconditional defaultless deps outside child IUSE take the same
+    // early skip.
+    let required_missing = use_deps.iter().any(|ud| {
+        ud.default.is_none()
+            && matches!(ud.op, UseDepOp::Enabled | UseDepOp::Disabled)
+            && !child_valid.contains(&ud.flag)
+    });
+    if required_missing {
+        return Vec::new();
+    }
+    // The concrete gate on the unevaluated unconditional deps (a
+    // `flag=`/`flag!=` match direction lands in `conditional`, never in
+    // the concrete sets, so it never fails the gate).
+    let concrete_violated = use_deps.iter().any(|ud| match ud.op {
+        UseDepOp::Enabled => {
+            !child_use.contains(&ud.flag)
+                && (child_valid.contains(&ud.flag) || ud.default == Some(UseDepDefault::Disabled))
+        }
+        UseDepOp::Disabled => {
+            child_use.contains(&ud.flag)
+                || (!child_valid.contains(&ud.flag) && ud.default == Some(UseDepDefault::Enabled))
+        }
+        _ => false,
+    });
+    if concrete_violated {
+        return Vec::new();
+    }
+    let mut involved: Vec<String> = conds
+        .iter()
+        .filter(|ud| {
+            let p = parent_use.contains(&ud.flag);
+            let c = child_use.contains(&ud.flag);
+            let valid = child_valid.contains(&ud.flag);
+            let missing_en = ud.default == Some(UseDepDefault::Enabled);
+            let missing_dis = ud.default == Some(UseDepDefault::Disabled);
+            match ud.op {
+                UseDepOp::IfParentEnabled => p && !c && (valid || missing_dis),
+                UseDepOp::EqualParent => {
+                    if p && !c {
+                        valid || missing_dis
+                    } else if !p && !c {
+                        !valid && missing_en
+                    } else {
+                        !p && c
+                    }
+                }
+                UseDepOp::OppositeParent => {
+                    if !p && !c {
+                        valid || missing_dis
+                    } else if p && !c {
+                        !valid && missing_en
+                    } else {
+                        p && c
+                    }
+                }
+                UseDepOp::IfParentDisabled => {
+                    if !p && !c {
+                        !valid && missing_en
+                    } else {
+                        !p && c
+                    }
+                }
+                _ => false,
+            }
+        })
+        .map(|ud| ud.flag.clone())
+        .collect();
+    involved.sort();
+    involved.dedup();
+    involved
+}
+
 /// The parent-side `--autounmask-use` mechanism: unlike
 /// `suggested_use_candidate` (which flips the candidate's flag), this
 /// flips the requesting parent's flag for atoms whose use-dep was
