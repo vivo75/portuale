@@ -854,11 +854,31 @@ impl LibGraph {
         }
     }
 
+    /// Registers (or reuses) the graph node for `path`'s object identity,
+    /// recording `path` as one of that node's `alt_paths`. Adds no edge.
+    fn path_to_node(&mut self, root: &Path, path: &str) -> ObjKey {
+        let key = obj_key(root, path);
+        self.alt_paths
+            .entry(key.clone())
+            .or_default()
+            .insert(path.to_string());
+        key
+    }
+
     fn root_nodes(&self) -> Vec<ObjKey> {
         self.parents
             .iter()
             .filter(|(_, parents)| parents.is_empty())
             .map(|(node, _)| node.clone())
+            .collect()
+    }
+
+    fn child_nodes(&self, node: &ObjKey) -> Vec<ObjKey> {
+        self.children
+            .get(node)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
             .collect()
     }
 }
