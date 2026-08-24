@@ -25,6 +25,57 @@ pub(crate) struct ComputeNvcSuggestionsArgs<'a> {
     pub(crate) entries: &'a [GraphEntry],
 }
 
+/// The `--autounmask` keyword, USE and parent-USE suggestions for a
+/// dependency's own miss.
+pub(crate) fn compute_nvc_suggestions(args: ComputeNvcSuggestionsArgs<'_>) -> NvcSuggestionsOut {
+    let ComputeNvcSuggestionsArgs {
+        outcome,
+        bp,
+        ctx,
+        key,
+        atom,
+        config,
+        owner,
+        unevaluated_atom,
+        entries,
+    } = args;
+    // Keyword suggestion for a dependency's own miss (see
+    // `GraphEntry::keyword_suggestion`).
+    let keyword_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+        && bp.autounmask_suggest_keywords
+    {
+        suggested_keyword_candidate(&ctx.repos, &key.0, &key.1, config)
+    } else {
+        None
+    };
+    // `atom.use_deps` is already conditional-evaluated (only plain `flag` /
+    // `-flag` forms survive). See `GraphEntry::use_suggestion`.
+    let use_suggestion =
+        if matches!(outcome, PretendOutcome::NoVisibleCandidate) && bp.autounmask_suggest_use {
+            suggested_use_candidate(&ctx.repos, &key.0, &key.1, atom.use_deps.as_deref(), config)
+        } else {
+            None
+        };
+    // Parent-use suggestion needs a conditional use-dep evaluated away and a
+    // parent to flip (every miss here is a dependency's, so `owner` holds).
+    // See `suggested_parent_use_candidate`.
+    let parent_use_suggestion =
+        if matches!(outcome, PretendOutcome::NoVisibleCandidate) && bp.autounmask_suggest_use {
+            owner
+                .zip(unevaluated_atom.as_deref())
+                .and_then(|(owner, unevaluated)| {
+                    suggested_parent_use_candidate(&ctx.repos, entries, unevaluated, owner, config)
+                })
+        } else {
+            None
+        };
+    NvcSuggestionsOut {
+        keyword_suggestion,
+        use_suggestion,
+        parent_use_suggestion,
+    }
+}
+
 /// The values [`push_unresolved_entry`] reads from its caller.
 pub(crate) struct PushUnresolvedEntryArgs<'a> {
     pub(crate) key: (String, String),

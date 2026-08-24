@@ -546,3 +546,86 @@ pub(crate) fn viable_parent_flip_targets(
 /// rather than the parent's entry (no per-parent reasons list exists).
 /// `(parent_category, parent_package, parent_version, [(flag, desired)])`.
 pub type ParentUseSuggestion = (String, String, String, Vec<(String, bool)>);
+
+pub(crate) fn suggested_parent_use_candidate(
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+    unevaluated_atom: &str,
+    owner: &(String, String),
+    config: &portage_profile::Config,
+) -> Option<ParentUseSuggestion> {
+    let unevaluated = portage_dep::parse_atom(unevaluated_atom)?;
+    let (parent_candidate, parent_iuse, parent_use, parent_required_use) =
+        parent_use_state(repos, entries, owner, config)?;
+    let evaluated_atom = portage_dep::evaluate_atom_conditionals(unevaluated_atom, &parent_use)?;
+    let evaluated = portage_dep::parse_atom(&evaluated_atom)?;
+    for (_child, involved) in viable_parent_flip_targets(ViableParentFlipTargetsArgs {
+        repos,
+        unevaluated: &unevaluated,
+        evaluated: &evaluated,
+        unevaluated_atom,
+        parent_use: &parent_use,
+        config,
+    }) {
+        if involved.iter().any(|f| !parent_iuse.contains(f)) {
+            continue;
+        }
+
+        let target_use: Vec<(String, bool)> = involved
+            .iter()
+            .map(|f| (f.clone(), !parent_use.contains(f)))
+            .collect();
+        if target_use.iter().any(|(flag, desired)| {
+            !flag_is_settable(FlagIsSettableArgs {
+                candidate: &parent_candidate,
+                category: &owner.0,
+                package: &owner.1,
+                flag,
+                desired: *desired,
+                config,
+            })
+        }) {
+            continue;
+        }
+
+        let mut hypothetical_use = parent_use.as_ref().clone();
+        for (flag, desired) in &target_use {
+            if *desired {
+                hypothetical_use.insert(flag.clone());
+            } else {
+                hypothetical_use.remove(flag);
+            }
+        }
+
+        let re_evaluated =
+            portage_dep::evaluate_atom_conditionals(unevaluated_atom, &hypothetical_use)?;
+        if !atom_currently_satisfiable(repos, &re_evaluated, config, &[]) {
+            continue;
+        }
+
+        if let Some(required_use) = &parent_required_use
+            && !required_use.trim().is_empty()
+        {
+            let old_sat =
+                portage_required_use::check_required_use(required_use, &parent_use, &parent_iuse)
+                    .unwrap_or(false);
+            let new_sat = portage_required_use::check_required_use(
+                required_use,
+                &hypothetical_use,
+                &parent_iuse,
+            )
+            .unwrap_or(false);
+            if old_sat && !new_sat {
+                continue;
+            }
+        }
+
+        return Some((
+            owner.0.clone(),
+            owner.1.clone(),
+            parent_candidate.version.clone(),
+            target_use,
+        ));
+    }
+    None
+}
