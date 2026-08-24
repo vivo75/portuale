@@ -104,6 +104,46 @@ pub(crate) fn remove_from_contents_into(
     Ok(())
 }
 
+/// Arguments of [`register_preserved_libs`].
+pub(crate) struct RegisterPreservedLibsArgs<'a> {
+    pub(crate) registry: &'a mut PlibRegistry,
+    pub(crate) cpv: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) counter: &'a str,
+    pub(crate) paths: &'a [String],
+}
+
+/// Registers (`paths`) or unregisters (empty `paths`, only on the same `cpv` + `counter`)
+/// one `cp:slot` record; the key is `category/package:slot`, without the version.
+// Portage: PreservedLibsRegistry.py, PreservedLibsRegistry.register
+pub(crate) fn register_preserved_libs(args: RegisterPreservedLibsArgs<'_>) {
+    let RegisterPreservedLibsArgs {
+        registry,
+        cpv,
+        category,
+        pn,
+        slot,
+        counter,
+        paths,
+    } = args;
+    let cps = format!("{category}/{pn}:{slot}");
+    let counter = counter.trim();
+    if paths.is_empty() {
+        if let Some((entry_cpv, entry_counter, _)) = registry.entries.get(&cps)
+            && entry_cpv == cpv
+            && entry_counter.trim() == counter
+        {
+            registry.entries.remove(&cps);
+        }
+    } else {
+        registry
+            .entries
+            .insert(cps, (cpv.to_string(), counter.to_string(), paths.to_vec()));
+    }
+}
+
 /// Shared `LinkageMap` input for the preserve-libs computations: vdb entries plus
 /// registry-orphan scan results. `exclude_cpvs` drops unmerging instances; the
 /// `replacement_*` feeds cover data that enumeration skips.
@@ -183,6 +223,16 @@ pub(crate) fn replacement_needed_entries(
     vec![(format!("{category}/{new_pf}"), entries)]
 }
 
+/// Arguments of [`find_preserve_paths_for_merge`].
+pub(crate) struct FindPreservePathsForMergeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) new_pf: &'a str,
+    pub(crate) main_slot: &'a str,
+    pub(crate) new_image_paths: &'a BTreeSet<String>,
+}
+
 /// Copies preserved paths' entries from the replaced instance's `CONTENTS` into the
 /// merging package's; a path missing there is dropped with a warning.
 // Portage: vartree.py, dblink._add_preserve_libs_to_contents
@@ -211,4 +261,51 @@ pub(crate) fn inject_preserved_libs_into_contents(
         }
     }
     (lines, surviving)
+}
+
+/// Arguments of [`register_merge_preserved_libs`].
+pub(crate) struct RegisterMergePreservedLibsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) new_pf: &'a str,
+    pub(crate) main_slot: &'a str,
+    pub(crate) preserve_paths: &'a BTreeSet<String>,
+}
+
+/// Arguments of [`merge_plib_registration`].
+pub(crate) struct MergePlibRegistrationArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) new_pf: &'a str,
+    pub(crate) main_slot: &'a str,
+    pub(crate) preserve_paths: &'a BTreeSet<String>,
+    pub(crate) new_counter: &'a str,
+}
+
+/// The registry [`register_merge_preserved_libs`] stores, split out for database backends.
+pub(crate) fn merge_plib_registration(args: MergePlibRegistrationArgs<'_>) -> PlibRegistry {
+    let MergePlibRegistrationArgs {
+        root,
+        category,
+        pn,
+        new_pf,
+        main_slot,
+        preserve_paths,
+        new_counter,
+    } = args;
+    let new_cpv = format!("{category}/{new_pf}");
+    let mut registry = read_plib_registry(root);
+    let paths_vec: Vec<String> = preserve_paths.iter().cloned().collect();
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: &new_cpv,
+        category,
+        pn,
+        slot: main_slot,
+        counter: new_counter,
+        paths: &paths_vec,
+    });
+    registry
 }
