@@ -391,6 +391,144 @@ pub(crate) struct ViableParentFlipTargetsArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
 }
 
+/// The version/slot-matching visible ebuilds behind the unevaluated atom
+/// (descending version), each paired with the parent-active violated flags
+/// [`violated_parent_flags`] finds for it. Skipped when a flag the child
+/// would need is mask/force-pinned (no flip can fix it) or when no
+/// conditional is parent-active. Both the repair probe and the display
+/// twin walk this list and take the first viable candidate.
+/// Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep loop
+pub(crate) fn viable_parent_flip_targets(
+    args: ViableParentFlipTargetsArgs<'_>,
+) -> Vec<(Candidate, Vec<String>)> {
+    let ViableParentFlipTargetsArgs {
+        repos,
+        unevaluated,
+        evaluated,
+        unevaluated_atom,
+        parent_use,
+        config,
+    } = args;
+    let category = unevaluated.category.clone();
+    let package = unevaluated.package.clone();
+    let Ok(candidates) = list_candidates(repos, &category, &package) else {
+        return Vec::new();
+    };
+    let strs: Vec<String> = candidates
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                category, package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    // Version/slot filter, USE and visibility ignored.
+    let Some(matched) =
+        portage_dep::match_from_list(portage_dep::without_use(unevaluated_atom), &refs)
+    else {
+        return Vec::new();
+    };
+    let matched: std::collections::HashSet<&str> = matched.into_iter().collect();
+    let mut cands: Vec<&Candidate> = candidates
+        .iter()
+        .zip(strs.iter())
+        .filter(|(_, s)| matched.contains(s.as_str()))
+        .map(|(c, _)| c)
+        .collect();
+    // Descending version.
+    cands.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+
+    let eval_deps = evaluated.use_deps.as_deref().unwrap_or_default();
+    let mut out = Vec::new();
+    for c in cands {
+        // Masked instances never reach the parent arm.
+        if !is_visible(c, &category, &package, config) {
+            continue;
+        }
+        let Some((declared, use_flags)) = candidate_iuse_and_use(c, &category, &package, config)
+        else {
+            continue;
+        };
+        let valid = valid_iuse(&declared, config);
+        // The child's effective USE, filtered to valid IUSE.
+        let child_use: HashSet<String> = use_flags
+            .iter()
+            .filter(|f| valid.contains(*f))
+            .cloned()
+            .collect();
+        // The evaluated atom's concrete needs, for the pin check below.
+        let need_enable: Vec<&String> = eval_deps
+            .iter()
+            .filter(|ud| {
+                ud.op == portage_dep::UseDepOp::Enabled
+                    && !child_use.contains(&ud.flag)
+                    && valid.contains(&ud.flag)
+            })
+            .map(|ud| &ud.flag)
+            .collect();
+        let need_disable: Vec<&String> = eval_deps
+            .iter()
+            .filter(|ud| {
+                ud.op == portage_dep::UseDepOp::Disabled
+                    && child_use.contains(&ud.flag)
+                    && valid.contains(&ud.flag)
+            })
+            .map(|ud| &ud.flag)
+            .collect();
+        // A flag the child would need but mask/force pins: no parent
+        // flip either.
+        let candidate_str = format!(
+            "{}/{}-{}:{}/{}::{}",
+            category, package, c.version, c.slot, c.sub_slot, c.repo_name
+        );
+        let stable = is_stable(IsStableArgs {
+            keywords: &c.keywords,
+            candidate_str: &candidate_str,
+            category: &category,
+            package: &package,
+            accept_keywords: &config.accept_keywords,
+            package_accept_keywords: &config.package_accept_keywords,
+        });
+        let mut untouchable = resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+            which: MaskOrForce::Mask,
+            config,
+            candidate_str: &candidate_str,
+            category: &category,
+            package: &package,
+            stable,
+        })
+        .as_ref()
+        .clone();
+        untouchable.extend(
+            resolved_use_mask_or_force(ResolvedUseMaskOrForceArgs {
+                which: MaskOrForce::Force,
+                config,
+                candidate_str: &candidate_str,
+                category: &category,
+                package: &package,
+                stable,
+            })
+            .iter()
+            .cloned(),
+        );
+        if need_enable
+            .iter()
+            .chain(need_disable.iter())
+            .any(|f| untouchable.contains(*f))
+        {
+            continue;
+        }
+        let involved = violated_parent_flags(unevaluated, parent_use, &child_use, &valid);
+        if involved.is_empty() {
+            continue;
+        }
+        out.push((c.clone(), involved));
+    }
+    out
+}
+
 /// The parent-side `--autounmask-use` mechanism: unlike
 /// `suggested_use_candidate` (which flips the candidate's flag), this
 /// flips the requesting parent's flag for atoms whose use-dep was
