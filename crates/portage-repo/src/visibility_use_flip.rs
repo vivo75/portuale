@@ -180,6 +180,87 @@ pub(crate) type ParentUseState = (
     Option<String>,
 );
 
+pub(crate) fn parent_use_state(
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+    owner: &(String, String),
+    config: &portage_profile::Config,
+) -> Option<ParentUseState> {
+    let parent_entry = entries
+        .iter()
+        .find(|e| e.category == owner.0 && e.package == owner.1)?;
+    let version: String = match &parent_entry.outcome {
+        PretendOutcome::New { version } => version,
+        PretendOutcome::Upgrade { to, .. } => to,
+        PretendOutcome::Downgrade { to, .. } => to,
+        PretendOutcome::Reinstall { version, .. } => version,
+        _ => return None,
+    }
+    .clone();
+    let candidates = list_candidates(repos, &owner.0, &owner.1).ok()?;
+    let resolved = candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)?
+        .clone();
+    let (_iuse, use_flags) = candidate_iuse_and_use(&resolved, &owner.0, &owner.1, config)?;
+    let pf = format!("{}-{version}", owner.1);
+    let metadata = repo_aux_metadata(&resolved.repo_location, &owner.0, &pf).ok()?;
+    let full_iuse = implicit_iuse_set(
+        metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+        config,
+    );
+    Some((
+        resolved,
+        full_iuse,
+        use_flags,
+        metadata.get("REQUIRED_USE").cloned(),
+    ))
+}
+
+/// The installed twin of [`parent_use_state`] for [`use_unsat_parent_row`]:
+/// flip base is the vdb `USE`, the IUSE fold is the vdb `IUSE`, and the
+/// same-version repo candidate supplies the `Candidate`, row cpv/repo and
+/// `REQUIRED_USE`. The repair path keeps the merge-bound-only shape.
+/// Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep
+pub(crate) fn installed_parent_use_state(
+    repos: &[RepoConfig],
+    root: &Path,
+    entries: &[GraphEntry],
+    owner: &(String, String),
+    config: &portage_profile::Config,
+) -> Option<ParentUseState> {
+    let parent_entry = entries
+        .iter()
+        .find(|e| e.category == owner.0 && e.package == owner.1)?;
+    let PretendOutcome::AlreadyInstalled { version } = &parent_entry.outcome else {
+        return None;
+    };
+    if !vdb_entry_is_dir(root, &owner.0, &owner.1, version) {
+        return None;
+    }
+    let candidates = list_candidates(repos, &owner.0, &owner.1).ok()?;
+    let resolved = candidates
+        .iter()
+        .filter(|c| c.version == *version)
+        .max_by_key(|c| c.repo_priority)?
+        .clone();
+    let vdb_iuse = read_vdb_flag_set(root, &owner.0, &owner.1, version, "IUSE");
+    let mut iuse_line: Vec<String> = vdb_iuse.into_iter().collect();
+    iuse_line.sort();
+    let full_iuse = implicit_iuse_set(&iuse_line.join(" "), config);
+    let use_flags: Rc<HashSet<String>> =
+        Rc::new(read_vdb_flag_set(root, &owner.0, &owner.1, version, "USE"));
+    let pf = format!("{}-{version}", owner.1);
+    let metadata = repo_aux_metadata(&resolved.repo_location, &owner.0, &pf).ok()?;
+    Some((
+        resolved,
+        full_iuse,
+        use_flags,
+        metadata.get("REQUIRED_USE").cloned(),
+    ))
+}
+
 /// Which of the unevaluated atom's conditional use-deps are violated by
 /// the parent's current USE (i.e. flipping the parent's flag changes the
 /// evaluation), given the child's IUSE-filtered effective USE. `child_use`
@@ -299,6 +380,15 @@ pub(crate) fn violated_parent_flags(
     involved.sort();
     involved.dedup();
     involved
+}
+
+pub(crate) struct ViableParentFlipTargetsArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) unevaluated: &'a portage_dep::Atom,
+    pub(crate) evaluated: &'a portage_dep::Atom,
+    pub(crate) unevaluated_atom: &'a str,
+    pub(crate) parent_use: &'a HashSet<String>,
+    pub(crate) config: &'a portage_profile::Config,
 }
 
 /// The parent-side `--autounmask-use` mechanism: unlike
