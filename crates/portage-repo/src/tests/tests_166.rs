@@ -64,6 +64,43 @@ fn conflict_166(versions: Vec<(&str, bool)>) -> SlotConflict {
     }
 }
 
+/// Merge-bound `GraphEntry` carrying resolved display flags (the
+/// shape `direct_solve_instance_use` reads for a merge instance).
+fn entry_166(cat: &str, pkg: &str, version: &str, display: Vec<(String, bool)>) -> GraphEntry {
+    GraphEntry {
+        discovery: 0,
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        outcome: PretendOutcome::New {
+            version: version.to_string(),
+        },
+        blockers: Vec::new(),
+        slot: Some("0".to_string()),
+        sub_slot: Some("0".to_string()),
+        repo_name: Some("testrepo".to_string()),
+        oldbest: Vec::new(),
+        use_flags_display: display,
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: Vec::new(),
+        source: CandidateSource::Ebuild,
+        provenance: VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    }
+}
+
 fn inst_166(version: &str, installed: bool) -> SlotConflictInstance {
     SlotConflictInstance {
         version: version.to_string(),

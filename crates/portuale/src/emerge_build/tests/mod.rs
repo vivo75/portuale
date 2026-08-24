@@ -83,5 +83,40 @@ fn source_entry(package: &str, outcome: PretendOutcome) -> GraphEntry {
         deps: Vec::new(),
     }
 }
+
+fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntry {
+    GraphEntry {
+        discovery: 0,
+        category: category.into(),
+        package: package.into(),
+        outcome: PretendOutcome::New {
+            version: version.into(),
+        },
+        blockers: vec![],
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        repo_name: Some("testrepo".into()),
+        oldbest: vec![],
+        use_flags_display: vec![],
+        use_expand_display: vec![],
+        use_expand_display_p: vec![],
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: vec![],
+        source: CandidateSource::Ebuild,
+        provenance: Default::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    }
+}
 mod entries;
 mod resume;

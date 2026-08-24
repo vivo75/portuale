@@ -105,6 +105,41 @@ mod tests {
         (format!("http://127.0.0.1:{port}"), handle)
     }
 
+    fn graph_entry(package: &str, source: CandidateSource, version: &str) -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: package.into(),
+            outcome: PretendOutcome::New {
+                version: version.into(),
+            },
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("testrepo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: vec![],
+            required_by: vec![],
+            source,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        }
+    }
+
     /// A writable copy of the committed GnuPG test keyring (see `binpkg.rs`).
     /// `gpg` refuses a homedir it doesn't own, so the tree itself is never used.
     fn test_gpg_home() -> std::path::PathBuf {
