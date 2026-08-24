@@ -1096,6 +1096,293 @@ fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
     })
 }
 
+pub(crate) struct QuickpkgFromVdbArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) scratch_ebuild_dir: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a PackageOptions,
+    pub(crate) config_protect: &'a str,
+    pub(crate) config_protect_mask: &'a str,
+}
+
+/// `FEATURES=unmerge-backup`'s pre-unmerge binpkg of the **installed** package,
+/// built from its files under `${ROOT}` per `CONTENTS` rather than from a
+/// fresh `src_install`. Stages the installed tree into the image dir and a
+/// verbatim copy of the vdb dir into `build-info`, then runs the same
+/// `__dyn_package` the `ebuild package` path uses. The `Packages` entry is
+/// written from the vdb's own recorded metadata (not md5-cache -- the package
+/// may no longer be in any repo).
+///
+/// A CONFIG_PROTECT'd (not -MASK'd) file is left out of the image
+/// (`include_config=False`); fifo/device nodes are skipped. Returns `Ok(None)`
+/// -- silently building no backup -- only when the target archive path already
+/// exists (Portage overwrites; this is a conservative cut against clobbering a
+/// user-placed binpkg). Portage's `BUILD_TIME` idempotency check is
+/// deliberately not mirrored (see body).
+///
+/// Under `FEATURES=binpkg-multi-instance` the archive goes to
+/// `<pkgdir>/<cat>/<pn>/<pf>-<build_id>.<suffix>`; otherwise the bare
+/// `<cat>/<pf>.<ext>`.
+// Portage: vartree.py, dblink.quickpkg
+pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<PathBuf>, String> {
+    let QuickpkgFromVdbArgs {
+        root,
+        category,
+        package,
+        pf,
+        scratch_ebuild_dir,
+        portage_tmpdir,
+        options,
+        config_protect,
+        config_protect_mask,
+    } = args;
+    let ext = binpkg_extension(&options.binpkg_format)?;
+    // The entry is read through the root's installed-database backend: the entry
+    // directory on `files`, a scratch materialized copy under
+    // `scratch_ebuild_dir` on a database backend.
+    let db = portage_vdb::for_root(root);
+    let key = portage_vdb::EntryKey::new(category, pf);
+    let vdb_dir = match db.entry_path(&key) {
+        Some(dir) => dir,
+        None => {
+            let dir = scratch_ebuild_dir.join("vdb-entry").join(category).join(pf);
+            if !portage_vdb::materialize_entry(db.as_ref(), &key, &dir)
+                .map_err(|e| e.to_string())?
+            {
+                return Err(format!("{category}/{pf}: not installed"));
+            }
+            dir
+        }
+    };
+    let vdb_build_time = ebuild_merge::read_entry_text(root, category, pf, "BUILD_TIME")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    // No `BUILD_TIME` idempotency check: in every removal flow that reaches here
+    // Portage's own bintree was never populated, so its check always rebuilds;
+    // consulting the raw index here instead once skipped a backup whenever a
+    // stale stanza shared the re-merged package's `BUILD_TIME`.
+    let cpv = format!("{category}/{pf}");
+
+    let multi_instance_suffix = multi_instance_binpkg_suffix(&options.binpkg_format)?;
+    let build_id = options.binpkg_multi_instance.then(|| {
+        allocate_binpkg_build_id(
+            &options.pkgdir,
+            category,
+            package,
+            pf,
+            multi_instance_suffix,
+        )
+    });
+    let binpkg_path = match build_id {
+        Some(id) => options
+            .pkgdir
+            .join(category)
+            .join(package)
+            .join(format!("{pf}-{id}.{multi_instance_suffix}")),
+        None => options.pkgdir.join(category).join(format!("{pf}.{ext}")),
+    };
+    if binpkg_path.exists() {
+        return Ok(None);
+    }
+
+    // Error shapes mirror `read_to_string`: io error, ENOENT for missing, UTF-8
+    // error text for non-UTF-8 CONTENTS.
+    let contents_path = vdb_dir.join("CONTENTS");
+    let contents_err = |e: &dyn std::fmt::Display| format!("{}: {e}", contents_path.display());
+    let contents = match db.read_file(&key, "CONTENTS") {
+        Ok(Some(bytes)) => String::from_utf8(bytes).map_err(|_| {
+            contents_err(&std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            ))
+        })?,
+        Ok(None) => return Err(contents_err(&std::io::Error::from_raw_os_error(2))),
+        Err(portage_vdb::Error::Io { source, .. }) => return Err(contents_err(&source)),
+        Err(e) => return Err(contents_err(&e)),
+    };
+    let vdb_ebuild = vdb_dir.join(format!("{pf}.ebuild"));
+    if !ebuild_merge::entry_file_is_regular(root, category, pf, &format!("{pf}.ebuild")) {
+        return Err(format!(
+            "{}: no vdb ebuild to package from (installed before portuale kept one?)",
+            vdb_dir.display()
+        ));
+    }
+
+    // The vdb layout is <cat>/<pf>/<pf>.ebuild; copy into a <cat>/<pn> layout
+    // so `compute_environment`'s path parse works.
+    let src_dir = scratch_ebuild_dir.join(category).join(package);
+    std::fs::create_dir_all(&src_dir).map_err(|e| format!("{}: {e}", src_dir.display()))?;
+    let scratch_ebuild = src_dir.join(format!("{pf}.ebuild"));
+    std::fs::copy(&vdb_ebuild, &scratch_ebuild)
+        .map_err(|e| format!("{}: {e}", vdb_ebuild.display()))?;
+
+    let env = ebuild_phases::compute_environment(&scratch_ebuild, portage_tmpdir)?;
+
+    // Fresh image dir, then stage every CONTENTS entry from ${ROOT}.
+    let image = env.d();
+    let _ = std::fs::remove_dir_all(&image);
+    std::fs::create_dir_all(&image).map_err(|e| format!("{}: {e}", image.display()))?;
+    for line in contents.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(kind), Some(abs)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let src = root.join(abs.trim_start_matches('/'));
+        let dst = image.join(abs.trim_start_matches('/'));
+        match kind {
+            "dir" => {
+                std::fs::create_dir_all(&dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+            }
+            "obj" => {
+                if ebuild_merge::is_protected(root, config_protect, config_protect_mask, &src) {
+                    continue;
+                }
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("{}: {e}", parent.display()))?;
+                }
+                std::fs::copy(&src, &dst)
+                    .map_err(|e| format!("quickpkg: {}: {e}", src.display()))?;
+            }
+            "sym" => {
+                let target = std::fs::read_link(&src)
+                    .map_err(|e| format!("quickpkg: {}: {e}", src.display()))?;
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("{}: {e}", parent.display()))?;
+                }
+                std::os::unix::fs::symlink(&target, &dst)
+                    .map_err(|e| format!("quickpkg: {}: {e}", dst.display()))?;
+            }
+            // "fif"/"dev": documented cut (needs CAP_MKNOD).
+            _ => {}
+        }
+    }
+
+    // build-info/ is a verbatim copy of the vdb dir.
+    let build_info = env.build_info();
+    let _ = std::fs::remove_dir_all(&build_info);
+    copy_dir_recursive(&vdb_dir, &build_info)?;
+
+    // Same temp-file-then-rename as `package_after_install`, so a failed
+    // compressor never leaves a corrupt archive at `binpkg_path`.
+    let tmp_path = binpkg_path.with_extension(format!(
+        "{}.tmp{}",
+        binpkg_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default(),
+        std::process::id()
+    ));
+    let status = invoke_dyn_package(InvokeDynPackageArgs {
+        ebuild_path: &scratch_ebuild,
+        portage_tmpdir,
+        root,
+        options,
+        binpkg_path: &tmp_path,
+        build_id: None,
+    })?;
+    if status != 0 {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(format!("{category}/{pf}: __dyn_package failed ({status})"));
+    }
+    std::fs::rename(&tmp_path, &binpkg_path)
+        .map_err(|e| format!("{} -> {}: {e}", tmp_path.display(), binpkg_path.display()))?;
+
+    // `$PKGDIR/Packages` entry from the vdb's own build-info files.
+    let bi = |k: &str| {
+        ebuild_merge::read_entry_text(root, category, pf, k)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let build_time = vdb_build_time.as_str();
+    // The stanza `BUILD_ID` is the installed entry's own, not the freshly
+    // allocated filename suffix: a `quickpkg` archive carries no new
+    // `BUILD_ID` (Portage never exports one on this path), so an entry for
+    // a source-installed package omits it even in the multi-instance
+    // layout. Same for the archive itself: no `BUILD_ID` export.
+    // Portage: bin/quickpkg; bintree.py, _pkgindex_entry
+    let build_id_str = bi("BUILD_ID");
+    // `PATH` is always written (also needed by the local-pkgdir scan's
+    // mtime-staleness fast path); derived from `binpkg_path` relative to
+    // `$PKGDIR` so the multi-instance subdir path carries through.
+    let path_field = binpkg_path
+        .strip_prefix(&options.pkgdir)
+        .ok()
+        .and_then(|rel| rel.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{category}/{pf}.{ext}"));
+    let size_str = std::fs::metadata(&binpkg_path)
+        .map(|st| st.len().to_string())
+        .unwrap_or_default();
+    let mtime_str = std::fs::metadata(&binpkg_path)
+        .ok()
+        .map(|st| binpkg::file_mtime(&st).to_string())
+        .unwrap_or_default();
+    let (md5_str, sha1_str) = binpkg_checksums(&binpkg_path).unwrap_or_default();
+    // The stanza is whatever of the vdb dir survives `PackageIndex.write`:
+    // `EAPI` verbatim unless `"0"`, `REPO_REVISIONS` verbatim when carried,
+    // `repository` verbatim as last key `REPO`, keys in sorted order, no
+    // `PF`/`CATEGORY` lines. Empty values are skipped, like Portage's guard.
+    let slot = omit_stanza_default("SLOT", bi("SLOT").as_str()).to_string();
+    let eapi = omit_stanza_default("EAPI", bi("EAPI").as_str()).to_string();
+    let keywords = bi("KEYWORDS");
+    let use_flags = bi("USE");
+    let license = bi("LICENSE");
+    let iuse = bi("IUSE");
+    let properties = bi("PROPERTIES");
+    let restrict = bi("RESTRICT");
+    let depend = bi("DEPEND");
+    let rdepend = bi("RDEPEND");
+    let bdepend = bi("BDEPEND");
+    let pdepend = bi("PDEPEND");
+    let idepend = bi("IDEPEND");
+    let defined_phases = bi("DEFINED_PHASES");
+    let repo_revisions = bi("REPO_REVISIONS");
+    let repository = bi("repository");
+    let mut fields: Vec<(&'static str, &str)> = vec![
+        ("BDEPEND", &bdepend),
+        ("BUILD_ID", &build_id_str),
+        ("BUILD_TIME", build_time),
+        ("CPV", &cpv),
+        ("DEFINED_PHASES", &defined_phases),
+        ("DEPEND", &depend),
+        ("EAPI", &eapi),
+        ("IDEPEND", &idepend),
+        ("IUSE", &iuse),
+        ("KEYWORDS", &keywords),
+        ("LICENSE", &license),
+        ("MD5", &md5_str),
+        ("PATH", &path_field),
+        ("PDEPEND", &pdepend),
+        ("PROPERTIES", &properties),
+        ("RDEPEND", &rdepend),
+        ("REPO_REVISIONS", &repo_revisions),
+        ("RESTRICT", &restrict),
+        ("SHA1", &sha1_str),
+        ("SIZE", &size_str),
+        ("SLOT", &slot),
+        ("USE", &use_flags),
+        ("MTIME", &mtime_str),
+        ("REPO", &repository),
+    ];
+    sort_stanza_fields_for_write(&mut fields);
+    write_packages_index_entry(
+        &options.pkgdir,
+        &cpv,
+        &fields,
+        options.pkgindex_header.as_ref().map(|h| &h.child),
+    )?;
+
+    Ok(Some(binpkg_path))
+}
+
 /// Recursively copy `src` -> `dst` (files, symlinks-as-symlinks,
 /// subdirs), creating `dst`. Used to stage the vdb dir as
 /// `${PORTAGE_BUILDDIR}/build-info` for `quickpkg_from_vdb`.
