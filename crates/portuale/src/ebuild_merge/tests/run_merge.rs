@@ -765,6 +765,87 @@ fn preservepkg_new_collides_ordinarily_without_a_registry_entry() {
     assert!(err.contains("/usr/lib/preservedtest/libfoo.so.1"), "{err}");
 }
 
+/// Merging a FIFO node creates it at the destination and records a `fif` CONTENTS
+/// line; re-merging is a no-op and unmerge leaves the node in place.
+#[test]
+fn real_merge_creates_a_real_fifo_and_records_a_fif_contents_line() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let portage_tmpdir = tmp.join("tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+    let ebuild = collision_fixture("fifopkg");
+    let status = run_merge(
+        &ebuild,
+        &root,
+        &portage_tmpdir,
+        &MergeOptions::default(),
+        None,
+    )
+    .expect("run_merge succeeds");
+    assert_eq!(status, 0);
+
+    let fifo_path = root.join("usr/lib/fifopkg/myfifo");
+    let meta = std::fs::symlink_metadata(&fifo_path).expect("the real FIFO was created");
+    assert!(meta.file_type().is_fifo(), "{:?}", meta.file_type());
+
+    let contents =
+        std::fs::read_to_string(root.join("var/db/pkg/dev-libs/fifopkg-1.0/CONTENTS")).unwrap();
+    assert!(
+        contents.contains("fif /usr/lib/fifopkg/myfifo\n"),
+        "{contents}"
+    );
+
+    // Plant something else there: an existing node must be left alone.
+    std::fs::remove_file(&fifo_path).unwrap();
+    std::fs::write(&fifo_path, b"not actually a fifo anymore").unwrap();
+    let status = run_merge(
+        &ebuild,
+        &root,
+        &portage_tmpdir,
+        &MergeOptions::default(),
+        None,
+    )
+    .expect("second run_merge succeeds");
+    assert_eq!(status, 0);
+    assert_eq!(
+        std::fs::read_to_string(&fifo_path).unwrap(),
+        "not actually a fifo anymore",
+        "an existing node at that path must be left completely alone"
+    );
+
+    // Restore a FIFO first so the leave-in-place assertion is meaningful.
+    std::fs::remove_file(&fifo_path).unwrap();
+    // SAFETY: `c_path` is a CString that outlives the `mkfifo`
+    // call; the call itself takes only the NUL-terminated pointer
+    // plus a plain mode int.
+    unsafe {
+        use std::os::unix::ffi::OsStrExt;
+        let c_path = std::ffi::CString::new(fifo_path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(libc::mkfifo(c_path.as_ptr(), 0o644), 0);
+    }
+
+    let unmerge_status = crate::ebuild_unmerge::run_unmerge(
+        &ebuild,
+        &root,
+        &portage_tmpdir,
+        &crate::ebuild_unmerge::UnmergeOptions::default(),
+    )
+    .expect("run_unmerge succeeds");
+    assert_eq!(unmerge_status, 0);
+    assert!(
+        std::fs::symlink_metadata(&fifo_path)
+            .map(|m| m.file_type().is_fifo())
+            .unwrap_or(false),
+        "real portage never unlinks a fif/dev CONTENTS entry on unmerge"
+    );
+    assert!(
+        !root.join("var/db/pkg/dev-libs/fifopkg-1.0").exists(),
+        "the vdb entry itself is still removed, same as any other unmerge"
+    );
+}
+
 /// `env_update()` runs after `postinst`, so it regenerates its outputs from the
 /// merge's own just-installed `/etc/env.d/50-envupdatetest` (Portage's order).
 #[test]

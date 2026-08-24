@@ -535,6 +535,78 @@ pub(crate) fn entry_path_for_message(root: &Path, category: &str, pf: &str) -> s
         .unwrap_or_else(|| std::path::PathBuf::from(format!("{category}/{pf}")))
 }
 
+/// `prerm` -> delete files -> `postrm`, then the vdb entry itself, but
+/// only on success.
+/// Portage: top-level `unmerge()`.
+pub fn run_unmerge(
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &UnmergeOptions,
+) -> Result<i32, String> {
+    let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
+    // One `stat` that follows symlinks; any error is "not there".
+    let installed = portage_vdb::for_root(root)
+        .file_meta(
+            &portage_vdb::EntryKey::new(env.category.as_str(), env.split.pf.as_str()),
+            "CONTENTS",
+        )
+        .is_ok_and(|meta| meta.is_some());
+    if !installed {
+        return Err(format!(
+            "{}: not installed",
+            entry_path_for_message(root, &env.category, &env.split.pf).display()
+        ));
+    }
+
+    let prerm_status = ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
+        ebuild_path,
+        phase: "prerm",
+        root,
+        portage_tmpdir,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        build_env: &[],
+        log_file: None,
+    })?;
+    if prerm_status != 0 {
+        return Ok(prerm_status);
+    }
+
+    let mut retire = ebuild_merge::RetireWrites::for_root(root);
+    unmerge_pkgfiles_into(UnmergePkgfilesIntoArgs {
+        root,
+        category: &env.category,
+        pn: &env.split.pn,
+        pf: &env.split.pf,
+        also_keep: &[],
+        options,
+        is_replacement: false,
+        replacement_preserved: &BTreeMap::new(), // Standalone `emerge -C`: no replacing package.
+        replacement_needed: &[],
+        retire: retire.as_mut(),
+    })?;
+
+    let postrm_status = ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
+        ebuild_path,
+        phase: "postrm",
+        root,
+        portage_tmpdir,
+        debug: options.debug,
+        config_root: &options.config_root,
+        shell: options.shell,
+        build_env: &[],
+        log_file: None,
+    })?;
+    if postrm_status != 0 {
+        return Ok(postrm_status);
+    }
+
+    retire_entry(root, &env.category, &env.split.pf, retire)?;
+    Ok(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,5 +823,206 @@ mod tests {
             contents_text: contents,
         })
         .expect("missing entries are not an error");
+    }
+
+    /// With defaults a locally-modified file is deleted anyway
+    /// (`unmerge-orphans` is default-on).
+    #[test]
+    fn real_unmerge_deletes_a_locally_modified_file_by_portage_default() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+        let merge_status = crate::ebuild_merge::run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &crate::ebuild_merge::MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
+        assert_eq!(merge_status, 0);
+
+        std::fs::write(
+            root.join("usr/share/mergepkg/hello.txt"),
+            b"hand-modified content",
+        )
+        .unwrap();
+
+        let unmerge_status =
+            run_unmerge(&ebuild, &root, &portage_tmpdir, &UnmergeOptions::default())
+                .expect("run_unmerge succeeds");
+        assert_eq!(unmerge_status, 0);
+
+        assert!(
+            !root.join("usr/share/mergepkg/hello.txt").exists(),
+            "unmerge-orphans is on by real default, so the modified file is deleted anyway"
+        );
+    }
+
+    #[test]
+    fn real_unmerge_removes_a_previously_real_merged_package() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+        let merge_status = crate::ebuild_merge::run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &crate::ebuild_merge::MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
+        assert_eq!(merge_status, 0);
+        assert!(root.join("usr/share/mergepkg/hello.txt").is_file());
+        let vdb_dir = root.join("var/db/pkg/dev-libs/mergepkg-1.0");
+        assert!(vdb_dir.is_dir());
+
+        let unmerge_status =
+            run_unmerge(&ebuild, &root, &portage_tmpdir, &UnmergeOptions::default())
+                .expect("run_unmerge succeeds");
+        assert_eq!(unmerge_status, 0);
+
+        assert!(!root.join("usr/share/mergepkg/hello.txt").exists());
+        assert!(!root.join("usr/share/mergepkg/hello-link.txt").exists());
+        assert!(!root.join("usr/share/mergepkg").exists());
+        assert!(!vdb_dir.exists());
+        assert!(!root.join("var/db/pkg/dev-libs").exists());
+    }
+
+    #[test]
+    fn real_unmerge_drops_a_stale_conf_mem_entry_but_keeps_an_unrelated_one() {
+        // End to end: the config-memory read, stale collection, and
+        // rewrite connect through `run_unmerge`.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+        let merge_status = crate::ebuild_merge::run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &crate::ebuild_merge::MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
+        assert_eq!(merge_status, 0);
+
+        // One entry for a path about to be removed, one for an untouched path.
+        let mut cfgfiledict = BTreeMap::new();
+        cfgfiledict.insert(
+            "/usr/share/mergepkg/hello.txt".to_string(),
+            "deadbeef".to_string(),
+        );
+        cfgfiledict.insert("/etc/unrelated.conf".to_string(), "cafebabe".to_string());
+        crate::ebuild_merge::write_cfgfiledict(&root, &cfgfiledict).unwrap();
+
+        let unmerge_status =
+            run_unmerge(&ebuild, &root, &portage_tmpdir, &UnmergeOptions::default())
+                .expect("run_unmerge succeeds");
+        assert_eq!(unmerge_status, 0);
+
+        let after = crate::ebuild_merge::read_cfgfiledict(&root);
+        assert_eq!(
+            after.get("/etc/unrelated.conf"),
+            Some(&"cafebabe".to_string()),
+            "an unrelated entry must survive untouched"
+        );
+        assert!(
+            !after.contains_key("/usr/share/mergepkg/hello.txt"),
+            "the removed package's own now-stale entry must be dropped"
+        );
+    }
+
+    #[test]
+    fn real_in_place_upgrade_via_ebuild_merge_replaces_the_old_slot_mate() {
+        // End-to-end in-place upgrade: merging 2.0 removes 1.0 but keeps
+        // the shared file; unmerging 2.0 removes it.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild_v1 = repo_root.join("dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild");
+        let ebuild_v2 = repo_root.join("dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild");
+
+        for ebuild in [&ebuild_v1, &ebuild_v2] {
+            let merge_status = crate::ebuild_merge::run_merge(
+                ebuild,
+                &root,
+                &portage_tmpdir,
+                &crate::ebuild_merge::MergeOptions::default(),
+                None,
+            )
+            .expect("run_merge succeeds");
+            assert_eq!(merge_status, 0);
+        }
+        let vdb_v1 = root.join("var/db/pkg/dev-libs/othersinslotpkg-1.0");
+        let vdb_v2 = root.join("var/db/pkg/dev-libs/othersinslotpkg-2.0");
+
+        assert!(
+            root.join("usr/share/othersinslotpkg/shared.txt").is_file(),
+            "2.0 owns shared.txt -- replacing 1.0 must not delete it"
+        );
+        assert!(
+            !root
+                .join("usr/share/othersinslotpkg/only-in-v1.txt")
+                .exists(),
+            "only-in-v1.txt has no other owner -- the replace unmerges it"
+        );
+        assert!(
+            root.join("usr/share/othersinslotpkg/only-in-v2.txt")
+                .is_file()
+        );
+        assert!(
+            !vdb_v1.exists(),
+            "1.0's vdb entry is dropped by the replace"
+        );
+        assert!(vdb_v2.is_dir());
+
+        let unmerge_v2_status = run_unmerge(
+            &ebuild_v2,
+            &root,
+            &portage_tmpdir,
+            &UnmergeOptions::default(),
+        )
+        .expect("run_unmerge succeeds");
+        assert_eq!(unmerge_v2_status, 0);
+        assert!(!root.join("usr/share/othersinslotpkg/shared.txt").exists());
+        assert!(!vdb_v2.exists());
+    }
+
+    #[test]
+    fn unmerge_of_a_never_installed_package_fails_clearly() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+        let result = run_unmerge(&ebuild, &root, &portage_tmpdir, &UnmergeOptions::default());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not installed"));
     }
 }
