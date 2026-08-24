@@ -334,6 +334,20 @@ pub(crate) struct UnmergePkgfilesArgs<'a> {
     pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
 }
 
+/// Arguments of [`unmerge_pkgfiles_into`].
+pub(crate) struct UnmergePkgfilesIntoArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pn: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) also_keep: &'a [String],
+    pub(crate) options: &'a UnmergeOptions,
+    pub(crate) is_replacement: bool,
+    pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
+    pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
+    pub(crate) retire: Option<&'a mut ebuild_merge::RetireWrites>,
+}
+
 /// Removes the vdb entry directory itself, then best-effort `rmdir`s its
 /// now-maybe-empty parent category directory (ignored on failure). Split
 /// out so the binpkg replace path can drop an old entry phaselessly.
@@ -390,5 +404,201 @@ mod tests {
         assert_eq!(entries[1].abs_path, "/usr/hello.txt");
         assert_eq!(entries[2].node_type, "sym");
         assert_eq!(entries[2].abs_path, "/usr/link");
+    }
+
+    #[test]
+    fn remove_contents_deletes_files_symlinks_and_empties_directories() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/x")).unwrap();
+        std::fs::write(root.join("usr/share/x/hello.txt"), b"hello").unwrap();
+        std::os::unix::fs::symlink("hello.txt", root.join("usr/share/x/link.txt")).unwrap();
+
+        let file_mtime = ebuild_merge::mtime_secs(
+            &std::fs::metadata(root.join("usr/share/x/hello.txt")).unwrap(),
+        )
+        .unwrap();
+        let link_mtime = ebuild_merge::mtime_secs(
+            &std::fs::symlink_metadata(root.join("usr/share/x/link.txt")).unwrap(),
+        )
+        .unwrap();
+        let contents = format!(
+            "dir /usr\n\
+             dir /usr/share\n\
+             dir /usr/share/x\n\
+             obj /usr/share/x/hello.txt abc123 {file_mtime}\n\
+             sym /usr/share/x/link.txt -> hello.txt {link_mtime}\n"
+        );
+
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(!root.join("usr/share/x/hello.txt").exists());
+        assert!(
+            root.join("usr/share/x/link.txt")
+                .symlink_metadata()
+                .is_err()
+        );
+        assert!(!root.join("usr/share/x").exists());
+        assert!(!root.join("usr/share").exists());
+        assert!(!root.join("usr").exists());
+    }
+
+    #[test]
+    fn remove_contents_leaves_a_locally_modified_file_in_place() {
+        // Changed mtime reads as locally modified and stays (this also
+        // protects CONFIG_PROTECT'd files).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("etc.conf"), b"user's own edits").unwrap();
+
+        // A recorded mtime that can never match the file just written
+        // above (created "now").
+        let contents = "obj /etc.conf abc123 1\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("etc.conf").is_file(),
+            "a locally-modified file must survive unmerge"
+        );
+    }
+
+    #[test]
+    fn remove_contents_with_unmerge_orphans_deletes_a_locally_modified_file() {
+        // Unlike the default (previous test), a locally-modified entry
+        // is deleted anyway.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("etc.conf"), b"user's own edits").unwrap();
+
+        let contents = "obj /etc.conf abc123 1\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: true,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            !root.join("etc.conf").exists(),
+            "unmerge-orphans deletes a locally-modified file too"
+        );
+    }
+
+    #[test]
+    fn remove_contents_with_unmerge_orphans_still_respects_config_protect() {
+        // Excludes a CONFIG_PROTECT'd path: only the `!mtime` check is
+        // overridden, not CONFIG_PROTECT itself.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
+
+        let contents = "obj /etc/foo.conf abc123 1\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: true,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("etc/foo.conf").is_file(),
+            "unmerge-orphans must not delete a CONFIG_PROTECT'd path"
+        );
+    }
+
+    #[test]
+    fn remove_contents_tolerates_a_directory_still_shared_with_another_package() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share")).unwrap();
+        // A file this CONTENTS doesn't know about, simulating another
+        // still-installed package's own file in the same shared dir.
+        std::fs::write(root.join("usr/share/other.txt"), b"other").unwrap();
+
+        let contents = "dir /usr\ndir /usr/share\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        // /usr/share survives (non-empty), and so does its parent.
+        assert!(root.join("usr/share/other.txt").is_file());
+    }
+
+    #[test]
+    fn remove_contents_tolerates_entries_already_gone() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let contents = "obj /usr/share/x/hello.txt abc123 100\ndir /usr/share/x\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("missing entries are not an error");
     }
 }

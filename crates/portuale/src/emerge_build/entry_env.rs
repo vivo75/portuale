@@ -2,6 +2,26 @@
 
 use crate::emerge_build::*;
 
+/// This entry's per-package `PORTAGE_TMPDIR`, re-derived from its matched
+/// `package.env` value so the pre-clean, phase chain, build log and
+/// post-merge clean share one root. A missing matched directory aborts
+/// the entry before anything runs.
+// Portage: EbuildBuild.py, _check_temp_dir
+pub(crate) fn entry_portage_tmpdir(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+    version: &str,
+    portage_tmpdir: &Path,
+) -> Result<PathBuf, String> {
+    let cpv_slot = entry_cpv_slot(entry, version);
+    crate::ebuild_phases::resolve_entry_portage_tmpdir(
+        &options.package_env_vars,
+        &cpv_slot,
+        portage_tmpdir,
+        options.process_tmpdir.as_deref(),
+    )
+}
+
 /// The `cat/pkg-ver:slot/sub` identity a build-bound entry is matched
 /// against. Missing `SLOT` means slot `0`; a missing sub-slot repeats
 /// the slot.
