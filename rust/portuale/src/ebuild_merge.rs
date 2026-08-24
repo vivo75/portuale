@@ -75,6 +75,19 @@
 // generic dependency" precedent (`--json` output, `SRC_URI`'s grammar,
 // `grabdict`-format `thirdpartymirrors`).
 //
+// `FEATURES=protect-owned` is real too: real `dblink.merge()`'s own
+// *separate* abort condition alongside `collision-protect`
+// (`lib/portage/dbapi/vartree.py:4770-4838`; Python operator precedence
+// makes the real check `collision_protect or (protect_owned and
+// owners)`) -- `protect_owned` alone only aborts a merge when
+// `find_owners` actually identified an owning package for at least one
+// collision, unlike `collision_protect` which aborts on any collision
+// regardless of whether an owner was found. Real portage's own "None of
+// the installed packages claim the file(s)" case (a stray, unowned file
+// already on disk) does *not* abort under `protect_owned` alone.
+// Reuses `find_owners` (already built for `collision-protect`'s own
+// abort message) rather than adding new machinery.
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope):
 //   - No preserve-libs *registration*/detection side at all: real
 //     `_find_libs_to_preserve`/`_linkmap_rebuild` use `LinkageMap`
@@ -95,10 +108,6 @@
 //     blockers` -- a package this ebuild's own dependencies block is
 //     also excluded from collision reporting) -- blockers are a real,
 //     broad gap this pilot doesn't attempt anywhere else either.
-//   - `FEATURES=protect-owned` (a separate real feature: abort only
-//     when an owning package was actually identified, regardless of
-//     `collision-protect`) is not implemented -- this pilot only ever
-//     checks `collision-protect` itself.
 //   - CONFIG_PROTECT is `obj`-only: a `sym` (symlink) entry under a
 //     protected path is never protected here -- real `dblink._protect()`
 //     handles symlinks too (comparing the *target string*'s own MD5),
@@ -173,6 +182,11 @@ pub struct MergeOptions {
     /// itself isn't in `FEATURES` by default (real `make.globals` never
     /// sets it), so `Default` matches that: `false`.
     pub collision_protect: bool,
+    /// Real `"protect-owned" in self.settings.features` (`lib/portage/
+    /// dbapi/vartree.py:4718`): a separate abort condition from
+    /// `collision_protect` -- see `run_merge`'s own doc comment for the
+    /// exact real logic. Same `FEATURES`-default-false `Default`.
+    pub protect_owned: bool,
 }
 
 impl Default for MergeOptions {
@@ -184,6 +198,7 @@ impl Default for MergeOptions {
             distdir: PathBuf::from("/var/cache/distfiles"),
             shell: ebuild_phases::ShellBackend::default(),
             collision_protect: false,
+            protect_owned: false,
         }
     }
 }
@@ -917,9 +932,12 @@ fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path
 /// unconditionally, regardless of `FEATURES`) plus real `FEATURES=
 /// collision-protect`'s own ordinary-collision detection, plus real
 /// preserve-libs collision exclusion (see this module's own module doc
-/// comment for the exact real mechanics and the ones this pilot still
-/// doesn't attempt: blocker exclusion, `FEATURES=protect-owned`). Walks
-/// `d` (the real install image, `${D}`) the same way `merge_tree` does,
+/// comment for the exact real mechanics and the one this pilot still
+/// doesn't attempt: blocker exclusion -- `FEATURES=protect-owned` is
+/// real too, but decided by the caller, `run_merge`, using this
+/// function's own `collisions` result together with `find_owners`, not
+/// inside this function itself). Walks `d` (the real install image,
+/// `${D}`) the same way `merge_tree` does,
 /// but read-only and file/symlink-only (real `_collision_protect` never
 /// checks directories at all -- a directory merging into an existing
 /// directory is normal, not a collision). Returns `(collisions,
@@ -1167,7 +1185,25 @@ pub fn run_merge(
         &options.config_protect_mask,
         &plib_inodes,
     )?;
-    if !symlink_collisions.is_empty() || (options.collision_protect && !collisions.is_empty()) {
+    // Real `dblink.merge()`'s own abort condition (`vartree.py:4830-
+    // 4838`, Python operator precedence: `collision_protect or
+    // (protect_owned and owners)`): a symlink-over-directory violation
+    // always aborts; otherwise `collision_protect` alone aborts on any
+    // collision, but `protect_owned` alone only aborts when an actual
+    // owning package was identified for at least one collision (real
+    // "None of the installed packages claim the file(s)" case does
+    // *not* abort under `protect_owned` alone). `find_owners` is only
+    // computed here (a second time, alongside `collision_message`'s own
+    // call) when `protect_owned` might actually need it -- matching real
+    // `get_owners()` itself only running when `collision_protect or
+    // protect_owned or symlink_collisions`.
+    let protect_owned_abort = options.protect_owned
+        && !collisions.is_empty()
+        && !find_owners(root, &collisions).is_empty();
+    if !symlink_collisions.is_empty()
+        || (options.collision_protect && !collisions.is_empty())
+        || protect_owned_abort
+    {
         let cpv = format!("{}/{}", env.category, env.split.pf);
         return Err(collision_message(
             root,
@@ -1810,6 +1846,85 @@ mod tests {
         // The real directory collisionpkg-a installed is still a real
         // directory -- never replaced by collisionpkg-b's own symlink.
         assert!(root.join("usr/share/collisiontest/adir").is_dir());
+    }
+
+    /// `FEATURES=protect-owned` alone (no `collision-protect`): real
+    /// `dblink.merge()`'s own separate abort condition aborts once
+    /// `find_owners` actually identifies an owning package for the
+    /// collision -- `collisionpkg-c` colliding with `collisionpkg-a`'s
+    /// own, different-package `shared.txt` is exactly that case.
+    #[test]
+    fn protect_owned_alone_aborts_when_an_owner_is_identified() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        run_merge(
+            &collision_fixture("collisionpkg-a"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("collisionpkg-a merges cleanly");
+
+        let options = MergeOptions {
+            protect_owned: true,
+            ..MergeOptions::default()
+        };
+        let err = run_merge(
+            &collision_fixture("collisionpkg-c"),
+            &root,
+            &portage_tmpdir,
+            &options,
+        )
+        .expect_err("protect-owned alone should abort once an owner is identified");
+        assert!(err.contains("dev-libs/collisionpkg-a-1.0"), "{err}");
+        assert!(err.contains("/usr/share/collisiontest/shared.txt"), "{err}");
+        assert!(err.contains("NOT merged due to file collisions"), "{err}");
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/share/collisiontest/shared.txt")).unwrap(),
+            "hello from collisionpkg-a\n"
+        );
+    }
+
+    /// Real "None of the installed packages claim the file(s)" case:
+    /// `FEATURES=protect-owned` alone must *not* abort when the
+    /// colliding destination is a stray file with no owning vdb entry
+    /// at all -- the distinguishing behavior from `collision-protect`,
+    /// which would abort unconditionally on any collision.
+    #[test]
+    fn protect_owned_alone_does_not_abort_an_unclaimed_stray_file() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(root.join("usr/share/collisiontest")).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        std::fs::write(
+            root.join("usr/share/collisiontest/shared.txt"),
+            "a stray, unowned file\n",
+        )
+        .unwrap();
+
+        let options = MergeOptions {
+            protect_owned: true,
+            ..MergeOptions::default()
+        };
+        let status = run_merge(
+            &collision_fixture("collisionpkg-c"),
+            &root,
+            &portage_tmpdir,
+            &options,
+        )
+        .expect("protect-owned alone must not abort an unclaimed collision");
+        assert_eq!(status, 0);
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/share/collisiontest/shared.txt")).unwrap(),
+            "hello from collisionpkg-c\n"
+        );
     }
 
     #[test]

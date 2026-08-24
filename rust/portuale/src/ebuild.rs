@@ -242,6 +242,16 @@ pub fn run(args: &[String]) -> ExitCode {
                     .any(|tok| tok == "collision-protect")
             })
             .unwrap_or(default_merge_options.collision_protect);
+        // Real `"protect-owned" in self.settings.features` -- same
+        // env-var-not-full-config-resolution shortcut as
+        // `collision_protect` immediately above.
+        let protect_owned = std::env::var("FEATURES")
+            .map(|features| {
+                features
+                    .split_whitespace()
+                    .any(|tok| tok == "protect-owned")
+            })
+            .unwrap_or(default_merge_options.protect_owned);
         let merge_options = ebuild_merge::MergeOptions {
             debug,
             config_protect: std::env::var("CONFIG_PROTECT")
@@ -251,6 +261,7 @@ pub fn run(args: &[String]) -> ExitCode {
             distdir: distdir.clone(),
             shell,
             collision_protect,
+            protect_owned,
         };
         // Real make.globals's own PKGDIR default -- see
         // ebuild_package::PackageOptions's own Default impl.
