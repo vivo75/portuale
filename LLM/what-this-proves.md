@@ -5681,3 +5681,75 @@ cat "${ROOT}"/ldconfig-was-invoked
 # -X -r /tmp/tmp.XXXXXXXXXX
 ```
 
+### `FEATURES=protect-owned`: a merge aborts only when the colliding file has a known owner
+
+`collision-protect`'s own sibling real merge-track feature, and the
+last item queued from portuale's own "next slice" backlog: real
+`dblink.merge()`'s own *separate* abort condition alongside
+`collision-protect` (`lib/portage/dbapi/vartree.py:4770-4838`). Python
+operator precedence makes the real check `collision_protect or
+(protect_owned and owners)` -- `collision-protect` aborts on any
+ordinary collision unconditionally, but `protect-owned` alone only
+aborts when `find_owners` (the same real `vardbapi._owners.
+get_owners()`-alike already built for `collision-protect`'s own abort
+message) actually identifies an owning package for at least one
+collision. Real portage's own "None of the installed packages claim
+the file(s)" case -- a stray file already on disk with no owning vdb
+entry at all -- does **not** abort under `protect-owned` alone, the
+one behavioral difference from `collision-protect` this feature exists
+for. `MergeOptions.protect_owned` is read from `FEATURES` at the
+`ebuild.rs` CLI boundary, the same env-var-not-full-config-resolution
+shortcut `collision_protect` already uses -- **unlike** `collision_protect`,
+though: a later slice found real `protect-owned` is actually one of real
+`make.globals`'s own default `FEATURES` tokens (`cnf/make.globals:77-84`),
+so `MergeOptions::default()`'s own `protect_owned` is now `true`, not
+`false` -- this section's own original claim (an implied
+`collision_protect`-style default-false) is now stale; see this file's
+own "`FEATURES=distlocks`" section below for the fuller writeup of this
+discovery and the two other flags it also applied to.
+
+No new machinery needed beyond reusing what `collision-protect`
+already built -- `find_owners` is called once more in `run_merge`
+itself (alongside `collision_message`'s own, separate call for the
+abort text) specifically to decide whether `protect_owned` should abort
+at all, matching real portage's own `get_owners()` likewise only
+running when `collision_protect or protect_owned or symlink_collisions`
+might need it.
+
+Proven via two new real, end-to-end tests reusing the existing
+`dev-libs/collisionpkg-a`/`-c` fixtures: `protect-owned` alone aborts
+and names `collisionpkg-a` as the owner, identical to `collision-
+protect`'s own abort message; a second test places a stray, unowned
+file directly on disk (no merge, no vdb entry) at the same destination
+path and proves `protect-owned` alone does *not* abort, merging over it
+instead -- the fixture-pair reuse plus the stray-file variant is what
+actually distinguishes this feature's own behavior from
+`collision-protect`'s, not just "also aborts."
+
+Running it:
+
+```sh
+cd rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/collisionpkg-a/collisionpkg-a-1.0.ebuild merge
+# FEATURES="protect-owned" is explicit here for clarity, but is now the
+# real default anyway -- omitting it entirely aborts the same way.
+FEATURES="protect-owned" rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
+# ebuild: This package will overwrite one or more files that may belong to other packages:
+# dev-libs/collisionpkg-a-1.0:
+#         /usr/share/collisiontest/shared.txt
+# Package 'dev-libs/collisionpkg-c-1.0' NOT merged due to file collisions.
+
+# A stray, unowned file at the same path -- no merge, no vdb entry:
+export ROOT="$(mktemp -d)"
+mkdir -p "${ROOT}/usr/share/collisiontest"
+echo "a stray, unowned file" > "${ROOT}/usr/share/collisiontest/shared.txt"
+FEATURES="protect-owned" rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
+cat "${ROOT}"/usr/share/collisiontest/shared.txt
+# hello from collisionpkg-c -- no abort, since no owner was ever identified
+```
+
