@@ -86,3 +86,89 @@ pub(crate) struct InstalledDepStringArgs<'a> {
     /// run-constant CLI flag, and both EAPIs are stable per package within a run.
     pub(crate) memo: &'a mut HashMap<(String, String, String, String), String>,
 }
+
+/// One installed package's `*DEPEND` string for `key`, at `layer`. One shared view for
+/// the four installed-metadata readers, so there is no second copy. Per arm:
+/// - no live metadata, or either EAPI unsupported: the raw record stands, with global
+///   package moves applied (a missing vdb `EAPI` file reads as `"0"`);
+/// - `--ignore-built-slot-operator-deps`, or an installed EAPI without `:=` support:
+///   the live ebuild string stands alone;
+/// - `IDEPEND` from a live EAPI without `idepend` support: `""`;
+/// - otherwise the vdb's own built `:=` atoms for this key are appended to the live
+///   string; when the live EAPI itself lacks `:=` support the overlay is void.
+///
+/// Portage: FakeVartree.py, _apply_dynamic_deps.
+pub(crate) fn installed_dep_string(args: InstalledDepStringArgs<'_>) -> String {
+    let InstalledDepStringArgs {
+        root,
+        dynamic_deps,
+        ignore_built_slot_operator_deps,
+        category,
+        package,
+        version,
+        live,
+        key,
+        layer,
+        memo,
+    } = args;
+    let raw = read_vdb_string(root, category, package, version, key);
+    if layer == InstalledMetaLayer::Raw || !dynamic_deps {
+        return raw;
+    }
+    let memo_key = (
+        category.to_string(),
+        package.to_string(),
+        version.to_string(),
+        key.to_string(),
+    );
+    if let Some(cached) = memo.get(&memo_key) {
+        return cached.clone();
+    }
+    let result = match live {
+        // No live ebuild metadata, so the raw record stands, with moves applied.
+        None => apply_updates_to_dep_string(&raw).unwrap_or(raw),
+        Some(live) => {
+            let live_value = live
+                .get(key)
+                .map(String::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let live_eapi = live
+                .get("EAPI")
+                .map(String::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let inst_eapi_raw = read_vdb_string(root, category, package, version, "EAPI");
+            let inst_eapi = inst_eapi_raw.trim();
+            let inst_eapi = if inst_eapi.is_empty() { "0" } else { inst_eapi };
+            if !(md5_dict::eapi_is_supported(&live_eapi) && md5_dict::eapi_is_supported(inst_eapi))
+            {
+                apply_updates_to_dep_string(&raw).unwrap_or_else(|| raw.clone())
+            } else if key == "IDEPEND" && !md5_dict::eapi_has_idepend(&live_eapi) {
+                // Only the live-ebuild overlay needs the gate (an older build never
+                // wrote an `IDEPEND` file); installed-metadata readers see `""`.
+                String::new()
+            } else if ignore_built_slot_operator_deps
+                || !md5_dict::eapi_has_slot_operator(inst_eapi)
+            {
+                live_value
+            } else {
+                let use_flags = read_vdb_flag_set(root, category, package, version, "USE");
+                let built = built_slot_operator_atoms(&raw, &use_flags);
+                if built.is_empty() {
+                    live_value
+                } else if !md5_dict::eapi_has_slot_operator(&live_eapi) {
+                    apply_updates_to_dep_string(&raw).unwrap_or_else(|| raw.clone())
+                } else if live_value.is_empty() {
+                    built.join(" ")
+                } else {
+                    format!("{live_value} {}", built.join(" "))
+                }
+            }
+        }
+    };
+    memo.insert(memo_key, result.clone());
+    result
+}
