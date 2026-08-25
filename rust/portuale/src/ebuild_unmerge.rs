@@ -116,19 +116,23 @@
 // and threads it down through `remove_contents`/`remove_dirs` into
 // `cleanup_info_dir`.
 //
+// Real `stale_confmem` cleanup is real too (`vartree.py:2747`/
+// `2931-2932`/`3106-3109`): `cfgfiledict`, the real `_conf_mem_file`
+// "already offered this MD5" memory `ebuild_merge` writes on merge
+// (`ebuild_merge::read_cfgfiledict`/`write_cfgfiledict`, promoted
+// `pub(crate)` for this), is read once up front by `run_unmerge` below;
+// any path `remove_contents` actually removes -- not `is_owned` by
+// another same-slot instance -- that `cfgfiledict` still remembers is
+// collected into `stale_confmem` and dropped from the persisted memory
+// afterward, matching real ordering exactly (the elif is off the same
+// `is_owned` check as the "replaced" skip).
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching `ebuild_merge`'s own
 // "narrow v1, document the cut" pattern):
 //   - No `bsd_chflags` handling -- confirmed dead code on Linux, not a
 //     real gap: `lib/portage/__init__.py:311` sets `bsd_chflags = None`
 //     unconditionally on non-BSD, and this pilot's own hard goal is
 //     Linux-only/musl-static.
-//   - Real `stale_confmem` cleanup (`vartree.py:3106-3109`: when a
-//     `CONFIG_PROTECT`'d path this package remembered in `cfgfiledict`
-//     is `is_owned` by another same-slot instance, its now-stale memory
-//     entry is dropped) isn't reproduced -- this pilot's own `unmerge`
-//     never reads or writes `ebuild_merge`'s own `_conf_mem_file`
-//     persistence at all yet, a separate small gap adjacent to but not
-//     the same as bug #326685 above.
 //   - Failure handling is coarser: real `_unmerge_pkgfiles()` counts
 //     per-file failures and keeps going regardless (overall success is
 //     governed by the `prerm`/`postrm` phase exit codes, not by
@@ -212,7 +216,15 @@ type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
 /// `dir` entries are deferred to a second pass (`remove_dirs`, real
 /// `_unmerge_dirs()`) instead of removed inline here (real `mydirs`) --
 /// see this module's own doc comment on bug #326685 for why the
-/// deferral matters.
+/// deferral matters. `cfgfiledict`/`stale_confmem`: real `_unmerge_
+/// pkgfiles()`'s own `stale_confmem` cleanup (`vartree.py:2931-2932`) --
+/// a removed, not-`is_owned` entry that `cfgfiledict` (the real
+/// `_conf_mem_file` "already offered this MD5" memory `ebuild_merge`
+/// writes on merge) still remembers has its own path collected into
+/// `stale_confmem`, so `run_unmerge` can drop it from the persisted
+/// memory afterward -- otherwise a future merge could wrongly treat a
+/// long-gone package's own previously-offered update as "already
+/// offered" for a path nothing installs anymore.
 #[allow(clippy::too_many_arguments)]
 fn remove_contents(
     root: &Path,
@@ -222,6 +234,8 @@ fn remove_contents(
     config_protect_mask: &str,
     unmerge_orphans: bool,
     infodirs_inodes: &BTreeSet<(u64, u64)>,
+    cfgfiledict: &BTreeMap<String, String>,
+    stale_confmem: &mut Vec<String>,
     contents_text: &str,
 ) -> Result<(), String> {
     let mut entries = parse_contents(contents_text);
@@ -277,6 +291,11 @@ fn remove_contents(
             // unmerged. Checked before the mtime check, matching real
             // `_unmerge_pkgfiles()`'s own ordering.
             continue;
+        } else if cfgfiledict.contains_key(&entry.abs_path) {
+            // Real `stale_confmem` (`vartree.py:2931-2932`): this path
+            // is actually going away and nothing else owns it, so its
+            // `_conf_mem_file` memory entry is now stale too.
+            stale_confmem.push(entry.abs_path.clone());
         }
 
         // Real `FEATURES=unmerge-orphans` (`vartree.py:2934-2950`):
@@ -586,6 +605,15 @@ pub fn run_unmerge(
     // doc comment for why this is a separate, narrower computation
     // rather than a refactor of that already-tested function.
     let infodirs_inodes = env_update::info_dirs_inodes(root);
+
+    // Real `cfgfiledict`/`stale_confmem` (`vartree.py:2747`/`2931-2932`/
+    // `3106-3109`): the real `_conf_mem_file` memory `ebuild_merge`
+    // writes on merge, read once up front the same way real
+    // `_unmerge_pkgfiles()` does, then pruned of every path this
+    // unmerge actually removes and rewritten -- see `remove_contents`'s
+    // own doc comment.
+    let cfgfiledict = ebuild_merge::read_cfgfiledict(root);
+    let mut stale_confmem: Vec<String> = Vec::new();
     remove_contents(
         root,
         &env.category,
@@ -594,8 +622,17 @@ pub fn run_unmerge(
         &options.config_protect_mask,
         options.unmerge_orphans,
         &infodirs_inodes,
+        &cfgfiledict,
+        &mut stale_confmem,
         &contents_text,
     )?;
+    if !stale_confmem.is_empty() {
+        let mut updated = cfgfiledict;
+        for filename in &stale_confmem {
+            updated.remove(filename);
+        }
+        ebuild_merge::write_cfgfiledict(root, &updated)?;
+    }
 
     let postrm_status = ebuild_phases::run_single_phase(
         ebuild_path,
@@ -691,6 +728,8 @@ mod tests {
             "",
             false,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             &contents,
         )
         .expect("remove_contents succeeds");
@@ -729,6 +768,8 @@ mod tests {
             "",
             false,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -759,6 +800,8 @@ mod tests {
             "",
             true,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -789,6 +832,8 @@ mod tests {
             "",
             true,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -821,6 +866,8 @@ mod tests {
             "",
             true,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -849,6 +896,8 @@ mod tests {
             "",
             false,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -871,6 +920,8 @@ mod tests {
             "",
             false,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             contents,
         )
         .expect("missing entries are not an error");
@@ -920,6 +971,8 @@ mod tests {
             "",
             false,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             &contents,
         )
         .expect("remove_contents succeeds");
@@ -932,6 +985,89 @@ mod tests {
             !root.join("usr/share/only-mine.txt").exists(),
             "a path no other same-slot package owns is still deleted normally"
         );
+    }
+
+    #[test]
+    fn remove_contents_collects_a_removed_cfgfiledict_path_into_stale_confmem() {
+        // Real `stale_confmem` (`vartree.py:2931-2932`): a removed,
+        // not-`is_owned` path that `cfgfiledict` (the real
+        // `_conf_mem_file` "already offered this MD5" memory) still
+        // remembers is collected so the caller can drop it from that
+        // persisted memory afterward.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("etc.conf"), b"content").unwrap();
+        let mtime =
+            ebuild_merge::mtime_secs(&std::fs::metadata(root.join("etc.conf")).unwrap()).unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        cfgfiledict.insert("/etc.conf".to_string(), "deadbeef".to_string());
+        cfgfiledict.insert("/untouched.conf".to_string(), "cafebabe".to_string());
+
+        let contents = format!("obj /etc.conf abc123 {mtime}\n");
+        let mut stale_confmem = Vec::new();
+        remove_contents(
+            &root,
+            "dev-libs",
+            &[],
+            "/etc",
+            "",
+            false,
+            &BTreeSet::new(),
+            &cfgfiledict,
+            &mut stale_confmem,
+            &contents,
+        )
+        .expect("remove_contents succeeds");
+
+        assert_eq!(stale_confmem, vec!["/etc.conf".to_string()]);
+    }
+
+    #[test]
+    fn remove_contents_does_not_mark_an_owned_path_stale_even_if_cfgfiledict_remembers_it() {
+        // Real ordering (`vartree.py:2928-2932`): `stale_confmem` is an
+        // `elif` off the same `is_owned` check as the "replaced" skip --
+        // a path another same-slot instance still owns is never
+        // considered stale, since the memory is still meaningful for
+        // that surviving instance.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share")).unwrap();
+        std::fs::write(root.join("usr/share/shared.txt"), b"shared").unwrap();
+        let mtime = ebuild_merge::mtime_secs(
+            &std::fs::metadata(root.join("usr/share/shared.txt")).unwrap(),
+        )
+        .unwrap();
+
+        let other_vdb = root.join("var/db/pkg/dev-libs/otherpkg-2.0");
+        std::fs::create_dir_all(&other_vdb).unwrap();
+        std::fs::write(
+            other_vdb.join("CONTENTS"),
+            format!("obj /usr/share/shared.txt abc123 {mtime}\n"),
+        )
+        .unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        cfgfiledict.insert("/usr/share/shared.txt".to_string(), "deadbeef".to_string());
+
+        let contents = format!("obj /usr/share/shared.txt abc123 {mtime}\n");
+        let mut stale_confmem = Vec::new();
+        remove_contents(
+            &root,
+            "dev-libs",
+            &["otherpkg-2.0".to_string()],
+            "/etc",
+            "",
+            false,
+            &BTreeSet::new(),
+            &cfgfiledict,
+            &mut stale_confmem,
+            &contents,
+        )
+        .expect("remove_contents succeeds");
+
+        assert!(stale_confmem.is_empty());
     }
 
     #[test]
@@ -964,6 +1100,8 @@ mod tests {
             "",
             false,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -1009,6 +1147,8 @@ mod tests {
             "",
             false,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -1128,6 +1268,8 @@ mod tests {
             "",
             false,
             &BTreeSet::new(),
+            &BTreeMap::new(),
+            &mut Vec::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -1175,6 +1317,8 @@ mod tests {
             "",
             false,
             &infodirs_inodes,
+            &BTreeMap::new(),
+            &mut Vec::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -1266,6 +1410,58 @@ mod tests {
         assert!(!vdb_dir.exists());
         // The category dir itself is now empty too.
         assert!(!root.join("var/db/pkg/dev-libs").exists());
+    }
+
+    #[test]
+    fn real_unmerge_drops_a_stale_conf_mem_entry_but_keeps_an_unrelated_one() {
+        // End-to-end proof that `ebuild_merge::read_cfgfiledict`/
+        // `write_cfgfiledict` and `remove_contents`'s own `stale_confmem`
+        // collection actually connect through `run_unmerge` (real
+        // `vartree.py:2747`/`2931-2932`/`3106-3109`).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+        let merge_status = crate::ebuild_merge::run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &crate::ebuild_merge::MergeOptions::default(),
+        )
+        .expect("run_merge succeeds");
+        assert_eq!(merge_status, 0);
+
+        // A real `_conf_mem_file`: one entry for a path this package
+        // actually owns and is about to remove, one entry for a wholly
+        // unrelated path nothing here touches.
+        let mut cfgfiledict = BTreeMap::new();
+        cfgfiledict.insert(
+            "/usr/share/mergepkg/hello.txt".to_string(),
+            "deadbeef".to_string(),
+        );
+        cfgfiledict.insert("/etc/unrelated.conf".to_string(), "cafebabe".to_string());
+        crate::ebuild_merge::write_cfgfiledict(&root, &cfgfiledict).unwrap();
+
+        let unmerge_status =
+            run_unmerge(&ebuild, &root, &portage_tmpdir, &UnmergeOptions::default())
+                .expect("run_unmerge succeeds");
+        assert_eq!(unmerge_status, 0);
+
+        let after = crate::ebuild_merge::read_cfgfiledict(&root);
+        assert_eq!(
+            after.get("/etc/unrelated.conf"),
+            Some(&"cafebabe".to_string()),
+            "an unrelated entry must survive untouched"
+        );
+        assert!(
+            !after.contains_key("/usr/share/mergepkg/hello.txt"),
+            "the removed package's own now-stale entry must be dropped"
+        );
     }
 
     #[test]

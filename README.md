@@ -5379,6 +5379,52 @@ test -e "${ROOT}"/usr/share/mergepkg && echo "still there" || echo "gone"
 # named "info", so the leftover index no longer blocks its removal.
 ```
 
+### `unmerge`: real `stale_confmem` cleanup
+
+Real `_unmerge_pkgfiles()`'s own `stale_confmem` cleanup
+(`vartree.py:2747`/`2931-2932`/`3106-3109`) is real now too.
+`cfgfiledict` -- the real `_conf_mem_file` "already offered this MD5"
+memory `ebuild_merge` writes on merge (`read_cfgfiledict`/
+`write_cfgfiledict`, promoted `pub(crate)` for this slice) -- is read
+once up front, the same way the real function reads it before its own
+per-file removal loop starts. Any path `remove_contents` actually
+removes -- one not `is_owned` by another same-slot instance -- that
+`cfgfiledict` still remembers is collected into `stale_confmem` and
+dropped from the persisted memory afterward: real ordering exactly,
+since `elif relative_path in cfgfiledict: stale_confmem.append(...)` is
+the same `if is_owned` check the "replaced" skip already uses. Without
+this, a long-gone package's own previously-offered CONFIG_PROTECT
+update would keep sitting in `_conf_mem_file` for a path nothing
+installs anymore, ready to wrongly satisfy a real future merge's own
+"already offered" check for some unrelated package that happens to
+write the same path. Verified directly against `remove_contents`
+(collects a removed, not-owned path's own stale entry; does *not*
+collect one still `is_owned` by another same-slot instance) and end to
+end via `run_unmerge`
+(`real_unmerge_drops_a_stale_conf_mem_entry_but_keeps_an_unrelated_one`).
+
+```sh
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+
+# A real _conf_mem_file: one entry for a path this package actually
+# owns and is about to remove, one entry for an unrelated path.
+mkdir -p "${ROOT}"/var/lib/portage
+cat > "${ROOT}"/var/lib/portage/config <<CONF
+/usr/share/mergepkg/hello.txt deadbeef
+/etc/unrelated.conf cafebabe
+CONF
+
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+cat "${ROOT}"/var/lib/portage/config
+# /etc/unrelated.conf cafebabe
+# -- the removed package's own now-stale entry is gone, the unrelated
+# one survives untouched.
+```
+
 ### Standalone `ebuild <file> config`/`info`
 
 Real `doebuild()`'s own early-return branch for a handful of commands

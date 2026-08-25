@@ -414,7 +414,11 @@ fn cfg_mem_path(root: &Path) -> PathBuf {
     root.join("var/lib/portage/config")
 }
 
-fn read_cfgfiledict(root: &Path) -> BTreeMap<String, String> {
+/// `pub(crate)`: also read by `ebuild_unmerge::run_unmerge` (real
+/// `_unmerge_pkgfiles()`'s own `stale_confmem` cleanup,
+/// `vartree.py:2747`/`2931-2932`/`3106-3109` -- a removed file's
+/// `_conf_mem_file` entry is dropped once nothing still owns that path).
+pub(crate) fn read_cfgfiledict(root: &Path) -> BTreeMap<String, String> {
     let mut map = BTreeMap::new();
     if let Ok(text) = std::fs::read_to_string(cfg_mem_path(root)) {
         for line in text.lines() {
@@ -427,7 +431,7 @@ fn read_cfgfiledict(root: &Path) -> BTreeMap<String, String> {
     map
 }
 
-fn write_cfgfiledict(root: &Path, map: &BTreeMap<String, String>) -> Result<(), String> {
+pub(crate) fn write_cfgfiledict(root: &Path, map: &BTreeMap<String, String>) -> Result<(), String> {
     let path = cfg_mem_path(root);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
