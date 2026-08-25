@@ -126,6 +126,7 @@ mod db_merge;
 mod installed_instance;
 mod plib_merge;
 mod plib_registry;
+mod plib_unmerge;
 mod protect;
 mod run_merge;
 mod tree;

@@ -1349,4 +1349,302 @@ mod tests {
         let root = tempdir();
         assert_eq!(read_all_needed_entries(&root), Vec::new());
     }
+
+    fn make_object(root: &std::path::Path, relative: &str) {
+        let abs = root.join(relative.trim_start_matches('/'));
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(&abs, b"fake elf content").unwrap();
+    }
+
+    #[test]
+    fn rebuild_indexes_a_simple_provider_and_consumer() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/consumer");
+
+        let owner_entries = vec![
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/consumer-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/consumer;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+
+        let map = rebuild(&root, &owner_entries);
+        let soname_map = &map.libs["x86_64"]["libfoo.so.1"];
+        let provider_key = obj_key(&root, "/usr/lib/libfoo.so.1");
+        let consumer_key = obj_key(&root, "/usr/bin/consumer");
+        assert!(soname_map.providers.contains(&provider_key));
+        assert!(soname_map.consumers.contains(&consumer_key));
+        assert_eq!(
+            map.obj_properties[&provider_key].owner,
+            "dev-libs/provider-1.0"
+        );
+    }
+
+    #[test]
+    fn rebuild_falls_back_to_the_approx_multilib_category_when_the_field_is_absent() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        let owner_entries = vec![(
+            "dev-libs/provider-1.0".to_string(),
+            vec![NeededEntry::parse("AARCH64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        assert!(
+            map.libs.contains_key("arm_64"),
+            "{:?}",
+            map.libs.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rebuild_expands_origin_in_runpaths() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/foo/consumer");
+        let owner_entries = vec![(
+            "dev-libs/pkg-1.0".to_string(),
+            vec![
+                NeededEntry::parse("X86_64;/usr/lib/foo/consumer;;$ORIGIN/../bar;libfoo.so.1")
+                    .unwrap(),
+            ],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        let key = obj_key(&root, "/usr/lib/foo/consumer");
+        assert_eq!(
+            map.obj_properties[&key].runpaths,
+            vec!["/usr/lib/bar".to_string()]
+        );
+    }
+
+    #[test]
+    fn rebuild_infers_an_implicit_runpath_for_a_same_owner_bundled_provider() {
+        let root = tempdir();
+        make_object(&root, "/opt/bundled/libbundled.so.1");
+        make_object(&root, "/opt/bundled/consumer");
+        // Same owner, no explicit rpath on the consumer: bundled-library
+        // internal resolution.
+        let owner_entries = vec![(
+            "dev-libs/pkg-1.0".to_string(),
+            vec![
+                NeededEntry::parse("X86_64;/opt/bundled/libbundled.so.1;libbundled.so.1;;")
+                    .unwrap(),
+                NeededEntry::parse("X86_64;/opt/bundled/consumer;;;libbundled.so.1").unwrap(),
+            ],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        let key = obj_key(&root, "/opt/bundled/consumer");
+        assert_eq!(
+            map.obj_properties[&key].runpaths,
+            vec!["/opt/bundled".to_string()]
+        );
+    }
+
+    #[test]
+    fn rebuild_does_not_infer_an_implicit_runpath_across_different_owners() {
+        let root = tempdir();
+        make_object(&root, "/opt/a/libshared.so.1");
+        make_object(&root, "/opt/b/consumer");
+        let owner_entries = vec![
+            (
+                "dev-libs/a-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/opt/a/libshared.so.1;libshared.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/b-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/opt/b/consumer;;;libshared.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let key = obj_key(&root, "/opt/b/consumer");
+        assert!(map.obj_properties[&key].runpaths.is_empty());
+    }
+
+    #[test]
+    fn rebuild_dedups_the_same_real_object_reached_via_two_recorded_paths() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/real-lib.so.1");
+        let real = root.join("usr/lib/real-lib.so.1");
+        let hardlink = root.join("usr/lib/alt-name.so.1");
+        std::fs::hard_link(&real, &hardlink).unwrap();
+
+        let owner_entries = vec![(
+            "dev-libs/pkg-1.0".to_string(),
+            vec![
+                NeededEntry::parse("X86_64;/usr/lib/real-lib.so.1;real-lib.so.1;;").unwrap(),
+                NeededEntry::parse("X86_64;/usr/lib/alt-name.so.1;real-lib.so.1;;").unwrap(),
+            ],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        assert_eq!(map.obj_properties.len(), 1, "{:?}", map.obj_properties);
+        let (_, props) = map.obj_properties.iter().next().unwrap();
+        assert_eq!(
+            props.alt_paths,
+            vec![
+                "/usr/lib/real-lib.so.1".to_string(),
+                "/usr/lib/alt-name.so.1".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn obj_key_falls_back_to_a_path_key_when_the_object_no_longer_exists() {
+        let root = tempdir();
+        assert_eq!(
+            obj_key(&root, "/usr/lib/gone.so.1"),
+            ObjKey::Path("/usr/lib/gone.so.1".to_string())
+        );
+    }
+
+    #[test]
+    fn obj_key_uses_the_real_inode_when_the_object_exists() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/real.so.1");
+        assert!(matches!(
+            obj_key(&root, "/usr/lib/real.so.1"),
+            ObjKey::Inode(_, _)
+        ));
+    }
+
+    #[test]
+    fn find_consumers_finds_a_consumer_via_the_default_lib_path() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/app-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+
+        let consumers = find_consumers(FindConsumersArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            obj: "/usr/lib/libfoo.so.1",
+            exclude_provider: None,
+            greedy: true,
+        })
+        .unwrap();
+        assert_eq!(consumers, BTreeSet::from(["/usr/bin/app".to_string()]));
+    }
+
+    #[test]
+    fn find_consumers_requires_the_providers_own_directory_to_be_reachable() {
+        let root = tempdir();
+        make_object(&root, "/opt/hidden/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/opt/hidden/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/app-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        // Not "/opt/hidden" -- app's own runpath and the default lib
+        // path both miss it, so it can never actually be found.
+        let defpath = vec!["/usr/lib".to_string()];
+
+        let consumers = find_consumers(FindConsumersArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            obj: "/opt/hidden/libfoo.so.1",
+            exclude_provider: None,
+            greedy: true,
+        })
+        .unwrap();
+        assert!(consumers.is_empty());
+    }
+
+    #[test]
+    fn find_consumers_excludes_a_consumer_already_satisfied_by_a_non_excluded_provider() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/excluded/libfoo.so.1");
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/excluded-1.0".to_string(),
+                vec![
+                    NeededEntry::parse("X86_64;/usr/lib/excluded/libfoo.so.1;libfoo.so.1;;")
+                        .unwrap(),
+                ],
+            ),
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/app-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let exclude = |p: &str| p == "/usr/lib/excluded/libfoo.so.1";
+
+        // Querying the excluded provider: app is satisfied elsewhere (the
+        // non-excluded /usr/lib/libfoo.so.1), so it's not reported as a
+        // consumer of the excluded one.
+        let consumers = find_consumers(FindConsumersArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            obj: "/usr/lib/excluded/libfoo.so.1",
+            exclude_provider: Some(&exclude),
+            greedy: true,
+        })
+        .unwrap();
+        assert!(consumers.is_empty(), "{consumers:?}");
+    }
+
+    #[test]
+    fn find_libs_to_preserve_preserves_a_lib_still_needed_by_a_surviving_consumer() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/oldpkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/apppkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let old_contents = vec!["/usr/lib/libfoo.so.1".to_string()];
+        let old_owner = |p: &str| p == "/usr/lib/libfoo.so.1";
+        let new_owner = |_: &str| false;
+
+        let preserved = find_libs_to_preserve(FindLibsToPreserveArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &old_owner,
+            new_owner_is_owner: &new_owner,
+        });
+        assert_eq!(
+            preserved,
+            BTreeSet::from(["/usr/lib/libfoo.so.1".to_string()])
+        );
+    }
 }
