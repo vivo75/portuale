@@ -21,20 +21,23 @@
 // own `__dyn_package` -- real, unmodified bash shelling out to the real,
 // unmodified `bin/xpak-helper.py` -- producing a genuine XPAK-tagged
 // `.tbz2` at `PKGDIR`, plus a real `Packages` index entry for it), PLUS,
-// as of the previous slice, real execution for `qmerge` too (see
+// as of two slices ago, real execution for `qmerge` too (see
 // `ebuild_merge::run_qmerge`'s own doc comment: `merge`'s own body,
 // minus the `install` phase re-run, gated on the same real
 // `${PORTAGE_BUILDDIR}/.installed` marker real `doebuild()` itself
-// checks), PLUS, as of this slice, real execution for standalone
-// `config`/`info` too (see `ebuild_phases::is_real_standalone_phase_
-// command`'s own doc comment: real, single-phase `pkg_config`/
-// `pkg_info` runs via `run_single_phase`, the exact same machinery
-// `preinst`/`postinst`/`prerm`/`postrm` already use internally -- no
-// new phase-execution machinery needed at all). Every other real
-// command (`preinst`/`postinst`/`prerm`/`postrm`/`nofetch`/`depend`/
-// `fetch`/`fetchall`/`digest`/`manifest`/`rpm`/`instprep`/`clean`/
-// `cleanrm`) still falls through to the pre-existing dry-run stub
-// message below unchanged.
+// checks), PLUS, as of the previous slice, real execution for standalone
+// `config`/`info` too, PLUS, as of this slice, `prerm`/`postrm` joining
+// them as standalone commands (see `ebuild_phases::
+// is_real_standalone_phase_command`'s own doc comment: real, single-
+// phase runs via `run_single_phase`, the exact same machinery
+// `preinst`/`postinst` already use internally as part of `merge` -- no
+// new phase-execution machinery needed at all; `preinst`/`postinst`
+// themselves stay internal-only, a real ordering constraint tying them
+// to `merge`'s own file-copy step that `prerm`/`postrm` don't share with
+// `unmerge`). Every other real command (`preinst`/`postinst`/`nofetch`/
+// `depend`/`fetch`/`fetchall`/`digest`/`manifest`/`rpm`/`instprep`/
+// `clean`/`cleanrm`) still falls through to the pre-existing dry-run
+// stub message below unchanged.
 //
 // Exit codes mirror real `ebuild`'s own conventions: 2 for "missing
 // required args" (real bin/ebuild's argparse `parser.error()`), 1 for
@@ -211,7 +214,8 @@ pub fn run(args: &[String]) -> ExitCode {
     // ebuild_unmerge's/ebuild_package's own module doc comments) only
     // when EVERY requested command is one this pilot actually implements
     // for real (the actionmap_deps-chained phase subset, plus
-    // `merge`/`qmerge`/`unmerge`/`package`/`config`/`info`) -- a
+    // `merge`/`qmerge`/`unmerge`/`package`/`config`/`info`/`prerm`/
+    // `postrm`) -- a
     // deliberate, simple v1 boundary: no partial-real-execution ambiguity
     // when a request mixes a real command with one this pilot still only
     // dry-runs (e.g. `ebuild foo.ebuild compile clean`). A purely dry-run

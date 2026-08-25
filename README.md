@@ -5340,12 +5340,15 @@ file via `run_single_phase`, the exact same machinery
 unmodified `bin/phase-functions.sh`'s own `__ebuild_main` already
 accepts `config`/`info` as literal phase arguments) -- so this slice
 needed no new phase-execution machinery at all, purely CLI routing
-(`ebuild_phases::is_real_standalone_phase_command`). The other commands
-in that same real early-return branch --
-`preinst`/`postinst`/`prerm`/`postrm` (real too, but only reachable
-internally, as part of `merge`/`unmerge`) and `pretend` (already part of
-the `actionmap_deps` chain) -- aren't newly reachable as their own
-top-level command by this slice.
+(`ebuild_phases::is_real_standalone_phase_command`). `prerm`/`postrm`
+joined them as standalone commands too, in a later slice -- see this
+file's own "Standalone `ebuild <file> prerm`/`postrm`" section below.
+`preinst`/`postinst` (real too, but only reachable internally, as part
+of `merge` -- a real ordering constraint, `dblink.treewalk()` invokes
+them directly around the actual file-copy step, that `prerm`/`postrm`
+don't share with `unmerge`) and `pretend` (already part of the
+`actionmap_deps` chain) still aren't reachable as their own top-level
+command.
 
 ```sh
 cd PORTING/rust && cargo build --release && cd ../..
@@ -5359,6 +5362,31 @@ ls "${PORTAGE_TMPDIR}"/portage/dev-libs/standalonephasepkg-1.0/temp/ | grep pkg-
 # Still a dry-run stub, unlike config/info now:
 PORTING/rust/target/release/portuale ebuild foo-1.0.ebuild clean
 # ebuild (pilot stub): dry-run only, no phase execution yet ...
+```
+
+### Standalone `ebuild <file> prerm`/`postrm`
+
+`prerm`/`postrm` join `config`/`info` as standalone commands, real for
+the same reason and via the same `run_single_phase` machinery (see the
+section above). Unlike `preinst`/`postinst` -- which stay internal-only,
+tied to `merge`'s own real file-copy ordering (`dblink.treewalk()`
+invokes them directly around it, a constraint no standalone invocation
+could reproduce) -- `prerm`/`postrm` have no equivalent constraint tying
+them to `unmerge`'s own file-removal step: real portage itself allows
+invoking them completely standalone (e.g. to test a `pkg_prerm`/
+`pkg_postrm` function without actually removing the package). So
+`unmerge`'s own internal use (`ebuild_unmerge::run_unmerge`) and this
+new standalone path are simply two independent, real ways to reach the
+same real phase functions -- no new phase-execution machinery needed
+here either, purely a CLI-routing addition.
+
+```sh
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild prerm postrm
+ls "${PORTAGE_TMPDIR}"/portage/dev-libs/standalonephasepkg-1.0/temp/ | grep pkg-
+# pkg-postrm-ran
+# pkg-prerm-ran
 ```
 
 ### Real `PORTAGE_COMPRESSION_COMMAND` resolution
