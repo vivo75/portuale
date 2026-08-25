@@ -1229,8 +1229,119 @@ mod tests {
     use super::*;
     use portage_util::TempDir;
 
+    #[test]
+    fn parse_reads_a_real_minimal_five_field_line() {
+        // Live-verified output for a dynamically-linked ELF binary with no
+        // DT_SONAME of its own (`/usr/bin/true`): the empty soname field is
+        // exactly why scanelf is never invoked with `-q`.
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6").unwrap();
+        assert_eq!(entry.arch, "X86_64");
+        assert_eq!(entry.filename, "/usr/bin/true");
+        assert_eq!(entry.soname, "");
+        assert_eq!(entry.runpaths, Vec::<String>::new());
+        assert_eq!(entry.needed, vec!["libc.so.6".to_string()]);
+        assert_eq!(entry.multilib_category, None);
+    }
+
+    #[test]
+    fn parse_reads_a_soname_multiple_rpaths_and_multiple_needed() {
+        let entry = NeededEntry::parse(
+            "X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;/usr/lib/foo:/usr/lib/bar;libc.so.6,libm.so.6",
+        )
+        .unwrap();
+        assert_eq!(entry.soname, "libfoo.so.1");
+        assert_eq!(
+            entry.runpaths,
+            vec!["/usr/lib/foo".to_string(), "/usr/lib/bar".to_string()]
+        );
+        assert_eq!(
+            entry.needed,
+            vec!["libc.so.6".to_string(), "libm.so.6".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_treats_the_real_dash_sentinel_rpath_as_empty() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;  -  ;libc.so.6").unwrap();
+        assert_eq!(entry.runpaths, Vec::<String>::new());
+    }
+
+    #[test]
+    fn parse_reads_the_optional_sixth_multilib_category_field() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6;x86_64").unwrap();
+        assert_eq!(entry.multilib_category, Some("x86_64".to_string()));
+    }
+
+    #[test]
+    fn parse_treats_an_empty_sixth_field_as_no_multilib_category() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6;").unwrap();
+        assert_eq!(entry.multilib_category, None);
+    }
+
+    #[test]
+    fn parse_ignores_extra_fields_beyond_the_sixth() {
+        let entry =
+            NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6;x86_64;future;fields").unwrap();
+        assert_eq!(entry.multilib_category, Some("x86_64".to_string()));
+    }
+
+    #[test]
+    fn parse_rejects_a_line_with_fewer_than_five_fields() {
+        assert_eq!(NeededEntry::parse("X86_64;/usr/bin/true;;"), None);
+        assert_eq!(NeededEntry::parse(""), None);
+    }
+
+    #[test]
+    fn parse_file_skips_malformed_lines_and_keeps_going() {
+        let text = "X86_64;/usr/bin/true;;;libc.so.6\n\
+                     bad-line\n\
+                     X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;\n";
+        let entries = NeededEntry::parse_file(text);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].filename, "/usr/bin/true");
+        assert_eq!(entries[1].filename, "/usr/lib/libfoo.so.1");
+    }
+
+    /// The write/read asymmetries: an empty `runpaths` serializes as a plain
+    /// empty string, never the `"  -  "` sentinel; the 6th field is always
+    /// present (as `""` when `None`).
+    #[test]
+    fn to_needed_line_writes_the_portage_rewrite_format_not_the_scanelf_read_format() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;  -  ;libc.so.6").unwrap();
+        assert_eq!(
+            entry.to_needed_line(),
+            "X86_64;/usr/bin/true;;;libc.so.6;\n"
+        );
+    }
+
     fn tempdir() -> std::path::PathBuf {
         TempDir::new("portuale-needed-elf-test").keep()
+    }
+
+    #[test]
+    fn read_all_needed_entries_covers_every_installed_package_including_ones_without_one() {
+        let root = tempdir();
+        let with_needed = root.join("var/db/pkg/dev-libs/withneeded-1.0");
+        let without_needed = root.join("var/db/pkg/dev-libs/withoutneeded-1.0");
+        std::fs::create_dir_all(&with_needed).unwrap();
+        std::fs::create_dir_all(&without_needed).unwrap();
+        std::fs::write(
+            with_needed.join("NEEDED.ELF.2"),
+            "X86_64;/usr/bin/withneeded;;;libc.so.6\n",
+        )
+        .unwrap();
+
+        let all = read_all_needed_entries(&root);
+        assert_eq!(
+            all,
+            vec![
+                (
+                    "dev-libs/withneeded-1.0".to_string(),
+                    vec![NeededEntry::parse("X86_64;/usr/bin/withneeded;;;libc.so.6").unwrap()]
+                ),
+                ("dev-libs/withoutneeded-1.0".to_string(), vec![]),
+            ]
+        );
     }
 
     #[test]

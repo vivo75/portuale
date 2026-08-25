@@ -934,6 +934,76 @@ fn real_merge_invokes_a_real_root_scoped_ldconfig_when_one_is_present() {
     assert!(marker.contains("-r"), "{marker}");
 }
 
+/// `NEEDED.ELF.2` (the post-install `scanelf` output) lands in the vdb entry,
+/// copied out of `build-info` like Portage's `treewalk` does.
+#[test]
+fn real_merge_copies_a_real_needed_elf2_into_the_vdb() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let portage_tmpdir = tmp.join("tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+    let status = run_merge(
+        &collision_fixture("elfpkg"),
+        &root,
+        &portage_tmpdir,
+        &MergeOptions::default(),
+        None,
+    )
+    .expect("run_merge succeeds");
+    assert_eq!(status, 0);
+
+    let needed = std::fs::read_to_string(root.join("var/db/pkg/dev-libs/elfpkg-1.0/NEEDED.ELF.2"))
+        .expect("NEEDED.ELF.2 should have been copied into the real vdb entry");
+    assert!(
+        needed.contains("/usr/bin/true"),
+        "should report the real installed binary's own path: {needed}"
+    );
+
+    // Same file through `NeededEntry::parse_file`, not just hand-crafted lines.
+    let entries = crate::needed_elf::NeededEntry::parse_file(&needed);
+    let entry = entries
+        .iter()
+        .find(|e| e.filename == "/usr/bin/true")
+        .expect("the real parser should find the real installed binary's own entry");
+    assert_eq!(entry.arch, "X86_64");
+    assert!(
+        entry.needed.iter().any(|n| n.starts_with("libc.so")),
+        "{:?}",
+        entry.needed
+    );
+    // The vdb copy carries the 6th multilib-category field from the soname rewrite.
+    assert_eq!(entry.multilib_category.as_deref(), Some("x86_64"));
+    assert!(
+        needed.lines().all(|l| l.split(';').count() >= 6),
+        "every rewritten line must carry the category field: {needed}"
+    );
+
+    let all = crate::needed_elf::read_all_needed_entries(&root);
+    let (cpv, cpv_entries) = all
+        .iter()
+        .find(|(cpv, _)| cpv == "dev-libs/elfpkg-1.0")
+        .expect("read_all_needed_entries should find the real installed package");
+    assert_eq!(cpv, "dev-libs/elfpkg-1.0");
+    assert!(cpv_entries.iter().any(|e| e.filename == "/usr/bin/true"));
+
+    let map = crate::needed_elf::rebuild(&root, &all);
+    let key = crate::needed_elf::obj_key(&root, "/usr/bin/true");
+    let props = map
+        .obj_properties
+        .get(&key)
+        .expect("rebuild should index the real installed binary");
+    assert_eq!(props.owner, "dev-libs/elfpkg-1.0");
+    assert!(!props.needed.is_empty(), "{:?}", props.needed);
+    let consumed_somewhere = map.libs.values().any(|sonames| {
+        sonames
+            .values()
+            .any(|soname_map| soname_map.consumers.contains(&key))
+    });
+    assert!(consumed_somewhere);
+}
+
 /// Baseline: with the inert default `config_root` no config/USE resolution runs,
 /// so this pair is an ordinary collision-protect abort, proving a genuine collision.
 #[test]
