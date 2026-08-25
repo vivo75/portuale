@@ -27,19 +27,27 @@
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
 // "narrow v1, document the cut" pattern):
-//   - `mirror://` resolution (`resolve_mirror_candidates`) only
-//     consults real `profiles/thirdpartymirrors` (the ebuild's own
-//     repo's copy, via `ebuild_phases::repo_root_for` at the call site
-//     in `portuale/src/fetch.rs`) -- real `custommirrors` (an admin-
-//     configured `/etc/portage/mirrors` file this pilot has no
-//     `PORTAGE_CONFIGROOT` concept for at all) is never consulted.
-//     Real portage's own `random.shuffle`s the resulting candidate
-//     list (load-balancing across equally-valid mirrors) -- not
-//     replicated here: this pilot's own "pinned, reproducible" test
-//     philosophy already rules out non-determinism elsewhere, and
-//     shuffling only affects *which* mirror is tried first, not
-//     correctness (every candidate is still real-digest-verified after
-//     fetching regardless).
+//   - `mirror://` resolution (`resolve_mirror_candidates`) consults both
+//     real `profiles/thirdpartymirrors` (the ebuild's own repo's copy,
+//     via `ebuild_phases::repo_root_for` at the call site in
+//     `portuale/src/fetch.rs`) and real `custommirrors` (an admin-
+//     configured `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file,
+//     "user-defined mirrors first" -- real `grabdict(...,
+//     recursive=1)`'s own directory-form (`/etc/portage/mirrors/` as a
+//     directory of drop-in files) isn't reproduced, only the plain-file
+//     form, the same narrowing `profiles/thirdpartymirrors` itself
+//     already has). Real `custommirrors["local"]`'s own separate
+//     filesystem-path/local-network fast-path lookup (real
+//     `fetch.py:1017-1029`) isn't reproduced either -- see
+//     `resolve_mirror_candidates`'s own doc comment for why a real
+//     `mirror://local/...` token still resolves correctly regardless.
+//     Real portage's own `random.shuffle`s the `thirdpartymirrors` half
+//     of the resulting candidate list (load-balancing across equally-
+//     valid mirrors) -- not replicated here: this pilot's own "pinned,
+//     reproducible" test philosophy already rules out non-determinism
+//     elsewhere, and shuffling only affects *which* mirror is tried
+//     first, not correctness (every candidate is still real-digest-
+//     verified after fetching regardless).
 //   - `gentoo_mirror_fallback` (real `async_mirror_url`'s own fallback
 //     path, applied to *every* file real portage fetches, not just
 //     `mirror://` ones) only ever assumes the real "flat" mirror
@@ -249,24 +257,37 @@ pub fn parse_thirdpartymirrors(path: &Path) -> Result<HashMap<String, Vec<String
     Ok(out)
 }
 
-/// Real `mirror://<name>/<path>` resolution (real `fetch.py`'s own
-/// thirdpartymirrors branch, `custommirrors` deliberately excluded --
-/// see this module's own doc comment): `<name>` is looked up in
-/// `thirdpartymirrors`, expanding to `<mirror_root>/<path>` for every
-/// root under that name (real `locmirr.rstrip("/") + "/" + path`
-/// string-built exactly, in the thirdpartymirrors file's own order --
-/// real portage `random.shuffle`s this, deliberately not replicated
-/// here, see this module's own doc comment). A `mirror://` token whose
-/// name isn't known to `thirdpartymirrors` at all, or that's malformed
-/// (`mirror://` with no further `/` at all), yields no candidates --
-/// real portage's own `writemsg` warning, not a hard error; the caller
-/// still fails loudly if this leaves a file with no working candidate
-/// at all, the same real end result. A non-`mirror://` URI is returned
-/// unchanged, as its own single candidate -- so every `SrcUriEntry.uri`
-/// can be passed through this function uniformly, regardless of
-/// whether it's actually a `mirror://` token.
+/// Real `mirror://<name>/<path>` resolution (real `fetch.py:1136-1160`):
+/// `<name>` is looked up in `custommirrors` *and* `thirdpartymirrors`
+/// (real comment: "Try user-defined mirrors first" -- `custommirrors`'s
+/// own roots for the name, if any, are listed before
+/// `thirdpartymirrors`'s own, real portage's own exact real order),
+/// expanding to `<mirror_root>/<path>` for every root under that name in
+/// each map (real `cmirr.rstrip("/") + "/" + path` /
+/// `locmirr.rstrip("/") + "/" + path`, string-built identically for
+/// both -- real portage `random.shuffle`s the `thirdpartymirrors` half
+/// only, deliberately not replicated here, see this module's own doc
+/// comment). A `mirror://` token whose name isn't known to *either* map,
+/// or that's malformed (`mirror://` with no further `/` at all), yields
+/// no candidates -- real portage's own `writemsg` warning, not a hard
+/// error; the caller still fails loudly if this leaves a file with no
+/// working candidate at all, the same real end result. A non-
+/// `mirror://` URI is returned unchanged, as its own single candidate --
+/// so every `SrcUriEntry.uri` can be passed through this function
+/// uniformly, regardless of whether it's actually a `mirror://` token.
+///
+/// Real `custommirrors["local"]`'s own *separate* meaning (a real,
+/// filesystem-path/local-network fast-path lookup tried before any
+/// remote fetch at all, real `fetch.py:1017-1029`'s own
+/// `fsmirrors`/`local_mirrors` split) is not reproduced -- a real
+/// `mirror://local/...` token, if one ever appeared in a real `SRC_URI`,
+/// would still resolve normally through this same function (real
+/// portage's own `if mirrorname in custommirrors:` check doesn't treat
+/// `"local"` specially either), so nothing is lost for that case; only
+/// the separate local-mirror optimization itself is out of scope.
 pub fn resolve_mirror_candidates(
     uri: &str,
+    custommirrors: &HashMap<String, Vec<String>>,
     thirdpartymirrors: &HashMap<String, Vec<String>>,
 ) -> Vec<String> {
     let Some(rest) = uri.strip_prefix("mirror://") else {
@@ -277,15 +298,20 @@ pub fn resolve_mirror_candidates(
     };
     let name = &rest[..slash];
     let path = &rest[slash + 1..];
-    thirdpartymirrors
-        .get(name)
-        .map(|roots| {
-            roots
-                .iter()
-                .map(|root| format!("{}/{}", root.trim_end_matches('/'), path))
-                .collect()
-        })
-        .unwrap_or_default()
+    let expand = |roots: &HashMap<String, Vec<String>>| -> Vec<String> {
+        roots
+            .get(name)
+            .map(|roots| {
+                roots
+                    .iter()
+                    .map(|root| format!("{}/{}", root.trim_end_matches('/'), path))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut candidates = expand(custommirrors);
+    candidates.extend(expand(thirdpartymirrors));
+    candidates
 }
 
 /// Real `async_mirror_url`'s own flat-layout fallback path, applied to
@@ -583,8 +609,11 @@ mod tests {
                 "https://gentoo.osuosl.org/distfiles/".to_string(),
             ],
         );
-        let candidates =
-            resolve_mirror_candidates("mirror://gentoo/app-arch/foo-1.0.tar.gz", &mirrors);
+        let candidates = resolve_mirror_candidates(
+            "mirror://gentoo/app-arch/foo-1.0.tar.gz",
+            &HashMap::new(),
+            &mirrors,
+        );
         assert_eq!(
             candidates,
             vec![
@@ -595,21 +624,56 @@ mod tests {
     }
 
     #[test]
+    fn resolve_mirror_candidates_tries_custommirrors_before_thirdpartymirrors() {
+        // Real "Try user-defined mirrors first" (fetch.py:1143).
+        let mut custommirrors = HashMap::new();
+        custommirrors.insert(
+            "gentoo".to_string(),
+            vec!["https://my-local-mirror.example/distfiles".to_string()],
+        );
+        let mut thirdpartymirrors = HashMap::new();
+        thirdpartymirrors.insert(
+            "gentoo".to_string(),
+            vec!["https://distfiles.gentoo.org/distfiles".to_string()],
+        );
+        let candidates = resolve_mirror_candidates(
+            "mirror://gentoo/app-arch/foo-1.0.tar.gz",
+            &custommirrors,
+            &thirdpartymirrors,
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                "https://my-local-mirror.example/distfiles/app-arch/foo-1.0.tar.gz".to_string(),
+                "https://distfiles.gentoo.org/distfiles/app-arch/foo-1.0.tar.gz".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn resolve_mirror_candidates_is_empty_for_an_unknown_mirror_name() {
-        let candidates = resolve_mirror_candidates("mirror://unknown/foo.tar.gz", &HashMap::new());
+        let candidates = resolve_mirror_candidates(
+            "mirror://unknown/foo.tar.gz",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(candidates.is_empty());
     }
 
     #[test]
     fn resolve_mirror_candidates_is_empty_for_a_malformed_mirror_uri() {
-        let candidates = resolve_mirror_candidates("mirror://gentoo", &HashMap::new());
+        let candidates =
+            resolve_mirror_candidates("mirror://gentoo", &HashMap::new(), &HashMap::new());
         assert!(candidates.is_empty());
     }
 
     #[test]
     fn resolve_mirror_candidates_returns_a_non_mirror_uri_unchanged() {
-        let candidates =
-            resolve_mirror_candidates("https://example.com/foo.tar.gz", &HashMap::new());
+        let candidates = resolve_mirror_candidates(
+            "https://example.com/foo.tar.gz",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(
             candidates,
             vec!["https://example.com/foo.tar.gz".to_string()]

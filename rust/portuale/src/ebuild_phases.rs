@@ -516,6 +516,10 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
         &FetchOptions {
             distdir: distdir.to_path_buf(),
             gentoo_mirrors: fetch::gentoo_mirrors_from_env(),
+            // Real PORTAGE_CONFIGROOT (real default: "/" when unset) --
+            // consulted only for real `custommirrors`, see
+            // `FetchOptions::config_root`'s own doc comment.
+            config_root: portage_repo::config_root_from_env(),
         },
     )?;
     Ok((a, aa))

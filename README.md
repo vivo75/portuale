@@ -4665,12 +4665,13 @@ mirror is attempted first, never correctness), stopping at the first
 one that both fetches *and* verifies.
 
 Deliberately not attempted (see `portage_fetch`'s own "KNOWN,
-DOCUMENTED GAPS" for the full list): real `custommirrors` (an
-admin-configured `/etc/portage/mirrors` file this pilot has no
-`PORTAGE_CONFIGROOT` concept for at all), live `layout.conf`
+DOCUMENTED GAPS" for the current, full list): live `layout.conf`
 negotiation, real candidate-list shuffling (`random.shuffle`, pure
 load-balancing, not correctness), and `RESTRICT=mirror`/`primaryuri`
-interactions.
+interactions. (Real `custommirrors` has since shipped -- see this
+file's own "Real `custommirrors`: an admin-configured
+`/etc/portage/mirrors` file" section below; this paragraph's original
+claim is now stale.)
 
 Live-verified against the real system: `app-arch/unzip-6.0_p31`'s own
 real `SRC_URI` (`https://downloads.sourceforge.net/infozip/${MY_P}.
@@ -5446,6 +5447,56 @@ PORTING/rust/target/release/portuale ebuild \
 # *   PORTAGE_COMPRESSION_COMMAND is unset
 unset BINPKG_COMPRESS
 ```
+
+### Real `custommirrors`: an admin-configured `/etc/portage/mirrors` file
+
+Real `fetch.py:984-985`'s own `custommirrors` (`grabdict(os.path.join(
+PORTAGE_CONFIGROOT, "etc/portage/mirrors"))`) is real now, closing the
+one gap the previous `mirror://` resolution slice's own doc comment
+explicitly flagged. Real `fetch.py:1143-1149`'s own "Try user-defined
+mirrors first" ordering: for a `mirror://<name>/<path>` token,
+`custommirrors`'s own roots for `<name>` (if any) are listed *before*
+`profiles/thirdpartymirrors`'s own roots for the same name --
+`portage_fetch::resolve_mirror_candidates` now takes both maps and
+expands `custommirrors` first, real `cmirr.rstrip("/") + "/" + path`
+string-built identically to the `thirdpartymirrors` half. Reuses
+`parse_thirdpartymirrors` directly for the actual file parsing (the
+exact same real `grabdict()` line format, just pointed at a different
+real file) rather than a second, duplicate parser.
+
+`FetchOptions` gained a `config_root` field (real `PORTAGE_CONFIGROOT`),
+mirroring `ebuild_merge::MergeOptions::config_root`'s own doc comment
+and its own deliberately-impossible-path `Default` exactly -- this
+pilot's own dev/test machine is a real Gentoo system, so a naive
+real-`/`-style default here would make every test that doesn't
+override this field read real host config. Fixed a real bug surfaced by
+that exact sentinel path during this slice's own implementation:
+`${config_root}/etc/portage/mirrors` fails with `ENOTDIR` (an
+*ancestor* path component, `/dev/null`, isn't a directory) when
+`config_root` is the sentinel, not the `NotFound` `parse_thirdpartymirrors`
+itself already tolerated -- an early version of this code propagated
+that as a raw I/O error instead of degrading gracefully to "no
+`custommirrors`", the same graceful-degrade precedent `ebuild_merge::
+blocked_installed_packages`'s own `find_repos(config_root).ok()?`
+already established for this exact pattern. Now a regression test
+(`fetch_src_uri_degrades_gracefully_when_config_root_is_the_default_
+sentinel`) locks that fix in.
+
+Real `custommirrors["local"]`'s own *separate* meaning -- a real
+filesystem-path/local-network fast-path lookup tried before any remote
+fetch at all (real `fetch.py:1017-1029`'s own `fsmirrors`/
+`local_mirrors` split) -- is not reproduced; nor is real `grabdict(...,
+recursive=1)`'s own directory-form (`/etc/portage/mirrors/` as a
+directory of drop-in files), the same narrowing `profiles/
+thirdpartymirrors` itself already has. Proven via a new, real,
+end-to-end integration test in `portuale/src/fetch.rs`
+(`fetch_src_uri_resolves_a_real_mirror_uri_via_custommirrors`: a real
+local HTTP server, a real `${config_root}/etc/portage/mirrors` file, a
+real `wget` subprocess, real digest verification -- no `profiles/
+thirdpartymirrors` entry for the name at all, proving `custommirrors`
+is consulted independently) plus a new, pure, offline unit test in
+`portage-fetch` (`resolve_mirror_candidates_tries_custommirrors_
+before_thirdpartymirrors`) proving the real ordering directly.
 
 ## Running it
 

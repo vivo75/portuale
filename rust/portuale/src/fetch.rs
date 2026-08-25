@@ -6,10 +6,6 @@
 // template verbatim (`cnf/make.globals`), rather than an in-process HTTP
 // client -- matching this pilot's own "run the same real external
 // process portage would" precedent (`bin/*.sh`, `xpak-helper.py`, ...).
-// No `PORTAGE_COMPRESSION_COMMAND`-style config resolution attempted
-// (this pilot has no `make.conf` resolution path at all), same "env
-// var/hardcoded default" shortcut `ebuild_package.rs` already
-// established.
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
 // "narrow v1, document the cut" pattern):
@@ -19,9 +15,11 @@
 //   - `mirror://` resolution is real now (`portage_fetch::
 //     resolve_mirror_candidates`/`gentoo_mirror_fallback`, see that
 //     crate's own module doc comment for the exact real mechanics
-//     covered and the real ones deliberately not attempted:
-//     `custommirrors`, live per-mirror `layout.conf` negotiation, real
-//     candidate-ordering/shuffling, `RESTRICT=mirror`/`primaryuri`).
+//     covered -- including real `custommirrors`, an admin-configured
+//     `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file, as of this
+//     slice -- and the real ones deliberately not attempted: live
+//     per-mirror `layout.conf` negotiation, real candidate-ordering/
+//     shuffling, `RESTRICT=mirror`/`primaryuri`).
 //   - No GPG verification (real `FEATURES=verify-sig`).
 //   - No `FEATURES=distlocks` -- this pilot's own single-invocation-at-
 //     a-time CLI usage never races a concurrent fetch of the same file.
@@ -59,10 +57,22 @@ pub fn gentoo_mirrors_from_env() -> Vec<String> {
 /// `make.globals`'s own `DISTDIR="/var/cache/distfiles"` exactly.
 /// `gentoo_mirrors` real make.globals default, see `gentoo_mirrors_
 /// from_env`'s own doc comment for why it's a field here rather than
-/// read directly inside `fetch_src_uri`.
+/// read directly inside `fetch_src_uri`. `config_root` (real
+/// `PORTAGE_CONFIGROOT`) is consulted only for real `custommirrors`
+/// (`${config_root}/etc/portage/mirrors`) -- deliberately a field, not
+/// an ambient env read inside this module, mirroring `ebuild_merge::
+/// MergeOptions::config_root`'s own doc comment exactly (this pilot's
+/// own dev/test machine is a real Gentoo system with a real, populated
+/// `/etc/portage/mirrors`-shaped tree, so a silent real-`/`-style
+/// default here would make every test that doesn't override this field
+/// read real host config); `Default` below uses the same deliberately
+/// impossible path `MergeOptions::config_root` does, so `fetch_src_uri`
+/// always degrades to an empty `custommirrors` map unless a caller
+/// opts in explicitly.
 pub struct FetchOptions {
     pub distdir: PathBuf,
     pub gentoo_mirrors: Vec<String>,
+    pub config_root: PathBuf,
 }
 
 impl Default for FetchOptions {
@@ -70,6 +80,7 @@ impl Default for FetchOptions {
         Self {
             distdir: PathBuf::from("/var/cache/distfiles"),
             gentoo_mirrors: vec!["http://distfiles.gentoo.org".to_string()],
+            config_root: PathBuf::from("/dev/null/no-config-root-configured"),
         }
     }
 }
@@ -140,12 +151,28 @@ pub fn fetch_src_uri(
     // ebuild's own repo's copy -- `repo_root_for` tolerates a
     // standalone ebuild outside any repo checkout the same way it
     // already does for eclass resolution, yielding an empty map, i.e.
-    // no thirdpartymirror candidates at all) plus the real `GENTOO_
-    // MIRRORS` flat-layout fallback -- see this module's own doc
-    // comment for the exact real mechanics covered/not covered.
+    // no thirdpartymirror candidates at all) plus real `custommirrors`
+    // (`${config_root}/etc/portage/mirrors`, real `grabdict()`'s own
+    // format -- reuses `parse_thirdpartymirrors` directly, since it's
+    // the exact same real format, just a different real source file)
+    // plus the real `GENTOO_MIRRORS` flat-layout fallback -- see this
+    // module's own doc comment for the exact real mechanics
+    // covered/not covered.
     let thirdpartymirrors = crate::ebuild_phases::repo_root_for(pkg_dir)
         .map(|repo_root| parse_thirdpartymirrors(&repo_root.join("profiles/thirdpartymirrors")))
         .transpose()?
+        .unwrap_or_default();
+    // `.unwrap_or_default()`, not `?`: `options.config_root` is
+    // deliberately an impossible sentinel path by default (see
+    // `FetchOptions::config_root`'s own doc comment) -- joining
+    // `etc/portage/mirrors` onto it can fail with `ENOTDIR` (an
+    // *ancestor* component isn't a directory), not just the `NotFound`
+    // `parse_thirdpartymirrors` itself already tolerates, so this
+    // degrades to an empty `custommirrors` map on *any* resolution
+    // failure, the same graceful-degrade precedent `ebuild_merge::
+    // blocked_installed_packages`'s own `find_repos(config_root).ok()?`
+    // already established for this exact sentinel-path pattern.
+    let custommirrors = parse_thirdpartymirrors(&options.config_root.join("etc/portage/mirrors"))
         .unwrap_or_default();
 
     let mut filenames = Vec::new();
@@ -176,7 +203,8 @@ pub fn fetch_src_uri(
             // fetch error is collected so the final failure message
             // (if all of them fail) mentions every URL actually tried,
             // not just the last one.
-            let mut candidates = resolve_mirror_candidates(&entry.uri, &thirdpartymirrors);
+            let mut candidates =
+                resolve_mirror_candidates(&entry.uri, &custommirrors, &thirdpartymirrors);
             candidates.extend(gentoo_mirror_fallback(
                 &entry.filename,
                 &options.gentoo_mirrors,
@@ -292,6 +320,7 @@ mod tests {
             &FetchOptions {
                 distdir: distdir.clone(),
                 gentoo_mirrors: vec![],
+                ..FetchOptions::default()
             },
         )
         .unwrap();
@@ -319,6 +348,7 @@ mod tests {
             &FetchOptions {
                 distdir: distdir.clone(),
                 gentoo_mirrors: vec![],
+                ..FetchOptions::default()
             },
         )
         .unwrap();
@@ -336,6 +366,7 @@ mod tests {
             &FetchOptions {
                 distdir: distdir.clone(),
                 gentoo_mirrors: vec![],
+                ..FetchOptions::default()
             },
         )
         .unwrap_err();
@@ -358,6 +389,7 @@ mod tests {
             &FetchOptions {
                 distdir: distdir.clone(),
                 gentoo_mirrors: vec![],
+                ..FetchOptions::default()
             },
         )
         .unwrap();
@@ -387,6 +419,7 @@ mod tests {
             &FetchOptions {
                 distdir: distdir.clone(),
                 gentoo_mirrors: vec![],
+                ..FetchOptions::default()
             },
         )
         .unwrap_err();
@@ -438,6 +471,7 @@ mod tests {
             &FetchOptions {
                 distdir: distdir.clone(),
                 gentoo_mirrors: vec![],
+                ..FetchOptions::default()
             },
         )
         .unwrap();
@@ -447,6 +481,77 @@ mod tests {
             "hello world"
         );
         handle.join().unwrap();
+    }
+
+    /// Real, end-to-end `custommirrors` proof: a real
+    /// `${config_root}/etc/portage/mirrors` file (real `grabdict()`
+    /// format, same as `profiles/thirdpartymirrors`) resolves a
+    /// `mirror://<name>` token via a real local HTTP server, with no
+    /// `profiles/thirdpartymirrors` entry for that name at all --
+    /// proving `custommirrors` is consulted independently, not merely
+    /// as a fallback when `thirdpartymirrors` already has the name.
+    #[test]
+    fn fetch_src_uri_resolves_a_real_mirror_uri_via_custommirrors() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let mirror_root = uri_base.trim_end_matches("/file");
+
+        let config_root = tempdir();
+        fs::create_dir_all(config_root.join("etc/portage")).unwrap();
+        fs::write(
+            config_root.join("etc/portage/mirrors"),
+            format!("testmirror {mirror_root}\n"),
+        )
+        .unwrap();
+
+        let pkg_dir = tempdir();
+        write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
+
+        let distdir = tempdir();
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "mirror://testmirror/foo-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                config_root: config_root.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["foo-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("foo-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    /// Regression test for a real bug this slice's own implementation
+    /// hit and fixed: `FetchOptions::default()`'s own deliberately
+    /// impossible `config_root` sentinel (`/dev/null/...`) makes
+    /// `${config_root}/etc/portage/mirrors` fail with `ENOTDIR` (an
+    /// *ancestor* path component isn't a directory), not the `NotFound`
+    /// `parse_thirdpartymirrors` itself already tolerates -- an earlier
+    /// version of this code propagated that as a raw I/O error instead
+    /// of degrading gracefully to "no custommirrors", producing a
+    /// confusing low-level error instead of the real, clean "no working
+    /// candidate mirror" message for an unknown `mirror://` name.
+    #[test]
+    fn fetch_src_uri_degrades_gracefully_when_config_root_is_the_default_sentinel() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
+
+        let err = fetch_src_uri(
+            &pkg_dir,
+            "mirror://unknown-name/foo-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("no working candidate mirror"), "{err}");
     }
 
     /// Real, end-to-end `GENTOO_MIRRORS` flat-layout fallback: the
@@ -474,6 +579,7 @@ mod tests {
             &FetchOptions {
                 distdir: distdir.clone(),
                 gentoo_mirrors: vec![mirror_root],
+                ..FetchOptions::default()
             },
         )
         .unwrap();
