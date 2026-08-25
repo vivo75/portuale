@@ -37,3 +37,20 @@ fn valid_float(s: &str) -> bool {
 
 use portage_vdb::BackendKind;
 use std::path::{Path, PathBuf};
+
+/// Shared by the database backends: refuse a missing file (mrg never
+/// creates one), then, after the open, print the stale-import warning
+/// and one warning per entry an interrupted merge left behind.
+#[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
+fn check_db_exists(path: &Path, root: &Path, kind: BackendKind) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    Err(format!(
+        "the {kind} VDB {} does not exist (portuale never creates one implicitly); \
+         convert first: portuale vdb convert --from files:{} --to {kind}:{}",
+        path.display(),
+        root.display(),
+        path.display()
+    ))
+}
