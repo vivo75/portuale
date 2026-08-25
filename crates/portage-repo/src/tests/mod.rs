@@ -987,6 +987,7 @@ mod blockers;
 mod candidates;
 mod conflict_use_display;
 mod graph;
+mod installed;
 mod license;
 mod masked_deps;
 mod pretend;
