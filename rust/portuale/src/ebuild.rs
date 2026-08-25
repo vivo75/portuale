@@ -311,13 +311,30 @@ pub fn run(args: &[String]) -> ExitCode {
         };
         // Real make.globals's own PKGDIR default -- see
         // ebuild_package::PackageOptions's own Default impl.
+        let default_package_options = ebuild_package::PackageOptions::default();
+        let binpkg_compress = std::env::var("BINPKG_COMPRESS")
+            .unwrap_or_else(|_| default_package_options.binpkg_compress.clone());
+        // Real `BINPKG_COMPRESS_FLAGS_<NAME>` (per-compressor override)
+        // if set, else real `BINPKG_COMPRESS_FLAGS` -- resolved here,
+        // once, so `ebuild_package.rs` itself never needs to know about
+        // the per-compressor override naming convention (see
+        // `PackageOptions::binpkg_compress_flags`'s own doc comment).
+        let binpkg_compress_flags_name =
+            format!("BINPKG_COMPRESS_FLAGS_{}", binpkg_compress.to_uppercase());
+        let binpkg_compress_flags = std::env::var(&binpkg_compress_flags_name)
+            .or_else(|_| std::env::var("BINPKG_COMPRESS_FLAGS"))
+            .unwrap_or_else(|_| default_package_options.binpkg_compress_flags.clone());
         let package_options = ebuild_package::PackageOptions {
             debug,
             pkgdir: std::env::var_os("PKGDIR")
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| ebuild_package::PackageOptions::default().pkgdir),
+                .unwrap_or_else(|| default_package_options.pkgdir.clone()),
             distdir: distdir.clone(),
             shell,
+            binpkg_compress,
+            binpkg_compress_flags,
+            portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
+                .unwrap_or(default_package_options.portage_bzip2_command),
         };
         let ebuild_path = std::path::Path::new(ebuild_file);
         // One command at a time here, not the whole slice at once --

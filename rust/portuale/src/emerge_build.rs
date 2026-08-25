@@ -233,6 +233,13 @@ mod tests {
                 pkgdir: bogus.clone(),
                 distdir: bogus.clone(),
                 shell: PackageOptions::default().shell,
+                // Pinned to "bzip2" (near-universal base package) rather
+                // than real Default's "zstd", so these tests don't
+                // depend on the test-running host actually having zstd
+                // installed -- real xpak/tbz2 building is codec-
+                // agnostic either way.
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
             },
         );
         assert!(result.is_ok());
@@ -273,6 +280,13 @@ mod tests {
                 pkgdir: pkgdir.clone(),
                 distdir: tempdir(),
                 shell: PackageOptions::default().shell,
+                // Pinned to "bzip2" (near-universal base package) rather
+                // than real Default's "zstd", so these tests don't
+                // depend on the test-running host actually having zstd
+                // installed -- real xpak/tbz2 building is codec-
+                // agnostic either way.
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
             },
         );
         assert!(result.is_ok(), "{result:?}");
@@ -324,6 +338,13 @@ mod tests {
                 pkgdir: pkgdir.clone(),
                 distdir: tempdir(),
                 shell: PackageOptions::default().shell,
+                // Pinned to "bzip2" (near-universal base package) rather
+                // than real Default's "zstd", so these tests don't
+                // depend on the test-running host actually having zstd
+                // installed -- real xpak/tbz2 building is codec-
+                // agnostic either way.
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
             },
         );
         // `fetchpkg`'s own fixture has a real, nonempty SRC_URI but no

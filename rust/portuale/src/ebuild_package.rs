@@ -21,13 +21,18 @@
 //     `SUPPORTED_GENTOO_BINPKG_FORMATS` default) -- the newer `"gpkg"`
 //     format (`bin/gpkg-helper.py`) is a real, separately-scoped
 //     alternative this slice doesn't attempt.
-//   - `PORTAGE_COMPRESSION_COMMAND` is hardcoded to `"bzip2 -c"` (real
-//     `make.globals`'s own `PORTAGE_COMPRESS="bzip2"` default) rather
-//     than resolved through real `_compressors`/`BINPKG_COMPRESS_FLAGS_*`
-//     substitution -- this pilot has no `make.conf` resolution path into
-//     `ebuild.rs` at all yet, the same "env var/hardcoded default, not
-//     full config resolution" shortcut `CONFIG_PROTECT` already
-//     established.
+//   - Real `PORTAGE_COMPRESSION_COMMAND` resolution (real
+//     `_compressors`/`BINPKG_COMPRESS_FLAGS_*`, `doebuild.py:697-750`) is
+//     real now -- see `resolve_compression_command`'s own doc comment
+//     for the exact real mechanics and v1 narrowing (no full shell
+//     `varexpand`, real host CPU count for `{JOBS}`). `BINPKG_COMPRESS`/
+//     `BINPKG_COMPRESS_FLAGS[_<NAME>]`/`PORTAGE_BZIP2_COMMAND` are env-
+//     var-sourced at the `ebuild.rs` CLI boundary, the same "env var,
+//     not full config resolution" shortcut `CONFIG_PROTECT` already
+//     established; `Default` matches real `make.globals`'s own
+//     `BINPKG_COMPRESS="zstd"` (**not** `"bzip2"` -- real portage's own
+//     default changed at some point; this pilot's own previous hardcoded
+//     `"bzip2 -c"` predated noticing that).
 //   - `USE` is always empty in the Packages index entry, matching this
 //     pilot's own phase environment (`ebuild_phases`'s own setup block
 //     always exports `USE=""`, a pre-existing, separately-documented v1
@@ -57,6 +62,7 @@
 
 use crate::ebuild_phases;
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -79,6 +85,21 @@ pub struct PackageOptions {
     pub pkgdir: PathBuf,
     pub distdir: PathBuf,
     pub shell: ebuild_phases::ShellBackend,
+    /// Real `BINPKG_COMPRESS` (real `make.globals`'s own default:
+    /// `"zstd"`) -- see `resolve_compression_command`'s own doc comment.
+    pub binpkg_compress: String,
+    /// Real `BINPKG_COMPRESS_FLAGS_<NAME>` (the per-compressor override,
+    /// `<NAME>` = `binpkg_compress` uppercased) if set, else real
+    /// `BINPKG_COMPRESS_FLAGS` -- already resolved to the single value
+    /// to use, at the `ebuild.rs` CLI boundary, so this module itself
+    /// doesn't need to know about the per-compressor override naming
+    /// convention at all. Real `make.globals` sets neither, so
+    /// `Default` is empty.
+    pub binpkg_compress_flags: String,
+    /// Real `PORTAGE_BZIP2_COMMAND` (real `make.globals`'s own default:
+    /// `"bzip2"`) -- only actually substituted when `binpkg_compress ==
+    /// "bzip2"`.
+    pub portage_bzip2_command: String,
 }
 
 impl Default for PackageOptions {
@@ -88,8 +109,90 @@ impl Default for PackageOptions {
             pkgdir: PathBuf::from("/var/cache/binpkgs"),
             distdir: PathBuf::from("/var/cache/distfiles"),
             shell: ebuild_phases::ShellBackend::default(),
+            binpkg_compress: "zstd".to_string(),
+            binpkg_compress_flags: String::new(),
+            portage_bzip2_command: "bzip2".to_string(),
         }
     }
+}
+
+/// Real `_compressors` (`lib/portage/util/compression_probe.py:10-53`),
+/// narrowed to the `"compress"` half only -- this module only ever
+/// *builds* a binpkg, never installs from one, so the real
+/// `"decompress"`/`"decompress_alt"` fields (relevant only when
+/// *installing* from a binpkg) have no equivalent here. `{JOBS}` is a
+/// plain, non-`${...}`, pre-`varexpand` substitution (real
+/// `doebuild.py:721-724`/`:740-743`); `${...}` placeholders are resolved
+/// afterward by `resolve_compression_command`.
+fn compress_template(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "bzip2" => "${PORTAGE_BZIP2_COMMAND} ${BINPKG_COMPRESS_FLAGS}",
+        "gzip" => "gzip ${BINPKG_COMPRESS_FLAGS}",
+        "lz4" => "lz4 ${BINPKG_COMPRESS_FLAGS}",
+        "lzip" => "lzip ${BINPKG_COMPRESS_FLAGS}",
+        "lzop" => "lzop ${BINPKG_COMPRESS_FLAGS}",
+        "xz" => "xz -T{JOBS} --memlimit-compress=50% -q ${BINPKG_COMPRESS_FLAGS}",
+        "zstd" => "zstd -T{JOBS} ${BINPKG_COMPRESS_FLAGS}",
+        _ => return None,
+    })
+}
+
+/// Real `find_binary()` (`lib/portage/process.py`): the first `PATH`
+/// entry containing an executable file named `name`.
+fn find_binary(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| {
+        std::fs::metadata(dir.join(name))
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    })
+}
+
+/// Real `PORTAGE_COMPRESSION_COMMAND` resolution (`doebuild.py:697-750`):
+/// looks up `binpkg_compress` in the real `_compressors` table,
+/// substitutes `{JOBS}` (real host CPU count, matching real
+/// `makeopts_to_job_count`'s own `get_cpu_count()` fallback path --
+/// this pilot's own `MAKEOPTS` is always unset, the same path real code
+/// takes whenever `MAKEOPTS` doesn't itself contain a `-j`/`--jobs=`
+/// value) and `${PORTAGE_BZIP2_COMMAND}`/`${BINPKG_COMPRESS_FLAGS}` (a
+/// plain, narrow `${VAR}` substitution -- not a full shell `varexpand`,
+/// since none of the six real templates or realistic flag values need
+/// anything beyond that), `shlex.split()`s the result (narrowed to
+/// whitespace-splitting -- same reasoning, no real quoting need), and
+/// confirms the resolved binary is real-`PATH`-findable (real
+/// `find_binary()`).
+///
+/// Returns `None` -- the caller omits `PORTAGE_COMPRESSION_COMMAND` from
+/// the exported environment entirely -- for an unknown `binpkg_compress`
+/// name or a compressor whose binary isn't installed, matching real
+/// behavior exactly: `mysettings["PORTAGE_COMPRESSION_COMMAND"]` is left
+/// unset in both real cases too (only warned about, real `writemsg` --
+/// not reproduced, this module's own real-execution path has no
+/// message-printing output anywhere else either), so real, unmodified
+/// `bin/misc-functions.sh` hits its own real `[[ -z
+/// "${PORTAGE_COMPRESSION_COMMAND}" ]] && die "PORTAGE_COMPRESSION_
+/// COMMAND is unset"` guard naturally.
+fn resolve_compression_command(
+    binpkg_compress: &str,
+    binpkg_compress_flags: &str,
+    portage_bzip2_command: &str,
+) -> Option<String> {
+    let template = compress_template(binpkg_compress)?;
+    let jobs = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let expanded = template
+        .replace("{JOBS}", &jobs.to_string())
+        .replace("${PORTAGE_BZIP2_COMMAND}", portage_bzip2_command)
+        .replace("${BINPKG_COMPRESS_FLAGS}", binpkg_compress_flags);
+    let tokens: Vec<&str> = expanded.split_whitespace().collect();
+    let binary = *tokens.first()?;
+    if !find_binary(binary) {
+        return None;
+    }
+    Some(tokens.join(" "))
 }
 
 fn now_unix_time() -> Result<u64, String> {
@@ -208,17 +311,13 @@ pub fn run_package(
     }
 
     let repo_lib_path = ebuild_phases::repo_root().join("lib");
-    let extra_env = vec![
+    let mut extra_env = vec![
         ("PKGDIR".to_string(), options.pkgdir.display().to_string()),
         (
             "PORTAGE_BINPKG_TMPFILE".to_string(),
             binpkg_path.display().to_string(),
         ),
         ("BINPKG_FORMAT".to_string(), "xpak".to_string()),
-        (
-            "PORTAGE_COMPRESSION_COMMAND".to_string(),
-            "bzip2 -c".to_string(),
-        ),
         // Real `bin/misc-functions.sh`'s own `xpak-helper.py` invocation
         // prefers `PORTAGE_PYTHONPATH` over `PORTAGE_PYM_PATH` (which
         // this pilot deliberately leaves unset -- see
@@ -231,6 +330,16 @@ pub fn run_package(
             repo_lib_path.display().to_string(),
         ),
     ];
+    if let Some(compression_command) = resolve_compression_command(
+        &options.binpkg_compress,
+        &options.binpkg_compress_flags,
+        &options.portage_bzip2_command,
+    ) {
+        extra_env.push((
+            "PORTAGE_COMPRESSION_COMMAND".to_string(),
+            compression_command,
+        ));
+    }
 
     let package_status = ebuild_phases::run_misc_function(
         ebuild_path,
@@ -301,6 +410,87 @@ mod tests {
         assert!(!is_real_package_command("qmerge"));
         assert!(!is_real_package_command("merge"));
         assert!(!is_real_package_command("install"));
+    }
+
+    #[test]
+    fn compress_template_covers_exactly_the_real_six_compressors() {
+        for name in ["bzip2", "gzip", "lz4", "lzip", "lzop", "xz", "zstd"] {
+            assert!(
+                compress_template(name).is_some(),
+                "{name} should be a known real compressor"
+            );
+        }
+        assert_eq!(compress_template("made-up-codec"), None);
+    }
+
+    #[test]
+    fn find_binary_finds_a_real_path_entry_and_rejects_a_bogus_name() {
+        assert!(find_binary("sh"), "sh should be on a real test PATH");
+        assert!(!find_binary(
+            "this-binary-definitely-does-not-exist-anywhere-xyz"
+        ));
+    }
+
+    #[test]
+    fn resolve_compression_command_substitutes_bzip2_var_and_flags() {
+        // "bzip2" is used as both the compressor name and the
+        // ${PORTAGE_BZIP2_COMMAND} value here so find_binary succeeds
+        // without depending on any *other* binary actually being
+        // installed on the test-running host.
+        let cmd = resolve_compression_command("bzip2", "-9", "bzip2")
+            .expect("bzip2 should be found on a real test PATH");
+        assert_eq!(cmd, "bzip2 -9");
+    }
+
+    #[test]
+    fn resolve_compression_command_substitutes_gzip_flags_with_no_bzip2_var() {
+        let cmd = resolve_compression_command("gzip", "-9", "bzip2")
+            .expect("gzip should be found on a real test PATH");
+        assert_eq!(cmd, "gzip -9");
+    }
+
+    #[test]
+    fn resolve_compression_command_substitutes_jobs_for_xz_and_zstd() {
+        // {JOBS} is real host CPU count -- not pinned to a fixed value,
+        // just proven to have actually been substituted (no literal
+        // "{JOBS}" left, and a real positive integer follows "-T").
+        for name in ["xz", "zstd"] {
+            let cmd = resolve_compression_command(name, "", "bzip2")
+                .unwrap_or_else(|| panic!("{name} should be found on a real test PATH"));
+            assert!(!cmd.contains("{JOBS}"), "{cmd}");
+            let jobs_token = cmd
+                .split_whitespace()
+                .find_map(|tok| tok.strip_prefix("-T"))
+                .unwrap_or_else(|| panic!("{cmd} should contain a -T<jobs> token"));
+            assert!(
+                jobs_token.parse::<u32>().is_ok(),
+                "-T should be followed by a real positive integer, got {jobs_token:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_compression_command_is_none_for_an_unknown_compressor() {
+        assert_eq!(
+            resolve_compression_command("made-up-codec", "", "bzip2"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_compression_command_is_none_when_the_bzip2_var_names_a_missing_binary() {
+        // A real compressor name, but ${PORTAGE_BZIP2_COMMAND} resolves
+        // to a binary that isn't actually installed -- real behavior:
+        // PORTAGE_COMPRESSION_COMMAND is left unset (the caller omits it
+        // from the exported environment), not a fabricated fallback.
+        assert_eq!(
+            resolve_compression_command(
+                "bzip2",
+                "",
+                "this-binary-definitely-does-not-exist-anywhere-xyz"
+            ),
+            None
+        );
     }
 
     // `repo_root_for` itself now lives in, and is tested in,
@@ -386,6 +576,15 @@ mod tests {
             pkgdir: tmp.join("pkgdir"),
             distdir: tmp.join("distdir"),
             shell: ebuild_phases::ShellBackend::default(),
+            // Real xpak/tbz2 building is codec-agnostic (this pilot's
+            // own `portage_repo` binpkg reader never parses a `.tbz2`'s
+            // own content, only `Packages`) -- pinned to "bzip2"
+            // explicitly here (rather than the real `Default`, "zstd")
+            // so this test doesn't depend on the test-running host
+            // actually having `zstd` installed; `bzip2` is a
+            // near-universal base package.
+            binpkg_compress: "bzip2".to_string(),
+            ..PackageOptions::default()
         };
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(&portage_tmpdir).unwrap();

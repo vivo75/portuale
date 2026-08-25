@@ -2680,15 +2680,33 @@ pub fn run(args: &[String]) -> ExitCode {
     // is also `true` -- see `emerge_build.rs`'s own module doc comment
     // for what this actually does (and doesn't) build.
     if !pretend {
+        // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
+        // PORTAGE_BZIP2_COMMAND resolution -- same env-var-sourced CLI
+        // boundary as `ebuild.rs`'s own real `merge`/`qmerge`/`package`
+        // construction (see `ebuild_package::PackageOptions::
+        // binpkg_compress_flags`'s own doc comment for why the
+        // per-compressor override is resolved here, once).
+        let default_package_options = ebuild_package::PackageOptions::default();
+        let binpkg_compress = std::env::var("BINPKG_COMPRESS")
+            .unwrap_or_else(|_| default_package_options.binpkg_compress.clone());
+        let binpkg_compress_flags_name =
+            format!("BINPKG_COMPRESS_FLAGS_{}", binpkg_compress.to_uppercase());
+        let binpkg_compress_flags = std::env::var(&binpkg_compress_flags_name)
+            .or_else(|_| std::env::var("BINPKG_COMPRESS_FLAGS"))
+            .unwrap_or_else(|_| default_package_options.binpkg_compress_flags.clone());
         let package_options = ebuild_package::PackageOptions {
             debug: false,
             pkgdir: std::env::var_os("PKGDIR")
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| ebuild_package::PackageOptions::default().pkgdir),
+                .unwrap_or_else(|| default_package_options.pkgdir.clone()),
             distdir: std::env::var_os("DISTDIR")
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| ebuild_package::PackageOptions::default().distdir),
-            shell: ebuild_package::PackageOptions::default().shell,
+                .unwrap_or_else(|| default_package_options.distdir.clone()),
+            shell: default_package_options.shell,
+            binpkg_compress,
+            binpkg_compress_flags,
+            portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
+                .unwrap_or(default_package_options.portage_bzip2_command),
         };
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
