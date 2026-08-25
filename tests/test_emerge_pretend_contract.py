@@ -847,6 +847,43 @@ def test_root_deps_matches_between_implementations(
     assert rust_with.stdout.strip() == "[ebuild  N] dev-libs/rootdepspkg-1.0"
 
 
+def test_root_deps_disjunctive_branch_selection_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--root-deps branch-selection feed-in: rootdepsorpkg's own BDEPEND
+    is "|| ( dev-libs/rootdepsnonexistent dev-libs/rootdepsprovider )" --
+    neither branch has an ebuild anywhere in the fixture repo tree, so
+    without --root-deps no branch resolves at all and *both* are reported
+    as unresolvable dependencies (this pilot's own pre-existing "leave an
+    unresolved || group's branches all in flat_deps" fallback, unrelated
+    to --root-deps itself). With --root-deps, rootdepsprovider's own
+    running-root satisfaction lets the closure select that branch
+    specifically, so neither branch is reported at all: rootdepsprovider
+    because it's already satisfied, rootdepsnonexistent because it was
+    never selected in the first place."""
+    env = dict(fixture_env)
+    env["PORTAGE_RUNNING_ROOT"] = env["ROOT"]
+    args_without = ["--pretend", "dev-libs/rootdepsorpkg"]
+    args_with = ["--pretend", "--root-deps", "dev-libs/rootdepsorpkg"]
+
+    rust_without = _run([str(emerge_binary)], args_without, env)
+    python_without = _run(emerge_pretend_python, args_without, env)
+    assert rust_without.returncode == 0
+    assert python_without.returncode == 0
+    assert rust_without.stdout == python_without.stdout
+    assert rust_without.stderr == python_without.stderr
+    assert "no visible ebuild for dependency" in rust_without.stderr
+
+    rust_with = _run([str(emerge_binary)], args_with, env)
+    python_with = _run(emerge_pretend_python, args_with, env)
+    assert rust_with.returncode == 0
+    assert python_with.returncode == 0
+    assert rust_with.stdout == python_with.stdout
+    assert rust_with.stderr == python_with.stderr
+    assert rust_with.stderr == ""
+    assert rust_with.stdout.strip() == "[ebuild  N] dev-libs/rootdepsorpkg-1.0"
+
+
 def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
     """Pins the exact recursion output for the diamond fixture (diamond ->
     shared-a, shared-b -> common), not just parity with Python: "common"

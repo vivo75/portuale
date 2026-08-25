@@ -3131,23 +3131,23 @@ fn atom_currently_satisfiable(
 /// own AlreadyInstalled-recursion path) share one implementation rather
 /// than drifting apart. Reads `metadata`'s own `DEPEND`+`BDEPEND` keys,
 /// flattens them the exact same way (`use_flags`/`repos`/`config`) the
-/// caller already flattened its own combined dep string with -- always
-/// the same branch choices, since `atom_currently_satisfiable` is a pure
-/// function of its own inputs -- and returns only the ones satisfied by
-/// `running_root`'s own real vdb (`running_root_satisfies_atom`).
-/// Callers drop these from their own already-flattened `flat_deps`
-/// before queueing (real "no separate graph node needed for an
-/// already-satisfied dep"). Degrades to an empty set on any flatten
-/// failure -- never a false negative that could silently drop a dep
-/// this pilot actually needed to walk.
-///
-/// KNOWN, DOCUMENTED SCOPE CUT: this doesn't feed running-root
-/// satisfiability into the disjunctive (`||`) branch-selection closure
-/// itself, so a `DEPEND`/`BDEPEND` `||` group with no branch visible in
-/// the fixture tree still fails to flatten at all here (returns
-/// `HashSet::new()`), even if some branch *would* be running-root-
-/// satisfied -- only already-resolved, non-disjunctive atoms benefit
-/// from real `--root-deps` behavior in this pilot.
+/// caller already flattened its own combined dep string with, *except*
+/// for one deliberate branch-selection difference: the disjunctive
+/// (`||`) closure passed to `use_reduce_flat_disjunctive` here accepts a
+/// branch when every atom in it is either ordinarily satisfiable
+/// (`atom_currently_satisfiable`, tree-visibility) *or* running-root-
+/// satisfied (`running_root_satisfies_atom`) -- so a `DEPEND`/`BDEPEND`
+/// `||` group with no branch visible in the fixture tree at all still
+/// flattens correctly here as long as some branch is already installed
+/// on the running root, matching real portage's own effective behavior
+/// (a build-time tool that's already present on the host never needs a
+/// *visible* ebuild candidate to satisfy a real `--root-deps` build).
+/// Returns only the tokens satisfied by `running_root`'s own real vdb
+/// (`running_root_satisfies_atom`) -- callers drop these from their own
+/// already-flattened `flat_deps` before queueing (real "no separate
+/// graph node needed for an already-satisfied dep"). Degrades to an
+/// empty set on any flatten failure -- never a false negative that
+/// could silently drop a dep this pilot actually needed to walk.
 fn root_deps_satisfied_atoms(
     metadata: &HashMap<String, String>,
     use_flags: &HashSet<String>,
@@ -3168,9 +3168,10 @@ fn root_deps_satisfied_atoms(
         use_flags,
         portage_use_reduce::MatchMode::Normal,
         &mut |atoms: &[String]| {
-            atoms
-                .iter()
-                .all(|a| atom_currently_satisfiable(repos, a, config))
+            atoms.iter().all(|a| {
+                atom_currently_satisfiable(repos, a, config)
+                    || running_root_satisfies_atom(a, running_root)
+            })
         },
     )
     .map(|flat| {
@@ -5057,14 +5058,35 @@ pub fn resolve_pretend_graph(
             }
         }
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+        // Real `--root-deps` branch-selection feed-in (see
+        // `root_deps_satisfied_atoms`'s own doc comment): a `||` group
+        // with no branch tree-visible still needs a branch selected
+        // here too, not just in `root_deps_satisfied_atoms`'s own
+        // separate re-flatten -- otherwise the *other*, genuinely
+        // unsatisfiable branch would remain in `flat_deps` and get
+        // queued as an ordinary (and wrongly reported) dependency. Real
+        // `--root-deps` only ever applies to `DEPEND`/`BDEPEND` -- this
+        // closure can't tell which of the five merged dep keys a given
+        // atom came from (this pilot's own single-unified-graph
+        // architecture merges them into one combined string before
+        // flattening at all -- the same documented limitation
+        // `PORTING/PROMPT-next.md`'s own `--root-deps` backlog entry
+        // names for the bigger, still-unattempted "recursive second-root
+        // graph" gap), so an `RDEPEND`/`PDEPEND`/`IDEPEND` `||` group
+        // gets this same permissive check too -- harmless in practice
+        // (those atoms almost always resolve via ordinary tree
+        // visibility already; a running-root coincidence only ever
+        // widens acceptance, never narrows it).
         let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
             &tokens,
             &use_flags,
             portage_use_reduce::MatchMode::Normal,
             &mut |atoms: &[String]| {
-                atoms
-                    .iter()
-                    .all(|a| atom_currently_satisfiable(&repos, a, config))
+                atoms.iter().all(|a| {
+                    atom_currently_satisfiable(&repos, a, config)
+                        || root_deps_running_root
+                            .is_some_and(|root| running_root_satisfies_atom(a, root))
+                })
             },
         ) else {
             continue;
@@ -5307,14 +5329,20 @@ fn enqueue_dependencies(
         }
     }
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    // Real `--root-deps` branch-selection feed-in -- see the main
+    // New/Upgrade/Reinstall loop's own identical fix, above, for the
+    // full grounding (this is `resolve_pretend_graph`'s own
+    // `--deep`/AlreadyInstalled-recursion counterpart to it).
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
         &tokens,
         &use_flags,
         portage_use_reduce::MatchMode::Normal,
         &mut |atoms: &[String]| {
-            atoms
-                .iter()
-                .all(|a| atom_currently_satisfiable(repos, a, config))
+            atoms.iter().all(|a| {
+                atom_currently_satisfiable(repos, a, config)
+                    || root_deps_running_root
+                        .is_some_and(|root| running_root_satisfies_atom(a, root))
+            })
         },
     ) else {
         return;
@@ -7678,6 +7706,63 @@ mod tests {
                     version: "1.0".to_string()
                 }
             ),]
+        );
+    }
+
+    #[test]
+    fn root_deps_feeds_running_root_satisfiability_into_disjunctive_branch_selection() {
+        // rootdepsorpkg's own BDEPEND is `|| ( rootdepsnonexistent
+        // rootdepsprovider )` -- neither branch has an ebuild anywhere
+        // in the fixture repo tree, so without `--root-deps` no branch
+        // can be selected via ordinary tree-visibility at all: this
+        // pilot's own pre-existing, unrelated `portage_use_reduce`
+        // simplification (real `dep_zapdeps()`'s own "fall back to the
+        // *last* alternative" isn't ported) leaves the whole `||` group
+        // unresolved instead, so *both* branches end up queued and
+        // reported individually -- unaffected by this fix, since
+        // `root_deps_running_root` is `None` here.
+        assert_eq!(
+            graph_root_deps("dev-libs/rootdepsorpkg", None),
+            vec![
+                (
+                    "dev-libs/rootdepsorpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/rootdepsnonexistent".to_string(),
+                    PretendOutcome::NoVisibleCandidate
+                ),
+                (
+                    "dev-libs/rootdepsprovider".to_string(),
+                    PretendOutcome::NoVisibleCandidate
+                ),
+            ],
+            "without --root-deps, neither branch resolves, so both are reported"
+        );
+
+        // With `--root-deps` pointed at a running root where
+        // `rootdepsprovider` genuinely is installed, the disjunctive
+        // closure now also accepts a branch that's running-root-
+        // satisfied even though it's invisible in the tree -- so the
+        // `||` group resolves to that one branch specifically (not
+        // both), which the trailing `root_deps_satisfied_atoms` filter
+        // then correctly drops from the queue entirely: no
+        // `rootdepsprovider` entry (already satisfied), and critically
+        // no `rootdepsnonexistent` entry either (never selected, so
+        // never queued at all) -- the real bug this fix closes.
+
+        let root = fixtures_root();
+        assert_eq!(
+            graph_root_deps("dev-libs/rootdepsorpkg", Some(&root)),
+            vec![(
+                "dev-libs/rootdepsorpkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),],
+            "the running-root-satisfied branch is selected and then dropped as already-satisfied"
         );
     }
 

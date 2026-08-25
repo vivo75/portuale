@@ -3131,29 +3131,32 @@ def _root_deps_satisfied_atoms(metadata, use_flags, repos, config, running_root)
     AlreadyInstalled-recursion path) share one implementation rather than
     drifting apart. Reads metadata's own DEPEND+BDEPEND keys, flattens
     them the exact same way (use_flags/repos/config) the caller already
-    flattened its own combined dep string with -- always the same branch
-    choices, since _atom_currently_satisfiable is a pure function of its
-    own inputs -- and returns only the ones satisfied by running_root's
-    own real vdb (_running_root_satisfies_atom). Callers drop these from
-    their own already-flattened flat_deps before queueing (real "no
-    separate graph node needed for an already-satisfied dep"). Degrades
-    to an empty set on any flatten failure -- never a false negative that
-    could silently drop a dep this pilot actually needed to walk.
-
-    KNOWN, DOCUMENTED SCOPE CUT: this doesn't feed running-root
-    satisfiability into the disjunctive ("||") branch-selection closure
-    itself, so a DEPEND/BDEPEND "||" group with no branch visible in the
-    fixture tree still fails to flatten at all here (returns an empty
-    set), even if some branch *would* be running-root-satisfied -- only
-    already-resolved, non-disjunctive atoms benefit from real
-    --root-deps behavior in this pilot. Mirrors portage-repo/src/lib.rs's
-    root_deps_satisfied_atoms exactly."""
+    flattened its own combined dep string with, *except* for one
+    deliberate branch-selection difference: the disjunctive ("||")
+    closure passed to _use_reduce_flat_disjunctive here accepts a branch
+    when every atom in it is either ordinarily satisfiable
+    (_atom_currently_satisfiable, tree-visibility) *or* running-root-
+    satisfied (_running_root_satisfies_atom) -- so a DEPEND/BDEPEND "||"
+    group with no branch visible in the fixture tree at all still
+    flattens correctly here as long as some branch is already installed
+    on the running root, matching real portage's own effective behavior.
+    Returns only the tokens satisfied by running_root's own real vdb
+    (_running_root_satisfies_atom) -- callers drop these from their own
+    already-flattened flat_deps before queueing (real "no separate graph
+    node needed for an already-satisfied dep"). Degrades to an empty set
+    on any flatten failure -- never a false negative that could silently
+    drop a dep this pilot actually needed to walk. Mirrors
+    portage-repo/src/lib.rs's root_deps_satisfied_atoms exactly."""
     build_depstr = " ".join(metadata[k] for k in ("DEPEND", "BDEPEND") if metadata.get(k))
     try:
         build_flat = _use_reduce_flat_disjunctive(
             build_depstr,
             use_flags,
-            lambda atoms: all(_atom_currently_satisfiable(repos, a, config) for a in atoms),
+            lambda atoms: all(
+                _atom_currently_satisfiable(repos, a, config)
+                or _running_root_satisfies_atom(a, running_root)
+                for a in atoms
+            ),
         )
     except InvalidDependString:
         return set()
@@ -4439,21 +4442,39 @@ def resolve_pretend_graph(
             for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
             if metadata.get(k)
         )
+        # --root-deps branch-selection feed-in (see
+        # _root_deps_satisfied_atoms's own docstring): a "||" group with
+        # no branch tree-visible still needs a branch selected here too,
+        # not just in _root_deps_satisfied_atoms's own separate
+        # re-flatten -- otherwise the *other*, genuinely unsatisfiable
+        # branch would remain in flat_deps and get queued as an ordinary
+        # (and wrongly reported) dependency. Real --root-deps only ever
+        # applies to DEPEND/BDEPEND -- this closure can't tell which of
+        # the five merged dep keys a given atom came from (this pilot's
+        # own single-unified-graph architecture merges them into one
+        # combined string before flattening at all), so an
+        # RDEPEND/PDEPEND/IDEPEND "||" group gets this same permissive
+        # check too -- harmless in practice, mirrors
+        # portage-repo/src/lib.rs's identical fix exactly.
         try:
             flat_deps = _use_reduce_flat_disjunctive(
                 depstr,
                 use_flags,
                 lambda atoms: all(
-                    _atom_currently_satisfiable(repos, a, config) for a in atoms
+                    _atom_currently_satisfiable(repos, a, config)
+                    or (
+                        root_deps_running_root is not None
+                        and _running_root_satisfies_atom(a, root_deps_running_root)
+                    )
+                    for a in atoms
                 ),
             )
         except InvalidDependString:
             continue
         # --root-deps: real ESYSROOT-vs-ROOT distinction (see
         # _root_deps_satisfied_atoms's own doc comment for the full
-        # grounding and its documented scope cut) -- a strict no-op when
-        # root_deps_running_root is None, matching every pre-existing
-        # call site/test.
+        # grounding) -- a strict no-op when root_deps_running_root is
+        # None, matching every pre-existing call site/test.
         root_deps_satisfied = (
             _root_deps_satisfied_atoms(metadata, use_flags, repos, config, root_deps_running_root)
             if root_deps_running_root is not None
@@ -4666,11 +4687,22 @@ def _enqueue_dependencies(
         else ("RDEPEND", "PDEPEND", "IDEPEND")
     )
     depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
+    # --root-deps branch-selection feed-in -- see the main
+    # New/Upgrade/Reinstall loop's own identical fix for the full
+    # grounding (this is _enqueue_dependencies's own
+    # --deep/AlreadyInstalled-recursion counterpart to it).
     try:
         flat_deps = _use_reduce_flat_disjunctive(
             depstr,
             use_flags,
-            lambda atoms: all(_atom_currently_satisfiable(repos, a, config) for a in atoms),
+            lambda atoms: all(
+                _atom_currently_satisfiable(repos, a, config)
+                or (
+                    root_deps_running_root is not None
+                    and _running_root_satisfies_atom(a, root_deps_running_root)
+                )
+                for a in atoms
+            ),
         )
     except InvalidDependString:
         return

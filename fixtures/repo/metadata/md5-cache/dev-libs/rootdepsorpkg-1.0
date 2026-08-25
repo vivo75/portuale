@@ -1,0 +1,10 @@
+BDEPEND=|| ( dev-libs/rootdepsnonexistent dev-libs/rootdepsprovider )
+DEFINED_PHASES=-
+DEPEND=
+DESCRIPTION=fixture package: --root-deps disjunctive (||) branch-selection feed-in -- neither BDEPEND branch has an ebuild anywhere in this fixture repo, only one (rootdepsprovider) in a hand-seeded running-root vdb
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=
+SLOT=0
+_md5_=0000000000000000000000000000000

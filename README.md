@@ -5240,20 +5240,37 @@ fake vdb tree instead, the same "explicit override for tests, real
 default at the CLI boundary" pattern `MergeOptions::config_root`
 already established.
 
-**KNOWN, DOCUMENTED SCOPE CUT**: this doesn't feed running-root
-satisfiability into the disjunctive (`||`) branch-selection closure
-itself, so a `DEPEND`/`BDEPEND` `||` group with no branch visible in the
-fixture tree still fails to resolve at all, even if some branch *would*
-be running-root-satisfied -- only already-resolved, non-disjunctive
-atoms benefit. Also not attempted at all: real portage's fuller
+Running-root satisfiability now feeds into the disjunctive (`||`)
+branch-selection closure too: a `DEPEND`/`BDEPEND` `||` group with no
+branch visible in the fixture tree resolves correctly when some branch
+*is* running-root-satisfied, in both real dep-walk sites (the main
+New/Upgrade/Reinstall flatten and `enqueue_dependencies`'s own
+`--deep`/`AlreadyInstalled` recursion). Since this pilot's own single-
+unified-graph architecture merges all five dep keys into one combined
+string before ever flattening at all, the running-root-aware closure
+can't tell which key a given atom came from, so an `RDEPEND`/`PDEPEND`/
+`IDEPEND` `||` group gets the same permissive check too -- harmless in
+practice (those atoms almost always resolve via ordinary tree
+visibility already; a running-root coincidence only ever widens
+acceptance, never narrows it). New fixture `dev-libs/rootdepsorpkg`
+(`BDEPEND="|| ( dev-libs/rootdepsnonexistent dev-libs/rootdepsprovider
+)"`, neither branch with an ebuild in the fixture tree) proves it, in
+both Rust and the Python reference mirror, plus a new dedicated pytest
+contract test.
+
+**KNOWN, DOCUMENTED SCOPE CUT (still open)**: real portage's fuller
 behavior of recursively pulling in and building a *new* package against
-the running root when it's *not* already there -- this pilot's own
-single unified BFS graph has no per-dependency-type root tracking
-anywhere (every dep key's tokens are merged into one combined string
-and walked as one graph), and reproducing genuine multi-root graph
-walking was judged too large a change for this slice; this v1 only
-answers "is it already there," never "what would it take to get it
-there."
+the running root when it's *not* already there is still not attempted.
+Investigated directly this round: real `depgraph.py`'s own `--root-deps`
+support depends on a genuine multi-root architecture (`self.trees
+[myroot]`, `self.roots[myroot]`, separate per-root graphs) -- this
+pilot's own single unified BFS queue has no per-entry root tracking at
+all (its `QueueItem` is a bare tuple used pervasively across a ~10,600-
+line file), so reproducing this would mean touching most of that
+file's own call sites, real risk to already-tested, heavily-used code
+for a single slice. This v1 only answers "is it already there," never
+"what would it take to get it there" -- left as its own, separately-
+scoped future slice.
 
 New fixture `dev-libs/rootdepspkg` (`BDEPEND="dev-libs/rootdepsprovider"`,
 no ebuild for `rootdepsprovider` anywhere in the fixture repo tree at
@@ -5295,6 +5312,24 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
     PORTING/rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rootdepspkg
 # [ebuild  N] dev-libs/rootdepspkg-1.0
+
+# Disjunctive branch-selection feed-in: rootdepsorpkg's own BDEPEND is
+# "|| ( rootdepsnonexistent rootdepsprovider )" -- neither branch has an
+# ebuild anywhere in the fixture repo tree, so without --root-deps
+# *both* branches are reported (this pilot's own pre-existing "leave an
+# unresolved || group's branches all in flat_deps" fallback).
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTING/rust/target/release/portuale \
+    emerge --pretend dev-libs/rootdepsorpkg
+# [ebuild  N] dev-libs/rootdepsorpkg-1.0
+# !!! no visible ebuild for dependency "dev-libs/rootdepsnonexistent"
+# !!! no visible ebuild for dependency "dev-libs/rootdepsprovider"
+
+# With --root-deps: the closure now selects the running-root-satisfied
+# branch specifically, so neither is reported at all.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rootdepsorpkg
+# [ebuild  N] dev-libs/rootdepsorpkg-1.0
 ```
 
 ### Real `ebuild <file> qmerge`
