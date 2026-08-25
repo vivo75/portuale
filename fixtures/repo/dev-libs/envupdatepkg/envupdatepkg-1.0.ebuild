@@ -9,5 +9,5 @@ src_install() {
 	echo 'ENVUPDATETEST_VAR="hello from envupdatetest"' >> "${T}/50-envupdatetest" || die
 	doins "${T}/50-envupdatetest"
 
-	dodir /usr/lib/envupdatetest
+	keepdir /usr/lib/envupdatetest
 }

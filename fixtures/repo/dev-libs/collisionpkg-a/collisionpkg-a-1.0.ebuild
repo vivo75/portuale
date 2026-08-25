@@ -7,5 +7,5 @@ src_install() {
 	insinto /usr/share/collisiontest
 	echo "hello from collisionpkg-a" > "${T}/shared.txt" || die
 	doins "${T}/shared.txt"
-	dodir /usr/share/collisiontest/adir
+	keepdir /usr/share/collisiontest/adir
 }

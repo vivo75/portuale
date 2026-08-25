@@ -1140,6 +1140,40 @@ async fn run_commands_async(
             if status != 0 {
                 return Ok(status);
             }
+            // Real `_post_phase_cmds["install"]` (`EbuildPhase.py:424`/
+            // `442-461`): real, unconditional `bin/misc-functions.sh
+            // install_qa_check install_symlink_html_docs install_hooks`,
+            // run once right after a successful real `install` phase --
+            // not gated on any `FEATURES` flag, and (unlike `ebuild
+            // <file> package`'s own separate `__dyn_package` misc-
+            // functions call) never itself part of `phase_prerequisites`'
+            // own chain, so this is the one place it can run. `EBUILD_
+            // PHASE` stays `"install"` for this call, matching real
+            // portage's own behavior (`_PostPhaseCommands` reuses the
+            // exact same `settings` the install phase itself already
+            // used, never resetting it). Real `bin/misc-functions.sh`'s
+            // own `MISC_FUNCTIONS_ARGS="$@"` then unquoted `for x in
+            // ${MISC_FUNCTIONS_ARGS}` re-splits on whitespace regardless
+            // of how many real argv entries this arrived as, so passing
+            // all three names as one space-joined string here is exactly
+            // equivalent to real portage's own three separate positional
+            // args -- `run_misc_functions` needs no changes at all.
+            if phase == "install" {
+                let qa_status = run_misc_functions(
+                    &env,
+                    root,
+                    "install",
+                    "install_qa_check install_symlink_html_docs install_hooks",
+                    &extra_env,
+                    debug,
+                    config_root,
+                    shell,
+                )
+                .await?;
+                if qa_status != 0 {
+                    return Ok(qa_status);
+                }
+            }
         }
     }
     Ok(0)
@@ -1399,6 +1433,71 @@ mod tests {
         assert_eq!(contents, "hello from phasepkg\n");
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Real, end-to-end proof that `_post_phase_cmds["install"]`
+    /// (`EbuildPhase.py:424`/`442-461`) actually runs now: real,
+    /// unmodified `bin/misc-functions.sh install_qa_check`'s own real
+    /// `95empty-dirs` QA check (`bin/install-qa-check.d/95empty-dirs`)
+    /// strips a genuinely empty directory from the install image for
+    /// any EAPI 8+ ebuild (real `___eapi_has_strict_keepdir`,
+    /// unconditional, not gated on any `FEATURES` flag) -- a bare
+    /// `dodir` with nothing ever installed into it must be gone from
+    /// `${D}` by the time `install` finishes, while a `keepdir`'d one
+    /// (the real ebuild-author idiom this QA check's own message
+    /// recommends) survives untouched.
+    #[test]
+    fn install_runs_the_real_post_install_qa_check_and_strips_a_genuinely_empty_dir() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-install_runs_the_real_post_install_qa_check",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let repo_root = tmp.join("repo");
+        let pkg_dir = repo_root.join("dev-libs/qacheckpkg");
+        std::fs::create_dir_all(repo_root.join("profiles")).unwrap();
+        std::fs::write(repo_root.join("profiles/repo_name"), "qachecktest\n").unwrap();
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("qacheckpkg-1.0.ebuild"),
+            "EAPI=8\n\
+             DESCRIPTION=\"fixture: real post-install QA check strips a genuinely empty dir\"\n\
+             SLOT=\"0\"\n\
+             KEYWORDS=\"amd64\"\n\
+             src_install() {\n\
+             \tdodir /usr/lib/reallyempty\n\
+             \tkeepdir /usr/lib/keptempty\n\
+             }\n",
+        )
+        .unwrap();
+
+        let ebuild_path = pkg_dir.join("qacheckpkg-1.0.ebuild");
+        let portage_tmpdir = tmp.join("portage_tmpdir");
+
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
+            false,
+            Path::new("/dev/null/no-config-root"),
+            ShellBackend::Brush,
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+
+        let image_dir = portage_tmpdir.join("portage/dev-libs/qacheckpkg-1.0/image");
+        assert!(
+            !image_dir.join("usr/lib/reallyempty").exists(),
+            "a genuinely empty dodir'd directory must be stripped by the real post-install QA check"
+        );
+        assert!(
+            image_dir.join("usr/lib/keptempty").is_dir(),
+            "a keepdir'd directory (real ebuild-author idiom) must survive"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Real, end-to-end proof that standalone `config`/`info` (real
