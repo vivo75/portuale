@@ -1471,6 +1471,53 @@ PORTING/
   though its main-repo-scoping half has no fixture that isolates it on
   its own.
 
+  **Explicit `repos.conf` `masters =` parsing**, closing the exact gap
+  just named above and finally making the main-repo `package.mask`
+  scoping fix's own distinguishing effect observable through a real
+  fixture for the first time. Grounded against real `RepoConfigLoader.
+  __init__` (`lib/portage/repository/config.py:1229-1260`): a repo with
+  no explicit `masters =` key at all implicitly masters the main repo
+  alone (the pre-existing default, unchanged); an *explicit* key --
+  even an empty one -- fully replaces that default, resolving each
+  named master to its own repo location, silently dropping an unknown
+  name (real `config.py` only warns, never a hard error). `portage_repo
+  ::RepoConfig` gains a new `masters: Vec<PathBuf>` field (Python:
+  `repos[i]["masters"]`, a list of locations, same shape), resolved by
+  `find_repos` in a genuine second pass over the now-complete repo list
+  (a master *name* can only resolve to a location once every repo's own
+  location is already known). `portage_profile::resolve_config` gains a
+  new `repo_masters: &HashMap<String, Vec<PathBuf>>` parameter (keyed by
+  repo name, the caller's own already-resolved chain) threaded through
+  every one of its own **61** existing call sites (36 in this crate's
+  own tests, 24 in `portage-repo`'s, 1 real -- scripted the same way
+  `resolve_pretend_graph`'s own new parameter was added, then hand-fixed
+  the handful of multi-line call sites the script mangled), replacing
+  the previous hardcoded "every overlay masters main alone" fallback
+  with each overlay's own real, resolved chain (falling back to that
+  exact same default when a repo name isn't a key in the map at all --
+  every pre-existing call site, including all 61 of the above, keeps
+  passing an empty map and keeps getting byte-identical results). The
+  actual stacking logic itself only needed a small, genuinely new
+  change: `package.mask` sources are now built from *every* declared
+  master's own `package.mask`, in order, not just the main repo's --
+  simplified from real `MaskManager.py`'s own per-master `stack_lists`
+  (which stacks each master separately against the repo's own lines,
+  then concatenates every one of those per-master results, so an
+  unmatched `-atom` removal warning can be attributed to the specific
+  master that should have supplied it) to one flat multi-source
+  `stack_mask_lines` call over every master's lines followed by the
+  repo's own -- produces the identical final masked-atom set for the
+  common case, diverging only from real portage's own warning-
+  attribution mechanics this pilot doesn't reproduce at all regardless.
+  New fixture repo `independentoverlay` (`repos.conf`'s own `masters =
+  overlay`, explicitly *not* the main repo) proves both directions with
+  two packages that exist only there: one masked only by the main
+  repo's own `package.mask` (must **not** apply -- main isn't a declared
+  master) and one masked only by the `overlay` repo's own `package.mask`
+  (must apply -- `overlay` is). Rust and Python byte-identical,
+  confirmed both via the shared pytest contract suite and a direct
+  manual diff against both built binaries.
+
   **Cross-repo profile parents (`reponame:path` syntax)**: closes the
   cut named just above, grounded against real `LocationsManager.
   _addProfile`/`_expand_parent_colon`: a profile's own `parent` file
@@ -5334,6 +5381,19 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/mastermaskedp
 # mask, since both get the identical "::overlay" auto-scoping
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/mastermaskedthenoverlayunmaskedpkg
 # [ebuild  N] dev-libs/mastermaskedthenoverlayunmaskedpkg-1.0
+
+# explicit repos.conf masters=: independentoverlay declares
+# "masters = overlay", NOT the main repo -- independentmastermainonlypkg
+# exists only there and is masked only by the MAIN repo's own
+# package.mask, which does NOT apply since main isn't a declared master
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/independentmastermainonlypkg
+# [ebuild  N] dev-libs/independentmastermainonlypkg-1.0
+
+# independentmasteroverlaypkg (also only in independentoverlay) is
+# masked only by the OVERLAY repo's own package.mask instead -- which
+# DOES apply, since overlay is independentoverlay's declared master
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/independentmasteroverlaypkg
+# emerge: there are no ebuilds to satisfy "dev-libs/independentmasteroverlaypkg".  (exit 1)
 
 # overlay package.use/.force/.mask: all three now read from every repo,
 # not just main -- overlayuseenablepkg exists only in the overlay, whose

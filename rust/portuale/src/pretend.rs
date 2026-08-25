@@ -2319,11 +2319,20 @@ pub fn run(args: &[String]) -> ExitCode {
         .map(|r| (r.name.clone(), r.location.clone()))
         .collect();
 
+    // Real `masters` (see `portage_repo::RepoConfig::masters`'s own doc
+    // comment): each repo's own already-resolved masters chain, keyed by
+    // name, for `resolve_config`'s own package.mask stacking.
+    let repo_masters: std::collections::HashMap<String, Vec<std::path::PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+
     let config = match portage_profile::resolve_config(
         &config_root,
         &main_repo.location,
         &overlay_repos,
         &main_repo.name,
+        &repo_masters,
     ) {
         Ok(config) => config,
         Err(e) => {

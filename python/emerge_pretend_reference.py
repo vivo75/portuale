@@ -171,6 +171,30 @@ def find_repos(config_root):
     if not any(r["name"] == main_repo for r in repos):
         raise ResolutionError(f'no location for repo "{main_repo}" in repos.conf')
 
+    # "masters" resolution (real RepoConfigLoader.__init__,
+    # lib/portage/repository/config.py:1229-1260): needs every repo's own
+    # location already known (to resolve a master *name* to a location),
+    # so this is a genuine second pass over the now-complete repos list.
+    # Mirrors portage-repo/src/lib.rs's own find_repos exactly, including
+    # its own real default (every non-main repo implicitly masters the
+    # main repo alone; the main repo can never be its own master) and its
+    # own real override (an explicit "masters =" key -- even an empty
+    # one -- replaces that default outright; an unknown master name is
+    # silently dropped, matching real config.py's own warn-and-continue).
+    location_by_name = {r["name"]: r["location"] for r in repos}
+    main_repo_location = location_by_name.get(main_repo)
+    for repo in repos:
+        raw_masters = parser.get(repo["name"], "masters", fallback=None)
+        if raw_masters is None:
+            if repo["name"] == main_repo:
+                repo["masters"] = []
+            else:
+                repo["masters"] = [main_repo_location] if main_repo_location else []
+        else:
+            repo["masters"] = [
+                location_by_name[n] for n in raw_masters.split() if n in location_by_name
+            ]
+
     repos.sort(key=lambda r: (r["priority"], r["name"]))
     return repos
 
@@ -2356,7 +2380,9 @@ def _process_make_conf_file(
         scalars[key] = value
 
 
-def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_name=""):
+def resolve_config(
+    config_root, main_repo_location, overlay_repos=(), main_repo_name="", repo_masters=None
+):
     """Computes real USE/ACCEPT_KEYWORDS/package.mask/.unmask/
     .accept_keywords: the profile chain rooted at
     <config_root>/etc/portage/make.profile (if it exists), then
@@ -2576,19 +2602,36 @@ def resolve_config(config_root, main_repo_location, overlay_repos=(), main_repo_
     )
     mask_sources = [_scope_repo_mask_lines(main_repo_mask_lines, main_repo_name)]
     unmask_sources = [_scope_repo_mask_lines(main_repo_unmask_lines, main_repo_name)]
+    _repo_masters = repo_masters or {}
     for repo_name, repo_location in overlay_repos:
-        # Real masters: a repo with no explicit "masters =" implicitly
-        # masters the main repo alone (config.py's own
-        # "repo.masters = (self.mainRepo(),)" default) -- an overlay's
-        # own package.mask is stacked *on top of* its master's own (main
-        # repo's) package.mask before the usual "::reponame" scoping.
-        # package.unmask deliberately does NOT get the same treatment --
-        # confirmed by reading MaskManager.py's own two loops side by
-        # side: only the package.mask loop iterates masters at all.
-        overlay_mask_lines = _read_config_lines(
-            os.path.join(repo_location, "profiles", "package.mask")
+        # Real masters (repo_masters, resolved by the caller from real
+        # repos.conf's own "masters = name1 name2 ..." key -- find_repos'
+        # own docstring has the full real grounding, config.py:
+        # 1229-1260): an overlay's own package.mask is stacked *on top
+        # of* every one of its declared masters' own package.mask, in
+        # declared order, before the usual "::reponame" scoping. No
+        # entry for repo_name in repo_masters at all falls back to the
+        # same "main repo alone" default this pilot always used before
+        # "masters =" parsing existed. package.unmask deliberately does
+        # NOT get the same treatment -- confirmed by reading
+        # MaskManager.py's own two loops side by side: only the
+        # package.mask loop iterates masters at all. Simplified from
+        # real MaskManager.py's own per-master stack_lists (stacks each
+        # master separately against the repo's own lines, then
+        # concatenates every one of those per-master results) to one
+        # flat _stack_mask_lines call over every master's lines followed
+        # by the repo's own -- same simplification as
+        # portage-repo/src/lib.rs's own resolve_config, see its own doc
+        # comment for the full reasoning.
+        masters = _repo_masters.get(repo_name) or [main_repo_location]
+        mastered_lines_stack = [
+            _read_config_lines(os.path.join(master_location, "profiles", "package.mask"))
+            for master_location in masters
+        ]
+        mastered_lines_stack.append(
+            _read_config_lines(os.path.join(repo_location, "profiles", "package.mask"))
         )
-        mastered_mask_lines = _stack_mask_lines([main_repo_mask_lines, overlay_mask_lines])
+        mastered_mask_lines = _stack_mask_lines(mastered_lines_stack)
         mask_sources.append(_scope_repo_mask_lines(mastered_mask_lines, repo_name))
         unmask_sources.append(
             _scope_repo_mask_lines(
@@ -6130,8 +6173,16 @@ def run(args):
         # name below, also lets resolve_config follow a profile's own
         # cross-repo "parent" entries (reponame:path syntax).
         overlay_repos = [(r["name"], r["location"]) for r in all_repos if not r["is_main"]]
+        # Real "masters" (see find_repos' own docstring): each repo's own
+        # already-resolved masters chain, keyed by name, for
+        # resolve_config's own package.mask stacking.
+        repo_masters = {r["name"]: r["masters"] for r in all_repos}
         config = resolve_config(
-            _config_root(), main_repo["location"], overlay_repos, main_repo["name"]
+            _config_root(),
+            main_repo["location"],
+            overlay_repos,
+            main_repo["name"],
+            repo_masters,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

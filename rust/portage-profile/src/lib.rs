@@ -1185,6 +1185,7 @@ pub fn resolve_config(
     main_repo_location: &Path,
     overlay_repos: &[(String, PathBuf)],
     main_repo_name: &str,
+    repo_masters: &HashMap<String, Vec<PathBuf>>,
 ) -> Result<Config, String> {
     let mut config = Config::default();
     let mut scalars: HashMap<String, String> = HashMap::new();
@@ -1372,19 +1373,41 @@ pub fn resolve_config(
         main_repo_name,
     )];
     for (repo_name, repo_location) in overlay_repos {
-        // Real masters: every non-main repo with no explicit "masters ="
-        // implicitly masters the main repo alone (config.py's own
-        // `repo.masters = (self.mainRepo(),)` default) -- an overlay's
-        // own package.mask is stacked *on top of* its master's own
-        // (main repo's) package.mask, exactly like stack_mask_lines
-        // already folds every other multi-source mask stack, before the
-        // combined result gets the usual "::reponame" scoping. Explicit
-        // "masters =" overrides aren't modeled (no fixture repo declares
-        // any), matching this pilot's own repos.conf parsing, which has
-        // no "masters" key at all yet.
-        let overlay_mask_lines = read_config_lines(&repo_location.join("profiles/package.mask"))?;
-        let mastered_mask_lines =
-            stack_mask_lines(&[main_repo_mask_lines.clone(), overlay_mask_lines]);
+        // Real masters (`repo_masters`, resolved by the caller from real
+        // `repos.conf`'s own `masters = name1 name2 ...` key --
+        // `portage_repo::find_repos`'s own `RepoConfig::masters` doc
+        // comment has the full real grounding, `config.py:1229-1260`):
+        // an overlay's own package.mask is stacked *on top of* every one
+        // of its declared masters' own package.mask, in declared order,
+        // before the combined result gets the usual "::reponame"
+        // scoping. No entry for `repo_name` in `repo_masters` at all
+        // (every pre-existing test call site, which never populates this
+        // map) falls back to the same "main repo alone" default this
+        // pilot always used before `masters =` parsing existed, so
+        // nothing already-tested changes behavior. Simplified from real
+        // `MaskManager.py`'s own per-master `stack_lists` (which stacks
+        // each master separately against the repo's own lines, then
+        // concatenates every one of those per-master results, so a
+        // "-atom" removal line's own unmatched-master warning can be
+        // attributed correctly) to one flat `stack_mask_lines` call over
+        // every master's lines followed by the repo's own -- produces
+        // the identical final masked-atom set for the common case (no
+        // fixture in this pilot exercises the exotic case where two
+        // masters' own "-atom" removals would need to be told apart).
+        let masters = repo_masters
+            .get(repo_name)
+            .cloned()
+            .unwrap_or_else(|| vec![main_repo_location.to_path_buf()]);
+        let mut mastered_lines_stack: Vec<Vec<String>> = Vec::with_capacity(masters.len() + 1);
+        for master_location in &masters {
+            mastered_lines_stack.push(read_config_lines(
+                &master_location.join("profiles/package.mask"),
+            )?);
+        }
+        mastered_lines_stack.push(read_config_lines(
+            &repo_location.join("profiles/package.mask"),
+        )?);
+        let mastered_mask_lines = stack_mask_lines(&mastered_lines_stack);
         mask_sources.push(scope_repo_mask_lines(&mastered_mask_lines, repo_name));
         // package.unmask deliberately does NOT get the same masters
         // treatment -- confirmed by reading MaskManager.py's own two
@@ -1810,8 +1833,14 @@ mod tests {
         // (portuale's pretend.rs, built from real find_repos) already
         // passes for this same fixture tree.
         let overlay_repos = [("overlay".to_string(), root.join("overlay"))];
-        let config = resolve_config(&root, &root.join("repo"), &overlay_repos, "testrepo")
-            .expect("fixture config must resolve");
+        let config = resolve_config(
+            &root,
+            &root.join("repo"),
+            &overlay_repos,
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config must resolve");
         assert_eq!(
             config.use_flags,
             HashSet::from([
@@ -1860,8 +1889,14 @@ mod tests {
     fn missing_profile_and_make_conf_yield_empty_config() {
         let empty_root = std::env::temp_dir().join("portage-profile-test-empty-root");
         let _ = fs::create_dir_all(&empty_root);
-        let config = resolve_config(&empty_root, &empty_root.join("repo"), &[], "testrepo")
-            .expect("missing profile/make.conf is not an error");
+        let config = resolve_config(
+            &empty_root,
+            &empty_root.join("repo"),
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("missing profile/make.conf is not an error");
         assert_eq!(config.use_flags, HashSet::new());
         assert_eq!(config.accept_keywords, HashSet::new());
         assert_eq!(
@@ -1902,8 +1937,14 @@ mod tests {
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
         let overlay_repos = [("otherrepo".to_string(), other_repo.clone())];
-        let config = resolve_config(&root, &main_repo, &overlay_repos, "testrepo")
-            .expect("cross-repo parent must resolve");
+        let config = resolve_config(
+            &root,
+            &main_repo,
+            &overlay_repos,
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("cross-repo parent must resolve");
         assert!(config.use_flags.contains("crossrepoflag"));
     }
 
@@ -1920,7 +1961,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let err = resolve_config(&root, &root.join("repo"), &[], "testrepo")
+        let err = resolve_config(&root, &root.join("repo"), &[], "testrepo", &HashMap::new())
             .expect_err("unknown repo name must be rejected");
         assert!(err.contains("no repo named"), "unexpected error: {err}");
     }
@@ -1951,7 +1992,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(main_repo.join("profiles/leaf"), &make_profile).unwrap();
 
-        let config = resolve_config(&root, &main_repo, &[], "testrepo")
+        let config = resolve_config(&root, &main_repo, &[], "testrepo", &HashMap::new())
             .expect("same-repo colon parent must resolve");
         assert!(config.use_flags.contains("samerepocolon"));
     }
@@ -1969,7 +2010,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let err = resolve_config(&root, &root.join("repo"), &[], "testrepo")
+        let err = resolve_config(&root, &root.join("repo"), &[], "testrepo", &HashMap::new())
             .expect_err("same-repo colon outside any known repo must be rejected");
         assert!(
             err.contains("not inside any known repo"),
@@ -2002,7 +2043,7 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("top"), &make_profile).unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo")
+        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo", &HashMap::new())
             .expect("diamond inheritance must resolve");
         assert_eq!(
             config.use_flags,
@@ -2039,7 +2080,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo")
+        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo", &HashMap::new())
             .expect("config with package.* files must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/foo".to_string()]);
         assert_eq!(config.package_unmask, vec!["dev-libs/baz".to_string()]);
@@ -2093,7 +2134,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_mask,
             vec!["dev-libs/b::testrepo".to_string(), "dev-libs/d".to_string()]
@@ -2132,8 +2174,8 @@ mod tests {
         fs::write(overlay.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config =
-            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
     }
 
@@ -2155,8 +2197,8 @@ mod tests {
         fs::write(overlay.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config =
-            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
         assert_eq!(
             config.package_unmask,
@@ -2184,8 +2226,8 @@ mod tests {
         fs::write(overlay.join("profiles/package.mask"), "dev-libs/b\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config =
-            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_mask,
             vec![
@@ -2213,12 +2255,75 @@ mod tests {
         fs::write(repo.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config =
-            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_unmask,
             vec!["dev-libs/a::testrepo".to_string()]
         );
+    }
+
+    #[test]
+    fn explicit_repo_masters_overrides_the_implicit_main_repo_default() {
+        // Real explicit "masters =" (portage_repo::find_repos, resolved
+        // into `repo_masters` by the caller) fully replaces the implicit
+        // "masters the main repo alone" default this crate always fell
+        // back to before -- an explicit empty masters list means NO
+        // package.mask inheritance at all, even from the main repo.
+        let root = std::env::temp_dir().join("portage-profile-test-explicit-masters-empty");
+        let repo = root.join("repo");
+        let overlay = root.join("overlay");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(overlay.join("profiles")).unwrap();
+
+        fs::write(repo.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
+
+        let overlay_repos = [("overlay".to_string(), overlay.clone())];
+        let repo_masters = HashMap::from([("overlay".to_string(), Vec::<PathBuf>::new())]);
+        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &repo_masters)
+            .expect("config must resolve");
+        // The main repo's own "dev-libs/a" entry still applies to
+        // itself (real portage's own repo-level package.mask always
+        // masks its own repo, independent of who masters whom) -- but
+        // is NOT inherited by the overlay, since its own masters is
+        // explicitly empty.
+        assert_eq!(
+            config.package_mask,
+            vec!["dev-libs/a::testrepo".to_string()]
+        );
+    }
+
+    #[test]
+    fn explicit_repo_masters_resolves_a_non_main_master_chain() {
+        // A repo can explicitly declare a master other than the main
+        // repo -- its own package.mask must be stacked in too, exactly
+        // like the implicit main-repo case already is.
+        let root = std::env::temp_dir().join("portage-profile-test-explicit-masters-chain");
+        let repo = root.join("repo");
+        let overlay = root.join("overlay");
+        let downstream = root.join("downstream");
+        fs::create_dir_all(repo.join("profiles")).unwrap();
+        fs::create_dir_all(overlay.join("profiles")).unwrap();
+        fs::create_dir_all(downstream.join("profiles")).unwrap();
+
+        // The main repo's own entry must NOT apply (downstream doesn't
+        // declare it as a master); the overlay's own entry must.
+        fs::write(repo.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
+        fs::write(overlay.join("profiles/package.mask"), "dev-libs/b\n").unwrap();
+
+        let overlay_repos = [
+            ("overlay".to_string(), overlay.clone()),
+            ("downstream".to_string(), downstream.clone()),
+        ];
+        let repo_masters = HashMap::from([("downstream".to_string(), vec![overlay.clone()])]);
+        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &repo_masters)
+            .expect("config must resolve");
+        assert!(config
+            .package_mask
+            .contains(&"dev-libs/b::downstream".to_string()));
+        assert!(!config
+            .package_mask
+            .contains(&"dev-libs/a::downstream".to_string()));
     }
 
     #[test]
@@ -2238,8 +2343,8 @@ mod tests {
         fs::write(overlay.join("profiles/package.use"), "dev-libs/a flag\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config =
-            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![("dev-libs/a::overlay".to_string(), vec!["flag".to_string()])]
@@ -2278,8 +2383,8 @@ mod tests {
         .unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config =
-            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_use_mask,
             vec![
@@ -2332,8 +2437,8 @@ mod tests {
         .unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config =
-            resolve_config(&root, &repo, &overlay_repos, "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_use_stable_mask,
             vec![
@@ -2382,7 +2487,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(config.system_packages, vec!["dev-libs/b".to_string()]);
     }
 
@@ -2424,7 +2530,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.use_flags,
             HashSet::from(["normalflag".to_string(), "maskflag".to_string()])
@@ -2465,7 +2572,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.archlist,
             HashSet::from(["amd64".to_string(), "arm64".to_string()])
@@ -2505,7 +2613,8 @@ mod tests {
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
         fs::write(portage_dir.join("make.conf"), "USE=\"baz\"\n").unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.use_tokens,
             vec!["foo".to_string(), "-foo bar".to_string(), "baz".to_string()]
@@ -2552,7 +2661,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.use_expand,
             HashSet::from(["VIDEO_CARDS".to_string(), "PYTHON_TARGETS".to_string()])
@@ -2590,7 +2700,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert!(!config.use_flags.contains("video_cards_nvidia"));
         assert!(config.use_flags.contains("video_cards_intel"));
         assert!(!config.use_flags.contains("+video_cards_intel"));
@@ -2622,7 +2733,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.use_expand_unprefixed,
             HashSet::from(["ARCH".to_string()])
@@ -2658,7 +2770,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert!(!config.use_flags.contains("foo"));
         assert!(config.use_flags.contains("bar"));
         assert!(!config.use_flags.contains("+bar"));
@@ -2691,7 +2804,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
             vec![
@@ -2732,7 +2846,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
             vec![("dev-libs/foo".to_string(), vec!["~amd64".to_string()])]
@@ -2769,7 +2884,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
             vec![("dev-libs/foo".to_string(), vec!["~amd64".to_string()])]
@@ -2801,7 +2917,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![
@@ -2830,7 +2947,8 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![(
@@ -2860,7 +2978,8 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![
@@ -2891,7 +3010,8 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![(
@@ -2934,7 +3054,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_use_mask,
             vec![
@@ -2975,7 +3096,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.use_stable_mask,
             HashSet::from(["stablemaskflag".to_string()])
@@ -3032,7 +3154,8 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo").expect("config must resolve");
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
         assert_eq!(
             config.package_use_stable_mask,
             vec![
@@ -3060,7 +3183,7 @@ mod tests {
         )
         .unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo")
+        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo", &HashMap::new())
             .expect("config with package.use must resolve");
         assert_eq!(
             config.package_use,

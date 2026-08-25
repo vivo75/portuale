@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: exists only in independentoverlay, which explicitly declares masters = overlay (not the main repo) -- masked in the main repo's own package.mask, which must NOT apply here since main isn't a declared master
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

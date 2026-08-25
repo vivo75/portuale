@@ -494,6 +494,8 @@ CASES = [
     ("overlay: repo-level package.unmask cancels the same overlay's own mask", ["--pretend", "dev-libs/overlaymaskedthenunmaskedpkg"], 0),
     ("overlay: implicit masters inherits the main repo's own package.mask", ["--pretend", "dev-libs/mastermaskedpkg"], 1),
     ("overlay: package.unmask cancels a masters-inherited mask", ["--pretend", "dev-libs/mastermaskedthenoverlayunmaskedpkg"], 0),
+    ("repos.conf explicit masters=: does not inherit the main repo's mask", ["--pretend", "dev-libs/independentmastermainonlypkg"], 0),
+    ("repos.conf explicit masters=: inherits a non-main declared master's mask", ["--pretend", "dev-libs/independentmasteroverlaypkg"], 1),
     ("slot conflict: two incompatible version constraints on one slot", ["--pretend", "dev-libs/slotconflictparent"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
@@ -2397,6 +2399,48 @@ def test_overlay_package_unmask_cancels_a_masters_inherited_mask(emerge_binary, 
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "[ebuild  N] dev-libs/mastermaskedthenoverlayunmaskedpkg-1.0"
+
+
+def test_explicit_masters_does_not_inherit_the_main_repos_mask(emerge_binary, fixture_env):
+    """Real repos.conf explicit "masters =" key (real RepoConfigLoader.
+    __init__, lib/portage/repository/config.py:1229-1260), now parsed and
+    resolved for the first time: the fixture repos.conf declares
+    "[independentoverlay] masters = overlay", NOT the main repo. dev-libs/
+    independentmastermainonlypkg exists only in independentoverlay, and
+    is masked only by the MAIN repo's own profiles/package.mask -- unlike
+    the implicit-default case above (mastermaskedpkg), main is NOT a
+    declared master here, so that mask entry must not apply. This is the
+    first fixture that actually distinguishes "explicit masters=" from
+    the pre-existing implicit default -- every previously-constructible
+    repo relationship happened to match "masters main" anyway."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/independentmastermainonlypkg"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "[ebuild  N] dev-libs/independentmastermainonlypkg-1.0"
+
+
+def test_explicit_masters_inherits_a_non_main_declared_masters_mask(emerge_binary, fixture_env):
+    """Same "masters = overlay" declaration as the sibling test above,
+    the other half: dev-libs/independentmasteroverlaypkg exists only in
+    independentoverlay, and is masked only by the OVERLAY repo's own
+    profiles/package.mask (not the main repo's). Since overlay IS a
+    declared master of independentoverlay, that mask entry does apply --
+    proving an explicit, non-main masters chain is genuinely resolved and
+    consulted, not just an on/off switch for the main repo alone."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/independentmasteroverlaypkg"],
+        fixture_env,
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/independentmasteroverlaypkg".'
+    )
 
 
 def test_overlay_own_package_use_gates_a_dependency(emerge_binary, fixture_env):

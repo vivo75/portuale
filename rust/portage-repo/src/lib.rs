@@ -87,6 +87,22 @@ pub struct RepoConfig {
     /// crate's own module doc comment for the overlay-scoping follow-ups
     /// that closed this out).
     pub is_main: bool,
+    /// Resolved `masters` chain (real `repos.conf`'s own `masters = name1
+    /// name2 ...` key, or `layout.conf`'s -- this pilot only reads the
+    /// `repos.conf` one -- see this field's own resolution in
+    /// `find_repos`), in real declaration order, as absolute repo
+    /// locations rather than names (the only thing `portage_profile::
+    /// resolve_config`'s own masters-stacking actually needs). Real
+    /// `config.py`'s own default resolution (`RepoConfigLoader.__init__`,
+    /// `lib/portage/repository/config.py:1229-1260`) when no explicit
+    /// `masters =` key is present at all: the main repo alone for every
+    /// other repo, empty for the main repo itself (it can never be its
+    /// own master). An *explicit* `masters =` key -- even an empty one --
+    /// overrides that default outright: each named master is resolved to
+    /// its own location; an unknown name is silently dropped (real
+    /// `config.py` only logs a warning and continues, never a hard
+    /// error).
+    pub masters: Vec<PathBuf>,
 }
 
 fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>) {
@@ -187,11 +203,45 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, String> {
             location,
             priority,
             is_main: *name == main_repo,
+            // Resolved below, once every repo's own location is known --
+            // see this function's own second pass.
+            masters: Vec::new(),
         });
     }
 
     if !repos.iter().any(|r| r.name == main_repo) {
         return Err(format!("no location for repo {main_repo:?} in repos.conf"));
+    }
+
+    // `masters` resolution (real `RepoConfigLoader.__init__`,
+    // `lib/portage/repository/config.py:1229-1260`): needs every repo's
+    // own location already known (to resolve a master *name* to a
+    // location), so this is a genuine second pass over the now-complete
+    // `repos` list -- real `masters` names, snapshotted before the
+    // mutable loop below to avoid borrowing `repos` both ways at once.
+    let location_by_name: HashMap<String, PathBuf> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+    let main_repo_location = location_by_name.get(&main_repo).cloned();
+    for repo in &mut repos {
+        let raw_masters = sections.get(&repo.name).and_then(|kv| kv.get("masters"));
+        repo.masters = match raw_masters {
+            None => {
+                // Real default: every non-main repo implicitly masters
+                // the main repo alone; the main repo can never be its
+                // own master.
+                if repo.name == main_repo {
+                    Vec::new()
+                } else {
+                    main_repo_location.clone().into_iter().collect()
+                }
+            }
+            Some(names) => names
+                .split_whitespace()
+                .filter_map(|n| location_by_name.get(n).cloned())
+                .collect(),
+        };
     }
 
     repos.sort_by(|a, b| {
@@ -5180,6 +5230,87 @@ mod tests {
         }
     }
 
+    fn masters_test_root(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "portage-repo-masters-test-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn find_repos_defaults_masters_to_the_main_repo_alone_when_unset() {
+        // Real config.py's own default (RepoConfigLoader.__init__,
+        // lib/portage/repository/config.py:1229-1260): no explicit
+        // "masters =" key at all -- every non-main repo implicitly
+        // masters the main repo alone; the main repo can never be its
+        // own master.
+        let root = masters_test_root("default");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n\n[overlay]\nlocation = overlay\n",
+        )
+        .unwrap();
+
+        let repos = find_repos(&root).expect("repos.conf resolves");
+        let main = repos.iter().find(|r| r.name == "main").unwrap();
+        let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
+        assert_eq!(main.masters, Vec::<PathBuf>::new());
+        assert_eq!(overlay.masters, vec![main.location.clone()]);
+    }
+
+    #[test]
+    fn find_repos_resolves_an_explicit_masters_key_to_the_named_repos_own_locations() {
+        // Real explicit "masters = name1 name2" overrides the default
+        // outright -- resolved to each named repo's own location, in
+        // declared order; an unknown name is silently dropped (real
+        // config.py only warns, never a hard error).
+        let root = masters_test_root("explicit");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n\
+             [main]\nlocation = main\n\n\
+             [overlay]\nlocation = overlay\n\n\
+             [downstream]\nlocation = downstream\nmasters = overlay unknownrepo\n",
+        )
+        .unwrap();
+
+        let repos = find_repos(&root).expect("repos.conf resolves");
+        let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
+        let downstream = repos.iter().find(|r| r.name == "downstream").unwrap();
+        // Only "overlay" resolves -- "unknownrepo" is silently dropped,
+        // and "main" is NOT implicitly included just because it's the
+        // main repo (an explicit key fully replaces the default).
+        assert_eq!(downstream.masters, vec![overlay.location.clone()]);
+    }
+
+    #[test]
+    fn find_repos_treats_an_explicit_empty_masters_key_as_no_masters_at_all() {
+        // Real explicit "masters = " (present but empty) is genuinely
+        // different from the key being absent: it means "no masters",
+        // not "fall back to the default main-repo-alone behavior".
+        let root = masters_test_root("empty");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n\
+             [main]\nlocation = main\n\n\
+             [overlay]\nlocation = overlay\nmasters = \n",
+        )
+        .unwrap();
+
+        let repos = find_repos(&root).expect("repos.conf resolves");
+        let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
+        assert_eq!(overlay.masters, Vec::<PathBuf>::new());
+    }
+
     fn resolve(category: &str, package: &str) -> PretendOutcome {
         let root = fixtures_root();
         let repos = find_repos(&root).expect("fixture repos.conf must resolve");
@@ -5624,6 +5755,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -5663,6 +5795,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -5701,6 +5834,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -5806,6 +5940,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -6006,6 +6141,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -6061,6 +6197,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let atom_str = format!("{category}/{package}");
@@ -6164,6 +6301,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         assert_eq!(
@@ -6310,6 +6448,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         assert_eq!(
@@ -6452,6 +6591,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         assert_eq!(
@@ -7481,6 +7621,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let entries = resolve_pretend_graph(
@@ -7719,6 +7860,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let entries = resolve_pretend_graph(
@@ -7818,6 +7960,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -7864,6 +8007,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -7969,6 +8113,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -8013,6 +8158,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -8059,6 +8205,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -8105,6 +8252,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -8365,6 +8513,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let err = resolve_pretend_graph(
@@ -8425,6 +8574,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/autounmaskkeywordpkg".to_string()];
@@ -8527,6 +8677,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/autounmaskdepconsumer".to_string()];
@@ -8588,6 +8739,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/useflagpkg[-foo]".to_string()];
@@ -8688,6 +8840,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         let atoms = vec!["dev-libs/usedeprejectedpkg".to_string()];
@@ -8763,6 +8916,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(
@@ -8808,6 +8962,7 @@ mod tests {
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
             "testrepo",
+            &HashMap::new(),
         )
         .expect("fixture config resolves");
         resolve_pretend_graph(

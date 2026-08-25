@@ -12,3 +12,9 @@ dev-libs/repomaskedthenuserremovedpkg
 # not an ordinary same-repo mask.
 dev-libs/mastermaskedpkg
 dev-libs/mastermaskedthenoverlayunmaskedpkg
+# explicit masters= (repos.conf): independentoverlay declares
+# "masters = overlay", NOT this (the main) repo -- this entry must NOT
+# mask independentmastermainonlypkg (which exists only there), proving
+# masters is no longer an unconditional "every overlay masters main"
+# blanket rule.
+dev-libs/independentmastermainonlypkg

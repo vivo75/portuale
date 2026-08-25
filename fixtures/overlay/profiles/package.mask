@@ -8,3 +8,9 @@ dev-libs/overlaymaskedpkg
 # overlay's own package.unmask -- proving mask+unmask still stack
 # correctly once both get the identical "::overlay" auto-scoping.
 dev-libs/overlaymaskedthenunmaskedpkg
+# explicit masters= (repos.conf): independentoverlay declares
+# "masters = overlay" -- this entry MUST mask
+# independentmasteroverlaypkg (which exists only there), proving an
+# explicit, non-main masters chain actually applies, not just an
+# on/off switch for the main repo alone.
+dev-libs/independentmasteroverlaypkg
