@@ -797,6 +797,62 @@ mod tests {
     }
 
     #[test]
+    fn distfile_lock_creates_a_real_sibling_lockfile() {
+        let dir = tempdir();
+        let dest = dir.join("foo-1.0.tar.gz");
+
+        let _lock = PortageLockfile::acquire(&dest).expect("acquire succeeds");
+
+        assert!(
+            dir.join(".foo-1.0.tar.gz.portage_lockfile").is_file(),
+            "real lockfile naming: '.' + basename + '.portage_lockfile'"
+        );
+    }
+
+    #[test]
+    fn distfile_lock_release_on_drop_lets_a_second_acquire_succeed_immediately() {
+        let dir = tempdir();
+        let dest = dir.join("foo-1.0.tar.gz");
+
+        let lock1 = PortageLockfile::acquire(&dest).expect("first acquire succeeds");
+        drop(lock1);
+
+        // The lockfile persists after release, just unlocked: a second acquire
+        // must succeed immediately, not block on itself.
+        PortageLockfile::acquire(&dest).expect("second acquire succeeds once the first is dropped");
+    }
+
+    /// A second acquire from another thread genuinely blocks until the first
+    /// lock is dropped.
+    #[test]
+    fn distfile_lock_blocks_a_second_acquire_until_released() {
+        let dir = tempdir();
+        let dest = dir.join("foo-1.0.tar.gz");
+
+        let lock1 = PortageLockfile::acquire(&dest).expect("first acquire succeeds");
+
+        let dest2 = dest.to_path_buf();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _lock2 =
+                PortageLockfile::acquire(&dest2).expect("second acquire succeeds once unblocked");
+            tx.send(()).unwrap();
+        });
+
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "a second acquire must block while the first lock is still held"
+        );
+
+        drop(lock1);
+
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("second acquire completes promptly once the first lock is released");
+        handle.join().unwrap();
+    }
+
+    #[test]
     fn fetch_src_uri_is_empty_for_an_empty_src_uri() {
         let pkg_dir = tempdir();
         let distdir = tempdir();

@@ -6400,3 +6400,91 @@ is consulted independently) plus a new, pure, offline unit test in
 `portage-fetch` (`resolve_mirror_candidates_tries_custommirrors_
 before_thirdpartymirrors`) proving the real ordering directly.
 
+### `FEATURES=distlocks`, and a real default-`FEATURES` correction to `protect-owned`/`unmerge-orphans`
+
+Real `lib/portage/locks.py`'s own `lockfile(mypath, wantnewlockfile=1)`
+(called at real `fetch.py:1315-1330`, unlocked at `:2032-2033`) is real
+now: a real, blocking `flock(2)` exclusive lock on a real, separate
+`.{basename}.portage_lockfile` sibling of the distfile, held for the
+*entire* per-file fetch-and-verify sequence (not just the actual
+download), guarding against two concurrent portage processes racing the
+same file. `DistfileLock` releases it simply by closing the lock file's
+own fd when the guard drops -- POSIX guarantees all of a process's own
+`flock` locks on an fd release when that fd closes, the same real effect
+real `unlockfile()`'s own explicit `LOCK_UN` has. Real `unlinkfile=0`
+(portuale's own default too): the lockfile persists on disk after
+release, just unlocked, ready for reuse. No std equivalent exists for
+`flock(2)` at all, so `libc` (already a transitive dependency of
+`tokio`/`brush-core`, declared directly here now for its own direct use)
+joins portuale's own small set of deliberate, documented dependency
+waivers.
+
+Verified genuinely live, not just "returns `Ok`": a real, blocking,
+cross-thread test (`distfile_lock_blocks_a_second_acquire_until_
+released`) holds the lock on one thread, spawns a second thread that
+tries to acquire the same lock, confirms it does *not* complete within
+200ms while the first lock is held, then drops the first lock and
+confirms the second completes within 5s -- genuine, real OS-level
+blocking, not a mocked assertion. Confirmed live against the compiled
+binary too: a real fetch leaves a real `.<filename>.portage_lockfile`
+sibling behind in `DISTDIR`, correctly unlocked and reusable.
+
+While researching real `distlocks`'s own actual default, a genuinely
+significant, previously-undiscovered finding surfaced: real
+`cnf/make.globals`'s own default `FEATURES` list (lines 77-84) --
+`assume-digests binpkg-docompress binpkg-dostrip binpkg-logs
+binpkg-multi-instance buildpkg-live compress-index config-protect-
+if-modified distlocks ebuild-locks fixlafiles ipc-sandbox merge-sync
+merge-wait multilib-strict network-sandbox news parallel-fetch
+pkgdir-index-trusted pid-sandbox preserve-libs protect-owned
+qa-unresolved-soname-deps sandbox strict unknown-features-warn
+unmerge-logs unmerge-orphans userfetch userpriv usersandbox usersync`
+-- includes not just `distlocks` but also `protect-owned` and
+`unmerge-orphans`, **both already shipped in earlier slices with
+`Default: false`**, each documented at the time with the same
+now-disproven claim `collision_protect` genuinely has ("real `FEATURES`
+itself isn't in `FEATURES` by default"). That claim was simply wrong for
+these two tokens. Fixed as part of this slice: `MergeOptions::
+protect_owned` and `UnmergeOptions::unmerge_orphans` now both default to
+`true`, matching real portage's own actual out-of-the-box behavior --
+confirmed live (an ordinary file collision with an identifiable owner
+now aborts by real default; a locally-modified file is now deleted on
+unmerge by real default) and locked in by two new tests
+(`ordinary_collision_aborts_by_real_default_via_protect_owned`,
+`real_unmerge_deletes_a_locally_modified_file_by_real_default`). One
+pre-existing test's own premise needed correcting to match: what used to
+be `ordinary_collision_is_merged_over_when_collision_protect_is_off`
+(implying "collision-protect off" alone was real portage's own default
+behavior) is now `ordinary_collision_is_merged_over_with_both_
+collision_protect_and_protect_owned_off`, explicitly setting
+`protect_owned: false` rather than relying on a default that no longer
+means what the name implied.
+
+Portuale's own env-var read for all three flags still only checks
+whether the literal `FEATURES` value, when set at all, contains the
+exact token -- it doesn't *accumulate* onto the real default set the way
+real portage's own `+`/`-`-prefixed `make.conf` `FEATURES` merging does,
+so setting `FEATURES` to any other, unrelated token still reads as
+`false` here for all three, unlike real portage (which would keep them
+enabled unless explicitly removed with a leading `-`). A pre-existing
+simplification this fix doesn't attempt to also resolve.
+
+While correcting this, also found (and fixed) that this same backlog's
+own "`FEATURES=verify-sig`" entry was mis-scoped from the start: real
+signature verification is a `gpkg` (the newer GPG-signed binary package
+format) and repo-sync concept, not a `SRC_URI`/distfile-fetch one at
+all -- confirmed by grepping `fetch.py` directly and finding zero hits
+for either term. Removed from the backlog rather than left to mislead a
+future "scope the next slice" round.
+
+```sh
+cd rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export DISTDIR="$(mktemp -d)"
+echo "hello from verifiedfetchpkg" > "${DISTDIR}/verifiedfetchpkg-1.0.tar.gz"
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild install
+ls -a "${DISTDIR}"
+# .  ..  .verifiedfetchpkg-1.0.tar.gz.portage_lockfile  verifiedfetchpkg-1.0.tar.gz
+```
+
