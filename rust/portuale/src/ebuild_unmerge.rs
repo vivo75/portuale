@@ -97,9 +97,30 @@
 // `config_protect_mask` fields mirror `MergeOptions`'s exactly, same
 // env-var-sourced defaults.
 //
+// Real `INFOPATH` cleanup is real too (`vartree.py:3226-3251`, inside
+// `_unmerge_dirs()`/`remove_dirs` below): a directory literally named
+// `"info"` (real comment: "since it might have been in INFOPATH
+// previously even though it may not be there now") whose only
+// remaining content is a subset of `{"dir", "dir.old"}` (real
+// `_infodir_cleanup`, GNU `install-info`'s own auto-generated index
+// files) has those removed first, before the ordinary `rmdir` attempt
+// -- without this, a stray leftover index file would keep such a
+// directory from ever emptying out and being removed at all. The other
+// real trigger for this same cleanup, `inode_key in infodirs_inodes`
+// (a real, `INFOPATH`/`INFODIR` env-var-driven inode set, covering an
+// info directory that *isn't* literally named `"info"`) is not
+// threaded through -- this pilot has no `INFOPATH`/`INFODIR` sourcing
+// anywhere yet (real portage's own values normally come from
+// `/etc/env.d` entries collated by `env_update()`, which this pilot's
+// own `env_update::run_env_update` doesn't export into any later
+// phase's environment).
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching `ebuild_merge`'s own
 // "narrow v1, document the cut" pattern):
-//   - No `bsd_chflags` handling, no `INFOPATH` special-casing.
+//   - No `bsd_chflags` handling. `INFOPATH`/`INFODIR` env-var-driven
+//     info-directory matching (see the real `INFOPATH` cleanup
+//     paragraph above) -- only the literal `basename == "info"` trigger
+//     is implemented.
 //   - Real `stale_confmem` cleanup (`vartree.py:3106-3109`: when a
 //     `CONFIG_PROTECT`'d path this package remembered in `cfgfiledict`
 //     is `is_owned` by another same-slot instance, its now-stale memory
@@ -323,6 +344,46 @@ fn remove_contents(
     Ok(())
 }
 
+/// Real `_infodir_cleanup` (`vartree.py:1794`): the only filenames GNU
+/// `install-info`'s own auto-generated index is ever known to leave
+/// behind.
+const INFODIR_CLEANUP: [&str; 2] = ["dir", "dir.old"];
+
+/// Real `_unmerge_dirs()`'s own INFOPATH cleanup (`vartree.py:3226-
+/// 3251`, the `basename(obj) == "info"` half -- see this module's own
+/// doc comment for the `infodirs_inodes` half this pilot doesn't
+/// thread through): if `dest` is literally named `"info"` and its only
+/// remaining content is a non-empty subset of `INFODIR_CLEANUP` (real
+/// `remaining and len(remaining) <= len(infodir_cleanup) and not
+/// set(remaining).difference(infodir_cleanup)`), those files are
+/// deleted -- real regular-file-only (`stat.S_ISREG`), so a same-named
+/// symlink or subdirectory is left alone -- clearing the way for the
+/// caller's own subsequent `rmdir` attempt to actually succeed.
+fn cleanup_info_dir(dest: &Path) {
+    if dest.file_name().and_then(|n| n.to_str()) != Some("info") {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dest) else {
+        return;
+    };
+    let names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    if names.is_empty()
+        || names.len() > INFODIR_CLEANUP.len()
+        || !names.iter().all(|n| INFODIR_CLEANUP.contains(&n.as_str()))
+    {
+        return;
+    }
+    for name in &names {
+        let child = dest.join(name);
+        if std::fs::symlink_metadata(&child).is_ok_and(|m| m.is_file()) {
+            let _ = std::fs::remove_file(&child);
+        }
+    }
+}
+
 /// Real `_unmerge_dirs()` (`vartree.py:3209-3332`): removes this
 /// package's own literal `dir` entries (`dirs`, real `mydirs`),
 /// tolerating "already gone" and "not empty" the same way the main
@@ -359,6 +420,7 @@ fn remove_dirs(
     let mut revisit: BTreeMap<PathBuf, (u64, u64)> = BTreeMap::new();
 
     while let Some((dest, inode_key)) = stack.pop() {
+        cleanup_info_dir(&dest);
         match std::fs::remove_dir(&dest) {
             Ok(()) => {
                 let Some(unmerge_syms) = protected_symlinks.remove(&inode_key) else {
@@ -868,6 +930,86 @@ mod tests {
             !root.join("zzz-parent").exists(),
             "the parent, blocked only by the now-deleted symlink, is revisited and removed too (bug #640058)"
         );
+    }
+
+    #[test]
+    fn cleanup_info_dir_removes_a_lone_leftover_index_file() {
+        let tmp = tempdir();
+        let info = tmp.join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        std::fs::write(info.join("dir"), b"").unwrap();
+
+        cleanup_info_dir(&info);
+
+        assert!(!info.join("dir").exists());
+    }
+
+    #[test]
+    fn cleanup_info_dir_removes_both_dir_and_dir_old() {
+        let tmp = tempdir();
+        let info = tmp.join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        std::fs::write(info.join("dir"), b"").unwrap();
+        std::fs::write(info.join("dir.old"), b"").unwrap();
+
+        cleanup_info_dir(&info);
+
+        assert!(!info.join("dir").exists());
+        assert!(!info.join("dir.old").exists());
+    }
+
+    #[test]
+    fn cleanup_info_dir_leaves_a_real_remaining_file_alone() {
+        // Real condition: cleanup only fires when the *entire* remaining
+        // content is a subset of {"dir","dir.old"} -- any other file
+        // present means the directory genuinely still has real content,
+        // so nothing is removed at all (not even "dir" itself).
+        let tmp = tempdir();
+        let info = tmp.join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        std::fs::write(info.join("dir"), b"").unwrap();
+        std::fs::write(info.join("automake.info"), b"real content").unwrap();
+
+        cleanup_info_dir(&info);
+
+        assert!(info.join("dir").exists());
+        assert!(info.join("automake.info").exists());
+    }
+
+    #[test]
+    fn cleanup_info_dir_ignores_a_directory_not_named_info() {
+        let tmp = tempdir();
+        let other = tmp.join("not-info");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("dir"), b"").unwrap();
+
+        cleanup_info_dir(&other);
+
+        assert!(other.join("dir").exists());
+    }
+
+    #[test]
+    fn remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file() {
+        // Real `_unmerge_dirs()`'s own INFOPATH cleanup (see this
+        // module's own doc comment): without it, `usr/share/info` would
+        // never empty out at all -- `dir` isn't one of this package's
+        // own CONTENTS entries (real `install-info` writes it outside
+        // any package's own tracked content), so it would otherwise sit
+        // there forever, blocking the directory's own removal.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/info")).unwrap();
+        std::fs::write(root.join("usr/share/info/dir"), b"").unwrap();
+
+        let contents = "dir /usr/share\ndir /usr/share/info\n";
+        remove_contents(&root, "dev-libs", &[], "/etc", "", false, contents)
+            .expect("remove_contents succeeds");
+
+        assert!(
+            !root.join("usr/share/info").exists(),
+            "the info directory is fully removed once its own leftover index is cleaned up"
+        );
+        assert!(!root.join("usr/share").exists());
     }
 
     #[test]

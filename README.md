@@ -5303,6 +5303,29 @@ test -e "${ROOT}"/usr/share/mergepkg/hello.txt && echo "still there" || echo "go
 unset FEATURES
 ```
 
+### `unmerge`: real `INFOPATH` cleanup
+
+Real `_unmerge_dirs()`'s own `INFOPATH` cleanup (`vartree.py:3226-3251`)
+is real now, for the more commonly-hit half of it: a directory literally
+named `"info"` (real comment: "since it might have been in INFOPATH
+previously even though it may not be there now") whose only remaining
+content is a subset of `{"dir", "dir.old"}` (real `_infodir_cleanup`,
+GNU `install-info`'s own auto-generated index files, which live outside
+any package's own tracked `CONTENTS`) has those removed first --
+otherwise a stray leftover index would keep such a directory from ever
+emptying out and being removed at all. The other real trigger, an
+`INFOPATH`/`INFODIR` env-var-driven inode match covering an info
+directory that isn't literally named `"info"`, isn't threaded through:
+this pilot has no `INFOPATH`/`INFODIR` sourcing anywhere yet (real
+values normally come from `/etc/env.d` entries collated by
+`env_update()`, which this pilot's own `env_update::run_env_update`
+doesn't export into any later phase's environment). Verified directly
+against `cleanup_info_dir` (the lone-index-file case, both `dir` and
+`dir.old` together, a real remaining file that correctly blocks cleanup
+entirely, and a same-named-but-not-`"info"` directory that's correctly
+ignored) and end to end via `remove_contents`
+(`remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file`).
+
 ## Running it
 
 Build both Rust binaries:
