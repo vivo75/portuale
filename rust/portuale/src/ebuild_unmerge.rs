@@ -30,16 +30,40 @@
 // still records the *original* file's own now-stale mtime, so the real
 // `/etc/foo.conf` a user edited never matches and is never touched).
 //
+// `others_in_slot` reverse-dependency checking is real too: real
+// `_unmerge_pkgfiles()`'s own `is_owned` check (`vartree.py:2893-2916`,
+// via `dblink.isowner()` == `bool(self._match_contents(filename))`) --
+// before a `CONTENTS` entry is even considered for the mtime check,
+// every *other* installed version of the same `category/PN` in the same
+// `SLOT` (excluding self) is asked whether its own `CONTENTS` also
+// claims that exact path; if so, the entry is left alone entirely
+// (real `"replaced"` skip) regardless of node type. This is what makes
+// an in-place upgrade not delete files the new version also owns --
+// without it, `merge`-then-`merge` (a reinstall/upgrade) followed by
+// `unmerge`ing the *old* vdb entry would have deleted files the new
+// installation still depends on. Reuses `ebuild_merge::owns_path_pf`
+// (already built for real blocker exclusion's own `CONTENTS`-ownership
+// check) and `ebuild_merge::read_installed_slot`, both promoted to
+// `pub(crate)` for this. Real `isowner`'s own path-ambiguity-via-
+// symlinked-directories inode-cache mechanism isn't reproduced --
+// this pilot's own `owns_path_pf` is a plain string scan, matching the
+// same simplification `find_owners`/blocker exclusion already made.
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching `ebuild_merge`'s own
 // "narrow v1, document the cut" pattern):
-//   - No preserve-libs / "others in this slot" reverse-dependency
-//     checking at all -- real `unmerge()` consults every other version
-//     installed in the same slot before deciding whether a shared
-//     library is still needed by something else.
+//   - The real "symlink orphan" refinement (bug #326685: a symlink to a
+//     directory, where the *new* owner recorded that directory as a
+//     plain `dir` entry rather than a `sym`) isn't reproduced -- real
+//     `_unmerge_pkgfiles()` does an extra `all_owned`/child-by-child
+//     scan in that specific case to decide whether the symlink itself
+//     is still safe to remove; this pilot's own `is_owned` check already
+//     covers the common case (the path is skipped outright whenever
+//     another same-slot instance owns it at all), just not this
+//     narrower "some of the target directory's children moved to being
+//     owned differently" sub-case.
 //   - No stale-symlink/orphan-directory bookkeeping
 //     (`FEATURES=unmerge-orphans`), no `bsd_chflags` handling, no
-//     `INFOPATH` special-casing, no `CONFIG_PROTECT`-aware "already
-//     replaced" (`replaced`) skip.
+//     `INFOPATH` special-casing.
 //   - Failure handling is coarser: real `_unmerge_pkgfiles()` counts
 //     per-file failures and keeps going regardless (overall success is
 //     governed by the `prerm`/`postrm` phase exit codes, not by
@@ -97,16 +121,34 @@ fn parse_contents(text: &str) -> Vec<ContentsEntry> {
 
 /// Deletes every `CONTENTS`-listed entry from `root`, deepest paths
 /// first (see this module's own doc comment for why, and for the v1
-/// failure-tolerance simplification) -- except an `obj`/`sym` entry
-/// whose live mtime no longer matches what `CONTENTS` recorded, which is
-/// left in place instead (real `!mtime` skip -- see this module's own
-/// doc comment for why this is also what protects a CONFIG_PROTECT'd
-/// file on removal).
-fn remove_contents(root: &Path, contents_text: &str) -> Result<(), String> {
+/// failure-tolerance simplification) -- except: an entry another
+/// same-`category/PN`-and-`SLOT` installed package (`others_in_slot`,
+/// bare `PF` strings) also owns, real `is_owned`/`"replaced"` skip (see
+/// this module's own doc comment); or an `obj`/`sym` entry whose live
+/// mtime no longer matches what `CONTENTS` recorded, left in place
+/// instead (real `!mtime` skip -- see this module's own doc comment for
+/// why this is also what protects a CONFIG_PROTECT'd file on removal).
+fn remove_contents(
+    root: &Path,
+    category: &str,
+    others_in_slot: &[String],
+    contents_text: &str,
+) -> Result<(), String> {
     let mut entries = parse_contents(contents_text);
     entries.sort_by(|a, b| b.abs_path.cmp(&a.abs_path));
 
     for entry in entries {
+        if others_in_slot
+            .iter()
+            .any(|other_pf| ebuild_merge::owns_path_pf(root, category, other_pf, &entry.abs_path))
+        {
+            // Real "replaced" skip: another still-installed version of
+            // this same cp:slot also claims this path -- most commonly
+            // an in-place upgrade sharing files with the version being
+            // unmerged. Checked before the mtime check, matching real
+            // `_unmerge_pkgfiles()`'s own ordering.
+            continue;
+        }
         let relative = entry.abs_path.trim_start_matches('/');
         let dest = root.join(relative);
         match entry.node_type.as_str() {
@@ -162,13 +204,37 @@ pub fn run_unmerge(
     let contents_text = std::fs::read_to_string(&contents_path)
         .map_err(|e| format!("{}: not installed ({e})", vdb_dir.display()))?;
 
+    // Real `others_in_slot`: every other installed version of this same
+    // category/PN in the same SLOT, excluding self -- see this module's
+    // own doc comment.
+    let own_slot = ebuild_merge::read_installed_slot(
+        root,
+        &env.category,
+        &env.split.pn,
+        &env.split.pf[env.split.pn.len() + 1..],
+    );
+    let others_in_slot: Vec<String> = match &own_slot {
+        Some(slot) => portage_repo::installed_versions(root, &env.category, &env.split.pn)
+            .into_iter()
+            .map(|version| format!("{}-{version}", env.split.pn))
+            .filter(|pf| pf != &env.split.pf)
+            .filter(|pf| {
+                let version = &pf[env.split.pn.len() + 1..];
+                ebuild_merge::read_installed_slot(root, &env.category, &env.split.pn, version)
+                    .as_deref()
+                    == Some(slot.as_str())
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+
     let prerm_status =
         ebuild_phases::run_single_phase(ebuild_path, "prerm", root, portage_tmpdir, debug, shell)?;
     if prerm_status != 0 {
         return Ok(prerm_status);
     }
 
-    remove_contents(root, &contents_text)?;
+    remove_contents(root, &env.category, &others_in_slot, &contents_text)?;
 
     let postrm_status =
         ebuild_phases::run_single_phase(ebuild_path, "postrm", root, portage_tmpdir, debug, shell)?;
@@ -250,7 +316,7 @@ mod tests {
              sym /usr/share/x/link.txt -> hello.txt {link_mtime}\n"
         );
 
-        remove_contents(&root, &contents).expect("remove_contents succeeds");
+        remove_contents(&root, "dev-libs", &[], &contents).expect("remove_contents succeeds");
 
         assert!(!root.join("usr/share/x/hello.txt").exists());
         assert!(root
@@ -278,7 +344,7 @@ mod tests {
         // A recorded mtime that can never match the file just written
         // above (created "now").
         let contents = "obj /etc.conf abc123 1\n";
-        remove_contents(&root, contents).expect("remove_contents succeeds");
+        remove_contents(&root, "dev-libs", &[], contents).expect("remove_contents succeeds");
 
         assert!(
             root.join("etc.conf").is_file(),
@@ -296,7 +362,7 @@ mod tests {
         std::fs::write(root.join("usr/share/other.txt"), b"other").unwrap();
 
         let contents = "dir /usr\ndir /usr/share\n";
-        remove_contents(&root, contents).expect("remove_contents succeeds");
+        remove_contents(&root, "dev-libs", &[], contents).expect("remove_contents succeeds");
 
         // /usr/share survives (non-empty), and so does its parent.
         assert!(root.join("usr/share/other.txt").is_file());
@@ -308,7 +374,57 @@ mod tests {
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let contents = "obj /usr/share/x/hello.txt abc123 100\ndir /usr/share/x\n";
-        remove_contents(&root, contents).expect("missing entries are not an error");
+        remove_contents(&root, "dev-libs", &[], contents)
+            .expect("missing entries are not an error");
+    }
+
+    #[test]
+    fn remove_contents_skips_a_path_another_same_slot_package_still_owns() {
+        // Real `is_owned`/"replaced" skip (see this module's own doc
+        // comment): a path is left alone entirely -- not even reaching
+        // the mtime check -- whenever some `others_in_slot` entry's own
+        // real vdb `CONTENTS` also claims it.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share")).unwrap();
+        std::fs::write(root.join("usr/share/shared.txt"), b"shared").unwrap();
+        std::fs::write(root.join("usr/share/only-mine.txt"), b"mine").unwrap();
+
+        // Real, matching mtimes for both files -- so the "shared.txt"
+        // skip below can only be explained by the `is_owned` check
+        // itself, not incidentally by an `!mtime` mismatch.
+        let shared_mtime = ebuild_merge::mtime_secs(
+            &std::fs::metadata(root.join("usr/share/shared.txt")).unwrap(),
+        )
+        .unwrap();
+        let mine_mtime = ebuild_merge::mtime_secs(
+            &std::fs::metadata(root.join("usr/share/only-mine.txt")).unwrap(),
+        )
+        .unwrap();
+
+        let other_vdb = root.join("var/db/pkg/dev-libs/otherpkg-2.0");
+        std::fs::create_dir_all(&other_vdb).unwrap();
+        std::fs::write(
+            other_vdb.join("CONTENTS"),
+            format!("obj /usr/share/shared.txt abc123 {shared_mtime}\n"),
+        )
+        .unwrap();
+
+        let contents = format!(
+            "obj /usr/share/shared.txt abc123 {shared_mtime}\n\
+             obj /usr/share/only-mine.txt abc123 {mine_mtime}\n"
+        );
+        remove_contents(&root, "dev-libs", &["otherpkg-2.0".to_string()], &contents)
+            .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("usr/share/shared.txt").is_file(),
+            "a path another same-slot package still owns must survive unmerge"
+        );
+        assert!(
+            !root.join("usr/share/only-mine.txt").exists(),
+            "a path no other same-slot package owns is still deleted normally"
+        );
     }
 
     #[test]
@@ -350,6 +466,87 @@ mod tests {
         assert!(!vdb_dir.exists());
         // The category dir itself is now empty too.
         assert!(!root.join("var/db/pkg/dev-libs").exists());
+    }
+
+    #[test]
+    fn real_unmerge_of_an_in_place_upgraded_slot_mate_keeps_the_shared_file() {
+        // Real, end-to-end `others_in_slot` proof: merge both
+        // othersinslotpkg-1.0 and -2.0 (same SLOT, both writing the same
+        // real shared path -- an in-place upgrade, real portage's own
+        // "install new, then remove old" merge-list order), then unmerge
+        // the *old* 1.0 vdb entry. The shared file must survive (2.0
+        // still owns it); the 1.0-only file must not.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild_v1 = repo_root.join("dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild");
+        let ebuild_v2 = repo_root.join("dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild");
+
+        for ebuild in [&ebuild_v1, &ebuild_v2] {
+            let merge_status = crate::ebuild_merge::run_merge(
+                ebuild,
+                &root,
+                &portage_tmpdir,
+                &crate::ebuild_merge::MergeOptions::default(),
+            )
+            .expect("run_merge succeeds");
+            assert_eq!(merge_status, 0);
+        }
+        assert!(root.join("usr/share/othersinslotpkg/shared.txt").is_file());
+        assert!(root
+            .join("usr/share/othersinslotpkg/only-in-v1.txt")
+            .is_file());
+        assert!(root
+            .join("usr/share/othersinslotpkg/only-in-v2.txt")
+            .is_file());
+        let vdb_v1 = root.join("var/db/pkg/dev-libs/othersinslotpkg-1.0");
+        let vdb_v2 = root.join("var/db/pkg/dev-libs/othersinslotpkg-2.0");
+        assert!(vdb_v1.is_dir());
+        assert!(vdb_v2.is_dir());
+
+        let unmerge_status = run_unmerge(
+            &ebuild_v1,
+            &root,
+            &portage_tmpdir,
+            false,
+            ebuild_phases::ShellBackend::default(),
+        )
+        .expect("run_unmerge succeeds");
+        assert_eq!(unmerge_status, 0);
+
+        assert!(
+            root.join("usr/share/othersinslotpkg/shared.txt").is_file(),
+            "othersinslotpkg-2.0 still owns shared.txt -- unmerging 1.0 must not delete it"
+        );
+        assert!(
+            !root
+                .join("usr/share/othersinslotpkg/only-in-v1.txt")
+                .exists(),
+            "only-in-v1.txt has no other owner -- unmerging 1.0 must delete it normally"
+        );
+        assert!(root
+            .join("usr/share/othersinslotpkg/only-in-v2.txt")
+            .is_file());
+        assert!(!vdb_v1.exists());
+        assert!(vdb_v2.is_dir(), "the 2.0 vdb entry itself is untouched");
+
+        // Now unmerge the remaining 2.0 entry too: with no other owner
+        // left, the shared file finally goes.
+        let unmerge_v2_status = run_unmerge(
+            &ebuild_v2,
+            &root,
+            &portage_tmpdir,
+            false,
+            ebuild_phases::ShellBackend::default(),
+        )
+        .expect("run_unmerge succeeds");
+        assert_eq!(unmerge_v2_status, 0);
+        assert!(!root.join("usr/share/othersinslotpkg/shared.txt").exists());
+        assert!(!vdb_v2.exists());
     }
 
     #[test]

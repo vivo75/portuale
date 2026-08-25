@@ -143,12 +143,6 @@
 //     cosmetic difference: this pilot may leave a few more distinct
 //     `._cfgNNNN_` files behind than real portage would for repeated,
 //     never-remembered identical content).
-//   - No `env_update()`/`ldconfig` triggering -- real `merge()` runs
-//     `env_update()` (`/etc/ld.so.cache`-equivalent regeneration,
-//     `/etc/env.d` processing) after a successful merge; this pilot has
-//     no equivalent machinery at all yet. (`COUNTER` and the atomic
-//     `dbtmpdir`-then-rename vdb write are both now real -- see
-//     `write_vdb_entry`'s own doc comment.)
 //   - Real `os.chown`/permission-preserving `os.chmod` per merged file
 //     are not reproduced explicitly -- `std::fs::copy` already preserves
 //     a regular file's permission bits on Unix, which covers the common
@@ -932,7 +926,7 @@ fn write_vdb_entry(
     Ok(())
 }
 
-fn read_installed_slot(
+pub(crate) fn read_installed_slot(
     root: &Path,
     category: &str,
     package: &str,
@@ -975,7 +969,7 @@ fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path
 /// hand, since it discovers installed packages by scanning real vdb
 /// directory names directly rather than through `installed_versions`'s
 /// own `package`-scoped lookup.
-fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str) -> bool {
+pub(crate) fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str) -> bool {
     let path = root
         .join("var/db/pkg")
         .join(category)

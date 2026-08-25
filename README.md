@@ -3898,13 +3898,78 @@ file on removal too, since its own recorded mtime reflects the
 `._cfgNNNN_`-diverted write, never the real file a user edited).
 
 **v1 scope cuts** (see `ebuild_unmerge.rs`'s own module doc comment for
-the full list): no preserve-libs / "others in this slot"
-reverse-dependency checking. No `unmerge-orphans`/`bsd_chflags`/
-`INFOPATH` handling. Coarser failure tolerance: a genuine I/O error (not
-"already gone" or "directory not
-empty", both tolerated) is a hard failure here, rather than real
-`_unmerge_pkgfiles()`'s own per-file failure counter that keeps going
-regardless.
+the full list): no `unmerge-orphans`/`bsd_chflags`/`INFOPATH` handling.
+Coarser failure tolerance: a genuine I/O error (not "already gone" or
+"directory not empty", both tolerated) is a hard failure here, rather
+than real `_unmerge_pkgfiles()`'s own per-file failure counter that
+keeps going regardless. (The "others in this slot" reverse-dependency
+check itself has since shipped -- see its own section below.)
+
+### `unmerge`'s own `others_in_slot` reverse-dependency check: an in-place upgrade doesn't delete files the new version still owns
+
+The last item on `ebuild_unmerge.rs`'s own gap list is real now: real
+`_unmerge_pkgfiles()`'s own `is_owned` check (`vartree.py:2893-2916`,
+via `dblink.isowner()`, itself `bool(self._match_contents(filename))`).
+Without this, `merge`-ing a new version of a package already installed
+in the same `SLOT` (an in-place upgrade -- real portage's own
+"install new, then remove old" merge-list order) and then `unmerge`-ing
+the *old* vdb entry would delete every file the old version's own
+`CONTENTS` lists, including ones the just-installed new version also
+owns, since this pilot's `unmerge` had no concept of "another installed
+package might still need this" at all before this slice.
+
+`run_unmerge` now computes real `others_in_slot` before doing any
+deletion: every other installed version of the same `category`/`PN` in
+the same `SLOT` as the package being unmerged, read directly from vdb
+`SLOT` files the same way `ebuild_merge`'s own blocker-exclusion slice
+already does (`portage_repo::installed_versions` +
+`ebuild_merge::read_installed_slot`, the latter promoted from private to
+`pub(crate)` for this). `remove_contents` then checks, for every
+`CONTENTS` entry and *before* the existing `!mtime` check (matching real
+`_unmerge_pkgfiles()`'s own ordering exactly), whether any
+`others_in_slot` member's own real `CONTENTS` also claims that same path
+(`ebuild_merge::owns_path_pf`, likewise promoted to `pub(crate)`,
+already built for blocker exclusion's own `CONTENTS`-ownership check) --
+if so, the entry is left alone entirely (real `"replaced"` skip),
+regardless of node type. Real weak vs. strong node-type distinctions in
+the "symlink orphan" refinement (bug #326685) aren't reproduced -- see
+`ebuild_unmerge.rs`'s own module doc comment for why that narrower
+sub-case is out of v1 scope.
+
+New fixtures `dev-libs/othersinslotpkg-1.0`/`-2.0`, both `SLOT="0"`,
+both installing a real shared file (`shared.txt`) plus a version-unique
+one (`only-in-v1.txt`/`only-in-v2.txt`). Proven via a real, end-to-end
+test: merge both versions, unmerge the *old* one -- `shared.txt`
+survives (2.0 still owns it) while `only-in-v1.txt` is deleted normally
+(no other owner); unmerge the *remaining* 2.0 entry too, and
+`shared.txt` finally goes, proving the skip isn't unconditional. No
+Python mirror needed -- like every other real-execution (non-dry-run)
+slice in this pilot, this is Rust-only; the shared pytest contract suite
+doesn't touch real `merge`/`unmerge` at all.
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+BIN=PORTING/rust/target/release/portuale
+
+$BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild merge
+$BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild merge
+ls "$ROOT"/usr/share/othersinslotpkg/
+# only-in-v1.txt  only-in-v2.txt  shared.txt
+
+$BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild unmerge
+ls "$ROOT"/usr/share/othersinslotpkg/
+# only-in-v2.txt  shared.txt -- only-in-v1.txt is gone, shared.txt survives
+cat "$ROOT"/usr/share/othersinslotpkg/shared.txt
+# shared, from 2.0
+
+$BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild unmerge
+ls "$ROOT"/usr/share/
+# ls: cannot access '.../usr/share/': No such file or directory -- no owner left, so it's really gone now
+```
 
 ### Real `CONFIG_PROTECT`: a locally-edited config file survives an upgrade
 
