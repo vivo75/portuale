@@ -103,6 +103,59 @@ fn is_env_d_filename(name: &str) -> bool {
         && !name.ends_with(".bak")
 }
 
+/// Real `dblink._unmerge_pkgfiles()`'s own `infodirs`/`infodirs_inodes`
+/// (`lib/portage/dbapi/vartree.py:2830-2846`): real `INFOPATH`/
+/// `INFODIR`, colon-separated, collated from `/etc/env.d/*` the same
+/// way `run_env_update` collates every other real `COLON_SEPARATED`
+/// key -- a deliberately separate, narrower computation reusing this
+/// module's own `is_env_d_filename`/`parse_env_d_line` helpers directly,
+/// rather than a refactor of `run_env_update`'s own already-tested
+/// control flow for a second, narrower caller (`ebuild_unmerge::
+/// run_unmerge` is the one real caller, threading the result into
+/// `cleanup_info_dir`'s own real `inode_key in infodirs_inodes` check).
+/// Each real, `root`-joined candidate directory that actually exists on
+/// disk right now contributes its own `(dev, ino)` -- real `os.stat`
+/// (follows symlinks, unlike the `lstat`-based inode keys this pilot's
+/// own `dirs`/`protected_symlinks` otherwise use, since a real
+/// `INFOPATH` entry naming a symlink should still match the directory
+/// it resolves to). A missing env.d directory, or a named candidate
+/// that doesn't actually exist, degrades gracefully to an empty/smaller
+/// set -- the same tolerance `run_env_update` itself already has for a
+/// missing `/etc/env.d`.
+pub fn info_dirs_inodes(root: &Path) -> std::collections::BTreeSet<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    let mut candidates: Vec<String> = Vec::new();
+    let envd_dir = root.join("etc/env.d");
+    if let Ok(entries) = std::fs::read_dir(&envd_dir) {
+        let mut filenames: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| is_env_d_filename(name))
+            .collect();
+        filenames.sort();
+        for fname in &filenames {
+            let Ok(text) = std::fs::read_to_string(envd_dir.join(fname)) else {
+                continue;
+            };
+            for line in text.lines() {
+                let Some((key, value)) = parse_env_d_line(line) else {
+                    continue;
+                };
+                if key == "INFOPATH" || key == "INFODIR" {
+                    candidates.extend(value.split(':').filter(|s| !s.is_empty()).map(String::from));
+                }
+            }
+        }
+    }
+
+    candidates
+        .iter()
+        .filter_map(|dir| std::fs::metadata(root.join(dir.trim_start_matches('/'))).ok())
+        .map(|meta| (meta.dev(), meta.ino()))
+        .collect()
+}
+
 /// Real `potential_lib_dirs`/`getlibpaths`-adjacent candidate set (see
 /// this module's own doc comment for the v1 cuts): every `LDPATH`
 /// entry, plus `usr/lib`/`lib`, plus any top-level or `usr/`-relative
@@ -310,6 +363,7 @@ pub fn run_env_update(root: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::MetadataExt;
 
     fn tempdir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -347,6 +401,47 @@ mod tests {
         assert!(!is_env_d_filename(".50-foo"));
         assert!(!is_env_d_filename("50-foo~"));
         assert!(!is_env_d_filename("50-foo.bak"));
+    }
+
+    #[test]
+    fn info_dirs_inodes_resolves_real_infopath_and_infodir_entries() {
+        let tmp = tempdir();
+        std::fs::create_dir_all(tmp.join("etc/env.d")).unwrap();
+        std::fs::create_dir_all(tmp.join("usr/share/info")).unwrap();
+        std::fs::create_dir_all(tmp.join("opt/pkg/info")).unwrap();
+        std::fs::write(
+            tmp.join("etc/env.d/50-foo"),
+            "INFOPATH=\"/usr/share/info:/opt/pkg/info\"\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.join("etc/env.d/60-bar"), "INFODIR=\"/opt/pkg/info\"\n").unwrap();
+
+        let inodes = info_dirs_inodes(&tmp);
+
+        let expected_a = std::fs::metadata(tmp.join("usr/share/info")).unwrap();
+        let expected_b = std::fs::metadata(tmp.join("opt/pkg/info")).unwrap();
+        assert!(inodes.contains(&(expected_a.dev(), expected_a.ino())));
+        assert!(inodes.contains(&(expected_b.dev(), expected_b.ino())));
+        assert_eq!(inodes.len(), 2);
+    }
+
+    #[test]
+    fn info_dirs_inodes_ignores_a_candidate_that_does_not_actually_exist() {
+        let tmp = tempdir();
+        std::fs::create_dir_all(tmp.join("etc/env.d")).unwrap();
+        std::fs::write(
+            tmp.join("etc/env.d/50-foo"),
+            "INFOPATH=\"/does/not/exist\"\n",
+        )
+        .unwrap();
+
+        assert!(info_dirs_inodes(&tmp).is_empty());
+    }
+
+    #[test]
+    fn info_dirs_inodes_degrades_gracefully_when_env_d_is_missing() {
+        let tmp = tempdir();
+        assert!(info_dirs_inodes(&tmp).is_empty());
     }
 
     #[test]

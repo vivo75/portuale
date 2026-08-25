@@ -108,19 +108,20 @@
 // directory from ever emptying out and being removed at all. The other
 // real trigger for this same cleanup, `inode_key in infodirs_inodes`
 // (a real, `INFOPATH`/`INFODIR` env-var-driven inode set, covering an
-// info directory that *isn't* literally named `"info"`) is not
-// threaded through -- this pilot has no `INFOPATH`/`INFODIR` sourcing
-// anywhere yet (real portage's own values normally come from
-// `/etc/env.d` entries collated by `env_update()`, which this pilot's
-// own `env_update::run_env_update` doesn't export into any later
-// phase's environment).
+// info directory that *isn't* literally named `"info"`) is threaded
+// through too now: `env_update::info_dirs_inodes` collates real
+// `INFOPATH`/`INFODIR` values from `/etc/env.d/*` the same way
+// `env_update::run_env_update` collates every other real
+// `COLON_SEPARATED` key, and `run_unmerge` below computes that set once
+// and threads it down through `remove_contents`/`remove_dirs` into
+// `cleanup_info_dir`.
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching `ebuild_merge`'s own
 // "narrow v1, document the cut" pattern):
-//   - No `bsd_chflags` handling. `INFOPATH`/`INFODIR` env-var-driven
-//     info-directory matching (see the real `INFOPATH` cleanup
-//     paragraph above) -- only the literal `basename == "info"` trigger
-//     is implemented.
+//   - No `bsd_chflags` handling -- confirmed dead code on Linux, not a
+//     real gap: `lib/portage/__init__.py:311` sets `bsd_chflags = None`
+//     unconditionally on non-BSD, and this pilot's own hard goal is
+//     Linux-only/musl-static.
 //   - Real `stale_confmem` cleanup (`vartree.py:3106-3109`: when a
 //     `CONFIG_PROTECT`'d path this package remembered in `cfgfiledict`
 //     is `is_owned` by another same-slot instance, its now-stale memory
@@ -144,6 +145,7 @@
 
 use crate::ebuild_merge;
 use crate::ebuild_phases;
+use crate::env_update;
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -211,6 +213,7 @@ type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
 /// `_unmerge_dirs()`) instead of removed inline here (real `mydirs`) --
 /// see this module's own doc comment on bug #326685 for why the
 /// deferral matters.
+#[allow(clippy::too_many_arguments)]
 fn remove_contents(
     root: &Path,
     category: &str,
@@ -218,6 +221,7 @@ fn remove_contents(
     config_protect: &str,
     config_protect_mask: &str,
     unmerge_orphans: bool,
+    infodirs_inodes: &BTreeSet<(u64, u64)>,
     contents_text: &str,
 ) -> Result<(), String> {
     let mut entries = parse_contents(contents_text);
@@ -332,7 +336,7 @@ fn remove_contents(
             }
         }
     }
-    remove_dirs(root, dirs, &mut protected_symlinks);
+    remove_dirs(root, dirs, &mut protected_symlinks, infodirs_inodes);
     // Real trailing `if protected_symlinks:` elog warning
     // (`vartree.py:3085-3103`) for whatever entries `remove_dirs`
     // didn't resolve is deliberately not reproduced -- see this
@@ -350,17 +354,23 @@ fn remove_contents(
 const INFODIR_CLEANUP: [&str; 2] = ["dir", "dir.old"];
 
 /// Real `_unmerge_dirs()`'s own INFOPATH cleanup (`vartree.py:3226-
-/// 3251`, the `basename(obj) == "info"` half -- see this module's own
-/// doc comment for the `infodirs_inodes` half this pilot doesn't
-/// thread through): if `dest` is literally named `"info"` and its only
-/// remaining content is a non-empty subset of `INFODIR_CLEANUP` (real
-/// `remaining and len(remaining) <= len(infodir_cleanup) and not
+/// 3251`): real `inode_key in infodirs_inodes or os.path.basename(obj)
+/// == "info"` -- a directory whose own `(dev, ino)` matches a real,
+/// live `INFOPATH`/`INFODIR` entry (`env_update::info_dirs_inodes`,
+/// covering an info directory reached via a different path than the
+/// literal `"info"` name, e.g. a symlink or a non-standard install
+/// location) *or* is literally named `"info"` (the more common case,
+/// shipped separately first). If its only remaining content is a
+/// non-empty subset of `INFODIR_CLEANUP` (real `remaining and
+/// len(remaining) <= len(infodir_cleanup) and not
 /// set(remaining).difference(infodir_cleanup)`), those files are
 /// deleted -- real regular-file-only (`stat.S_ISREG`), so a same-named
 /// symlink or subdirectory is left alone -- clearing the way for the
 /// caller's own subsequent `rmdir` attempt to actually succeed.
-fn cleanup_info_dir(dest: &Path) {
-    if dest.file_name().and_then(|n| n.to_str()) != Some("info") {
+fn cleanup_info_dir(dest: &Path, inode_key: (u64, u64), infodirs_inodes: &BTreeSet<(u64, u64)>) {
+    let is_info_dir = infodirs_inodes.contains(&inode_key)
+        || dest.file_name().and_then(|n| n.to_str()) == Some("info");
+    if !is_info_dir {
         return;
     }
     let Ok(entries) = std::fs::read_dir(dest) else {
@@ -407,6 +417,7 @@ fn remove_dirs(
     root: &Path,
     dirs: Vec<(PathBuf, (u64, u64))>,
     protected_symlinks: &mut ProtectedSymlinks,
+    infodirs_inodes: &BTreeSet<(u64, u64)>,
 ) {
     // Real `_unmerge_dirs()`'s own `dirs = sorted(dirs)`: `mydirs` is
     // built as a Python *set* during the caller's own traversal (order
@@ -420,7 +431,7 @@ fn remove_dirs(
     let mut revisit: BTreeMap<PathBuf, (u64, u64)> = BTreeMap::new();
 
     while let Some((dest, inode_key)) = stack.pop() {
-        cleanup_info_dir(&dest);
+        cleanup_info_dir(&dest, inode_key, infodirs_inodes);
         match std::fs::remove_dir(&dest) {
             Ok(()) => {
                 let Some(unmerge_syms) = protected_symlinks.remove(&inode_key) else {
@@ -568,6 +579,13 @@ pub fn run_unmerge(
         return Ok(prerm_status);
     }
 
+    // Real `infodirs`/`infodirs_inodes` (`vartree.py:2830-2846`): real
+    // `INFOPATH`/`INFODIR`, collated from `/etc/env.d/*` the same way
+    // `env_update::run_env_update` collates every other real
+    // `COLON_SEPARATED` key -- see `env_update::info_dirs_inodes`'s own
+    // doc comment for why this is a separate, narrower computation
+    // rather than a refactor of that already-tested function.
+    let infodirs_inodes = env_update::info_dirs_inodes(root);
     remove_contents(
         root,
         &env.category,
@@ -575,6 +593,7 @@ pub fn run_unmerge(
         &options.config_protect,
         &options.config_protect_mask,
         options.unmerge_orphans,
+        &infodirs_inodes,
         &contents_text,
     )?;
 
@@ -664,8 +683,17 @@ mod tests {
              sym /usr/share/x/link.txt -> hello.txt {link_mtime}\n"
         );
 
-        remove_contents(&root, "dev-libs", &[], "/etc", "", false, &contents)
-            .expect("remove_contents succeeds");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &[],
+            "/etc",
+            "",
+            false,
+            &BTreeSet::new(),
+            &contents,
+        )
+        .expect("remove_contents succeeds");
 
         assert!(!root.join("usr/share/x/hello.txt").exists());
         assert!(root
@@ -693,8 +721,17 @@ mod tests {
         // A recorded mtime that can never match the file just written
         // above (created "now").
         let contents = "obj /etc.conf abc123 1\n";
-        remove_contents(&root, "dev-libs", &[], "/etc", "", false, contents)
-            .expect("remove_contents succeeds");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &[],
+            "/etc",
+            "",
+            false,
+            &BTreeSet::new(),
+            contents,
+        )
+        .expect("remove_contents succeeds");
 
         assert!(
             root.join("etc.conf").is_file(),
@@ -714,8 +751,17 @@ mod tests {
         std::fs::write(root.join("etc.conf"), b"user's own edits").unwrap();
 
         let contents = "obj /etc.conf abc123 1\n";
-        remove_contents(&root, "dev-libs", &[], "/etc", "", true, contents)
-            .expect("remove_contents succeeds");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &[],
+            "/etc",
+            "",
+            true,
+            &BTreeSet::new(),
+            contents,
+        )
+        .expect("remove_contents succeeds");
 
         assert!(
             !root.join("etc.conf").exists(),
@@ -735,8 +781,17 @@ mod tests {
         std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
 
         let contents = "obj /etc/foo.conf abc123 1\n";
-        remove_contents(&root, "dev-libs", &[], "/etc", "", true, contents)
-            .expect("remove_contents succeeds");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &[],
+            "/etc",
+            "",
+            true,
+            &BTreeSet::new(),
+            contents,
+        )
+        .expect("remove_contents succeeds");
 
         assert!(
             root.join("etc/foo.conf").is_file(),
@@ -758,8 +813,17 @@ mod tests {
         std::os::unix::fs::symlink(root.join("real-lib"), root.join("lib")).unwrap();
 
         let contents = "sym /lib -> whatever 1\n";
-        remove_contents(&root, "dev-libs", &[], "/etc", "", true, contents)
-            .expect("remove_contents succeeds");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &[],
+            "/etc",
+            "",
+            true,
+            &BTreeSet::new(),
+            contents,
+        )
+        .expect("remove_contents succeeds");
 
         assert!(
             root.join("lib").symlink_metadata().is_ok(),
@@ -777,8 +841,17 @@ mod tests {
         std::fs::write(root.join("usr/share/other.txt"), b"other").unwrap();
 
         let contents = "dir /usr\ndir /usr/share\n";
-        remove_contents(&root, "dev-libs", &[], "/etc", "", false, contents)
-            .expect("remove_contents succeeds");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &[],
+            "/etc",
+            "",
+            false,
+            &BTreeSet::new(),
+            contents,
+        )
+        .expect("remove_contents succeeds");
 
         // /usr/share survives (non-empty), and so does its parent.
         assert!(root.join("usr/share/other.txt").is_file());
@@ -790,8 +863,17 @@ mod tests {
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let contents = "obj /usr/share/x/hello.txt abc123 100\ndir /usr/share/x\n";
-        remove_contents(&root, "dev-libs", &[], "/etc", "", false, contents)
-            .expect("missing entries are not an error");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &[],
+            "/etc",
+            "",
+            false,
+            &BTreeSet::new(),
+            contents,
+        )
+        .expect("missing entries are not an error");
     }
 
     #[test]
@@ -837,6 +919,7 @@ mod tests {
             "/etc",
             "",
             false,
+            &BTreeSet::new(),
             &contents,
         )
         .expect("remove_contents succeeds");
@@ -880,6 +963,7 @@ mod tests {
             "/etc",
             "",
             false,
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -924,6 +1008,7 @@ mod tests {
             "/etc",
             "",
             false,
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -952,7 +1037,7 @@ mod tests {
         std::fs::create_dir_all(&info).unwrap();
         std::fs::write(info.join("dir"), b"").unwrap();
 
-        cleanup_info_dir(&info);
+        cleanup_info_dir(&info, (0, 0), &BTreeSet::new());
 
         assert!(!info.join("dir").exists());
     }
@@ -965,7 +1050,7 @@ mod tests {
         std::fs::write(info.join("dir"), b"").unwrap();
         std::fs::write(info.join("dir.old"), b"").unwrap();
 
-        cleanup_info_dir(&info);
+        cleanup_info_dir(&info, (0, 0), &BTreeSet::new());
 
         assert!(!info.join("dir").exists());
         assert!(!info.join("dir.old").exists());
@@ -983,7 +1068,7 @@ mod tests {
         std::fs::write(info.join("dir"), b"").unwrap();
         std::fs::write(info.join("automake.info"), b"real content").unwrap();
 
-        cleanup_info_dir(&info);
+        cleanup_info_dir(&info, (0, 0), &BTreeSet::new());
 
         assert!(info.join("dir").exists());
         assert!(info.join("automake.info").exists());
@@ -996,9 +1081,29 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(other.join("dir"), b"").unwrap();
 
-        cleanup_info_dir(&other);
+        cleanup_info_dir(&other, (0, 0), &BTreeSet::new());
 
         assert!(other.join("dir").exists());
+    }
+
+    #[test]
+    fn cleanup_info_dir_fires_on_an_infodirs_inodes_match_even_when_not_named_info() {
+        // Real `_unmerge_dirs()`'s own second trigger half (`vartree.py`
+        // ~3226): `inode_key in infodirs_inodes` fires independently of
+        // the literal `basename == "info"` check -- a real `INFOPATH`/
+        // `INFODIR` entry can name any directory at all.
+        let tmp = tempdir();
+        let other = tmp.join("not-info-at-all");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("dir"), b"").unwrap();
+
+        let meta = std::fs::metadata(&other).unwrap();
+        let inode_key = (meta.dev(), meta.ino());
+        let infodirs_inodes = BTreeSet::from([inode_key]);
+
+        cleanup_info_dir(&other, inode_key, &infodirs_inodes);
+
+        assert!(!other.join("dir").exists());
     }
 
     #[test]
@@ -1015,14 +1120,69 @@ mod tests {
         std::fs::write(root.join("usr/share/info/dir"), b"").unwrap();
 
         let contents = "dir /usr/share\ndir /usr/share/info\n";
-        remove_contents(&root, "dev-libs", &[], "/etc", "", false, contents)
-            .expect("remove_contents succeeds");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &[],
+            "/etc",
+            "",
+            false,
+            &BTreeSet::new(),
+            contents,
+        )
+        .expect("remove_contents succeeds");
 
         assert!(
             !root.join("usr/share/info").exists(),
             "the info directory is fully removed once its own leftover index is cleaned up"
         );
         assert!(!root.join("usr/share").exists());
+    }
+
+    #[test]
+    fn remove_contents_removes_a_real_env_d_sourced_infopath_directory_not_named_info() {
+        // End-to-end proof that `env_update::info_dirs_inodes`'s own
+        // real `/etc/env.d` collation and `remove_contents`'s own
+        // `infodirs_inodes` threading actually connect: a real
+        // `INFOPATH` entry can name any directory at all, not just one
+        // literally called "info" (see `cleanup_info_dir_fires_on_an_
+        // infodirs_inodes_match_even_when_not_named_info` above for the
+        // narrower, `cleanup_info_dir`-only version of this same real
+        // condition).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+        std::fs::create_dir_all(root.join("opt/pkg/docs")).unwrap();
+        std::fs::write(root.join("opt/pkg/docs/dir"), b"").unwrap();
+        std::fs::write(
+            root.join("etc/env.d/50-pkg"),
+            "INFOPATH=\"/opt/pkg/docs\"\n",
+        )
+        .unwrap();
+
+        let infodirs_inodes = crate::env_update::info_dirs_inodes(&root);
+        assert!(
+            !infodirs_inodes.is_empty(),
+            "the real env.d entry must resolve"
+        );
+
+        let contents = "dir /opt/pkg\ndir /opt/pkg/docs\n";
+        remove_contents(
+            &root,
+            "dev-libs",
+            &[],
+            "/etc",
+            "",
+            false,
+            &infodirs_inodes,
+            contents,
+        )
+        .expect("remove_contents succeeds");
+
+        assert!(
+            !root.join("opt/pkg/docs").exists(),
+            "a real env.d-sourced INFOPATH directory is cleaned up even though it isn't named info"
+        );
     }
 
     /// `UnmergeOptions::default()`, no overrides at all: a locally-

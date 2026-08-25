@@ -3898,12 +3898,14 @@ file on removal too, since its own recorded mtime reflects the
 `._cfgNNNN_`-diverted write, never the real file a user edited).
 
 **v1 scope cuts** (see `ebuild_unmerge.rs`'s own module doc comment for
-the full list): no `unmerge-orphans`/`bsd_chflags`/`INFOPATH` handling.
-Coarser failure tolerance: a genuine I/O error (not "already gone" or
-"directory not empty", both tolerated) is a hard failure here, rather
-than real `_unmerge_pkgfiles()`'s own per-file failure counter that
-keeps going regardless. (The "others in this slot" reverse-dependency
-check itself has since shipped -- see its own section below.)
+the full list): no `bsd_chflags` handling -- confirmed dead code on
+Linux (`lib/portage/__init__.py:311` sets it to `None` unconditionally
+on non-BSD), not a real gap. Coarser failure tolerance: a genuine I/O
+error (not "already gone" or "directory not empty", both tolerated) is
+a hard failure here, rather than real `_unmerge_pkgfiles()`'s own
+per-file failure counter that keeps going regardless. (`unmerge-orphans`
+and `INFOPATH` handling have since shipped -- see their own sections
+below; so has the "others in this slot" reverse-dependency check.)
 
 ### `unmerge`'s own `others_in_slot` reverse-dependency check: an in-place upgrade doesn't delete files the new version still owns
 
@@ -5326,25 +5328,56 @@ unset FEATURES
 ### `unmerge`: real `INFOPATH` cleanup
 
 Real `_unmerge_dirs()`'s own `INFOPATH` cleanup (`vartree.py:3226-3251`)
-is real now, for the more commonly-hit half of it: a directory literally
-named `"info"` (real comment: "since it might have been in INFOPATH
-previously even though it may not be there now") whose only remaining
-content is a subset of `{"dir", "dir.old"}` (real `_infodir_cleanup`,
-GNU `install-info`'s own auto-generated index files, which live outside
-any package's own tracked `CONTENTS`) has those removed first --
-otherwise a stray leftover index would keep such a directory from ever
-emptying out and being removed at all. The other real trigger, an
-`INFOPATH`/`INFODIR` env-var-driven inode match covering an info
-directory that isn't literally named `"info"`, isn't threaded through:
-this pilot has no `INFOPATH`/`INFODIR` sourcing anywhere yet (real
-values normally come from `/etc/env.d` entries collated by
-`env_update()`, which this pilot's own `env_update::run_env_update`
-doesn't export into any later phase's environment). Verified directly
-against `cleanup_info_dir` (the lone-index-file case, both `dir` and
-`dir.old` together, a real remaining file that correctly blocks cleanup
-entirely, and a same-named-but-not-`"info"` directory that's correctly
-ignored) and end to end via `remove_contents`
-(`remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file`).
+is fully real now, both triggers. A directory literally named `"info"`
+(real comment: "since it might have been in INFOPATH previously even
+though it may not be there now") whose only remaining content is a
+subset of `{"dir", "dir.old"}` (real `_infodir_cleanup`, GNU
+`install-info`'s own auto-generated index files, which live outside any
+package's own tracked `CONTENTS`) has those removed first -- otherwise a
+stray leftover index would keep such a directory from ever emptying out
+and being removed at all. The other real trigger, `inode_key in
+infodirs_inodes` -- an `INFOPATH`/`INFODIR` env-var-driven inode match
+covering an info directory that isn't literally named `"info"` -- is
+threaded through too: `env_update::info_dirs_inodes` collates real
+`INFOPATH`/`INFODIR` values from `/etc/env.d/*` the same way
+`env_update::run_env_update` collates every other real
+`COLON_SEPARATED` key, and `run_unmerge` computes that set once per
+unmerge and threads it down through `remove_contents`/`remove_dirs`
+into `cleanup_info_dir`. Verified directly against `cleanup_info_dir`
+(the lone-index-file case, both `dir` and `dir.old` together, a real
+remaining file that correctly blocks cleanup entirely, a
+same-named-but-not-`"info"` directory that's correctly ignored, and now
+an inode-match hit on a directory *not* named `"info"`), against
+`env_update::info_dirs_inodes` directly (real multi-entry
+`INFOPATH`/`INFODIR` resolution, a candidate that doesn't actually
+exist, and a missing `/etc/env.d` altogether), and end to end via
+`remove_contents`
+(`remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file`
+for the `basename == "info"` half,
+`remove_contents_removes_a_real_env_d_sourced_infopath_directory_not_named_info`
+for the `infodirs_inodes` half).
+
+```sh
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+
+# A real install-info leftover index, untracked by CONTENTS, in a
+# directory that is NOT literally named "info".
+echo -n "" > "${ROOT}"/usr/share/mergepkg/dir
+
+# A real /etc/env.d entry declaring this directory via INFOPATH, the
+# same way env_update() collates every other real COLON_SEPARATED key.
+mkdir -p "${ROOT}"/etc/env.d
+echo 'INFOPATH="/usr/share/mergepkg"' > "${ROOT}"/etc/env.d/50-fixture
+
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+test -e "${ROOT}"/usr/share/mergepkg && echo "still there" || echo "gone"
+# gone -- the inode-match trigger fired even though the directory isn't
+# named "info", so the leftover index no longer blocks its removal.
+```
 
 ### Standalone `ebuild <file> config`/`info`
 
