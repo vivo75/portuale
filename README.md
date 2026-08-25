@@ -4543,20 +4543,85 @@ real compilation of almost any real package impossible.
 Real `doebuild.py` sets this variable from `repo.eclass_db.
 eclass_locations_string` -- a real, `shlex`-quoted, priority-ordered
 list of the ebuild's own repo *plus every one of its master repos*
-(`layout.conf`'s own `masters =` chain). `eclass_locations_value`
-(`ebuild_phases.rs`) implements the v1 slice of this: the ebuild's own
-containing repo alone (`repo_root_for`, single-quoted the same real
-way `shlex.join` would), no masters chain at all -- a real, separately-
-scoped gap for an overlay ebuild that inherits a main-repo-only eclass
-without redeclaring it locally. Every real eclass this pilot has
-needed so far lives in the *same* repo as the ebuild that inherits it
-(confirmed live: `nano`'s/`xz-utils`'s/`fuse`'s own eclasses are all
-real files under the real `gentoo` main repo's own `eclass/`
-directory, and that repo's own real `metadata/layout.conf` explicitly
-declares `masters =` empty), so this narrower slice already closes the
-gap for every case demonstrated so far. Exported unconditionally
-(like `DISTDIR`), not just for phases that happen to need it, matching
-real `doebuild()`'s own environment.
+(real masters-chain resolution, `config.py:1256-1266`/`eclass_cache.
+py:177-179`: `eclass_locations = [master.location for master in repo.
+masters] + [repo.location]` unless already present, exported
+`reversed()` -- the ebuild's own containing repo searched first, its
+masters after, in real declared order). `eclass_locations_value`
+(`ebuild_phases.rs`) originally implemented only the narrower half of
+this -- the ebuild's own containing repo alone, no masters chain at
+all -- a real, separately-scoped gap for an overlay ebuild that
+inherits a main-repo-only eclass without redeclaring it locally. The
+masters chain is real now too: `RepoConfig::masters` (already resolved
+elsewhere -- `ebuild_merge::blocked_installed_packages`/`pretend.rs`
+already consult it for profile/USE config stacking) is looked up via
+`portage_repo::find_repos(config_root)`, matched against the ebuild's
+own containing repo by location; `config_root` itself is threaded all
+the way down from each real caller's own CLI-boundary `PORTAGE_
+CONFIGROOT` resolution (`ebuild.rs`'s `merge_options.config_root`,
+`MergeOptions`/`UnmergeOptions`/`PackageOptions`'s own `config_root`
+field, mirroring `MergeOptions::config_root`'s own established
+"explicit field, deliberately-inert `Default`" shape) through the
+whole phase-execution call chain (`run_commands`/`run_single_phase` ->
+... -> `phase_env_vars`). Any resolution failure (missing `repos.conf`,
+the containing repo not listed in it, etc.) degrades to the original
+v1 behavior -- the same graceful-degrade precedent `blocked_installed_
+packages` established. Every real eclass this pilot had live-verified
+before this fix happened to live in the *same* repo as the ebuild that
+inherits it (`nano`'s/`xz-utils`'s/`fuse`'s own eclasses are all real
+files under the real `gentoo` main repo's own `eclass/` directory,
+that repo's own real `metadata/layout.conf` declaring `masters =`
+empty), so the gap was real but never yet hit live -- now closed
+directly, with a real, end-to-end fixture (an overlay ebuild inheriting
+an eclass that only exists in its own master repo) proving it.
+Exported unconditionally (like `DISTDIR`), not just for phases that
+happen to need it, matching real `doebuild()`'s own environment.
+
+```sh
+CFGROOT="$(mktemp -d)"
+MAIN="${CFGROOT}/repos/main"
+OVERLAY="${CFGROOT}/repos/overlay"
+mkdir -p "${MAIN}"/profiles "${MAIN}"/eclass "${OVERLAY}"/profiles \
+    "${OVERLAY}"/dev-libs/overlaypkg
+echo main > "${MAIN}"/profiles/repo_name
+echo overlay > "${OVERLAY}"/profiles/repo_name
+cat > "${MAIN}"/eclass/mastershared.eclass <<'ECLASS'
+mastershared_hello() {
+	echo "hello from mastershared.eclass"
+}
+ECLASS
+cat > "${OVERLAY}"/dev-libs/overlaypkg/overlaypkg-1.0.ebuild <<'EBUILD'
+EAPI=8
+DESCRIPTION="cross-repo masters-chain eclass inherit"
+SLOT="0"
+KEYWORDS="amd64"
+inherit mastershared
+src_install() {
+	mastershared_hello > "${T}/eclass-marker.txt" || die
+}
+EBUILD
+mkdir -p "${CFGROOT}"/etc/portage
+cat > "${CFGROOT}"/etc/portage/repos.conf <<EOF
+[DEFAULT]
+main-repo = main
+
+[main]
+location = ${MAIN}
+
+[overlay]
+location = ${OVERLAY}
+masters = main
+EOF
+
+export PORTAGE_CONFIGROOT="$CFGROOT"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    "${OVERLAY}/dev-libs/overlaypkg/overlaypkg-1.0.ebuild" install
+cat "${PORTAGE_TMPDIR}"/portage/dev-libs/overlaypkg-1.0/temp/eclass-marker.txt
+# hello from mastershared.eclass -- found via the overlay's own masters
+# chain, even though the eclass itself never lived in the overlay repo.
+unset PORTAGE_CONFIGROOT
+```
 
 **A new, separate gap surfaced while live-verifying this -- since
 fixed upstream**: after `inherit()` itself stopped `die`ing,

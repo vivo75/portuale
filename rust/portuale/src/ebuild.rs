@@ -312,6 +312,7 @@ pub fn run(args: &[String]) -> ExitCode {
             config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
                 .unwrap_or(default_unmerge_options.config_protect_mask),
             unmerge_orphans,
+            config_root: portage_repo::config_root_from_env(),
         };
         // Real make.globals's own PKGDIR default -- see
         // ebuild_package::PackageOptions's own Default impl.
@@ -339,6 +340,7 @@ pub fn run(args: &[String]) -> ExitCode {
             binpkg_compress_flags,
             portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
                 .unwrap_or(default_package_options.portage_bzip2_command),
+            config_root: portage_repo::config_root_from_env(),
         };
         let ebuild_path = std::path::Path::new(ebuild_file);
         // One command at a time here, not the whole slice at once --
@@ -366,6 +368,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &root,
                     &portage_tmpdir,
                     debug,
+                    &merge_options.config_root,
                     shell,
                 )
             } else {
@@ -376,6 +379,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     &portage_tmpdir,
                     &distdir,
                     debug,
+                    &merge_options.config_root,
                     shell,
                 )
             };

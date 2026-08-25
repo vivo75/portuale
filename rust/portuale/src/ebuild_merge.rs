@@ -1600,6 +1600,7 @@ pub fn run_merge(
         portage_tmpdir,
         &options.distdir,
         options.debug,
+        &options.config_root,
         options.shell,
     )?;
     if status != 0 {
@@ -1719,6 +1720,7 @@ fn merge_after_install(
         root,
         portage_tmpdir,
         options.debug,
+        &options.config_root,
         options.shell,
     )?;
     if preinst_status != 0 {
@@ -1753,6 +1755,7 @@ fn merge_after_install(
         root,
         portage_tmpdir,
         options.debug,
+        &options.config_root,
         options.shell,
     )?;
 
@@ -2395,6 +2398,7 @@ mod tests {
             &portage_tmpdir,
             &MergeOptions::default().distdir,
             false,
+            &MergeOptions::default().config_root,
             ebuild_phases::ShellBackend::default(),
         )
         .expect("install phase succeeds");

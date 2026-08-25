@@ -587,34 +587,55 @@ pub enum ShellBackend {
 /// `app-editors/nano`, and `app-arch/xz-utils` all failed here before
 /// this fix, each on a different real eclass.
 ///
-/// V1 scope: the ebuild's own containing repo alone (`repo_root_for`),
-/// no masters chain -- real `eclass_db`'s own cross-repo inheritance
-/// (an overlay ebuild inheriting an eclass that only exists in its own
-/// master repo, never redeclared locally) is a real, separately-scoped
-/// gap this pilot doesn't reach yet. Every real eclass this pilot has
-/// needed so far lives in the exact same repo as the ebuild that
-/// inherits it (confirmed live: `sys-fs/fuse`'s/`app-editors/nano`'s/
-/// `app-arch/xz-utils`'s own eclasses -- `meson-multilib`,
-/// `toolchain-funcs`, `flag-o-matic`, `verify-sig`, `dot-a`, ... --
-/// are all real files under the real `gentoo` main repo's own
-/// `eclass/` directory, and that repo's own real `metadata/
-/// layout.conf` explicitly declares `masters =` empty). `None` (a
-/// standalone ebuild file outside any repo checkout) exports an empty
-/// value -- `inherit()` still `die`s for any eclass in that case, the
-/// same honest "nothing to look in" real behavior a truly master-less,
-/// repo-less ebuild file would hit too.
-fn eclass_locations_value(pkg_dir: &Path) -> String {
-    match repo_root_for(pkg_dir) {
-        Some(repo_root) => {
-            format!(
-                "'{}'",
-                repo_root.display().to_string().replace('\'', r"'\''")
-            )
-        }
-        None => String::new(),
+/// Real masters-chain resolution (`config.py:1256-1266`, `RepoConfigLoader.
+/// __init__`): `eclass_locations = [master.location for master in
+/// repo.masters] + ([repo.location] if repo.location not already in
+/// there)`, then `eclass_db.eclass_locations_string` exports it
+/// `reversed()` (`eclass_cache.py:177-179`) -- the ebuild's own
+/// containing repo searched *first*, its masters after, in real
+/// declared order. `repo.masters` itself (`RepoConfig::masters`, the
+/// same real, already-resolved chain `ebuild_merge::
+/// blocked_installed_packages` and `pretend.rs` already consult for
+/// profile/USE config stacking) defaults to the main repo alone when no
+/// explicit `masters =` key is present, empty for the main repo itself.
+/// `repos.conf`/`config_root` resolution failure of any kind (missing
+/// `repos.conf`, the containing repo not listed in it, etc.) degrades
+/// to the previous v1 behavior -- the ebuild's own containing repo
+/// alone, no masters chain -- the same graceful-degrade precedent
+/// `blocked_installed_packages`'s own doc comment already established
+/// for this exact `find_repos(config_root).ok()?` pattern: never a
+/// false negative in the direction that could break an eclass lookup
+/// that used to work. `None` (a standalone ebuild file outside any repo
+/// checkout) exports an empty value either way -- `inherit()` still
+/// `die`s for any eclass in that case, the same honest "nothing to
+/// look in" real behavior a truly master-less, repo-less ebuild file
+/// would hit too.
+fn eclass_locations_value(pkg_dir: &Path, config_root: &Path) -> String {
+    let Some(repo_root) = repo_root_for(pkg_dir) else {
+        return String::new();
+    };
+
+    let masters: Vec<PathBuf> = (|| -> Option<Vec<PathBuf>> {
+        let repos = portage_repo::find_repos(config_root).ok()?;
+        let repo = repos.iter().find(|r| r.location == repo_root)?;
+        Some(repo.masters.clone())
+    })()
+    .unwrap_or_default();
+
+    let mut locations = masters;
+    if !locations.contains(&repo_root) {
+        locations.push(repo_root);
     }
+    locations.reverse();
+
+    locations
+        .iter()
+        .map(|p| format!("'{}'", p.display().to_string().replace('\'', r"'\''")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn phase_env_vars(
     env: &Environment,
     root: &Path,
@@ -622,6 +643,7 @@ fn phase_env_vars(
     debug: bool,
     bin_dir: &Path,
     helpers_dir: &Path,
+    config_root: &Path,
     extra_env: &[(String, String)],
 ) -> Vec<(String, String)> {
     // Real EPREFIX support is never enabled here (`EPREFIX=""`
@@ -664,7 +686,7 @@ fn phase_env_vars(
         ),
         (
             "PORTAGE_ECLASS_LOCATIONS".to_string(),
-            eclass_locations_value(&env.pkg_dir),
+            eclass_locations_value(&env.pkg_dir, config_root),
         ),
         ("PORTAGE_PYTHON".to_string(), "/usr/bin/python".to_string()),
         ("PATH".to_string(), path),
@@ -693,6 +715,7 @@ fn phase_env_vars(
 /// backend needs no such text at all -- `phase_env_vars`'s own pairs
 /// are passed directly as real subprocess environment variables
 /// instead, see `run_one_phase_bash`/`run_misc_functions_bash`.
+#[allow(clippy::too_many_arguments)]
 fn phase_setup_script(
     env: &Environment,
     root: &Path,
@@ -700,6 +723,7 @@ fn phase_setup_script(
     debug: bool,
     bin_dir: &Path,
     helpers_dir: &Path,
+    config_root: &Path,
     extra_env: &[(String, String)],
 ) -> String {
     let mut script = String::new();
@@ -710,6 +734,7 @@ fn phase_setup_script(
         debug,
         bin_dir,
         helpers_dir,
+        config_root,
         extra_env,
     ) {
         script.push_str(&format!("export {name}={value:?}\n"));
@@ -734,12 +759,14 @@ fn phase_setup_script(
 /// run cheap to "re-run" from a fresh shell, exactly the way real
 /// `doebuild()` itself relies on across its own separate `spawnebuild()`
 /// calls -- this isn't a new mechanism invented for this pilot.
+#[allow(clippy::too_many_arguments)]
 async fn run_one_phase(
     env: &Environment,
     root: &Path,
     phase: &str,
     debug: bool,
     extra_env: &[(String, String)],
+    config_root: &Path,
     shell: ShellBackend,
 ) -> Result<i32, String> {
     let bin_dir = repo_root().join("bin");
@@ -747,14 +774,32 @@ async fn run_one_phase(
 
     match shell {
         ShellBackend::Brush => {
-            run_one_phase_brush(env, root, phase, debug, extra_env, &bin_dir, &helpers_dir).await
+            run_one_phase_brush(
+                env,
+                root,
+                phase,
+                debug,
+                extra_env,
+                &bin_dir,
+                &helpers_dir,
+                config_root,
+            )
+            .await
         }
-        ShellBackend::Bash => {
-            run_one_phase_bash(env, root, phase, debug, extra_env, &bin_dir, &helpers_dir)
-        }
+        ShellBackend::Bash => run_one_phase_bash(
+            env,
+            root,
+            phase,
+            debug,
+            extra_env,
+            &bin_dir,
+            &helpers_dir,
+            config_root,
+        ),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_one_phase_brush(
     env: &Environment,
     root: &Path,
@@ -763,6 +808,7 @@ async fn run_one_phase_brush(
     extra_env: &[(String, String)],
     bin_dir: &Path,
     helpers_dir: &Path,
+    config_root: &Path,
 ) -> Result<i32, String> {
     let mut shell = brush_core::Shell::builder()
         .default_builtins(brush_builtins::BuiltinSet::BashMode)
@@ -771,7 +817,16 @@ async fn run_one_phase_brush(
         .map_err(|e| format!("brush shell failed to start: {e}"))?;
     let params = shell.default_exec_params();
 
-    let setup = phase_setup_script(env, root, phase, debug, bin_dir, helpers_dir, extra_env);
+    let setup = phase_setup_script(
+        env,
+        root,
+        phase,
+        debug,
+        bin_dir,
+        helpers_dir,
+        config_root,
+        extra_env,
+    );
     shell
         .run_string(&setup, &brush_core::SourceInfo::default(), &params)
         .await
@@ -819,6 +874,7 @@ async fn run_one_phase_brush(
 /// `tokio::process` one: matches `fetch.rs`'s own precedent for
 /// spawning a real subprocess (`wget`) from inside an `async fn`
 /// without pulling in tokio's own "process" feature.
+#[allow(clippy::too_many_arguments)]
 fn run_one_phase_bash(
     env: &Environment,
     root: &Path,
@@ -827,8 +883,18 @@ fn run_one_phase_bash(
     extra_env: &[(String, String)],
     bin_dir: &Path,
     helpers_dir: &Path,
+    config_root: &Path,
 ) -> Result<i32, String> {
-    let vars = phase_env_vars(env, root, phase, debug, bin_dir, helpers_dir, extra_env);
+    let vars = phase_env_vars(
+        env,
+        root,
+        phase,
+        debug,
+        bin_dir,
+        helpers_dir,
+        config_root,
+        extra_env,
+    );
     let status = std::process::Command::new("bash")
         .arg(bin_dir.join("ebuild.sh"))
         .arg(phase)
@@ -855,6 +921,7 @@ fn run_one_phase_bash(
 /// with `dyn_command` as a positional arg is enough to invoke it
 /// directly; no separate `invoke_function` call is needed the way
 /// `run_one_phase`'s own explicit `__ebuild_main` call is.
+#[allow(clippy::too_many_arguments)]
 async fn run_misc_functions(
     env: &Environment,
     root: &Path,
@@ -862,6 +929,7 @@ async fn run_misc_functions(
     dyn_command: &str,
     extra_env: &[(String, String)],
     debug: bool,
+    config_root: &Path,
     shell: ShellBackend,
 ) -> Result<i32, String> {
     let bin_dir = repo_root().join("bin");
@@ -878,6 +946,7 @@ async fn run_misc_functions(
                 debug,
                 &bin_dir,
                 &helpers_dir,
+                config_root,
             )
             .await
         }
@@ -890,6 +959,7 @@ async fn run_misc_functions(
             debug,
             &bin_dir,
             &helpers_dir,
+            config_root,
         ),
     }
 }
@@ -904,6 +974,7 @@ async fn run_misc_functions_brush(
     debug: bool,
     bin_dir: &Path,
     helpers_dir: &Path,
+    config_root: &Path,
 ) -> Result<i32, String> {
     let mut shell = brush_core::Shell::builder()
         .default_builtins(brush_builtins::BuiltinSet::BashMode)
@@ -919,6 +990,7 @@ async fn run_misc_functions_brush(
         debug,
         bin_dir,
         helpers_dir,
+        config_root,
         extra_env,
     );
     shell
@@ -952,6 +1024,7 @@ fn run_misc_functions_bash(
     debug: bool,
     bin_dir: &Path,
     helpers_dir: &Path,
+    config_root: &Path,
 ) -> Result<i32, String> {
     let vars = phase_env_vars(
         env,
@@ -960,6 +1033,7 @@ fn run_misc_functions_bash(
         debug,
         bin_dir,
         helpers_dir,
+        config_root,
         extra_env,
     );
     let status = std::process::Command::new("bash")
@@ -982,6 +1056,7 @@ pub(crate) fn run_misc_function(
     dyn_command: &str,
     extra_env: &[(String, String)],
     debug: bool,
+    config_root: &Path,
     shell: ShellBackend,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -998,6 +1073,7 @@ pub(crate) fn run_misc_function(
             dyn_command,
             extra_env,
             debug,
+            config_root,
             shell,
         )
         .await
@@ -1032,6 +1108,7 @@ pub(crate) fn run_misc_function(
 /// a real fetched-and-verified distfile still made `unpack` report
 /// `"either does not exist or is not a regular file"` before this was
 /// added).
+#[allow(clippy::too_many_arguments)]
 async fn run_commands_async(
     ebuild_path: &Path,
     commands: &[&str],
@@ -1039,6 +1116,7 @@ async fn run_commands_async(
     portage_tmpdir: &Path,
     distdir: &Path,
     debug: bool,
+    config_root: &Path,
     shell: ShellBackend,
 ) -> Result<i32, String> {
     let env = compute_environment(ebuild_path, portage_tmpdir)?;
@@ -1057,7 +1135,8 @@ async fn run_commands_async(
 
     for &command in commands {
         for phase in phase_prerequisites(command) {
-            let status = run_one_phase(&env, root, phase, debug, &extra_env, shell).await?;
+            let status =
+                run_one_phase(&env, root, phase, debug, &extra_env, config_root, shell).await?;
             if status != 0 {
                 return Ok(status);
             }
@@ -1092,6 +1171,7 @@ pub fn run_commands(
     portage_tmpdir: &Path,
     distdir: &Path,
     debug: bool,
+    config_root: &Path,
     shell: ShellBackend,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1105,6 +1185,7 @@ pub fn run_commands(
         portage_tmpdir,
         distdir,
         debug,
+        config_root,
         shell,
     ))
 }
@@ -1124,12 +1205,14 @@ pub fn run_commands(
 /// (`declare -F "$1" >/dev/null && __qa_call $1`) -- so this is safe to
 /// call even for a fixture ebuild that defines neither `pkg_preinst` nor
 /// `pkg_postinst` at all.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_single_phase(
     ebuild_path: &Path,
     phase: &str,
     root: &Path,
     portage_tmpdir: &Path,
     debug: bool,
+    config_root: &Path,
     shell: ShellBackend,
 ) -> Result<i32, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1145,7 +1228,7 @@ pub(crate) fn run_single_phase(
         // `doebuild()`'s own fetch-then-phases sequence at all -- see
         // this function's own doc comment), so there's nothing to
         // re-fetch or re-export here.
-        run_one_phase(&env, root, phase, debug, &[], shell).await
+        run_one_phase(&env, root, phase, debug, &[], config_root, shell).await
     })
 }
 
@@ -1303,6 +1386,7 @@ mod tests {
             &portage_tmpdir,
             &portage_tmpdir.join("distfiles"),
             false,
+            Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
         )
         .expect("run_commands should not itself error");
@@ -1342,6 +1426,7 @@ mod tests {
             Path::new("/"),
             &portage_tmpdir,
             false,
+            Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
         )
         .expect("run_single_phase should not itself error");
@@ -1352,6 +1437,7 @@ mod tests {
             Path::new("/"),
             &portage_tmpdir,
             false,
+            Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
         )
         .expect("run_single_phase should not itself error");
@@ -1397,6 +1483,7 @@ mod tests {
             Path::new("/"),
             &portage_tmpdir,
             false,
+            Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
         )
         .expect("run_single_phase should not itself error");
@@ -1407,6 +1494,7 @@ mod tests {
             Path::new("/"),
             &portage_tmpdir,
             false,
+            Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
         )
         .expect("run_single_phase should not itself error");
@@ -1448,6 +1536,7 @@ mod tests {
             &portage_tmpdir,
             &portage_tmpdir.join("distfiles"),
             false,
+            Path::new("/dev/null/no-config-root"),
             ShellBackend::Bash,
         )
         .expect("run_commands should not itself error");
@@ -1505,6 +1594,7 @@ mod tests {
             &portage_tmpdir,
             &distdir,
             false,
+            Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
         )
         .expect("run_commands should not itself error");
@@ -1551,6 +1641,7 @@ mod tests {
             &portage_tmpdir,
             &portage_tmpdir.join("distfiles"),
             false,
+            Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
         )
         .expect("run_commands should not itself error");
@@ -1602,6 +1693,7 @@ mod tests {
                 &thread_portage_tmpdir,
                 &thread_portage_tmpdir.join("distfiles"),
                 false,
+                Path::new("/dev/null/no-config-root"),
                 ShellBackend::Brush,
             );
             let _ = tx.send(result);
@@ -1632,7 +1724,7 @@ mod tests {
             .canonicalize()
             .unwrap();
         let pkg_dir = repo_root.join("dev-libs/eclasspkg");
-        let value = eclass_locations_value(&pkg_dir);
+        let value = eclass_locations_value(&pkg_dir, Path::new("/dev/null/no-config-root"));
         // Real bin/ebuild.sh's own `eval "PORTAGE_ECLASS_LOCATIONS=(${...})"`
         // expects single-quoted tokens -- confirmed by round-tripping
         // through the exact same real, unmodified bash line here.
@@ -1648,7 +1740,173 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let pkg_dir = tmp.join("dev-libs/standalone");
         std::fs::create_dir_all(&pkg_dir).unwrap();
-        assert_eq!(eclass_locations_value(&pkg_dir), "");
+        assert_eq!(
+            eclass_locations_value(&pkg_dir, Path::new("/dev/null/no-config-root")),
+            ""
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn eclass_locations_value_puts_the_own_repo_first_then_masters_in_declared_order() {
+        // Real config.py:1256-1266 + eclass_cache.py:177-179: `eclass_
+        // locations = [master.location for master in repo.masters] +
+        // [repo.location]`, exported `reversed()` -- so the ebuild's own
+        // containing repo is searched first, its masters after, in real
+        // declared order.
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-eclass_locations_masters_order",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let main = tmp.join("main");
+        let secondary = tmp.join("secondary");
+        let overlay = tmp.join("overlay");
+        for repo in [&main, &secondary, &overlay] {
+            std::fs::create_dir_all(repo.join("profiles")).unwrap();
+        }
+        std::fs::write(main.join("profiles/repo_name"), "main\n").unwrap();
+        std::fs::write(secondary.join("profiles/repo_name"), "secondary\n").unwrap();
+        std::fs::write(overlay.join("profiles/repo_name"), "overlay\n").unwrap();
+        std::fs::create_dir_all(tmp.join("etc/portage")).unwrap();
+        std::fs::write(
+            tmp.join("etc/portage/repos.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = main\n\n\
+                 [main]\nlocation = {}\n\n\
+                 [secondary]\nlocation = {}\n\n\
+                 [overlay]\nlocation = {}\nmasters = main secondary\n",
+                main.display(),
+                secondary.display(),
+                overlay.display(),
+            ),
+        )
+        .unwrap();
+
+        let pkg_dir = overlay.join("dev-libs/overlaypkg");
+        let value = eclass_locations_value(&pkg_dir, &tmp);
+        assert_eq!(
+            value,
+            format!(
+                "'{}' '{}' '{}'",
+                overlay.display(),
+                secondary.display(),
+                main.display()
+            ),
+            "own repo first, then masters in real declared order"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn eclass_locations_value_does_not_duplicate_the_own_repo_when_it_is_also_a_master() {
+        // Real config.py:1264-1266: "Only append the current repo to
+        // eclass_locations if it's not there already" -- exercised via
+        // the main repo itself, whose own `masters` real-defaults to
+        // empty (`config.py:1229-1260`, "the main repo can never be its
+        // own master"), so this also doubles as a real-default-masters
+        // proof: no explicit `masters =` key at all for `main`.
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-eclass_locations_no_dup",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let main = tmp.join("main");
+        std::fs::create_dir_all(main.join("profiles")).unwrap();
+        std::fs::write(main.join("profiles/repo_name"), "main\n").unwrap();
+        std::fs::create_dir_all(tmp.join("etc/portage")).unwrap();
+        std::fs::write(
+            tmp.join("etc/portage/repos.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {}\n",
+                main.display()
+            ),
+        )
+        .unwrap();
+
+        let pkg_dir = main.join("dev-libs/mainpkg");
+        let value = eclass_locations_value(&pkg_dir, &tmp);
+        assert_eq!(value, format!("'{}'", main.display()));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Real, end-to-end proof that the masters-chain fix actually
+    /// unblocks a real `inherit()` call real `PORTAGE_ECLASS_LOCATIONS`
+    /// resolution alone couldn't reach before: an overlay ebuild
+    /// inheriting an eclass that only exists in its own master repo,
+    /// never redeclared locally -- exactly the real gap this module's
+    /// own doc comment (before this slice) named as out of scope.
+    #[test]
+    fn install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_repo() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-eclass_masters_e2e",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let main = tmp.join("main");
+        let overlay = tmp.join("overlay");
+        std::fs::create_dir_all(main.join("profiles")).unwrap();
+        std::fs::create_dir_all(main.join("eclass")).unwrap();
+        std::fs::write(main.join("profiles/repo_name"), "main\n").unwrap();
+        std::fs::write(
+            main.join("eclass/mastershared.eclass"),
+            "mastershared_hello() {\n\techo \"hello from mastershared.eclass\"\n}\n",
+        )
+        .unwrap();
+
+        let pkg_dir = overlay.join("dev-libs/overlaypkg");
+        std::fs::create_dir_all(overlay.join("profiles")).unwrap();
+        std::fs::write(overlay.join("profiles/repo_name"), "overlay\n").unwrap();
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("overlaypkg-1.0.ebuild"),
+            "EAPI=8\n\
+             DESCRIPTION=\"fixture: real cross-repo masters-chain eclass inherit\"\n\
+             SLOT=\"0\"\n\
+             KEYWORDS=\"amd64\"\n\
+             inherit mastershared\n\
+             src_install() {\n\
+             \tmastershared_hello > \"${T}/eclass-marker.txt\" || die\n\
+             }\n",
+        )
+        .unwrap();
+
+        std::fs::create_dir_all(tmp.join("etc/portage")).unwrap();
+        std::fs::write(
+            tmp.join("etc/portage/repos.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = main\n\n\
+                 [main]\nlocation = {}\n\n\
+                 [overlay]\nlocation = {}\nmasters = main\n",
+                main.display(),
+                overlay.display(),
+            ),
+        )
+        .unwrap();
+
+        let ebuild_path = pkg_dir.join("overlaypkg-1.0.ebuild");
+        let portage_tmpdir = tmp.join("portage_tmpdir");
+
+        let status = run_commands(
+            &ebuild_path,
+            &["install"],
+            Path::new("/"),
+            &portage_tmpdir,
+            &portage_tmpdir.join("distfiles"),
+            false,
+            &tmp,
+            ShellBackend::Brush,
+        )
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "install should exit successfully");
+
+        let marker = portage_tmpdir.join("portage/dev-libs/overlaypkg-1.0/temp/eclass-marker.txt");
+        let observed = std::fs::read_to_string(&marker)
+            .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
+        assert_eq!(observed, "hello from mastershared.eclass\n");
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1713,6 +1971,7 @@ mod tests {
                 &portage_tmpdir,
                 &portage_tmpdir.join("distfiles"),
                 debug,
+                Path::new("/dev/null/no-config-root"),
                 ShellBackend::Brush,
             )
             .expect("run_commands should not itself error");
@@ -1754,6 +2013,7 @@ mod tests {
             &portage_tmpdir,
             &portage_tmpdir.join("distfiles"),
             false,
+            Path::new("/dev/null/no-config-root"),
             ShellBackend::Brush,
         )
         .expect("run_commands should not itself error");

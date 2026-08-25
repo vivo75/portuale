@@ -530,6 +530,12 @@ pub struct UnmergeOptions {
     /// real portage -- a pre-existing simplification this fix doesn't
     /// attempt to also resolve.
     pub unmerge_orphans: bool,
+    /// Real `PORTAGE_CONFIGROOT` -- see `ebuild_merge::MergeOptions::
+    /// config_root`'s own doc comment for the exact real default/`Default`
+    /// split this mirrors (only consulted by `ebuild_phases::
+    /// eclass_locations_value`'s own masters-chain resolution, reached
+    /// via `prerm`/`postrm`'s own `run_single_phase` call below).
+    pub config_root: PathBuf,
 }
 
 impl Default for UnmergeOptions {
@@ -540,6 +546,7 @@ impl Default for UnmergeOptions {
             config_protect: "/etc".to_string(),
             config_protect_mask: "/etc/env.d".to_string(),
             unmerge_orphans: true,
+            config_root: PathBuf::from("/dev/null/no-config-root-configured"),
         }
     }
 }
@@ -592,6 +599,7 @@ pub fn run_unmerge(
         root,
         portage_tmpdir,
         options.debug,
+        &options.config_root,
         options.shell,
     )?;
     if prerm_status != 0 {
@@ -640,6 +648,7 @@ pub fn run_unmerge(
         root,
         portage_tmpdir,
         options.debug,
+        &options.config_root,
         options.shell,
     )?;
     if postrm_status != 0 {

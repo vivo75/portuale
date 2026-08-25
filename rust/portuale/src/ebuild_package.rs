@@ -100,6 +100,11 @@ pub struct PackageOptions {
     /// `"bzip2"`) -- only actually substituted when `binpkg_compress ==
     /// "bzip2"`.
     pub portage_bzip2_command: String,
+    /// Real `PORTAGE_CONFIGROOT` -- see `ebuild_merge::MergeOptions::
+    /// config_root`'s own doc comment for the exact real default/`Default`
+    /// split this mirrors (only consulted by `ebuild_phases::
+    /// eclass_locations_value`'s own masters-chain resolution).
+    pub config_root: PathBuf,
 }
 
 impl Default for PackageOptions {
@@ -112,6 +117,7 @@ impl Default for PackageOptions {
             binpkg_compress: "zstd".to_string(),
             binpkg_compress_flags: String::new(),
             portage_bzip2_command: "bzip2".to_string(),
+            config_root: PathBuf::from("/dev/null/no-config-root-configured"),
         }
     }
 }
@@ -287,6 +293,7 @@ pub fn run_package(
         portage_tmpdir,
         &options.distdir,
         options.debug,
+        &options.config_root,
         options.shell,
     )?;
     if status != 0 {
@@ -349,6 +356,7 @@ pub fn run_package(
         "__dyn_package",
         &extra_env,
         options.debug,
+        &options.config_root,
         options.shell,
     )?;
     if package_status != 0 {

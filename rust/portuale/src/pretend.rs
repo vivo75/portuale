@@ -2720,6 +2720,7 @@ pub fn run(args: &[String]) -> ExitCode {
             binpkg_compress_flags,
             portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
                 .unwrap_or(default_package_options.portage_bzip2_command),
+            config_root: portage_repo::config_root_from_env(),
         };
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
