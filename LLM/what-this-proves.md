@@ -6178,3 +6178,55 @@ The real elog warning text for symlinks that do survive
 message-printing output anywhere else either, only the behavioral effect
 (the symlink is left in place).
 
+### `unmerge`: real `FEATURES=unmerge-orphans`
+
+Real `_unmerge_pkgfiles()`'s own `unmerge_orphans` handling
+(`vartree.py:2934-2950`) is real now too. Despite the name, this isn't
+untracked-orphan scanning -- for a non-`CONFIG_PROTECT`'d `obj`/`sym`
+entry (excluding a symlink whose live target itself resolves to a
+directory, real comment: "Don't unlink symlinks to directories here
+since that can remove /lib and /usr/lib symlinks"), it bypasses the
+ordinary `!mtime` staleness check entirely and deletes the entry
+unconditionally, even if locally modified. `UnmergeOptions` (new: this
+portuale's own `run_unmerge` had only two loose parameters,
+`debug`/`shell`, before this slice -- now five, so it gets the same
+struct treatment `MergeOptions` already established) reuses
+`ebuild_merge::is_protected` (promoted to `pub(crate)` for this) for
+the real `ConfigProtect.isprotected()` check, and mirrors
+`MergeOptions`'s own `config_protect`/`config_protect_mask` fields and
+env-var-sourced CLI-boundary defaults exactly.
+
+```sh
+export CONFIG_PROTECT=/etc
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+echo "hand-modified content" > "${ROOT}"/usr/share/mergepkg/hello.txt
+
+# Real default (unmerge-orphans is a real make.globals default FEATURES
+# token, see this file's own "FEATURES=distlocks" section below): the
+# locally-modified file is deleted anyway.
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+test -e "${ROOT}"/usr/share/mergepkg/hello.txt && echo "still there" || echo "gone"
+# gone
+
+# Re-merge, modify again, unmerge with FEATURES="-unmerge-orphans" (real
+# make.conf's own opt-out syntax -- portuale's own simplified env-var
+# check treats *any* explicit FEATURES value as a literal membership
+# list rather than a +/- delta against the real default set, so setting
+# FEATURES at all to anything other than the literal token
+# "unmerge-orphans" already reads as off here): survives this time.
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+echo "hand-modified content" > "${ROOT}"/usr/share/mergepkg/hello.txt
+export FEATURES=some-other-token
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+cat "${ROOT}"/usr/share/mergepkg/hello.txt
+# hand-modified content
+unset FEATURES
+unset FEATURES
+```
+

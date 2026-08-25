@@ -775,6 +775,37 @@ mod tests {
     }
 
     #[test]
+    fn remove_contents_with_unmerge_orphans_leaves_a_symlink_to_a_directory_alone() {
+        // Excludes a symlink to a directory; the mtime-checked removal
+        // leaves it alone here too.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("real-lib")).unwrap();
+        std::os::unix::fs::symlink(root.join("real-lib"), root.join("lib")).unwrap();
+
+        let contents = "sym /lib -> whatever 1\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: true,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("lib").symlink_metadata().is_ok(),
+            "unmerge-orphans must not delete a symlink-to-directory"
+        );
+    }
+
+    #[test]
     fn remove_contents_tolerates_a_directory_still_shared_with_another_package() {
         let tmp = tempdir();
         let root = tmp.join("root");
@@ -1051,6 +1082,60 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_info_dir_removes_a_lone_leftover_index_file() {
+        let tmp = tempdir();
+        let info = tmp.join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        std::fs::write(info.join("dir"), b"").unwrap();
+
+        cleanup_info_dir(&info, (0, 0), &BTreeSet::new());
+
+        assert!(!info.join("dir").exists());
+    }
+
+    #[test]
+    fn cleanup_info_dir_removes_both_dir_and_dir_old() {
+        let tmp = tempdir();
+        let info = tmp.join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        std::fs::write(info.join("dir"), b"").unwrap();
+        std::fs::write(info.join("dir.old"), b"").unwrap();
+
+        cleanup_info_dir(&info, (0, 0), &BTreeSet::new());
+
+        assert!(!info.join("dir").exists());
+        assert!(!info.join("dir.old").exists());
+    }
+
+    #[test]
+    fn cleanup_info_dir_leaves_a_real_remaining_file_alone() {
+        // Cleanup fires only when everything remaining is the index subset;
+        // any other file keeps it all.
+        let tmp = tempdir();
+        let info = tmp.join("info");
+        std::fs::create_dir_all(&info).unwrap();
+        std::fs::write(info.join("dir"), b"").unwrap();
+        std::fs::write(info.join("automake.info"), b"real content").unwrap();
+
+        cleanup_info_dir(&info, (0, 0), &BTreeSet::new());
+
+        assert!(info.join("dir").exists());
+        assert!(info.join("automake.info").exists());
+    }
+
+    #[test]
+    fn cleanup_info_dir_ignores_a_directory_not_named_info() {
+        let tmp = tempdir();
+        let other = tmp.join("not-info");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("dir"), b"").unwrap();
+
+        cleanup_info_dir(&other, (0, 0), &BTreeSet::new());
+
+        assert!(other.join("dir").exists());
+    }
+
+    #[test]
     fn remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file() {
         // Without the cleanup the info dir would never empty out (`dir`
         // is untracked).
@@ -1080,6 +1165,49 @@ mod tests {
             "the info directory is fully removed once its own leftover index is cleaned up"
         );
         assert!(!root.join("usr/share").exists());
+    }
+
+    #[test]
+    fn remove_contents_removes_a_real_env_d_sourced_infopath_directory_not_named_info() {
+        // End to end: the env.d collation and the `infodirs_inodes`
+        // threading connect.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
+        std::fs::create_dir_all(root.join("opt/pkg/docs")).unwrap();
+        std::fs::write(root.join("opt/pkg/docs/dir"), b"").unwrap();
+        std::fs::write(
+            root.join("etc/env.d/50-pkg"),
+            "INFOPATH=\"/opt/pkg/docs\"\n",
+        )
+        .unwrap();
+
+        let infodirs_inodes = crate::env_update::info_dirs_inodes(&root);
+        assert!(
+            !infodirs_inodes.is_empty(),
+            "the real env.d entry must resolve"
+        );
+
+        let contents = "dir /opt/pkg\ndir /opt/pkg/docs\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &infodirs_inodes,
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            !root.join("opt/pkg/docs").exists(),
+            "a real env.d-sourced INFOPATH directory is cleaned up even though it isn't named info"
+        );
     }
 
     /// With defaults a locally-modified file is deleted anyway
