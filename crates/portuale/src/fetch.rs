@@ -1552,6 +1552,66 @@ mod tests {
         handle.join().unwrap();
     }
 
+    #[test]
+    fn checksum_failures_rename_bad_files_with_deterministic_suffix() {
+        let bad = || serve_mirror(vec![("/distfiles/bad-1.0.tar.gz", b"BAD DATA".to_vec())], 2);
+        let (m1, _, _h1) = bad();
+        let (m2, _, _h2) = bad();
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "bad-1.0.tar.gz", 8);
+
+        let result = fetch_src_uri(
+            &pkg_dir,
+            &format!("{m1}/distfiles/bad-1.0.tar.gz"),
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![m2],
+                checksum_failure_max_tries: 2,
+                ..FetchOptions::default()
+            },
+        );
+
+        assert!(
+            result.is_err(),
+            "fetch should fail after 2 checksum failures"
+        );
+
+        let entries = portage_util::read_dir_entries(&distdir).unwrap();
+        let mut bad_files: Vec<_> = entries
+            .into_iter()
+            .filter_map(|e| {
+                let path = e.path();
+                if path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.contains("_checksum_failure_"))
+                    .unwrap_or(false)
+                {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(
+            bad_files.len(),
+            2,
+            "should have 2 renamed bad files with _checksum_failure_ suffix"
+        );
+        bad_files.sort();
+        for (i, path) in bad_files.iter().enumerate() {
+            assert!(
+                path.to_string_lossy()
+                    .contains(&format!("_checksum_failure_{}", i + 1)),
+                "bad file {} should have suffix _checksum_failure_{}",
+                i,
+                i + 1
+            );
+        }
+    }
+
     /// A multiply-sourced file is still listed once.
     #[test]
     fn fetch_src_uri_returns_a_multiply_sourced_file_once() {

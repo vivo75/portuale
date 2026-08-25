@@ -971,6 +971,33 @@ mod tests {
     }
 
     #[test]
+    fn resolve_mirror_candidates_tries_custommirrors_before_thirdpartymirrors() {
+        // Portage "Try user-defined mirrors first".
+        let mut custommirrors = HashMap::new();
+        custommirrors.insert(
+            "gentoo".to_string(),
+            vec!["https://my-local-mirror.example/distfiles".to_string()],
+        );
+        let mut thirdpartymirrors = HashMap::new();
+        thirdpartymirrors.insert(
+            "gentoo".to_string(),
+            vec!["https://distfiles.gentoo.org/distfiles".to_string()],
+        );
+        let candidates = resolve_mirror_candidates(
+            "mirror://gentoo/app-arch/foo-1.0.tar.gz",
+            &custommirrors,
+            &thirdpartymirrors,
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                "https://my-local-mirror.example/distfiles/app-arch/foo-1.0.tar.gz".to_string(),
+                "https://distfiles.gentoo.org/distfiles/app-arch/foo-1.0.tar.gz".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn resolve_mirror_candidates_is_empty_for_an_unknown_mirror_name() {
         let candidates = resolve_mirror_candidates(
             "mirror://unknown/foo.tar.gz",
