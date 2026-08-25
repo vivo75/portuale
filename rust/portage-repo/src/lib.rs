@@ -716,7 +716,7 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// comment for that established, confirmed simplification, extended
 /// here rather than re-litigated).
 #[allow(clippy::too_many_arguments)]
-fn effective_use_flags(
+pub fn effective_use_flags(
     iuse: &str,
     use_tokens: &[String],
     package_use: &[(String, Vec<String>)],

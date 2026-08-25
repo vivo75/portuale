@@ -262,6 +262,12 @@ pub fn run(args: &[String]) -> ExitCode {
             shell,
             collision_protect,
             protect_owned,
+            // Real PORTAGE_CONFIGROOT (real default: "/" when unset) --
+            // see MergeOptions::config_root's own doc comment for why
+            // this is the one place a real env-var default of "/" is
+            // actually correct (unlike its own Default impl, used
+            // pervasively by tests).
+            config_root: portage_repo::config_root_from_env(),
         };
         // Real make.globals's own PKGDIR default -- see
         // ebuild_package::PackageOptions's own Default impl.

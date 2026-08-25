@@ -4862,6 +4862,102 @@ cat "${ROOT}"/usr/share/collisiontest/shared.txt
 # hello from collisionpkg-c -- no abort, since no owner was ever identified
 ```
 
+### Real blocker exclusion: `mypkglist = others_in_slot + blockers`
+
+The last item on `ebuild_merge.rs`'s own gap list from the collision-
+detection work above is real now: real `dblink.merge()`'s own
+`mypkglist = others_in_slot + blockers` (`others_in_slot` is already
+this pilot's own `own_versions`). Real `dblink._blockers` is never
+computed by `dblink` itself -- it's injected by the real depgraph
+resolver, which already knows the full dependency graph by the time a
+merge runs. This pilot's own `ebuild <file> merge` has no depgraph at
+all (a standalone, single-ebuild real-execution path, unlike `emerge
+--pretend`), so closing this gap meant something genuinely new: bringing
+real `repos.conf`/profile/USE config resolution into the real-execution
+path for the first time ever (previously entirely env-var-driven, no
+`portage_repo::find_repos`/`portage_profile::resolve_config` call
+anywhere in it). Confirmed with the user before implementing, given the
+size -- a narrower "literal blocker-atom text scan, no USE-conditional
+evaluation" alternative was on the table and explicitly declined in
+favor of doing this correctly.
+
+New `blocked_installed_packages`: resolves the merging package's own
+repo (`ebuild_phases::repo_root_for`, already used by the `package`/
+binpkg-building slice) and real md5-cache metadata, resolves real
+config the same way `pretend.rs` does (including this session's own
+`masters =` work), computes the merging package's own effective USE
+(`portage_repo::effective_use_flags`, made `pub` for this), flattens
+its own real `DEPEND`+`RDEPEND`+`BDEPEND`+`PDEPEND`+`IDEPEND`
+(`portage_use_reduce::use_reduce_flat`) against it, and matches every
+blocker atom found against every real installed package
+(`portage_dep::match_from_list`, which -- real, already-verified
+behavior elsewhere in this pilot -- ignores an atom's own blocker
+marker when matching, so the atom string is passed through as-is,
+`!`/`!!` prefix included). Weak and strong blockers aren't
+distinguished, matching real `mypkglist`'s own construction. Degrades
+gracefully to an empty blocked set on any resolution failure (missing
+`repos.conf`, unreadable md5-cache, etc.) -- a collision that would
+have been excluded just gets reported as an ordinary one instead,
+never a false negative in the direction that could silently corrupt a
+real merge.
+
+A real safety issue surfaced and was fixed before this ever ran against
+real fixtures: this pilot's own dev/test machine has a real, populated
+`/etc/portage/repos.conf` (a real Gentoo system), so naively reading
+`PORTAGE_CONFIGROOT` via an ambient env-var default (real portage's own
+default is `/` when unset) would have made every existing test that
+never touches this new feature at all silently start reading real host
+config the moment it ran on this machine. Fixed by making `config_root`
+an explicit new `MergeOptions` field instead -- the same "explicit
+parameter, not an ambient env read inside library code" reasoning
+`portage_fetch::FetchOptions::gentoo_mirrors` already established, but
+load-bearing here for a genuinely different, more serious reason.
+`MergeOptions::default()`'s own value is a deliberately impossible path
+(`/dev/null/...` -- `/dev/null` is a real character device, never a
+directory, so nothing can ever exist under it), guaranteeing
+`find_repos` always fails cleanly for every one of this pilot's own
+~30 pre-existing merge tests unless a test opts in explicitly; only
+`ebuild.rs`'s own real CLI boundary reads the real env var, matching
+real portage's own actual default behavior for real usage.
+
+New fixtures `dev-libs/mergeblockerpkg` (`RDEPEND="!dev-libs/
+mergeblockedbypkg"`) and `dev-libs/mergeblockedbypkg`, both installing
+the same file -- proven via two new tests: with `MergeOptions::
+default()`'s own inert `config_root`, the collision is an ordinary
+`collision-protect` abort (the fixture pair's own "genuinely collides"
+baseline); with `config_root` pointed at the real `PORTING/fixtures`
+tree (a real `repos.conf` of its own), the real blocker atom excludes
+it and `mergeblockerpkg` takes over the file even with `collision_
+protect: true`.
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergeblockedbypkg/mergeblockedbypkg-1.0.ebuild merge
+
+# Baseline: config resolution unavailable (a deliberately empty/
+# nonexistent PORTAGE_CONFIGROOT) -- an ordinary collision-protect abort
+PORTAGE_CONFIGROOT="/tmp/definitely-empty-configroot-$$" \
+FEATURES="collision-protect" PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergeblockerpkg/mergeblockerpkg-1.0.ebuild merge
+# ebuild: This package will overwrite one or more files that may belong to other packages:
+# dev-libs/mergeblockedbypkg-1.0:
+#         /usr/share/mergeblockertest/shared.txt
+# Package 'dev-libs/mergeblockerpkg-1.0' NOT merged due to file collisions.  (exit 1)
+
+# With real config resolution: mergeblockerpkg's own real RDEPEND
+# blocks mergeblockedbypkg, so the collision is excluded
+PORTAGE_CONFIGROOT="$(realpath PORTING/fixtures)" \
+FEATURES="collision-protect" PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergeblockerpkg/mergeblockerpkg-1.0.ebuild merge
+cat "${ROOT}"/usr/share/mergeblockertest/shared.txt
+# hello from mergeblockerpkg -- no abort, the blocked package's file was simply taken over
+```
+
 ## Running it
 
 Build both Rust binaries:

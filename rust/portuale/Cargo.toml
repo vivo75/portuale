@@ -8,6 +8,7 @@ portage-dep = { path = "../portage-dep" }
 portage-repo = { path = "../portage-repo" }
 portage-profile = { path = "../portage-profile" }
 portage-fetch = { path = "../portage-fetch" }
+portage-use-reduce = { path = "../portage-use-reduce" }
 # Real ebuild phase execution (task #54, PORTING/PROMPT-next.md's own
 # "Real ebuild phase execution" section): a deliberate, accepted dynamic
 # dependency (this pilot's own "near-zero dependencies" discipline is

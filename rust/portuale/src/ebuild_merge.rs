@@ -88,6 +88,29 @@
 // Reuses `find_owners` (already built for `collision-protect`'s own
 // abort message) rather than adding new machinery.
 //
+// Real blocker exclusion is real too: real `dblink.merge()`'s own
+// `mypkglist = others_in_slot + blockers`. Real `dblink._blockers` is
+// never computed by `dblink` itself -- it's injected by the real
+// depgraph resolver, which already knows the full dependency graph by
+// the time a merge runs. This pilot's own `ebuild <file> merge` has no
+// depgraph at all (a standalone, single-ebuild real-execution path,
+// unlike `emerge --pretend`), so `blocked_installed_packages` is new,
+// self-contained machinery: real `repos.conf`/profile/USE config
+// resolution (`portage_repo::find_repos` + `portage_profile::
+// resolve_config`, brought into the real-execution path for the first
+// time here), real effective-USE computation (`portage_repo::
+// effective_use_flags`, made `pub` for this), real dependency-string
+// flattening (`portage_use_reduce::use_reduce_flat`) against
+// `DEPEND`+`RDEPEND`+`BDEPEND`+`PDEPEND`+`IDEPEND`, and real blocker-
+// atom matching against every installed package (`portage_dep::
+// match_from_list`). Degrades gracefully to an empty blocked set on any
+// resolution failure -- see `MergeOptions::config_root`'s own doc
+// comment for a real safety issue this surfaced and how it was fixed
+// (this pilot's own dev/test machine has a real, populated
+// `/etc/portage/repos.conf`, so an ambient env-var default here would
+// have made every pre-existing test silently start reading real host
+// config).
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope):
 //   - No preserve-libs *registration*/detection side at all: real
 //     `_find_libs_to_preserve`/`_linkmap_rebuild` use `LinkageMap`
@@ -104,10 +127,6 @@
 //     corrupt a future preserve-libs decision) -- moot without the
 //     registration side above ever writing `NEEDED` data in the first
 //     place.
-//   - No blocker exclusion (real `mypkglist = others_in_slot +
-//     blockers` -- a package this ebuild's own dependencies block is
-//     also excluded from collision reporting) -- blockers are a real,
-//     broad gap this pilot doesn't attempt anywhere else either.
 //   - CONFIG_PROTECT is `obj`-only: a `sym` (symlink) entry under a
 //     protected path is never protected here -- real `dblink._protect()`
 //     handles symlinks too (comparing the *target string*'s own MD5),
@@ -154,7 +173,7 @@
 use crate::ebuild_phases;
 use crate::env_update;
 use md5::{Digest, Md5};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -187,6 +206,22 @@ pub struct MergeOptions {
     /// `collision_protect` -- see `run_merge`'s own doc comment for the
     /// exact real logic. Same `FEATURES`-default-false `Default`.
     pub protect_owned: bool,
+    /// Real `PORTAGE_CONFIGROOT` (`portage_repo::config_root_from_env`'s
+    /// own real default: `/` when unset) -- consulted only by
+    /// `blocked_installed_packages`'s own real `repos.conf`/profile/USE
+    /// resolution (see its own doc comment). Deliberately an explicit
+    /// field, not an ambient env read inside this module -- the same
+    /// "explicit parameter, not an ambient env read inside library code"
+    /// reasoning `portage_fetch::FetchOptions::gentoo_mirrors` already
+    /// established, load-bearing here for a genuinely different reason:
+    /// this pilot's own dev/test machine has a real, populated
+    /// `/etc/portage/repos.conf` (a real Gentoo system), so silently
+    /// defaulting to real `/` the way `ebuild.rs`'s own CLI boundary
+    /// does would make every test that doesn't override this field read
+    /// real host config -- `Default` below uses a deliberately
+    /// impossible path instead, so `blocked_installed_packages` always
+    /// degrades to an empty blocked set unless a test opts in explicitly.
+    pub config_root: PathBuf,
 }
 
 impl Default for MergeOptions {
@@ -199,6 +234,11 @@ impl Default for MergeOptions {
             shell: ebuild_phases::ShellBackend::default(),
             collision_protect: false,
             protect_owned: false,
+            // "/dev/null" is a real character device, never a directory
+            // -- joining anything under it can never exist on any real
+            // filesystem, guaranteeing find_repos always fails cleanly
+            // here regardless of what happens to exist on the host.
+            config_root: PathBuf::from("/dev/null/no-config-root-configured"),
         }
     }
 }
@@ -928,12 +968,215 @@ fn owns_path(root: &Path, category: &str, package: &str, version: &str, abs_path
     })
 }
 
+/// Same real `CONTENTS`-ownership check as `owns_path`, but keyed by a
+/// bare `category`/`pf` pair (`"package-version"`, real portage's own
+/// vdb directory-name convention) rather than a split `package`/
+/// `version` -- what `blocked_installed_packages` below already has on
+/// hand, since it discovers installed packages by scanning real vdb
+/// directory names directly rather than through `installed_versions`'s
+/// own `package`-scoped lookup.
+fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str) -> bool {
+    let path = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(pf)
+        .join("CONTENTS");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        parts.next();
+        parts.next() == Some(abs_path)
+    })
+}
+
+/// Real `mypkglist = others_in_slot + blockers` (`dblink.merge()`'s own
+/// blocker half -- `others_in_slot` is already `find_collisions`'s own
+/// `own_versions`). Real `dblink._blockers` is never computed by
+/// `dblink` itself: it's injected by the real depgraph resolver, which
+/// already knows the full dependency graph by the time a merge runs.
+/// This pilot's own `ebuild <file> merge` has no depgraph at all (a
+/// standalone, single-ebuild real-execution path, unlike `emerge
+/// --pretend`) -- so this is a new, self-contained computation:
+/// resolves real `repos.conf`/profile/USE config for the merging
+/// package's own repo (`portage_repo::find_repos` +
+/// `portage_profile::resolve_config`, the exact same machinery
+/// `pretend.rs` already uses, including its own real `masters =`
+/// resolution), computes the merging package's own effective USE the
+/// same way `portage_repo`'s own (now `pub`) `effective_use_flags`
+/// always has, flattens its own real `DEPEND`+`RDEPEND`+`BDEPEND`+
+/// `PDEPEND`+`IDEPEND` (`portage_use_reduce::use_reduce_flat`) against
+/// it, and matches every blocker atom found (`!atom`/`!!atom`,
+/// `portage_dep::parse_atom`'s own `.blocker`) against every real
+/// installed package (`portage_dep::match_from_list`, which -- real,
+/// verified behavior already relied on elsewhere in this pilot --
+/// ignores an atom's blocker marker entirely when matching, so the
+/// blocker atom string can be passed in as-is). Real weak vs. strong
+/// blockers are not distinguished (`dblink.merge()`'s own `mypkglist`
+/// construction doesn't either -- both kinds exclude a collision the
+/// same way). Returns every matched installed package as a bare
+/// `(category, pf)` pair.
+///
+/// Degrades gracefully to an empty set on any resolution failure
+/// (missing `repos.conf`, unreadable md5-cache, an ebuild path outside
+/// any real repo, etc.) -- config resolution isn't guaranteed to
+/// succeed in every context `ebuild <file> merge` is used from (unlike
+/// `emerge --pretend`, this pilot's own real-execution CLI has never
+/// required it before this slice), and a collision that would have been
+/// excluded here just gets reported as an ordinary one instead: never a
+/// false negative in the direction that could silently corrupt a real
+/// merge.
+fn blocked_installed_packages(
+    root: &Path,
+    config_root: &Path,
+    env: &ebuild_phases::Environment,
+    slot: &str,
+    repository: &str,
+) -> HashSet<(String, String)> {
+    (|| -> Option<HashSet<(String, String)>> {
+        let repo_root = ebuild_phases::repo_root_for(&env.pkg_dir)?;
+        let metadata =
+            portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok()?;
+
+        let repos = portage_repo::find_repos(config_root).ok()?;
+        let main_repo = repos.iter().find(|r| r.is_main)?;
+        let overlay_repos: Vec<(String, PathBuf)> = repos
+            .iter()
+            .filter(|r| !r.is_main)
+            .map(|r| (r.name.clone(), r.location.clone()))
+            .collect();
+        let repo_masters: HashMap<String, Vec<PathBuf>> = repos
+            .iter()
+            .map(|r| (r.name.clone(), r.masters.clone()))
+            .collect();
+        let config = portage_profile::resolve_config(
+            config_root,
+            &main_repo.location,
+            &overlay_repos,
+            &main_repo.name,
+            &repo_masters,
+        )
+        .ok()?;
+
+        let iuse = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
+        let keywords: Vec<String> = metadata
+            .get("KEYWORDS")
+            .map(|s| s.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        let candidate_str = format!(
+            "{}/{}-{}:{slot}/{slot}::{repository}",
+            env.category, env.split.pn, env.split.pvr
+        );
+        let use_flags = portage_repo::effective_use_flags(
+            iuse,
+            &config.use_tokens,
+            &config.package_use,
+            &config.package_use_force,
+            &config.package_use_mask,
+            &config.use_force,
+            &config.use_mask,
+            &config.use_stable_force,
+            &config.use_stable_mask,
+            &config.package_use_stable_force,
+            &config.package_use_stable_mask,
+            &keywords,
+            &config.accept_keywords,
+            &config.package_accept_keywords,
+            &candidate_str,
+            &env.category,
+            &env.split.pn,
+        );
+
+        let dep_keys = ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"];
+        let mut depstr = String::new();
+        for dep_key in dep_keys {
+            if let Some(d) = metadata.get(dep_key) {
+                depstr.push_str(d);
+                depstr.push(' ');
+            }
+        }
+        let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+        let flat_deps = portage_use_reduce::use_reduce_flat(
+            &tokens,
+            &use_flags,
+            portage_use_reduce::MatchMode::Normal,
+        )
+        .ok()?;
+
+        // Every real installed package, as (category, pf, candidate_str)
+        // -- candidate_str needs real SLOT info too (a blocker atom can
+        // be slot-restricted, e.g. `!dev-libs/foo:0`), read directly
+        // from each vdb entry's own SLOT file, mirroring real
+        // `resolve_blockers`'s own candidate-string construction
+        // (portage-repo) rather than the bare `category/pf` shortcut
+        // `find_owners`'s own error-reporting-only scan uses (which
+        // never needs slot-restricted matching at all).
+        let pkg_root = root.join("var/db/pkg");
+        let categories = std::fs::read_dir(&pkg_root).ok()?;
+        let installed: Vec<(String, String, String)> = categories
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .flat_map(|category_entry| {
+                let category_name = category_entry.file_name().to_string_lossy().to_string();
+                std::fs::read_dir(category_entry.path())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .filter_map(move |pkg_entry| {
+                        let pf = pkg_entry.file_name().to_string_lossy().to_string();
+                        let slot = std::fs::read_to_string(pkg_entry.path().join("SLOT"))
+                            .ok()?
+                            .trim()
+                            .to_string();
+                        let (slot, sub_slot) = slot
+                            .split_once('/')
+                            .map(|(s, ss)| (s.to_string(), ss.to_string()))
+                            .unwrap_or_else(|| (slot.clone(), slot.clone()));
+                        Some((category_name.clone(), pf, slot, sub_slot))
+                    })
+                    .map(|(category, pf, slot, sub_slot)| {
+                        let candidate_str = format!("{category}/{pf}:{slot}/{sub_slot}");
+                        (category, pf, candidate_str)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let installed_strs: Vec<&str> = installed.iter().map(|(_, _, s)| s.as_str()).collect();
+        let by_str: HashMap<&str, &(String, String, String)> = installed_strs
+            .iter()
+            .copied()
+            .zip(installed.iter())
+            .collect();
+
+        let mut blocked: HashSet<(String, String)> = HashSet::new();
+        for tok in &flat_deps {
+            let Some(dep_atom) = portage_dep::parse_atom(tok) else {
+                continue;
+            };
+            if dep_atom.blocker == portage_dep::Blocker::None {
+                continue;
+            }
+            if let Some(matched) = portage_dep::match_from_list(tok, &installed_strs) {
+                for m in matched {
+                    if let Some((category, pf, _)) = by_str.get(m) {
+                        blocked.insert((category.clone(), pf.clone()));
+                    }
+                }
+            }
+        }
+        Some(blocked)
+    })()
+    .unwrap_or_default()
+}
+
 /// Real PMS 13.4's own symlink-over-directory ban (checked
 /// unconditionally, regardless of `FEATURES`) plus real `FEATURES=
 /// collision-protect`'s own ordinary-collision detection, plus real
-/// preserve-libs collision exclusion (see this module's own module doc
-/// comment for the exact real mechanics and the one this pilot still
-/// doesn't attempt: blocker exclusion -- `FEATURES=protect-owned` is
+/// preserve-libs collision exclusion and real blocker exclusion (`mypkglist
+/// = others_in_slot + blockers` -- see `blocked_installed_packages`'s own
+/// doc comment for the full real grounding; `FEATURES=protect-owned` is
 /// real too, but decided by the caller, `run_merge`, using this
 /// function's own `collisions` result together with `find_owners`, not
 /// inside this function itself). Walks `d` (the real install image,
@@ -961,6 +1204,7 @@ fn find_collisions(
     config_protect: &str,
     config_protect_mask: &str,
     plib_inodes: &HashMap<(u64, u64), Vec<(String, String)>>,
+    blocked: &HashSet<(String, String)>,
 ) -> CollisionsResult {
     let own_versions: Vec<String> = portage_repo::installed_versions(root, category, package)
         .into_iter()
@@ -1016,7 +1260,10 @@ fn find_collisions(
 
             let owned = own_versions
                 .iter()
-                .any(|version| owns_path(root, category, package, version, &abs_path));
+                .any(|version| owns_path(root, category, package, version, &abs_path))
+                || blocked
+                    .iter()
+                    .any(|(bcat, bpf)| owns_path_pf(root, bcat, bpf, &abs_path));
             if owned || is_protected(root, config_protect, config_protect_mask, &dest) {
                 continue;
             }
@@ -1175,6 +1422,11 @@ pub fn run_merge(
     // `FEATURES=collision-protect`.
     let plib_registry = read_plib_registry(root);
     let plib_inodes = plib_inode_map(root, &plib_registry.preserved_libs());
+    // Real `mypkglist = others_in_slot + blockers` -- see
+    // `blocked_installed_packages`'s own doc comment for the full real
+    // grounding (this is genuinely new machinery: `ebuild <file> merge`
+    // has never resolved real config/USE at all before this).
+    let blocked = blocked_installed_packages(root, &options.config_root, &env, &slot, &repository);
     let (collisions, symlink_collisions, plib_collisions) = find_collisions(
         &env.d(),
         root,
@@ -1184,6 +1436,7 @@ pub fn run_merge(
         &options.config_protect,
         &options.config_protect_mask,
         &plib_inodes,
+        &blocked,
     )?;
     // Real `dblink.merge()`'s own abort condition (`vartree.py:4830-
     // 4838`, Python operator precedence: `collision_protect or
@@ -2202,5 +2455,95 @@ mod tests {
             .expect("the real ROOT-scoped ldconfig binary was really invoked");
         assert!(marker.contains("-X"), "{marker}");
         assert!(marker.contains("-r"), "{marker}");
+    }
+
+    fn fixtures_root() -> PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    /// Sanity baseline (this pilot's own "fixtures must actually
+    /// distinguish the new behavior" rule): with `MergeOptions::default()`
+    /// (its own deliberately-inert `config_root` sentinel, see that
+    /// field's own doc comment), real config/USE resolution never even
+    /// attempts, so `blocked_installed_packages` degrades to an empty
+    /// set -- `mergeblockerpkg` colliding with `mergeblockedbypkg` on
+    /// `/usr/share/mergeblockertest/shared.txt` is an ordinary
+    /// collision-protect abort, exactly like `collisionpkg-a`/`-c`
+    /// above, proving the fixture pair is a genuine collision before the
+    /// next test shows real blocker resolution excluding it.
+    #[test]
+    fn mergeblockerpkg_collides_ordinarily_without_config_resolution() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        run_merge(
+            &collision_fixture("mergeblockedbypkg"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("mergeblockedbypkg merges cleanly");
+
+        let options = MergeOptions {
+            collision_protect: true,
+            ..MergeOptions::default()
+        };
+        let err = run_merge(
+            &collision_fixture("mergeblockerpkg"),
+            &root,
+            &portage_tmpdir,
+            &options,
+        )
+        .expect_err("without config resolution this is an ordinary collision");
+        assert!(err.contains("dev-libs/mergeblockedbypkg-1.0"), "{err}");
+        assert!(
+            err.contains("/usr/share/mergeblockertest/shared.txt"),
+            "{err}"
+        );
+    }
+
+    /// Real `mypkglist = others_in_slot + blockers`: `mergeblockerpkg`'s own
+    /// real `RDEPEND="!dev-libs/mergeblockedbypkg"` -- flattened via real
+    /// config/USE resolution rooted at `config_root` (the real
+    /// `PORTING/fixtures` tree, which has its own real `repos.conf`) --
+    /// matches the already-installed `mergeblockedbypkg`, so the collision on
+    /// `/usr/share/mergeblockertest/shared.txt` is excluded even with
+    /// `collision_protect: true`, and `mergeblockerpkg` takes over the file.
+    #[test]
+    fn mergeblockerpkg_excludes_the_collision_via_a_real_blocker_atom() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        run_merge(
+            &collision_fixture("mergeblockedbypkg"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("mergeblockedbypkg merges cleanly");
+
+        let options = MergeOptions {
+            collision_protect: true,
+            config_root: fixtures_root(),
+            ..MergeOptions::default()
+        };
+        let status = run_merge(
+            &collision_fixture("mergeblockerpkg"),
+            &root,
+            &portage_tmpdir,
+            &options,
+        )
+        .expect("a blocker-excluded collision is not an abort");
+        assert_eq!(status, 0);
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/share/mergeblockertest/shared.txt")).unwrap(),
+            "hello from mergeblockerpkg\n"
+        );
     }
 }

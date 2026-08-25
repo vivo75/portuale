@@ -1,0 +1,8 @@
+DEFINED_PHASES=src_install
+DESCRIPTION=fixture package: real merge-time blocker collision exclusion -- RDEPEND blocks dev-libs/mergeblockedbypkg, whose own file this package also installs
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=!dev-libs/mergeblockedbypkg
+SLOT=0
+_md5_=0000000000000000000000000000000
