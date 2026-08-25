@@ -83,11 +83,23 @@
 // see the "Failure handling is coarser" gap below for the same
 // no-message-output pattern elsewhere in this module.
 //
+// `FEATURES=unmerge-orphans` is real too (`vartree.py:2934-2950`):
+// despite the name, not untracked-orphan scanning -- for a
+// non-`CONFIG_PROTECT`'d `obj`/`sym` entry (excluding a symlink whose
+// live target itself resolves to a directory, real comment: "Don't
+// unlink symlinks to directories here since that can remove /lib and
+// /usr/lib symlinks"), it bypasses the ordinary `!mtime` staleness
+// check entirely and deletes the entry unconditionally, even if
+// locally modified. Reuses `ebuild_merge::is_protected` (promoted to
+// `pub(crate)` for this), the exact same real `ConfigProtect.
+// isprotected()` check `ebuild_merge`'s own `CONFIG_PROTECT` handling
+// already established -- `UnmergeOptions`'s own `config_protect`/
+// `config_protect_mask` fields mirror `MergeOptions`'s exactly, same
+// env-var-sourced defaults.
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching `ebuild_merge`'s own
 // "narrow v1, document the cut" pattern):
-//   - No stale-symlink/orphan-directory bookkeeping
-//     (`FEATURES=unmerge-orphans`), no `bsd_chflags` handling, no
-//     `INFOPATH` special-casing.
+//   - No `bsd_chflags` handling, no `INFOPATH` special-casing.
 //   - Real `stale_confmem` cleanup (`vartree.py:3106-3109`: when a
 //     `CONFIG_PROTECT`'d path this package remembered in `cfgfiledict`
 //     is `is_owned` by another same-slot instance, its now-stale memory
@@ -167,15 +179,24 @@ type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
 /// this module's own doc comment); or an `obj`/`sym` entry whose live
 /// mtime no longer matches what `CONTENTS` recorded, left in place
 /// instead (real `!mtime` skip -- see this module's own doc comment for
-/// why this is also what protects a CONFIG_PROTECT'd file on removal).
-/// This package's own literal `dir` entries are deferred to a second
-/// pass (`remove_dirs`, real `_unmerge_dirs()`) instead of removed
-/// inline here (real `mydirs`) -- see this module's own doc comment on
-/// bug #326685 for why the deferral matters.
+/// why this is also what protects a CONFIG_PROTECT'd file on removal) --
+/// unless `unmerge_orphans` is set, real `FEATURES=unmerge-orphans`
+/// (see this module's own doc comment), which bypasses that `!mtime`
+/// check entirely for a non-`CONFIG_PROTECT`'d `obj`/`sym` entry (a
+/// symlink whose live target is itself a directory excluded, real
+/// comment: "Don't unlink symlinks to directories here since that can
+/// remove /lib and /usr/lib symlinks"). This package's own literal
+/// `dir` entries are deferred to a second pass (`remove_dirs`, real
+/// `_unmerge_dirs()`) instead of removed inline here (real `mydirs`) --
+/// see this module's own doc comment on bug #326685 for why the
+/// deferral matters.
 fn remove_contents(
     root: &Path,
     category: &str,
     others_in_slot: &[String],
+    config_protect: &str,
+    config_protect_mask: &str,
+    unmerge_orphans: bool,
     contents_text: &str,
 ) -> Result<(), String> {
     let mut entries = parse_contents(contents_text);
@@ -232,6 +253,35 @@ fn remove_contents(
             // `_unmerge_pkgfiles()`'s own ordering.
             continue;
         }
+
+        // Real `FEATURES=unmerge-orphans` (`vartree.py:2934-2950`):
+        // deletes a non-`CONFIG_PROTECT`'d `obj`/`sym` entry
+        // unconditionally, bypassing the `!mtime` staleness check below
+        // entirely -- even a locally-modified file is deleted. Excludes
+        // a symlink whose live target itself resolves to a directory
+        // (real comment: "Don't unlink symlinks to directories here
+        // since that can remove /lib and /usr/lib symlinks"), which
+        // falls through to the ordinary mtime-checked removal below
+        // instead. Checked before the mtime check, matching real
+        // ordering exactly.
+        if unmerge_orphans
+            && matches!(entry.node_type.as_str(), "obj" | "sym")
+            && !ebuild_merge::is_protected(root, config_protect, config_protect_mask, &dest)
+        {
+            let symlink_to_dir = entry.node_type == "sym"
+                && std::fs::metadata(&dest)
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false);
+            if !symlink_to_dir {
+                if let Err(e) = std::fs::remove_file(&dest) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return Err(format!("{}: {e}", dest.display()));
+                    }
+                }
+                continue;
+            }
+        }
+
         match entry.node_type.as_str() {
             "obj" | "sym" => {
                 if let (Some(recorded_mtime), Ok(meta)) =
@@ -358,6 +408,37 @@ fn remove_dirs(
     }
 }
 
+/// Options for `run_unmerge`, bundled into a struct rather than more
+/// positional parameters -- this pilot already relearned the
+/// "positional-parameter pain" lesson once, in `--newrepo`'s own
+/// bulk-fix saga (see `ebuild_merge::MergeOptions`'s own doc comment,
+/// the precedent this mirrors). `config_protect`/`config_protect_mask`
+/// are only consulted by `FEATURES=unmerge-orphans`
+/// (`unmerge_orphans`) -- `Default` matches real `make.globals`'s own
+/// values exactly, the same defaults `MergeOptions::default()` uses.
+pub struct UnmergeOptions {
+    pub debug: bool,
+    pub shell: ebuild_phases::ShellBackend,
+    pub config_protect: String,
+    pub config_protect_mask: String,
+    /// Real `"unmerge-orphans" in self.settings.features` -- `FEATURES`
+    /// itself isn't in `FEATURES` by default (real `make.globals` never
+    /// sets it), so `Default` matches that: `false`.
+    pub unmerge_orphans: bool,
+}
+
+impl Default for UnmergeOptions {
+    fn default() -> Self {
+        Self {
+            debug: false,
+            shell: ebuild_phases::ShellBackend::default(),
+            config_protect: "/etc".to_string(),
+            config_protect_mask: "/etc/env.d".to_string(),
+            unmerge_orphans: false,
+        }
+    }
+}
+
 /// Real top-level `unmerge()`: `dblink.unmerge()` (`prerm` -> delete
 /// files -> `postrm`), then -- only on success -- `dblink.delete()`
 /// (remove the vdb entry itself).
@@ -365,8 +446,7 @@ pub fn run_unmerge(
     ebuild_path: &Path,
     root: &Path,
     portage_tmpdir: &Path,
-    debug: bool,
-    shell: ebuild_phases::ShellBackend,
+    options: &UnmergeOptions,
 ) -> Result<i32, String> {
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
     let vdb_dir = root
@@ -401,16 +481,36 @@ pub fn run_unmerge(
         None => Vec::new(),
     };
 
-    let prerm_status =
-        ebuild_phases::run_single_phase(ebuild_path, "prerm", root, portage_tmpdir, debug, shell)?;
+    let prerm_status = ebuild_phases::run_single_phase(
+        ebuild_path,
+        "prerm",
+        root,
+        portage_tmpdir,
+        options.debug,
+        options.shell,
+    )?;
     if prerm_status != 0 {
         return Ok(prerm_status);
     }
 
-    remove_contents(root, &env.category, &others_in_slot, &contents_text)?;
+    remove_contents(
+        root,
+        &env.category,
+        &others_in_slot,
+        &options.config_protect,
+        &options.config_protect_mask,
+        options.unmerge_orphans,
+        &contents_text,
+    )?;
 
-    let postrm_status =
-        ebuild_phases::run_single_phase(ebuild_path, "postrm", root, portage_tmpdir, debug, shell)?;
+    let postrm_status = ebuild_phases::run_single_phase(
+        ebuild_path,
+        "postrm",
+        root,
+        portage_tmpdir,
+        options.debug,
+        options.shell,
+    )?;
     if postrm_status != 0 {
         return Ok(postrm_status);
     }
@@ -489,7 +589,8 @@ mod tests {
              sym /usr/share/x/link.txt -> hello.txt {link_mtime}\n"
         );
 
-        remove_contents(&root, "dev-libs", &[], &contents).expect("remove_contents succeeds");
+        remove_contents(&root, "dev-libs", &[], "/etc", "", false, &contents)
+            .expect("remove_contents succeeds");
 
         assert!(!root.join("usr/share/x/hello.txt").exists());
         assert!(root
@@ -517,11 +618,77 @@ mod tests {
         // A recorded mtime that can never match the file just written
         // above (created "now").
         let contents = "obj /etc.conf abc123 1\n";
-        remove_contents(&root, "dev-libs", &[], contents).expect("remove_contents succeeds");
+        remove_contents(&root, "dev-libs", &[], "/etc", "", false, contents)
+            .expect("remove_contents succeeds");
 
         assert!(
             root.join("etc.conf").is_file(),
             "a locally-modified file must survive unmerge"
+        );
+    }
+
+    #[test]
+    fn remove_contents_with_unmerge_orphans_deletes_a_locally_modified_file() {
+        // Real `FEATURES=unmerge-orphans` (see this module's own doc
+        // comment): unlike the default (previous test), a locally-
+        // modified `obj`/`sym` entry is deleted anyway -- the `!mtime`
+        // staleness check is bypassed entirely.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("etc.conf"), b"user's own edits").unwrap();
+
+        let contents = "obj /etc.conf abc123 1\n";
+        remove_contents(&root, "dev-libs", &[], "/etc", "", true, contents)
+            .expect("remove_contents succeeds");
+
+        assert!(
+            !root.join("etc.conf").exists(),
+            "unmerge-orphans deletes a locally-modified file too"
+        );
+    }
+
+    #[test]
+    fn remove_contents_with_unmerge_orphans_still_respects_config_protect() {
+        // Real `FEATURES=unmerge-orphans` explicitly excludes a
+        // CONFIG_PROTECT'd path (real `not self.isprotected(obj)`) --
+        // it isn't a blanket override of CONFIG_PROTECT, just of the
+        // ordinary `!mtime` check.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
+
+        let contents = "obj /etc/foo.conf abc123 1\n";
+        remove_contents(&root, "dev-libs", &[], "/etc", "", true, contents)
+            .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("etc/foo.conf").is_file(),
+            "unmerge-orphans must not delete a CONFIG_PROTECT'd path"
+        );
+    }
+
+    #[test]
+    fn remove_contents_with_unmerge_orphans_leaves_a_symlink_to_a_directory_alone() {
+        // Real `FEATURES=unmerge-orphans` explicitly excludes a symlink
+        // whose live target is itself a directory (real comment: "Don't
+        // unlink symlinks to directories here since that can remove
+        // /lib and /usr/lib symlinks") -- falls through to the ordinary
+        // mtime-checked removal instead, which also leaves it alone
+        // here (a deliberately stale recorded mtime).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("real-lib")).unwrap();
+        std::os::unix::fs::symlink(root.join("real-lib"), root.join("lib")).unwrap();
+
+        let contents = "sym /lib -> whatever 1\n";
+        remove_contents(&root, "dev-libs", &[], "/etc", "", true, contents)
+            .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("lib").symlink_metadata().is_ok(),
+            "unmerge-orphans must not delete a symlink-to-directory"
         );
     }
 
@@ -535,7 +702,8 @@ mod tests {
         std::fs::write(root.join("usr/share/other.txt"), b"other").unwrap();
 
         let contents = "dir /usr\ndir /usr/share\n";
-        remove_contents(&root, "dev-libs", &[], contents).expect("remove_contents succeeds");
+        remove_contents(&root, "dev-libs", &[], "/etc", "", false, contents)
+            .expect("remove_contents succeeds");
 
         // /usr/share survives (non-empty), and so does its parent.
         assert!(root.join("usr/share/other.txt").is_file());
@@ -547,7 +715,7 @@ mod tests {
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let contents = "obj /usr/share/x/hello.txt abc123 100\ndir /usr/share/x\n";
-        remove_contents(&root, "dev-libs", &[], contents)
+        remove_contents(&root, "dev-libs", &[], "/etc", "", false, contents)
             .expect("missing entries are not an error");
     }
 
@@ -587,8 +755,16 @@ mod tests {
             "obj /usr/share/shared.txt abc123 {shared_mtime}\n\
              obj /usr/share/only-mine.txt abc123 {mine_mtime}\n"
         );
-        remove_contents(&root, "dev-libs", &["otherpkg-2.0".to_string()], &contents)
-            .expect("remove_contents succeeds");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &["otherpkg-2.0".to_string()],
+            "/etc",
+            "",
+            false,
+            &contents,
+        )
+        .expect("remove_contents succeeds");
 
         assert!(
             root.join("usr/share/shared.txt").is_file(),
@@ -622,8 +798,16 @@ mod tests {
         std::fs::write(other_vdb.join("CONTENTS"), "dir /keep/link\n").unwrap();
 
         let contents = "dir /keep\nsym /keep/link -> whatever 100\n";
-        remove_contents(&root, "dev-libs", &["orphanpkg-2.0".to_string()], contents)
-            .expect("remove_contents succeeds");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &["orphanpkg-2.0".to_string()],
+            "/etc",
+            "",
+            false,
+            contents,
+        )
+        .expect("remove_contents succeeds");
 
         assert!(
             root.join("keep/link").symlink_metadata().is_ok(),
@@ -658,8 +842,16 @@ mod tests {
 
         let contents =
             "dir /zzz-parent\nsym /zzz-parent/compat-link -> whatever 100\ndir /aaa-target\n";
-        remove_contents(&root, "dev-libs", &["orphanpkg-2.0".to_string()], contents)
-            .expect("remove_contents succeeds");
+        remove_contents(
+            &root,
+            "dev-libs",
+            &["orphanpkg-2.0".to_string()],
+            "/etc",
+            "",
+            false,
+            contents,
+        )
+        .expect("remove_contents succeeds");
 
         assert!(
             !root
@@ -701,14 +893,9 @@ mod tests {
         let vdb_dir = root.join("var/db/pkg/dev-libs/mergepkg-1.0");
         assert!(vdb_dir.is_dir());
 
-        let unmerge_status = run_unmerge(
-            &ebuild,
-            &root,
-            &portage_tmpdir,
-            false,
-            ebuild_phases::ShellBackend::default(),
-        )
-        .expect("run_unmerge succeeds");
+        let unmerge_status =
+            run_unmerge(&ebuild, &root, &portage_tmpdir, &UnmergeOptions::default())
+                .expect("run_unmerge succeeds");
         assert_eq!(unmerge_status, 0);
 
         assert!(!root.join("usr/share/mergepkg/hello.txt").exists());
@@ -763,8 +950,7 @@ mod tests {
             &ebuild_v1,
             &root,
             &portage_tmpdir,
-            false,
-            ebuild_phases::ShellBackend::default(),
+            &UnmergeOptions::default(),
         )
         .expect("run_unmerge succeeds");
         assert_eq!(unmerge_status, 0);
@@ -791,8 +977,7 @@ mod tests {
             &ebuild_v2,
             &root,
             &portage_tmpdir,
-            false,
-            ebuild_phases::ShellBackend::default(),
+            &UnmergeOptions::default(),
         )
         .expect("run_unmerge succeeds");
         assert_eq!(unmerge_v2_status, 0);
@@ -811,13 +996,7 @@ mod tests {
         let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
 
-        let result = run_unmerge(
-            &ebuild,
-            &root,
-            &portage_tmpdir,
-            false,
-            ebuild_phases::ShellBackend::default(),
-        );
+        let result = run_unmerge(&ebuild, &root, &portage_tmpdir, &UnmergeOptions::default());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not installed"));
     }

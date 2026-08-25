@@ -5258,6 +5258,51 @@ The real elog warning text for symlinks that do survive
 message-printing output anywhere else either, only the behavioral effect
 (the symlink is left in place).
 
+### `unmerge`: real `FEATURES=unmerge-orphans`
+
+Real `_unmerge_pkgfiles()`'s own `unmerge_orphans` handling
+(`vartree.py:2934-2950`) is real now too. Despite the name, this isn't
+untracked-orphan scanning -- for a non-`CONFIG_PROTECT`'d `obj`/`sym`
+entry (excluding a symlink whose live target itself resolves to a
+directory, real comment: "Don't unlink symlinks to directories here
+since that can remove /lib and /usr/lib symlinks"), it bypasses the
+ordinary `!mtime` staleness check entirely and deletes the entry
+unconditionally, even if locally modified. `UnmergeOptions` (new: this
+pilot's own `run_unmerge` had only two loose parameters,
+`debug`/`shell`, before this slice -- now five, so it gets the same
+struct treatment `MergeOptions` already established) reuses
+`ebuild_merge::is_protected` (promoted to `pub(crate)` for this) for
+the real `ConfigProtect.isprotected()` check, and mirrors
+`MergeOptions`'s own `config_protect`/`config_protect_mask` fields and
+env-var-sourced CLI-boundary defaults exactly.
+
+```sh
+export CONFIG_PROTECT=/etc
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+echo "hand-modified content" > "${ROOT}"/usr/share/mergepkg/hello.txt
+
+# Default: a locally-modified file survives unmerge.
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+cat "${ROOT}"/usr/share/mergepkg/hello.txt
+# hand-modified content
+
+# Re-merge, modify again, unmerge with FEATURES=unmerge-orphans: deleted
+# despite the local modification.
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+echo "hand-modified content" > "${ROOT}"/usr/share/mergepkg/hello.txt
+export FEATURES=unmerge-orphans
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+test -e "${ROOT}"/usr/share/mergepkg/hello.txt && echo "still there" || echo "gone"
+# gone
+unset FEATURES
+```
+
 ## Running it
 
 Build both Rust binaries:

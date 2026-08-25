@@ -285,8 +285,14 @@ impl Default for MergeOptions {
 /// entry that names a real, on-disk directory matches any path under it
 /// (`/etc` matches `/etc/foo` but not `/etcfoo`); one that doesn't (a
 /// literal file, or a path that doesn't exist at all) only ever matches
-/// exactly.
-fn is_protected(root: &Path, config_protect: &str, config_protect_mask: &str, dest: &Path) -> bool {
+/// exactly. `pub(crate)`: `ebuild_unmerge`'s own `FEATURES=unmerge-orphans`
+/// handling reuses this exact real check (real `self.isprotected(obj)`).
+pub(crate) fn is_protected(
+    root: &Path,
+    config_protect: &str,
+    config_protect_mask: &str,
+    dest: &Path,
+) -> bool {
     fn longest_match(root: &Path, list: &str, dest: &Path) -> usize {
         let dest_str = dest.to_string_lossy();
         let mut best = 0;

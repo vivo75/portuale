@@ -282,6 +282,26 @@ pub fn run(args: &[String]) -> ExitCode {
             // pervasively by tests).
             config_root: portage_repo::config_root_from_env(),
         };
+        // Real `"unmerge-orphans" in self.settings.features` -- same
+        // env-var-not-full-config-resolution shortcut `collision_protect`/
+        // `protect_owned` above already use.
+        let default_unmerge_options = ebuild_unmerge::UnmergeOptions::default();
+        let unmerge_orphans = std::env::var("FEATURES")
+            .map(|features| {
+                features
+                    .split_whitespace()
+                    .any(|tok| tok == "unmerge-orphans")
+            })
+            .unwrap_or(default_unmerge_options.unmerge_orphans);
+        let unmerge_options = ebuild_unmerge::UnmergeOptions {
+            debug,
+            shell,
+            config_protect: std::env::var("CONFIG_PROTECT")
+                .unwrap_or(default_unmerge_options.config_protect),
+            config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
+                .unwrap_or(default_unmerge_options.config_protect_mask),
+            unmerge_orphans,
+        };
         // Real make.globals's own PKGDIR default -- see
         // ebuild_package::PackageOptions's own Default impl.
         let package_options = ebuild_package::PackageOptions {
@@ -308,7 +328,7 @@ pub fn run(args: &[String]) -> ExitCode {
             } else if ebuild_merge::is_real_qmerge_command(cmd) {
                 ebuild_merge::run_qmerge(ebuild_path, &root, &portage_tmpdir, &merge_options)
             } else if ebuild_unmerge::is_real_unmerge_command(cmd) {
-                ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, debug, shell)
+                ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, &unmerge_options)
             } else if ebuild_package::is_real_package_command(cmd) {
                 ebuild_package::run_package(ebuild_path, &root, &portage_tmpdir, &package_options)
             } else {
