@@ -2,6 +2,10 @@ use super::*;
 
 use portage_util::TempDir;
 
+fn fixtures_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+}
+
 /// A stub `eselect` on `PATH`, logging its argv to a marker file. Returns the
 /// stub dir (to prepend to `PATH`) and the marker path.
 #[cfg(unix)]
