@@ -117,6 +117,32 @@ pub(crate) struct FindUnusedPreservedLibsArgs<'a> {
     pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
 }
 
+/// Registered preserved libraries no installed package links against any more, keyed by
+/// owner. Paths whose owner left the vdb fall back to a soname reverse lookup.
+// Portage: vartree.py, dblink._find_unused_preserved_libs
+#[cfg(test)]
+pub(crate) fn find_unused_preserved_libs(
+    args: FindUnusedPreservedLibsArgs<'_>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let FindUnusedPreservedLibsArgs {
+        root,
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+    } = args;
+    find_unused_preserved_libs_in(FindUnusedPreservedLibsInArgs {
+        root,
+        registry: read_plib_registry(root),
+        unmerge_no_replacement,
+        being_unmerged,
+        exclude_cpvs,
+        replacement_preserved,
+        replacement_needed,
+    })
+}
+
 /// Arguments of [`find_unused_preserved_libs_in`].
 pub(crate) struct FindUnusedPreservedLibsInArgs<'a> {
     pub(crate) root: &'a Path,

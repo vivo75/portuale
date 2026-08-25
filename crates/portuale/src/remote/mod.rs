@@ -63,3 +63,30 @@ pub enum RemoteTransport {
     /// label; key/port/user/timeout/host-key options are inert.
     Local,
 }
+
+/// Resolved client binary placement: the absolute client path every
+/// generated script exports as `PORTUALE_BIN`, however it got there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientBinPlan {
+    /// No preflight ran yet (fresh CLI parse, or local transport without
+    /// `--remote-portuale-dir`, which skips the gates by design).
+    Unresolved,
+    /// The running binary itself (local transport without the override):
+    /// no preflight checks, no install.
+    Local(String),
+    /// A client path whose full SHA-256 already matches: use it, install
+    /// nothing.
+    Use(String),
+    /// No candidate matches: install there (as `portuale-<hash>`).
+    Install(String),
+}
+
+impl ClientBinPlan {
+    /// The absolute path the plan settled on, if any.
+    pub fn abs(&self) -> Option<&str> {
+        match self {
+            Self::Unresolved => None,
+            Self::Local(path) | Self::Use(path) | Self::Install(path) => Some(path),
+        }
+    }
+}

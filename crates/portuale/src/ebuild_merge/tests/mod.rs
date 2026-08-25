@@ -43,6 +43,57 @@ fn versioned_fixture(name: &str, version: &str) -> PathBuf {
         .join(format!("{name}-{version}.ebuild"))
 }
 
+/// Compiles a linked `libA`/`libB` pair with the host `cc` under the
+/// synthetic root, so `scanelf` sees genuine ELF headers.
+fn compile_linked_pair(tmp: &std::path::Path, root: &std::path::Path) {
+    let build = tmp.join("build");
+    std::fs::create_dir_all(&build).unwrap();
+    std::fs::write(build.join("a.c"), "int aval(void) { return 1; }\n").unwrap();
+    std::fs::write(
+        build.join("b.c"),
+        "extern int aval(void);\nint bval(void) { return aval(); }\n",
+    )
+    .unwrap();
+    let run = |args: &[&str]| {
+        let status = std::process::Command::new("cc")
+            .args(args)
+            .current_dir(&build)
+            .status()
+            .expect("host cc must exist for the orphan-scan test");
+        assert!(status.success(), "cc {args:?} must succeed");
+    };
+    run(&[
+        "-shared",
+        "-fPIC",
+        "-Wl,-soname,libA.so.1",
+        "-o",
+        "libA.so.1.0.0",
+        "a.c",
+    ]);
+    std::os::unix::fs::symlink("libA.so.1.0.0", build.join("libA.so")).unwrap();
+    run(&[
+        "-shared",
+        "-fPIC",
+        "-Wl,-soname,libB.so.1",
+        "-o",
+        "libB.so.1.0.0",
+        "b.c",
+        "-L.",
+        "-lA",
+    ]);
+    std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+    std::fs::copy(
+        build.join("libA.so.1.0.0"),
+        root.join("usr/lib/libA.so.1.0.0"),
+    )
+    .unwrap();
+    std::fs::copy(
+        build.join("libB.so.1.0.0"),
+        root.join("usr/lib/libB.so.1.0.0"),
+    )
+    .unwrap();
+}
+
 fn env_update_fixture() -> PathBuf {
     collision_fixture("envupdatepkg")
 }
