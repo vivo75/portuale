@@ -27,3 +27,13 @@ pub(crate) fn env_d_reloaded(config: &portage_profile::Config) -> Option<portage
     reloaded.reload_env_d(&config.envd_eroot);
     Some(reloaded)
 }
+
+/// Arguments of [`buildpkgonly_entry_build_env`].
+pub(crate) struct BuildpkgonlyEntryBuildEnvArgs<'a> {
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) candidate: &'a Candidate,
+    pub(crate) cpv_slot: &'a str,
+    pub(crate) run_wide: &'a [(String, String)],
+}

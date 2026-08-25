@@ -175,3 +175,66 @@ pub(crate) fn run_wide_phase_env(config: &portage_profile::Config) -> Vec<(Strin
     }
     env
 }
+
+/// The package metadata keys that stay exported in the saved environment
+/// (`DEFINED_PHASES`, `KEYWORDS`, `LICENSE`); values come from the
+/// md5-cache, `""` when omitted.
+pub(crate) const EXPORTED_PKG_METADATA: [&str; 3] = ["DEFINED_PHASES", "KEYWORDS", "LICENSE"];
+
+pub(crate) fn entry_metadata_env(
+    entry: &GraphEntry,
+    candidate: &Candidate,
+) -> Vec<(String, String)> {
+    let pf = format!("{}-{}", entry.package, candidate.version);
+    let cache = mrg_director::Md5Cache::new(&candidate.repo_location, &candidate.repo_name);
+    let Ok(metadata) = mrg_director::RepoCache::metadata(&cache, &entry.category, &pf) else {
+        return Vec::new();
+    };
+    EXPORTED_PKG_METADATA
+        .iter()
+        .map(|k| (k.to_string(), metadata.get(*k).cloned().unwrap_or_default()))
+        .collect()
+}
+
+/// The per-entry tail of [`entry_build_env`]: resolved `USE` (or the
+/// legacy enabled-IUSE-only `USE` when no config is in scope) plus the
+/// `SLOT`/repo identity. Shared with `run_buildpkgonly`.
+///
+/// With `config` set the `USE` is the resolver's full effective set
+/// narrowed to `IUSE ∪ IUSE_EFFECTIVE`.
+pub(crate) fn entry_phase_env_tail(
+    config: Option<&portage_profile::Config>,
+    repos: &[RepoConfig],
+    entry: &GraphEntry,
+    candidate: Option<&Candidate>,
+) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    let Some(config) = config else {
+        env.extend(build_use_env(entry));
+        return env;
+    };
+    if let Some(candidate) = candidate {
+        env.extend(entry_metadata_env(entry, candidate));
+        let enabled = portage_repo::candidate_effective_use_flags(
+            repos,
+            config,
+            &entry.category,
+            &entry.package,
+            &candidate.version,
+        );
+        let iuse: Vec<String> = candidate
+            .iuse
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        env.extend(portage_profile::phase_environ_pkg(
+            config,
+            Some(portage_profile::PhaseUse {
+                iuse: &iuse,
+                enabled: &enabled,
+            }),
+        ));
+    }
+    env.extend(entry_identity_env(entry, candidate));
+    env
+}
