@@ -2,6 +2,13 @@
 
 use crate::emerge_build::*;
 
+/// The entry's `::repo` for the progress lines. An empty fallback keeps a
+/// would-be `None` loud (a visibly wrong `cpv::`) rather than silently
+/// reshaping the line.
+pub(crate) fn entry_repo(entry: &GraphEntry) -> &str {
+    entry.repo_name.as_deref().unwrap_or("")
+}
+
 /// Arguments of [`resume_entry`].
 pub(crate) struct ResumeEntryArgs<'a> {
     pub(crate) category: &'a str,

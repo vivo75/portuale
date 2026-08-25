@@ -22,6 +22,47 @@ pub(crate) fn entry_portage_tmpdir(
     )
 }
 
+/// This entry's per-package `FEATURES`: the matched env-file value folds
+/// onto the run-wide list in `[run-wide, pkg, calling-env]` order instead
+/// of replacing it. `None` when nothing matched, so the caller keeps the
+/// run-wide value untouched.
+pub(crate) fn resolved_features_for(
+    package_env_vars: &[(String, Vec<(String, String)>)],
+    cpv_slot: &str,
+    run_wide_features: &str,
+    calling_features: &str,
+) -> Option<String> {
+    let pkg_raw = crate::ebuild_phases::match_package_env_incremental_raw(
+        package_env_vars,
+        cpv_slot,
+        "FEATURES",
+    );
+    if pkg_raw.is_empty() {
+        return None;
+    }
+    Some(crate::ebuild_phases::fold_package_env_incremental(
+        run_wide_features,
+        &pkg_raw,
+        calling_features,
+    ))
+}
+
+/// `[("USE", "<space-joined enabled IUSE flags>")]` for `entry`, or empty
+/// when the entry declares no enabled flags.
+pub(crate) fn build_use_env(entry: &GraphEntry) -> Vec<(String, String)> {
+    let enabled: Vec<&str> = entry
+        .use_flags_display
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(f, _)| f.as_str())
+        .collect();
+    if enabled.is_empty() {
+        Vec::new()
+    } else {
+        vec![("USE".to_string(), enabled.join(" "))]
+    }
+}
+
 /// The `cat/pkg-ver:slot/sub` identity a build-bound entry is matched
 /// against. Missing `SLOT` means slot `0`; a missing sub-slot repeats
 /// the slot.
@@ -77,4 +118,60 @@ pub(crate) fn entry_package_env_vars(
         &profile_only_variables,
         &options.build_env,
     )
+}
+
+/// `SLOT`, `PORTAGE_REPO_NAME`, `PORTAGE_REPO_REVISIONS` for `entry`.
+/// `SLOT` is `slot/sub_slot` when a sub-slot is declared, bare slot
+/// otherwise, never empty (`entry.slot` unset means `"0"`).
+/// `PORTAGE_REPO_REVISIONS` is `"{}"` until portuale tracks a revision;
+// Portage: doebuild.py, doebuild_environment
+pub(crate) fn entry_identity_env(
+    entry: &GraphEntry,
+    candidate: Option<&Candidate>,
+) -> Vec<(String, String)> {
+    let slot = entry
+        .slot
+        .as_deref()
+        .or_else(|| candidate.map(|c| c.slot.as_str()))
+        .unwrap_or("0");
+    let sub_slot = entry
+        .sub_slot
+        .as_deref()
+        .or_else(|| candidate.map(|c| c.sub_slot.as_str()))
+        .unwrap_or(slot);
+    let slot_value = if sub_slot.is_empty() || sub_slot == slot {
+        slot.to_string()
+    } else {
+        format!("{slot}/{sub_slot}")
+    };
+    let repo_name = entry
+        .repo_name
+        .as_deref()
+        .or_else(|| candidate.map(|c| c.repo_name.as_str()))
+        .unwrap_or("");
+    let mut env = vec![
+        ("SLOT".to_string(), slot_value),
+        ("PORTAGE_REPO_REVISIONS".to_string(), "{}".to_string()),
+    ];
+    if !repo_name.is_empty() {
+        env.push(("PORTAGE_REPO_NAME".to_string(), repo_name.to_string()));
+    }
+    env
+}
+
+/// The run-wide half of `config.environ()` for a build, plus the dynamic
+/// `PORTAGE_COMPRESSION_COMMAND` from portuale's compressor table.
+pub(crate) fn run_wide_phase_env(config: &portage_profile::Config) -> Vec<(String, String)> {
+    let mut env = portage_profile::phase_environ(config, None);
+    let lookup = |key: &str| {
+        env.iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .or_else(|| std::env::var(key).ok())
+            .or_else(|| config.other_vars.get(key).cloned())
+    };
+    if let Some(cmd) = ebuild_package::phase_compression_command(lookup) {
+        env.push(("PORTAGE_COMPRESSION_COMMAND".to_string(), cmd));
+    }
+    env
 }

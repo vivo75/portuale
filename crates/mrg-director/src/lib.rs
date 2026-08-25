@@ -65,6 +65,30 @@ pub trait PackagesDb {
 }
 
 // ---------------------------------------------------------------------------
+// RepoCache
+// ---------------------------------------------------------------------------
+
+/// A **repository metadata cache backend**: a `cat/pkg-ver` →
+/// `(aux key → value)` map read from a repo's cache directory.
+/// Portage: `portage/cache/template.py::database` (see notes for the
+/// backends and the narrowed-out machinery).
+pub trait RepoCache {
+    /// The full aux dictionary for one `category/package-revision`
+    /// ("pf"), or `Err` when absent (`DEPEND`, `KEYWORDS`, … spelling).
+    fn metadata(
+        &self,
+        category: &str,
+        pf: &str,
+    ) -> Result<std::collections::HashMap<String, String>, String>;
+
+    /// The `pf` names present for one category, in stable sort order.
+    fn category(&self, category: &str) -> Vec<String>;
+
+    /// The repo this cache reads (`::reponame`), for provenance.
+    fn repo(&self) -> &str;
+}
+
+// ---------------------------------------------------------------------------
 // BinpkgFetch
 // ---------------------------------------------------------------------------
 
@@ -128,6 +152,14 @@ pub struct MergeProgress {
     pub cur: usize,
     /// Total merging entries in the run.
     pub max: usize,
+}
+
+impl MergeProgress {
+    /// A lone unit executed outside a merge run: it is the only package,
+    /// so it is 1 of 1.
+    pub fn single() -> Self {
+        Self { cur: 1, max: 1 }
+    }
 }
 
 /// A single unit of merge work: one resolved entry as plain data (never
@@ -278,6 +310,84 @@ impl PackagesDb for VdbReader<'_> {
     }
     fn root(&self) -> &Path {
         self.root
+    }
+}
+
+/// The filesystem-backed `RepoCache`: the flat md5-cache directory
+/// (Portage `flat_hash.py`'s layout), with an ebuild-tree fallback when
+/// the repo has no usable cache (see notes).
+pub struct Md5Cache<'a> {
+    repo_location: &'a Path,
+    repo_name: &'a str,
+}
+
+impl<'a> Md5Cache<'a> {
+    /// Wrap one repo location under its `repos.conf` name (the
+    /// `::reponame` provenance `RepoCache::repo` reports).
+    pub fn new(repo_location: &'a Path, repo_name: &'a str) -> Self {
+        Self {
+            repo_location,
+            repo_name,
+        }
+    }
+}
+impl RepoCache for Md5Cache<'_> {
+    fn metadata(
+        &self,
+        category: &str,
+        pf: &str,
+    ) -> Result<std::collections::HashMap<String, String>, String> {
+        portage_repo::repo_aux_metadata(self.repo_location, category, pf)
+            .map(|m| (*m).clone())
+            .map_err(|e| e.to_string())
+    }
+    fn category(&self, category: &str) -> Vec<String> {
+        if portage_repo::has_usable_md5_cache(self.repo_location) {
+            let dir = self
+                .repo_location
+                .join("metadata")
+                .join("md5-cache")
+                .join(category);
+            portage_util::read_dir_entries(&dir)
+                .map(|it| {
+                    it.into_iter()
+                        .map(|e| e.file_name().to_string_lossy().into_owned())
+                        .filter(|n| !n.contains('.'))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            // No cache dir: walk the `<cat>/<pkg>/<pf>.ebuild` tree for
+            // each ebuild file's `<pkg>-<version>` stem.
+            let dir = self.repo_location.join(category);
+            let mut names: Vec<String> = portage_util::read_dir_entries(&dir)
+                .map(|it| {
+                    it.into_iter()
+                        .filter(|e| e.path().is_dir())
+                        .flat_map(|pkg_dir| {
+                            portage_util::read_dir_entries(&pkg_dir.path())
+                                .map(|files| {
+                                    files
+                                        .into_iter()
+                                        .filter(|f| f.path().is_file())
+                                        .filter_map(|f| {
+                                            let name = f.file_name().to_string_lossy().into_owned();
+                                            name.strip_suffix(".ebuild").map(str::to_string)
+                                        })
+                                        .collect::<Vec<String>>()
+                                })
+                                .unwrap_or_default()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            names.sort();
+            names.dedup();
+            names
+        }
+    }
+    fn repo(&self) -> &str {
+        self.repo_name
     }
 }
 

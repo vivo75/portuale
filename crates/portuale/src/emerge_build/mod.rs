@@ -4,6 +4,8 @@
 //! the winning candidate's repo via `portage_repo::list_candidates`.
 
 use crate::ebuild_merge;
+
+mod buildpkgonly;
 mod entry_env;
 mod logs;
 mod resume;
@@ -11,6 +13,8 @@ mod status;
 
 #[cfg(test)]
 mod tests;
+
+pub use buildpkgonly::*;
 pub(crate) use entry_env::*;
 pub(crate) use logs::*;
 pub(crate) use resume::*;

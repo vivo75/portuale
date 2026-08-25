@@ -210,6 +210,25 @@ pub(crate) fn makeopts_to_job_count(makeopts: &str) -> String {
     cpu_count()
 }
 
+/// `PORTAGE_COMPRESSION_COMMAND` from the resolved config (`lookup`: calling
+/// env over `make.conf`/profile/`make.globals`): `BINPKG_COMPRESS` (default
+/// `bzip2`; empty = `cat`), the `BINPKG_COMPRESS_FLAGS_<NAME>` override over
+/// `BINPKG_COMPRESS_FLAGS`, `{JOBS}` from `MAKEOPTS`. `None` for an unknown
+/// compressor or a missing binary, like Portage (left unset).
+// Portage: doebuild.py, doebuild_environment
+pub fn phase_compression_command(lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let name = lookup("BINPKG_COMPRESS").unwrap_or_else(|| "bzip2".to_string());
+    if name.is_empty() {
+        return Some("cat".to_string());
+    }
+    let flags = lookup(&format!("BINPKG_COMPRESS_FLAGS_{}", name.to_uppercase()))
+        .or_else(|| lookup("BINPKG_COMPRESS_FLAGS"))
+        .unwrap_or_default();
+    let bzip2 = lookup("PORTAGE_BZIP2_COMMAND").unwrap_or_else(|| "bzip2".to_string());
+    let makeopts = lookup("MAKEOPTS").unwrap_or_else(|| "1".to_string());
+    resolve_compression_command_jobs(&name, &flags, &bzip2, &makeopts_to_job_count(&makeopts))
+}
+
 /// `PKGDIR` from the resolved config: the chain value when set anywhere, else
 /// the default `/var/cache/binpkgs`. An empty value falls back (Portage has
 /// no `PKGDIR`-empty die; an empty pkgdir only ever yields broken paths).
@@ -270,6 +289,47 @@ fn resolve_compression_command_jobs(
         return None;
     }
     Some(tokens.join(" "))
+}
+
+/// Re-derives `PORTAGE_COMPRESSION_COMMAND` from an entry's already-layered
+/// build env, replacing the run-wide pair in place. Portage computes the
+/// command from the package's own settings, so a per-package
+/// `BINPKG_COMPRESS=gzip` reaches the xpak tar pipe even when the run-wide
+/// value differs -- but the gpkg helper reads the global settings, so a
+/// per-entry value must never reach it.
+///
+/// The lookup is last-wins over the layered pairs, then the calling env, then
+/// the resolved config's own file chain. An unmatched entry re-derives the
+/// run-wide command byte-identically. A recompute of `None` (unknown
+/// per-entry codec) removes the pair, matching Portage leaving the key unset.
+/// `config` is `None` on the config-less paths.
+pub(crate) fn refresh_entry_compression_command(
+    build_env: &mut Vec<(String, String)>,
+    config: Option<&portage_profile::Config>,
+) {
+    let lookup = |key: &str| {
+        build_env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .or_else(|| portage_profile::config_env_var(key))
+            .or_else(|| config.and_then(|c| c.other_vars.get(key).cloned()))
+    };
+    let recomputed = phase_compression_command(lookup);
+    if let Some(pos) = build_env
+        .iter()
+        .rposition(|(k, _)| k == "PORTAGE_COMPRESSION_COMMAND")
+    {
+        match recomputed {
+            Some(cmd) => build_env[pos].1 = cmd,
+            None => {
+                build_env.remove(pos);
+            }
+        }
+    } else if let Some(cmd) = recomputed {
+        build_env.push(("PORTAGE_COMPRESSION_COMMAND".to_string(), cmd));
+    }
 }
 
 fn now_unix_time() -> Result<u64, String> {

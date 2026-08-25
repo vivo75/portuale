@@ -283,4 +283,81 @@ impl Config {
             )
         })
     }
+
+    /// Whether `<eroot>/etc/profile.env` changed since this config was
+    /// resolved or last reloaded. A missing file reads as `""`. The
+    /// per-package-task gate: when false the caller keeps the old path.
+    pub fn env_d_changed(&self, eroot: &Path) -> bool {
+        std::fs::read_to_string(eroot.join("etc/profile.env")).unwrap_or_default() != self.envd_raw
+    }
+
+    /// Re-read env.d and replace that layer, leaving every higher layer
+    /// alone. Keys a higher layer owns or the blacklist drops are
+    /// untouched; other keys match the new file. The USE-context
+    /// fingerprint is refreshed for the `portage-repo` memos.
+    /// Higher-layer expansions are deliberately not redone.
+    // Portage: config.py, reload
+    pub fn reload_env_d(&mut self, eroot: &Path) {
+        let text = std::fs::read_to_string(eroot.join("etc/profile.env")).unwrap_or_default();
+        let blacklist: HashSet<String> = self
+            .envd_profile_only
+            .iter()
+            .cloned()
+            .chain(ENV_BLACKLIST.iter().map(|s| s.to_string()))
+            .collect();
+        let parsed = parse_envd_text(&text);
+        for (key, value) in &parsed.vars {
+            if blacklist.contains(key) || self.envd_higher_keys.contains(key) {
+                continue;
+            }
+            self.other_vars.insert(key.clone(), value.clone());
+        }
+        for key in self.envd_vars.keys() {
+            if !parsed.vars.contains_key(key) && !self.envd_higher_keys.contains(key) {
+                self.other_vars.remove(key);
+            }
+        }
+        for key in TRACKED_INCREMENTALS {
+            let new_layer = parsed
+                .incremental_layers
+                .get(key)
+                .filter(|_| !blacklist.contains(key));
+            let had_old = self.envd_incremental_layers.contains_key(key);
+            if new_layer.is_none() && !had_old {
+                continue;
+            }
+            // A recorded env.d layer is still index 0 (lowest db-stack
+            // layer): nothing post-resolve mutates these lists.
+            let sources = self.incremental_sources.entry(key.to_string()).or_default();
+            if had_old && !sources.is_empty() {
+                match new_layer {
+                    Some(tokens) => sources[0] = (*tokens).clone(),
+                    None => {
+                        sources.remove(0);
+                    }
+                }
+                if sources.is_empty() {
+                    self.incremental_sources.remove(key);
+                }
+            } else if let Some(tokens) = new_layer {
+                // No recorded layer (or its trace is gone, unreachable):
+                // the new env.d layer goes first regardless.
+                sources.insert(0, (*tokens).clone());
+            }
+        }
+        self.envd_raw = text;
+        self.envd_vars = parsed
+            .vars
+            .into_iter()
+            .filter(|(k, _)| !blacklist.contains(k))
+            .collect();
+        self.envd_incremental_layers = parsed
+            .incremental_layers
+            .into_iter()
+            .filter(|(k, _)| !blacklist.contains(k))
+            .collect();
+        self.envd_sets_path = parsed.sets_path && !blacklist.contains("PATH");
+        self.envd_use_tokens = read_envd_use_tokens_text(&self.envd_raw);
+        self.use_context_base = Some(use_context_base_fingerprint(self));
+    }
 }
