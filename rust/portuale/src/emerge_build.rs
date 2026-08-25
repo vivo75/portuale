@@ -37,10 +37,11 @@
 //   - Builds run strictly in `entries` order (no explicit reordering) --
 //     safe only because the gate above already guarantees no ordering
 //     constraint exists between any two needs-building entries.
-//   - A build failure aborts immediately (no partial-graph continuation,
-//     no cleanup of any already-built packages) -- this pilot's own
-//     single-invocation-at-a-time CLI usage never needs the resume/retry
-//     machinery real portage's own `--keep-going` provides.
+//   - A build failure aborts immediately, unless real `--keep-going` is
+//     given (now real, see `run_buildpkgonly`'s own doc comment) -- no
+//     cleanup of any already-built packages either way, this pilot's
+//     own single-invocation-at-a-time CLI usage never needs partial-
+//     build cleanup.
 
 use crate::ebuild_package::{self, PackageOptions};
 use portage_repo::{Candidate, CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
@@ -94,16 +95,31 @@ fn ebuild_path(candidate: &Candidate, category: &str, package: &str, version: &s
 
 /// Actually builds a binary package (never merges) for every entry in
 /// `entries` that real `--buildpkgonly` would build -- see the module
-/// doc comment for the full scope. Returns the first failure
-/// encountered (message already includes which package failed), or
-/// `Ok(())` once every entry has a real binary package on disk.
+/// doc comment for the full scope. Without `keep_going`, returns the
+/// *first* failure encountered (message already includes which package
+/// failed) and stops there, matching this pilot's own long-established
+/// default. With real `--keep-going` (real `main.py`'s own `y_or_n`
+/// option, narrowed by this pilot's own CLI transcription to the bare/
+/// `y` form -- see `pretend.rs`'s own `keep_going` doc comment), every
+/// entry is still attempted regardless of earlier failures -- safe here
+/// specifically because the gate `pretend.rs` already checks before
+/// calling this at all (`GraphResult::buildpkgonly_deps_unsatisfied`)
+/// guarantees no entry depends on another, so unlike real portage's own
+/// general `--keep-going` (which must also skip every *dependent* of a
+/// failed package, tracked via real `Scheduler.py`'s own mergelist
+/// recalculation), there is nothing here that a failure could ever
+/// invalidate for a later entry. Failures are collected and returned
+/// together at the end as a single combined error listing every one --
+/// `Ok(())` only once every entry has a real binary package on disk.
 pub fn run_buildpkgonly(
     entries: &[GraphEntry],
     repos: &[RepoConfig],
     root: &Path,
     portage_tmpdir: &Path,
     options: &PackageOptions,
+    keep_going: bool,
 ) -> Result<(), String> {
+    let mut failures = Vec::new();
     for entry in entries {
         if entry.source == CandidateSource::Binary {
             continue;
@@ -113,34 +129,50 @@ pub fn run_buildpkgonly(
         };
         let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, version)
         else {
-            return Err(format!(
+            let failure = format!(
                 "{}/{}-{version}: could not locate its own ebuild file \
                  (repo layout changed since resolution?)",
                 entry.category, entry.package
-            ));
+            );
+            if keep_going {
+                failures.push(failure);
+                continue;
+            }
+            return Err(failure);
         };
         let path = ebuild_path(&candidate, &entry.category, &entry.package, version);
         println!(
             ">>> Building binary for {}/{}-{version}...",
             entry.category, entry.package
         );
-        match ebuild_package::run_package(&path, root, portage_tmpdir, options) {
-            Ok(0) => {}
-            Ok(_) => {
-                return Err(format!(
-                    "{}/{}-{version}: build failed",
-                    entry.category, entry.package
-                ))
+        let failure = match ebuild_package::run_package(&path, root, portage_tmpdir, options) {
+            Ok(0) => None,
+            Ok(_) => Some(format!(
+                "{}/{}-{version}: build failed",
+                entry.category, entry.package
+            )),
+            Err(e) => Some(format!(
+                "{}/{}-{version}: {e}",
+                entry.category, entry.package
+            )),
+        };
+        if let Some(failure) = failure {
+            if keep_going {
+                failures.push(failure);
+                continue;
             }
-            Err(e) => {
-                return Err(format!(
-                    "{}/{}-{version}: {e}",
-                    entry.category, entry.package
-                ))
-            }
+            return Err(failure);
         }
     }
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} package(s) failed to build (--keep-going):\n{}",
+            failures.len(),
+            failures.join("\n")
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -241,6 +273,7 @@ mod tests {
                 binpkg_compress: "bzip2".to_string(),
                 ..PackageOptions::default()
             },
+            false,
         );
         assert!(result.is_ok());
     }
@@ -288,6 +321,7 @@ mod tests {
                 binpkg_compress: "bzip2".to_string(),
                 ..PackageOptions::default()
             },
+            false,
         );
         assert!(result.is_ok(), "{result:?}");
 
@@ -346,6 +380,7 @@ mod tests {
                 binpkg_compress: "bzip2".to_string(),
                 ..PackageOptions::default()
             },
+            false,
         );
         // `fetchpkg`'s own fixture has a real, nonempty SRC_URI but no
         // Manifest entry at all -- refused before any network access is
@@ -356,6 +391,108 @@ mod tests {
         assert!(
             !pkgdir.join("dev-libs/fetchpkg-1.0.tbz2").exists(),
             "must not have built anything"
+        );
+    }
+
+    fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntry {
+        GraphEntry {
+            category: category.into(),
+            package: package.into(),
+            outcome: PretendOutcome::New {
+                version: version.into(),
+            },
+            blockers: vec![],
+            slot: Some("0".into()),
+            use_flags_display: vec![],
+            required_by: vec![],
+            source: CandidateSource::Ebuild,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+        }
+    }
+
+    /// Without real `--keep-going`, a failing entry stops the whole run
+    /// immediately -- a later, independently-buildable entry in the same
+    /// list never even gets attempted.
+    #[test]
+    fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        // fetchpkg (no Manifest entry, always fails) listed *before*
+        // packagepkg (builds cleanly) -- proves packagepkg is never even
+        // attempted once fetchpkg fails.
+        let entries = vec![
+            buildpkgonly_entry("dev-libs", "fetchpkg", "1.0"),
+            buildpkgonly_entry("dev-libs", "packagepkg", "1.0"),
+        ];
+
+        let result = run_buildpkgonly(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            false,
+        );
+        let err = result.expect_err("fetchpkg must still fail");
+        assert!(err.contains("no Manifest entry"), "{err}");
+        assert!(
+            !pkgdir.join("dev-libs/packagepkg-1.0.tbz2").exists(),
+            "packagepkg must never be attempted once fetchpkg fails without --keep-going"
+        );
+    }
+
+    /// With real `--keep-going`, a failing entry does *not* stop the
+    /// run -- packagepkg still gets built despite fetchpkg's own
+    /// failure, and the final error names both entries.
+    #[test]
+    fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let pkgdir = tempdir();
+
+        let entries = vec![
+            buildpkgonly_entry("dev-libs", "fetchpkg", "1.0"),
+            buildpkgonly_entry("dev-libs", "packagepkg", "1.0"),
+        ];
+
+        let result = run_buildpkgonly(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &PackageOptions {
+                debug: false,
+                pkgdir: pkgdir.clone(),
+                distdir: tempdir(),
+                shell: PackageOptions::default().shell,
+                binpkg_compress: "bzip2".to_string(),
+                ..PackageOptions::default()
+            },
+            true,
+        );
+        let err = result.expect_err("fetchpkg still fails overall");
+        assert!(err.contains("dev-libs/fetchpkg-1.0"), "{err}");
+        assert!(err.contains("no Manifest entry"), "{err}");
+
+        assert!(
+            pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file(),
+            "packagepkg must still be built with --keep-going, despite fetchpkg's own failure"
         );
     }
 }

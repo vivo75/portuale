@@ -4304,13 +4304,15 @@ machinery ... refusing rather than silently building an empty
 package"`) rather than letting that happen. Real fetch + Manifest
 verification stays a separately-scoped, not-yet-attempted follow-up.
 
-**v1 scope cuts** (see `emerge_build.rs`'s own module doc comment for the
-full list): a `CandidateSource::Binary` entry (would only come from
-`--usepkg`) is skipped outright, nothing to build. A build failure
-aborts immediately, no partial-graph continuation or `--keep-going`
-equivalent. `--debug` isn't threaded through this path yet (real
-`emerge --debug` still routes to the pre-existing "not implemented"
-bucket, unchanged).
+**v1 scope cuts as of this section's own original slice** (see
+`emerge_build.rs`'s own module doc comment for the current, full list):
+a `CandidateSource::Binary` entry (would only come from `--usepkg`) is
+skipped outright, nothing to build, still true. Real `--keep-going` has
+since shipped -- see this file's own "`emerge --buildpkgonly
+--keep-going`" section below; this paragraph's original "no partial-
+graph continuation" claim is now stale. `--debug` isn't threaded
+through this path yet (real `emerge --debug` still routes to the
+pre-existing "not implemented" bucket, unchanged).
 
 Proven via `dev-libs/packagepkg` (real end-to-end build, same fixture
 task #105-#109 already established) and a new `dev-libs/fetchpkg`
@@ -5600,6 +5602,58 @@ PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild install
 ls -a "${DISTDIR}"
 # .  ..  .verifiedfetchpkg-1.0.tar.gz.portage_lockfile  verifiedfetchpkg-1.0.tar.gz
+```
+
+### `emerge --buildpkgonly --keep-going`
+
+Real `--keep-going` (real `main.py`'s own `y_or_n` option, narrowed by
+this pilot's own CLI transcription, `emerge_options::BOOLEAN_OPTIONS`,
+to the bare/`y` form only -- already recognized on the command line
+before this slice, just silently ignored) is real now, for
+`--buildpkgonly` without `--pretend`: without it, `run_buildpkgonly`
+still stops at the *first* build failure, its own long-established
+default; with it, every remaining entry is still attempted regardless
+of an earlier failure, and all failures are collected into a single
+combined error at the end.
+
+This pilot's own version is genuinely simpler than real portage's own
+general `--keep-going`: real `Scheduler.py` must also skip every
+*dependent* of a failed package (tracked via real mergelist
+recalculation against `_mtimedb`), since a real merge list can have
+real ordering dependencies between entries. `--buildpkgonly`'s own real
+depgraph gate (`GraphResult::buildpkgonly_deps_unsatisfied`, already
+checked in `pretend.rs` before `run_buildpkgonly` is ever called at
+all) guarantees the opposite here: every entry it resolves already has
+every real dependency satisfied by something *already installed*, so
+no entry in this pilot's own build list can ever depend on another one
+in it. A failure therefore has nothing downstream left to invalidate --
+`--keep-going` here reduces to "attempt every entry regardless, report
+every failure at the end," with none of real portage's own mergelist
+machinery needed to make that safe.
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_CONFIGROOT="$(pwd)/PORTING/fixtures"
+export ROOT="$(pwd)/PORTING/fixtures"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export PKGDIR="$(mktemp -d)"
+
+# Without --keep-going: stops at fetchpkg (no Manifest entry), never
+# even attempts packagepkg.
+PORTING/rust/target/release/portuale emerge --buildpkgonly \
+    dev-libs/fetchpkg dev-libs/packagepkg
+ls "${PKGDIR}/dev-libs" 2>&1
+# ls: cannot access '.../dev-libs': No such file or directory
+
+# With --keep-going: fetchpkg still fails, but packagepkg gets built
+# anyway.
+export PKGDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale emerge --buildpkgonly --keep-going \
+    dev-libs/fetchpkg dev-libs/packagepkg
+# emerge: 1 package(s) failed to build (--keep-going):
+# dev-libs/fetchpkg-1.0: fetchpkg-1.0.tar.gz: no Manifest entry, ...
+ls "${PKGDIR}/dev-libs"
+# packagepkg-1.0.tbz2
 ```
 
 ## Running it

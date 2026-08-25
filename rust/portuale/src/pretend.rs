@@ -1519,6 +1519,16 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut newrepo = false;
     // --buildpkgonly/-B: same plain-boolean shape as --newrepo above.
     let mut buildpkgonly = false;
+    // --keep-going: real main.py's own `y_or_n` validator, but this
+    // pilot's own transcription (`emerge_options::BOOLEAN_OPTIONS`)
+    // already narrows it to the bare/`y` form only, the same shape
+    // `--newrepo`/`--buildpkgonly` have -- only meaningful alongside
+    // `--buildpkgonly` (without `--pretend`), see `emerge_build::
+    // run_buildpkgonly`'s own doc comment for why this pilot's own
+    // simplified, no-cross-entry-ordering context makes the real
+    // semantics much narrower than real portage's own general
+    // mergelist-recalculation/resume-state machinery.
+    let mut keep_going = false;
     // --root-deps: real main.py's own `choices: ("True", "rdeps")`, plus
     // a bare form (no `=value` at all). This pilot's own v1 doesn't
     // distinguish "True" (fold DEPEND/BDEPEND/IDEPEND into RDEPEND) from
@@ -1949,6 +1959,9 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--buildpkgonly" || arg == "-B" {
             buildpkgonly = true;
+            i += 1;
+        } else if arg == "--keep-going" {
+            keep_going = true;
             i += 1;
         } else if arg == "--root-deps" || arg == "--root-deps=True" || arg == "--root-deps=rdeps" {
             root_deps = true;
@@ -2717,6 +2730,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &root,
             &portage_tmpdir,
             &package_options,
+            keep_going,
         ) {
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
