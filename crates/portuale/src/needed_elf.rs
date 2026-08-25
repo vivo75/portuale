@@ -1510,6 +1510,52 @@ mod tests {
     }
 
     #[test]
+    fn getlibpaths_reads_ld_so_conf_and_appends_the_real_defaults() {
+        let root = tempdir();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::write(
+            root.join("etc/ld.so.conf"),
+            "# a comment\n/opt/foo/lib\n/opt/bar/lib # inline comment\n\n",
+        )
+        .unwrap();
+
+        let paths = getlibpaths(&root, None);
+        assert_eq!(
+            paths,
+            vec![
+                "/opt/foo/lib".to_string(),
+                "/opt/bar/lib".to_string(),
+                "/usr/lib".to_string(),
+                "/lib".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn getlibpaths_includes_ld_library_path_when_given() {
+        let root = tempdir();
+        let paths = getlibpaths(&root, Some("/opt/a/lib:/opt/b/lib"));
+        assert_eq!(
+            paths,
+            vec![
+                "/opt/a/lib".to_string(),
+                "/opt/b/lib".to_string(),
+                "/usr/lib".to_string(),
+                "/lib".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn getlibpaths_degrades_gracefully_when_ld_so_conf_is_missing() {
+        let root = tempdir();
+        assert_eq!(
+            getlibpaths(&root, None),
+            vec!["/usr/lib".to_string(), "/lib".to_string()]
+        );
+    }
+
+    #[test]
     fn find_consumers_finds_a_consumer_via_the_default_lib_path() {
         let root = tempdir();
         make_object(&root, "/usr/lib/libfoo.so.1");
@@ -1614,6 +1660,55 @@ mod tests {
     }
 
     #[test]
+    fn find_consumers_returns_empty_for_an_object_shadowed_by_a_different_soname_symlink() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1.2.3");
+        // A same-directory soname symlink pointing at a DIFFERENT file --
+        // the object queried below is shadowed.
+        make_object(&root, "/usr/lib/other.so.1");
+        std::os::unix::fs::symlink(
+            root.join("usr/lib/other.so.1"),
+            root.join("usr/lib/libfoo.so.1"),
+        )
+        .unwrap();
+
+        let owner_entries = vec![(
+            "dev-libs/provider-1.0".to_string(),
+            vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1.2.3;libfoo.so.1;;").unwrap()],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+
+        let consumers = find_consumers(FindConsumersArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            obj: "/usr/lib/libfoo.so.1.2.3",
+            exclude_provider: None,
+            greedy: true,
+        })
+        .unwrap();
+        assert!(consumers.is_empty());
+    }
+
+    #[test]
+    fn find_consumers_errors_for_an_object_not_in_the_map() {
+        let root = tempdir();
+        let map = LinkageMap::default();
+        assert!(
+            find_consumers(FindConsumersArgs {
+                root: &root,
+                map: &map,
+                defpath: &[],
+                obj: "/nope",
+                exclude_provider: None,
+                greedy: true
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
     fn find_libs_to_preserve_preserves_a_lib_still_needed_by_a_surviving_consumer() {
         let root = tempdir();
         make_object(&root, "/usr/lib/libfoo.so.1");
@@ -1646,5 +1741,78 @@ mod tests {
             preserved,
             BTreeSet::from(["/usr/lib/libfoo.so.1".to_string()])
         );
+    }
+
+    #[test]
+    fn find_libs_to_preserve_does_not_preserve_when_the_new_package_fully_replaces_it() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1.2.3");
+        // A soname *symlink* (not a hardlink): `alt_paths` for a preserve
+        // node is only ever populated from paths the `old_contents`/consumer
+        // walk actually mentions, never from a filesystem-wide inode scan;
+        // both the file and its soname symlink must be `old_contents`
+        // entries in their own right, as vdb `CONTENTS` records both.
+        std::os::unix::fs::symlink(
+            root.join("usr/lib/libfoo.so.1.2.3"),
+            root.join("usr/lib/libfoo.so.1"),
+        )
+        .unwrap();
+        make_object(&root, "/usr/bin/app");
+
+        let owner_entries = vec![
+            (
+                "dev-libs/oldpkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1.2.3;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/apppkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let old_contents = vec![
+            "/usr/lib/libfoo.so.1.2.3".to_string(),
+            "/usr/lib/libfoo.so.1".to_string(),
+        ];
+        let old_owner = |p: &str| p == "/usr/lib/libfoo.so.1.2.3" || p == "/usr/lib/libfoo.so.1";
+        // The *new* package being merged replaces both the file and the
+        // soname symlink itself -- nothing to preserve.
+        let new_owner = |p: &str| p == "/usr/lib/libfoo.so.1.2.3" || p == "/usr/lib/libfoo.so.1";
+
+        let preserved = find_libs_to_preserve(FindLibsToPreserveArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &old_owner,
+            new_owner_is_owner: &new_owner,
+        });
+        assert!(preserved.is_empty(), "{preserved:?}");
+    }
+
+    #[test]
+    fn find_libs_to_preserve_preserves_nothing_when_there_are_no_real_consumers() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/unused.so.1");
+        let owner_entries = vec![(
+            "dev-libs/oldpkg-1.0".to_string(),
+            vec![NeededEntry::parse("X86_64;/usr/lib/unused.so.1;unused.so.1;;").unwrap()],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let old_contents = vec!["/usr/lib/unused.so.1".to_string()];
+        let old_owner = |p: &str| p == "/usr/lib/unused.so.1";
+        let new_owner = |_: &str| false;
+
+        let preserved = find_libs_to_preserve(FindLibsToPreserveArgs {
+            root: &root,
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &old_owner,
+            new_owner_is_owner: &new_owner,
+        });
+        assert!(preserved.is_empty());
     }
 }
