@@ -23,6 +23,7 @@ mod emerge_build;
 mod emerge_options;
 mod env_update;
 mod fetch;
+mod needed_elf;
 mod pretend;
 
 use std::process::ExitCode;

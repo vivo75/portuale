@@ -3653,6 +3653,21 @@ mod tests {
             needed.contains("/usr/bin/true"),
             "should report the real installed binary's own path: {needed}"
         );
+
+        // `crate::needed_elf::NeededEntry::parse_file` end to end against
+        // this real, live `scanelf`-generated vdb file -- not just the
+        // hand-crafted lines its own unit tests already cover.
+        let entries = crate::needed_elf::NeededEntry::parse_file(&needed);
+        let entry = entries
+            .iter()
+            .find(|e| e.filename == "/usr/bin/true")
+            .expect("the real parser should find the real installed binary's own entry");
+        assert_eq!(entry.arch, "X86_64");
+        assert!(
+            entry.needed.iter().any(|n| n.starts_with("libc.so")),
+            "{:?}",
+            entry.needed
+        );
     }
 
     fn fixtures_root() -> PathBuf {

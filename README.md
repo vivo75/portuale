@@ -5030,6 +5030,46 @@ cat "${ROOT}"/var/db/pkg/dev-libs/elfpkg-1.0/NEEDED.ELF.2
 # X86_64;/usr/bin/true;;;libc.so.6
 ```
 
+### `preserve-libs` registration: `NEEDED.ELF.2` parsing (data model only, confirmed with the user before implementing)
+
+A second, deliberately narrow step toward `preserve-libs` registration:
+`needed_elf.rs` (new module) ports real `NeededEntry`
+(`lib/portage/util/_dyn_libs/NeededEntry.py`) -- the data model for one
+parsed `NEEDED.ELF.2` line (`arch;filename;soname;rpaths;needed`,
+semicolon-delimited, an optional 6th `multilib_category` field, any
+further fields silently ignored). `soname` is a plain, possibly-empty
+`String`, not `Option`, matching real Python exactly: real `scanelf`
+genuinely reports an empty soname for some real libraries (e.g. musl's
+own `libc.so`, which has no `DT_SONAME` at all -- precisely why real
+`bin/misc-functions.sh` deliberately never invokes `scanelf -q`, which
+would otherwise omit such libraries entirely). `rpaths`'s own real
+`"  -  "` sentinel (two spaces, a dash, two spaces) -- the placeholder
+that same `-q`-avoidance forces real portage to handle itself -- means
+"no rpath at all" and is recognized as such. A malformed line (fewer
+than 5 fields) parses to `None`; `parse_file` skips it and keeps going,
+the same tolerance real `LinkageMap.rebuild()` itself already has.
+
+**Confirmed scope, before implementing**: parsing only. No `LinkageMap`
+graph, no `findConsumers`, no preserve-libs decision -- real
+`LinkageMapELF.rebuild()` alone is ~280 lines (multilib categorization,
+`$ORIGIN` runpath expansion, implicit-runpath inference for bundled
+libraries, per-architecture soname maps), `findConsumers()` is ~140
+more, and `_find_libs_to_preserve()`'s own graph-reachability decision
+is another ~80 -- still not a single slice, even with `NEEDED.ELF.2`
+generation and parsing both now real. This module has no real caller
+yet (`#[allow(dead_code)]`, documented in its own module doc comment) --
+the same "narrow, additive, no wiring until the next slice needs it"
+shape this pilot used for explicit `masters =` parsing landing before
+eclass masters-chain search ever consumed it.
+
+Verified directly against hand-crafted lines (a real soname/multiple
+rpaths/multiple needed entries; the `"  -  "` rpath sentinel; the
+optional multilib-category field, both present and empty; extra fields
+beyond the sixth ignored; a malformed line rejected) and end to end
+against a real, live `scanelf`-generated `NEEDED.ELF.2` (the same
+`dev-libs/elfpkg` fixture above, parsed back out of the real vdb entry
+`run_merge` just wrote).
+
 ### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`
 
 The last item on `ebuild_merge.rs`'s own gap list from the "Real merge/
