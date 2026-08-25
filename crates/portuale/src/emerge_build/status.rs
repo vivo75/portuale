@@ -95,6 +95,56 @@ impl StatusMode {
     }
 }
 
+/// The `>>> Jobs:` line plus the `Scheduler._status_msg` half that prefixes
+/// every status line with a blank line unless in background mode. One value
+/// per merge run, shared by reference (the `-jN` scheduler prints from worker
+/// threads, so the counters live behind a mutex).
+///
+/// `maxval` is the build-bound count here (see `scheduler_needs_build`);
+/// the `merge-wait` arm is implemented but always reads 0 (portuale
+/// serializes every vdb merge and models no merge-wait queue).
+pub(crate) struct StatusDisplay {
+    pub(crate) mode: StatusMode,
+    pub(crate) color: crate::color::Colorizer,
+    pub(crate) state: std::sync::Mutex<StatusState>,
+}
+
+pub(crate) struct StatusState {
+    pub(crate) maxval: usize,
+    pub(crate) curval: usize,
+    pub(crate) running: usize,
+    pub(crate) failed: usize,
+    /// A `>>> Jobs:` line has been printed: the current status re-displays
+    /// after every status line once one is on screen.
+    pub(crate) displayed: bool,
+}
+
+impl StatusDisplay {
+    pub(crate) fn new(mode: StatusMode, maxval: usize, color: crate::color::Colorizer) -> Self {
+        StatusDisplay {
+            mode,
+            color,
+            state: std::sync::Mutex::new(StatusState {
+                maxval,
+                curval: 0,
+                running: 0,
+                failed: 0,
+                displayed: false,
+            }),
+        }
+    }
+}
+
+/// Arguments of [`jobs_line`].
+pub(crate) struct JobsLineArgs<'a> {
+    pub(crate) color: &'a crate::color::Colorizer,
+    pub(crate) curval: usize,
+    pub(crate) maxval: usize,
+    pub(crate) running: usize,
+    pub(crate) failed: usize,
+    pub(crate) merge_wait: usize,
+}
+
 /// `{Emerging|Emerging binary} ({cur} of {max}) {cpv}::{repo}`, plus
 /// ` for {root}` when `ROOT != "/"`. The counters wear
 /// `MERGE_LIST_PROGRESS`, the `cpv::repo` wears `PKG_MERGE` (source) or
