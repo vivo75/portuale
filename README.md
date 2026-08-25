@@ -5030,7 +5030,7 @@ cat "${ROOT}"/var/db/pkg/dev-libs/elfpkg-1.0/NEEDED.ELF.2
 # X86_64;/usr/bin/true;;;libc.so.6
 ```
 
-### `preserve-libs` registration: `NEEDED.ELF.2` parsing (data model only, confirmed with the user before implementing)
+### `preserve-libs` registration: `NEEDED.ELF.2` parsing and the real per-package vdb read (still data only, confirmed with the user before implementing)
 
 A second, deliberately narrow step toward `preserve-libs` registration:
 `needed_elf.rs` (new module) ports real `NeededEntry`
@@ -5049,26 +5049,41 @@ that same `-q`-avoidance forces real portage to handle itself -- means
 than 5 fields) parses to `None`; `parse_file` skips it and keeps going,
 the same tolerance real `LinkageMap.rebuild()` itself already has.
 
-**Confirmed scope, before implementing**: parsing only. No `LinkageMap`
-graph, no `findConsumers`, no preserve-libs decision -- real
-`LinkageMapELF.rebuild()` alone is ~280 lines (multilib categorization,
-`$ORIGIN` runpath expansion, implicit-runpath inference for bundled
-libraries, per-architecture soname maps), `findConsumers()` is ~140
-more, and `_find_libs_to_preserve()`'s own graph-reachability decision
-is another ~80 -- still not a single slice, even with `NEEDED.ELF.2`
-generation and parsing both now real. This module has no real caller
-yet (`#[allow(dead_code)]`, documented in its own module doc comment) --
-the same "narrow, additive, no wiring until the next slice needs it"
-shape this pilot used for explicit `masters =` parsing landing before
-eclass masters-chain search ever consumed it.
+A third narrow step, added in the same slice: `read_all_needed_entries`
+ports real `LinkageMap.rebuild()`'s own *initial data-gathering loop*
+(`LinkageMapELF.py:218-231`) -- for every real installed package (real
+`dbapi.cpv_all()`, walked the same way `ebuild_merge::find_owners`
+already walks every installed package's own vdb directory), its own
+real vdb-stored `NEEDED.ELF.2`, parsed via `NeededEntry::parse_file`.
+Degrades gracefully to an empty entry list for a package with no such
+file at all (real `aux_get` itself already tolerates a missing aux file
+the same way, returning `""`) -- a package is still included, with an
+empty list, matching real `rebuild()`'s own unconditional per-cpv walk.
+
+**Confirmed scope, before implementing**: parsing plus this one raw read
+step, nothing more. No soname map, no multilib/runpath resolution
+(real `rebuild()`'s own `libs`/`obj_properties` indexing, `providers`/
+`consumers` bucketing, `$ORIGIN` expansion), no `findConsumers`, no
+preserve-libs decision -- real `LinkageMapELF.rebuild()`'s own indexing
+alone is ~280 lines total (this step covers only its first ~15),
+`findConsumers()` is ~140 more, and `_find_libs_to_preserve()`'s own
+graph-reachability decision is another ~80 -- still not a single slice,
+even with generation, parsing, and the per-package read all now real.
+This module has no real caller yet (`#[allow(dead_code)]`, documented in
+its own module doc comment) -- the same "narrow, additive, no wiring
+until the next slice needs it" shape this pilot used for explicit
+`masters =` parsing landing before eclass masters-chain search ever
+consumed it.
 
 Verified directly against hand-crafted lines (a real soname/multiple
 rpaths/multiple needed entries; the `"  -  "` rpath sentinel; the
 optional multilib-category field, both present and empty; extra fields
-beyond the sixth ignored; a malformed line rejected) and end to end
-against a real, live `scanelf`-generated `NEEDED.ELF.2` (the same
-`dev-libs/elfpkg` fixture above, parsed back out of the real vdb entry
-`run_merge` just wrote).
+beyond the sixth ignored; a malformed line rejected; multiple installed
+packages, some with a real `NEEDED.ELF.2`, some without; a missing
+`var/db/pkg` degrading to an empty result) and end to end against a
+real, live `scanelf`-generated `NEEDED.ELF.2` (the same `dev-libs/elfpkg`
+fixture above, both parsed directly out of the real vdb entry and found
+via a real, full `read_all_needed_entries` walk after `run_merge`).
 
 ### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`
 

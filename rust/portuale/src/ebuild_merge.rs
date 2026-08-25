@@ -3668,6 +3668,16 @@ mod tests {
             "{:?}",
             entry.needed
         );
+
+        // `crate::needed_elf::read_all_needed_entries` end to end: the
+        // real vdb walk finds this exact package's own real entry too.
+        let all = crate::needed_elf::read_all_needed_entries(&root);
+        let (cpv, cpv_entries) = all
+            .iter()
+            .find(|(cpv, _)| cpv == "dev-libs/elfpkg-1.0")
+            .expect("read_all_needed_entries should find the real installed package");
+        assert_eq!(cpv, "dev-libs/elfpkg-1.0");
+        assert!(cpv_entries.iter().any(|e| e.filename == "/usr/bin/true"));
     }
 
     fn fixtures_root() -> PathBuf {

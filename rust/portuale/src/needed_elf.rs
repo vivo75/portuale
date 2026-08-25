@@ -5,20 +5,25 @@
 // which `ebuild_merge::write_vdb_entry` now copies into every real vdb
 // entry that has one (see that function's own doc comment).
 //
-// Deliberately just the data primitive, confirmed with the user before
-// implementing: parsing only, no `LinkageMap` graph, no
-// `findConsumers`, no preserve-libs decision -- those remain real,
-// separately-scoped future work (`LinkageMapELF.rebuild()` alone is
-// ~280 lines of multilib categorization, `$ORIGIN` runpath expansion,
-// and implicit-runpath inference for bundled libraries;
-// `findConsumers()` is ~140 more; `_find_libs_to_preserve()`'s own
-// graph-reachability decision is another ~80 -- see
+// Deliberately just the data primitive plus one narrow read step,
+// confirmed with the user before implementing each time: real parsing
+// (`NeededEntry`) and real `LinkageMap.rebuild()`'s own initial data-
+// gathering loop (`read_all_needed_entries`, every installed package's
+// own vdb-stored `NEEDED.ELF.2`) -- no soname map, no multilib/runpath
+// resolution, no `findConsumers`, no preserve-libs decision. Those
+// remain real, separately-scoped future work (`rebuild()`'s own
+// indexing alone is ~280 lines of multilib categorization, `$ORIGIN`
+// runpath expansion, and implicit-runpath inference for bundled
+// libraries; `findConsumers()` is ~140 more; `_find_libs_to_preserve()`'s
+// own graph-reachability decision is another ~80 -- see
 // `PORTING/PROMPT-next.md`'s own "preserve-libs registration" backlog
 // entry). `#[allow(dead_code)]` below is deliberate: this module has no
 // real caller yet, the same "narrow, additive, no wiring until the next
 // slice needs it" shape this pilot has used before (e.g. `masters =`
 // parsing landing before eclass masters-chain search consumed it).
 #![allow(dead_code)]
+
+use std::path::Path;
 
 /// Real `NeededEntry.__slots__`: one parsed `NEEDED.ELF.2` line.
 /// `soname` is a plain (possibly empty) string, not `Option`, matching
@@ -93,6 +98,65 @@ impl NeededEntry {
     pub fn parse_file(text: &str) -> Vec<Self> {
         text.lines().filter_map(Self::parse).collect()
     }
+}
+
+/// Real `LinkageMap.rebuild()`'s own initial data-gathering loop
+/// (`LinkageMapELF.py:218-231`): for every real installed package (real
+/// `dbapi.cpv_all()`, walked here the same way `ebuild_merge::
+/// find_owners` already walks every installed package's own vdb
+/// directory), its own real vdb-stored `NEEDED.ELF.2` (real `aux_get(cpv,
+/// [self._needed_aux_key])`), parsed via `NeededEntry::parse_file`.
+/// Degrades gracefully to an empty entry list for a package with no such
+/// file at all (real `aux_get` itself already tolerates a missing aux
+/// file the same way, returning `""`) -- a `cpv` is still included, with
+/// an empty `Vec`, matching real `rebuild()`'s own unconditional per-cpv
+/// walk (it never skips a `cpv` just because it happens to own no ELF
+/// content). Returns `(cpv, entries)` pairs in sorted vdb directory-
+/// listing order, for this pilot's own determinism -- real `cpv_all()`
+/// has no particular real ordering guarantee, so this doesn't lose
+/// anything real by sorting.
+///
+/// Still just the raw per-package data: no soname map, no multilib/
+/// runpath resolution (real `rebuild()`'s own `libs`/`obj_properties`
+/// indexing, `providers`/`consumers` bucketing, `$ORIGIN` expansion --
+/// all real, separately-scoped future work), so nothing here yet answers
+/// "what does path X provide" or "what needs path X" -- only "what did
+/// each installed package's own real `NEEDED.ELF.2` say".
+pub fn read_all_needed_entries(root: &Path) -> Vec<(String, Vec<NeededEntry>)> {
+    let mut result = Vec::new();
+    let pkg_root = root.join("var/db/pkg");
+    let Ok(categories) = std::fs::read_dir(&pkg_root) else {
+        return result;
+    };
+    let mut category_names: Vec<String> = categories
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    category_names.sort();
+
+    for category in category_names {
+        let category_path = pkg_root.join(&category);
+        let Ok(packages) = std::fs::read_dir(&category_path) else {
+            continue;
+        };
+        let mut pf_names: Vec<String> = packages
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        pf_names.sort();
+
+        for pf in pf_names {
+            let cpv = format!("{category}/{pf}");
+            let needed_path = category_path.join(&pf).join("NEEDED.ELF.2");
+            let entries = std::fs::read_to_string(&needed_path)
+                .map(|text| NeededEntry::parse_file(&text))
+                .unwrap_or_default();
+            result.push((cpv, entries));
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -172,5 +236,50 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].filename, "/usr/bin/true");
         assert_eq!(entries[1].filename, "/usr/lib/libfoo.so.1");
+    }
+
+    fn tempdir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "portuale-needed-elf-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn read_all_needed_entries_covers_every_installed_package_including_ones_without_one() {
+        let root = tempdir();
+        let with_needed = root.join("var/db/pkg/dev-libs/withneeded-1.0");
+        let without_needed = root.join("var/db/pkg/dev-libs/withoutneeded-1.0");
+        std::fs::create_dir_all(&with_needed).unwrap();
+        std::fs::create_dir_all(&without_needed).unwrap();
+        std::fs::write(
+            with_needed.join("NEEDED.ELF.2"),
+            "X86_64;/usr/bin/withneeded;;;libc.so.6\n",
+        )
+        .unwrap();
+
+        let all = read_all_needed_entries(&root);
+        assert_eq!(
+            all,
+            vec![
+                (
+                    "dev-libs/withneeded-1.0".to_string(),
+                    vec![NeededEntry::parse("X86_64;/usr/bin/withneeded;;;libc.so.6").unwrap()]
+                ),
+                ("dev-libs/withoutneeded-1.0".to_string(), vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_all_needed_entries_degrades_gracefully_when_var_db_pkg_is_missing() {
+        let root = tempdir();
+        assert_eq!(read_all_needed_entries(&root), Vec::new());
     }
 }
