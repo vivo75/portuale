@@ -825,6 +825,173 @@ mod tests {
         .expect("missing entries are not an error");
     }
 
+    #[test]
+    fn remove_contents_skips_a_path_another_same_slot_package_still_owns() {
+        // A path another same-slot entry's `CONTENTS` claims is left alone
+        // before the mtime check.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share")).unwrap();
+        std::fs::write(root.join("usr/share/shared.txt"), b"shared").unwrap();
+        std::fs::write(root.join("usr/share/only-mine.txt"), b"mine").unwrap();
+
+        // Matching mtimes, so only the ownership check can explain the skip.
+        let shared_mtime = ebuild_merge::mtime_secs(
+            &std::fs::metadata(root.join("usr/share/shared.txt")).unwrap(),
+        )
+        .unwrap();
+        let mine_mtime = ebuild_merge::mtime_secs(
+            &std::fs::metadata(root.join("usr/share/only-mine.txt")).unwrap(),
+        )
+        .unwrap();
+
+        let other_vdb = root.join("var/db/pkg/dev-libs/otherpkg-2.0");
+        std::fs::create_dir_all(&other_vdb).unwrap();
+        std::fs::write(
+            other_vdb.join("CONTENTS"),
+            format!("obj /usr/share/shared.txt abc123 {shared_mtime}\n"),
+        )
+        .unwrap();
+
+        let contents = format!(
+            "obj /usr/share/shared.txt abc123 {shared_mtime}\n\
+             obj /usr/share/only-mine.txt abc123 {mine_mtime}\n"
+        );
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &["otherpkg-2.0".to_string()],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("usr/share/shared.txt").is_file(),
+            "a path another same-slot package still owns must survive unmerge"
+        );
+        assert!(
+            !root.join("usr/share/only-mine.txt").exists(),
+            "a path no other same-slot package owns is still deleted normally"
+        );
+    }
+
+    #[test]
+    fn remove_contents_collects_a_removed_cfgfiledict_path_into_stale_confmem() {
+        // A removed path the config memory still remembers is collected
+        // for the caller to drop.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("etc.conf"), b"content").unwrap();
+        let mtime =
+            ebuild_merge::mtime_secs(&std::fs::metadata(root.join("etc.conf")).unwrap()).unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        cfgfiledict.insert("/etc.conf".to_string(), "deadbeef".to_string());
+        cfgfiledict.insert("/untouched.conf".to_string(), "cafebabe".to_string());
+
+        let contents = format!("obj /etc.conf abc123 {mtime}\n");
+        let mut stale_confmem = Vec::new();
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &cfgfiledict,
+            stale_confmem: &mut stale_confmem,
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert_eq!(stale_confmem, vec!["/etc.conf".to_string()]);
+    }
+
+    #[test]
+    fn remove_contents_does_not_mark_an_owned_path_stale_even_if_cfgfiledict_remembers_it() {
+        // An owned path is never stale: the memory still serves the survivor.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share")).unwrap();
+        std::fs::write(root.join("usr/share/shared.txt"), b"shared").unwrap();
+        let mtime = ebuild_merge::mtime_secs(
+            &std::fs::metadata(root.join("usr/share/shared.txt")).unwrap(),
+        )
+        .unwrap();
+
+        let other_vdb = root.join("var/db/pkg/dev-libs/otherpkg-2.0");
+        std::fs::create_dir_all(&other_vdb).unwrap();
+        std::fs::write(
+            other_vdb.join("CONTENTS"),
+            format!("obj /usr/share/shared.txt abc123 {mtime}\n"),
+        )
+        .unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        cfgfiledict.insert("/usr/share/shared.txt".to_string(), "deadbeef".to_string());
+
+        let contents = format!("obj /usr/share/shared.txt abc123 {mtime}\n");
+        let mut stale_confmem = Vec::new();
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &["otherpkg-2.0".to_string()],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &cfgfiledict,
+            stale_confmem: &mut stale_confmem,
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(stale_confmem.is_empty());
+    }
+
+    #[test]
+    fn remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file() {
+        // Without the cleanup the info dir would never empty out (`dir`
+        // is untracked).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/info")).unwrap();
+        std::fs::write(root.join("usr/share/info/dir"), b"").unwrap();
+
+        let contents = "dir /usr/share\ndir /usr/share/info\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            !root.join("usr/share/info").exists(),
+            "the info directory is fully removed once its own leftover index is cleaned up"
+        );
+        assert!(!root.join("usr/share").exists());
+    }
+
     /// With defaults a locally-modified file is deleted anyway
     /// (`unmerge-orphans` is default-on).
     #[test]
