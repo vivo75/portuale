@@ -5030,7 +5030,7 @@ cat "${ROOT}"/var/db/pkg/dev-libs/elfpkg-1.0/NEEDED.ELF.2
 # X86_64;/usr/bin/true;;;libc.so.6
 ```
 
-### `preserve-libs` registration: `NEEDED.ELF.2` parsing, the per-package vdb read, and the real soname map (still no graph decision, confirmed with the user before implementing)
+### `preserve-libs` registration: the full `LinkageMap`/`findConsumers`/decision computation (still not wired into a real merge, confirmed with the user before implementing)
 
 A second, deliberately narrow step toward `preserve-libs` registration:
 `needed_elf.rs` (new module) ports real `NeededEntry`
@@ -5090,15 +5090,69 @@ resolving fallback, a deliberate simplification for a case that should
 be rare -- an entry read moments after real `scanelf` itself confirmed
 the object's existence, gone by the time this runs).
 
-**Confirmed scope, before implementing, each of these four times**: no
-`findConsumers` (~140 lines) and no `_find_libs_to_preserve()`'s own
-graph-reachability decision (~80 lines) -- still not a single slice,
-even with generation, parsing, the per-package read, and now the soname
-map itself all real. This module has no real caller yet
-(`#[allow(dead_code)]`, documented in its own module doc comment) -- the
-same "narrow, additive, no wiring until the next slice needs it" shape
-this pilot used for explicit `masters =` parsing landing before eclass
-masters-chain search ever consumed it.
+A fifth and final computational step, after re-reading `findConsumers()`/
+`_find_libs_to_preserve()` in full to confirm the real scope before
+committing to it: `getlibpaths`, `find_consumers`, and `find_libs_to_
+preserve` port the rest of the real subsystem. `getlibpaths`
+(`lib/portage/util/__init__.py:1945-1963`) is the real default dynamic-
+linker search path -- `LD_LIBRARY_PATH` (an explicit parameter here, not
+an ambient env read), every line of the real `/etc/ld.so.conf`, then
+the real `/usr/lib`/`/lib` defaults. Its own `/etc/ld.so.conf.d/*.conf`
+`include`-directive expansion is deliberately not reproduced, the same
+v1 cut `env_update.rs`'s own module doc comment already documents and
+confirmed with the user for the *other* real `/etc/ld.so.conf` reader in
+this pilot.
+
+`find_consumers` ports real `LinkageMap.findConsumers()`
+(`LinkageMapELF.py:817-960`), narrowed to the one real calling
+convention `_find_libs_to_preserve` itself actually uses (`obj` always a
+path string; `exclude_providers` always exactly one real callable, not a
+general collection). Real "shadowed by another version" detection first
+(a same-directory soname symlink pointing somewhere else entirely means
+no consumers at all -- the real binutils-`CHOST`-symlink bug context);
+then real `exclude_providers`/`greedy` consumer-satisfaction filtering
+(a consumer already reachable via some *other*, non-excluded provider of
+the same soname is dropped from the result -- it wouldn't actually
+break); finally, only consumers that can actually *reach* the queried
+object (its own directory in their own runpath or the real default lib
+path) are returned.
+
+`find_libs_to_preserve` ports real `dblink._find_libs_to_preserve()`
+(`vartree.py:3491-3595`), narrowed to its own pure computation -- the
+real gating conditions (`FEATURES=preserve-libs` on, a real
+`_installed_instance`, etc.) are left as the *caller's* own
+responsibility, since there is no real caller yet. A minimal `LibGraph`
+(real `portage.util.digraph`, narrowed to exactly the three operations
+`_find_libs_to_preserve` uses: `add(node, parent)`, `root_nodes()`,
+`child_nodes()`) builds a real dependency graph from `find_consumers`
+results -- an edge from each provider to each of its own real consumers,
+skipping a consumer that's itself being removed and isn't also a
+provider. Walking from every real "root" consumer (nothing depends on
+it, and it isn't itself a provider) finds every provider transitively
+reachable -- those are the real preserve candidates. For each, real
+hardlink/soname-symlink classification (`stat.S_ISREG` via
+`symlink_metadata`, matching real `os.lstat`) decides what to actually
+preserve, skipping a candidate the *new* package already replaces both
+the real file *and* the soname symlink for -- that "does the new
+package already cover it" check is folded into a caller-supplied
+closure rather than a separate `unmerge: bool` parameter, since real
+`not unmerge and self.isowner(f)` collapses to `false` for every real
+unmerge-only caller anyway.
+
+**Confirmed scope, before implementing, each of these five times**: even
+with the pure computation now complete, this slice does *not* wire `find
+_libs_to_preserve`'s own output into a real merge/unmerge's actual
+control flow -- calling it at the right point in `ebuild_merge::
+merge_after_install`, writing results into the real `preserved_libs_
+registry.json` via the already-existing `write_plib_registry`, and
+making `ebuild_unmerge::remove_contents` skip deleting a preserved path
+are all real, separate control-flow integration work across two already-
+tested files, left for a following slice rather than risking the
+already-shipped preserve-libs *consult/unregister* side. This module
+still has no real caller (`#[allow(dead_code)]`, documented in its own
+module doc comment) -- the same "narrow, additive, no wiring until the
+next slice needs it" shape this pilot used for explicit `masters =`
+parsing landing before eclass masters-chain search ever consumed it.
 
 Verified directly against hand-crafted lines/entries (`NeededEntry`
 parsing: a real soname/multiple rpaths/multiple needed entries, the
@@ -5112,12 +5166,22 @@ category fallback, `$ORIGIN` expansion, implicit same-owner runpath
 inference *not* crossing package boundaries, real inode-based dedup of
 two recorded paths for the same real file with both kept as
 `alt_paths`, and the real path-string fallback for a since-vanished
-object) and end to end against a real, live `scanelf`-generated
-`NEEDED.ELF.2` (the same `dev-libs/elfpkg` fixture above, parsed,
-collected, and indexed through the full real chain -- `NeededEntry::
-parse_file` -> `read_all_needed_entries` -> `rebuild` -- after a real
-`run_merge`, confirming the real installed binary's own real `DT_NEEDED`
-entries land as real consumers).
+object; `getlibpaths`: real `/etc/ld.so.conf` reading with comments and
+an explicit `LD_LIBRARY_PATH`, degrading gracefully when missing;
+`find_consumers`: a consumer found via the real default lib path, a
+provider whose own directory is unreachable correctly excluded, a
+consumer already satisfied by a non-excluded provider correctly
+dropped, a shadowed object returning no consumers at all, and a real
+`KeyError`-equivalent for an unknown object; `find_libs_to_preserve`: a
+lib still needed by a real surviving consumer is preserved, a lib the
+new package fully replaces -- both the real file and its own real
+soname symlink -- is not, and a lib with no real consumers at all is
+never preserved) and end to end against a real, live `scanelf`-
+generated `NEEDED.ELF.2` for `rebuild` specifically (the same
+`dev-libs/elfpkg` fixture, parsed, collected, and indexed through the
+full real chain -- `NeededEntry::parse_file` -> `read_all_needed_
+entries` -> `rebuild` -- after a real `run_merge`, confirming the real
+installed binary's own real `DT_NEEDED` entries land as real consumers).
 
 ### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`
 

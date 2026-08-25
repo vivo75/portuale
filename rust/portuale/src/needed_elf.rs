@@ -7,20 +7,28 @@
 //
 // Each step confirmed with the user before implementing: real parsing
 // (`NeededEntry`), real `LinkageMap.rebuild()`'s own initial data-
-// gathering loop (`read_all_needed_entries`), and now `rebuild()`'s own
-// remaining indexing logic (`rebuild`, `ObjKey`/`ObjProperties`/
-// `SonameMap`/`LinkageMap` -- multilib categorization, `$ORIGIN` runpath
-// expansion, implicit-runpath inference for bundled libraries, and the
-// per-architecture providers/consumers soname map). Deliberately still
-// missing: the live-`scanelf`-for-orphaned-preserved-libs branch inside
-// real `rebuild()` itself (`LinkageMapELF.py:233-324` -- the one place
-// real portage falls back to a raw ELF header read rather than
-// `NEEDED.ELF.2`, out of scope until preserve-libs actually needs it),
-// `findConsumers()` (~140 lines), and `_find_libs_to_preserve()`'s own
-// graph-reachability decision (~80 lines) -- both real, separately-
-// scoped future work (see `PORTING/PROMPT-next.md`'s own "preserve-libs
-// registration" backlog entry). `#[allow(dead_code)]` below is
-// deliberate: this module has no real caller yet, the same "narrow,
+// gathering loop (`read_all_needed_entries`), `rebuild()`'s own
+// remaining indexing logic (`rebuild`), and now `findConsumers()` +
+// `_find_libs_to_preserve()`'s own graph-reachability decision
+// (`find_consumers`/`find_libs_to_preserve`, plus the small primitives
+// they both need: `getlibpaths`, a minimal `LibGraph`). Deliberately
+// still missing: the live-`scanelf`-for-orphaned-preserved-libs branch
+// inside real `rebuild()` itself (`LinkageMapELF.py:233-324` -- the one
+// place real portage falls back to a raw ELF header read rather than
+// `NEEDED.ELF.2`, out of scope until preserve-libs actually needs it).
+//
+// What this slice does NOT do, even though the pure-computation port is
+// now complete: wire `find_libs_to_preserve`'s own output into a real
+// merge/unmerge's actual control flow (calling it at the right point in
+// `ebuild_merge::merge_after_install`, writing results into the real
+// `preserved_libs_registry.json` via the already-existing
+// `write_plib_registry`, and making `ebuild_unmerge::remove_contents`
+// skip deleting a preserved path). That's a real, separate control-flow
+// integration task across two already-tested files, not a "port this
+// Python function" task -- left for a following slice so it can be
+// scoped and reviewed on its own, without risk to the already-shipped
+// preserve-libs *consult/unregister* side. `#[allow(dead_code)]` below
+// is deliberate: this module has no real caller yet, the same "narrow,
 // additive, no wiring until the next slice needs it" shape this pilot
 // has used before (e.g. `masters =` parsing landing before eclass
 // masters-chain search consumed it).
@@ -436,6 +444,394 @@ pub fn rebuild(root: &Path, owner_entries: &[(String, Vec<NeededEntry>)]) -> Lin
     map
 }
 
+/// Real `os.path.dirname`: everything before the last `/`, or `""` if
+/// there is none -- unlike `Path::parent()`, `dirname("/foo")` is `"/"`
+/// (not `None`), matching real Python's own behavior exactly (needed
+/// here since `$ORIGIN`/soname-symlink logic both rely on that).
+fn dirname(path: &str) -> String {
+    match path.rfind('/') {
+        Some(0) => "/".to_string(),
+        Some(i) => path[..i].to_string(),
+        None => String::new(),
+    }
+}
+
+/// Real `os.path.basename`: everything after the last `/`.
+fn basename(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(i) => &path[i + 1..],
+        None => path,
+    }
+}
+
+/// Real `grabfile()` (`lib/portage/util/__init__.py:156-185`), narrowed
+/// to what `getlibpaths`'s own `read_ld_so_conf` actually needs:
+/// whitespace-normalizes each line, strips a `#`-prefixed token onward
+/// (an inline, not just a leading, comment), skips anything left empty.
+/// A missing file degrades to an empty result, matching real
+/// `grabfile`'s own tolerance for a nonexistent file.
+fn grab_lines(path: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let tokens: Vec<&str> = line
+                .split_whitespace()
+                .take_while(|tok| !tok.starts_with('#'))
+                .collect();
+            if tokens.is_empty() {
+                None
+            } else {
+                Some(tokens.join(" "))
+            }
+        })
+        .collect()
+}
+
+/// Real `getlibpaths()` (`lib/portage/util/__init__.py:1945-1963`): the
+/// real default dynamic-linker library search path -- `LD_LIBRARY_PATH`
+/// (explicit parameter here, not an ambient env read, the same
+/// "explicit parameter over ambient env read inside library code"
+/// reasoning `portage_fetch::FetchOptions::gentoo_mirrors` already
+/// established), every line of the real, root-scoped `/etc/ld.so.conf`
+/// (real `grabfile` semantics, see `grab_lines`), then the real
+/// `/usr/lib`/`/lib` defaults -- each `normalize_path`'d. Real
+/// `/etc/ld.so.conf.d/*.conf`'s own `include` directive expansion is
+/// deliberately not reproduced here, the same v1 cut this pilot's own
+/// `env_update.rs` module doc comment already documents and confirmed
+/// with the user for the *other* real `/etc/ld.so.conf` reader in this
+/// pilot (`run_env_update`'s own candidate-lib-dir scan) -- a rare,
+/// admin-configured mechanism, not populated by anything this pilot's
+/// own fixtures do.
+pub fn getlibpaths(root: &Path, ld_library_path: Option<&str>) -> Vec<String> {
+    let mut rval: Vec<String> = ld_library_path
+        .unwrap_or("")
+        .split(':')
+        .map(String::from)
+        .collect();
+    rval.extend(grab_lines(&root.join("etc/ld.so.conf")));
+    rval.push("/usr/lib".to_string());
+    rval.push("/lib".to_string());
+    rval.into_iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| normalize_path(&s))
+        .collect()
+}
+
+/// Real `portage.util.digraph`, narrowed to exactly what real
+/// `_find_libs_to_preserve()` uses: `add(node, parent)` (real "adds the
+/// specified node with the specified parent" -- an edge where `parent`
+/// depends on `node`), `root_nodes()` (real: nodes with no parent --
+/// nothing in the graph depends on them), and `child_nodes()` (real:
+/// what a node itself depends on). Nodes are `ObjKey`s here (real
+/// `_LibGraphNode` wraps an `_ObjectKey`, the exact same real dedup-by-
+/// inode identity `ObjKey` already gives this port); `alt_paths` are
+/// tracked alongside, the same real "multiple recorded paths can be the
+/// same real object" bookkeeping `path_to_node` itself does.
+#[derive(Debug, Clone, Default)]
+struct LibGraph {
+    children: BTreeMap<ObjKey, BTreeSet<ObjKey>>,
+    parents: BTreeMap<ObjKey, BTreeSet<ObjKey>>,
+    alt_paths: BTreeMap<ObjKey, BTreeSet<String>>,
+}
+
+impl LibGraph {
+    fn ensure_node(&mut self, key: &ObjKey) {
+        self.children.entry(key.clone()).or_default();
+        self.parents.entry(key.clone()).or_default();
+    }
+
+    fn add(&mut self, node: &ObjKey, parent: Option<&ObjKey>) {
+        self.ensure_node(node);
+        if let Some(parent) = parent {
+            self.ensure_node(parent);
+            self.children.get_mut(parent).unwrap().insert(node.clone());
+            self.parents.get_mut(node).unwrap().insert(parent.clone());
+        }
+    }
+
+    /// Real `path_to_node`: registers (or reuses) the graph node for
+    /// `path`'s own real object identity, recording `path` itself as one
+    /// of that node's own `alt_paths` -- deliberately *not* itself an
+    /// `add()` call (real `path_to_node` doesn't add an edge either; the
+    /// caller decides separately whether and how this node connects).
+    fn path_to_node(&mut self, root: &Path, path: &str) -> ObjKey {
+        let key = obj_key(root, path);
+        self.alt_paths
+            .entry(key.clone())
+            .or_default()
+            .insert(path.to_string());
+        key
+    }
+
+    fn root_nodes(&self) -> Vec<ObjKey> {
+        self.parents
+            .iter()
+            .filter(|(_, parents)| parents.is_empty())
+            .map(|(node, _)| node.clone())
+            .collect()
+    }
+
+    fn child_nodes(&self, node: &ObjKey) -> Vec<ObjKey> {
+        self.children
+            .get(node)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    }
+}
+
+/// Real `LinkageMap.findConsumers()` (`LinkageMapELF.py:817-960`),
+/// narrowed to the one real calling convention `_find_libs_to_preserve`
+/// itself actually uses: `obj` is always a path string (never an
+/// already-resolved `_ObjectKey`), and `exclude_providers` is always
+/// exactly one real callable (`(installed_instance.isowner,)`, a real
+/// 1-tuple at the one real call site) rather than a general collection
+/// -- `exclude_provider: Option<&dyn Fn(&str) -> bool>` here.
+///
+/// Real "shadowed by another version" check first: if a same-directory
+/// soname symlink exists and doesn't actually point at `obj` itself
+/// (dev/inode comparison), `obj` has no consumers of its own (real bug
+/// context: binutils-style per-`CHOST` symlink indirection). Then real
+/// `exclude_providers`/`greedy` consumer-satisfaction filtering: a
+/// consumer is dropped from the result if some *other*, non-excluded
+/// provider of the same soname already satisfies it (found in its own
+/// runpath or the real default lib path, `defpath`) -- so only
+/// consumers that would actually break stay in the result. Finally, only
+/// consumers that can actually *reach* `obj` itself (`obj`'s own
+/// directory is in the consumer's own runpath or `defpath`) are
+/// returned at all.
+///
+/// `Err` for a real `KeyError` (matching this pilot's own established
+/// error-string convention) -- `obj` itself not a real indexed object at
+/// all.
+pub fn find_consumers(
+    root: &Path,
+    map: &LinkageMap,
+    defpath: &[String],
+    obj: &str,
+    exclude_provider: Option<&dyn Fn(&str) -> bool>,
+    greedy: bool,
+) -> Result<BTreeSet<String>, String> {
+    let obj_key_val = obj_key(root, obj);
+    let Some(obj_props) = map.obj_properties.get(&obj_key_val) else {
+        return Err(format!("{obj_key_val:?} ({obj}) not in object list"));
+    };
+
+    // Real shadowed-by-symlink check.
+    if !obj_props.soname.is_empty() {
+        let soname_link = root
+            .join(dirname(obj).trim_start_matches('/'))
+            .join(&obj_props.soname);
+        let obj_path = root.join(obj.trim_start_matches('/'));
+        if let (Ok(soname_st), Ok(obj_st)) = (
+            std::fs::metadata(&soname_link),
+            std::fs::metadata(&obj_path),
+        ) {
+            use std::os::unix::fs::MetadataExt;
+            if (obj_st.dev(), obj_st.ino()) != (soname_st.dev(), soname_st.ino()) {
+                return Ok(BTreeSet::new());
+            }
+        }
+    }
+
+    let category = &obj_props.category;
+    let soname = &obj_props.soname;
+    let soname_node = map
+        .libs
+        .get(category)
+        .and_then(|arch_map| arch_map.get(soname));
+
+    let defpath_keys: BTreeSet<ObjKey> = defpath.iter().map(|p| obj_key(root, p)).collect();
+    let mut satisfied_consumer_keys: BTreeSet<ObjKey> = BTreeSet::new();
+
+    if let Some(soname_node) = soname_node {
+        if exclude_provider.is_some() || !greedy {
+            let mut relevant_dir_keys: BTreeSet<ObjKey> = BTreeSet::new();
+            for provider_key in &soname_node.providers {
+                if !greedy && *provider_key == obj_key_val {
+                    continue;
+                }
+                let Some(provider_props) = map.obj_properties.get(provider_key) else {
+                    continue;
+                };
+                for p in &provider_props.alt_paths {
+                    let excluded = exclude_provider.is_some_and(|f| f(p));
+                    if !excluded {
+                        relevant_dir_keys.insert(obj_key(root, &dirname(p)));
+                    }
+                }
+            }
+
+            if !relevant_dir_keys.is_empty() {
+                for consumer_key in &soname_node.consumers {
+                    let Some(consumer_props) = map.obj_properties.get(consumer_key) else {
+                        continue;
+                    };
+                    let mut path_keys = defpath_keys.clone();
+                    path_keys.extend(consumer_props.runpaths.iter().map(|p| obj_key(root, p)));
+                    if relevant_dir_keys.intersection(&path_keys).next().is_some() {
+                        satisfied_consumer_keys.insert(consumer_key.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut result = BTreeSet::new();
+    if let Some(soname_node) = soname_node {
+        let objs_dir_key = obj_key(root, &dirname(obj));
+        for consumer_key in &soname_node.consumers {
+            if satisfied_consumer_keys.contains(consumer_key) {
+                continue;
+            }
+            let Some(consumer_props) = map.obj_properties.get(consumer_key) else {
+                continue;
+            };
+            let mut path_keys = defpath_keys.clone();
+            path_keys.extend(consumer_props.runpaths.iter().map(|p| obj_key(root, p)));
+            if path_keys.contains(&objs_dir_key) {
+                result.extend(consumer_props.alt_paths.iter().cloned());
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Real `dblink._find_libs_to_preserve()` (`vartree.py:3491-3595`),
+/// narrowed to its own pure computation: the real gating conditions
+/// (`_linkmap_broken`, `_plib_registry is None`, `FEATURES=preserve-libs`
+/// off, no `_installed_instance`) are the *caller's* own responsibility
+/// to check before calling this at all -- see this module's own doc
+/// comment for why wiring this into a real merge/unmerge is deliberately
+/// not part of this slice.
+///
+/// `old_contents`: the *previous* same-slot instance's own real
+/// `CONTENTS` paths (real `installed_instance.getcontents()`) -- already
+/// `ROOT`-relative absolute paths in this pilot's own convention, unlike
+/// real Python's own `f_abs[root_len:]` stripping (which starts from a
+/// `ROOT`-joined absolute path; this pilot's `CONTENTS` entries never
+/// carry `ROOT` in the first place, so there's nothing to strip).
+/// `old_owner_is_owner`: real `installed_instance.isowner` (does the
+/// *old*, being-replaced/removed instance own this path). `new_owner_is_
+/// owner`: real `self.isowner`, gated by real `not unmerge` at the one
+/// real call site that matters (`vartree.py:3585`/`3589`) -- folded into
+/// this closure by the caller instead of a separate `unmerge: bool`
+/// parameter: a real unmerge-only caller passes a closure that always
+/// returns `false`, exactly matching what `not unmerge and self.isowner
+/// (f)` collapses to when `unmerge` is `true`.
+///
+/// Real algorithm: build a dependency graph from real `findConsumers`
+/// results (an edge from each provider to each of its own real
+/// consumers, skipping a consumer that's itself being removed and isn't
+/// also a provider); walk from every real "root" consumer (nothing
+/// depends on it, and it isn't itself a provider) to find every provider
+/// transitively reachable -- those are the real preserve candidates.
+/// For each, real hardlink/soname-symlink classification decides what to
+/// actually preserve (skipping a candidate the *new* package already
+/// replaces both the real file *and* the soname symlink for).
+pub fn find_libs_to_preserve(
+    root: &Path,
+    map: &LinkageMap,
+    defpath: &[String],
+    old_contents: &[String],
+    old_owner_is_owner: &dyn Fn(&str) -> bool,
+    new_owner_is_owner: &dyn Fn(&str) -> bool,
+) -> BTreeSet<String> {
+    let mut graph = LibGraph::default();
+    let mut consumer_map: BTreeMap<ObjKey, BTreeSet<String>> = BTreeMap::new();
+    let mut provider_nodes: BTreeSet<ObjKey> = BTreeSet::new();
+
+    for f in old_contents {
+        let Ok(consumers) = find_consumers(root, map, defpath, f, Some(old_owner_is_owner), true)
+        else {
+            continue;
+        };
+        if consumers.is_empty() {
+            continue;
+        }
+        let provider_node = graph.path_to_node(root, f);
+        graph.add(&provider_node, None);
+        provider_nodes.insert(provider_node.clone());
+        consumer_map.insert(provider_node, consumers);
+    }
+
+    for (provider_node, consumers) in &consumer_map {
+        for c in consumers {
+            let consumer_node = graph.path_to_node(root, c);
+            if old_owner_is_owner(c) && !provider_nodes.contains(&consumer_node) {
+                continue;
+            }
+            graph.add(provider_node, Some(&consumer_node));
+        }
+    }
+
+    let mut preserve_nodes: BTreeSet<ObjKey> = BTreeSet::new();
+    for consumer_node in graph.root_nodes() {
+        if provider_nodes.contains(&consumer_node) {
+            continue;
+        }
+        let mut node_stack = graph.child_nodes(&consumer_node);
+        while let Some(provider_node) = node_stack.pop() {
+            if preserve_nodes.contains(&provider_node) {
+                continue;
+            }
+            preserve_nodes.insert(provider_node.clone());
+            node_stack.extend(graph.child_nodes(&provider_node));
+        }
+    }
+
+    let mut preserve_paths: BTreeSet<String> = BTreeSet::new();
+    for preserve_node in &preserve_nodes {
+        let Some(alt_paths) = graph.alt_paths.get(preserve_node) else {
+            continue;
+        };
+        let mut hardlinks: BTreeSet<String> = BTreeSet::new();
+        let mut soname_symlinks: BTreeSet<String> = BTreeSet::new();
+        let soname = map
+            .obj_properties
+            .get(preserve_node)
+            .map(|p| p.soname.clone())
+            .unwrap_or_default();
+        let mut have_replacement_soname_link = false;
+        let mut have_replacement_hardlink = false;
+
+        for f in alt_paths {
+            let f_abs = root.join(f.trim_start_matches('/'));
+            let Ok(meta) = std::fs::symlink_metadata(&f_abs) else {
+                continue;
+            };
+            if meta.file_type().is_file() {
+                hardlinks.insert(f.clone());
+                if new_owner_is_owner(f) {
+                    have_replacement_hardlink = true;
+                    if basename(f) == soname {
+                        have_replacement_soname_link = true;
+                    }
+                }
+            } else if basename(f) == soname {
+                soname_symlinks.insert(f.clone());
+                if new_owner_is_owner(f) {
+                    have_replacement_soname_link = true;
+                }
+            }
+        }
+
+        if have_replacement_hardlink && have_replacement_soname_link {
+            continue;
+        }
+
+        if !hardlinks.is_empty() {
+            preserve_paths.extend(hardlinks);
+            preserve_paths.extend(soname_symlinks);
+        }
+    }
+
+    preserve_paths
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -717,5 +1113,272 @@ mod tests {
             obj_key(&root, "/usr/lib/real.so.1"),
             ObjKey::Inode(_, _)
         ));
+    }
+
+    #[test]
+    fn getlibpaths_reads_ld_so_conf_and_appends_the_real_defaults() {
+        let root = tempdir();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::write(
+            root.join("etc/ld.so.conf"),
+            "# a comment\n/opt/foo/lib\n/opt/bar/lib # inline comment\n\n",
+        )
+        .unwrap();
+
+        let paths = getlibpaths(&root, None);
+        assert_eq!(
+            paths,
+            vec![
+                "/opt/foo/lib".to_string(),
+                "/opt/bar/lib".to_string(),
+                "/usr/lib".to_string(),
+                "/lib".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn getlibpaths_includes_ld_library_path_when_given() {
+        let root = tempdir();
+        let paths = getlibpaths(&root, Some("/opt/a/lib:/opt/b/lib"));
+        assert_eq!(
+            paths,
+            vec![
+                "/opt/a/lib".to_string(),
+                "/opt/b/lib".to_string(),
+                "/usr/lib".to_string(),
+                "/lib".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn getlibpaths_degrades_gracefully_when_ld_so_conf_is_missing() {
+        let root = tempdir();
+        assert_eq!(
+            getlibpaths(&root, None),
+            vec!["/usr/lib".to_string(), "/lib".to_string()]
+        );
+    }
+
+    #[test]
+    fn find_consumers_finds_a_consumer_via_the_default_lib_path() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/app-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+
+        let consumers =
+            find_consumers(&root, &map, &defpath, "/usr/lib/libfoo.so.1", None, true).unwrap();
+        assert_eq!(consumers, BTreeSet::from(["/usr/bin/app".to_string()]));
+    }
+
+    #[test]
+    fn find_consumers_requires_the_providers_own_directory_to_be_reachable() {
+        let root = tempdir();
+        make_object(&root, "/opt/hidden/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/opt/hidden/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/app-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        // Not "/opt/hidden" -- app's own runpath and the default lib
+        // path both miss it, so it can never actually be found.
+        let defpath = vec!["/usr/lib".to_string()];
+
+        let consumers =
+            find_consumers(&root, &map, &defpath, "/opt/hidden/libfoo.so.1", None, true).unwrap();
+        assert!(consumers.is_empty());
+    }
+
+    #[test]
+    fn find_consumers_excludes_a_consumer_already_satisfied_by_a_non_excluded_provider() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/excluded/libfoo.so.1");
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/excluded-1.0".to_string(),
+                vec![
+                    NeededEntry::parse("X86_64;/usr/lib/excluded/libfoo.so.1;libfoo.so.1;;")
+                        .unwrap(),
+                ],
+            ),
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/app-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let exclude = |p: &str| p == "/usr/lib/excluded/libfoo.so.1";
+
+        // Querying the excluded provider: app is satisfied elsewhere
+        // (the real, non-excluded /usr/lib/libfoo.so.1), so it's not
+        // reported as a real consumer of the excluded one.
+        let consumers = find_consumers(
+            &root,
+            &map,
+            &defpath,
+            "/usr/lib/excluded/libfoo.so.1",
+            Some(&exclude),
+            true,
+        )
+        .unwrap();
+        assert!(consumers.is_empty(), "{consumers:?}");
+    }
+
+    #[test]
+    fn find_consumers_returns_empty_for_an_object_shadowed_by_a_different_soname_symlink() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1.2.3");
+        // A same-directory soname symlink pointing at a DIFFERENT real
+        // file -- the real object queried below is shadowed.
+        make_object(&root, "/usr/lib/other.so.1");
+        std::os::unix::fs::symlink(
+            root.join("usr/lib/other.so.1"),
+            root.join("usr/lib/libfoo.so.1"),
+        )
+        .unwrap();
+
+        let owner_entries = vec![(
+            "dev-libs/provider-1.0".to_string(),
+            vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1.2.3;libfoo.so.1;;").unwrap()],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+
+        let consumers = find_consumers(
+            &root,
+            &map,
+            &defpath,
+            "/usr/lib/libfoo.so.1.2.3",
+            None,
+            true,
+        )
+        .unwrap();
+        assert!(consumers.is_empty());
+    }
+
+    #[test]
+    fn find_consumers_errors_for_an_object_not_in_the_map() {
+        let root = tempdir();
+        let map = LinkageMap::default();
+        assert!(find_consumers(&root, &map, &[], "/nope", None, true).is_err());
+    }
+
+    #[test]
+    fn find_libs_to_preserve_preserves_a_lib_still_needed_by_a_surviving_consumer() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1");
+        make_object(&root, "/usr/bin/app");
+        let owner_entries = vec![
+            (
+                "dev-libs/oldpkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/apppkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let old_contents = vec!["/usr/lib/libfoo.so.1".to_string()];
+        let old_owner = |p: &str| p == "/usr/lib/libfoo.so.1";
+        let new_owner = |_: &str| false;
+
+        let preserved =
+            find_libs_to_preserve(&root, &map, &defpath, &old_contents, &old_owner, &new_owner);
+        assert_eq!(
+            preserved,
+            BTreeSet::from(["/usr/lib/libfoo.so.1".to_string()])
+        );
+    }
+
+    #[test]
+    fn find_libs_to_preserve_does_not_preserve_when_the_new_package_fully_replaces_it() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/libfoo.so.1.2.3");
+        // A real soname *symlink* (not a hardlink -- `alt_paths` for a
+        // preserve node is only ever populated from paths this pilot's
+        // own `old_contents`/consumer walk actually mentions, matching
+        // real portage's own `path_to_node` semantics, never from a
+        // filesystem-wide inode scan; both the real file and its own
+        // soname symlink must be real `old_contents` entries in their
+        // own right, exactly as real vdb `CONTENTS` would record both).
+        std::os::unix::fs::symlink(
+            root.join("usr/lib/libfoo.so.1.2.3"),
+            root.join("usr/lib/libfoo.so.1"),
+        )
+        .unwrap();
+        make_object(&root, "/usr/bin/app");
+
+        let owner_entries = vec![
+            (
+                "dev-libs/oldpkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/lib/libfoo.so.1.2.3;libfoo.so.1;;").unwrap()],
+            ),
+            (
+                "dev-libs/apppkg-1.0".to_string(),
+                vec![NeededEntry::parse("X86_64;/usr/bin/app;;;libfoo.so.1").unwrap()],
+            ),
+        ];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let old_contents = vec![
+            "/usr/lib/libfoo.so.1.2.3".to_string(),
+            "/usr/lib/libfoo.so.1".to_string(),
+        ];
+        let old_owner = |p: &str| p == "/usr/lib/libfoo.so.1.2.3" || p == "/usr/lib/libfoo.so.1";
+        // The *new* package being merged replaces both the real file
+        // and the soname symlink itself -- nothing to preserve.
+        let new_owner = |p: &str| p == "/usr/lib/libfoo.so.1.2.3" || p == "/usr/lib/libfoo.so.1";
+
+        let preserved =
+            find_libs_to_preserve(&root, &map, &defpath, &old_contents, &old_owner, &new_owner);
+        assert!(preserved.is_empty(), "{preserved:?}");
+    }
+
+    #[test]
+    fn find_libs_to_preserve_preserves_nothing_when_there_are_no_real_consumers() {
+        let root = tempdir();
+        make_object(&root, "/usr/lib/unused.so.1");
+        let owner_entries = vec![(
+            "dev-libs/oldpkg-1.0".to_string(),
+            vec![NeededEntry::parse("X86_64;/usr/lib/unused.so.1;unused.so.1;;").unwrap()],
+        )];
+        let map = rebuild(&root, &owner_entries);
+        let defpath = vec!["/usr/lib".to_string()];
+        let old_contents = vec!["/usr/lib/unused.so.1".to_string()];
+        let old_owner = |p: &str| p == "/usr/lib/unused.so.1";
+        let new_owner = |_: &str| false;
+
+        let preserved =
+            find_libs_to_preserve(&root, &map, &defpath, &old_contents, &old_owner, &new_owner);
+        assert!(preserved.is_empty());
     }
 }
