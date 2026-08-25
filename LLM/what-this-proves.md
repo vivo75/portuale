@@ -6230,3 +6230,40 @@ unset FEATURES
 unset FEATURES
 ```
 
+### Standalone `ebuild <file> config`/`info`
+
+Real `doebuild()`'s own early-return branch for a handful of commands
+(`lib/portage/package/ebuild/doebuild.py:1326-1351`, "running them out
+of the sandbox -- and stop now") is real now, for the two of them a real
+admin/user actually invokes directly by name: `config`/`info`. No
+`install` chain, no merge/vdb step at all -- just the real, single
+`pkg_config`/`pkg_info` phase function, run directly against the ebuild
+file via `run_single_phase`, the exact same machinery
+`preinst`/`postinst`/`prerm`/`postrm` already use internally (real,
+unmodified `bin/phase-functions.sh`'s own `__ebuild_main` already
+accepts `config`/`info` as literal phase arguments) -- so this slice
+needed no new phase-execution machinery at all, purely CLI routing
+(`ebuild_phases::is_real_standalone_phase_command`). `prerm`/`postrm`
+joined them as standalone commands too, in a later slice -- see this
+file's own "Standalone `ebuild <file> prerm`/`postrm`" section below.
+`preinst`/`postinst` (real too, but only reachable internally, as part
+of `merge` -- a real ordering constraint, `dblink.treewalk()` invokes
+them directly around the actual file-copy step, that `prerm`/`postrm`
+don't share with `unmerge`) and `pretend` (already part of the
+`actionmap_deps` chain) still aren't reachable as their own top-level
+command.
+
+```sh
+cd rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild config info
+ls "${PORTAGE_TMPDIR}"/portage/dev-libs/standalonephasepkg-1.0/temp/ | grep pkg-
+# pkg-config-ran
+# pkg-info-ran
+
+# Still a no-op dry run, unlike config/info now:
+rust/target/release/portuale ebuild foo-1.0.ebuild clean
+# ebuild: dry run -- one or more of these commands is recognized but not yet implemented in portuale
+```
+

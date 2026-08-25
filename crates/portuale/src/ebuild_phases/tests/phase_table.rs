@@ -79,6 +79,24 @@ fn is_phase_command_covers_exactly_the_actionmap_deps_chain() {
 }
 
 #[test]
+fn is_standalone_phase_command_covers_exactly_config_info_prerm_postrm() {
+    for cmd in ["config", "info", "prerm", "postrm"] {
+        assert!(
+            is_standalone_phase_command(cmd),
+            "{cmd} should be a real standalone phase command"
+        );
+    }
+    for cmd in [
+        "merge", "qmerge", "unmerge", "package", "clean", "install", "preinst", "postinst", "help",
+    ] {
+        assert!(
+            !is_standalone_phase_command(cmd),
+            "{cmd} should NOT be a real standalone phase command"
+        );
+    }
+}
+
+#[test]
 fn split_package_separates_pv_from_the_revision() {
     let split = split_package(Path::new("/repo/dev-libs/foo/foo-1.2.3-r1.ebuild"), "foo").unwrap();
     assert_eq!(split.pn, "foo");

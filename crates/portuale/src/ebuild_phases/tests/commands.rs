@@ -293,6 +293,75 @@ fn install_really_inherits_a_real_eclass_and_calls_its_own_function() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// A saved `${T}/environment` that does not parse fails the next phase
+/// loudly instead of running `default` against a half-loaded env.
+/// Portage: bin/ebuild.sh, ebuild environment sourcing.
+#[test]
+fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/heredocpkg/heredocpkg-1.0.ebuild");
+    let tmp = TempDir::new(&format!(
+        "ebuild-phases-test-{}-{}",
+        std::process::id(),
+        "a_corrupt_saved_environment_fails_the_next_phase_in_both_backends"
+    ));
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    for (shell, name) in [(ShellBackend::Bash, "bash"), (ShellBackend::Brush, "brush")] {
+        let portage_tmpdir = tmp.join(name);
+        let unpack_status = run_commands(RunCommandsArgs {
+            ebuild_path: &ebuild_path,
+            commands: &["unpack"],
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &portage_tmpdir.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell,
+            build_env: &[],
+        })
+        .expect("run_commands should not itself error");
+        assert_eq!(unpack_status, 0, "{name}: unpack should exit successfully");
+
+        // The post-phase save writes `${T}/environment`; break it with
+        // a genuine syntax error (an unterminated quote -- an
+        // unterminated here-document is only a warning to bash, not a
+        // parse error, so it would not fail the bash control).
+        let environment = portage_tmpdir.join("portage/dev-libs/heredocpkg-1.0/temp/environment");
+        assert!(
+            environment.is_file(),
+            "{name}: the unpack phase must save {environment:?}"
+        );
+        std::fs::write(&environment, "f() { echo \"unterminated\n").unwrap();
+
+        let log = tmp.join(format!("{name}.log"));
+        let compile_status = run_single_phase(RunSinglePhaseArgs {
+            ebuild_path: &ebuild_path,
+            phase: "compile",
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell,
+            build_env: &[],
+            log_file: Some(&log),
+        })
+        .expect("run_single_phase should not itself error");
+        assert_ne!(
+            compile_status, 0,
+            "{name}: a corrupt saved environment must fail the phase"
+        );
+        let logged = std::fs::read_to_string(&log)
+            .unwrap_or_else(|e| panic!("{} should have been written: {e}", log.display()));
+        assert!(
+            logged.contains("error sourcing environment"),
+            "{name}: expected real ebuild.sh's own die in the phase log, got:\n{logged}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The saved `${T}/environment` carries no bash special variables, so
 /// re-sourcing it prints no `cannot mutate readonly variable`.
 #[test]
