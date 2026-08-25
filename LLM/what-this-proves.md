@@ -4835,6 +4835,54 @@ a repeat merge of unchanged content -- its real, visible effect is that
 the logical path stays protected (left alone) instead of being
 overwritten directly, not that a fresh numbered file appears each time.
 
+### CONFIG_PROTECT: a type-changing update is real-protected too
+
+Real `dblink._protect()`'s own destination-side computation
+(`vartree.py:5434-5480`/`5831-5901`) is fully type-independent now: it
+was already the case that its own `dest_md5`/`dest_link` comparison is
+computed from the *live destination's own lstat'd on-disk type*,
+regardless of what type the incoming source itself is -- previously,
+portuale's `merge_tree` only ever protect-compared an `obj` entry
+against an `obj` (regular file) dest, and a `sym` entry only against a
+`sym` dest, silently overwriting a type-changing update (a symlink
+replacing a previously-installed regular file at the same path, or vice
+versa) instead of diverting it. `protect_decision`, a new function
+shared by `merge_tree`'s `obj`/`sym` branches, closes this: it lstats
+the live destination once, computes `dest_md5` (content MD5, if it's a
+regular file) or `dest_link` (target string, if it's a symlink)
+accordingly, and compares against the incoming source's own MD5 either
+way -- a type mismatch simply lands in a different hash domain
+(content-MD5 vs. target-string-MD5), so it practically never matches and
+is correctly diverted into a fresh `._cfgNNNN_` sibling, exactly like a
+real content/target change would be. Real `force` (`dest_link !=
+src_link` on a type mismatch) is deliberately not threaded through, for
+the same reason `new_protect_filename`'s own doc comment already gives
+for the general case: it only ever changes behavior when the
+destination doesn't exist yet, and every call site here -- like every
+one before it -- only reaches `new_protect_filename` after confirming
+the destination exists. Verified directly (a `sym` source landing on a
+regular-file dest is protected; the mirror-image `obj`-source-on-`sym`-
+dest case too) and live against the compiled binary, in both directions
+(`CONFIG_PROTECT=/usr/share/mergepkg`, merging `dev-libs/mergepkg` over
+a manually-placed admin file/symlink at the destination path):
+
+```sh
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export CONFIG_PROTECT=/usr/share/mergepkg
+mkdir -p "${ROOT}"/usr/share/mergepkg
+echo "the admin's own regular file" > "${ROOT}"/usr/share/mergepkg/hello-link.txt
+
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+
+cat "${ROOT}"/usr/share/mergepkg/hello-link.txt
+# the admin's own regular file -- untouched
+readlink "${ROOT}"/usr/share/mergepkg/._cfg0000_hello-link.txt
+# hello.txt -- the package's own symlink landed in a ._cfg0000_ sibling
+unset CONFIG_PROTECT
+```
+
 ### `FEATURES=collision-protect`: a merge that would overwrite another package's file aborts
 
 CONFIG_PROTECT's own sibling real merge-track feature: real
@@ -6228,6 +6276,106 @@ cat "${ROOT}"/usr/share/mergepkg/hello.txt
 # hand-modified content
 unset FEATURES
 unset FEATURES
+```
+
+### `unmerge`: real `INFOPATH` cleanup
+
+Real `_unmerge_dirs()`'s own `INFOPATH` cleanup (`vartree.py:3226-3251`)
+is fully real now, both triggers. A directory literally named `"info"`
+(real comment: "since it might have been in INFOPATH previously even
+though it may not be there now") whose only remaining content is a
+subset of `{"dir", "dir.old"}` (real `_infodir_cleanup`, GNU
+`install-info`'s own auto-generated index files, which live outside any
+package's own tracked `CONTENTS`) has those removed first -- otherwise a
+stray leftover index would keep such a directory from ever emptying out
+and being removed at all. The other real trigger, `inode_key in
+infodirs_inodes` -- an `INFOPATH`/`INFODIR` env-var-driven inode match
+covering an info directory that isn't literally named `"info"` -- is
+threaded through too: `env_update::info_dirs_inodes` collates real
+`INFOPATH`/`INFODIR` values from `/etc/env.d/*` the same way
+`env_update::run_env_update` collates every other real
+`COLON_SEPARATED` key, and `run_unmerge` computes that set once per
+unmerge and threads it down through `remove_contents`/`remove_dirs`
+into `cleanup_info_dir`. Verified directly against `cleanup_info_dir`
+(the lone-index-file case, both `dir` and `dir.old` together, a real
+remaining file that correctly blocks cleanup entirely, a
+same-named-but-not-`"info"` directory that's correctly ignored, and now
+an inode-match hit on a directory *not* named `"info"`), against
+`env_update::info_dirs_inodes` directly (real multi-entry
+`INFOPATH`/`INFODIR` resolution, a candidate that doesn't actually
+exist, and a missing `/etc/env.d` altogether), and end to end via
+`remove_contents`
+(`remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file`
+for the `basename == "info"` half,
+`remove_contents_removes_a_real_env_d_sourced_infopath_directory_not_named_info`
+for the `infodirs_inodes` half).
+
+```sh
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+
+# A real install-info leftover index, untracked by CONTENTS, in a
+# directory that is NOT literally named "info".
+echo -n "" > "${ROOT}"/usr/share/mergepkg/dir
+
+# A real /etc/env.d entry declaring this directory via INFOPATH, the
+# same way env_update() collates every other real COLON_SEPARATED key.
+mkdir -p "${ROOT}"/etc/env.d
+echo 'INFOPATH="/usr/share/mergepkg"' > "${ROOT}"/etc/env.d/50-fixture
+
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+test -e "${ROOT}"/usr/share/mergepkg && echo "still there" || echo "gone"
+# gone -- the inode-match trigger fired even though the directory isn't
+# named "info", so the leftover index no longer blocks its removal.
+```
+
+### `unmerge`: real `stale_confmem` cleanup
+
+Real `_unmerge_pkgfiles()`'s own `stale_confmem` cleanup
+(`vartree.py:2747`/`2931-2932`/`3106-3109`) is real now too.
+`cfgfiledict` -- the real `_conf_mem_file` "already offered this MD5"
+memory `ebuild_merge` writes on merge (`read_cfgfiledict`/
+`write_cfgfiledict`, promoted `pub(crate)` for this slice) -- is read
+once up front, the same way the real function reads it before its own
+per-file removal loop starts. Any path `remove_contents` actually
+removes -- one not `is_owned` by another same-slot instance -- that
+`cfgfiledict` still remembers is collected into `stale_confmem` and
+dropped from the persisted memory afterward: real ordering exactly,
+since `elif relative_path in cfgfiledict: stale_confmem.append(...)` is
+the same `if is_owned` check the "replaced" skip already uses. Without
+this, a long-gone package's own previously-offered CONFIG_PROTECT
+update would keep sitting in `_conf_mem_file` for a path nothing
+installs anymore, ready to wrongly satisfy a real future merge's own
+"already offered" check for some unrelated package that happens to
+write the same path. Verified directly against `remove_contents`
+(collects a removed, not-owned path's own stale entry; does *not*
+collect one still `is_owned` by another same-slot instance) and end to
+end via `run_unmerge`
+(`real_unmerge_drops_a_stale_conf_mem_entry_but_keeps_an_unrelated_one`).
+
+```sh
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+
+# A real _conf_mem_file: one entry for a path this package actually
+# owns and is about to remove, one entry for an unrelated path.
+mkdir -p "${ROOT}"/var/lib/portage
+cat > "${ROOT}"/var/lib/portage/config <<CONF
+/usr/share/mergepkg/hello.txt deadbeef
+/etc/unrelated.conf cafebabe
+CONF
+
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+cat "${ROOT}"/var/lib/portage/config
+# /etc/unrelated.conf cafebabe
+# -- the removed package's own now-stale entry is gone, the unrelated
+# one survives untouched.
 ```
 
 ### Standalone `ebuild <file> config`/`info`

@@ -1136,6 +1136,24 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_info_dir_fires_on_an_infodirs_inodes_match_even_when_not_named_info() {
+        // The inode match fires independently of the `info` name: an
+        // `INFOPATH` entry can name any directory.
+        let tmp = tempdir();
+        let other = tmp.join("not-info-at-all");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("dir"), b"").unwrap();
+
+        let meta = std::fs::metadata(&other).unwrap();
+        let inode_key = (meta.dev(), meta.ino());
+        let infodirs_inodes = BTreeSet::from([inode_key]);
+
+        cleanup_info_dir(&other, inode_key, &infodirs_inodes);
+
+        assert!(!other.join("dir").exists());
+    }
+
+    #[test]
     fn remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file() {
         // Without the cleanup the info dir would never empty out (`dir`
         // is untracked).

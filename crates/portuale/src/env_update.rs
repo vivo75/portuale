@@ -353,6 +353,28 @@ mod tests {
     }
 
     #[test]
+    fn info_dirs_inodes_resolves_real_infopath_and_infodir_entries() {
+        let tmp = tempdir();
+        std::fs::create_dir_all(tmp.join("etc/env.d")).unwrap();
+        std::fs::create_dir_all(tmp.join("usr/share/info")).unwrap();
+        std::fs::create_dir_all(tmp.join("opt/pkg/info")).unwrap();
+        std::fs::write(
+            tmp.join("etc/env.d/50-foo"),
+            "INFOPATH=\"/usr/share/info:/opt/pkg/info\"\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.join("etc/env.d/60-bar"), "INFODIR=\"/opt/pkg/info\"\n").unwrap();
+
+        let inodes = info_dirs_inodes(&tmp);
+
+        let expected_a = std::fs::metadata(tmp.join("usr/share/info")).unwrap();
+        let expected_b = std::fs::metadata(tmp.join("opt/pkg/info")).unwrap();
+        assert!(inodes.contains(&(expected_a.dev(), expected_a.ino())));
+        assert!(inodes.contains(&(expected_b.dev(), expected_b.ino())));
+        assert_eq!(inodes.len(), 2);
+    }
+
+    #[test]
     fn info_dirs_inodes_ignores_a_candidate_that_does_not_actually_exist() {
         let tmp = tempdir();
         std::fs::create_dir_all(tmp.join("etc/env.d")).unwrap();
