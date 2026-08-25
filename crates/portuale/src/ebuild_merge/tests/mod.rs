@@ -72,6 +72,8 @@ mod collisions;
 /// The merge on a database backend.
 #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 mod db_merge;
+mod installed_instance;
+mod plib_merge;
 mod plib_registry;
 mod protect;
 mod run_merge;
