@@ -39,7 +39,13 @@
 // relearned the "positional-parameter pain" lesson once, in `--newrepo`'s
 // own bulk-fix saga), defaulting to real `make.globals`'s own
 // `CONFIG_PROTECT="/etc"`/`CONFIG_PROTECT_MASK="/etc/env.d"` (`NOCONFMEM`
-// unset).
+// unset). The MD5-comparison decision itself is real `dblink._protect()`'s
+// own *type-independent* one (`vartree.py:5434-5480`/`5831-5901`,
+// `protect_decision`, shared by the `obj`/`sym` branches): `dest_md5`/
+// `dest_link` are always computed from the live destination's own
+// lstat'd on-disk type, regardless of the incoming source's own type, so
+// a symlink replacing a previously-installed regular file at the same
+// path (or vice versa) is real-protected too, not silently overwritten.
 //
 // `FEATURES=collision-protect` is real too: real `dblink.
 // _collision_protect` (`lib/portage/dbapi/vartree.py:3836`), narrowed --
@@ -139,18 +145,6 @@
 //     corrupt a future preserve-libs decision) -- moot without the
 //     registration side above ever writing `NEEDED` data in the first
 //     place.
-//   - CONFIG_PROTECT only compares like-for-like: an `obj` entry is only
-//     ever protect-compared against an `obj` (regular file) dest, a `sym`
-//     entry only against a `sym` dest. Real `dblink._protect()` computes
-//     `dest_md5`/`dest_link` from whatever the *live* destination's own
-//     on-disk type actually is, independent of the incoming source's own
-//     type, so a type-changing update (e.g. a symlink replacing a
-//     previously-installed regular file at the same path, or vice versa)
-//     is real-protected too. This pilot's narrower version writes such a
-//     type-changing update directly, unprotected -- a real corner case
-//     rare enough (an ebuild revision changing a path from a regular
-//     file to a symlink or back) that it wasn't worth the extra
-//     type-dispatch complexity here.
 //   - No `_installed_instance`/`protect_if_modified` support: real
 //     `_protect()` also consults the *previous* installed version's own
 //     `CONTENTS` (when upgrading over it) to tell "content the admin
@@ -400,6 +394,61 @@ fn new_protect_filename(dest: &Path, newmd5: &str) -> Result<PathBuf, String> {
         }
     }
     Ok(parent.join(format!("._cfg{:04}_{basename}", max_num + 1)))
+}
+
+/// Real `dblink._protect()`'s own decision, shared by `merge_tree`'s
+/// `obj`/`sym` branches (`vartree.py:5434-5480`/`5831-5901`): `dest_md5`/
+/// `dest_link` are computed from the *live destination's own lstat'd
+/// on-disk type* -- independent of the incoming source's own type, so a
+/// type-changing update (a symlink replacing a previously-installed
+/// regular file at the same path, or vice versa) is real-protected too,
+/// closing the "like-for-like only" v1 cut this module's own doc comment
+/// used to document. `src_md5`/`src_link` mirror real `mymd5`/`myto`:
+/// always an MD5-shaped string either way (a symlink source's own is the
+/// target string's own MD5, real bug #485598), `src_link` only `Some`
+/// for a symlink source. Real `force` (from `dest_link != src_link` on a
+/// type mismatch) is deliberately not threaded through, for the exact
+/// reason `new_protect_filename`'s own doc comment already gives: it
+/// only ever changes behavior when `dest` doesn't exist, and this
+/// function -- like every existing call site before it -- only reaches
+/// `new_protect_filename` after confirming `dest` exists.
+fn protect_decision(
+    dest: &Path,
+    abs_path: &str,
+    src_md5: &str,
+    cfgfiledict: &mut BTreeMap<String, String>,
+    noconfmem: bool,
+) -> Result<PathBuf, String> {
+    let Ok(dest_meta) = std::fs::symlink_metadata(dest) else {
+        // Real `dest_mode is None`: nothing to protect against yet.
+        return Ok(dest.to_path_buf());
+    };
+
+    let (dest_md5, dest_link): (Option<String>, Option<String>) =
+        if dest_meta.file_type().is_symlink() {
+            let target = std::fs::read_link(dest)
+                .ok()
+                .map(|t| t.to_string_lossy().to_string());
+            let md5 = target.as_deref().map(|t| md5_hex_bytes(t.as_bytes()));
+            (md5, target)
+        } else if dest_meta.is_file() {
+            (md5_hex(dest).ok(), None)
+        } else {
+            (None, None)
+        };
+
+    if dest_md5.as_deref() == Some(src_md5) {
+        return Ok(dest.to_path_buf());
+    }
+
+    let already_offered = cfgfiledict.get(abs_path).map(String::as_str) == Some(src_md5);
+    let mut write_dest = dest.to_path_buf();
+    if !already_offered || noconfmem {
+        let newmd5 = dest_link.as_deref().unwrap_or(src_md5);
+        write_dest = new_protect_filename(dest, newmd5)?;
+    }
+    cfgfiledict.insert(abs_path.to_string(), src_md5.to_string());
+    Ok(write_dest)
 }
 
 /// Real `vardbapi._conf_mem_file`: `<root>/var/lib/portage/config`, a
@@ -864,40 +913,17 @@ fn merge_tree(
                     std::fs::read_link(&src).map_err(|e| format!("{}: {e}", src.display()))?;
                 let target_str = target.to_string_lossy().to_string();
                 // Real dblink._protect(): a CONFIG_PROTECT'd `sym` entry
-                // whose real on-disk target string differs from the one
-                // about to be merged is diverted to a fresh ._cfgNNNN_
-                // sibling too (real bug #485598) -- mirrors the `obj`
-                // branch below exactly, hashing the target string's own
-                // bytes (real `md5(myto.encode(...))`) instead of reading
-                // file content. Only compared against a dest that's
-                // itself already a symlink (see this module's own doc
-                // comment on the "like-for-like only" v1 scope cut).
+                // whose real, live destination differs is diverted to a
+                // fresh ._cfgNNNN_ sibling (real bug #485598: the target
+                // string's own MD5 is what's hashed, not file content) --
+                // `protect_decision` computes the comparison from the
+                // dest's own real on-disk type, whatever it actually is
+                // (see that function's own doc comment).
                 let mut write_dest = dest.clone();
                 if is_protected(root, config_protect, config_protect_mask, &dest) {
-                    if let Ok(dest_meta) = std::fs::symlink_metadata(&dest) {
-                        if dest_meta.file_type().is_symlink() {
-                            if let Ok(dest_target) = std::fs::read_link(&dest) {
-                                let dest_target_str = dest_target.to_string_lossy().to_string();
-                                if dest_target_str != target_str {
-                                    let src_md5 = md5_hex_bytes(target_str.as_bytes());
-                                    let already_offered =
-                                        cfgfiledict.get(&abs_path) == Some(&src_md5);
-                                    if !already_offered || noconfmem {
-                                        // Real `_protect()`'s own
-                                        // `new_protect_filename(dest,
-                                        // newmd5=(dest_link or src_md5))`:
-                                        // since `dest_link` (the dest's
-                                        // own existing target) is truthy
-                                        // here, newmd5 is the *dest's*
-                                        // current target, not the
-                                        // incoming source's.
-                                        write_dest = new_protect_filename(&dest, &dest_target_str)?;
-                                    }
-                                    cfgfiledict.insert(abs_path.clone(), src_md5);
-                                }
-                            }
-                        }
-                    }
+                    let src_md5 = md5_hex_bytes(target_str.as_bytes());
+                    write_dest =
+                        protect_decision(&dest, &abs_path, &src_md5, cfgfiledict, noconfmem)?;
                 }
 
                 if let Some(parent) = write_dest.parent() {
@@ -951,18 +977,8 @@ fn merge_tree(
                 // "IGNORE"]`).
                 let mut write_dest = dest.clone();
                 if is_protected(root, config_protect, config_protect_mask, &dest) {
-                    if let Ok(dest_meta) = std::fs::metadata(&dest) {
-                        if dest_meta.is_file() {
-                            let dest_md5 = md5_hex(&dest)?;
-                            if dest_md5 != src_md5 {
-                                let already_offered = cfgfiledict.get(&abs_path) == Some(&src_md5);
-                                if !already_offered || noconfmem {
-                                    write_dest = new_protect_filename(&dest, &src_md5)?;
-                                }
-                                cfgfiledict.insert(abs_path.clone(), src_md5.clone());
-                            }
-                        }
-                    }
+                    write_dest =
+                        protect_decision(&dest, &abs_path, &src_md5, cfgfiledict, noconfmem)?;
                 }
 
                 if let Some(parent) = write_dest.parent() {
@@ -2172,6 +2188,74 @@ mod tests {
             PathBuf::from("same-target")
         );
         assert!(!root.join("etc/._cfg0000_link.conf").exists());
+    }
+
+    #[test]
+    fn merge_tree_protects_a_symlink_source_replacing_a_regular_file_dest() {
+        // Real dblink._protect()'s own type-independent comparison
+        // (vartree.py:5434-5480): dest_md5/dest_link are computed from
+        // the live destination's own on-disk type regardless of the
+        // incoming source's type -- a symlink source landing on a path
+        // the admin's own regular file still occupies is real-protected
+        // too, not silently overwritten.
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("etc")).unwrap();
+        std::os::unix::fs::symlink("new-target", d.join("etc/thing.conf")).unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::write(root.join("etc/thing.conf"), b"the admin's own regular file").unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        let contents = merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
+            .expect("merge_tree succeeds");
+
+        // The admin's own regular file at the logical path is untouched...
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/thing.conf")).unwrap(),
+            "the admin's own regular file"
+        );
+        // ...and the new symlink lands in a ._cfg0000_ sibling instead.
+        assert_eq!(
+            std::fs::read_link(root.join("etc/._cfg0000_thing.conf")).unwrap(),
+            PathBuf::from("new-target")
+        );
+        assert!(contents
+            .lines()
+            .any(|l| l.starts_with("sym /etc/thing.conf -> new-target")));
+    }
+
+    #[test]
+    fn merge_tree_protects_a_regular_file_source_replacing_a_symlink_dest() {
+        // The mirror image of the test above: an `obj` source landing on
+        // a path a symlink (admin-installed, or left over from a
+        // previous, differently-shaped package version) still occupies.
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("etc")).unwrap();
+        std::fs::write(d.join("etc/thing.conf"), b"new regular content").unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::os::unix::fs::symlink("admins-own-target", root.join("etc/thing.conf")).unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        let contents = merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
+            .expect("merge_tree succeeds");
+
+        // The admin's own symlink at the logical path is untouched...
+        assert_eq!(
+            std::fs::read_link(root.join("etc/thing.conf")).unwrap(),
+            PathBuf::from("admins-own-target")
+        );
+        // ...and the new regular-file content lands in a ._cfg0000_
+        // sibling instead.
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/._cfg0000_thing.conf")).unwrap(),
+            "new regular content"
+        );
+        assert!(contents
+            .lines()
+            .any(|l| l.starts_with("obj /etc/thing.conf")));
     }
 
     fn tempdir() -> PathBuf {

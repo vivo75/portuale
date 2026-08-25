@@ -4028,9 +4028,10 @@ documented are now closed, finishing off real `dblink._protect()`/
 real on-disk target string differs from the one about to be merged is now
 diverted too (real bug #485598: the *target string*'s own MD5 is what's
 compared, not file content) -- mirrors the `obj` case exactly, just
-hashing the target string's bytes instead of reading file content, and
-only compared against a dest that's itself already a symlink (see the
-"like-for-like only" cut above). **`NOCONFMEM`**: real `--noconfmem`
+hashing the target string's bytes instead of reading file content (the
+comparison is type-independent of the live destination's own on-disk
+type since a later slice -- see "CONFIG_PROTECT: a type-changing update
+is real-protected too" below). **`NOCONFMEM`**: real `--noconfmem`
 (`lib/_emerge/actions.py:2790`) is an `emerge`-only CLI flag with no real
 `bin/ebuild` equivalent at all (confirmed against `bin/ebuild`'s own
 six-option `argparse` list), so this pilot reads the `NOCONFMEM` env var
@@ -4047,6 +4048,54 @@ what keeps `NOCONFMEM` from spawning a visibly *new* `._cfgNNNN_` file on
 a repeat merge of unchanged content -- its real, visible effect is that
 the logical path stays protected (left alone) instead of being
 overwritten directly, not that a fresh numbered file appears each time.
+
+### CONFIG_PROTECT: a type-changing update is real-protected too
+
+Real `dblink._protect()`'s own destination-side computation
+(`vartree.py:5434-5480`/`5831-5901`) is fully type-independent now: it
+was already the case that its own `dest_md5`/`dest_link` comparison is
+computed from the *live destination's own lstat'd on-disk type*,
+regardless of what type the incoming source itself is -- previously,
+this pilot's `merge_tree` only ever protect-compared an `obj` entry
+against an `obj` (regular file) dest, and a `sym` entry only against a
+`sym` dest, silently overwriting a type-changing update (a symlink
+replacing a previously-installed regular file at the same path, or vice
+versa) instead of diverting it. `protect_decision`, a new function
+shared by `merge_tree`'s `obj`/`sym` branches, closes this: it lstats
+the live destination once, computes `dest_md5` (content MD5, if it's a
+regular file) or `dest_link` (target string, if it's a symlink)
+accordingly, and compares against the incoming source's own MD5 either
+way -- a type mismatch simply lands in a different hash domain
+(content-MD5 vs. target-string-MD5), so it practically never matches and
+is correctly diverted into a fresh `._cfgNNNN_` sibling, exactly like a
+real content/target change would be. Real `force` (`dest_link !=
+src_link` on a type mismatch) is deliberately not threaded through, for
+the same reason `new_protect_filename`'s own doc comment already gives
+for the general case: it only ever changes behavior when the
+destination doesn't exist yet, and every call site here -- like every
+one before it -- only reaches `new_protect_filename` after confirming
+the destination exists. Verified directly (a `sym` source landing on a
+regular-file dest is protected; the mirror-image `obj`-source-on-`sym`-
+dest case too) and live against the compiled binary, in both directions
+(`CONFIG_PROTECT=/usr/share/mergepkg`, merging `dev-libs/mergepkg` over
+a manually-placed admin file/symlink at the destination path):
+
+```sh
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export CONFIG_PROTECT=/usr/share/mergepkg
+mkdir -p "${ROOT}"/usr/share/mergepkg
+echo "the admin's own regular file" > "${ROOT}"/usr/share/mergepkg/hello-link.txt
+
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+
+cat "${ROOT}"/usr/share/mergepkg/hello-link.txt
+# the admin's own regular file -- untouched
+readlink "${ROOT}"/usr/share/mergepkg/._cfg0000_hello-link.txt
+# hello.txt -- the package's own symlink landed in a ._cfg0000_ sibling
+unset CONFIG_PROTECT
+```
 
 ### `FEATURES=collision-protect`: a merge that would overwrite another package's file aborts
 
