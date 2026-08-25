@@ -4918,7 +4918,14 @@ entry at all -- does **not** abort under `protect-owned` alone, the
 one behavioral difference from `collision-protect` this feature exists
 for. `MergeOptions.protect_owned` is read from `FEATURES` at the
 `ebuild.rs` CLI boundary, the same env-var-not-full-config-resolution
-shortcut `collision_protect` already uses.
+shortcut `collision_protect` already uses -- **unlike** `collision_protect`,
+though: a later slice found real `protect-owned` is actually one of real
+`make.globals`'s own default `FEATURES` tokens (`cnf/make.globals:77-84`),
+so `MergeOptions::default()`'s own `protect_owned` is now `true`, not
+`false` -- this section's own original claim (an implied
+`collision_protect`-style default-false) is now stale; see this file's
+own "`FEATURES=distlocks`" section below for the fuller writeup of this
+discovery and the two other flags it also applied to.
 
 No new machinery needed beyond reusing what `collision-protect`
 already built -- `find_owners` is called once more in `run_merge`
@@ -4946,6 +4953,8 @@ export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
 PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/collisionpkg-a/collisionpkg-a-1.0.ebuild merge
+# FEATURES="protect-owned" is explicit here for clarity, but is now the
+# real default anyway -- omitting it entirely aborts the same way.
 FEATURES="protect-owned" PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
 # ebuild: This package will overwrite one or more files that may belong to other packages:
@@ -5286,22 +5295,29 @@ PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
 echo "hand-modified content" > "${ROOT}"/usr/share/mergepkg/hello.txt
 
-# Default: a locally-modified file survives unmerge.
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
-cat "${ROOT}"/usr/share/mergepkg/hello.txt
-# hand-modified content
-
-# Re-merge, modify again, unmerge with FEATURES=unmerge-orphans: deleted
-# despite the local modification.
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
-echo "hand-modified content" > "${ROOT}"/usr/share/mergepkg/hello.txt
-export FEATURES=unmerge-orphans
+# Real default (unmerge-orphans is a real make.globals default FEATURES
+# token, see this file's own "FEATURES=distlocks" section below): the
+# locally-modified file is deleted anyway.
 PORTING/rust/target/release/portuale ebuild \
     PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
 test -e "${ROOT}"/usr/share/mergepkg/hello.txt && echo "still there" || echo "gone"
 # gone
+
+# Re-merge, modify again, unmerge with FEATURES="-unmerge-orphans" (real
+# make.conf's own opt-out syntax -- this pilot's own simplified env-var
+# check treats *any* explicit FEATURES value as a literal membership
+# list rather than a +/- delta against the real default set, so setting
+# FEATURES at all to anything other than the literal token
+# "unmerge-orphans" already reads as off here): survives this time.
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+echo "hand-modified content" > "${ROOT}"/usr/share/mergepkg/hello.txt
+export FEATURES=some-other-token
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+cat "${ROOT}"/usr/share/mergepkg/hello.txt
+# hand-modified content
+unset FEATURES
 unset FEATURES
 ```
 
@@ -5497,6 +5513,94 @@ thirdpartymirrors` entry for the name at all, proving `custommirrors`
 is consulted independently) plus a new, pure, offline unit test in
 `portage-fetch` (`resolve_mirror_candidates_tries_custommirrors_
 before_thirdpartymirrors`) proving the real ordering directly.
+
+### `FEATURES=distlocks`, and a real default-`FEATURES` correction to `protect-owned`/`unmerge-orphans`
+
+Real `lib/portage/locks.py`'s own `lockfile(mypath, wantnewlockfile=1)`
+(called at real `fetch.py:1315-1330`, unlocked at `:2032-2033`) is real
+now: a real, blocking `flock(2)` exclusive lock on a real, separate
+`.{basename}.portage_lockfile` sibling of the distfile, held for the
+*entire* per-file fetch-and-verify sequence (not just the actual
+download), guarding against two concurrent portage processes racing the
+same file. `DistfileLock` releases it simply by closing the lock file's
+own fd when the guard drops -- POSIX guarantees all of a process's own
+`flock` locks on an fd release when that fd closes, the same real effect
+real `unlockfile()`'s own explicit `LOCK_UN` has. Real `unlinkfile=0`
+(this pilot's own default too): the lockfile persists on disk after
+release, just unlocked, ready for reuse. No std equivalent exists for
+`flock(2)` at all, so `libc` (already a transitive dependency of
+`tokio`/`brush-core`, declared directly here now for its own direct use)
+joins this pilot's own small set of deliberate, documented dependency
+waivers.
+
+Verified genuinely live, not just "returns `Ok`": a real, blocking,
+cross-thread test (`distfile_lock_blocks_a_second_acquire_until_
+released`) holds the lock on one thread, spawns a second thread that
+tries to acquire the same lock, confirms it does *not* complete within
+200ms while the first lock is held, then drops the first lock and
+confirms the second completes within 5s -- genuine, real OS-level
+blocking, not a mocked assertion. Confirmed live against the compiled
+binary too: a real fetch leaves a real `.<filename>.portage_lockfile`
+sibling behind in `DISTDIR`, correctly unlocked and reusable.
+
+While researching real `distlocks`'s own actual default, a genuinely
+significant, previously-undiscovered finding surfaced: real
+`cnf/make.globals`'s own default `FEATURES` list (lines 77-84) --
+`assume-digests binpkg-docompress binpkg-dostrip binpkg-logs
+binpkg-multi-instance buildpkg-live compress-index config-protect-
+if-modified distlocks ebuild-locks fixlafiles ipc-sandbox merge-sync
+merge-wait multilib-strict network-sandbox news parallel-fetch
+pkgdir-index-trusted pid-sandbox preserve-libs protect-owned
+qa-unresolved-soname-deps sandbox strict unknown-features-warn
+unmerge-logs unmerge-orphans userfetch userpriv usersandbox usersync`
+-- includes not just `distlocks` but also `protect-owned` and
+`unmerge-orphans`, **both already shipped in earlier slices with
+`Default: false`**, each documented at the time with the same
+now-disproven claim `collision_protect` genuinely has ("real `FEATURES`
+itself isn't in `FEATURES` by default"). That claim was simply wrong for
+these two tokens. Fixed as part of this slice: `MergeOptions::
+protect_owned` and `UnmergeOptions::unmerge_orphans` now both default to
+`true`, matching real portage's own actual out-of-the-box behavior --
+confirmed live (an ordinary file collision with an identifiable owner
+now aborts by real default; a locally-modified file is now deleted on
+unmerge by real default) and locked in by two new tests
+(`ordinary_collision_aborts_by_real_default_via_protect_owned`,
+`real_unmerge_deletes_a_locally_modified_file_by_real_default`). One
+pre-existing test's own premise needed correcting to match: what used to
+be `ordinary_collision_is_merged_over_when_collision_protect_is_off`
+(implying "collision-protect off" alone was real portage's own default
+behavior) is now `ordinary_collision_is_merged_over_with_both_
+collision_protect_and_protect_owned_off`, explicitly setting
+`protect_owned: false` rather than relying on a default that no longer
+means what the name implied.
+
+This pilot's own env-var read for all three flags still only checks
+whether the literal `FEATURES` value, when set at all, contains the
+exact token -- it doesn't *accumulate* onto the real default set the way
+real portage's own `+`/`-`-prefixed `make.conf` `FEATURES` merging does,
+so setting `FEATURES` to any other, unrelated token still reads as
+`false` here for all three, unlike real portage (which would keep them
+enabled unless explicitly removed with a leading `-`). A pre-existing
+simplification this fix doesn't attempt to also resolve.
+
+While correcting this, also found (and fixed) that this same backlog's
+own "`FEATURES=verify-sig`" entry was mis-scoped from the start: real
+signature verification is a `gpkg` (the newer GPG-signed binary package
+format) and repo-sync concept, not a `SRC_URI`/distfile-fetch one at
+all -- confirmed by grepping `fetch.py` directly and finding zero hits
+for either term. Removed from the backlog rather than left to mislead a
+future "scope the next slice" round.
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export DISTDIR="$(mktemp -d)"
+echo "hello from verifiedfetchpkg" > "${DISTDIR}/verifiedfetchpkg-1.0.tar.gz"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild install
+ls -a "${DISTDIR}"
+# .  ..  .verifiedfetchpkg-1.0.tar.gz.portage_lockfile  verifiedfetchpkg-1.0.tar.gz
+```
 
 ## Running it
 

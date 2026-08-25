@@ -520,6 +520,14 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
             // consulted only for real `custommirrors`, see
             // `FetchOptions::config_root`'s own doc comment.
             config_root: portage_repo::config_root_from_env(),
+            // Real `"distlocks" in self.settings.features` -- same
+            // env-var-not-full-config-resolution shortcut
+            // `collision_protect`/`protect_owned`/`unmerge_orphans`
+            // already use, defaulting to real `true` (see
+            // `FetchOptions::distlocks`'s own doc comment).
+            distlocks: std::env::var("FEATURES")
+                .map(|features| features.split_whitespace().any(|tok| tok == "distlocks"))
+                .unwrap_or(FetchOptions::default().distlocks),
         },
     )?;
     Ok((a, aa))

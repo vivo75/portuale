@@ -1403,6 +1403,7 @@ dependencies = [
  "brush-builtins",
  "brush-core",
  "filetime",
+ "libc",
  "md-5",
  "portage-dep",
  "portage-fetch",

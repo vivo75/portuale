@@ -229,7 +229,23 @@ pub struct MergeOptions {
     /// Real `"protect-owned" in self.settings.features` (`lib/portage/
     /// dbapi/vartree.py:4718`): a separate abort condition from
     /// `collision_protect` -- see `run_merge`'s own doc comment for the
-    /// exact real logic. Same `FEATURES`-default-false `Default`.
+    /// exact real logic. **Unlike `collision_protect`**, real
+    /// `protect-owned` *is* one of real `make.globals`'s own default
+    /// `FEATURES` tokens (`cnf/make.globals:77-84`) -- confirmed by
+    /// reading it directly (a real, previously-undiscovered mismatch:
+    /// this field's own `Default` used to be `false` with a doc comment
+    /// incorrectly claiming the same "not in FEATURES by default"
+    /// reasoning `collision_protect` genuinely has). `Default` is now
+    /// `true`, matching real portage's own actual out-of-the-box
+    /// behavior. This pilot's own env-var read still only checks
+    /// whether the literal `FEATURES` value (when set at all) contains
+    /// the `"protect-owned"` token -- it doesn't *accumulate* onto the
+    /// real default set the way real portage's own `+`/`-`-prefixed
+    /// `make.conf` `FEATURES` merging does, so setting `FEATURES` to
+    /// any *other* token still reads as `protect_owned: false` here,
+    /// unlike real portage (which would keep it enabled unless `-
+    /// protect-owned` was explicitly given) -- a pre-existing
+    /// simplification this fix doesn't attempt to also resolve.
     pub protect_owned: bool,
     /// Real `--noconfmem`/`settings["NOCONFMEM"]` (`lib/_emerge/
     /// actions.py:2790`, `vartree.py:4949`'s own `cfgfiledict["IGNORE"]`):
@@ -268,7 +284,7 @@ impl Default for MergeOptions {
             distdir: PathBuf::from("/var/cache/distfiles"),
             shell: ebuild_phases::ShellBackend::default(),
             collision_protect: false,
-            protect_owned: false,
+            protect_owned: true,
             noconfmem: false,
             // "/dev/null" is a real character device, never a directory
             // -- joining anything under it can never exist on any real
@@ -2450,13 +2466,22 @@ mod tests {
             .join(format!("{name}-1.0.ebuild"))
     }
 
-    /// `FEATURES=collision-protect` off (`MergeOptions::default()`):
-    /// real portage's own default behavior -- an ordinary file
-    /// collision is merged over anyway (`collisionpkg-c` overwrites
-    /// `collisionpkg-a`'s own `shared.txt`), matching every pre-existing
-    /// test in this file that never set `collision_protect` at all.
+    /// Both `FEATURES=collision-protect` **and** `protect-owned` off: an
+    /// ordinary file collision is merged over (`collisionpkg-c`
+    /// overwrites `collisionpkg-a`'s own `shared.txt`). Real
+    /// `protect-owned` *is* one of real `make.globals`'s own default
+    /// `FEATURES` tokens (`cnf/make.globals:77-84`, confirmed by reading
+    /// it directly), unlike `collision-protect` -- so real portage's own
+    /// actual default behavior for this exact scenario (an identifiable
+    /// owner for the collision, `collisionpkg-a`) is to *abort*, not
+    /// merge over; `MergeOptions::default()` alone (`protect_owned:
+    /// true`) reproduces that real default correctly. This test
+    /// therefore sets `protect_owned: false` explicitly rather than
+    /// relying on `MergeOptions::default()` -- see
+    /// `protect_owned_alone_aborts_when_an_owner_is_identified` for the
+    /// real-default (`protect_owned: true`) case.
     #[test]
-    fn ordinary_collision_is_merged_over_when_collision_protect_is_off() {
+    fn ordinary_collision_is_merged_over_with_both_collision_protect_and_protect_owned_off() {
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");
@@ -2471,17 +2496,62 @@ mod tests {
         )
         .expect("collisionpkg-a merges cleanly");
 
+        let options = MergeOptions {
+            protect_owned: false,
+            ..MergeOptions::default()
+        };
         let status = run_merge(
             &collision_fixture("collisionpkg-c"),
             &root,
             &portage_tmpdir,
-            &MergeOptions::default(),
+            &options,
         )
         .expect("run_merge should not itself error");
         assert_eq!(status, 0);
         assert_eq!(
             std::fs::read_to_string(root.join("usr/share/collisiontest/shared.txt")).unwrap(),
             "hello from collisionpkg-c\n"
+        );
+    }
+
+    /// `MergeOptions::default()`, no overrides at all: an ordinary file
+    /// collision with an identifiable owner now aborts, matching real
+    /// portage's own real out-of-the-box behavior (real `protect-owned`
+    /// is a default-on `FEATURES` token, see `MergeOptions::
+    /// protect_owned`'s own doc comment). Complements
+    /// `protect_owned_alone_aborts_when_an_owner_is_identified` below,
+    /// which proves the same real logic via an explicit `protect_owned:
+    /// true` rather than relying on the real default.
+    #[test]
+    fn ordinary_collision_aborts_by_real_default_via_protect_owned() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        run_merge(
+            &collision_fixture("collisionpkg-a"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("collisionpkg-a merges cleanly");
+
+        let err = run_merge(
+            &collision_fixture("collisionpkg-c"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect_err("protect-owned is on by real default, so this should abort");
+        assert!(err.contains("dev-libs/collisionpkg-a-1.0"), "{err}");
+        assert!(err.contains("/usr/share/collisiontest/shared.txt"), "{err}");
+
+        // Nothing was written: the file is still collisionpkg-a's own.
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/share/collisiontest/shared.txt")).unwrap(),
+            "hello from collisionpkg-a\n"
         );
     }
 

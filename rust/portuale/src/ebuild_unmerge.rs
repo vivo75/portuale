@@ -483,9 +483,22 @@ pub struct UnmergeOptions {
     pub shell: ebuild_phases::ShellBackend,
     pub config_protect: String,
     pub config_protect_mask: String,
-    /// Real `"unmerge-orphans" in self.settings.features` -- `FEATURES`
-    /// itself isn't in `FEATURES` by default (real `make.globals` never
-    /// sets it), so `Default` matches that: `false`.
+    /// Real `"unmerge-orphans" in self.settings.features`. Real
+    /// `unmerge-orphans` *is* one of real `make.globals`'s own default
+    /// `FEATURES` tokens (`cnf/make.globals:77-84`) -- confirmed by
+    /// reading it directly (a real, previously-undiscovered mismatch:
+    /// this field's own `Default` used to be `false` with a doc comment
+    /// incorrectly claiming "not in FEATURES by default", the same
+    /// mistake `ebuild_merge::MergeOptions::protect_owned` had). `Default`
+    /// is now `true`, matching real portage's own actual out-of-the-box
+    /// behavior. This pilot's own env-var read still only checks
+    /// whether the literal `FEATURES` value (when set at all) contains
+    /// the `"unmerge-orphans"` token -- it doesn't *accumulate* onto the
+    /// real default set the way real portage's own `+`/`-`-prefixed
+    /// `make.conf` `FEATURES` merging does, so setting `FEATURES` to any
+    /// *other* token still reads as `unmerge_orphans: false` here, unlike
+    /// real portage -- a pre-existing simplification this fix doesn't
+    /// attempt to also resolve.
     pub unmerge_orphans: bool,
 }
 
@@ -496,7 +509,7 @@ impl Default for UnmergeOptions {
             shell: ebuild_phases::ShellBackend::default(),
             config_protect: "/etc".to_string(),
             config_protect_mask: "/etc/env.d".to_string(),
-            unmerge_orphans: false,
+            unmerge_orphans: true,
         }
     }
 }
@@ -1010,6 +1023,53 @@ mod tests {
             "the info directory is fully removed once its own leftover index is cleaned up"
         );
         assert!(!root.join("usr/share").exists());
+    }
+
+    /// `UnmergeOptions::default()`, no overrides at all: a locally-
+    /// modified file is deleted anyway, matching real portage's own
+    /// real out-of-the-box behavior (real `unmerge-orphans` is a
+    /// default-on `FEATURES` token, see `UnmergeOptions::
+    /// unmerge_orphans`'s own doc comment). Complements
+    /// `remove_contents_with_unmerge_orphans_deletes_a_locally_
+    /// modified_file` above, which proves the same real logic via an
+    /// explicit `true` argument to `remove_contents` directly rather
+    /// than relying on the real default through the full `run_merge`/
+    /// `run_unmerge` chain.
+    #[test]
+    fn real_unmerge_deletes_a_locally_modified_file_by_real_default() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+        let merge_status = crate::ebuild_merge::run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &crate::ebuild_merge::MergeOptions::default(),
+        )
+        .expect("run_merge succeeds");
+        assert_eq!(merge_status, 0);
+
+        std::fs::write(
+            root.join("usr/share/mergepkg/hello.txt"),
+            b"hand-modified content",
+        )
+        .unwrap();
+
+        let unmerge_status =
+            run_unmerge(&ebuild, &root, &portage_tmpdir, &UnmergeOptions::default())
+                .expect("run_unmerge succeeds");
+        assert_eq!(unmerge_status, 0);
+
+        assert!(
+            !root.join("usr/share/mergepkg/hello.txt").exists(),
+            "unmerge-orphans is on by real default, so the modified file is deleted anyway"
+        );
     }
 
     #[test]

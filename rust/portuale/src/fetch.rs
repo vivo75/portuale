@@ -7,6 +7,24 @@
 // client -- matching this pilot's own "run the same real external
 // process portage would" precedent (`bin/*.sh`, `xpak-helper.py`, ...).
 //
+// Real `FEATURES=distlocks` is real too (`lib/portage/locks.py:175-`'s
+// own `lockfile(mypath, wantnewlockfile=1)`, called at real
+// `fetch.py:1315-1330`/unlocked at `:2032-2033`, wrapping the *entire*
+// per-file fetch-and-verify sequence, not just the actual download):
+// a real, blocking `flock(2)` exclusive lock (real `fcntl.flock`) on a
+// real, separate sibling lockfile (real `'.' + basename +
+// '.portage_lockfile'`) -- guards against two concurrent portage
+// processes racing the same distfile. Confirmed via `cnf/make.globals`
+// (line 77-84) that `distlocks` is one of real portage's own *default*
+// `FEATURES` tokens (`DistfileLock::acquire`'s own callers default to
+// locking accordingly). Released by simply closing the lock file's own
+// fd (`DistfileLock`'s own `Drop`), the same real effect real
+// `unlockfile()`'s own explicit `flock(fd, LOCK_UN)` has -- POSIX
+// guarantees all of a process's own `flock` locks on an fd are released
+// when that fd is closed. Real `unlinkfile=0` (this pilot's own default
+// too, matching real `fetch.py`'s own call): the lockfile itself
+// persists on disk after release, just unlocked, ready for reuse.
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
 // "narrow v1, document the cut" pattern):
 //   - No resume support (real `RESUMECOMMAND`'s own retry-with-`-c`
@@ -16,20 +34,68 @@
 //     resolve_mirror_candidates`/`gentoo_mirror_fallback`, see that
 //     crate's own module doc comment for the exact real mechanics
 //     covered -- including real `custommirrors`, an admin-configured
-//     `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file, as of this
-//     slice -- and the real ones deliberately not attempted: live
-//     per-mirror `layout.conf` negotiation, real candidate-ordering/
-//     shuffling, `RESTRICT=mirror`/`primaryuri`).
-//   - No GPG verification (real `FEATURES=verify-sig`).
-//   - No `FEATURES=distlocks` -- this pilot's own single-invocation-at-
-//     a-time CLI usage never races a concurrent fetch of the same file.
+//     `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file -- and the real
+//     ones deliberately not attempted: live per-mirror `layout.conf`
+//     negotiation, real candidate-ordering/shuffling, `RESTRICT=
+//     mirror`/`primaryuri`).
+//   - No `FEATURES=verify-sig` GPG check -- this backlog item was
+//     mis-scoped when first written: real `verify-sig`/signature
+//     verification is a `gpkg` (the newer GPG-signed binary package
+//     format, `lib/portage/gpkg.py`) and repo-sync concept (real
+//     `lib/portage/sync/modules/webrsync`'s own gemato-based Manifest
+//     signing), not a `SRC_URI`/distfile-fetch one at all -- confirmed
+//     by grepping `fetch.py` directly and finding zero hits for either
+//     term. Neither `gpkg` nor repo syncing are in this pilot's own
+//     scope at all yet, so there's nothing to port here.
 
 use portage_fetch::{
     flatten_src_uri, gentoo_mirror_fallback, parse_manifest, parse_thirdpartymirrors,
     resolve_mirror_candidates, verify_digests,
 };
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Real `lockfile(mypath, wantnewlockfile=1)` (`lib/portage/locks.py`):
+/// a real, separate `.{basename}.portage_lockfile` sibling of `dest`,
+/// locked via a real, blocking `flock(2)` exclusive lock for the
+/// lifetime of this guard -- see this module's own doc comment for the
+/// full real grounding. Held open for as long as the returned guard
+/// lives; dropping it closes the fd, which releases the `flock` (POSIX
+/// guarantees this), the same real effect real `unlockfile()` has.
+struct DistfileLock {
+    _file: std::fs::File,
+}
+
+impl DistfileLock {
+    fn acquire(dest: &Path) -> Result<Self, String> {
+        let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+        let basename = dest.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let lock_path = parent.join(format!(".{basename}.portage_lockfile"));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            // Never truncate: only the lock itself matters, real
+            // `os.open(lockfile, O_CREAT)` doesn't `O_TRUNC` either, and
+            // truncating would race a concurrent holder's own in-flight
+            // read of the file (moot in practice since nothing is ever
+            // written to it, but explicit is cheap and correct).
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| format!("{}: {e}", lock_path.display()))?;
+        // Real default (no `os.O_NONBLOCK`, real `fetchonly`-only
+        // override this pilot's own CLI has no equivalent mode for):
+        // block until the lock is available.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(format!(
+                "{}: {}",
+                lock_path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Self { _file: file })
+    }
+}
 
 /// Real `make.globals`'s own `GENTOO_MIRRORS="http://distfiles.gentoo.
 /// org"` default. Used only by `ebuild_phases::fetch_sources`'s own
@@ -68,11 +134,16 @@ pub fn gentoo_mirrors_from_env() -> Vec<String> {
 /// read real host config); `Default` below uses the same deliberately
 /// impossible path `MergeOptions::config_root` does, so `fetch_src_uri`
 /// always degrades to an empty `custommirrors` map unless a caller
-/// opts in explicitly.
+/// opts in explicitly. `distlocks` (real `"distlocks" in self.settings.
+/// features`) defaults to `true`: real `distlocks` *is* one of real
+/// `make.globals`'s own default `FEATURES` tokens (`cnf/make.globals:
+/// 77-84`, confirmed by reading it directly) -- unlike, say,
+/// `collision-protect`, which genuinely isn't.
 pub struct FetchOptions {
     pub distdir: PathBuf,
     pub gentoo_mirrors: Vec<String>,
     pub config_root: PathBuf,
+    pub distlocks: bool,
 }
 
 impl Default for FetchOptions {
@@ -81,6 +152,7 @@ impl Default for FetchOptions {
             distdir: PathBuf::from("/var/cache/distfiles"),
             gentoo_mirrors: vec!["http://distfiles.gentoo.org".to_string()],
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
+            distlocks: true,
         }
     }
 }
@@ -178,21 +250,36 @@ pub fn fetch_src_uri(
     let mut filenames = Vec::new();
     for entry in &entries {
         let dest = options.distdir.join(&entry.filename);
+        // Real `FEATURES=distlocks`: acquired before even checking
+        // whether the file is already fetched (real `fetch.py:1315`,
+        // ahead of its own `_check_distfile` call at `:1336`), held for
+        // the entire per-file sequence below, released when `_lock`
+        // drops at the end of this loop iteration -- see this module's
+        // own doc comment. Deliberately acquired *after* the "no
+        // Manifest entry" refusal just below rather than strictly
+        // mirroring real ordering: this pilot's own single unified
+        // refusal for unverifiable content has no real single-point
+        // equivalent (real portage's own structure is different here),
+        // and there's nothing to actually fetch or protect with a lock
+        // when refusing outright -- no reason to require `DISTDIR`
+        // write access just to reach that refusal.
         let digests = manifest.get(&entry.filename);
+        let Some(digests) = digests else {
+            return Err(format!(
+                "{}: no Manifest entry, cannot verify -- refusing to fetch \
+                 unverifiable content",
+                entry.filename
+            ));
+        };
+        let _lock = if options.distlocks {
+            Some(DistfileLock::acquire(&dest)?)
+        } else {
+            None
+        };
 
-        let already_verified = digests
-            .map(|d| dest.is_file() && verify_digests(&dest, d).is_ok())
-            .unwrap_or(false);
+        let already_verified = dest.is_file() && verify_digests(&dest, digests).is_ok();
 
         if !already_verified {
-            let Some(digests) = digests else {
-                return Err(format!(
-                    "{}: no Manifest entry, cannot verify -- refusing to fetch \
-                     unverifiable content",
-                    entry.filename
-                ));
-            };
-
             // Real portage's own dedicated `mirror://` candidates
             // (or, for a plain URI, the URI itself) tried first, the
             // real `GENTOO_MIRRORS` flat-layout fallback tried last --
@@ -308,6 +395,66 @@ mod tests {
             }
         });
         (format!("http://127.0.0.1:{port}/file"), handle)
+    }
+
+    #[test]
+    fn distfile_lock_creates_a_real_sibling_lockfile() {
+        let dir = tempdir();
+        let dest = dir.join("foo-1.0.tar.gz");
+
+        let _lock = DistfileLock::acquire(&dest).expect("acquire succeeds");
+
+        assert!(
+            dir.join(".foo-1.0.tar.gz.portage_lockfile").is_file(),
+            "real lockfile naming: '.' + basename + '.portage_lockfile'"
+        );
+    }
+
+    #[test]
+    fn distfile_lock_release_on_drop_lets_a_second_acquire_succeed_immediately() {
+        let dir = tempdir();
+        let dest = dir.join("foo-1.0.tar.gz");
+
+        let lock1 = DistfileLock::acquire(&dest).expect("first acquire succeeds");
+        drop(lock1);
+
+        // Real `unlinkfile=0`: the lockfile persists on disk, just
+        // unlocked -- a second acquire (in the same process, a
+        // re-entrant flock on a fresh fd for the same file) must
+        // succeed immediately, not block on itself.
+        DistfileLock::acquire(&dest).expect("second acquire succeeds once the first is dropped");
+    }
+
+    /// Real, end-to-end proof of the actual blocking behavior
+    /// `flock(2)` provides: a second acquire on the same distfile, from
+    /// a different thread, genuinely blocks until the first lock is
+    /// dropped -- not merely that the API happens to return `Ok`.
+    #[test]
+    fn distfile_lock_blocks_a_second_acquire_until_released() {
+        let dir = tempdir();
+        let dest = dir.join("foo-1.0.tar.gz");
+
+        let lock1 = DistfileLock::acquire(&dest).expect("first acquire succeeds");
+
+        let dest2 = dest.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _lock2 =
+                DistfileLock::acquire(&dest2).expect("second acquire succeeds once unblocked");
+            tx.send(()).unwrap();
+        });
+
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "a second acquire must block while the first lock is still held"
+        );
+
+        drop(lock1);
+
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("second acquire completes promptly once the first lock is released");
+        handle.join().unwrap();
     }
 
     #[test]
@@ -514,6 +661,7 @@ mod tests {
                 distdir: distdir.clone(),
                 gentoo_mirrors: vec![],
                 config_root: config_root.clone(),
+                ..FetchOptions::default()
             },
         )
         .unwrap();

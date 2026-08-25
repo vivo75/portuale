@@ -53,3 +53,12 @@ md-5 = "0.10"
 # is used for those); another deliberate, documented dependency, same
 # waiver as brush-core/regex/md-5 above.
 filetime = "0.2"
+# Real FEATURES=distlocks (lib/portage/locks.py's own lockfile()): a
+# real, blocking flock(2) exclusive lock -- no std equivalent exists
+# (stable std::fs has no flock wrapper at all), another deliberate,
+# documented dependency, same waiver as brush-core/regex/md-5/filetime
+# above. Already a transitive dependency (tokio/brush-core both pull it
+# in) at this exact version -- declared directly here rather than
+# relying on that, the same "don't depend on an undeclared transitive"
+# reasoning that applies to any direct API use of another crate.
+libc = "0.2"
