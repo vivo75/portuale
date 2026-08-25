@@ -5168,6 +5168,49 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
 # [ebuild  N] dev-libs/rootdepspkg-1.0
 ```
 
+### Real `ebuild <file> qmerge`
+
+`qmerge` is now real too, real `doebuild()`'s own `mydo == "qmerge"`
+branch (`lib/portage/package/ebuild/doebuild.py:1562-1591`): skips the
+`install` phase entirely and goes straight to `merge()`'s own body,
+assuming a prior real `install` (or `merge`, which itself runs `install`
+first) already populated `${D}`. Real portage gates this on a real,
+on-disk marker, `${PORTAGE_BUILDDIR}/.installed` -- and real, unmodified
+`bin/phase-functions.sh`'s own `__dyn_install` already creates that
+marker unconditionally on a successful `src_install`
+(`phase-functions.sh:653`), so this pilot needed to write no new
+marker-writing code at all: a real `ebuild <file> install` run via this
+pilot's own binary already leaves `.installed` behind as a natural
+byproduct of real phase execution, confirmed empirically. Missing the
+marker is real portage's own ordinary "forgot a step" mistake, not a
+crash: `writemsg(...); return 1`, ported here as the exact same message
+text. Implemented as a refactor, not new merge logic: `ebuild_merge.rs`'s
+own `run_merge` (the `install`-then-merge path) and the new `run_qmerge`
+(skip straight to merge) now both call a shared `merge_after_install`
+helper -- real `merge()`'s own body, collision detection through
+`pkg_postinst`/`env_update()`, unchanged from what `run_merge` already
+did.
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+
+# Without a prior install: real doebuild()'s own ordinary "forgot a
+# step" message, exit 1 -- not a crash.
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild qmerge
+# ebuild: mydo=qmerge, but the install phase has not been run
+
+# install, then qmerge -- no install phase re-run, straight to merge().
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild install qmerge
+cat "${ROOT}"/usr/share/mergepkg/hello.txt
+# hello from mergepkg
+ls "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0/
+# CATEGORY  CONTENTS  COUNTER  SLOT  repository
+```
+
 ## Running it
 
 Build both Rust binaries:

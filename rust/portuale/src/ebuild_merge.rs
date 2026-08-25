@@ -201,6 +201,14 @@ pub fn is_real_merge_command(command: &str) -> bool {
     command == "merge"
 }
 
+/// Whether `command` is real `qmerge` -- checked separately from
+/// `is_real_merge_command` since `ebuild.rs` routes it to `run_qmerge`,
+/// not `run_merge` (real `qmerge` skips the `install` phase entirely,
+/// see `run_qmerge`'s own doc comment).
+pub fn is_real_qmerge_command(command: &str) -> bool {
+    command == "qmerge"
+}
+
 /// Options for `run_merge`, bundled into a struct rather than more
 /// positional parameters -- this pilot already relearned the
 /// "positional-parameter pain" lesson once, in `--newrepo`'s own
@@ -1523,8 +1531,50 @@ pub fn run_merge(
     if status != 0 {
         return Ok(status);
     }
-
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
+    merge_after_install(ebuild_path, root, portage_tmpdir, &env, options)
+}
+
+/// Real `doebuild()`'s own `mydo == "qmerge"` branch
+/// (`lib/portage/package/ebuild/doebuild.py:1562-1591`): skips the
+/// `install` phase entirely, assuming a prior real `install` (or `merge`,
+/// which runs `install` first) already populated `${D}` -- gated on the
+/// same real marker real `doebuild()` itself checks, `${PORTAGE_BUILDDIR}/
+/// .installed` (see `Environment::installed_marker`'s own doc comment for
+/// why this pilot doesn't need to write it itself). Real portage doesn't
+/// treat a missing marker as a hard failure (`writemsg(...); return 1`,
+/// not a raised exception) -- this pilot's own established idiom for
+/// surfacing an internal message through `ebuild.rs`'s own `Err` ->
+/// `eprintln!("ebuild: {e}")` path still produces the same real exit code
+/// (1) either way (see `ebuild.rs`'s own `Ok(_) => ExitCode::from(1)`
+/// fallback), so `Err` is used here for consistency with this module's
+/// other "not in the expected state" checks (e.g. `run_unmerge`'s own
+/// "not installed" case) rather than hand-rolling a second message-
+/// printing path.
+pub fn run_qmerge(
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &MergeOptions,
+) -> Result<i32, String> {
+    let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
+    if !env.installed_marker().exists() {
+        return Err("mydo=qmerge, but the install phase has not been run".to_string());
+    }
+    merge_after_install(ebuild_path, root, portage_tmpdir, &env, options)
+}
+
+/// Real `merge()`'s own body (`lib/portage/dbapi/vartree.py`), shared by
+/// both real `merge` (after a fresh `install` phase run) and real
+/// `qmerge` (skipping straight here, assuming `install` already ran) --
+/// see `run_merge`/`run_qmerge`'s own doc comments.
+fn merge_after_install(
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    env: &ebuild_phases::Environment,
+    options: &MergeOptions,
+) -> Result<i32, String> {
     let ebuild_text = std::fs::read_to_string(&env.ebuild_abs)
         .map_err(|e| format!("{}: {e}", env.ebuild_abs.display()))?;
     let slot = parse_slot(&ebuild_text);
@@ -1544,7 +1594,7 @@ pub fn run_merge(
     // `blocked_installed_packages`'s own doc comment for the full real
     // grounding (this is genuinely new machinery: `ebuild <file> merge`
     // has never resolved real config/USE at all before this).
-    let blocked = blocked_installed_packages(root, &options.config_root, &env, &slot, &repository);
+    let blocked = blocked_installed_packages(root, &options.config_root, env, &slot, &repository);
     let (collisions, symlink_collisions, plib_collisions) = find_collisions(
         &env.d(),
         root,
@@ -1611,7 +1661,7 @@ pub fn run_merge(
         &mut cfgfiledict,
     )?;
     write_cfgfiledict(root, &cfgfiledict)?;
-    write_vdb_entry(root, &env, &slot, &repository, &contents)?;
+    write_vdb_entry(root, env, &slot, &repository, &contents)?;
 
     if !plib_collisions.is_empty() {
         let cpv = format!("{}/{}", env.category, env.split.pf);
@@ -1649,6 +1699,14 @@ mod tests {
         assert!(!is_real_merge_command("qmerge"));
         assert!(!is_real_merge_command("unmerge"));
         assert!(!is_real_merge_command("install"));
+    }
+
+    #[test]
+    fn is_real_qmerge_command_covers_exactly_qmerge() {
+        assert!(is_real_qmerge_command("qmerge"));
+        assert!(!is_real_qmerge_command("merge"));
+        assert!(!is_real_qmerge_command("unmerge"));
+        assert!(!is_real_qmerge_command("install"));
     }
 
     #[test]
@@ -2152,6 +2210,73 @@ mod tests {
             t_dir.join("postinst-ran-after-merge").is_file(),
             "pkg_postinst must run, and see the file (and vdb entry) already merged"
         );
+    }
+
+    #[test]
+    fn run_qmerge_fails_when_the_install_phase_has_not_been_run() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+        let err = run_qmerge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
+            .expect_err("qmerge without a prior install must fail");
+        assert!(err.contains("install phase has not been run"), "{err}");
+        // Nothing was written at all.
+        assert!(!root.join("usr/share/mergepkg").exists());
+    }
+
+    #[test]
+    fn run_qmerge_merges_without_rerunning_the_install_phase() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
+
+        // Real qmerge assumes a prior real `install` already populated
+        // ${D} -- run only the install phase directly here (not
+        // run_merge, which would also run qmerge's own merge logic).
+        let install_status = ebuild_phases::run_commands(
+            &ebuild,
+            &["install"],
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default().distdir,
+            false,
+            ebuild_phases::ShellBackend::default(),
+        )
+        .expect("install phase succeeds");
+        assert_eq!(install_status, 0);
+        // Real bin/phase-functions.sh's own __dyn_install already leaves
+        // this marker behind -- confirms the test's own setup is
+        // faithful to what a real prior `ebuild <file> install` run
+        // leaves for qmerge to find.
+        assert!(portage_tmpdir
+            .join("portage/dev-libs/mergepkg-1.0/.installed")
+            .exists());
+
+        let status = run_qmerge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
+            .expect("run_qmerge succeeds");
+        assert_eq!(status, 0);
+
+        assert!(root.join("usr/share/mergepkg/hello.txt").is_file());
+        let vdb_dir = root.join("var/db/pkg/dev-libs/mergepkg-1.0");
+        assert!(vdb_dir.join("CONTENTS").is_file());
+        // Real pkg_preinst/pkg_postinst still run -- qmerge only skips
+        // the install phase itself, not merge()'s own body.
+        let t_dir = portage_tmpdir.join("portage/dev-libs/mergepkg-1.0/temp");
+        assert!(t_dir.join("preinst-ran-before-merge").is_file());
+        assert!(t_dir.join("postinst-ran-after-merge").is_file());
     }
 
     #[test]

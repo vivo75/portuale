@@ -63,14 +63,20 @@
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
 // "narrow v1, document the cut" pattern):
-//   - Only the `actionmap_deps`-chained phases run for real: `pretend`,
-//     `setup`, `unpack`, `prepare`, `configure`, `compile`, `test`,
-//     `install` (see `phase_prerequisites`'s own doc comment). Every
-//     other real `ebuild` command (`merge`/`qmerge`/`unmerge`/`package`/
-//     `preinst`/`postinst`/`prerm`/`postrm`/`config`/`info`/`nofetch`/
-//     `depend`/`fetch`/`fetchall`/`digest`/`manifest`/`rpm`/`instprep`/
-//     `clean`/`cleanrm`) still falls through to `ebuild.rs`'s own
-//     pre-existing dry-run stub message unchanged.
+//   - This module itself only runs the `actionmap_deps`-chained phases
+//     for real: `pretend`, `setup`, `unpack`, `prepare`, `configure`,
+//     `compile`, `test`, `install` (see `phase_prerequisites`'s own doc
+//     comment). `merge`/`qmerge`/`unmerge`/`package` are real too, but
+//     live in their own modules (`ebuild_merge`/`ebuild_unmerge`/
+//     `ebuild_package`, each routed to directly by `ebuild.rs`, not
+//     through this module's own `run_commands`/`run_single_phase`).
+//     Every other real `ebuild` command (`preinst`/`postinst`/`prerm`/
+//     `postrm`/`config`/`info`/`nofetch`/`depend`/`fetch`/`fetchall`/
+//     `digest`/`manifest`/`rpm`/`instprep`/`clean`/`cleanrm`) still falls
+//     through to `ebuild.rs`'s own pre-existing dry-run stub message
+//     unchanged (`preinst`/`postinst`/`prerm`/`postrm` *are* run for
+//     real, but only internally, as part of `merge`/`unmerge` -- not
+//     reachable as their own standalone top-level command yet).
 //   - No sandboxing at all (`SANDBOX_DISABLED=1` is set unconditionally
 //     below) -- real portage's own `libsandbox`-based filesystem-access
 //     confinement is a real, separate feature this slice doesn't attempt.
@@ -355,6 +361,19 @@ impl Environment {
     /// real copy of the ebuild file in it (`build-info/${PF}.ebuild`).
     pub(crate) fn build_info(&self) -> PathBuf {
         self.portage_builddir.join("build-info")
+    }
+    /// Real `${PORTAGE_BUILDDIR}/.installed`: real, unmodified
+    /// `bin/phase-functions.sh`'s own `__dyn_install` already creates
+    /// this unconditionally on a successful `src_install`
+    /// (`phase-functions.sh:653`, no `FEATURES` gate at all) -- this
+    /// pilot writes nothing new for it, real phase execution already
+    /// leaves it behind as a side effect (confirmed empirically: a real
+    /// `ebuild <file> install` run via this pilot's own binary leaves
+    /// `.installed` in place). `ebuild_merge::run_qmerge` is the one
+    /// caller: real `doebuild()`'s own `mydo == "qmerge"` branch checks
+    /// for exactly this marker before skipping the install phase.
+    pub(crate) fn installed_marker(&self) -> PathBuf {
+        self.portage_builddir.join(".installed")
     }
 }
 

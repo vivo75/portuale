@@ -20,11 +20,15 @@
 // real `install` chain, then really invokes `bin/misc-functions.sh`'s
 // own `__dyn_package` -- real, unmodified bash shelling out to the real,
 // unmodified `bin/xpak-helper.py` -- producing a genuine XPAK-tagged
-// `.tbz2` at `PKGDIR`, plus a real `Packages` index entry for it). Every
-// other real command (`qmerge`/`preinst`/`postinst`/`prerm`/`postrm`/
-// `config`/`info`/`nofetch`/`depend`/`fetch`/`fetchall`/`digest`/
-// `manifest`/`rpm`/`instprep`/`clean`/`cleanrm`) still falls through to
-// the pre-existing dry-run stub message below unchanged.
+// `.tbz2` at `PKGDIR`, plus a real `Packages` index entry for it), PLUS,
+// as of this slice, real execution for `qmerge` too (see
+// `ebuild_merge::run_qmerge`'s own doc comment: `merge`'s own body,
+// minus the `install` phase re-run, gated on the same real
+// `${PORTAGE_BUILDDIR}/.installed` marker real `doebuild()` itself
+// checks). Every other real command (`preinst`/`postinst`/`prerm`/
+// `postrm`/`config`/`info`/`nofetch`/`depend`/`fetch`/`fetchall`/
+// `digest`/`manifest`/`rpm`/`instprep`/`clean`/`cleanrm`) still falls
+// through to the pre-existing dry-run stub message below unchanged.
 //
 // Exit codes mirror real `ebuild`'s own conventions: 2 for "missing
 // required args" (real bin/ebuild's argparse `parser.error()`), 1 for
@@ -201,14 +205,15 @@ pub fn run(args: &[String]) -> ExitCode {
     // ebuild_unmerge's/ebuild_package's own module doc comments) only
     // when EVERY requested command is one this pilot actually implements
     // for real (the actionmap_deps-chained phase subset, plus
-    // `merge`/`unmerge`/`package`) -- a deliberate, simple v1 boundary:
-    // no partial-real-execution ambiguity when a request mixes a real
-    // command with one this pilot still only dry-runs (e.g. `ebuild
-    // foo.ebuild compile qmerge`). A purely dry-run request keeps the
-    // exact pre-existing stub message unchanged.
+    // `merge`/`qmerge`/`unmerge`/`package`) -- a deliberate, simple v1
+    // boundary: no partial-real-execution ambiguity when a request mixes
+    // a real command with one this pilot still only dry-runs (e.g.
+    // `ebuild foo.ebuild compile config`). A purely dry-run request keeps
+    // the exact pre-existing stub message unchanged.
     if commands.iter().all(|cmd| {
         ebuild_phases::is_real_phase_command(cmd)
             || ebuild_merge::is_real_merge_command(cmd)
+            || ebuild_merge::is_real_qmerge_command(cmd)
             || ebuild_unmerge::is_real_unmerge_command(cmd)
             || ebuild_package::is_real_package_command(cmd)
     }) {
@@ -300,6 +305,8 @@ pub fn run(args: &[String]) -> ExitCode {
         for &cmd in &commands {
             let result = if ebuild_merge::is_real_merge_command(cmd) {
                 ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options)
+            } else if ebuild_merge::is_real_qmerge_command(cmd) {
+                ebuild_merge::run_qmerge(ebuild_path, &root, &portage_tmpdir, &merge_options)
             } else if ebuild_unmerge::is_real_unmerge_command(cmd) {
                 ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, debug, shell)
             } else if ebuild_package::is_real_package_command(cmd) {
@@ -346,12 +353,12 @@ mod tests {
 
     #[test]
     fn accepts_a_real_command_and_still_prints_the_stub_marker() {
-        // "qmerge" is a real ebuild command (doebuild()'s own
+        // "config" is a real ebuild command (doebuild()'s own
         // validcommands list) that this pilot still doesn't implement
-        // for real (unlike "merge"/"package"/the actionmap_deps-chained
-        // phases as of tasks #54/#55) -- exactly the case the dry-run
+        // for real (unlike "merge"/"qmerge"/"package"/the
+        // actionmap_deps-chained phases) -- exactly the case the dry-run
         // stub still needs to cover.
-        let code = run(&args(&["foo-1.0.ebuild", "qmerge"]));
+        let code = run(&args(&["foo-1.0.ebuild", "config"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
@@ -363,42 +370,42 @@ mod tests {
 
     #[test]
     fn accepts_a_real_boolean_option() {
-        let code = run(&args(&["--force", "foo-1.0.ebuild", "qmerge"]));
+        let code = run(&args(&["--force", "foo-1.0.ebuild", "config"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn accepts_a_real_value_option_without_misreading_its_value() {
-        let code = run(&args(&["--color", "y", "foo-1.0.ebuild", "qmerge"]));
+        let code = run(&args(&["--color", "y", "foo-1.0.ebuild", "config"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn accepts_the_inline_equals_form_of_a_value_option() {
-        let code = run(&args(&["--color=y", "foo-1.0.ebuild", "qmerge"]));
+        let code = run(&args(&["--color=y", "foo-1.0.ebuild", "config"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn accepts_shell_bash_and_shell_brush() {
-        // "qmerge" is dry-run-only (see `accepts_a_real_command_and_
+        // "config" is dry-run-only (see `accepts_a_real_command_and_
         // still_prints_the_stub_marker` above), so this only exercises
         // `--shell`'s own CLI parsing, not real phase execution.
-        let code = run(&args(&["--shell", "brush", "foo-1.0.ebuild", "qmerge"]));
+        let code = run(&args(&["--shell", "brush", "foo-1.0.ebuild", "config"]));
         assert_eq!(code, ExitCode::SUCCESS);
-        let code = run(&args(&["--shell", "bash", "foo-1.0.ebuild", "qmerge"]));
+        let code = run(&args(&["--shell", "bash", "foo-1.0.ebuild", "config"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn accepts_the_inline_equals_form_of_shell() {
-        let code = run(&args(&["--shell=bash", "foo-1.0.ebuild", "qmerge"]));
+        let code = run(&args(&["--shell=bash", "foo-1.0.ebuild", "config"]));
         assert_eq!(code, ExitCode::SUCCESS);
     }
 
     #[test]
     fn rejects_an_invalid_shell_value() {
-        let code = run(&args(&["--shell", "zsh", "foo-1.0.ebuild", "qmerge"]));
+        let code = run(&args(&["--shell", "zsh", "foo-1.0.ebuild", "config"]));
         assert_eq!(code, ExitCode::from(1));
     }
 
@@ -410,7 +417,7 @@ mod tests {
 
     #[test]
     fn rejects_an_unrecognized_option() {
-        let code = run(&args(&["--not-a-real-option", "foo-1.0.ebuild", "qmerge"]));
+        let code = run(&args(&["--not-a-real-option", "foo-1.0.ebuild", "config"]));
         assert_eq!(code, ExitCode::from(1));
     }
 
