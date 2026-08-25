@@ -6,6 +6,7 @@
 // 127: no IPC daemon) and `ping` (a fixed token). Anything unknown exits
 // 127, so a new upstream call fails loudly (D1).
 
+mod chmod_lite;
 mod doins;
 // The merge copies xattrs through the same `_copyxattr`/`_cmpxattr`
 // port the helpers use.

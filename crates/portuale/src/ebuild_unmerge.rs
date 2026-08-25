@@ -961,6 +961,96 @@ mod tests {
     }
 
     #[test]
+    fn remove_contents_leaves_an_orphaned_symlink_alone_while_its_target_is_still_needed() {
+        // The orphaned symlink's target is not this package's `dir` entry,
+        // so both survive untouched.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("keep/target")).unwrap();
+        std::fs::write(root.join("keep/target/other.txt"), b"other").unwrap();
+        std::os::unix::fs::symlink(root.join("keep/target"), root.join("keep/link")).unwrap();
+
+        let other_vdb = root.join("var/db/pkg/dev-libs/orphanpkg-2.0");
+        std::fs::create_dir_all(&other_vdb).unwrap();
+        std::fs::write(other_vdb.join("CONTENTS"), "dir /keep/link\n").unwrap();
+
+        let contents = "dir /keep\nsym /keep/link -> whatever 100\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &["orphanpkg-2.0".to_string()],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("keep/link").symlink_metadata().is_ok(),
+            "the orphaned symlink itself must survive -- its target is never resolved"
+        );
+        assert!(
+            root.join("keep/target/other.txt").is_file(),
+            "the symlink's own target directory, owned by nobody in this removal, is untouched"
+        );
+    }
+
+    #[test]
+    fn remove_contents_deletes_an_orphaned_symlink_once_its_target_directory_empties_and_revisits_the_freed_parent()
+     {
+        // This time the target is this package's `dir` entry: both go,
+        // and the parent gets a revisit.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("zzz-parent")).unwrap();
+        std::fs::create_dir_all(root.join("aaa-target")).unwrap();
+        std::os::unix::fs::symlink(root.join("aaa-target"), root.join("zzz-parent/compat-link"))
+            .unwrap();
+
+        let other_vdb = root.join("var/db/pkg/dev-libs/orphanpkg-2.0");
+        std::fs::create_dir_all(&other_vdb).unwrap();
+        std::fs::write(other_vdb.join("CONTENTS"), "dir /zzz-parent/compat-link\n").unwrap();
+
+        let contents =
+            "dir /zzz-parent\nsym /zzz-parent/compat-link -> whatever 100\ndir /aaa-target\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            others_in_slot: &["orphanpkg-2.0".to_string()],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            !root
+                .join("zzz-parent/compat-link")
+                .symlink_metadata()
+                .is_ok(),
+            "the symlink is deleted once its own target directory actually empties"
+        );
+        assert!(
+            !root.join("aaa-target").exists(),
+            "the symlink's own target directory is removed normally"
+        );
+        assert!(
+            !root.join("zzz-parent").exists(),
+            "the parent, blocked only by the now-deleted symlink, is revisited and removed too (bug #640058)"
+        );
+    }
+
+    #[test]
     fn remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file() {
         // Without the cleanup the info dir would never empty out (`dir`
         // is untracked).
