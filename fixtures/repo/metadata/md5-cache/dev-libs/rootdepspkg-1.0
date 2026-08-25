@@ -1,0 +1,10 @@
+BDEPEND=dev-libs/rootdepsprovider
+DEFINED_PHASES=-
+DEPEND=
+DESCRIPTION=fixture package: --root-deps real running-root (ESYSROOT) satisfiability -- BDEPENDs on a package with no ebuild anywhere in this fixture repo, only in a hand-seeded running-root vdb
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=
+SLOT=0
+_md5_=0000000000000000000000000000000

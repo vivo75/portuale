@@ -1519,6 +1519,16 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut newrepo = false;
     // --buildpkgonly/-B: same plain-boolean shape as --newrepo above.
     let mut buildpkgonly = false;
+    // --root-deps: real main.py's own `choices: ("True", "rdeps")`, plus
+    // a bare form (no `=value` at all). This pilot's own v1 doesn't
+    // distinguish "True" (fold DEPEND/BDEPEND/IDEPEND into RDEPEND) from
+    // "rdeps" (additionally ignore DEPEND for non-BDEPEND-EAPI packages)
+    // -- see `root_deps_satisfied_atoms`'s own doc comment for why
+    // neither is observable in this pilot's own single-root graph model
+    // anyway -- so every accepted real form just enables the one real
+    // behavior this pilot does implement: real running-root (`ESYSROOT`)
+    // satisfiability for DEPEND/BDEPEND atoms.
+    let mut root_deps = false;
     let mut with_test_deps = false;
     let mut changed_deps_report = false;
     // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
@@ -1939,6 +1949,9 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--buildpkgonly" || arg == "-B" {
             buildpkgonly = true;
+            i += 1;
+        } else if arg == "--root-deps" || arg == "--root-deps=True" || arg == "--root-deps=rdeps" {
+            root_deps = true;
             i += 1;
         } else if arg == "--with-test-deps" {
             // Real "--with-test-deps": y_or_n (default_arg_opts), the
@@ -2498,6 +2511,11 @@ pub fn run(args: &[String]) -> ExitCode {
     let rebuilt_binaries =
         rebuilt_binaries.unwrap_or(usepkgonly && deep == portage_repo::Deep::Unlimited && update);
 
+    // --root-deps: real running root (see `running_root_from_env`'s own
+    // doc comment for why real "/" is the correct default here, and
+    // `PORTAGE_RUNNING_ROOT`'s own pilot-specific, test-only override).
+    let root_deps_running_root = root_deps.then(portage_repo::running_root_from_env);
+
     let result = match resolve_pretend_graph(
         &config_root,
         &root,
@@ -2526,6 +2544,7 @@ pub fn run(args: &[String]) -> ExitCode {
         rebuilt_binaries_timestamp,
         newrepo,
         buildpkgonly,
+        root_deps_running_root.as_deref(),
     ) {
         Ok(result) => result,
         Err(e) => {

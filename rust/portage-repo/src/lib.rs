@@ -72,6 +72,24 @@ pub fn root_from_env() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+/// `--root-deps`'s own real running-root default: real `ESYSROOT`
+/// resolves to the real *build machine's* own `/` whenever `SYSROOT` is
+/// left unset (see `running_root_satisfies_atom`'s own doc comment for
+/// the full grounding) -- `/` is the correct real default here too, for
+/// the same reason `config_root_from_env`/`root_from_env` default to
+/// `/`. `PORTAGE_RUNNING_ROOT` itself is NOT a real portage environment
+/// variable (real portage has no way to override this at all -- it's
+/// always genuinely `/`, full stop, outside of Prefix's own `BROOT`
+/// concept) -- a pilot-specific override purely so a test can point this
+/// at a fixture's own fake vdb tree instead of the real host, the same
+/// "explicit override for tests, real default at the CLI boundary"
+/// pattern `MergeOptions::config_root` already established.
+pub fn running_root_from_env() -> PathBuf {
+    std::env::var_os("PORTAGE_RUNNING_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
 #[derive(Debug, Clone)]
 pub struct RepoConfig {
     pub name: String,
@@ -2266,6 +2284,45 @@ pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<Str
         .collect()
 }
 
+/// `--root-deps`'s own real `ESYSROOT`-vs-`ROOT` distinction, narrowed to
+/// an "is it already there" existence check (see `enqueue_dependencies`'s
+/// own doc comment for the full real grounding and why a fuller,
+/// recursive second-root graph isn't attempted). Whether `atom_str` is
+/// satisfied by anything installed under `running_root`'s own real vdb --
+/// `installed_candidates`, keyed directly off the atom's own parsed
+/// `category`/`package` (no wildcard-atom support needed: this pilot's
+/// own atom grammar never has an atom without an explicit category/
+/// package, see `portage_dep::parse_atom`'s own doc comment), matched via
+/// `portage_dep::match_from_list` the same way every other real
+/// installed-package match in this pilot works. Deliberately generic on
+/// `running_root` (just like `installed_versions`/`owns_path_pf`
+/// elsewhere): this function has no idea whether it's being pointed at a
+/// real host `/` or a fixture's own fake vdb tree, and every automated
+/// test in this pilot uses the latter -- only `pretend.rs`'s own real CLI
+/// boundary ever points this at real `/`, matching real portage's own
+/// actual default (`SYSROOT` unset). USE-deps on the atom aren't checked
+/// against the running root's own recorded `USE` (the same simplification
+/// `blocked_installed_packages`'s own blocker-atom matching already
+/// makes) -- a documented v1 scope cut.
+fn running_root_satisfies_atom(atom_str: &str, running_root: &Path) -> bool {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return false;
+    };
+    let candidates = installed_candidates(running_root, &atom.category, &atom.package);
+    let candidate_strs: Vec<String> = candidates
+        .iter()
+        .map(|(version, slot, sub_slot)| {
+            format!(
+                "{}/{}-{version}:{slot}/{sub_slot}",
+                atom.category, atom.package
+            )
+        })
+        .collect();
+    let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    portage_dep::match_from_list(atom_str, &candidate_str_refs)
+        .is_some_and(|matched| !matched.is_empty())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PretendOutcome {
     NoVisibleCandidate,
@@ -3065,6 +3122,64 @@ fn atom_currently_satisfiable(
         };
         portage_dep::use_deps_satisfied(use_deps, &iuse, &use_flags)
     })
+}
+
+/// Real `--root-deps`'s own `DEPEND`/`BDEPEND`-vs-`ESYSROOT` distinction
+/// (see `running_root_satisfies_atom`'s own doc comment for the full real
+/// grounding), factored out so both real dep-walk sites in this file
+/// (the main New/Upgrade/Reinstall flatten and `enqueue_dependencies`'s
+/// own AlreadyInstalled-recursion path) share one implementation rather
+/// than drifting apart. Reads `metadata`'s own `DEPEND`+`BDEPEND` keys,
+/// flattens them the exact same way (`use_flags`/`repos`/`config`) the
+/// caller already flattened its own combined dep string with -- always
+/// the same branch choices, since `atom_currently_satisfiable` is a pure
+/// function of its own inputs -- and returns only the ones satisfied by
+/// `running_root`'s own real vdb (`running_root_satisfies_atom`).
+/// Callers drop these from their own already-flattened `flat_deps`
+/// before queueing (real "no separate graph node needed for an
+/// already-satisfied dep"). Degrades to an empty set on any flatten
+/// failure -- never a false negative that could silently drop a dep
+/// this pilot actually needed to walk.
+///
+/// KNOWN, DOCUMENTED SCOPE CUT: this doesn't feed running-root
+/// satisfiability into the disjunctive (`||`) branch-selection closure
+/// itself, so a `DEPEND`/`BDEPEND` `||` group with no branch visible in
+/// the fixture tree still fails to flatten at all here (returns
+/// `HashSet::new()`), even if some branch *would* be running-root-
+/// satisfied -- only already-resolved, non-disjunctive atoms benefit
+/// from real `--root-deps` behavior in this pilot.
+fn root_deps_satisfied_atoms(
+    metadata: &HashMap<String, String>,
+    use_flags: &HashSet<String>,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    running_root: &Path,
+) -> HashSet<String> {
+    let mut build_depstr = String::new();
+    for dep_key in ["DEPEND", "BDEPEND"] {
+        if let Some(d) = metadata.get(dep_key) {
+            build_depstr.push_str(d);
+            build_depstr.push(' ');
+        }
+    }
+    let build_tokens: Vec<String> = build_depstr.split_whitespace().map(String::from).collect();
+    portage_use_reduce::use_reduce_flat_disjunctive(
+        &build_tokens,
+        use_flags,
+        portage_use_reduce::MatchMode::Normal,
+        &mut |atoms: &[String]| {
+            atoms
+                .iter()
+                .all(|a| atom_currently_satisfiable(repos, a, config))
+        },
+    )
+    .map(|flat| {
+        flat.into_iter()
+            .filter(|t| t != "||")
+            .filter(|t| running_root_satisfies_atom(t, running_root))
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// Real `_select_pkg_highest_available_imp`'s own early `avoid_update`
@@ -4349,6 +4464,7 @@ pub fn resolve_pretend_graph(
     rebuilt_binaries_timestamp: Option<u64>,
     newrepo: bool,
     buildpkgonly: bool,
+    root_deps_running_root: Option<&Path>,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -4624,6 +4740,7 @@ pub fn resolve_pretend_graph(
                         key.clone(),
                         version.clone(),
                         with_bdeps,
+                        root_deps_running_root,
                     );
                 }
             }
@@ -4952,6 +5069,18 @@ pub fn resolve_pretend_graph(
         ) else {
             continue;
         };
+        // `--root-deps`: real `ESYSROOT`-vs-`ROOT` distinction (see
+        // `root_deps_satisfied_atoms`'s own doc comment for the full
+        // grounding and its documented scope cut) -- a strict no-op when
+        // `root_deps_running_root` is `None`, matching every pre-existing
+        // call site/test.
+        let root_deps_satisfied: HashSet<String> = root_deps_running_root
+            .map(|root| root_deps_satisfied_atoms(&metadata, &use_flags, &repos, config, root))
+            .unwrap_or_default();
+        let flat_deps: Vec<String> = flat_deps
+            .into_iter()
+            .filter(|tok| !root_deps_satisfied.contains(tok))
+            .collect();
         enqueue_flat_deps(
             flat_deps,
             &key,
@@ -5096,6 +5225,19 @@ pub fn resolve_pretend_graph(
 /// deliberately does *not* take a `with_bdeps` parameter at all, since
 /// real portage only ever drops build-time deps for an *already-built*
 /// package -- see `resolve_pretend_graph`'s own doc comment.
+///
+/// `root_deps_running_root` (real `--root-deps`, see
+/// `running_root_satisfies_atom`'s own doc comment for the full real
+/// `ESYSROOT`-vs-`ROOT` grounding, and `root_deps_satisfied_atoms`'s own
+/// doc comment for the shared implementation and its documented scope
+/// cut): `None` for every pre-existing call site/test, and a strict
+/// no-op when `None` -- the combined `dep_keys`/`depstr`/`tokens`/
+/// `flat_deps` pipeline below is completely unchanged from before this
+/// parameter existed, same order, same closure, same error behavior.
+/// When `Some`, any already-flattened plain atom in `flat_deps` that
+/// `root_deps_satisfied_atoms` reports as running-root-satisfied is
+/// dropped from the queue entirely (real portage's own "no separate
+/// graph node needed for an already-satisfied dep").
 #[allow(clippy::too_many_arguments)]
 fn enqueue_dependencies(
     repos: &[RepoConfig],
@@ -5109,6 +5251,7 @@ fn enqueue_dependencies(
     owner_key: (String, String),
     owner_version: String,
     with_bdeps: bool,
+    root_deps_running_root: Option<&Path>,
 ) {
     let Ok(repo_candidates) = list_candidates(repos, category, package) else {
         return;
@@ -5176,6 +5319,15 @@ fn enqueue_dependencies(
     ) else {
         return;
     };
+
+    let root_deps_satisfied: HashSet<String> = if with_bdeps {
+        root_deps_running_root
+            .map(|root| root_deps_satisfied_atoms(&metadata, &use_flags, repos, config, root))
+            .unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
+
     for tok in flat_deps {
         if tok == "||" {
             continue;
@@ -5192,6 +5344,12 @@ fn enqueue_dependencies(
                 });
                 continue;
             }
+        }
+        if root_deps_satisfied.contains(&tok) {
+            // Real "no separate graph node needed for an
+            // already-satisfied dep": ESYSROOT (here, the real running
+            // root) already has it.
+            continue;
         }
         // This path never calls `evaluate_atom_conditionals` at all (a
         // real, pre-existing gap unrelated to `--autounmask-use`: an
@@ -6050,6 +6208,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -7025,6 +7184,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7064,6 +7224,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7105,6 +7266,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7150,6 +7312,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -7212,6 +7375,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7322,6 +7486,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7401,6 +7566,122 @@ mod tests {
     }
 
     #[test]
+    fn running_root_satisfies_atom_checks_the_given_roots_own_real_vdb() {
+        // rootdepsprovider-1.0 exists only as a hand-seeded vdb entry
+        // under PORTING/fixtures (no ebuild anywhere in the fixture
+        // repo tree at all) -- see this crate's own doc comment on
+        // `running_root_satisfies_atom` for why this is deliberately
+        // generic on which root it's pointed at.
+        let root = fixtures_root();
+        assert!(running_root_satisfies_atom(
+            "dev-libs/rootdepsprovider",
+            &root
+        ));
+        assert!(running_root_satisfies_atom(
+            "dev-libs/rootdepsprovider:0",
+            &root
+        ));
+        assert!(!running_root_satisfies_atom(
+            "dev-libs/rootdepsprovider:1",
+            &root
+        ));
+        assert!(!running_root_satisfies_atom(
+            "dev-libs/nonexistentprovider",
+            &root
+        ));
+    }
+
+    fn graph_root_deps(
+        atom_str: &str,
+        root_deps_running_root: Option<&Path>,
+    ) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            false,
+            Deep::Unlimited,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            root_deps_running_root,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+    }
+
+    #[test]
+    fn without_root_deps_a_bdepend_only_satisfiable_on_the_running_root_is_no_visible_candidate() {
+        // rootdepspkg's own BDEPEND (dev-libs/rootdepsprovider) has no
+        // ebuild anywhere in the fixture repo tree -- without
+        // `--root-deps`, this pilot has no way to know it's already
+        // satisfied elsewhere, so it's reported (not fatal, since it's a
+        // dependency, not a top-level atom) exactly like any other
+        // unresolvable dependency.
+        assert_eq!(
+            graph_root_deps("dev-libs/rootdepspkg", None),
+            vec![
+                (
+                    "dev-libs/rootdepspkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/rootdepsprovider".to_string(),
+                    PretendOutcome::NoVisibleCandidate
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn root_deps_drops_a_bdepend_already_satisfied_by_the_running_root() {
+        // Same atom, but now with `--root-deps` pointed at a running
+        // root where rootdepsprovider genuinely is installed (here, the
+        // same fixture tree, reused purely as a convenient real vdb --
+        // see `running_root_satisfies_atom`'s own doc comment: ordinary
+        // dependency resolution never consults a root's own vdb at all,
+        // only the ebuild repo tree, so this is a valid, real proof the
+        // new running-root check -- not some other pre-existing
+        // mechanism -- is what's excluding it). No separate
+        // NoVisibleCandidate entry for rootdepsprovider is produced.
+        let root = fixtures_root();
+        assert_eq!(
+            graph_root_deps("dev-libs/rootdepspkg", Some(&root)),
+            vec![(
+                "dev-libs/rootdepspkg".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),]
+        );
+    }
+
+    #[test]
     fn deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely() {
         // --nodeps trumps --deep -- real create_depgraph_params.py pops
         // "recurse" out of myparams outright, which the dependency walk
@@ -7434,6 +7715,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -7652,6 +7934,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -7738,6 +8021,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -7891,6 +8175,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -7991,6 +8276,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -8038,6 +8324,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -8144,6 +8431,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -8189,6 +8477,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -8236,6 +8525,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -8283,6 +8573,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -8547,6 +8838,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -8606,6 +8898,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -8641,6 +8934,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -8709,6 +9003,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -8771,6 +9066,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -8806,6 +9102,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -8872,6 +9169,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -8947,6 +9245,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -8993,6 +9292,7 @@ mod tests {
             None,
             false,
             true,
+            None,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

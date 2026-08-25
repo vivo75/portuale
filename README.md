@@ -5023,6 +5023,117 @@ cat "${ROOT}"/usr/share/mergeblockertest/shared.txt
 # hello from mergeblockerpkg -- no abort, the blocked package's file was simply taken over
 ```
 
+### `emerge --pretend --root-deps`: real `ESYSROOT`-vs-`ROOT` dependency resolution
+
+The last genuinely open item in the dry-run backlog's own "Open backlog"
+section (`PROMPT-next.md`) is real now, at a deliberately narrowed v1
+scope confirmed with the user before implementing (see below). Real
+`depgraph.py`'s own `depend_root` selection (~`depgraph.py:4209-4225`)
+resolves `DEPEND` (and, for a `BDEPEND`-capable EAPI -- this pilot's own
+5+ floor always is -- also the root `BDEPEND` folds into) against
+`ESYSROOT`, not the target `ROOT` -- and real `ESYSROOT`'s own default
+(`LocationsManager.py:406-411`) is the **real build machine's own `/`**
+whenever `SYSROOT` is left unset, which is true for every single fixture
+test this pilot has ever run (`ROOT` always a `mktemp -d`, `SYSROOT`
+never set). Porting this literally would mean every existing `--deep`/
+`--with-bdeps` test's own `DEPEND`/`BDEPEND` resolution would start
+silently consulting whichever real host machine happens to run the test
+suite -- fundamentally in tension with this pilot's own hard goal of a
+deterministic shared pytest contract suite (`PROMPT.md`'s own "Rust must
+be measurably faster... shared pytest contract suite as executable
+behavioral spec" framing implicitly assumes deterministic tests to
+measure and compare against in the first place).
+
+Resolved by scoping this as new, **additive, opt-in-only** machinery
+that changes nothing about any pre-existing call site or test: real
+`--root-deps` (`emerge --pretend --root-deps`) computes a real running
+root's own satisfiability for `DEPEND`/`BDEPEND` atoms and drops any
+that are already satisfied there from the queue entirely (real "no
+separate graph node needed for an already-satisfied dep") -- new
+`portage_repo::running_root_satisfies_atom` (a plain vdb existence
+check, `installed_candidates` + `match_from_list`, deliberately generic
+on which root it's pointed at -- exactly like `installed_versions`
+elsewhere in this crate) and `root_deps_satisfied_atoms` (flattens the
+package's own `DEPEND`+`BDEPEND` alone, using the exact same
+`atom_currently_satisfiable` closure the caller's own combined flatten
+already used, so branch choices are always identical), threaded through
+both real dep-walk sites (`enqueue_dependencies`'s `AlreadyInstalled`
+path, and the main New/Upgrade/Reinstall flatten) via a new
+`root_deps_running_root: Option<&Path>` parameter on
+`resolve_pretend_graph` -- `None` for every one of this pilot's own
+~30 pre-existing call sites/tests (a strict no-op, verified by the full
+`cargo test` suite passing unchanged before and after). Only
+`pretend.rs`'s own real CLI boundary ever resolves this to real `/` by
+default (`running_root_from_env`, matching real portage's own actual
+default), gated on the new `--root-deps` flag (bare, `=True`, or
+`=rdeps` all just enable this pilot's one real behavior -- the "fold
+DEPEND into RDEPEND" vs. "ignore DEPEND for non-BDEPEND-EAPI packages"
+distinction real portage's own two explicit values carry isn't
+observable in this pilot's own single-root graph architecture anyway,
+so it's deliberately not reproduced). A new, pilot-specific
+`PORTAGE_RUNNING_ROOT` environment variable (real portage has no
+equivalent override at all) lets a test point this at a fixture's own
+fake vdb tree instead, the same "explicit override for tests, real
+default at the CLI boundary" pattern `MergeOptions::config_root`
+already established.
+
+**KNOWN, DOCUMENTED SCOPE CUT**: this doesn't feed running-root
+satisfiability into the disjunctive (`||`) branch-selection closure
+itself, so a `DEPEND`/`BDEPEND` `||` group with no branch visible in the
+fixture tree still fails to resolve at all, even if some branch *would*
+be running-root-satisfied -- only already-resolved, non-disjunctive
+atoms benefit. Also not attempted at all: real portage's fuller
+behavior of recursively pulling in and building a *new* package against
+the running root when it's *not* already there -- this pilot's own
+single unified BFS graph has no per-dependency-type root tracking
+anywhere (every dep key's tokens are merged into one combined string
+and walked as one graph), and reproducing genuine multi-root graph
+walking was judged too large a change for this slice; this v1 only
+answers "is it already there," never "what would it take to get it
+there."
+
+New fixture `dev-libs/rootdepspkg` (`BDEPEND="dev-libs/rootdepsprovider"`,
+no ebuild for `rootdepsprovider` anywhere in the fixture repo tree at
+all) plus a hand-seeded vdb-only entry (`rootdepsprovider-1.0`, no
+ebuild, just `SLOT`/`CATEGORY` files) under `PORTING/fixtures/var/db/pkg`
+itself -- reused directly as the running root in tests, since ordinary
+dependency resolution never consults a root's own vdb at all, only the
+ebuild repo tree, so this is a valid, real proof the new running-root
+check (not some other pre-existing mechanism) is what excludes it.
+Proven via Rust unit tests (`running_root_satisfies_atom` directly, plus
+two end-to-end `resolve_pretend_graph` tests with/without
+`root_deps_running_root`), mirrored exactly in
+`emerge_pretend_reference.py` (`_running_root_satisfies_atom`,
+`_root_deps_satisfied_atoms`, the same threading through both dep-walk
+sites), and a new dedicated pytest contract test
+(`test_root_deps_matches_between_implementations`) asserting byte-for-
+byte Rust/Python parity in both the without-`--root-deps` (a reported,
+non-fatal `NoVisibleCandidate` dependency entry) and with-`--root-deps`
+(no such entry) cases.
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+
+# Without --root-deps: rootdepsprovider has no ebuild anywhere in the
+# fixture repo tree, so it's reported as an unresolvable dependency
+# (not fatal -- it's a dependency, not the top-level atom).
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTING/rust/target/release/portuale \
+    emerge --pretend dev-libs/rootdepspkg
+# [ebuild  N] dev-libs/rootdepspkg-1.0
+# !!! no visible ebuild for dependency "dev-libs/rootdepsprovider"
+
+# With --root-deps, pointed (via the pilot-specific PORTAGE_RUNNING_ROOT
+# override) at a running root where rootdepsprovider genuinely is
+# installed: no more unresolved-dependency report.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rootdepspkg
+# [ebuild  N] dev-libs/rootdepspkg-1.0
+```
+
 ## Running it
 
 Build both Rust binaries:

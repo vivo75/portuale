@@ -812,6 +812,41 @@ def test_missing_repos_conf_matches_between_implementations(
     assert rust_result.stderr == python_result.stderr
 
 
+def test_root_deps_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--root-deps: rootdepspkg's own BDEPEND (dev-libs/rootdepsprovider)
+    has no ebuild anywhere in the fixture repo tree -- only a hand-seeded
+    vdb entry. PORTAGE_RUNNING_ROOT (a pilot-specific, test-only override
+    -- see running_root_from_env's own doc comment) is pointed at the
+    same fixture tree here purely as a convenient real vdb; ordinary
+    dependency resolution never consults a root's own vdb at all, only
+    the ebuild repo tree, so this is a valid, real proof the new
+    running-root check is what's excluding it, not some other
+    pre-existing mechanism."""
+    env = dict(fixture_env)
+    env["PORTAGE_RUNNING_ROOT"] = env["ROOT"]
+    args_without = ["--pretend", "dev-libs/rootdepspkg"]
+    args_with = ["--pretend", "--root-deps", "dev-libs/rootdepspkg"]
+
+    rust_without = _run([str(emerge_binary)], args_without, env)
+    python_without = _run(emerge_pretend_python, args_without, env)
+    assert rust_without.returncode == 0
+    assert python_without.returncode == 0
+    assert rust_without.stdout == python_without.stdout
+    assert rust_without.stderr == python_without.stderr
+    assert "no visible ebuild for dependency" in rust_without.stderr
+
+    rust_with = _run([str(emerge_binary)], args_with, env)
+    python_with = _run(emerge_pretend_python, args_with, env)
+    assert rust_with.returncode == 0
+    assert python_with.returncode == 0
+    assert rust_with.stdout == python_with.stdout
+    assert rust_with.stderr == python_with.stderr
+    assert rust_with.stderr == ""
+    assert rust_with.stdout.strip() == "[ebuild  N] dev-libs/rootdepspkg-1.0"
+
+
 def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
     """Pins the exact recursion output for the diamond fixture (diamond ->
     shared-a, shared-b -> common), not just parity with Python: "common"

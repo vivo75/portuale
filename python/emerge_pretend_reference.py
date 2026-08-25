@@ -109,6 +109,19 @@ def _root():
     return os.environ.get("ROOT") or "/"
 
 
+def _running_root():
+    """--root-deps's own real running-root default: real ESYSROOT
+    resolves to the real build machine's own "/" whenever SYSROOT is left
+    unset -- see the Rust side's own running_root_satisfies_atom doc
+    comment for the full grounding. PORTAGE_RUNNING_ROOT itself is NOT a
+    real portage environment variable (real portage has no way to
+    override this at all) -- a pilot-specific override purely so a test
+    can point this at a fixture's own fake vdb tree instead of the real
+    host, matching PORTAGE_CONFIGROOT/ROOT's own existing precedent.
+    """
+    return os.environ.get("PORTAGE_RUNNING_ROOT") or "/"
+
+
 def find_repos(config_root):
     """Parses repos.conf and returns every [reponame] section that has a
     location (the main repo plus any overlays) as a list of dicts with
@@ -2176,6 +2189,38 @@ def installed_versions(root, category, package):
     return [version for version, _slot, _sub_slot in installed_candidates(root, category, package)]
 
 
+def _running_root_satisfies_atom(atom_str, running_root):
+    """--root-deps's own real ESYSROOT-vs-ROOT distinction, narrowed to an
+    "is it already there" existence check -- see _root_deps_satisfied_atoms's
+    own doc comment for the full real grounding and why a fuller,
+    recursive second-root graph isn't attempted. Whether atom_str is
+    satisfied by anything installed under running_root's own real vdb --
+    installed_candidates, keyed directly off the atom's own parsed
+    category/package (no wildcard-atom support needed: this pilot's own
+    atom grammar never has an atom without an explicit category/package),
+    matched via match_from_list the same way every other real
+    installed-package match in this pilot works. Deliberately generic on
+    running_root: this function has no idea whether it's being pointed at
+    a real host "/" or a fixture's own fake vdb tree -- only the real CLI
+    boundary (--root-deps's own default resolution) ever points this at
+    real "/". USE-deps on the atom aren't checked against the running
+    root's own recorded USE (the same simplification blocker-atom
+    matching elsewhere in this pilot already makes) -- a documented v1
+    scope cut. Mirrors portage-repo/src/lib.rs's own
+    running_root_satisfies_atom."""
+    try:
+        atom = Atom(atom_str)
+    except InvalidAtom:
+        return False
+    category, package = atom.cp.split("/", 1)
+    candidates = installed_candidates(running_root, category, package)
+    candidate_strs = [
+        f"{atom.cp}-{version}:{slot}/{sub_slot}" for version, slot, sub_slot in candidates
+    ]
+    matched = match_from_list(atom_str, candidate_strs)
+    return bool(matched)
+
+
 _VAR_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -3079,6 +3124,46 @@ def _atom_currently_satisfiable(repos, atom_str, config):
     return bool(matched)
 
 
+def _root_deps_satisfied_atoms(metadata, use_flags, repos, config, running_root):
+    """--root-deps's own DEPEND/BDEPEND-vs-ESYSROOT distinction, factored
+    out so both real dep-walk sites in this file (the main New/Upgrade/
+    Reinstall flatten and _enqueue_dependencies's own
+    AlreadyInstalled-recursion path) share one implementation rather than
+    drifting apart. Reads metadata's own DEPEND+BDEPEND keys, flattens
+    them the exact same way (use_flags/repos/config) the caller already
+    flattened its own combined dep string with -- always the same branch
+    choices, since _atom_currently_satisfiable is a pure function of its
+    own inputs -- and returns only the ones satisfied by running_root's
+    own real vdb (_running_root_satisfies_atom). Callers drop these from
+    their own already-flattened flat_deps before queueing (real "no
+    separate graph node needed for an already-satisfied dep"). Degrades
+    to an empty set on any flatten failure -- never a false negative that
+    could silently drop a dep this pilot actually needed to walk.
+
+    KNOWN, DOCUMENTED SCOPE CUT: this doesn't feed running-root
+    satisfiability into the disjunctive ("||") branch-selection closure
+    itself, so a DEPEND/BDEPEND "||" group with no branch visible in the
+    fixture tree still fails to flatten at all here (returns an empty
+    set), even if some branch *would* be running-root-satisfied -- only
+    already-resolved, non-disjunctive atoms benefit from real
+    --root-deps behavior in this pilot. Mirrors portage-repo/src/lib.rs's
+    root_deps_satisfied_atoms exactly."""
+    build_depstr = " ".join(metadata[k] for k in ("DEPEND", "BDEPEND") if metadata.get(k))
+    try:
+        build_flat = _use_reduce_flat_disjunctive(
+            build_depstr,
+            use_flags,
+            lambda atoms: all(_atom_currently_satisfiable(repos, a, config) for a in atoms),
+        )
+    except InvalidDependString:
+        return set()
+    return {
+        tok
+        for tok in build_flat
+        if tok != "||" and _running_root_satisfies_atom(tok, running_root)
+    }
+
+
 def _dependency_avoid_update_candidate(root, atom, atom_str, category, package, candidates, installed):
     """Real `_select_pkg_highest_available_imp`'s own early avoid_update
     return for a DEPENDENCY atom (`lib/_emerge/depgraph.py` ~8440: "if
@@ -3770,6 +3855,7 @@ def resolve_pretend_graph(
     rebuilt_binaries_timestamp=None,
     newrepo=False,
     buildpkgonly=False,
+    root_deps_running_root=None,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -4097,6 +4183,7 @@ def resolve_pretend_graph(
                     key,
                     outcome[1],
                     with_bdeps,
+                    root_deps_running_root,
                 )
             # --autounmask's own keyword-suggestion sub-feature, extended
             # here to a *dependency's* own NoVisibleCandidate -- see
@@ -4362,6 +4449,17 @@ def resolve_pretend_graph(
             )
         except InvalidDependString:
             continue
+        # --root-deps: real ESYSROOT-vs-ROOT distinction (see
+        # _root_deps_satisfied_atoms's own doc comment for the full
+        # grounding and its documented scope cut) -- a strict no-op when
+        # root_deps_running_root is None, matching every pre-existing
+        # call site/test.
+        root_deps_satisfied = (
+            _root_deps_satisfied_atoms(metadata, use_flags, repos, config, root_deps_running_root)
+            if root_deps_running_root is not None
+            else set()
+        )
+        flat_deps = [tok for tok in flat_deps if tok not in root_deps_satisfied]
         _enqueue_flat_deps(flat_deps, key, version, depth, use_flags, queue, pending_blockers)
 
         # --with-test-deps: additive on top of the normal deps just
@@ -4486,6 +4584,7 @@ def _enqueue_dependencies(
     owner_key,
     owner_version,
     with_bdeps=True,
+    root_deps_running_root=None,
 ):
     """Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+
     PDEPEND+IDEPEND metadata (from whichever repo actually carries this
@@ -4514,8 +4613,18 @@ def _enqueue_dependencies(
     resolve_pretend_graph's own main loop (the New/Upgrade/Reinstall
     path this function mirrors) deliberately doesn't take a with_bdeps
     parameter at all, since real portage only ever drops build-time deps
-    for an already-built package. Mirrors portage-repo/src/lib.rs's
-    enqueue_dependencies exactly."""
+    for an already-built package.
+
+    `root_deps_running_root` (real --root-deps, see
+    _running_root_satisfies_atom's own doc comment for the full real
+    ESYSROOT-vs-ROOT grounding, and _root_deps_satisfied_atoms's own doc
+    comment for the shared implementation and its documented scope cut):
+    None for every pre-existing call site/test, and a strict no-op when
+    None. When given, any already-flattened plain atom in flat_deps that
+    _root_deps_satisfied_atoms reports as running-root-satisfied is
+    dropped from the queue entirely (real portage's own "no separate
+    graph node needed for an already-satisfied dep"). Mirrors
+    portage-repo/src/lib.rs's enqueue_dependencies exactly."""
     repo_candidates = [c for c in list_candidates(repos, category, package) if c["version"] == version]
     if not repo_candidates:
         return
@@ -4565,6 +4674,13 @@ def _enqueue_dependencies(
         )
     except InvalidDependString:
         return
+
+    root_deps_satisfied = (
+        _root_deps_satisfied_atoms(metadata, use_flags, repos, config, root_deps_running_root)
+        if root_deps_running_root is not None and with_bdeps
+        else set()
+    )
+
     for tok in flat_deps:
         if tok == "||":
             continue
@@ -4580,6 +4696,11 @@ def _enqueue_dependencies(
                     "owner_version": owner_version,
                 }
             )
+            continue
+        if tok in root_deps_satisfied:
+            # Real "no separate graph node needed for an
+            # already-satisfied dep": ESYSROOT (here, the real running
+            # root) already has it.
             continue
         # This path never calls evaluate_conditionals at all (a real,
         # pre-existing gap unrelated to --autounmask-use: an
@@ -5457,6 +5578,16 @@ def run(args):
     newrepo = False
     # --buildpkgonly/-B: same plain-boolean shape as --newrepo above.
     buildpkgonly = False
+    # --root-deps: real main.py's own choices=("True", "rdeps"), plus a
+    # bare form (no =value at all). This pilot's own v1 doesn't
+    # distinguish "True" (fold DEPEND/BDEPEND/IDEPEND into RDEPEND) from
+    # "rdeps" (additionally ignore DEPEND for non-BDEPEND-EAPI packages)
+    # -- see _root_deps_satisfied_atoms's own doc comment for why neither
+    # is observable in this pilot's own single-root graph model anyway --
+    # so every accepted real form just enables the one real behavior this
+    # pilot does implement: real running-root (ESYSROOT) satisfiability
+    # for DEPEND/BDEPEND atoms.
+    root_deps = False
     with_test_deps = False
     changed_deps_report = False
     # --autounmask/--autounmask-keep-keywords: None means "not explicitly
@@ -5818,6 +5949,9 @@ def run(args):
             i += 1
         elif arg == "--buildpkgonly" or arg == "-B":
             buildpkgonly = True
+            i += 1
+        elif arg in ("--root-deps", "--root-deps=True", "--root-deps=rdeps"):
+            root_deps = True
             i += 1
         elif arg == "--with-test-deps":
             # Real "--with-test-deps": y_or_n (default_arg_opts), the
@@ -6320,6 +6454,11 @@ def run(args):
         else (usepkgonly and deep is True and update)
     )
 
+    # --root-deps: real running root (see _running_root's own doc comment
+    # for why real "/" is the correct default here, and
+    # PORTAGE_RUNNING_ROOT's own pilot-specific, test-only override).
+    root_deps_running_root = _running_root() if root_deps else None
+
     try:
         result = resolve_pretend_graph(
             _config_root(),
@@ -6349,6 +6488,7 @@ def run(args):
             rebuilt_binaries_timestamp,
             newrepo,
             buildpkgonly,
+            root_deps_running_root,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
