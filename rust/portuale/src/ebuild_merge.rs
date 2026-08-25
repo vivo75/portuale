@@ -3678,6 +3678,26 @@ mod tests {
             .expect("read_all_needed_entries should find the real installed package");
         assert_eq!(cpv, "dev-libs/elfpkg-1.0");
         assert!(cpv_entries.iter().any(|e| e.filename == "/usr/bin/true"));
+
+        // `crate::needed_elf::rebuild` end to end: the real installed
+        // binary's own real DT_NEEDED entries (whatever the real host's
+        // own /bin/true actually links against -- typically libc.so.6)
+        // get indexed as real consumers, keyed by its own real multilib
+        // category.
+        let map = crate::needed_elf::rebuild(&root, &all);
+        let key = crate::needed_elf::obj_key(&root, "/usr/bin/true");
+        let props = map
+            .obj_properties
+            .get(&key)
+            .expect("rebuild should index the real installed binary");
+        assert_eq!(props.owner, "dev-libs/elfpkg-1.0");
+        assert!(!props.needed.is_empty(), "{:?}", props.needed);
+        let consumed_somewhere = map.libs.values().any(|sonames| {
+            sonames
+                .values()
+                .any(|soname_map| soname_map.consumers.contains(&key))
+        });
+        assert!(consumed_somewhere);
     }
 
     fn fixtures_root() -> PathBuf {

@@ -5030,7 +5030,7 @@ cat "${ROOT}"/var/db/pkg/dev-libs/elfpkg-1.0/NEEDED.ELF.2
 # X86_64;/usr/bin/true;;;libc.so.6
 ```
 
-### `preserve-libs` registration: `NEEDED.ELF.2` parsing and the real per-package vdb read (still data only, confirmed with the user before implementing)
+### `preserve-libs` registration: `NEEDED.ELF.2` parsing, the per-package vdb read, and the real soname map (still no graph decision, confirmed with the user before implementing)
 
 A second, deliberately narrow step toward `preserve-libs` registration:
 `needed_elf.rs` (new module) ports real `NeededEntry`
@@ -5060,30 +5060,64 @@ file at all (real `aux_get` itself already tolerates a missing aux file
 the same way, returning `""`) -- a package is still included, with an
 empty list, matching real `rebuild()`'s own unconditional per-cpv walk.
 
-**Confirmed scope, before implementing**: parsing plus this one raw read
-step, nothing more. No soname map, no multilib/runpath resolution
-(real `rebuild()`'s own `libs`/`obj_properties` indexing, `providers`/
-`consumers` bucketing, `$ORIGIN` expansion), no `findConsumers`, no
-preserve-libs decision -- real `LinkageMapELF.rebuild()`'s own indexing
-alone is ~280 lines total (this step covers only its first ~15),
-`findConsumers()` is ~140 more, and `_find_libs_to_preserve()`'s own
-graph-reachability decision is another ~80 -- still not a single slice,
-even with generation, parsing, and the per-package read all now real.
-This module has no real caller yet (`#[allow(dead_code)]`, documented in
-its own module doc comment) -- the same "narrow, additive, no wiring
-until the next slice needs it" shape this pilot used for explicit
-`masters =` parsing landing before eclass masters-chain search ever
-consumed it.
+A fourth step, in the same slice: `rebuild` ports real `LinkageMap.
+rebuild()`'s own *remaining* indexing logic (`LinkageMapELF.py:325-469`,
+everything after the initial data-gathering loop) -- the real soname
+providers/consumers map, deliberately excluding the one branch inside
+real `rebuild()` that isn't `NEEDED.ELF.2`-driven at all (the live-
+`scanelf`-for-orphaned-preserved-libs fallback, `LinkageMapELF.py:
+233-324` -- the one real spot a raw ELF header read matters, still
+correctly left for whenever preserve-libs registration actually needs
+it). Per real entry: the real multilib category (its own field, or
+`approx_multilib_category`'s own static-table fallback, real
+`_approx_multilib_categories`); real `normalize_path`'d filename; real
+`$ORIGIN`/`${ORIGIN}` runpath expansion (`os.path.dirname` of the
+object's own filename, real dynamic-linker semantics) followed by
+`normalize_path` again. Then real "implicit runpath" inference for
+bundled libraries (`LinkageMapELF.py:380-410`): within the *same* owner
+package's own entries, a needed soname provided by another entry from
+that same owner gets its provider's own directory added to the
+consumer's own runpaths when it isn't already there -- accounting for a
+package's own internal library resolution without requiring an explicit
+rpath. Finally, real per-object indexing keyed by `ObjKey` (a real
+`(dev, ino)` pair when the object still exists on disk, `os.stat`-
+followed-symlinks -- collapsing hardlink/symlink aliases of the same
+real file into one entry, every recorded filename kept as an
+`alt_paths` entry, matching real `_obj_key`'s own dedup-by-inode
+semantics; falls back to the literal path string for an object that no
+longer exists, narrower than real `os.path.realpath`'s own symlink-
+resolving fallback, a deliberate simplification for a case that should
+be rare -- an entry read moments after real `scanelf` itself confirmed
+the object's existence, gone by the time this runs).
 
-Verified directly against hand-crafted lines (a real soname/multiple
-rpaths/multiple needed entries; the `"  -  "` rpath sentinel; the
-optional multilib-category field, both present and empty; extra fields
-beyond the sixth ignored; a malformed line rejected; multiple installed
-packages, some with a real `NEEDED.ELF.2`, some without; a missing
-`var/db/pkg` degrading to an empty result) and end to end against a
-real, live `scanelf`-generated `NEEDED.ELF.2` (the same `dev-libs/elfpkg`
-fixture above, both parsed directly out of the real vdb entry and found
-via a real, full `read_all_needed_entries` walk after `run_merge`).
+**Confirmed scope, before implementing, each of these four times**: no
+`findConsumers` (~140 lines) and no `_find_libs_to_preserve()`'s own
+graph-reachability decision (~80 lines) -- still not a single slice,
+even with generation, parsing, the per-package read, and now the soname
+map itself all real. This module has no real caller yet
+(`#[allow(dead_code)]`, documented in its own module doc comment) -- the
+same "narrow, additive, no wiring until the next slice needs it" shape
+this pilot used for explicit `masters =` parsing landing before eclass
+masters-chain search ever consumed it.
+
+Verified directly against hand-crafted lines/entries (`NeededEntry`
+parsing: a real soname/multiple rpaths/multiple needed entries, the
+`"  -  "` rpath sentinel, the optional multilib-category field both
+present and empty, extra fields beyond the sixth ignored, a malformed
+line rejected; `read_all_needed_entries`: multiple installed packages
+some with a real `NEEDED.ELF.2` and some without, a missing
+`var/db/pkg` degrading to an empty result; `rebuild`: a simple
+provider/consumer pair indexed correctly, the approximate-multilib-
+category fallback, `$ORIGIN` expansion, implicit same-owner runpath
+inference *not* crossing package boundaries, real inode-based dedup of
+two recorded paths for the same real file with both kept as
+`alt_paths`, and the real path-string fallback for a since-vanished
+object) and end to end against a real, live `scanelf`-generated
+`NEEDED.ELF.2` (the same `dev-libs/elfpkg` fixture above, parsed,
+collected, and indexed through the full real chain -- `NeededEntry::
+parse_file` -> `read_all_needed_entries` -> `rebuild` -- after a real
+`run_merge`, confirming the real installed binary's own real `DT_NEEDED`
+entries land as real consumers).
 
 ### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`
 
