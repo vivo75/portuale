@@ -20,6 +20,10 @@ fn test_config() -> portage_profile::Config {
     }
 }
 
+fn masters_test_root(name: &str) -> std::path::PathBuf {
+    TempDir::new(&format!("portage-repo-masters-test-{name}")).keep()
+}
+
 /// Like `resolve_update`, but with `excluded` too (`--exclude` beats `--update`).
 fn resolve_update_excluded(category: &str, package: &str, excluded: &[String]) -> PretendOutcome {
     let root = fixtures_root();
@@ -988,6 +992,7 @@ mod masked_deps;
 mod pretend;
 mod queue;
 mod reinstall;
+mod repo_config;
 mod tests_184;
 mod use_flags;
 mod visibility;

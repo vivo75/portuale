@@ -39,3 +39,47 @@ pub(crate) fn config_bzip2_command(config: &portage_profile::Config) -> String {
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "bzip2".to_string())
 }
+
+/// Profile half over a loaded repo list: both roots resolve the same trees.
+/// Portage: create_trees (running tree inherits `PORTAGE_REPOSITORIES`)
+pub(crate) fn resolve_config_for_root(
+    config_root: &std::path::Path,
+    repos: &[portage_repo::RepoConfig],
+    root: &std::path::Path,
+) -> Result<portage_profile::Config, String> {
+    let main_repo = repos
+        .iter()
+        .find(|r| r.is_main)
+        .ok_or_else(|| "no main repo found in repos.conf".to_string())?;
+
+    // Each overlay's (name, location): for `::name` scoping and cross-repo parents.
+    let overlay_repos: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .filter(|r| !r.is_main)
+        .map(|r| (r.name.clone(), r.location.clone()))
+        .collect();
+
+    // Each repo's resolved `masters` chain, keyed by name.
+    let repo_masters: std::collections::HashMap<String, Vec<std::path::PathBuf>> = repos
+        .iter()
+        .map(|r| (r.name.clone(), r.masters.clone()))
+        .collect();
+
+    // Every repo's `aliases` with locations, for aliased profile parents.
+    let repo_aliases: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root,
+        main_repo_location: &main_repo.location,
+        overlay_repos: &overlay_repos,
+        repo_aliases: &repo_aliases,
+        main_repo_name: &main_repo.name,
+        repo_masters: &repo_masters,
+        eroot: root,
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(config)
+}

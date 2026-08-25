@@ -20,6 +20,31 @@ fn install_165(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &st
     }
 }
 
+// ---- `find_repos_impl` survivors (Portage RepoConfigLoader). ----
+
+/// The main repo defaults to priority -1000, every other repo to 0
+/// (Portage `config.py`'s own default).
+#[test]
+fn find_repos_impl_defaults_the_main_repo_to_priority_minus_1000() {
+    let root = dir_165("repos-priority");
+    std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+    std::fs::write(
+        root.join("etc/portage/repos.conf"),
+        "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n\n[overlay]\nlocation = overlay\n",
+    )
+    .unwrap();
+    let repos = find_repos(&root).expect("repos.conf resolves");
+    assert_eq!(
+        repos.iter().find(|r| r.name == "main").unwrap().priority,
+        -1000
+    );
+    assert_eq!(
+        repos.iter().find(|r| r.name == "overlay").unwrap().priority,
+        0
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 fn cfg_165() -> portage_profile::Config {
     portage_profile::Config {
         accept_keywords: HashSet::from(["amd64".to_string()]),
