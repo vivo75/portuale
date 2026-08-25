@@ -51,7 +51,7 @@ def test_dispatch_via_symlink_ebuild(portuale_binary, tmp_path):
     ebuild_link = tmp_path / "ebuild"
     ebuild_link.symlink_to(portuale_binary)
     result = subprocess.run(
-        [str(ebuild_link), "foo-1.0.ebuild", "config"],
+        [str(ebuild_link), "foo-1.0.ebuild", "clean"],
         capture_output=True,
         text=True,
         check=True,
@@ -83,7 +83,7 @@ def test_explicit_arg_fallback_dispatch(portuale_binary):
     via an explicit first argument, busybox-style, so it's testable and
     usable without setting up symlinks."""
     result = subprocess.run(
-        [str(portuale_binary), "ebuild", "foo-1.0.ebuild", "config"],
+        [str(portuale_binary), "ebuild", "foo-1.0.ebuild", "clean"],
         capture_output=True,
         text=True,
         check=True,
@@ -117,19 +117,19 @@ def test_ebuild_accepts_a_real_value_option_without_misreading_its_value(ebuild_
     bin/ebuild's own argparse setup) -- its value ("y") must not be
     misinterpreted as the ebuild file or an extra command."""
     result = subprocess.run(
-        [str(ebuild_binary), "--color", "y", "foo-1.0.ebuild", "config"],
+        [str(ebuild_binary), "--color", "y", "foo-1.0.ebuild", "clean"],
         capture_output=True,
         text=True,
         check=True,
     )
     assert "ebuild (pilot stub)" in result.stdout
     assert 'ebuild file: "foo-1.0.ebuild"' in result.stdout
-    assert 'commands: ["config"]' in result.stdout
+    assert 'commands: ["clean"]' in result.stdout
 
 
 def test_ebuild_accepts_the_inline_equals_form_of_a_value_option(ebuild_binary):
     result = subprocess.run(
-        [str(ebuild_binary), "--color=y", "foo-1.0.ebuild", "config"],
+        [str(ebuild_binary), "--color=y", "foo-1.0.ebuild", "clean"],
         capture_output=True,
         text=True,
         check=True,
@@ -145,7 +145,7 @@ def test_ebuild_rejects_an_unrecognized_option(ebuild_binary):
     args instead -- see ebuild.rs's doc comment for why this pilot
     deviates)."""
     result = subprocess.run(
-        [str(ebuild_binary), "--not-a-real-option", "foo-1.0.ebuild", "config"],
+        [str(ebuild_binary), "--not-a-real-option", "foo-1.0.ebuild", "clean"],
         capture_output=True,
         text=True,
         check=False,
@@ -156,7 +156,7 @@ def test_ebuild_rejects_an_unrecognized_option(ebuild_binary):
 
 def test_ebuild_rejects_a_filename_not_ending_in_dot_ebuild(ebuild_binary):
     result = subprocess.run(
-        [str(ebuild_binary), "foo-1.0.tar.gz", "config"],
+        [str(ebuild_binary), "foo-1.0.tar.gz", "clean"],
         capture_output=True,
         text=True,
         check=False,
@@ -234,7 +234,7 @@ def test_ebuild_help_wins_unconditionally_regardless_of_position_or_other_args(
     it appears or what else (valid or not) accompanies it -- same
     precedent emerge's own --help already set."""
     for args in (
-        ["foo-1.0.ebuild", "config", "--help"],
+        ["foo-1.0.ebuild", "clean", "--help"],
         ["--not-a-real-option", "--help"],
         ["-h", "foo-1.0.ebuild"],
     ):
@@ -258,7 +258,7 @@ def test_ebuild_version_is_recognized_but_not_specially_implemented(ebuild_binar
     special behavior), unlike emerge's own CLI, which explicitly rejects
     every merely-recognized-but-unimplemented option by name."""
     result = subprocess.run(
-        [str(ebuild_binary), "--version", "foo-1.0.ebuild", "config"],
+        [str(ebuild_binary), "--version", "foo-1.0.ebuild", "clean"],
         capture_output=True,
         text=True,
         check=False,

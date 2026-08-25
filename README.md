@@ -5326,6 +5326,40 @@ entirely, and a same-named-but-not-`"info"` directory that's correctly
 ignored) and end to end via `remove_contents`
 (`remove_contents_removes_an_info_directory_blocked_only_by_a_leftover_index_file`).
 
+### Standalone `ebuild <file> config`/`info`
+
+Real `doebuild()`'s own early-return branch for a handful of commands
+(`lib/portage/package/ebuild/doebuild.py:1326-1351`, "running them out
+of the sandbox -- and stop now") is real now, for the two of them a real
+admin/user actually invokes directly by name: `config`/`info`. No
+`install` chain, no merge/vdb step at all -- just the real, single
+`pkg_config`/`pkg_info` phase function, run directly against the ebuild
+file via `run_single_phase`, the exact same machinery
+`preinst`/`postinst`/`prerm`/`postrm` already use internally (real,
+unmodified `bin/phase-functions.sh`'s own `__ebuild_main` already
+accepts `config`/`info` as literal phase arguments) -- so this slice
+needed no new phase-execution machinery at all, purely CLI routing
+(`ebuild_phases::is_real_standalone_phase_command`). The other commands
+in that same real early-return branch --
+`preinst`/`postinst`/`prerm`/`postrm` (real too, but only reachable
+internally, as part of `merge`/`unmerge`) and `pretend` (already part of
+the `actionmap_deps` chain) -- aren't newly reachable as their own
+top-level command by this slice.
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild config info
+ls "${PORTAGE_TMPDIR}"/portage/dev-libs/standalonephasepkg-1.0/temp/ | grep pkg-
+# pkg-config-ran
+# pkg-info-ran
+
+# Still a dry-run stub, unlike config/info now:
+PORTING/rust/target/release/portuale ebuild foo-1.0.ebuild clean
+# ebuild (pilot stub): dry-run only, no phase execution yet ...
+```
+
 ## Running it
 
 Build both Rust binaries:

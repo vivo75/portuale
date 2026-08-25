@@ -69,14 +69,18 @@
 //     comment). `merge`/`qmerge`/`unmerge`/`package` are real too, but
 //     live in their own modules (`ebuild_merge`/`ebuild_unmerge`/
 //     `ebuild_package`, each routed to directly by `ebuild.rs`, not
-//     through this module's own `run_commands`/`run_single_phase`).
-//     Every other real `ebuild` command (`preinst`/`postinst`/`prerm`/
-//     `postrm`/`config`/`info`/`nofetch`/`depend`/`fetch`/`fetchall`/
-//     `digest`/`manifest`/`rpm`/`instprep`/`clean`/`cleanrm`) still falls
-//     through to `ebuild.rs`'s own pre-existing dry-run stub message
-//     unchanged (`preinst`/`postinst`/`prerm`/`postrm` *are* run for
-//     real, but only internally, as part of `merge`/`unmerge` -- not
-//     reachable as their own standalone top-level command yet).
+//     through this module's own `run_commands`). `config`/`info` *are*
+//     real too, through this module's own `run_single_phase` (see
+//     `is_real_standalone_phase_command`'s own doc comment) -- routed
+//     to directly by `ebuild.rs`, the same way `merge`/`qmerge`/
+//     `unmerge`/`package` are. Every other real `ebuild` command
+//     (`preinst`/`postinst`/`prerm`/`postrm`/`nofetch`/`depend`/`fetch`/
+//     `fetchall`/`digest`/`manifest`/`rpm`/`instprep`/`clean`/
+//     `cleanrm`) still falls through to `ebuild.rs`'s own pre-existing
+//     dry-run stub message unchanged (`preinst`/`postinst`/`prerm`/
+//     `postrm` *are* run for real, but only internally, as part of
+//     `merge`/`unmerge` -- not reachable as their own standalone
+//     top-level command yet).
 //   - No sandboxing at all (`SANDBOX_DISABLED=1` is set unconditionally
 //     below) -- real portage's own `libsandbox`-based filesystem-access
 //     confinement is a real, separate feature this slice doesn't attempt.
@@ -266,6 +270,28 @@ fn phase_prerequisites(mydo: &str) -> Vec<&'static str> {
 /// dry-run stub for everything else.
 pub fn is_real_phase_command(command: &str) -> bool {
     phase_prerequisites(command).last() == Some(&command)
+}
+
+/// Whether `command` is a real, standalone single-phase `ebuild`
+/// command with no `actionmap_deps` prerequisite chain at all -- real
+/// `doebuild()`'s own `mydo in ("config", "help", "info", "postinst",
+/// "preinst", "pretend", "postrm", "prerm")` early-return branch
+/// (`lib/portage/package/ebuild/doebuild.py:1326-1351`, "running them
+/// out of the sandbox -- and stop now"), narrowed to the two of those a
+/// real admin/user actually invokes directly by name:
+/// `preinst`/`postinst`/`prerm`/`postrm` are already real, but only
+/// ever reached internally, as part of `merge`/`unmerge` (see
+/// `ebuild_merge::run_merge`/`ebuild_unmerge::run_unmerge`'s own doc
+/// comments), never as their own standalone top-level command; `pretend`
+/// is already part of the `actionmap_deps` chain above; `help` this
+/// pilot's own CLI already handles separately (`wants_help`).
+/// `run_single_phase` (already used internally for exactly this reason)
+/// is a direct fit for `config`/`info`: real `bin/phase-functions.sh`'s
+/// own `__ebuild_main` already accepts them as literal phase arguments
+/// (`run_single_phase`'s own doc comment), so no new phase-execution
+/// machinery is needed at all -- this is purely a CLI-routing addition.
+pub fn is_real_standalone_phase_command(command: &str) -> bool {
+    matches!(command, "config" | "info")
 }
 
 /// The real directory layout `doebuild_environment()` computes (all
@@ -1183,6 +1209,24 @@ mod tests {
     }
 
     #[test]
+    fn is_real_standalone_phase_command_covers_exactly_config_and_info() {
+        for cmd in ["config", "info"] {
+            assert!(
+                is_real_standalone_phase_command(cmd),
+                "{cmd} should be a real standalone phase command"
+            );
+        }
+        for cmd in [
+            "merge", "qmerge", "unmerge", "package", "clean", "install", "preinst", "help",
+        ] {
+            assert!(
+                !is_real_standalone_phase_command(cmd),
+                "{cmd} should NOT be a real standalone phase command"
+            );
+        }
+    }
+
+    #[test]
     fn split_package_separates_pv_from_the_revision() {
         let split =
             split_package(Path::new("/repo/dev-libs/foo/foo-1.2.3-r1.ebuild"), "foo").unwrap();
@@ -1245,6 +1289,59 @@ mod tests {
         let contents = std::fs::read_to_string(&installed)
             .unwrap_or_else(|e| panic!("{} should have been installed: {e}", installed.display()));
         assert_eq!(contents, "hello from phasepkg\n");
+
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    /// Real, end-to-end proof that standalone `config`/`info` (real
+    /// `ebuild.rs`'s own routing to `run_single_phase`, see
+    /// `is_real_standalone_phase_command`'s own doc comment) actually
+    /// runs the real `pkg_config`/`pkg_info` phase functions -- not just
+    /// that `run_single_phase` returns successfully. No `install` chain
+    /// involved at all, matching real standalone usage (a real admin
+    /// runs `ebuild <file> config` directly against an ebuild, with no
+    /// merge/vdb step in the same invocation).
+    #[test]
+    fn run_single_phase_actually_runs_pkg_config_and_pkg_info() {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild");
+        let portage_tmpdir = std::env::temp_dir().join(format!(
+            "ebuild-phases-test-{}-{}",
+            std::process::id(),
+            "run_single_phase_actually_runs_pkg_config_and_pkg_info"
+        ));
+        let _ = std::fs::remove_dir_all(&portage_tmpdir);
+
+        let config_status = run_single_phase(
+            &ebuild_path,
+            "config",
+            Path::new("/"),
+            &portage_tmpdir,
+            false,
+            ShellBackend::Brush,
+        )
+        .expect("run_single_phase should not itself error");
+        assert_eq!(config_status, 0);
+        let info_status = run_single_phase(
+            &ebuild_path,
+            "info",
+            Path::new("/"),
+            &portage_tmpdir,
+            false,
+            ShellBackend::Brush,
+        )
+        .expect("run_single_phase should not itself error");
+        assert_eq!(info_status, 0);
+
+        let t_dir = portage_tmpdir.join("portage/dev-libs/standalonephasepkg-1.0/temp");
+        assert!(
+            t_dir.join("pkg-config-ran").is_file(),
+            "pkg_config must actually run"
+        );
+        assert!(
+            t_dir.join("pkg-info-ran").is_file(),
+            "pkg_info must actually run"
+        );
 
         let _ = std::fs::remove_dir_all(&portage_tmpdir);
     }
