@@ -82,6 +82,83 @@ fn merge_tree_copies_files_dirs_and_symlinks_and_writes_matching_contents() {
 }
 
 #[test]
+fn merge_tree_preserves_ownership_from_the_source_when_root() {
+    // The destination takes the source's uid/gid (Portage's movefile/mergeme).
+    // Root-only: skipped otherwise (run under `sudo cargo test ...` to exercise).
+    // SAFETY: `geteuid` takes no arguments and returns a plain int.
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("skipping merge_tree_preserves_ownership_from_the_source_when_root: not root");
+        return;
+    }
+    let tmp = tempdir();
+    let d = tmp.join("D");
+    let root = tmp.join("ROOT");
+    std::fs::create_dir_all(d.join("usr/share/x")).unwrap();
+    std::fs::write(d.join("usr/share/x/hello.txt"), b"hello").unwrap();
+    std::os::unix::fs::symlink("hello.txt", d.join("usr/share/x/link.txt")).unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+
+    // A uid/gid that's neither 0 nor this process's own.
+    let (uid, gid) = (65534u32, 65534u32);
+    for p in [
+        d.join("usr"),
+        d.join("usr/share"),
+        d.join("usr/share/x"),
+        d.join("usr/share/x/hello.txt"),
+    ] {
+        raw_chown(&p, uid, gid, false);
+    }
+    raw_chown(&d.join("usr/share/x/link.txt"), uid, gid, true);
+
+    let mut cfgfiledict = BTreeMap::new();
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict,
+        xattrs: &XattrPolicy::default(),
+    })
+    .expect("merge_tree succeeds");
+
+    for p in [
+        root.join("usr"),
+        root.join("usr/share"),
+        root.join("usr/share/x"),
+        root.join("usr/share/x/hello.txt"),
+        root.join("usr/share/x/link.txt"),
+    ] {
+        let meta = std::fs::symlink_metadata(&p).unwrap();
+        assert_eq!(meta.uid(), uid, "{}: uid", p.display());
+        assert_eq!(meta.gid(), gid, "{}: gid", p.display());
+    }
+
+    // An existing directory keeps its ownership (Portage's "kept as-is" branch).
+    raw_chown(&d.join("usr/share/x"), 0, 0, false);
+    let mut cfgfiledict2 = BTreeMap::new();
+    merge_tree(MergeTreeArgs {
+        d: &d,
+        root: &root,
+        category: "dev-libs",
+        installed_instance_pf: None,
+        protect_if_modified: false,
+        config_protect: "/etc",
+        config_protect_mask: "/etc/env.d",
+        noconfmem: false,
+        cfgfiledict: &mut cfgfiledict2,
+        xattrs: &XattrPolicy::default(),
+    })
+    .expect("merge_tree succeeds");
+    let meta = std::fs::symlink_metadata(root.join("usr/share/x")).unwrap();
+    assert_eq!(meta.uid(), uid, "existing dir must keep its ownership");
+    assert_eq!(meta.gid(), gid, "existing dir must keep its ownership");
+}
+
+#[test]
 fn merge_tree_does_not_protect_a_brand_new_file() {
     let tmp = tempdir();
     let d = tmp.join("D");

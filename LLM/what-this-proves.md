@@ -4805,6 +4805,36 @@ instead leaves the destination completely untouched in that case (while
 still recording the merge in `CONTENTS`) -- the one remaining, deliberate
 v1 simplification in this area.
 
+### `CONFIG_PROTECT` for symlinks, `--noconfmem`, and `new_protect_filename`'s own file-reuse logic
+
+Three gaps the previous section's own "v1 scope cuts" originally
+documented are now closed, finishing off real `dblink._protect()`/
+`new_protect_filename()` (`lib/portage/util/__init__.py:1803`) parity.
+**Symlink CONFIG_PROTECT**: a `sym` entry under a protected path whose
+real on-disk target string differs from the one about to be merged is now
+diverted too (real bug #485598: the *target string*'s own MD5 is what's
+compared, not file content) -- mirrors the `obj` case exactly, just
+hashing the target string's bytes instead of reading file content (the
+comparison is type-independent of the live destination's own on-disk
+type since a later slice -- see "CONFIG_PROTECT: a type-changing update
+is real-protected too" below). **`NOCONFMEM`**: real `--noconfmem`
+(`lib/_emerge/actions.py:2790`) is an `emerge`-only CLI flag with no real
+`bin/ebuild` equivalent at all (confirmed against `bin/ebuild`'s own
+six-option `argparse` list), so portuale reads the `NOCONFMEM` env var
+directly instead -- the same "env var, not full config resolution"
+shortcut `CONFIG_PROTECT` itself already uses. Real `vartree.py:4949`'s
+own `cfgfiledict["IGNORE"]`: forces every already-offered,
+unmodified-since update to be re-protected instead of applied directly,
+regardless of memory. **`new_protect_filename` file reuse**: real
+`new_protect_filename()` no longer always allocates a fresh
+`._cfgNNNN_<name>` number -- it now reuses the *last* one when that
+file's own content (or, if it's itself a symlink, its own target string)
+already matches the pending update, exactly like real portage. This is
+what keeps `NOCONFMEM` from spawning a visibly *new* `._cfgNNNN_` file on
+a repeat merge of unchanged content -- its real, visible effect is that
+the logical path stays protected (left alone) instead of being
+overwritten directly, not that a fresh numbered file appears each time.
+
 ### `FEATURES=collision-protect`: a merge that would overwrite another package's file aborts
 
 CONFIG_PROTECT's own sibling real merge-track feature: real

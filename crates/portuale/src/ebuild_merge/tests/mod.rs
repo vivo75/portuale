@@ -2,6 +2,29 @@ use super::*;
 
 use portage_util::TempDir;
 
+/// `chown()`s a test-source path directly, without going through the
+/// function under test.
+fn raw_chown(path: &Path, uid: u32, gid: u32, is_symlink: bool) {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    let ret = if is_symlink {
+        // SAFETY: `c` is a CString that outlives the call; takes a
+        // NUL-terminated path pointer plus plain uid/gid ints.
+        unsafe { libc::lchown(c.as_ptr(), uid, gid) }
+    } else {
+        // SAFETY: `c` is a CString that outlives the call; takes a
+        // NUL-terminated path pointer plus plain uid/gid ints.
+        unsafe { libc::chown(c.as_ptr(), uid, gid) }
+    };
+    assert_eq!(
+        ret,
+        0,
+        "{}: {}",
+        path.display(),
+        std::io::Error::last_os_error()
+    );
+}
+
 fn tempdir() -> std::path::PathBuf {
     TempDir::new("portuale-ebuild-merge-test").keep()
 }

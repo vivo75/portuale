@@ -118,3 +118,20 @@ fn new_protect_filename_reuses_last_file_with_matching_content() {
         tmp.join("._cfg0002_foo.conf")
     );
 }
+
+#[test]
+fn new_protect_filename_reuses_last_symlink_with_matching_target() {
+    let tmp = tempdir();
+    std::fs::create_dir_all(&tmp).unwrap();
+    let dest = tmp.join("link.conf");
+    std::os::unix::fs::symlink("old-target", tmp.join("._cfg0000_link.conf")).unwrap();
+
+    assert_eq!(
+        new_protect_filename(&dest, "old-target").unwrap(),
+        tmp.join("._cfg0000_link.conf")
+    );
+    assert_eq!(
+        new_protect_filename(&dest, "new-target").unwrap(),
+        tmp.join("._cfg0001_link.conf")
+    );
+}
