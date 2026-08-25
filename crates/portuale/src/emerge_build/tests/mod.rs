@@ -118,5 +118,7 @@ fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntr
         deps: Vec::new(),
     }
 }
+
+mod buildpkgonly;
 mod entries;
 mod resume;
