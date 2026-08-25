@@ -168,6 +168,63 @@ fn install_writes_the_real_build_time_file() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// End-to-end proof that the `install` post-phase QA runs: the
+/// `95empty-dirs` check strips a genuinely empty dir for EAPI 8+
+/// while a `keepdir`'d one survives.
+#[test]
+fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_dir() {
+    let tmp =
+        TempDir::new("ebuild-phases-test-install_runs_the_portage_post_install_qa_check").keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let repo_root = tmp.join("repo");
+    let pkg_dir = repo_root.join("dev-libs/qacheckpkg");
+    std::fs::create_dir_all(repo_root.join("profiles")).unwrap();
+    std::fs::write(repo_root.join("profiles/repo_name"), "qachecktest\n").unwrap();
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    std::fs::write(
+        pkg_dir.join("qacheckpkg-1.0.ebuild"),
+        "EAPI=8\n\
+         DESCRIPTION=\"fixture: real post-install QA check strips a genuinely empty dir\"\n\
+         SLOT=\"0\"\n\
+         KEYWORDS=\"amd64\"\n\
+         S=\"${WORKDIR}\"\n\
+         src_install() {\n\
+         \tdodir /usr/lib/reallyempty\n\
+         \tkeepdir /usr/lib/keptempty\n\
+         }\n",
+    )
+    .unwrap();
+
+    let ebuild_path = pkg_dir.join("qacheckpkg-1.0.ebuild");
+    let portage_tmpdir = tmp.join("portage_tmpdir");
+
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
+    .expect("run_commands should not itself error");
+    assert_eq!(status, 0, "install should exit successfully");
+
+    let image_dir = portage_tmpdir.join("portage/dev-libs/qacheckpkg-1.0/image");
+    assert!(
+        !image_dir.join("usr/lib/reallyempty").exists(),
+        "a genuinely empty dodir'd directory must be stripped by the real post-install QA check"
+    );
+    assert!(
+        image_dir.join("usr/lib/keptempty").is_dir(),
+        "a keepdir'd directory (real ebuild-author idiom) must survive"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// `ShellBackend::Bash` counterpart of the brush proof above: same
 /// fixture, same assertions, identical result.
 #[test]
@@ -415,6 +472,79 @@ fn brush_phase_env_is_filtered_of_bash_special_variables() {
     );
 
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// End-to-end proof that the masters chain unblocks an `inherit()` of
+/// an eclass existing only in the overlay's master repo.
+#[test]
+fn install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_repo() {
+    let tmp = TempDir::new("ebuild-phases-test-eclass_masters_e2e").keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let main = tmp.join("main");
+    let overlay = tmp.join("overlay");
+    std::fs::create_dir_all(main.join("profiles")).unwrap();
+    std::fs::create_dir_all(main.join("eclass")).unwrap();
+    std::fs::write(main.join("profiles/repo_name"), "main\n").unwrap();
+    std::fs::write(
+        main.join("eclass/mastershared.eclass"),
+        "mastershared_hello() {\n\techo \"hello from mastershared.eclass\"\n}\n",
+    )
+    .unwrap();
+
+    let pkg_dir = overlay.join("dev-libs/overlaypkg");
+    std::fs::create_dir_all(overlay.join("profiles")).unwrap();
+    std::fs::write(overlay.join("profiles/repo_name"), "overlay\n").unwrap();
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    std::fs::write(
+        pkg_dir.join("overlaypkg-1.0.ebuild"),
+        "EAPI=8\n\
+         DESCRIPTION=\"fixture: real cross-repo masters-chain eclass inherit\"\n\
+         SLOT=\"0\"\n\
+         KEYWORDS=\"amd64\"\n\
+         S=\"${WORKDIR}\"\n\
+         inherit mastershared\n\
+         src_install() {\n\
+         \tmastershared_hello > \"${T}/eclass-marker.txt\" || die\n\
+         }\n",
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(tmp.join("etc/portage")).unwrap();
+    std::fs::write(
+        tmp.join("etc/portage/repos.conf"),
+        format!(
+            "[DEFAULT]\nmain-repo = main\n\n\
+             [main]\nlocation = {}\n\n\
+             [overlay]\nlocation = {}\nmasters = main\n",
+            main.display(),
+            overlay.display(),
+        ),
+    )
+    .unwrap();
+
+    let ebuild_path = pkg_dir.join("overlaypkg-1.0.ebuild");
+    let portage_tmpdir = tmp.join("portage_tmpdir");
+
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: &tmp,
+        shell: ShellBackend::Brush,
+        build_env: &[],
+    })
+    .expect("run_commands should not itself error");
+    assert_eq!(status, 0, "install should exit successfully");
+
+    let marker = portage_tmpdir.join("portage/dev-libs/overlaypkg-1.0/temp/eclass-marker.txt");
+    let observed = std::fs::read_to_string(&marker)
+        .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
+    assert_eq!(observed, "hello from mastershared.eclass\n");
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// Passing `debug: true` exports `PORTAGE_DEBUG=1` into the phase's
