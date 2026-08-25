@@ -41,6 +41,20 @@ pub fn eapi_is_supported(eapi: &str) -> bool {
     )
 }
 
+/// Whether `:=` slot-operator dependencies exist in this EAPI (EAPI 5+).
+/// Call only with an `eapi_is_supported` EAPI; reads by numeric prefix, so the
+/// deprecated underscore EAPIs (which Portage's own parser rejects) read by
+/// prefix here -- unreachable in any vdb or tree in practice.
+// Portage: _get_eapi_attrs(eapi).slot_operator, FakeVartree._apply_dynamic_deps
+pub fn eapi_has_slot_operator(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u32>().is_ok_and(|n| n >= 5)
+}
+
 /// Whether `IUSE_EFFECTIVE` exists in this EAPI (EAPI 5+) and therefore governs
 /// the `PORTAGE_USE` masking and the valid-flag domain. Same numeric-prefix
 /// reading as `eapi_has_slot_operator`.
@@ -52,6 +66,18 @@ pub fn eapi_has_iuse_effective(eapi: &str) -> bool {
         .take_while(|c| c.is_ascii_digit())
         .collect();
     digits.parse::<u32>().is_ok_and(|n| n >= 5)
+}
+
+/// Whether `IDEPEND` exists in this EAPI (EAPI 8+). An older EAPI's `IDEPEND`
+/// assignment never reaches saved metadata, so it reads as empty.
+// Portage: eapi_has_idepend, bin/ebuild.sh depend phase
+pub fn eapi_has_idepend(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u32>().is_ok_and(|n| n >= 8)
 }
 
 /// Arguments of [`cache_entry_is_valid`].

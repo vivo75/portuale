@@ -2,6 +2,16 @@
 
 use crate::*;
 
+/// The vdb record verbatim (`Raw`) vs what Portage's dynamic-deps overlay leaves
+/// behind (`Effective`: live ebuild `*DEPEND` plus the vdb's own built slot-operator
+/// atoms). With `--dynamic-deps=n` the two collapse into one.
+/// Portage: FakeVartree.py, _apply_dynamic_deps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum InstalledMetaLayer {
+    Raw,
+    Effective,
+}
+
 /// The live ebuild metadata for one installed `cat/pkg-version`, always from the
 /// repo the vdb says it was built from, never from a repo-priority search. `None`
 /// when the version is gone from the recorded repo. One shared helper, so the four
@@ -56,4 +66,23 @@ pub(crate) fn built_slot_operator_atoms(
             })
         })
         .collect()
+}
+
+/// Arguments of [`installed_dep_string`].
+pub(crate) struct InstalledDepStringArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) dynamic_deps: bool,
+    pub(crate) ignore_built_slot_operator_deps: bool,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    /// The repo's current metadata for this exact version; `None` when the version is
+    /// gone from every repo.
+    pub(crate) live: Option<&'a HashMap<String, String>>,
+    pub(crate) key: &'a str,
+    pub(crate) layer: InstalledMetaLayer,
+    /// Caches the Effective result only, per pass, keyed `(category, package, version,
+    /// key)`. The key stays valid with the overlay inputs: the ignore flag is a
+    /// run-constant CLI flag, and both EAPIs are stable per package within a run.
+    pub(crate) memo: &'a mut HashMap<(String, String, String, String), String>,
 }
