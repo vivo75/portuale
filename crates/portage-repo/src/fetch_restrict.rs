@@ -79,6 +79,49 @@ pub(crate) fn evaluated_metadata_tokens(args: EvaluatedMetadataTokensArgs<'_>) -
         .unwrap_or_default()
 }
 
+/// Arguments of [`fetch_restrict_files_all_present`].
+pub(crate) struct FetchRestrictFilesAllPresentArgs<'a> {
+    pub(crate) src_uri: &'a str,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) repo_location: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) distdir: &'a Path,
+}
+
+/// Whether every distfile this candidate's `SRC_URI` names (flattened against its
+/// effective USE) is already present in `distdir` at its Manifest-recorded size.
+/// Unparsable `SRC_URI` or a distfile with no `Manifest` `DIST` line counts as
+/// *not* satisfied; empty `SRC_URI` is trivially satisfied.
+// Portage: output.py, getfetchsizes with only_restricted=True
+pub(crate) fn fetch_restrict_files_all_present(args: FetchRestrictFilesAllPresentArgs<'_>) -> bool {
+    let FetchRestrictFilesAllPresentArgs {
+        src_uri,
+        use_flags,
+        repo_location,
+        category,
+        package,
+        distdir,
+    } = args;
+    let Ok(files) = flatten_src_uri_with_use(src_uri, use_flags) else {
+        return false;
+    };
+    if files.is_empty() {
+        return true;
+    }
+    let digests =
+        portage_fetch::parse_manifest(&repo_location.join(category).join(package).join("Manifest"))
+            .unwrap_or_default();
+    files.iter().all(|f| {
+        let Some(recorded) = digests.get(&f.filename) else {
+            return false;
+        };
+        std::fs::metadata(distdir.join(&f.filename))
+            .map(|m| m.len() == recorded.size)
+            .unwrap_or(false)
+    })
+}
+
 /// `portage_fetch::flatten_src_uri` with a USE-membership check: `flag?` is active
 /// iff the flag is on (`!flag?` iff off).
 // Portage: getfetchsizes, getFetchMap with useflags=pkg.use

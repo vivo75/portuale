@@ -6267,3 +6267,61 @@ rust/target/release/portuale ebuild foo-1.0.ebuild clean
 # ebuild: dry run -- one or more of these commands is recognized but not yet implemented in portuale
 ```
 
+### Real `PORTAGE_COMPRESSION_COMMAND` resolution
+
+Real `doebuild.py:697-750`'s own `PORTAGE_COMPRESSION_COMMAND`
+resolution is real now, replacing the previous hardcoded `"bzip2 -c"`.
+Looks up `BINPKG_COMPRESS` (real `make.globals`'s own default is
+`"zstd"` -- **not** `"bzip2"`; portuale's own previous hardcoded
+value predated noticing real portage's own default had changed) in the
+real `_compressors` table (all six real entries: `bzip2`/`gzip`/`lz4`/
+`lzip`/`lzop`/`xz`/`zstd`), substitutes `{JOBS}` (real host CPU count)
+and `${PORTAGE_BZIP2_COMMAND}`/`${BINPKG_COMPRESS_FLAGS}` (narrowed to a
+plain `${VAR}` substitution, not a full shell `varexpand` -- none of the
+six real templates or realistic flag values need anything beyond that),
+and confirms the resolved binary is real-`PATH`-findable (real
+`find_binary()`). An unknown `BINPKG_COMPRESS` name or a compressor
+whose binary isn't actually installed leaves `PORTAGE_COMPRESSION_
+COMMAND` unset entirely -- matching real behavior exactly, real,
+unmodified `bin/misc-functions.sh` then hits its own real `[[ -z
+"${PORTAGE_COMPRESSION_COMMAND}" ]] && die "PORTAGE_COMPRESSION_COMMAND
+is unset"` guard naturally, rather than portuale fabricating a
+fallback. `BINPKG_COMPRESS_FLAGS_<NAME>` (the real per-compressor
+override) is resolved once, at the `ebuild.rs`/`pretend.rs` CLI
+boundary (both real entry points into `PackageOptions`), falling back to
+plain `BINPKG_COMPRESS_FLAGS` when unset -- `ebuild_package.rs` itself
+never needs to know about the override naming convention at all.
+
+Since portuale's own `portage_repo` binary-package reader never parses
+a `.tbz2`/XPAK file's own content (only `Packages`), the tar body's
+actual compression codec was always cosmetic to portuale's own
+reading path -- verified by checking the real magic bytes at the start
+of the produced `.tbz2` directly (`28 b5 2f fd` for real zstd, `fd 37 7a
+58 5a 00` for real xz, both matching real `compression_probe.py`'s own
+`_compression_re`), not just that the file exists.
+
+```sh
+cd rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export PKGDIR="$(mktemp -d)"
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
+xxd "${PKGDIR}"/dev-libs/packagepkg-1.0.tbz2 | head -1
+# 00000000: 28b5 2ffd ...   <- real zstd magic bytes, the new default
+
+export PKGDIR="$(mktemp -d)"
+export BINPKG_COMPRESS=xz
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
+xxd "${PKGDIR}"/dev-libs/packagepkg-1.0.tbz2 | head -1
+# 00000000: fd37 7a58 5a00 ...   <- real xz magic bytes
+
+export PKGDIR="$(mktemp -d)"
+export BINPKG_COMPRESS=made-up-codec
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
+# * ERROR: dev-libs/packagepkg-1.0:: failed (package phase):
+# *   PORTAGE_COMPRESSION_COMMAND is unset
+unset BINPKG_COMPRESS
+```
+

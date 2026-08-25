@@ -1417,6 +1417,82 @@ mod tests {
         TempDir::new("portuale-ebuild-package-test").keep()
     }
 
+    #[test]
+    fn compress_template_covers_exactly_the_real_six_compressors() {
+        for name in ["bzip2", "gzip", "lz4", "lzip", "lzop", "xz", "zstd"] {
+            assert!(
+                compress_template(name).is_some(),
+                "{name} should be a known real compressor"
+            );
+        }
+        assert_eq!(compress_template("made-up-codec"), None);
+    }
+
+    #[test]
+    fn find_binary_finds_a_real_path_entry_and_rejects_a_bogus_name() {
+        assert!(find_binary("sh"), "sh should be on a real test PATH");
+        assert!(!find_binary(
+            "this-binary-definitely-does-not-exist-anywhere-xyz"
+        ));
+    }
+
+    #[test]
+    fn resolve_compression_command_substitutes_bzip2_var_and_flags() {
+        // "bzip2" doubles as the ${PORTAGE_BZIP2_COMMAND} value so find_binary
+        // succeeds without depending on another installed binary.
+        let cmd = resolve_compression_command("bzip2", "-9", "bzip2")
+            .expect("bzip2 should be found on a real test PATH");
+        assert_eq!(cmd, "bzip2 -9");
+    }
+
+    #[test]
+    fn resolve_compression_command_substitutes_gzip_flags_with_no_bzip2_var() {
+        let cmd = resolve_compression_command("gzip", "-9", "bzip2")
+            .expect("gzip should be found on a real test PATH");
+        assert_eq!(cmd, "gzip -9");
+    }
+
+    #[test]
+    fn resolve_compression_command_substitutes_jobs_for_xz_and_zstd() {
+        // {JOBS} is the host CPU count -- not pinned, just proven substituted
+        // (no literal "{JOBS}" left, and a positive integer follows "-T").
+        for name in ["xz", "zstd"] {
+            let cmd = resolve_compression_command(name, "", "bzip2")
+                .unwrap_or_else(|| panic!("{name} should be found on a real test PATH"));
+            assert!(!cmd.contains("{JOBS}"), "{cmd}");
+            let jobs_token = cmd
+                .split_whitespace()
+                .find_map(|tok| tok.strip_prefix("-T"))
+                .unwrap_or_else(|| panic!("{cmd} should contain a -T<jobs> token"));
+            assert!(
+                jobs_token.parse::<u32>().is_ok(),
+                "-T should be followed by a real positive integer, got {jobs_token:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_compression_command_is_none_for_an_unknown_compressor() {
+        assert_eq!(
+            resolve_compression_command("made-up-codec", "", "bzip2"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_compression_command_is_none_when_the_bzip2_var_names_a_missing_binary() {
+        // A genuine compressor name, but the bzip2 var names a missing binary:
+        // the command is left unset, not fabricated.
+        assert_eq!(
+            resolve_compression_command(
+                "bzip2",
+                "",
+                "this-binary-definitely-does-not-exist-anywhere-xyz"
+            ),
+            None
+        );
+    }
+
     // `repo_root_for` lives in, and is tested in, `ebuild_phases.rs`.
 
     #[test]

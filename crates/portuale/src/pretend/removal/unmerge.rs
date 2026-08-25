@@ -2,6 +2,15 @@
 
 use crate::pretend::*;
 
+/// Whether a `FEATURES` token is on in the raw process env. This is the
+/// fallback for the CLI boundaries with no resolved config; every
+/// build/merge path reads the resolved list instead.
+pub(crate) fn feature_enabled(token: &str) -> bool {
+    std::env::var("FEATURES")
+        .map(|f| f.split_whitespace().any(|t| t == token))
+        .unwrap_or(false)
+}
+
 /// Drop every world atom for the removed package unless some installed
 /// version still satisfies it; all other atoms are kept untouched. The file
 /// is rewritten sorted, with comment and `@set` lines not carried forward.
