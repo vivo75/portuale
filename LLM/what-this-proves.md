@@ -6267,6 +6267,31 @@ rust/target/release/portuale ebuild foo-1.0.ebuild clean
 # ebuild: dry run -- one or more of these commands is recognized but not yet implemented in portuale
 ```
 
+### Standalone `ebuild <file> prerm`/`postrm`
+
+`prerm`/`postrm` join `config`/`info` as standalone commands, real for
+the same reason and via the same `run_single_phase` machinery (see the
+section above). Unlike `preinst`/`postinst` -- which stay internal-only,
+tied to `merge`'s own real file-copy ordering (`dblink.treewalk()`
+invokes them directly around it, a constraint no standalone invocation
+could reproduce) -- `prerm`/`postrm` have no equivalent constraint tying
+them to `unmerge`'s own file-removal step: real portage itself allows
+invoking them completely standalone (e.g. to test a `pkg_prerm`/
+`pkg_postrm` function without actually removing the package). So
+`unmerge`'s own internal use (`ebuild_unmerge::run_unmerge`) and this
+new standalone path are simply two independent, real ways to reach the
+same real phase functions -- no new phase-execution machinery needed
+here either, purely a CLI-routing addition.
+
+```sh
+export PORTAGE_TMPDIR="$(mktemp -d)"
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild prerm postrm
+ls "${PORTAGE_TMPDIR}"/portage/dev-libs/standalonephasepkg-1.0/temp/ | grep pkg-
+# pkg-postrm-ran
+# pkg-prerm-ran
+```
+
 ### Real `PORTAGE_COMPRESSION_COMMAND` resolution
 
 Real `doebuild.py:697-750`'s own `PORTAGE_COMPRESSION_COMMAND`
