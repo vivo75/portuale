@@ -735,6 +735,67 @@ mod tests {
         (format!("http://127.0.0.1:{port}/file"), handle)
     }
 
+    /// A mirror-shaped HTTP server: serves `routes` by request path (404
+    /// otherwise), recording every requested path. A caller expecting fewer
+    /// requests than `connections` stops the thread with `unblock_server` (an empty
+    /// connection ends it).
+    #[allow(clippy::type_complexity)]
+    fn serve_mirror(
+        routes: Vec<(&'static str, Vec<u8>)>,
+        connections: usize,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let requested = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = requested.clone();
+        let handle = std::thread::spawn(move || {
+            for _ in 0..connections {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]);
+                let Some(path) = request.split_whitespace().nth(1) else {
+                    // `unblock_server`: stop serving.
+                    return;
+                };
+                log.lock().unwrap().push(path.to_string());
+                let response = match routes.iter().find(|(p, _)| *p == path) {
+                    Some((_, body)) => {
+                        let mut r = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .into_bytes();
+                        r.extend_from_slice(body);
+                        r
+                    }
+                    None => {
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            .to_vec()
+                    }
+                };
+                let _ = stream.write_all(&response);
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), requested, handle)
+    }
+
+    /// Connects (sending nothing) so a parked `serve_mirror` thread can exit.
+    fn unblock_server(root: &str) {
+        let addr = root.trim_start_matches("http://");
+        let _ = std::net::TcpStream::connect(addr);
+    }
+
     #[test]
     fn fetch_src_uri_is_empty_for_an_empty_src_uri() {
         let pkg_dir = tempdir();
