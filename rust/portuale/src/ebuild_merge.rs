@@ -46,6 +46,20 @@
 // lstat'd on-disk type, regardless of the incoming source's own type, so
 // a symlink replacing a previously-installed regular file at the same
 // path (or vice versa) is real-protected too, not silently overwritten.
+// Real `_installed_instance`/`FEATURES=config-protect-if-modified` is
+// real too now (`vartree.py:4409-4418`/`5849-5866`): `installed_
+// instance_pf` picks the max-`COUNTER` same-slot instance this merge is
+// upgrading over (reusing the same real per-package `COUNTER` this
+// pilot already writes on every merge), and `protect_decision` consults
+// its own real `CONTENTS` (`owned_node_value_pf`) for two distinct real
+// behaviors: a path it recorded that's now missing entirely on disk
+// (the admin deleted it) always force-diverts (real bug #523684); and,
+// only when `config-protect-if-modified` is on (real `make.globals`
+// default), a live destination that still matches *exactly* what that
+// previous instance installed -- never locally modified -- has the new
+// version's content applied directly, distinguishing "this file's own
+// default content changed between package versions" from "the admin
+// hand-edited it locally".
 //
 // `FEATURES=collision-protect` is real too: real `dblink.
 // _collision_protect` (`lib/portage/dbapi/vartree.py:3836`), narrowed --
@@ -145,14 +159,6 @@
 //     corrupt a future preserve-libs decision) -- moot without the
 //     registration side above ever writing `NEEDED` data in the first
 //     place.
-//   - No `_installed_instance`/`protect_if_modified` support: real
-//     `_protect()` also consults the *previous* installed version's own
-//     `CONTENTS` (when upgrading over it) to tell "content the admin
-//     locally modified" apart from "content inherited unchanged from the
-//     old package" -- this pilot's own `ebuild <file> merge` has no
-//     notion of "the package instance this merge is replacing" at all
-//     (see `blocked_installed_packages`'s own doc comment: no depgraph),
-//     so this always behaves as if no matching previous instance exists.
 //   - An already-offered, unmodified-since update (`cfgfiledict` already
 //     remembers this exact content for this path, `NOCONFMEM` unset) is
 //     applied directly here; real portage instead leaves the live
@@ -251,6 +257,19 @@ pub struct MergeOptions {
     /// fresh `._cfgNNNN_` file instead of silently reused/applied.
     /// `Default` matches real portage's own default: unset, `false`.
     pub noconfmem: bool,
+    /// Real `"config-protect-if-modified" in self.settings.features`
+    /// (`vartree.py:5376-5379`): gates `_protect()`'s own `protect_if_
+    /// modified` behavior (see `protect_decision`'s own doc comment) --
+    /// real `config-protect-if-modified` *is* one of real `make.globals`'s
+    /// own default `FEATURES` tokens (`cnf/make.globals:79`), confirmed
+    /// by reading it directly, the same category of previously-
+    /// undiscovered default-`FEATURES` mismatch `protect_owned`'s own doc
+    /// comment already found. `Default` is `true`, matching real
+    /// portage's own actual out-of-the-box behavior. Same env-var-not-
+    /// full-config-resolution shortcut (and the same "doesn't accumulate
+    /// onto the real default set" simplification) `protect_owned`
+    /// already uses.
+    pub protect_if_modified: bool,
     /// Real `PORTAGE_CONFIGROOT` (`portage_repo::config_root_from_env`'s
     /// own real default: `/` when unset) -- consulted only by
     /// `blocked_installed_packages`'s own real `repos.conf`/profile/USE
@@ -280,6 +299,7 @@ impl Default for MergeOptions {
             collision_protect: false,
             protect_owned: true,
             noconfmem: false,
+            protect_if_modified: true,
             // "/dev/null" is a real character device, never a directory
             // -- joining anything under it can never exist on any real
             // filesystem, guaranteeing find_repos always fails cleanly
@@ -411,16 +431,58 @@ fn new_protect_filename(dest: &Path, newmd5: &str) -> Result<PathBuf, String> {
 /// reason `new_protect_filename`'s own doc comment already gives: it
 /// only ever changes behavior when `dest` doesn't exist, and this
 /// function -- like every existing call site before it -- only reaches
-/// `new_protect_filename` after confirming `dest` exists.
+/// `new_protect_filename` after confirming `dest` exists, *except* the
+/// one new case below that deliberately doesn't.
+///
+/// Real `_installed_instance`/`k = self._installed_instance.
+/// _match_contents(dest_real)` (`vartree.py:5849-5866`) is real now too:
+/// `installed_instance_pf` (the *previous* same-slot instance this
+/// merge is upgrading over, if any) is consulted via `owned_node_value_
+/// pf` for whatever it recorded at `abs_path`. Two distinct real
+/// behaviors, both gated on a match (`k is not False`):
+///   - `dest_mode is None` (the live destination doesn't exist at all --
+///     the admin deleted or renamed a path the *previous* package
+///     installed): real `force = True`, which (since `_protect()`'s own
+///     `if protected and dest_mode is not None:` main block is skipped
+///     entirely when `dest_mode is None`, leaving `protected`/`move_me`
+///     at their initial `True` values) always diverts into a fresh
+///     `._cfgNNNN_` sibling -- bug #523684, prompting the admin instead
+///     of silently re-creating a path they deliberately removed.
+///   - `dest_mode is not None` and real `FEATURES=config-protect-if-
+///     modified` (`protect_if_modified`) is on: if the live destination
+///     still matches *exactly* what the previous instance's own real
+///     `CONTENTS` recorded (an `obj`'s content MD5, or a `sym`'s own
+///     target string), the admin never touched it since that install --
+///     so it's not "modified" in the sense this feature cares about,
+///     and `protected` is cleared outright, applying the new version's
+///     content directly even though it differs from `src`. Distinguishes
+///     "this file's own default content changed between package
+///     versions" from "the admin hand-edited this file locally", which
+///     the plain `src_md5 == dest_md5` comparison below can't tell
+///     apart on its own.
+#[allow(clippy::too_many_arguments)]
 fn protect_decision(
+    root: &Path,
+    category: &str,
+    installed_instance_pf: Option<&str>,
+    protect_if_modified: bool,
     dest: &Path,
     abs_path: &str,
     src_md5: &str,
     cfgfiledict: &mut BTreeMap<String, String>,
     noconfmem: bool,
 ) -> Result<PathBuf, String> {
+    let matched: Option<(String, String)> =
+        installed_instance_pf.and_then(|pf| owned_node_value_pf(root, category, pf, abs_path));
+
     let Ok(dest_meta) = std::fs::symlink_metadata(dest) else {
-        // Real `dest_mode is None`: nothing to protect against yet.
+        // Real `dest_mode is None`.
+        if matched.is_some() {
+            // Real bug #523684: force-diverts even though there's
+            // nothing on disk to compare against yet.
+            cfgfiledict.insert(abs_path.to_string(), src_md5.to_string());
+            return new_protect_filename(dest, src_md5);
+        }
         return Ok(dest.to_path_buf());
     };
 
@@ -436,6 +498,19 @@ fn protect_decision(
         } else {
             (None, None)
         };
+
+    if protect_if_modified {
+        if let Some((node_type, value)) = &matched {
+            let unmodified_since_installed = match node_type.as_str() {
+                "obj" => dest_md5.as_deref() == Some(value.as_str()),
+                "sym" => dest_link.as_deref() == Some(value.as_str()),
+                _ => false,
+            };
+            if unmodified_since_installed {
+                return Ok(dest.to_path_buf());
+            }
+        }
+    }
 
     if dest_md5.as_deref() == Some(src_md5) {
         return Ok(dest.to_path_buf());
@@ -881,9 +956,13 @@ pub(crate) fn mtime_secs(metadata: &std::fs::Metadata) -> Result<i64, String> {
 /// read once by the caller before this runs and written back once after
 /// -- real `vardbapi._conf_mem_file` semantics (a single, whole-merge
 /// read/update/write, not a per-file one).
+#[allow(clippy::too_many_arguments)]
 fn merge_tree(
     d: &Path,
     root: &Path,
+    category: &str,
+    installed_instance_pf: Option<&str>,
+    protect_if_modified: bool,
     config_protect: &str,
     config_protect_mask: &str,
     noconfmem: bool,
@@ -922,8 +1001,17 @@ fn merge_tree(
                 let mut write_dest = dest.clone();
                 if is_protected(root, config_protect, config_protect_mask, &dest) {
                     let src_md5 = md5_hex_bytes(target_str.as_bytes());
-                    write_dest =
-                        protect_decision(&dest, &abs_path, &src_md5, cfgfiledict, noconfmem)?;
+                    write_dest = protect_decision(
+                        root,
+                        category,
+                        installed_instance_pf,
+                        protect_if_modified,
+                        &dest,
+                        &abs_path,
+                        &src_md5,
+                        cfgfiledict,
+                        noconfmem,
+                    )?;
                 }
 
                 if let Some(parent) = write_dest.parent() {
@@ -977,8 +1065,17 @@ fn merge_tree(
                 // "IGNORE"]`).
                 let mut write_dest = dest.clone();
                 if is_protected(root, config_protect, config_protect_mask, &dest) {
-                    write_dest =
-                        protect_decision(&dest, &abs_path, &src_md5, cfgfiledict, noconfmem)?;
+                    write_dest = protect_decision(
+                        root,
+                        category,
+                        installed_instance_pf,
+                        protect_if_modified,
+                        &dest,
+                        &abs_path,
+                        &src_md5,
+                        cfgfiledict,
+                        noconfmem,
+                    )?;
                 }
 
                 if let Some(parent) = write_dest.parent() {
@@ -1116,6 +1213,40 @@ pub(crate) fn read_installed_slot(
         .map(|text| text.trim().split('/').next().unwrap_or("").to_string())
 }
 
+/// Real `self._installed_instance` selection (`vartree.py:4409-4418`):
+/// among every other real, currently-installed version of this exact
+/// `category/package/slot`, the one with the highest real `COUNTER`
+/// (real `cpv_counter`, this pilot's own real per-package `COUNTER` file
+/// -- see `next_counter`'s own doc comment) -- `None` when none exist (a
+/// first-ever install, or every other same-slot instance's own
+/// `COUNTER` is unreadable). Real `_installed_instance` is only ever
+/// set when `slot_matches` (this exact slot has at least one other
+/// installed version already) -- naturally true here too, since an
+/// empty `own_versions` list has no max at all.
+fn installed_instance_pf(root: &Path, category: &str, package: &str, slot: &str) -> Option<String> {
+    portage_repo::installed_versions(root, category, package)
+        .into_iter()
+        .filter(|version| {
+            read_installed_slot(root, category, package, version).as_deref() == Some(slot)
+        })
+        .filter_map(|version| {
+            let pf = format!("{package}-{version}");
+            let counter: i64 = std::fs::read_to_string(
+                root.join("var/db/pkg")
+                    .join(category)
+                    .join(&pf)
+                    .join("COUNTER"),
+            )
+            .ok()?
+            .trim()
+            .parse()
+            .ok()?;
+            Some((pf, counter))
+        })
+        .max_by_key(|(_, counter)| *counter)
+        .map(|(pf, _)| pf)
+}
+
 /// Whether the installed package at `<root>/var/db/pkg/<category>/
 /// <package>-<version>` already claims `abs_path` in its own real
 /// `CONTENTS` (second whitespace-separated field of any line, the same
@@ -1187,6 +1318,45 @@ pub(crate) fn owned_node_type_pf(
             Some(node_type.to_string())
         } else {
             None
+        }
+    })
+}
+
+/// Real `dblnk._match_contents(relative_path)` + `getcontents()[key]`,
+/// the *value* half `owned_node_type_pf` above deliberately leaves out:
+/// an `obj` entry's own content MD5, or a `sym` entry's own target
+/// string -- exactly the values real `_protect()`'s own `data[2]`
+/// compares against `dest_md5`/`dest_link` for `protect_if_modified`
+/// (see `protect_decision`'s own doc comment). `None` for any other
+/// node type (`dir`, etc. -- never real `_protect()`-relevant) or a
+/// path this instance doesn't own at all.
+fn owned_node_value_pf(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    abs_path: &str,
+) -> Option<(String, String)> {
+    let path = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(pf)
+        .join("CONTENTS");
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let node_type = parts.next()?;
+        if parts.next() != Some(abs_path) {
+            return None;
+        }
+        match node_type {
+            "obj" => Some((node_type.to_string(), parts.next()?.to_string())),
+            "sym" => {
+                if parts.next() != Some("->") {
+                    return None;
+                }
+                Some((node_type.to_string(), parts.next()?.to_string()))
+            }
+            _ => None,
         }
     })
 }
@@ -1655,6 +1825,12 @@ fn merge_after_install(
     let slot = parse_slot(&ebuild_text);
     let repository = repository_name_for(&env.pkg_dir).unwrap_or_else(|| "__unknown__".to_string());
 
+    // Real `self._installed_instance` (`vartree.py:4409-4418`), computed
+    // early -- before the vdb write below ever touches this exact
+    // category/pf's own real `CONTENTS` -- see `installed_instance_pf`'s
+    // own doc comment.
+    let installed_instance_pf = installed_instance_pf(root, &env.category, &env.split.pn, &slot);
+
     // Real `merge()`'s own ordering: the collision-protect abort check
     // (`_collision_protect`) happens before `pkg_preinst` ever runs, not
     // after -- confirmed by reading it, the real `EbuildPhase(phase=
@@ -1731,6 +1907,9 @@ fn merge_after_install(
     let contents = merge_tree(
         &env.d(),
         root,
+        &env.category,
+        installed_instance_pf.as_deref(),
+        options.protect_if_modified,
         &options.config_protect,
         &options.config_protect_mask,
         options.noconfmem,
@@ -1801,6 +1980,62 @@ mod tests {
     }
 
     #[test]
+    fn installed_instance_pf_picks_the_highest_counter_same_slot_version() {
+        let tmp = tempdir();
+        let root = tmp.join("ROOT");
+        for (version, slot, counter) in [("1.0", "0", "3"), ("2.0", "0", "7"), ("3.0", "1", "99")] {
+            let vdb_dir = root
+                .join("var/db/pkg/dev-libs")
+                .join(format!("instpkg-{version}"));
+            std::fs::create_dir_all(&vdb_dir).unwrap();
+            std::fs::write(vdb_dir.join("SLOT"), format!("{slot}\n")).unwrap();
+            std::fs::write(vdb_dir.join("COUNTER"), counter).unwrap();
+        }
+
+        assert_eq!(
+            installed_instance_pf(&root, "dev-libs", "instpkg", "0"),
+            Some("instpkg-2.0".to_string()),
+            "the higher-COUNTER same-slot version wins, not the higher version number"
+        );
+        assert_eq!(
+            installed_instance_pf(&root, "dev-libs", "instpkg", "2"),
+            None,
+            "no installed version at all in this slot"
+        );
+    }
+
+    #[test]
+    fn owned_node_value_pf_reads_an_obj_and_a_sym_entrys_own_value() {
+        let tmp = tempdir();
+        let root = tmp.join("ROOT");
+        let vdb_dir = root.join("var/db/pkg/dev-libs/instpkg-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        std::fs::write(
+            vdb_dir.join("CONTENTS"),
+            "obj /etc/foo.conf abc123 100\nsym /etc/link -> target 100\ndir /etc\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            owned_node_value_pf(&root, "dev-libs", "instpkg-1.0", "/etc/foo.conf"),
+            Some(("obj".to_string(), "abc123".to_string()))
+        );
+        assert_eq!(
+            owned_node_value_pf(&root, "dev-libs", "instpkg-1.0", "/etc/link"),
+            Some(("sym".to_string(), "target".to_string()))
+        );
+        assert_eq!(
+            owned_node_value_pf(&root, "dev-libs", "instpkg-1.0", "/etc"),
+            None,
+            "a dir entry has no MD5/target value at all"
+        );
+        assert_eq!(
+            owned_node_value_pf(&root, "dev-libs", "instpkg-1.0", "/etc/nope"),
+            None
+        );
+    }
+
+    #[test]
     fn format_contents_line_matches_real_dblink_format() {
         assert_eq!(
             format_contents_line("dir", "/usr/share/x", None, None, None),
@@ -1846,8 +2081,18 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        let contents = merge_tree(&d, &root, "/etc", "/etc/env.d", false, &mut cfgfiledict)
-            .expect("merge_tree succeeds");
+        let contents = merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "/etc/env.d",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
 
         assert!(root.join("usr/share/x/hello.txt").is_file());
         assert_eq!(
@@ -2014,7 +2259,18 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict).expect("merge_tree succeeds");
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
 
         assert_eq!(
             std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
@@ -2034,7 +2290,18 @@ mod tests {
         std::fs::write(root.join("etc/foo.conf"), b"same content").unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict).expect("merge_tree succeeds");
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
 
         assert_eq!(
             std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
@@ -2054,8 +2321,18 @@ mod tests {
         std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        let contents = merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
-            .expect("merge_tree succeeds");
+        let contents = merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
 
         // The real, logical path is untouched...
         assert_eq!(
@@ -2078,6 +2355,160 @@ mod tests {
     }
 
     #[test]
+    fn merge_tree_protect_if_modified_applies_directly_when_dest_still_matches_the_installed_instance(
+    ) {
+        // Real `_installed_instance`/`protect_if_modified`
+        // (`vartree.py:5849-5866`): the live destination still holds
+        // *exactly* what the previous same-slot instance's own real
+        // CONTENTS recorded -- the admin never touched it -- so even
+        // though it differs from the new src content, it's not
+        // "modified" in the sense this feature cares about, and the new
+        // content is applied directly instead of diverted.
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("etc")).unwrap();
+        std::fs::write(d.join("etc/foo.conf"), b"new content").unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::write(root.join("etc/foo.conf"), b"old content").unwrap();
+        let old_md5 = md5_hex(&root.join("etc/foo.conf")).unwrap();
+
+        let vdb_dir = root.join("var/db/pkg/dev-libs/foopkg-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        std::fs::write(vdb_dir.join("SLOT"), "0\n").unwrap();
+        std::fs::write(
+            vdb_dir.join("CONTENTS"),
+            format!("obj /etc/foo.conf {old_md5} 100\n"),
+        )
+        .unwrap();
+        std::fs::write(vdb_dir.join("COUNTER"), "5").unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        let contents = merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            Some("foopkg-1.0"),
+            true,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
+            "new content",
+            "unmodified-since-installed content is overwritten directly, not protected"
+        );
+        assert!(!root.join("etc/._cfg0000_foo.conf").exists());
+        let new_md5 = md5_hex(&d.join("etc/foo.conf")).unwrap();
+        assert!(contents
+            .lines()
+            .any(|l| l.starts_with(&format!("obj /etc/foo.conf {new_md5} "))));
+    }
+
+    #[test]
+    fn merge_tree_still_protects_a_locally_modified_file_despite_protect_if_modified() {
+        // Same setup as above, but the live destination's own content no
+        // longer matches what the installed instance recorded -- the
+        // admin *did* modify it locally, so protect_if_modified must not
+        // waive protection here.
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("etc")).unwrap();
+        std::fs::write(d.join("etc/foo.conf"), b"new content").unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::write(root.join("etc/foo.conf"), b"the admin's own local edits").unwrap();
+
+        let vdb_dir = root.join("var/db/pkg/dev-libs/foopkg-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        std::fs::write(vdb_dir.join("SLOT"), "0\n").unwrap();
+        std::fs::write(
+            vdb_dir.join("CONTENTS"),
+            "obj /etc/foo.conf deadbeefdeadbeefdeadbeefdeadbeef 100\n",
+        )
+        .unwrap();
+        std::fs::write(vdb_dir.join("COUNTER"), "5").unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            Some("foopkg-1.0"),
+            true,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
+            "the admin's own local edits",
+            "locally-modified content is still protected"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/._cfg0000_foo.conf")).unwrap(),
+            "new content"
+        );
+    }
+
+    #[test]
+    fn merge_tree_force_protects_a_path_the_installed_instance_recorded_but_the_admin_deleted() {
+        // Real bug #523684 (`vartree.py:5852-5859`): the installed
+        // instance's own CONTENTS recorded this exact path, but nothing
+        // exists there on disk at all right now (the admin deleted or
+        // renamed it) -- real `force = True` diverts into a fresh
+        // ._cfgNNNN_ sibling instead of silently re-creating the path
+        // the admin deliberately removed, even though there's nothing
+        // to compare content against.
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("etc")).unwrap();
+        std::fs::write(d.join("etc/foo.conf"), b"new content").unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+
+        let vdb_dir = root.join("var/db/pkg/dev-libs/foopkg-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        std::fs::write(vdb_dir.join("SLOT"), "0\n").unwrap();
+        std::fs::write(
+            vdb_dir.join("CONTENTS"),
+            "obj /etc/foo.conf deadbeefdeadbeefdeadbeefdeadbeef 100\n",
+        )
+        .unwrap();
+        std::fs::write(vdb_dir.join("COUNTER"), "5").unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            Some("foopkg-1.0"),
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
+
+        assert!(
+            !root.join("etc/foo.conf").exists(),
+            "the admin's own deletion is respected -- nothing is silently re-created"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/._cfg0000_foo.conf")).unwrap(),
+            "new content"
+        );
+    }
+
+    #[test]
     fn merge_tree_remembers_an_already_offered_update_and_stops_re_protecting_it() {
         let tmp = tempdir();
         let d = tmp.join("D");
@@ -2088,15 +2519,35 @@ mod tests {
         std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
-            .expect("first merge_tree succeeds");
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("first merge_tree succeeds");
         assert!(root.join("etc/._cfg0000_foo.conf").exists());
 
         // Re-merging the exact same new content again: already
         // remembered in cfgfiledict, so this time it's applied directly
         // -- no second ._cfg0001_ file spawned.
-        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
-            .expect("second merge_tree succeeds");
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("second merge_tree succeeds");
         assert_eq!(
             std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
             "new content"
@@ -2115,8 +2566,18 @@ mod tests {
         std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
-            .expect("first merge_tree succeeds");
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("first merge_tree succeeds");
         assert!(root.join("etc/._cfg0000_foo.conf").exists());
 
         // Re-merging the exact same content with NOCONFMEM-equivalent
@@ -2130,8 +2591,18 @@ mod tests {
         // ._cfg0001_ with identical content, so the *visible* difference
         // from the default isn't a new numbered file -- it's that the
         // logical path itself is protected instead of overwritten.
-        merge_tree(&d, &root, "/etc", "", true, &mut cfgfiledict)
-            .expect("second merge_tree succeeds");
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            true,
+            &mut cfgfiledict,
+        )
+        .expect("second merge_tree succeeds");
         assert!(!root.join("etc/._cfg0001_foo.conf").exists());
         assert_eq!(
             std::fs::read_to_string(root.join("etc/._cfg0000_foo.conf")).unwrap(),
@@ -2154,8 +2625,18 @@ mod tests {
         std::os::unix::fs::symlink("users-own-target", root.join("etc/link.conf")).unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        let contents = merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
-            .expect("merge_tree succeeds");
+        let contents = merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
 
         // The real, logical path is untouched...
         assert_eq!(
@@ -2184,7 +2665,18 @@ mod tests {
         std::os::unix::fs::symlink("same-target", root.join("etc/link.conf")).unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict).expect("merge_tree succeeds");
+        merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
 
         assert_eq!(
             std::fs::read_link(root.join("etc/link.conf")).unwrap(),
@@ -2210,8 +2702,18 @@ mod tests {
         std::fs::write(root.join("etc/thing.conf"), b"the admin's own regular file").unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        let contents = merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
-            .expect("merge_tree succeeds");
+        let contents = merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
 
         // The admin's own regular file at the logical path is untouched...
         assert_eq!(
@@ -2242,8 +2744,18 @@ mod tests {
         std::os::unix::fs::symlink("admins-own-target", root.join("etc/thing.conf")).unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        let contents = merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
-            .expect("merge_tree succeeds");
+        let contents = merge_tree(
+            &d,
+            &root,
+            "dev-libs",
+            None,
+            false,
+            "/etc",
+            "",
+            false,
+            &mut cfgfiledict,
+        )
+        .expect("merge_tree succeeds");
 
         // The admin's own symlink at the logical path is untouched...
         assert_eq!(

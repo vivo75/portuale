@@ -268,6 +268,16 @@ pub fn run(args: &[String]) -> ExitCode {
                     .any(|tok| tok == "protect-owned")
             })
             .unwrap_or(default_merge_options.protect_owned);
+        // Real `"config-protect-if-modified" in self.settings.features`
+        // -- same env-var-not-full-config-resolution shortcut as
+        // `protect_owned` immediately above.
+        let protect_if_modified = std::env::var("FEATURES")
+            .map(|features| {
+                features
+                    .split_whitespace()
+                    .any(|tok| tok == "config-protect-if-modified")
+            })
+            .unwrap_or(default_merge_options.protect_if_modified);
         // Real `"NOCONFMEM" in self.settings` -- presence-based, matching
         // real portage's own check (any value, even an empty string,
         // counts). Real `--noconfmem` is an `emerge`-only CLI flag with
@@ -286,6 +296,7 @@ pub fn run(args: &[String]) -> ExitCode {
             collision_protect,
             protect_owned,
             noconfmem,
+            protect_if_modified,
             // Real PORTAGE_CONFIGROOT (real default: "/" when unset) --
             // see MergeOptions::config_root's own doc comment for why
             // this is the one place a real env-var default of "/" is

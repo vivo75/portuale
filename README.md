@@ -4007,17 +4007,12 @@ mtime setter exists, symlinks included) and explicitly setting it after
 every merged `obj`/`sym` write.
 
 **v1 scope cuts as of this slice** (see `ebuild_merge.rs`'s own module doc
-comment for the full, current list -- the paragraph below documents the
-three gaps this section originally listed as now closed): CONFIG_PROTECT
-only compares like-for-like (an `obj` entry only against an `obj` dest, a
-`sym` entry only against a `sym` dest -- a type-changing update, e.g. a
-symlink replacing a previously-installed regular file at the same path,
-is written directly, unprotected). No `_installed_instance`/
-`protect_if_modified` support (this pilot's own `ebuild <file> merge` has
-no notion of "the package instance this merge is replacing" at all). An
-already-offered, unmodified-since update is applied directly here; real
-portage instead leaves the destination completely untouched in that case
-(while still recording the merge in `CONTENTS`).
+comment for the full, current list -- every gap this paragraph originally
+listed here has since shipped, see the sections below): an already-
+offered, unmodified-since update is applied directly here; real portage
+instead leaves the destination completely untouched in that case (while
+still recording the merge in `CONTENTS`) -- the one remaining, deliberate
+v1 simplification in this area.
 
 ### `CONFIG_PROTECT` for symlinks, `--noconfmem`, and `new_protect_filename`'s own file-reuse logic
 
@@ -4094,6 +4089,65 @@ cat "${ROOT}"/usr/share/mergepkg/hello-link.txt
 # the admin's own regular file -- untouched
 readlink "${ROOT}"/usr/share/mergepkg/._cfg0000_hello-link.txt
 # hello.txt -- the package's own symlink landed in a ._cfg0000_ sibling
+unset CONFIG_PROTECT
+```
+
+### CONFIG_PROTECT: `_installed_instance`/`FEATURES=config-protect-if-modified`
+
+Real `_installed_instance`/`protect_if_modified` (`vartree.py:4409-4418`/
+`5849-5866`) are real now too, closing the last CONFIG_PROTECT gap this
+area's own module doc comment used to list. `installed_instance_pf`
+picks the *previous* same-slot installed instance a merge is upgrading
+over -- the one with the highest real `COUNTER` among every other
+currently-installed version in this exact `category/package/slot`,
+reusing the same real per-package `COUNTER` file this pilot already
+writes on every merge (`next_counter`), rather than needing any new
+persistence. `owned_node_value_pf` (the value-returning sibling of the
+already-existing `owned_node_type_pf`) consults that instance's own real
+`CONTENTS` for whatever it recorded at a given path -- an `obj`'s own
+content MD5, or a `sym`'s own target string.
+
+Two distinct real behaviors, both gated on that instance having actually
+recorded the path at all (real `k = self._installed_instance.
+_match_contents(dest_real)`):
+
+- A path it recorded that's now missing entirely from the live
+  filesystem (the admin deleted or renamed it) always force-diverts into
+  a fresh `._cfgNNNN_` sibling -- real bug #523684, prompting the admin
+  instead of silently re-creating a path they deliberately removed. This
+  is the one case in this whole area where `new_protect_filename` is
+  reached with a destination that doesn't exist at all.
+- With real `FEATURES=config-protect-if-modified` on (real `make.
+  globals`'s own default -- confirmed by reading `cnf/make.globals:79`
+  directly, the same category of previously-undiscovered default-
+  `FEATURES` mismatch the `protect-owned`/`unmerge-orphans` fix found
+  earlier; `MergeOptions::protect_if_modified` now defaults `true` to
+  match), a live destination that still matches *exactly* what that
+  previous instance installed -- the admin never touched it since --
+  has the new version's own content applied directly, even though it
+  differs from what the *old* version installed. This is what tells
+  "this file's own default content changed between package versions"
+  apart from "the admin hand-edited it locally", which the plain
+  `src_md5 == dest_md5` comparison alone can't distinguish.
+
+Verified directly (unmodified-since-installed content applies directly;
+locally-modified content still protects; a deleted path force-diverts)
+and live end to end, reusing the existing `dev-libs/othersinslotpkg`
+fixture pair purely as a convenient same-slot upgrade whose own
+`shared.txt` genuinely differs in content between `1.0`/`2.0`:
+
+```sh
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export CONFIG_PROTECT=/usr/share/othersinslotpkg
+V1=PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild
+V2=PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild
+
+PORTING/rust/target/release/portuale ebuild "$V1" merge
+PORTING/rust/target/release/portuale ebuild "$V2" merge
+cat "${ROOT}"/usr/share/othersinslotpkg/shared.txt
+# shared, from 2.0 -- applied directly, no ._cfgNNNN_ sibling at all,
+# since it was never modified since 1.0 installed it.
 unset CONFIG_PROTECT
 ```
 
