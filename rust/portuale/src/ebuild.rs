@@ -252,6 +252,13 @@ pub fn run(args: &[String]) -> ExitCode {
                     .any(|tok| tok == "protect-owned")
             })
             .unwrap_or(default_merge_options.protect_owned);
+        // Real `"NOCONFMEM" in self.settings` -- presence-based, matching
+        // real portage's own check (any value, even an empty string,
+        // counts). Real `--noconfmem` is an `emerge`-only CLI flag with
+        // no `bin/ebuild` equivalent at all, so this pilot reads the env
+        // var directly instead of adding a CLI flag real `ebuild` doesn't
+        // have -- see `MergeOptions::noconfmem`'s own doc comment.
+        let noconfmem = std::env::var_os("NOCONFMEM").is_some();
         let merge_options = ebuild_merge::MergeOptions {
             debug,
             config_protect: std::env::var("CONFIG_PROTECT")
@@ -262,6 +269,7 @@ pub fn run(args: &[String]) -> ExitCode {
             shell,
             collision_protect,
             protect_owned,
+            noconfmem,
             // Real PORTAGE_CONFIGROOT (real default: "/" when unset) --
             // see MergeOptions::config_root's own doc comment for why
             // this is the one place a real env-var default of "/" is

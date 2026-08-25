@@ -14,20 +14,32 @@
 // (`EbuildPhase(phase="preinst"/"postinst")`), not through `doebuild()`'s
 // own `actionmap_deps` chain the way `pretend`..`install` are.
 //
-// CONFIG_PROTECT is real too, for `obj` (regular file) entries: real
-// `ConfigProtect.isprotected()` path matching (`is_protected`), the real
-// MD5-comparison rename-instead-of-overwrite decision (real `dblink.
-// _protect()`, into the next `._cfgNNNN_<name>` sibling -- real
-// `new_protect_filename()`), and real `vardbapi._conf_mem_file`
-// persistence (`read_cfgfiledict`/`write_cfgfiledict`) so a repeat merge
-// of an already-offered update doesn't spawn a fresh `._cfgNNNN_` file
-// every time. `CONFIG_PROTECT`/`CONFIG_PROTECT_MASK` are read via env
-// vars at the `ebuild.rs` CLI boundary (bundled into `MergeOptions`,
-// deliberately a struct and not more positional parameters -- this
-// pilot already relearned the "positional-parameter pain" lesson once,
-// in `--newrepo`'s own bulk-fix saga), defaulting to real `make.
-// globals`'s own `CONFIG_PROTECT="/etc"`/`CONFIG_PROTECT_MASK="/etc/
-// env.d"`.
+// CONFIG_PROTECT is real too, for both `obj` (regular file) and `sym`
+// (symlink -- real bug #485598: the *target string*'s own MD5 is what's
+// compared, not file content) entries: real `ConfigProtect.isprotected()`
+// path matching (`is_protected`), the real MD5-comparison
+// rename-instead-of-overwrite decision (real `dblink._protect()`, into
+// the next `._cfgNNNN_<name>` sibling -- real `new_protect_filename()`,
+// including its own "reuse the last `._cfgNNNN_` file when its own
+// content/target already matches" logic), and real
+// `vardbapi._conf_mem_file` persistence
+// (`read_cfgfiledict`/`write_cfgfiledict`) so a repeat merge of an
+// already-offered update doesn't spawn a fresh `._cfgNNNN_` file every
+// time -- unless `NOCONFMEM` is set (real `--noconfmem`: an `emerge`-only
+// CLI flag, real `lib/_emerge/actions.py:2790`, that lands as
+// `settings["NOCONFMEM"]`, real `vartree.py:4949`'s own `cfgfiledict[
+// "IGNORE"]`; real `bin/ebuild` has no such flag at all, so this pilot
+// reads the env var directly, the same "env var, not full config
+// resolution" shortcut `CONFIG_PROTECT` itself already uses), which
+// forces every already-offered update to be re-protected into a fresh
+// `._cfgNNNN_` file regardless of memory. `CONFIG_PROTECT`/
+// `CONFIG_PROTECT_MASK`/`NOCONFMEM` are read via env vars at the
+// `ebuild.rs` CLI boundary (bundled into `MergeOptions`, deliberately a
+// struct and not more positional parameters -- this pilot already
+// relearned the "positional-parameter pain" lesson once, in `--newrepo`'s
+// own bulk-fix saga), defaulting to real `make.globals`'s own
+// `CONFIG_PROTECT="/etc"`/`CONFIG_PROTECT_MASK="/etc/env.d"` (`NOCONFMEM`
+// unset).
 //
 // `FEATURES=collision-protect` is real too: real `dblink.
 // _collision_protect` (`lib/portage/dbapi/vartree.py:3836`), narrowed --
@@ -127,22 +139,33 @@
 //     corrupt a future preserve-libs decision) -- moot without the
 //     registration side above ever writing `NEEDED` data in the first
 //     place.
-//   - CONFIG_PROTECT is `obj`-only: a `sym` (symlink) entry under a
-//     protected path is never protected here -- real `dblink._protect()`
-//     handles symlinks too (comparing the *target string*'s own MD5),
-//     but a CONFIG_PROTECT'd symlink is a genuinely rare real-world case
-//     (essentially every real protected path is a regular config file).
-//   - No `--noconfmem` support at all -- this pilot's own `ebuild` CLI
-//     has no such flag, so behavior always matches real portage's own
-//     default (`--noconfmem` off, i.e. `IGNORE=0`): an update whose
-//     content exactly matches what `read_cfgfiledict` already recorded
-//     as previously-offered is applied directly, never re-protected.
-//   - `new_protect_filename` always allocates a fresh `._cfgNNNN_`
-//     number -- real `new_protect_filename()` also reuses the *last*
-//     one when its own content already matches the new update (a purely
-//     cosmetic difference: this pilot may leave a few more distinct
-//     `._cfgNNNN_` files behind than real portage would for repeated,
-//     never-remembered identical content).
+//   - CONFIG_PROTECT only compares like-for-like: an `obj` entry is only
+//     ever protect-compared against an `obj` (regular file) dest, a `sym`
+//     entry only against a `sym` dest. Real `dblink._protect()` computes
+//     `dest_md5`/`dest_link` from whatever the *live* destination's own
+//     on-disk type actually is, independent of the incoming source's own
+//     type, so a type-changing update (e.g. a symlink replacing a
+//     previously-installed regular file at the same path, or vice versa)
+//     is real-protected too. This pilot's narrower version writes such a
+//     type-changing update directly, unprotected -- a real corner case
+//     rare enough (an ebuild revision changing a path from a regular
+//     file to a symlink or back) that it wasn't worth the extra
+//     type-dispatch complexity here.
+//   - No `_installed_instance`/`protect_if_modified` support: real
+//     `_protect()` also consults the *previous* installed version's own
+//     `CONTENTS` (when upgrading over it) to tell "content the admin
+//     locally modified" apart from "content inherited unchanged from the
+//     old package" -- this pilot's own `ebuild <file> merge` has no
+//     notion of "the package instance this merge is replacing" at all
+//     (see `blocked_installed_packages`'s own doc comment: no depgraph),
+//     so this always behaves as if no matching previous instance exists.
+//   - An already-offered, unmodified-since update (`cfgfiledict` already
+//     remembers this exact content for this path, `NOCONFMEM` unset) is
+//     applied directly here; real portage instead leaves the live
+//     destination file completely untouched in that case (while still
+//     recording the merge in `CONTENTS`) -- a deliberately narrower v1
+//     simplification, unchanged by this slice's own `NOCONFMEM`/`sym`/
+//     reuse work, all of which builds on top of it unmodified.
 //   - Real `os.chown`/permission-preserving `os.chmod` per merged file
 //     are not reproduced explicitly -- `std::fs::copy` already preserves
 //     a regular file's permission bits on Unix, which covers the common
@@ -200,6 +223,16 @@ pub struct MergeOptions {
     /// `collision_protect` -- see `run_merge`'s own doc comment for the
     /// exact real logic. Same `FEATURES`-default-false `Default`.
     pub protect_owned: bool,
+    /// Real `--noconfmem`/`settings["NOCONFMEM"]` (`lib/_emerge/
+    /// actions.py:2790`, `vartree.py:4949`'s own `cfgfiledict["IGNORE"]`):
+    /// an `emerge`-only CLI flag with no real `bin/ebuild` equivalent, so
+    /// this pilot reads the `NOCONFMEM` env var directly (presence-based,
+    /// matching real `"NOCONFMEM" in self.settings`) rather than adding a
+    /// CLI flag real `ebuild` doesn't have. Forces every already-offered,
+    /// unmodified-since CONFIG_PROTECT update to be re-protected into a
+    /// fresh `._cfgNNNN_` file instead of silently reused/applied.
+    /// `Default` matches real portage's own default: unset, `false`.
+    pub noconfmem: bool,
     /// Real `PORTAGE_CONFIGROOT` (`portage_repo::config_root_from_env`'s
     /// own real default: `/` when unset) -- consulted only by
     /// `blocked_installed_packages`'s own real `repos.conf`/profile/USE
@@ -228,6 +261,7 @@ impl Default for MergeOptions {
             shell: ebuild_phases::ShellBackend::default(),
             collision_protect: false,
             protect_owned: false,
+            noconfmem: false,
             // "/dev/null" is a real character device, never a directory
             // -- joining anything under it can never exist on any real
             // filesystem, guaranteeing find_repos always fails cleanly
@@ -270,13 +304,27 @@ fn is_protected(root: &Path, config_protect: &str, config_protect_mask: &str, de
     protected_len > longest_match(root, config_protect_mask, dest)
 }
 
-/// Real `new_protect_filename()` (`lib/portage/util/__init__.py`): the
-/// next unused `._cfgNNNN_<basename>` sibling of `dest` -- `dest` itself
-/// is never touched here, the caller writes to the returned path
-/// instead. Deliberately narrower than real: always allocates a fresh
-/// number rather than reusing the last one when its own content already
-/// matches the new update (see this module's own doc comment).
-fn new_protect_filename(dest: &Path) -> Result<PathBuf, String> {
+/// Real `new_protect_filename()` (`lib/portage/util/__init__.py:1803`):
+/// the next unused `._cfgNNNN_<basename>` sibling of `dest`, unless the
+/// *highest-numbered existing* `._cfgNNNN_<basename>` sibling already
+/// holds the same content/target as `newmd5` -- in which case that
+/// existing file is reused instead of allocating a new one. `newmd5`
+/// mirrors real `_protect()`'s own `(dest_link or src_md5)` call
+/// argument: the pending update's own content MD5 for a regular file, or
+/// (for a symlink) the *comparison* target-string this call site chose
+/// -- real portage's own naming is misleading here, "newmd5" folds both
+/// "an MD5 hex string" and "a raw symlink target string" into the same
+/// parameter, compared against whichever kind the last `._cfgNNNN_` file
+/// itself turns out to be. `dest` itself is never touched here, the
+/// caller writes to the returned path instead. Narrower than real in one
+/// way: real `new_protect_filename(mydest, newmd5, force)` returns
+/// `mydest` unchanged outright when `mydest` doesn't exist yet and
+/// `force` is false -- moot here since every call site already only
+/// calls this after confirming `dest` exists (see `merge_tree`'s own obj/
+/// sym branches), so `force`'s only real effect (forcing that early
+/// return to still allocate a number) never applies and isn't threaded
+/// through.
+fn new_protect_filename(dest: &Path, newmd5: &str) -> Result<PathBuf, String> {
     let parent = dest
         .parent()
         .ok_or_else(|| format!("{}: has no parent directory", dest.display()))?;
@@ -286,6 +334,7 @@ fn new_protect_filename(dest: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("{}: not a valid filename", dest.display()))?;
 
     let mut max_num: i64 = -1;
+    let mut last_pfile: Option<PathBuf> = None;
     if let Ok(entries) = std::fs::read_dir(parent) {
         for entry in entries.filter_map(|e| e.ok()) {
             let name = entry.file_name();
@@ -293,7 +342,28 @@ fn new_protect_filename(dest: &Path) -> Result<PathBuf, String> {
             if let Some(rest) = name.strip_prefix("._cfg") {
                 if rest.len() > 5 && rest.as_bytes()[4] == b'_' && &rest[5..] == basename {
                     if let Ok(n) = rest[..4].parse::<i64>() {
-                        max_num = max_num.max(n);
+                        if n > max_num {
+                            max_num = n;
+                            last_pfile = Some(parent.join(entry.file_name()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(old_pfile) = &last_pfile {
+        if let Ok(meta) = std::fs::symlink_metadata(old_pfile) {
+            if meta.file_type().is_symlink() {
+                if let Ok(target) = std::fs::read_link(old_pfile) {
+                    if target.to_string_lossy() == newmd5 {
+                        return Ok(old_pfile.clone());
+                    }
+                }
+            } else if meta.is_file() {
+                if let Ok(md5) = md5_hex(old_pfile) {
+                    if md5 == newmd5 {
+                        return Ok(old_pfile.clone());
                     }
                 }
             }
@@ -675,12 +745,16 @@ fn repository_name_for(pkg_dir: &Path) -> Option<String> {
     None
 }
 
+fn md5_hex_bytes(data: &[u8]) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(data);
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn md5_hex(path: &Path) -> Result<String, String> {
     let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut hasher = Md5::new();
-    hasher.update(&data);
-    let digest = hasher.finalize();
-    Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(md5_hex_bytes(&data))
 }
 
 /// Real `dblink._format_contents_line`: `<type> <path>[ <md5>| -> <target>][ <mtime>]\n`.
@@ -729,6 +803,7 @@ fn merge_tree(
     root: &Path,
     config_protect: &str,
     config_protect_mask: &str,
+    noconfmem: bool,
     cfgfiledict: &mut BTreeMap<String, String>,
 ) -> Result<String, String> {
     let mut contents = String::new();
@@ -753,11 +828,53 @@ fn merge_tree(
             if file_type.is_symlink() {
                 let target =
                     std::fs::read_link(&src).map_err(|e| format!("{}: {e}", src.display()))?;
-                if dest.exists() || dest.symlink_metadata().is_ok() {
-                    let _ = std::fs::remove_file(&dest);
+                let target_str = target.to_string_lossy().to_string();
+                // Real dblink._protect(): a CONFIG_PROTECT'd `sym` entry
+                // whose real on-disk target string differs from the one
+                // about to be merged is diverted to a fresh ._cfgNNNN_
+                // sibling too (real bug #485598) -- mirrors the `obj`
+                // branch below exactly, hashing the target string's own
+                // bytes (real `md5(myto.encode(...))`) instead of reading
+                // file content. Only compared against a dest that's
+                // itself already a symlink (see this module's own doc
+                // comment on the "like-for-like only" v1 scope cut).
+                let mut write_dest = dest.clone();
+                if is_protected(root, config_protect, config_protect_mask, &dest) {
+                    if let Ok(dest_meta) = std::fs::symlink_metadata(&dest) {
+                        if dest_meta.file_type().is_symlink() {
+                            if let Ok(dest_target) = std::fs::read_link(&dest) {
+                                let dest_target_str = dest_target.to_string_lossy().to_string();
+                                if dest_target_str != target_str {
+                                    let src_md5 = md5_hex_bytes(target_str.as_bytes());
+                                    let already_offered =
+                                        cfgfiledict.get(&abs_path) == Some(&src_md5);
+                                    if !already_offered || noconfmem {
+                                        // Real `_protect()`'s own
+                                        // `new_protect_filename(dest,
+                                        // newmd5=(dest_link or src_md5))`:
+                                        // since `dest_link` (the dest's
+                                        // own existing target) is truthy
+                                        // here, newmd5 is the *dest's*
+                                        // current target, not the
+                                        // incoming source's.
+                                        write_dest = new_protect_filename(&dest, &dest_target_str)?;
+                                    }
+                                    cfgfiledict.insert(abs_path.clone(), src_md5);
+                                }
+                            }
+                        }
+                    }
                 }
-                std::os::unix::fs::symlink(&target, &dest)
-                    .map_err(|e| format!("{}: {e}", dest.display()))?;
+
+                if let Some(parent) = write_dest.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("{}: {e}", parent.display()))?;
+                }
+                if write_dest.exists() || write_dest.symlink_metadata().is_ok() {
+                    let _ = std::fs::remove_file(&write_dest);
+                }
+                std::os::unix::fs::symlink(&target, &write_dest)
+                    .map_err(|e| format!("{}: {e}", write_dest.display()))?;
                 let mtime = mtime_secs(
                     &std::fs::symlink_metadata(&src)
                         .map_err(|e| format!("{}: {e}", src.display()))?,
@@ -769,13 +886,18 @@ fn merge_tree(
                 // (see ebuild_unmerge.rs's own "!mtime" staleness check,
                 // which relies on this actually holding).
                 let ft = filetime::FileTime::from_unix_time(mtime, 0);
-                filetime::set_symlink_file_times(&dest, ft, ft)
-                    .map_err(|e| format!("{}: {e}", dest.display()))?;
+                filetime::set_symlink_file_times(&write_dest, ft, ft)
+                    .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                // Real CONTENTS always records the package's own logical
+                // path/target (`abs_path`/`target_str`), never the
+                // ._cfgNNNN_ variant a protected write may have actually
+                // landed at -- same "logical path, not the protect-file
+                // path" rule the `obj` branch below documents.
                 contents.push_str(&format_contents_line(
                     "sym",
                     &abs_path,
                     None,
-                    Some(&target.to_string_lossy()),
+                    Some(&target_str),
                     Some(mtime),
                 ));
             } else if file_type.is_dir() {
@@ -790,7 +912,9 @@ fn merge_tree(
                 // overwritten -- unless cfgfiledict already remembers
                 // this exact src_md5 as a previously-offered update for
                 // this path (real "--noconfmem off" default: apply it
-                // directly, don't re-protect).
+                // directly, don't re-protect; `NOCONFMEM` forces
+                // re-protection regardless of memory, real `cfgfiledict[
+                // "IGNORE"]`).
                 let mut write_dest = dest.clone();
                 if is_protected(root, config_protect, config_protect_mask, &dest) {
                     if let Ok(dest_meta) = std::fs::metadata(&dest) {
@@ -798,8 +922,8 @@ fn merge_tree(
                             let dest_md5 = md5_hex(&dest)?;
                             if dest_md5 != src_md5 {
                                 let already_offered = cfgfiledict.get(&abs_path) == Some(&src_md5);
-                                if !already_offered {
-                                    write_dest = new_protect_filename(&dest)?;
+                                if !already_offered || noconfmem {
+                                    write_dest = new_protect_filename(&dest, &src_md5)?;
                                 }
                                 cfgfiledict.insert(abs_path.clone(), src_md5.clone());
                             }
@@ -1483,6 +1607,7 @@ pub fn run_merge(
         root,
         &options.config_protect,
         &options.config_protect_mask,
+        options.noconfmem,
         &mut cfgfiledict,
     )?;
     write_cfgfiledict(root, &cfgfiledict)?;
@@ -1586,7 +1711,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        let contents = merge_tree(&d, &root, "/etc", "/etc/env.d", &mut cfgfiledict)
+        let contents = merge_tree(&d, &root, "/etc", "/etc/env.d", false, &mut cfgfiledict)
             .expect("merge_tree succeeds");
 
         assert!(root.join("usr/share/x/hello.txt").is_file());
@@ -1669,29 +1794,78 @@ mod tests {
         let tmp = tempdir();
         std::fs::create_dir_all(&tmp).unwrap();
         let dest = tmp.join("foo.conf");
+        // A newmd5 that never matches any of these files' own content --
+        // isolates this test from the reuse behavior covered by
+        // new_protect_filename_reuses_last_file_with_matching_content
+        // below.
+        let no_match = "no-such-md5";
 
         assert_eq!(
-            new_protect_filename(&dest).unwrap(),
+            new_protect_filename(&dest, no_match).unwrap(),
             tmp.join("._cfg0000_foo.conf")
         );
 
         std::fs::write(tmp.join("._cfg0000_foo.conf"), b"x").unwrap();
         assert_eq!(
-            new_protect_filename(&dest).unwrap(),
+            new_protect_filename(&dest, no_match).unwrap(),
             tmp.join("._cfg0001_foo.conf")
         );
 
         std::fs::write(tmp.join("._cfg0007_foo.conf"), b"x").unwrap();
         assert_eq!(
-            new_protect_filename(&dest).unwrap(),
+            new_protect_filename(&dest, no_match).unwrap(),
             tmp.join("._cfg0008_foo.conf")
         );
 
         // A same-prefixed file for a *different* basename doesn't count.
         std::fs::write(tmp.join("._cfg0099_other.conf"), b"x").unwrap();
         assert_eq!(
-            new_protect_filename(&dest).unwrap(),
+            new_protect_filename(&dest, no_match).unwrap(),
             tmp.join("._cfg0008_foo.conf")
+        );
+    }
+
+    #[test]
+    fn new_protect_filename_reuses_last_file_with_matching_content() {
+        let tmp = tempdir();
+        std::fs::create_dir_all(&tmp).unwrap();
+        let dest = tmp.join("foo.conf");
+        std::fs::write(tmp.join("._cfg0000_foo.conf"), b"old update").unwrap();
+        std::fs::write(tmp.join("._cfg0001_foo.conf"), b"newest update").unwrap();
+        let newest_md5 = md5_hex(&tmp.join("._cfg0001_foo.conf")).unwrap();
+
+        // The highest-numbered sibling's own content already matches --
+        // reuse it instead of allocating ._cfg0002_.
+        assert_eq!(
+            new_protect_filename(&dest, &newest_md5).unwrap(),
+            tmp.join("._cfg0001_foo.conf")
+        );
+
+        // A newmd5 that doesn't match the highest-numbered sibling
+        // allocates a fresh number as usual, even though an *older*
+        // sibling (._cfg0000_) would have matched -- real
+        // new_protect_filename() only ever compares against the last one.
+        let old_md5 = md5_hex(&tmp.join("._cfg0000_foo.conf")).unwrap();
+        assert_eq!(
+            new_protect_filename(&dest, &old_md5).unwrap(),
+            tmp.join("._cfg0002_foo.conf")
+        );
+    }
+
+    #[test]
+    fn new_protect_filename_reuses_last_symlink_with_matching_target() {
+        let tmp = tempdir();
+        std::fs::create_dir_all(&tmp).unwrap();
+        let dest = tmp.join("link.conf");
+        std::os::unix::fs::symlink("old-target", tmp.join("._cfg0000_link.conf")).unwrap();
+
+        assert_eq!(
+            new_protect_filename(&dest, "old-target").unwrap(),
+            tmp.join("._cfg0000_link.conf")
+        );
+        assert_eq!(
+            new_protect_filename(&dest, "new-target").unwrap(),
+            tmp.join("._cfg0001_link.conf")
         );
     }
 
@@ -1705,7 +1879,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        merge_tree(&d, &root, "/etc", "", &mut cfgfiledict).expect("merge_tree succeeds");
+        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict).expect("merge_tree succeeds");
 
         assert_eq!(
             std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
@@ -1725,7 +1899,7 @@ mod tests {
         std::fs::write(root.join("etc/foo.conf"), b"same content").unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        merge_tree(&d, &root, "/etc", "", &mut cfgfiledict).expect("merge_tree succeeds");
+        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict).expect("merge_tree succeeds");
 
         assert_eq!(
             std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
@@ -1745,8 +1919,8 @@ mod tests {
         std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        let contents =
-            merge_tree(&d, &root, "/etc", "", &mut cfgfiledict).expect("merge_tree succeeds");
+        let contents = merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
+            .expect("merge_tree succeeds");
 
         // The real, logical path is untouched...
         assert_eq!(
@@ -1779,18 +1953,109 @@ mod tests {
         std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
 
         let mut cfgfiledict = BTreeMap::new();
-        merge_tree(&d, &root, "/etc", "", &mut cfgfiledict).expect("first merge_tree succeeds");
+        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
+            .expect("first merge_tree succeeds");
         assert!(root.join("etc/._cfg0000_foo.conf").exists());
 
         // Re-merging the exact same new content again: already
         // remembered in cfgfiledict, so this time it's applied directly
         // -- no second ._cfg0001_ file spawned.
-        merge_tree(&d, &root, "/etc", "", &mut cfgfiledict).expect("second merge_tree succeeds");
+        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
+            .expect("second merge_tree succeeds");
         assert_eq!(
             std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
             "new content"
         );
         assert!(!root.join("etc/._cfg0001_foo.conf").exists());
+    }
+
+    #[test]
+    fn merge_tree_noconfmem_reprotects_an_already_offered_update() {
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("etc")).unwrap();
+        std::fs::write(d.join("etc/foo.conf"), b"new content").unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::write(root.join("etc/foo.conf"), b"user's own edits").unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
+            .expect("first merge_tree succeeds");
+        assert!(root.join("etc/._cfg0000_foo.conf").exists());
+
+        // Re-merging the exact same content with NOCONFMEM-equivalent
+        // (noconfmem=true): unlike the default (dest gets directly
+        // overwritten, see the test above), this forces re-protection
+        // every time regardless of cfgfiledict memory -- real
+        // `--noconfmem`/`cfgfiledict["IGNORE"]` -- so the logical path is
+        // left alone again. `new_protect_filename`'s own "reuse the last
+        // file when content already matches" logic (this slice's own
+        // third piece) then reuses ._cfg0000_ rather than spawning a
+        // ._cfg0001_ with identical content, so the *visible* difference
+        // from the default isn't a new numbered file -- it's that the
+        // logical path itself is protected instead of overwritten.
+        merge_tree(&d, &root, "/etc", "", true, &mut cfgfiledict)
+            .expect("second merge_tree succeeds");
+        assert!(!root.join("etc/._cfg0001_foo.conf").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/._cfg0000_foo.conf")).unwrap(),
+            "new content"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
+            "user's own edits"
+        );
+    }
+
+    #[test]
+    fn merge_tree_protects_a_changed_symlink_under_a_protected_path() {
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("etc")).unwrap();
+        std::os::unix::fs::symlink("new-target", d.join("etc/link.conf")).unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::os::unix::fs::symlink("users-own-target", root.join("etc/link.conf")).unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        let contents = merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict)
+            .expect("merge_tree succeeds");
+
+        // The real, logical path is untouched...
+        assert_eq!(
+            std::fs::read_link(root.join("etc/link.conf")).unwrap(),
+            PathBuf::from("users-own-target")
+        );
+        // ...and the new target lands in a ._cfg0000_ sibling instead.
+        assert_eq!(
+            std::fs::read_link(root.join("etc/._cfg0000_link.conf")).unwrap(),
+            PathBuf::from("new-target")
+        );
+        // CONTENTS still records the logical path with the *new* target.
+        assert!(contents
+            .lines()
+            .any(|l| l.starts_with("sym /etc/link.conf -> new-target")));
+    }
+
+    #[test]
+    fn merge_tree_does_not_protect_an_unchanged_symlink() {
+        let tmp = tempdir();
+        let d = tmp.join("D");
+        let root = tmp.join("ROOT");
+        std::fs::create_dir_all(d.join("etc")).unwrap();
+        std::os::unix::fs::symlink("same-target", d.join("etc/link.conf")).unwrap();
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::os::unix::fs::symlink("same-target", root.join("etc/link.conf")).unwrap();
+
+        let mut cfgfiledict = BTreeMap::new();
+        merge_tree(&d, &root, "/etc", "", false, &mut cfgfiledict).expect("merge_tree succeeds");
+
+        assert_eq!(
+            std::fs::read_link(root.join("etc/link.conf")).unwrap(),
+            PathBuf::from("same-target")
+        );
+        assert!(!root.join("etc/._cfg0000_link.conf").exists());
     }
 
     fn tempdir() -> PathBuf {
@@ -1969,6 +2234,50 @@ mod tests {
             .lines()
             .any(|l| l.starts_with("obj /etc/configpkg.conf ")));
         assert!(!contents.contains("._cfg0000_configpkg.conf"));
+    }
+
+    #[test]
+    fn real_merge_protects_a_locally_modified_etc_symlink_via_the_full_cli_path() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        // Simulate a pre-existing, locally-modified /etc symlink -- as if
+        // this package (or an earlier version of it) had installed a
+        // default target the admin then repointed by hand.
+        std::os::unix::fs::symlink("admins-own-target", root.join("etc/configsympkg.conf"))
+            .unwrap();
+
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/configsympkg/configsympkg-1.0.ebuild");
+
+        let status = run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
+            .expect("run_merge succeeds");
+        assert_eq!(status, 0);
+
+        // The real, logical /etc/configsympkg.conf is never touched.
+        assert_eq!(
+            std::fs::read_link(root.join("etc/configsympkg.conf")).unwrap(),
+            PathBuf::from("admins-own-target")
+        );
+        // The new target the ebuild wanted to install lands in a real
+        // ._cfg0000_ sibling instead.
+        assert_eq!(
+            std::fs::read_link(root.join("etc/._cfg0000_configsympkg.conf")).unwrap(),
+            PathBuf::from("new-target")
+        );
+        // The vdb's own CONTENTS still considers /etc/configsympkg.conf
+        // (the logical path) this package's own -- not the ._cfg
+        // variant.
+        let contents =
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/configsympkg-1.0/CONTENTS"))
+                .unwrap();
+        assert!(contents
+            .lines()
+            .any(|l| l.starts_with("sym /etc/configsympkg.conf -> new-target")));
+        assert!(!contents.contains("._cfg0000_configsympkg.conf"));
     }
 
     fn collision_fixture(name: &str) -> PathBuf {

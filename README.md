@@ -4004,13 +4004,47 @@ MD5-based comparison's own correctness *and* `unmerge`'s `!mtime` check
 mtime setter exists, symlinks included) and explicitly setting it after
 every merged `obj`/`sym` write.
 
-**v1 scope cuts** (see `ebuild_merge.rs`'s own module doc comment for the
-full list): `CONFIG_PROTECT` is `obj`-only (a protected symlink is a
-genuinely rare real-world case). No `--noconfmem` support at all (this
-pilot's own `ebuild` CLI has no such flag, so behavior always matches
-real portage's own default). `new_protect_filename` always allocates a
-fresh number rather than reusing the last one when its content already
-matches (a purely cosmetic difference).
+**v1 scope cuts as of this slice** (see `ebuild_merge.rs`'s own module doc
+comment for the full, current list -- the paragraph below documents the
+three gaps this section originally listed as now closed): CONFIG_PROTECT
+only compares like-for-like (an `obj` entry only against an `obj` dest, a
+`sym` entry only against a `sym` dest -- a type-changing update, e.g. a
+symlink replacing a previously-installed regular file at the same path,
+is written directly, unprotected). No `_installed_instance`/
+`protect_if_modified` support (this pilot's own `ebuild <file> merge` has
+no notion of "the package instance this merge is replacing" at all). An
+already-offered, unmodified-since update is applied directly here; real
+portage instead leaves the destination completely untouched in that case
+(while still recording the merge in `CONTENTS`).
+
+### `CONFIG_PROTECT` for symlinks, `--noconfmem`, and `new_protect_filename`'s own file-reuse logic
+
+Three gaps the previous section's own "v1 scope cuts" originally
+documented are now closed, finishing off real `dblink._protect()`/
+`new_protect_filename()` (`lib/portage/util/__init__.py:1803`) parity.
+**Symlink CONFIG_PROTECT**: a `sym` entry under a protected path whose
+real on-disk target string differs from the one about to be merged is now
+diverted too (real bug #485598: the *target string*'s own MD5 is what's
+compared, not file content) -- mirrors the `obj` case exactly, just
+hashing the target string's bytes instead of reading file content, and
+only compared against a dest that's itself already a symlink (see the
+"like-for-like only" cut above). **`NOCONFMEM`**: real `--noconfmem`
+(`lib/_emerge/actions.py:2790`) is an `emerge`-only CLI flag with no real
+`bin/ebuild` equivalent at all (confirmed against `bin/ebuild`'s own
+six-option `argparse` list), so this pilot reads the `NOCONFMEM` env var
+directly instead -- the same "env var, not full config resolution"
+shortcut `CONFIG_PROTECT` itself already uses. Real `vartree.py:4949`'s
+own `cfgfiledict["IGNORE"]`: forces every already-offered,
+unmodified-since update to be re-protected instead of applied directly,
+regardless of memory. **`new_protect_filename` file reuse**: real
+`new_protect_filename()` no longer always allocates a fresh
+`._cfgNNNN_<name>` number -- it now reuses the *last* one when that
+file's own content (or, if it's itself a symlink, its own target string)
+already matches the pending update, exactly like real portage. This is
+what keeps `NOCONFMEM` from spawning a visibly *new* `._cfgNNNN_` file on
+a repeat merge of unchanged content -- its real, visible effect is that
+the logical path stays protected (left alone) instead of being
+overwritten directly, not that a fresh numbered file appears each time.
 
 ### `FEATURES=collision-protect`: a merge that would overwrite another package's file aborts
 
@@ -6557,6 +6591,59 @@ cat "${ROOT}"/etc/._cfg0000_configpkg.conf
 # new content from configpkg  <- diverted here instead
 grep configpkg "${ROOT}"/var/db/pkg/dev-libs/configpkg-1.0/CONTENTS
 # obj /etc/configpkg.conf <md5-of-the-new-content> <mtime>
+```
+
+(A real host's own ambient `CONFIG_PROTECT` -- if this pilot's dev/test
+machine is itself a real Gentoo system -- will override the `/etc`
+default shown above via the same env-var-sourced CLI boundary; export
+`CONFIG_PROTECT=/etc` explicitly first if reproducing this by hand
+outside the test suite, which never inherits host env vars this way.)
+
+Real symlink `CONFIG_PROTECT`, `NOCONFMEM`, and `new_protect_filename`'s
+own file-reuse logic (see "What this proves" above for the full writeup):
+a locally-repointed `/etc` symlink survives a merge exactly like a
+regular file does, and `NOCONFMEM` changes the real, visible outcome of a
+repeat merge. Uses `PORTING/fixtures/repo/dev-libs/configsympkg`, whose
+own `src_install` installs a *new* `/etc/configsympkg.conf` symlink
+pointing at `new-target`:
+
+```sh
+export CONFIG_PROTECT=/etc
+mkdir -p "${ROOT}"/etc
+ln -sfn admins-own-target "${ROOT}"/etc/configsympkg.conf
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/configsympkg/configsympkg-1.0.ebuild merge
+readlink "${ROOT}"/etc/configsympkg.conf
+# admins-own-target          <- untouched
+readlink "${ROOT}"/etc/._cfg0000_configsympkg.conf
+# new-target                  <- diverted here instead
+grep configsympkg "${ROOT}"/var/db/pkg/dev-libs/configsympkg-1.0/CONTENTS
+# sym /etc/configsympkg.conf -> new-target <mtime>
+```
+
+Re-merging `configpkg` (the regular-file example above) a second time
+with content unchanged shows `NOCONFMEM`'s real, visible effect -- not a
+second numbered file, but whether the logical path stays protected:
+
+```sh
+# Without NOCONFMEM: the already-offered update applies directly.
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild merge
+cat "${ROOT}"/etc/configpkg.conf
+# new content from configpkg  <- overwritten, no ._cfg0001_ spawned
+
+# With NOCONFMEM: re-protected instead, reusing ._cfg0000_ (its content
+# already matches -- new_protect_filename()'s own reuse logic) rather
+# than spawning a ._cfg0001_ with identical content.
+export NOCONFMEM=1
+echo "admin's own edits" > "${ROOT}"/etc/configpkg.conf
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild merge
+cat "${ROOT}"/etc/configpkg.conf
+# admin's own edits           <- protected again, not overwritten
+cat "${ROOT}"/etc/._cfg0000_configpkg.conf
+# new content from configpkg  <- reused, no ._cfg0001_ spawned
+unset NOCONFMEM
 ```
 
 `--debug` (task #56 -- see "What this proves" above for the full
