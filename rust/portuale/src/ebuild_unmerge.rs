@@ -49,21 +49,52 @@
 // this pilot's own `owns_path_pf` is a plain string scan, matching the
 // same simplification `find_owners`/blocker exclusion already made.
 //
+// The real "symlink orphan" refinement (bug #326685) is real too: when
+// a live symlink-to-directory this package's own CONTENTS recorded as
+// `sym` or `dir` is `is_owned` by another same-slot instance that
+// itself now records that exact path as a literal `dir` entry (the
+// directory the symlink pointed to got "promoted" to a real directory
+// across the upgrade), the symlink is genuinely orphaned: neither this
+// package's own removal pass nor the survivor's own files actually
+// still need it as a symlink. Real `_unmerge_pkgfiles()`
+// (`vartree.py:2895-2926`) detects this and defers the decision --
+// `protected_symlinks`, keyed by the symlink's own *target* directory's
+// `(dev, ino)` -- to a second pass over this package's own literal
+// `dir` entries (real `_unmerge_dirs()`, `vartree.py:3209-3332`,
+// `remove_dirs` below): when that target directory is later actually
+// removed (because nothing else needs it as a real directory either),
+// the now-truly-orphaned symlink is deleted too, and its own
+// newly-emptied parent directories are recursively revisited (real bug
+// #640058) in case removing the symlink itself finally empties them.
+// Real `_unmerge_protected_symlinks()` (`vartree.py:3114-3207`, called
+// on whatever `protected_symlinks` entries *don't* get resolved by
+// `_unmerge_dirs()`) is deliberately NOT ported: its own first loop
+// re-checks the exact same `others_in_slot`/`isowner` condition already
+// required to populate `protected_symlinks` in the first place -- since
+// that fact cannot change between the two passes within one real
+// `unmerge()` call, its own `return` fires unconditionally, making the
+// real system-wide `get_owners()`-gated delete-or-elog-warn logic after
+// it genuinely unreachable dead code in current portage (confirmed by
+// tracing the exact call graph, not a simplification -- there is no
+// real behavior there to be unfaithful to). The real elog warning text
+// for symlinks that *do* survive (`vartree.py:3085-3103`) is also not
+// reproduced: this module has no message-printing output anywhere else
+// either, only the behavioral effect (leave the symlink in place) --
+// see the "Failure handling is coarser" gap below for the same
+// no-message-output pattern elsewhere in this module.
+//
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching `ebuild_merge`'s own
 // "narrow v1, document the cut" pattern):
-//   - The real "symlink orphan" refinement (bug #326685: a symlink to a
-//     directory, where the *new* owner recorded that directory as a
-//     plain `dir` entry rather than a `sym`) isn't reproduced -- real
-//     `_unmerge_pkgfiles()` does an extra `all_owned`/child-by-child
-//     scan in that specific case to decide whether the symlink itself
-//     is still safe to remove; this pilot's own `is_owned` check already
-//     covers the common case (the path is skipped outright whenever
-//     another same-slot instance owns it at all), just not this
-//     narrower "some of the target directory's children moved to being
-//     owned differently" sub-case.
 //   - No stale-symlink/orphan-directory bookkeeping
 //     (`FEATURES=unmerge-orphans`), no `bsd_chflags` handling, no
 //     `INFOPATH` special-casing.
+//   - Real `stale_confmem` cleanup (`vartree.py:3106-3109`: when a
+//     `CONFIG_PROTECT`'d path this package remembered in `cfgfiledict`
+//     is `is_owned` by another same-slot instance, its now-stale memory
+//     entry is dropped) isn't reproduced -- this pilot's own `unmerge`
+//     never reads or writes `ebuild_merge`'s own `_conf_mem_file`
+//     persistence at all yet, a separate small gap adjacent to but not
+//     the same as bug #326685 above.
 //   - Failure handling is coarser: real `_unmerge_pkgfiles()` counts
 //     per-file failures and keeps going regardless (overall success is
 //     governed by the `prerm`/`postrm` phase exit codes, not by
@@ -80,7 +111,9 @@
 
 use crate::ebuild_merge;
 use crate::ebuild_phases;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 
 /// Whether `command` is the one real unmerge command this module
 /// implements -- `ebuild.rs` checks this alongside `ebuild_phases::
@@ -119,6 +152,13 @@ fn parse_contents(text: &str) -> Vec<ContentsEntry> {
         .collect()
 }
 
+/// Real `protected_symlinks`: the live target directory's own `(dev,
+/// ino)` a bug-#326685 orphaned symlink points to -> every such
+/// symlink's own `abs_path`. Grouped by target inode (not by symlink
+/// path) because that's how `remove_dirs` below looks entries up --
+/// real `_unmerge_dirs()`'s own `protected_symlinks.pop(inode_key)`.
+type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
+
 /// Deletes every `CONTENTS`-listed entry from `root`, deepest paths
 /// first (see this module's own doc comment for why, and for the v1
 /// failure-tolerance simplification) -- except: an entry another
@@ -128,6 +168,10 @@ fn parse_contents(text: &str) -> Vec<ContentsEntry> {
 /// mtime no longer matches what `CONTENTS` recorded, left in place
 /// instead (real `!mtime` skip -- see this module's own doc comment for
 /// why this is also what protects a CONFIG_PROTECT'd file on removal).
+/// This package's own literal `dir` entries are deferred to a second
+/// pass (`remove_dirs`, real `_unmerge_dirs()`) instead of removed
+/// inline here (real `mydirs`) -- see this module's own doc comment on
+/// bug #326685 for why the deferral matters.
 fn remove_contents(
     root: &Path,
     category: &str,
@@ -137,11 +181,50 @@ fn remove_contents(
     let mut entries = parse_contents(contents_text);
     entries.sort_by(|a, b| b.abs_path.cmp(&a.abs_path));
 
+    let mut protected_symlinks: ProtectedSymlinks = BTreeMap::new();
+    let mut dirs: Vec<(PathBuf, (u64, u64))> = Vec::new();
+
     for entry in entries {
-        if others_in_slot
+        let is_owned = others_in_slot
             .iter()
-            .any(|other_pf| ebuild_merge::owns_path_pf(root, category, other_pf, &entry.abs_path))
-        {
+            .any(|other_pf| ebuild_merge::owns_path_pf(root, category, other_pf, &entry.abs_path));
+
+        let relative = entry.abs_path.trim_start_matches('/');
+        let dest = root.join(relative);
+
+        // Real bug #326685 detection (`vartree.py:2898-2926`): a live
+        // symlink-to-directory this package's own CONTENTS recorded as
+        // `sym` or `dir`, whose exact path another same-slot instance
+        // now claims *as a literal `dir` entry* (not `sym`) -- see this
+        // module's own doc comment for the full real grounding.
+        if is_owned && (entry.node_type == "sym" || entry.node_type == "dir") {
+            if let Ok(link_meta) = std::fs::symlink_metadata(&dest) {
+                if link_meta.file_type().is_symlink() {
+                    if let Ok(target_meta) = std::fs::metadata(&dest) {
+                        if target_meta.is_dir() {
+                            let symlink_orphan = others_in_slot.iter().any(|other_pf| {
+                                ebuild_merge::owned_node_type_pf(
+                                    root,
+                                    category,
+                                    other_pf,
+                                    &entry.abs_path,
+                                )
+                                .as_deref()
+                                    == Some("dir")
+                            });
+                            if symlink_orphan {
+                                protected_symlinks
+                                    .entry((target_meta.dev(), target_meta.ino()))
+                                    .or_default()
+                                    .push(entry.abs_path.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if is_owned {
             // Real "replaced" skip: another still-installed version of
             // this same cp:slot also claims this path -- most commonly
             // an in-place upgrade sharing files with the version being
@@ -149,8 +232,6 @@ fn remove_contents(
             // `_unmerge_pkgfiles()`'s own ordering.
             continue;
         }
-        let relative = entry.abs_path.trim_start_matches('/');
-        let dest = root.join(relative);
         match entry.node_type.as_str() {
             "obj" | "sym" => {
                 if let (Some(recorded_mtime), Ok(meta)) =
@@ -170,11 +251,9 @@ fn remove_contents(
                 }
             }
             "dir" => {
-                // Ignore both "already gone" and "not empty" -- matches
-                // real `_ignored_rmdir_errnos`/`!empty` tolerance (a
-                // directory another still-installed package also uses
-                // is expected to fail here, harmlessly).
-                let _ = std::fs::remove_dir(&dest);
+                if let Ok(meta) = std::fs::symlink_metadata(&dest) {
+                    dirs.push((dest, (meta.dev(), meta.ino())));
+                }
             }
             _ => {
                 // fifo/device nodes: `ebuild_merge::merge_tree` doesn't
@@ -182,7 +261,101 @@ fn remove_contents(
             }
         }
     }
+    remove_dirs(root, dirs, &mut protected_symlinks);
+    // Real trailing `if protected_symlinks:` elog warning
+    // (`vartree.py:3085-3103`) for whatever entries `remove_dirs`
+    // didn't resolve is deliberately not reproduced -- see this
+    // module's own doc comment (no message-printing output anywhere
+    // else in this module either). The behavioral effect -- those
+    // symlinks are left in place -- already holds: `remove_dirs` only
+    // ever deletes a `protected_symlinks` entry's own symlinks when it
+    // actually removes their target directory.
     Ok(())
+}
+
+/// Real `_unmerge_dirs()` (`vartree.py:3209-3332`): removes this
+/// package's own literal `dir` entries (`dirs`, real `mydirs`),
+/// tolerating "already gone" and "not empty" the same way the main
+/// per-entry loop above does for everything else. The one added
+/// wrinkle over a plain removal loop: when removing one of these
+/// directories actually succeeds, and its own `(dev, ino)` matches a
+/// `protected_symlinks` entry (a bug-#326685 orphaned symlink pointing
+/// at exactly this directory -- see `remove_contents`'s own doc
+/// comment), that symlink is now genuinely safe to delete too (nothing
+/// needs it as a real directory after all) -- deleted here, with its
+/// own newly-emptied parent directories recursively re-queued for
+/// another removal attempt (real bug #640058), since a directory that
+/// failed to rmdir earlier only because this exact symlink still
+/// occupied it deserves a second chance. Uses `dirs` as a LIFO stack,
+/// mirroring real `_unmerge_dirs()`'s own `dirs.pop()`/`dirs.append()`
+/// usage of a plain Python list -- removal order itself has no real
+/// semantic meaning (this module's own doc comment), but the stack
+/// shape (a directory can be pushed back after being popped) is
+/// load-bearing for the bug-#640058 revisit to work at all.
+fn remove_dirs(
+    root: &Path,
+    dirs: Vec<(PathBuf, (u64, u64))>,
+    protected_symlinks: &mut ProtectedSymlinks,
+) {
+    // Real `_unmerge_dirs()`'s own `dirs = sorted(dirs)`: `mydirs` is
+    // built as a Python *set* during the caller's own traversal (order
+    // not guaranteed), so real code always re-sorts ascending before
+    // relying on `pop()` (removes-from-the-end) to visit deepest paths
+    // first -- sorted ascending, a path is always lexicographically
+    // greater than its own ancestor (`/usr` < `/usr/share`), so the
+    // last element is always the deepest.
+    let mut stack = dirs;
+    stack.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut revisit: BTreeMap<PathBuf, (u64, u64)> = BTreeMap::new();
+
+    while let Some((dest, inode_key)) = stack.pop() {
+        match std::fs::remove_dir(&dest) {
+            Ok(()) => {
+                let Some(unmerge_syms) = protected_symlinks.remove(&inode_key) else {
+                    continue;
+                };
+                let mut parents: BTreeSet<PathBuf> = BTreeSet::new();
+                for relative_path in &unmerge_syms {
+                    let sym_dest = root.join(relative_path.trim_start_matches('/'));
+                    if std::fs::remove_file(&sym_dest).is_ok() {
+                        if let Some(parent) = sym_dest.parent() {
+                            parents.insert(parent.to_path_buf());
+                        }
+                    }
+                }
+                // Real bug #640058: walk each newly-emptied symlink's
+                // own ancestor chain while each successive ancestor is
+                // itself a directory that previously failed to rmdir
+                // (`revisit`), re-queuing all of them for another
+                // removal attempt now that this symlink is gone.
+                let mut recursive_parents: BTreeSet<PathBuf> = BTreeSet::new();
+                for parent in parents {
+                    let mut cur = parent;
+                    while revisit.contains_key(&cur) {
+                        recursive_parents.insert(cur.clone());
+                        match cur.parent() {
+                            Some(p) => cur = p.to_path_buf(),
+                            None => break,
+                        }
+                    }
+                }
+                for parent in recursive_parents {
+                    if let Some(key) = revisit.remove(&parent) {
+                        stack.push((parent, key));
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Already gone -- tolerate, no revisit needed (real:
+                // `errno == ENOENT` is excluded from revisit tracking).
+            }
+            Err(_) => {
+                // Real: any other tolerated rmdir failure (chiefly
+                // "not empty") is tracked for a possible later revisit.
+                revisit.insert(dest, inode_key);
+            }
+        }
+    }
 }
 
 /// Real top-level `unmerge()`: `dblink.unmerge()` (`prerm` -> delete
@@ -424,6 +597,84 @@ mod tests {
         assert!(
             !root.join("usr/share/only-mine.txt").exists(),
             "a path no other same-slot package owns is still deleted normally"
+        );
+    }
+
+    #[test]
+    fn remove_contents_leaves_an_orphaned_symlink_alone_while_its_target_is_still_needed() {
+        // Real bug #326685 (see this module's own doc comment): a live
+        // symlink-to-directory this package's own CONTENTS recorded,
+        // whose exact path another same-slot instance now claims as a
+        // literal `dir` entry, is never deleted directly (the ordinary
+        // `is_owned` skip already protects it) -- but here its own
+        // target directory is never part of *this* package's own `dir`
+        // entries at all (owned/populated by something else entirely),
+        // so `remove_dirs` never gets a chance to resolve it either: the
+        // symlink and its target must both survive untouched.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("keep/target")).unwrap();
+        std::fs::write(root.join("keep/target/other.txt"), b"other").unwrap();
+        std::os::unix::fs::symlink(root.join("keep/target"), root.join("keep/link")).unwrap();
+
+        let other_vdb = root.join("var/db/pkg/dev-libs/orphanpkg-2.0");
+        std::fs::create_dir_all(&other_vdb).unwrap();
+        std::fs::write(other_vdb.join("CONTENTS"), "dir /keep/link\n").unwrap();
+
+        let contents = "dir /keep\nsym /keep/link -> whatever 100\n";
+        remove_contents(&root, "dev-libs", &["orphanpkg-2.0".to_string()], contents)
+            .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("keep/link").symlink_metadata().is_ok(),
+            "the orphaned symlink itself must survive -- its target is never resolved"
+        );
+        assert!(
+            root.join("keep/target/other.txt").is_file(),
+            "the symlink's own target directory, owned by nobody in this removal, is untouched"
+        );
+    }
+
+    #[test]
+    fn remove_contents_deletes_an_orphaned_symlink_once_its_target_directory_empties_and_revisits_the_freed_parent(
+    ) {
+        // Real bug #326685 + bug #640058 (see this module's own doc
+        // comment): this time the symlink's own target directory *is*
+        // one of this package's own `dir` entries -- once it's actually
+        // removed (nothing else needs it as a real directory), the
+        // now-truly-orphaned symlink is deleted too, and its own parent
+        // directory (which could only fail to rmdir because the symlink
+        // was still occupying it) gets a revisit and is removed as well.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("zzz-parent")).unwrap();
+        std::fs::create_dir_all(root.join("aaa-target")).unwrap();
+        std::os::unix::fs::symlink(root.join("aaa-target"), root.join("zzz-parent/compat-link"))
+            .unwrap();
+
+        let other_vdb = root.join("var/db/pkg/dev-libs/orphanpkg-2.0");
+        std::fs::create_dir_all(&other_vdb).unwrap();
+        std::fs::write(other_vdb.join("CONTENTS"), "dir /zzz-parent/compat-link\n").unwrap();
+
+        let contents =
+            "dir /zzz-parent\nsym /zzz-parent/compat-link -> whatever 100\ndir /aaa-target\n";
+        remove_contents(&root, "dev-libs", &["orphanpkg-2.0".to_string()], contents)
+            .expect("remove_contents succeeds");
+
+        assert!(
+            !root
+                .join("zzz-parent/compat-link")
+                .symlink_metadata()
+                .is_ok(),
+            "the symlink is deleted once its own target directory actually empties"
+        );
+        assert!(
+            !root.join("aaa-target").exists(),
+            "the symlink's own target directory is removed normally"
+        );
+        assert!(
+            !root.join("zzz-parent").exists(),
+            "the parent, blocked only by the now-deleted symlink, is revisited and removed too (bug #640058)"
         );
     }
 

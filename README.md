@@ -5211,6 +5211,53 @@ ls "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0/
 # CATEGORY  CONTENTS  COUNTER  SLOT  repository
 ```
 
+### `unmerge`'s own "symlink orphan" refinement (bug #326685)
+
+Real `_unmerge_pkgfiles()`'s own bug-#326685 handling
+(`vartree.py:2895-2926` + `_unmerge_dirs()`, `:3209-3332`) is real now,
+on top of the `others_in_slot`/`"replaced"` skip (see "What this proves"
+above). When a live symlink-to-directory this package's own `CONTENTS`
+recorded as `sym` (or `dir`) is `is_owned` by another still-installed
+same-slot instance that itself now records that *exact path* as a
+literal `dir` entry (the directory it pointed to got "promoted" to a
+real directory across an upgrade), the ordinary `is_owned` skip already
+leaves the symlink itself untouched -- but real portage goes further: it
+defers a decision on the symlink's own *target* directory to a second
+pass over this package's own literal `dir` entries. If that target
+directory is itself one of them, and actually gets removed during this
+same unmerge (nothing else needs it as a real directory either), the
+now-truly-orphaned symlink is deleted too -- and its own freshly-emptied
+parent directory, which could only have failed to `rmdir` earlier
+because the symlink was still occupying it, gets a recursive revisit
+(real bug #640058) and is removed as well. `remove_dirs`
+(`ebuild_unmerge.rs`) ports this as a real LIFO-stack second pass
+(`remove_contents` defers this package's own `dir` entries into it
+instead of removing them inline), verified for both directions:
+`remove_contents_leaves_an_orphaned_symlink_alone_while_its_target_is_still_needed`
+(the target directory is never part of this package's own removal at
+all -- symlink and target both survive) and
+`remove_contents_deletes_an_orphaned_symlink_once_its_target_directory_empties_and_revisits_the_freed_parent`
+(the target directory *is* removed here, so the symlink is deleted too,
+and its own now-empty parent is revisited and removed -- exercising bug
+#640058's own recursive-parent-revisit end to end).
+
+A real, confirmed finding surfaced while tracing this: real
+`_unmerge_protected_symlinks()` (`vartree.py:3114-3207`, real portage's
+own separate function for whatever `protected_symlinks` entries *don't*
+get resolved by `_unmerge_dirs()`) is **not** ported here, deliberately.
+Its own first loop re-checks the exact same `others_in_slot`/`isowner`
+condition that was already required to populate `protected_symlinks` in
+the first place -- since that fact can't change between the two passes
+within one real `unmerge()` call, its own early `return` fires
+unconditionally, making the real system-wide `get_owners()`-gated
+delete-or-elog-warn logic after it genuinely unreachable dead code in
+current portage. Confirmed by tracing the exact call graph directly, not
+a simplification -- there's no real behavior there to be unfaithful to.
+The real elog warning text for symlinks that do survive
+(`vartree.py:3085-3103`) also isn't reproduced: this module has no
+message-printing output anywhere else either, only the behavioral effect
+(the symlink is left in place).
+
 ## Running it
 
 Build both Rust binaries:

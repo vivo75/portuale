@@ -1117,6 +1117,38 @@ pub(crate) fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str
     })
 }
 
+/// Real `dblnk._match_contents(relative_path)` + `getcontents()[key][0]`:
+/// the node type (`"obj"`/`"dir"`/`"sym"`/...) the installed package
+/// `category/pf` recorded for `abs_path` in its own real `CONTENTS`, or
+/// `None` if it doesn't own that exact path at all. `ebuild_unmerge`'s
+/// own bug #326685 "symlink orphan" detection is the one caller: it
+/// needs to know not just *whether* another same-slot instance owns a
+/// path (`owns_path_pf` above) but specifically *what type* it recorded
+/// it as, to tell "still a symlink there too" apart from "reclassified
+/// as a real directory".
+pub(crate) fn owned_node_type_pf(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    abs_path: &str,
+) -> Option<String> {
+    let path = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(pf)
+        .join("CONTENTS");
+    let text = std::fs::read_to_string(path).ok()?;
+    text.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let node_type = parts.next()?;
+        if parts.next() == Some(abs_path) {
+            Some(node_type.to_string())
+        } else {
+            None
+        }
+    })
+}
+
 /// Real `mypkglist = others_in_slot + blockers` (`dblink.merge()`'s own
 /// blocker half -- `others_in_slot` is already `find_collisions`'s own
 /// `own_versions`). Real `dblink._blockers` is never computed by
