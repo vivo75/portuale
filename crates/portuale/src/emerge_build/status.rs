@@ -133,6 +133,42 @@ impl StatusDisplay {
             }),
         }
     }
+
+    /// The leading blank unless in background mode, the `>>> ` line itself,
+    /// then the current `>>> Jobs:` status again when the display is live.
+    /// (The tty `\r`-redraw half is not ported.)
+    pub(crate) fn status(&self, line: &str) {
+        if !self.mode.background {
+            println!();
+        }
+        println!("{line}");
+        let redisplay = self.mode.show_jobs && self.state.lock().unwrap().displayed;
+        if redisplay {
+            self.print_jobs();
+        }
+    }
+
+    pub(crate) fn print_jobs(&self) {
+        println!("{}", self.jobs_line());
+        self.state.lock().unwrap().displayed = true;
+    }
+
+    /// The `>>> Jobs: {cur} of {max} complete` line plus the `running` /
+    /// `failed` / `merge wait` arms only when nonzero, padded to the
+    /// 68-column jobs field. Portage's `Load avg:` trailer is cut (kept out
+    /// of stdout for run determinism); the padding that precedes it is kept,
+    /// so the line keeps Portage's shape and column.
+    pub(crate) fn jobs_line(&self) -> String {
+        let state = self.state.lock().unwrap();
+        jobs_line(JobsLineArgs {
+            color: &self.color,
+            curval: state.curval,
+            maxval: state.maxval,
+            running: state.running,
+            failed: state.failed,
+            merge_wait: 0,
+        })
+    }
 }
 
 /// Arguments of [`jobs_line`].
@@ -143,6 +179,44 @@ pub(crate) struct JobsLineArgs<'a> {
     pub(crate) running: usize,
     pub(crate) failed: usize,
     pub(crate) merge_wait: usize,
+}
+
+/// The pure `>>> Jobs:` shape, split out for unit tests. `merge_wait` is
+/// always 0 from portuale (see [`StatusDisplay`]); the arm stays because it
+/// is part of the shape.
+pub(crate) fn jobs_line(args: JobsLineArgs<'_>) -> String {
+    let JobsLineArgs {
+        color,
+        curval,
+        maxval,
+        running,
+        failed,
+        merge_wait,
+    } = args;
+    let mut plain = format!("Jobs: {curval} of {maxval} complete");
+    let mut styled = format!(
+        "Jobs: {} of {} complete",
+        color.c("INFORM", &curval.to_string()),
+        color.c("INFORM", &maxval.to_string()),
+    );
+    for (value, label) in [
+        (running, "running"),
+        (failed, "failed"),
+        (merge_wait, "merge wait"),
+    ] {
+        if value > 0 {
+            plain.push_str(&format!(", {value} {label}"));
+            styled.push_str(&format!(
+                ", {} {label}",
+                color.c("INFORM", &value.to_string()),
+            ));
+        }
+    }
+    // The padding stays even though the `Load avg:` trailer is cut, so the
+    // line keeps Portage's shape and column.
+    let padding = 68usize.saturating_sub(plain.len());
+    styled.push_str(&" ".repeat(padding));
+    format!(">>> {styled}")
 }
 
 /// `{Emerging|Emerging binary} ({cur} of {max}) {cpv}::{repo}`, plus
