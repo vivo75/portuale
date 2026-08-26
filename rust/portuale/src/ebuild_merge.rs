@@ -861,6 +861,145 @@ fn remove_from_contents(root: &Path, cpv: &str, paths: &BTreeSet<String>) -> Res
         .map_err(|e| format!("{}: {e}", contents_path.display()))
 }
 
+/// Real `PreservedLibsRegistry.register`/`.unregister`
+/// (`lib/portage/util/_dyn_libs/PreservedLibsRegistry.py:142-176`): real
+/// `unregister(cpv, slot, counter) = register(cpv, slot, counter, [])`,
+/// so this one function covers both real calls, matching real `register`
+/// exactly. Real `cps = cpv_getkey(cpv) + ":" + slot` (the real registry
+/// key: `category/package:slot`, no version) -- `category`/`pn` are
+/// passed in already split, rather than re-deriving them from a version
+/// string the way real `cpv_getkey` does, since every real caller here
+/// already has them split (`ebuild_phases::Environment::split`).
+///
+/// Empty `paths` (real `unregister`): removes the `cps` entry, but only
+/// if it currently records the *same* `cpv` and `counter` -- never
+/// blindly erasing a different package's own entry that happens to
+/// share this exact slot's own key. Non-empty `paths`: unconditionally
+/// overwrites the `cps` entry (real `_normalize_counter` is just a
+/// whitespace-trim, not integer parsing, so a plain trimmed-string
+/// comparison already matches real behavior exactly).
+fn register_preserved_libs(
+    registry: &mut PlibRegistry,
+    cpv: &str,
+    category: &str,
+    pn: &str,
+    slot: &str,
+    counter: &str,
+    paths: &[String],
+) {
+    let cps = format!("{category}/{pn}:{slot}");
+    let counter = counter.trim();
+    if paths.is_empty() {
+        if let Some((entry_cpv, entry_counter, _)) = registry.entries.get(&cps) {
+            if entry_cpv == cpv && entry_counter.trim() == counter {
+                registry.entries.remove(&cps);
+            }
+        }
+    } else {
+        registry
+            .entries
+            .insert(cps, (cpv.to_string(), counter.to_string(), paths.to_vec()));
+    }
+}
+
+/// Real `dblink._prune_plib_registry()` (`vartree.py:2228-2314`), called
+/// from real `unmerge()` with `unmerge=True` right before real
+/// `_unmerge_pkgfiles()` runs (`vartree.py:2493`/`2529` -- confirmed by
+/// reading the real call site, not just the method itself), narrowed to
+/// the one real shape this pilot's own standalone `ebuild <file>
+/// unmerge` always reaches: `unmerge_with_replacement=False`. Real
+/// `preserve_paths` (a `_prune_plib_registry` parameter, not to be
+/// confused with this function's own *return* value) is only ever
+/// non-`None` when a real depgraph-driven upgrade transaction already
+/// computed it via a companion `merge()` call in the *same* transaction
+/// -- this pilot's own `merge`/`unmerge` are always separate,
+/// independent CLI invocations, so this is always the real shape that
+/// applies (real `instance_owns_files and not unmerge_with_replacement`
+/// collapses to just `instance_owns_files`).
+///
+/// Real order: rebuild the system-wide `LinkageMap` from every real
+/// installed package's own vdb-stored `NEEDED.ELF.2`
+/// (`needed_elf::read_all_needed_entries` + `rebuild` -- real `exclude_
+/// pkgs=None` in this exact shape, since the package being unmerged
+/// hasn't left the vdb yet, so its own data is still really part of the
+/// map, matching real behavior exactly). Compute `needed_elf::find_
+/// libs_to_preserve` with `new_owner_is_owner` always `false` (matching
+/// what real `not unmerge and self.isowner(f)` collapses to when
+/// `unmerge` is `true`) and `old_owner_is_owner` real `self.isowner`
+/// (`owns_path_pf`, this exact package's own real `CONTENTS`).
+/// Unconditionally unregister this package's own prior registry entry
+/// first (real `plib_registry.unregister`); if anything is actually
+/// preserved, register this package -- the one being removed -- as the
+/// new keeper of those paths (real `plib_registry.register`).
+///
+/// Returns the set of preserved paths (already `ROOT`-relative absolute
+/// paths, this pilot's own `CONTENTS` convention) -- the caller is
+/// responsible for excluding them from its own real file-removal loop
+/// (real "remove the preserved files from our contents so that they
+/// won't be unmerged"; this pilot's own vdb entry directory gets deleted
+/// wholesale moments later regardless, so there's no separate real
+/// `CONTENTS`-file rewrite to also perform here).
+pub(crate) fn preserve_libs_on_unmerge(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    pf: &str,
+    slot: &str,
+    contents_text: &str,
+) -> Result<BTreeSet<String>, String> {
+    if contents_text.trim().is_empty() {
+        return Ok(BTreeSet::new());
+    }
+
+    let owner_entries = crate::needed_elf::read_all_needed_entries(root);
+    let map = crate::needed_elf::rebuild(root, &owner_entries);
+    let defpath =
+        crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
+
+    let old_contents: Vec<String> = contents_text
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+        .collect();
+
+    let old_owner_is_owner = |p: &str| owns_path_pf(root, category, pf, p);
+    let new_owner_is_owner = |_: &str| false;
+
+    let preserved = crate::needed_elf::find_libs_to_preserve(
+        root,
+        &map,
+        &defpath,
+        &old_contents,
+        &old_owner_is_owner,
+        &new_owner_is_owner,
+    );
+
+    let counter_path = root
+        .join("var/db/pkg")
+        .join(category)
+        .join(pf)
+        .join("COUNTER");
+    let counter = std::fs::read_to_string(&counter_path).unwrap_or_else(|_| "0".to_string());
+    let cpv = format!("{category}/{pf}");
+
+    let mut registry = read_plib_registry(root);
+    register_preserved_libs(&mut registry, &cpv, category, pn, slot, &counter, &[]);
+    if !preserved.is_empty() {
+        let paths_vec: Vec<String> = preserved.iter().cloned().collect();
+        register_preserved_libs(
+            &mut registry,
+            &cpv,
+            category,
+            pn,
+            slot,
+            &counter,
+            &paths_vec,
+        );
+    }
+    write_plib_registry(root, &registry)?;
+
+    Ok(preserved)
+}
+
 /// Real PMS: unlike `EAPI` (restricted to the ebuild's own first real
 /// line), `SLOT` may appear anywhere among an ebuild's own top-level
 /// variable assignments -- this scans every line for the first literal
@@ -3410,6 +3549,117 @@ mod tests {
         );
     }
 
+    /// Real `unregister` (`register(cpv, slot, counter, [])`): removes
+    /// the `cps` entry only when it still records the *same* `cpv` and
+    /// `counter` -- a different package (or a stale counter) sharing the
+    /// same `category/pn:slot` key must survive untouched.
+    #[test]
+    fn register_preserved_libs_unregister_only_matches_the_same_cpv_and_counter() {
+        let mut registry = PlibRegistry {
+            entries: BTreeMap::new(),
+        };
+        register_preserved_libs(
+            &mut registry,
+            "dev-libs/foo-1.0",
+            "dev-libs",
+            "foo",
+            "0",
+            "5",
+            &["/usr/lib/libfoo.so.1".to_string()],
+        );
+        assert!(registry.entries.contains_key("dev-libs/foo:0"));
+
+        // Wrong counter: real `unregister` must leave the entry alone.
+        register_preserved_libs(
+            &mut registry,
+            "dev-libs/foo-1.0",
+            "dev-libs",
+            "foo",
+            "0",
+            "9",
+            &[],
+        );
+        assert!(
+            registry.entries.contains_key("dev-libs/foo:0"),
+            "a stale counter must not unregister someone else's live entry"
+        );
+
+        // Wrong cpv (a different version currently holding this slot):
+        // same real "leave it alone" rule.
+        register_preserved_libs(
+            &mut registry,
+            "dev-libs/foo-2.0",
+            "dev-libs",
+            "foo",
+            "0",
+            "5",
+            &[],
+        );
+        assert!(
+            registry.entries.contains_key("dev-libs/foo:0"),
+            "a different cpv must not unregister someone else's live entry"
+        );
+
+        // Matching cpv and counter: real `unregister` removes it.
+        register_preserved_libs(
+            &mut registry,
+            "dev-libs/foo-1.0",
+            "dev-libs",
+            "foo",
+            "0",
+            "5",
+            &[],
+        );
+        assert!(!registry.entries.contains_key("dev-libs/foo:0"));
+    }
+
+    /// Real `register` with non-empty `paths`: unconditionally overwrites
+    /// whatever the `cps` key already held, even a different package's
+    /// own entry -- no same-cpv/counter guard the way empty-`paths`
+    /// (`unregister`) has.
+    #[test]
+    fn register_preserved_libs_with_paths_unconditionally_overwrites() {
+        let mut registry = PlibRegistry {
+            entries: BTreeMap::new(),
+        };
+        register_preserved_libs(
+            &mut registry,
+            "dev-libs/foo-1.0",
+            "dev-libs",
+            "foo",
+            "0",
+            "5",
+            &["/usr/lib/libfoo.so.1".to_string()],
+        );
+        register_preserved_libs(
+            &mut registry,
+            "dev-libs/foo-2.0",
+            "dev-libs",
+            "foo",
+            "0",
+            "6",
+            &["/usr/lib/libfoo.so.2".to_string()],
+        );
+
+        let (cpv, counter, paths) = registry.entries.get("dev-libs/foo:0").unwrap();
+        assert_eq!(cpv, "dev-libs/foo-2.0");
+        assert_eq!(counter, "6");
+        assert_eq!(paths, &["/usr/lib/libfoo.so.2".to_string()]);
+    }
+
+    /// Real `_prune_plib_registry`'s own early-exit shape for a package
+    /// that owns no files at all (empty `CONTENTS`): this pilot's own
+    /// `preserve_libs_on_unmerge` short-circuits to an empty preserved
+    /// set without touching the registry or rebuilding the linkage map.
+    #[test]
+    fn preserve_libs_on_unmerge_short_circuits_on_empty_contents() {
+        let tmp = tempdir();
+        let preserved =
+            preserve_libs_on_unmerge(&tmp, "dev-libs", "foo", "foo-1.0", "0", "").unwrap();
+        assert!(preserved.is_empty());
+        assert!(!plib_registry_path(&tmp).exists());
+    }
+
     /// Sanity baseline (this pilot's own "fixtures must actually
     /// distinguish the new behavior" rule): with no preserve-libs
     /// registry entry at all, `preservepkg-new` colliding with
@@ -3698,6 +3948,88 @@ mod tests {
                 .any(|soname_map| soname_map.consumers.contains(&key))
         });
         assert!(consumed_somewhere);
+    }
+
+    /// Real, end-to-end proof of the full preserve-libs pipeline this
+    /// pilot's own `preserve_libs_on_unmerge` (see its own doc comment
+    /// above) actually wires into real `ebuild_unmerge::run_unmerge`:
+    /// merge a real library, merge a real consumer that's genuinely
+    /// linked against it (real `DT_NEEDED: libpreservetest.so.1`, baked
+    /// in by real `gcc` at fixture build time -- see the two fixture
+    /// ebuilds' own comments for why each independently rebuilds a
+    /// throwaway same-sonamed copy to link against), then unmerge the
+    /// library while the consumer is still installed. Real `_find_libs_
+    /// to_preserve` should find the still-installed consumer's own
+    /// `NEEDED.ELF.2` entry still needing this soname, so the real
+    /// library file must survive on disk (filtered out of `CONTENTS`
+    /// before `remove_contents`'s own per-file loop ever sees it -- see
+    /// `ebuild_unmerge::remove_contents`'s own `preserved_paths` doc
+    /// comment) and the real on-disk registry must record it under this
+    /// exact package's own real `category/pn:slot` key.
+    #[test]
+    fn real_unmerge_preserves_a_still_needed_shared_library() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let lib_ebuild = collision_fixture("libpreservetest");
+        let consumer_ebuild = collision_fixture("consumepreservetest");
+
+        let lib_status = run_merge(
+            &lib_ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("run_merge (library) succeeds");
+        assert_eq!(lib_status, 0);
+
+        let consumer_status = run_merge(
+            &consumer_ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("run_merge (consumer) succeeds");
+        assert_eq!(consumer_status, 0);
+
+        let lib_path = root.join("usr/lib/libpreservetest.so.1");
+        assert!(
+            lib_path.is_file(),
+            "sanity: the library was really installed"
+        );
+
+        let unmerge_status = crate::ebuild_unmerge::run_unmerge(
+            &lib_ebuild,
+            &root,
+            &portage_tmpdir,
+            &crate::ebuild_unmerge::UnmergeOptions::default(),
+        )
+        .expect("run_unmerge succeeds");
+        assert_eq!(unmerge_status, 0);
+
+        assert!(
+            lib_path.is_file(),
+            "the still-needed shared library must survive unmerge, preserved on disk"
+        );
+        assert!(
+            !root
+                .join("var/db/pkg/dev-libs/libpreservetest-1.0")
+                .exists(),
+            "the vdb entry itself is still removed, same as any other unmerge"
+        );
+
+        let registry = read_plib_registry(&root);
+        let preserved = registry.preserved_libs();
+        let paths = preserved
+            .get("dev-libs/libpreservetest-1.0")
+            .expect("the real registry should record this package as the new keeper");
+        assert!(
+            paths.iter().any(|p| p == "/usr/lib/libpreservetest.so.1"),
+            "{paths:?}"
+        );
     }
 
     fn fixtures_root() -> PathBuf {

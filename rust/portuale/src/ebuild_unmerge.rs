@@ -224,7 +224,13 @@ type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
 /// `stale_confmem`, so `run_unmerge` can drop it from the persisted
 /// memory afterward -- otherwise a future merge could wrongly treat a
 /// long-gone package's own previously-offered update as "already
-/// offered" for a path nothing installs anymore.
+/// offered" for a path nothing installs anymore. `preserved_paths`: real
+/// "remove the preserved files from our contents so that they won't be
+/// unmerged" (`vartree.py:2293-2294`, see `ebuild_merge::preserve_libs_
+/// on_unmerge`'s own doc comment for the real preserve-libs registration
+/// this mirrors) -- filtered out of `entries` immediately, the same
+/// point real portage itself strips them from the CONTENTS dict, before
+/// the per-file removal loop below ever sees them at all.
 #[allow(clippy::too_many_arguments)]
 fn remove_contents(
     root: &Path,
@@ -236,9 +242,11 @@ fn remove_contents(
     infodirs_inodes: &BTreeSet<(u64, u64)>,
     cfgfiledict: &BTreeMap<String, String>,
     stale_confmem: &mut Vec<String>,
+    preserved_paths: &BTreeSet<String>,
     contents_text: &str,
 ) -> Result<(), String> {
     let mut entries = parse_contents(contents_text);
+    entries.retain(|e| !preserved_paths.contains(&e.abs_path));
     entries.sort_by(|a, b| b.abs_path.cmp(&a.abs_path));
 
     let mut protected_symlinks: ProtectedSymlinks = BTreeMap::new();
@@ -622,6 +630,23 @@ pub fn run_unmerge(
     // own doc comment.
     let cfgfiledict = ebuild_merge::read_cfgfiledict(root);
     let mut stale_confmem: Vec<String> = Vec::new();
+
+    // Real `_prune_plib_registry(unmerge=True, ...)` (`vartree.py:2493`),
+    // called right before real `_unmerge_pkgfiles()` runs -- see
+    // `ebuild_merge::preserve_libs_on_unmerge`'s own doc comment for the
+    // full real grounding. `own_slot` defaults to `"0"` the same way
+    // `parse_slot`'s own real fallback already does, matching real
+    // `_pkg_str`'s own `settings["SLOT"]` fallback for a package with no
+    // recorded slot at all.
+    let preserved_paths = ebuild_merge::preserve_libs_on_unmerge(
+        root,
+        &env.category,
+        &env.split.pn,
+        &env.split.pf,
+        own_slot.as_deref().unwrap_or("0"),
+        &contents_text,
+    )?;
+
     remove_contents(
         root,
         &env.category,
@@ -632,6 +657,7 @@ pub fn run_unmerge(
         &infodirs_inodes,
         &cfgfiledict,
         &mut stale_confmem,
+        &preserved_paths,
         &contents_text,
     )?;
     if !stale_confmem.is_empty() {
@@ -739,6 +765,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             &contents,
         )
         .expect("remove_contents succeeds");
@@ -779,6 +806,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -811,6 +839,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -843,6 +872,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -877,6 +907,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -907,6 +938,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -931,6 +963,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             contents,
         )
         .expect("missing entries are not an error");
@@ -982,6 +1015,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             &contents,
         )
         .expect("remove_contents succeeds");
@@ -1026,6 +1060,7 @@ mod tests {
             &BTreeSet::new(),
             &cfgfiledict,
             &mut stale_confmem,
+            &BTreeSet::new(),
             &contents,
         )
         .expect("remove_contents succeeds");
@@ -1072,6 +1107,7 @@ mod tests {
             &BTreeSet::new(),
             &cfgfiledict,
             &mut stale_confmem,
+            &BTreeSet::new(),
             &contents,
         )
         .expect("remove_contents succeeds");
@@ -1111,6 +1147,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -1158,6 +1195,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -1279,6 +1317,7 @@ mod tests {
             &BTreeSet::new(),
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");
@@ -1328,6 +1367,7 @@ mod tests {
             &infodirs_inodes,
             &BTreeMap::new(),
             &mut Vec::new(),
+            &BTreeSet::new(),
             contents,
         )
         .expect("remove_contents succeeds");

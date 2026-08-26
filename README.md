@@ -5153,6 +5153,8 @@ still has no real caller (`#[allow(dead_code)]`, documented in its own
 module doc comment) -- the same "narrow, additive, no wiring until the
 next slice needs it" shape this pilot used for explicit `masters =`
 parsing landing before eclass masters-chain search ever consumed it.
+That control-flow wiring has since shipped -- see "`preserve-libs`
+registration: wired into a real unmerge's control flow" below.
 
 Verified directly against hand-crafted lines/entries (`NeededEntry`
 parsing: a real soname/multiple rpaths/multiple needed entries, the
@@ -5182,6 +5184,98 @@ generated `NEEDED.ELF.2` for `rebuild` specifically (the same
 full real chain -- `NeededEntry::parse_file` -> `read_all_needed_
 entries` -> `rebuild` -- after a real `run_merge`, confirming the real
 installed binary's own real `DT_NEEDED` entries land as real consumers).
+
+### `preserve-libs` registration: wired into a real unmerge's control flow
+
+The control-flow integration explicitly deferred at the end of the
+previous section is real now: `preserve_libs_on_unmerge` (new,
+`ebuild_merge.rs`) ports real `dblink._prune_plib_registry()`
+(`lib/portage/dbapi/vartree.py:2228-2314`), called from real
+`unmerge()` right before `_unmerge_pkgfiles()` runs (`vartree.py:2493`/
+`2529`, confirmed by reading the real call site, not just the method
+itself), narrowed to the one real shape this pilot's own standalone
+`ebuild <file> unmerge` always reaches: `unmerge_with_replacement=
+False`, since this pilot's own `merge`/`unmerge` are always separate,
+independent CLI invocations, never a combined depgraph-driven upgrade
+transaction passing `preserve_paths` between them (real `instance_owns_
+files and not unmerge_with_replacement` collapses to just `instance_
+owns_files`). It rebuilds the system-wide `LinkageMap` from every real
+installed package's own vdb-stored `NEEDED.ELF.2` (the package being
+unmerged hasn't left the vdb yet, so its own data is still really part
+of the map, matching real `exclude_pkgs=None` in this exact shape),
+calls `find_libs_to_preserve` with the real `unmerge=True` semantics,
+then unconditionally unregisters this package's own prior registry
+entry before registering it as the new keeper of anything actually
+preserved -- real `plib_registry.unregister`/`.register`, ported as
+one `register_preserved_libs` function since real `unregister(cpv,
+slot, counter)` **is** `register(cpv, slot, counter, [])` verbatim.
+Real `cps = cpv_getkey(cpv) + ":" + slot` (`category/pn:slot`, no
+version); empty `paths` removes the `cps` entry only if it still
+records the *same* `cpv`/`counter` (never blindly erasing a different
+package's own entry sharing that key); non-empty `paths` unconditionally
+overwrites, matching real `_normalize_counter`'s own plain whitespace-
+trim (not integer parsing).
+
+`ebuild_unmerge::run_unmerge` calls it right before `remove_contents`,
+threading the returned preserved-path set into a new `remove_contents`
+parameter that filters them out of the parsed `CONTENTS` entries
+immediately -- real "remove the preserved files from our contents so
+that they won't be unmerged" (`vartree.py:2293-2294`). Persisting a
+separately-rewritten `CONTENTS` file was judged unnecessary for this
+pilot's own observable-behavior fidelity: the whole vdb entry directory
+gets deleted wholesale moments later regardless, so filtering the
+in-memory entries before the deletion loop already matches real
+portage's own observable behavior (the file survives on `ROOT`) without
+a wasted disk write real portage's own architecture needs but this
+pilot's doesn't.
+
+Verified end to end against two real, `gcc`-compiled packages (`dev-
+libs/libpreservetest`/`dev-libs/consumepreservetest` fixtures): the
+consumer package independently rebuilds a throwaway same-sonamed copy
+of the library purely to link against at its own build time (baking in
+a real `DT_NEEDED: libpreservetest.so.1`), while the library package
+separately builds and installs the "real" instance -- mirroring how a
+real cross-package Gentoo build already has a dependency's shared
+library installed on the real system when a consumer links against it.
+Merging the library, then the consumer, then unmerging the library
+proves the full real chain: `/usr/lib/libpreservetest.so.1` survives on
+disk, the library's own vdb entry is still removed like any other
+unmerge, and the real `preserved_libs_registry` records the preserved
+path under `dev-libs/libpreservetest-1.0`'s own real `category/pn:slot`
+key -- confirmed both via a `#[test]` and by directly running the
+compiled `portuale` CLI binary through the same merge/merge/unmerge
+sequence. Smaller, hand-crafted unit tests separately cover `register_
+preserved_libs`'s own unregister-only-on-matching-cpv-and-counter and
+unconditional-overwrite-with-paths semantics, and `preserve_libs_on_
+unmerge`'s own empty-`CONTENTS` short-circuit.
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+BIN=PORTING/rust/target/release/portuale
+"$BIN" ebuild PORTING/fixtures/repo/dev-libs/libpreservetest/libpreservetest-1.0.ebuild merge
+"$BIN" ebuild PORTING/fixtures/repo/dev-libs/consumepreservetest/consumepreservetest-1.0.ebuild merge
+"$BIN" ebuild PORTING/fixtures/repo/dev-libs/libpreservetest/libpreservetest-1.0.ebuild unmerge
+ls "${ROOT}"/usr/lib/
+# libpreservetest.so.1 -- still there, preserved, even though its own
+# package was just unmerged
+ls "${ROOT}"/var/db/pkg/dev-libs/
+# consumepreservetest-1.0 -- libpreservetest-1.0's own vdb entry is gone,
+# same as any other unmerge
+cat "${ROOT}"/var/lib/portage/preserved_libs_registry
+# {
+# 	"dev-libs/libpreservetest:0": [
+# 		"dev-libs/libpreservetest-1.0",
+# 		"0",
+# 		[
+# 			"/usr/lib/libpreservetest.so.1"
+# 		]
+# 	]
+# }
+```
 
 ### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`
 
