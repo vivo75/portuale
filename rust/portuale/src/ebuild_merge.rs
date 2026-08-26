@@ -180,7 +180,7 @@ use crate::ebuild_phases;
 use crate::env_update;
 use md5::{Digest, Md5};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 /// Whether `command` is the one real merge command this module implements
@@ -1328,12 +1328,116 @@ fn merge_tree(
                     None,
                     Some(mtime),
                 ));
+            } else if file_type.is_fifo()
+                || file_type.is_char_device()
+                || file_type.is_block_device()
+            {
+                // Real `mergeme()`'s own `else:` branch ("we are merging a
+                // fifo or device node", `vartree.py:5787-5811`): never
+                // `_protect()`'d (this branch doesn't call it at all,
+                // unlike `obj`/`sym` above), and only actually created
+                // when the live destination doesn't already exist yet
+                // (real `if mydmode is None:`) -- an existing node at that
+                // path is left completely alone, matching real portage's
+                // own conservative "don't touch a device/fifo that's
+                // already there" behavior. The `CONTENTS` line is written
+                // unconditionally either way (real `_format_contents_line`
+                // call sits *outside* that `if`), with no digest/mtime/
+                // target field at all (real `abs_path=myrealdest` only).
+                //
+                // Real `movefile()` has no dedicated fifo/device-node
+                // logic of its own -- an ordinary `os.rename()` just works
+                // for a special file too, since `rename(2)` doesn't care
+                // what type of file it's moving (real `movefile()`'s own
+                // comment: "we don't yet handle special, so we need to
+                // fall back to /bin/mv" only fires on a genuine cross-
+                // device `EXDEV` failure). This pilot's own merge step
+                // never moves `${D}` content though (every other branch
+                // above copies/recreates instead, so `${D}` itself stays
+                // intact) -- recreating a fresh node at `write_dest` via
+                // real `mkfifo(3)`/`mknod(3)` (matching the source's own
+                // real type, permission bits, and -- for a device node --
+                // major/minor) is the equivalent "copy" here, the same
+                // "recreate, don't move" shape the `sym` branch above
+                // already established for symlinks.
+                if std::fs::symlink_metadata(&dest).is_err() {
+                    if let Some(parent) = dest.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("{}: {e}", parent.display()))?;
+                    }
+                    create_special_node(&src, &dest, &file_type)?;
+                }
+                let node_type = if file_type.is_fifo() { "fif" } else { "dev" };
+                contents.push_str(&format_contents_line(
+                    node_type, &abs_path, None, None, None,
+                ));
             }
-            // fifo/device nodes: real mergeme() handles these too, but no
-            // fixture this pilot has needs them -- out of scope for now.
         }
     }
     Ok(contents)
+}
+
+/// Creates a fresh FIFO or device node at `dest`, matching `src`'s own
+/// real type, permission bits, and (for a device) real major/minor
+/// (`st_rdev`) -- the "recreate, don't move" equivalent of real
+/// `movefile()`'s ordinary same-device `rename(2)` for a special file
+/// (see `merge_tree`'s own `fif`/`dev` branch doc comment for why this
+/// pilot recreates rather than moves). `mkfifo(3)`/`mknod(3)` both apply
+/// the process umask to the mode given, unlike `std::fs::copy`'s own
+/// automatic exact permission-bit preservation for a regular file -- an
+/// explicit `chmod` afterward closes that gap, so a real, non-default
+/// source mode (e.g. `0600`) survives regardless of this process's own
+/// umask.
+///
+/// Real `mknod(2)` genuinely requires root/`CAP_MKNOD` for a real
+/// (nonzero major:minor) character or block device -- an unprivileged
+/// caller merging a real device node from `${D}` (itself only possible
+/// because a privileged build process, e.g. real `udev`, put it there)
+/// hits this same real permission wall, surfaced here as an ordinary
+/// `Result::Err` rather than a panic.
+fn create_special_node(
+    src: &Path,
+    dest: &Path,
+    file_type: &std::fs::FileType,
+) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let src_meta = std::fs::symlink_metadata(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let mode = src_meta.mode() & 0o7777;
+    let dest_c = std::ffi::CString::new(dest.as_os_str().as_bytes())
+        .map_err(|e| format!("{}: {e}", dest.display()))?;
+
+    let ret = if file_type.is_fifo() {
+        unsafe { libc::mkfifo(dest_c.as_ptr(), mode) }
+    } else {
+        let type_bit = if file_type.is_char_device() {
+            libc::S_IFCHR
+        } else {
+            libc::S_IFBLK
+        };
+        unsafe {
+            libc::mknod(
+                dest_c.as_ptr(),
+                type_bit | mode,
+                src_meta.rdev() as libc::dev_t,
+            )
+        }
+    };
+    if ret != 0 {
+        return Err(format!(
+            "{}: {}",
+            dest.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    if unsafe { libc::chmod(dest_c.as_ptr(), mode) } != 0 {
+        return Err(format!(
+            "{}: {}",
+            dest.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
 }
 
 /// Real `lib/portage/const.py`'s own `CACHE_PATH` (`var/cache/edb`): the
@@ -3956,6 +4060,123 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(vdb_dir.join("NEEDED.ELF.2")).unwrap(),
             original_needed
+        );
+    }
+
+    /// Real, end-to-end proof of `merge_tree`'s own new `fif` branch:
+    /// merging a real FIFO node (created via real `mkfifo(1)`, no
+    /// special privilege needed unlike a device node) actually creates a
+    /// real FIFO at the destination and records a real `fif` `CONTENTS`
+    /// line with no digest/mtime/target field at all (real
+    /// `_format_contents_line(node_type="fif", abs_path=myrealdest)`).
+    /// Re-merging over an already-existing node is a real no-op (real
+    /// `if mydmode is None:` only creates when nothing's there yet) --
+    /// proven by planting an unrelated real file at the destination
+    /// first and confirming it survives untouched. Unmerging leaves the
+    /// node in place too, matching real `_unmerge_pkgfiles()`'s own
+    /// `"fif"`/`"dev"` branches never calling `unlink()` at all (see
+    /// `ebuild_unmerge::remove_contents`'s own doc comment) -- this
+    /// pilot's own vdb entry is still removed as normal either way.
+    #[test]
+    fn real_merge_creates_a_real_fifo_and_records_a_fif_contents_line() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let ebuild = collision_fixture("fifopkg");
+        let status = run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
+            .expect("run_merge succeeds");
+        assert_eq!(status, 0);
+
+        let fifo_path = root.join("usr/lib/fifopkg/myfifo");
+        let meta = std::fs::symlink_metadata(&fifo_path).expect("the real FIFO was created");
+        assert!(meta.file_type().is_fifo(), "{:?}", meta.file_type());
+
+        let contents =
+            std::fs::read_to_string(root.join("var/db/pkg/dev-libs/fifopkg-1.0/CONTENTS")).unwrap();
+        assert!(
+            contents.contains("fif /usr/lib/fifopkg/myfifo\n"),
+            "{contents}"
+        );
+
+        // Re-merging (a real reinstall) must not recreate the node --
+        // plant something else there and confirm it survives.
+        std::fs::remove_file(&fifo_path).unwrap();
+        std::fs::write(&fifo_path, b"not actually a fifo anymore").unwrap();
+        let status = run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
+            .expect("second run_merge succeeds");
+        assert_eq!(status, 0);
+        assert_eq!(
+            std::fs::read_to_string(&fifo_path).unwrap(),
+            "not actually a fifo anymore",
+            "an existing node at that path must be left completely alone"
+        );
+
+        // Restore a real FIFO before unmerging, so the "leave it in
+        // place" assertion below is actually meaningful.
+        std::fs::remove_file(&fifo_path).unwrap();
+        unsafe {
+            use std::os::unix::ffi::OsStrExt;
+            let c_path = std::ffi::CString::new(fifo_path.as_os_str().as_bytes()).unwrap();
+            assert_eq!(libc::mkfifo(c_path.as_ptr(), 0o644), 0);
+        }
+
+        let unmerge_status = crate::ebuild_unmerge::run_unmerge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &crate::ebuild_unmerge::UnmergeOptions::default(),
+        )
+        .expect("run_unmerge succeeds");
+        assert_eq!(unmerge_status, 0);
+        assert!(
+            std::fs::symlink_metadata(&fifo_path)
+                .map(|m| m.file_type().is_fifo())
+                .unwrap_or(false),
+            "real portage never unlinks a fif/dev CONTENTS entry on unmerge"
+        );
+        assert!(
+            !root.join("var/db/pkg/dev-libs/fifopkg-1.0").exists(),
+            "the vdb entry itself is still removed, same as any other unmerge"
+        );
+    }
+
+    /// Device-node creation (`mknod(2)` with `S_IFCHR`/`S_IFBLK`) genuinely
+    /// requires root/`CAP_MKNOD` for a *real* (nonzero major:minor)
+    /// device on a real Linux system -- confirmed empirically both via a
+    /// plain standalone `mknod(2)` call and via this very function, as
+    /// this pilot's own unprivileged dev/test user. (A privilege-free
+    /// carve-out does exist for `mknod(path, S_IFCHR, 0)` specifically --
+    /// the real kernel's own overlayfs "whiteout" convention, `dev_t ==
+    /// 0` never being a usable real device -- which is precisely why
+    /// this test passes `/dev/null` itself as `src`, not an arbitrary
+    /// regular file: only a real char device's own real, nonzero `rdev`
+    /// actually exercises the real privileged path.) Not reproducible as
+    /// a real, live end-to-end test in this environment, unlike the
+    /// `fif` case above. This narrower test instead confirms
+    /// `create_special_node` itself propagates that real failure cleanly
+    /// via `Result` (no panic) -- a permission error surfacing as an
+    /// ordinary merge failure, not a crash.
+    #[test]
+    fn create_special_node_reports_a_permission_failure_cleanly_rather_than_panicking() {
+        let tmp = tempdir();
+        let dest = tmp.join("devnode");
+
+        let dev_null = Path::new("/dev/null");
+        let dev_null_type = std::fs::symlink_metadata(dev_null).unwrap().file_type();
+        assert!(dev_null_type.is_char_device());
+
+        let err = create_special_node(dev_null, &dest, &dev_null_type)
+            .expect_err("mknod(2) for a real, nonzero-rdev char device requires root");
+        assert!(
+            err.contains("Operation not permitted") || err.contains("permitted"),
+            "{err}"
+        );
+        assert!(
+            !dest.exists(),
+            "a failed mknod must not leave a partial node behind"
         );
     }
 

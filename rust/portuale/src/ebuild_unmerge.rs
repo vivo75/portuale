@@ -358,8 +358,15 @@ fn remove_contents(
                 }
             }
             _ => {
-                // fifo/device nodes: `ebuild_merge::merge_tree` doesn't
-                // create these either -- nothing to remove.
+                // Real `_unmerge_pkgfiles()`'s own `"fif"`/`"dev"` branches
+                // (`vartree.py:3062-3068`) never call `unlink()` at all --
+                // both just report `show_unmerge("---", "", ...)` (real
+                // portage's own conservative "leave a device/fifo node in
+                // place" behavior, unlike `obj`/`sym`/`dir` above). This
+                // matches that exactly: a real no-op, not merely "nothing
+                // to remove yet" (see `ebuild_merge::merge_tree`'s own
+                // `fif`/`dev` branch for the merge-time counterpart that
+                // creates these nodes in the first place).
             }
         }
     }

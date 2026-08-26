@@ -5700,6 +5700,93 @@ cat "${ROOT}"/usr/share/mergeblockertest/shared.txt
 # hello from mergeblockerpkg -- no abort, the blocked package's file was simply taken over
 ```
 
+### `ebuild_merge.rs`/`ebuild_unmerge.rs`: real FIFO/device node `CONTENTS` support (`fif`/`dev`)
+
+`merge_tree`'s own last documented gap ("real `mergeme()` handles these
+too, but no fixture this pilot has needs them") is closed: real
+`mergeme()`'s own `else:` branch ("we are merging a fifo or device
+node", `vartree.py:5787-5811`) is real now. Neither node type is ever
+`_protect()`'d (that branch doesn't call it at all, unlike `obj`/`sym`),
+and a node is only actually created when the live destination doesn't
+already exist yet (real `if mydmode is None:` -- an existing node at
+that path is left completely alone). The real `fif`/`dev` `CONTENTS`
+line is written unconditionally either way, with no digest/mtime/target
+field at all (real `_format_contents_line(node_type=..., abs_path=
+myrealdest)` only).
+
+Real `movefile()` has no dedicated fifo/device-node logic of its own --
+an ordinary same-filesystem `os.rename()` just works for a special file
+too, since `rename(2)` doesn't care what type of file it's moving (real
+`movefile()`'s own "we don't yet handle special, so we need to fall
+back to /bin/mv" comment only fires on a genuine cross-device `EXDEV`
+failure). This pilot's own merge step never moves `${D}` content at all
+though -- every other branch copies/recreates instead, so `${D}` itself
+stays intact -- so new `create_special_node` recreates a fresh node at
+the destination via real `mkfifo(3)`/`mknod(3)` instead, matching the
+source's own real type, permission bits, and (for a device node) real
+major/minor (`st_rdev`); an explicit `chmod` afterward closes the one
+real gap `mkfifo(3)`/`mknod(3)` themselves have that `std::fs::copy`
+doesn't (both apply the process's own umask to the given mode, unlike
+`std::fs::copy`'s automatic exact permission-bit preservation for a
+regular file).
+
+Real `mknod(2)` genuinely requires root/`CAP_MKNOD` for a real (nonzero
+major:minor) character or block device on a real Linux system -- an
+unrelated real kernel carve-out exists for `mknod(path, S_IFCHR, 0)`
+specifically (`dev_t == 0`, the overlayfs "whiteout" convention, never a
+usable real device), confirmed empirically while building this slice's
+own tests (a naive first attempt at a permission-failure test happened
+to trip this exact carve-out by using an arbitrary regular file, whose
+own `rdev` defaults to `0`, as the stand-in device source -- silently
+succeeding instead of demonstrating the real permission wall it was
+meant to prove). `create_special_node` surfaces a real permission
+failure as an ordinary `Result::Err`, not a panic.
+
+The unmerge side needed no functional change at all: real
+`_unmerge_pkgfiles()`'s own `"fif"`/`"dev"` branches
+(`vartree.py:3062-3068`) never call `unlink()` in the first place --
+both just report a real `"---"` status, portage's own conservative
+"leave a device/fifo node in place" behavior, unlike `obj`/`sym`/`dir`.
+`ebuild_unmerge.rs`'s own catch-all for these two node types already
+happened to do nothing, matching real behavior by coincidence rather
+than by design -- its own doc comment (previously citing the wrong
+reason, "merge_tree doesn't create these either") is corrected in place
+to cite the real one.
+
+Verified end to end with a new `dev-libs/fifopkg` fixture (a real FIFO,
+created via real `mkfifo(1)` in `src_install` -- unlike a device node,
+this needs no special privilege at all, so it's the one of the two real
+node types this pilot can actually exercise live): merging creates a
+real FIFO and records a real `fif` line; re-merging over something else
+already planted at that same path leaves it completely untouched;
+unmerging leaves the FIFO in place while still removing the vdb entry
+as normal. Device-node creation itself is verified only via a narrower,
+hand-crafted unit test proving `create_special_node` fails cleanly
+without root (using real `/dev/null` as `src`, so its own real, nonzero
+`rdev` genuinely exercises the real privileged path rather than the
+`dev_t == 0` carve-out above) -- not reproducible as a real, live
+end-to-end merge in this unprivileged dev/test environment.
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+BIN=PORTING/rust/target/release/portuale
+PKG=PORTING/fixtures/repo/dev-libs/fifopkg/fifopkg-1.0.ebuild
+
+"$BIN" ebuild "$PKG" merge
+ls -la "${ROOT}"/usr/lib/fifopkg/
+# prw-r--r-- ... myfifo  -- a real FIFO, not a regular file
+cat "${ROOT}"/var/db/pkg/dev-libs/fifopkg-1.0/CONTENTS
+# fif /usr/lib/fifopkg/myfifo  -- no digest/mtime field at all
+
+"$BIN" ebuild "$PKG" unmerge
+ls -la "${ROOT}"/usr/lib/fifopkg/
+# the FIFO is still there -- real portage never unlinks a fif/dev entry
+```
+
 ### `emerge --pretend --root-deps`: real `ESYSROOT`-vs-`ROOT` dependency resolution
 
 The last genuinely open item in the dry-run backlog's own "Open backlog"
