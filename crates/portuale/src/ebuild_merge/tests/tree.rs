@@ -673,3 +673,27 @@ fn merge_tree_protects_a_regular_file_source_replacing_a_symlink_dest() {
             .any(|l| l.starts_with("obj /etc/thing.conf"))
     );
 }
+
+/// `mknod(2)` for a nonzero-rdev device needs root/`CAP_MKNOD`; passing `/dev/null`
+/// as `src` exercises that privileged path, and the failure must surface via
+/// `Result`, not a panic.
+#[test]
+fn create_special_node_reports_a_permission_failure_cleanly_rather_than_panicking() {
+    let tmp = tempdir();
+    let dest = tmp.join("devnode");
+
+    let dev_null = Path::new("/dev/null");
+    let dev_null_type = std::fs::symlink_metadata(dev_null).unwrap().file_type();
+    assert!(dev_null_type.is_char_device());
+
+    let err = create_special_node(dev_null, &dest, &dev_null_type)
+        .expect_err("mknod(2) for a real, nonzero-rdev char device requires root");
+    assert!(
+        err.contains("Operation not permitted") || err.contains("permitted"),
+        "{err}"
+    );
+    assert!(
+        !dest.exists(),
+        "a failed mknod must not leave a partial node behind"
+    );
+}

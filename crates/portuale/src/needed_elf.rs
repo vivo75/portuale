@@ -1302,6 +1302,14 @@ mod tests {
         assert_eq!(entries[1].filename, "/usr/lib/libfoo.so.1");
     }
 
+    #[test]
+    fn to_needed_line_round_trips_through_parse() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6;x86_64").unwrap();
+        let line = entry.to_needed_line();
+        let reparsed = NeededEntry::parse(line.trim_end_matches('\n')).unwrap();
+        assert_eq!(entry, reparsed);
+    }
+
     /// The write/read asymmetries: an empty `runpaths` serializes as a plain
     /// empty string, never the `"  -  "` sentinel; the 6th field is always
     /// present (as `""` when `None`).

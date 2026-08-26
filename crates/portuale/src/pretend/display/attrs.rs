@@ -143,6 +143,27 @@ pub(crate) fn nomerge_row(args: NomergeRowArgs<'_>) -> String {
     format!("[nomerge{pad}] {indent}{category}/{package}-{disp_ver}{tail}")
 }
 
+/// Portage's `darkgreen("to " + pkg.root)` suffix, per merge row: an entry
+/// whose own root is not `/` is annotated with where it installs; a
+/// `/`-rooted row stays bare. Returned bare (no leading space); the call
+/// site reproduces Portage's spacing.
+/// Portage: resolver/output.py
+pub(crate) fn root_suffix(
+    entry: &GraphEntry,
+    target_root: &Path,
+    running_root: Option<&Path>,
+) -> String {
+    let own_root: Option<&Path> = if entry.targets_running_root {
+        running_root
+    } else {
+        Some(target_root)
+    };
+    match own_root {
+        Some(root) if root != Path::new("/") => format!("to {}", root.display()),
+        _ => String::new(),
+    }
+}
+
 /// The version `entry`'s own package line displays; `None` for the
 /// non-merging outcomes. `merge_order`'s own `entry_version` is the same
 /// mapping, but it is private to `portage-repo`.

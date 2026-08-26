@@ -152,3 +152,25 @@ fn remove_from_contents_does_not_create_a_needed_elf2_file_that_never_existed() 
 
     assert!(!vdb_dir.join("NEEDED.ELF.2").exists());
 }
+
+/// When nothing was actually removed, `NEEDED.ELF.2` stays byte-identical.
+/// Portage: `vartree.py`, `removeFromContents`.
+#[test]
+fn remove_from_contents_leaves_needed_elf2_untouched_when_nothing_was_removed() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let vdb_dir = root.join("var/db/pkg/dev-libs/foo-1.0");
+    std::fs::create_dir_all(&vdb_dir).unwrap();
+    std::fs::write(vdb_dir.join("CONTENTS"), "obj /usr/lib/a.so abc123 100\n").unwrap();
+    let original_needed = "X86_64;/usr/lib/a.so;liba.so.1;;\n";
+    std::fs::write(vdb_dir.join("NEEDED.ELF.2"), original_needed).unwrap();
+
+    let mut paths = BTreeSet::new();
+    paths.insert("/usr/lib/nonexistent.so".to_string());
+    remove_from_contents(&root, "dev-libs/foo-1.0", &paths).expect("remove_from_contents succeeds");
+
+    assert_eq!(
+        std::fs::read_to_string(vdb_dir.join("NEEDED.ELF.2")).unwrap(),
+        original_needed
+    );
+}

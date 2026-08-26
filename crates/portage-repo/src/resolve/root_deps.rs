@@ -2,6 +2,17 @@
 
 use crate::*;
 
+/// Arguments of [`root_deps_satisfied_atoms`].
+pub(crate) struct RootDepsSatisfiedAtomsArgs<'a> {
+    pub(crate) metadata: &'a HashMap<String, String>,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) running_root: &'a Path,
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) empty_groups_always_true: bool,
+}
+
 /// Arguments of [`flatten_evaluated_root_deps_atoms`]: the inputs both
 /// `--root-deps` halves share.
 pub(crate) struct FlattenRootDepsAtomsArgs<'a> {
@@ -66,6 +77,76 @@ fn flatten_evaluated_root_deps_atoms(args: FlattenRootDepsAtomsArgs<'_>) -> Vec<
             .collect()
     })
     .unwrap_or_default()
+}
+
+/// The `--root-deps` build-vs-running-root split, shared by both dep-walk sites
+/// so they cannot drift apart. Returns only the tokens already satisfied by
+/// the running root's vdb (evaluated); empty on any flatten failure.
+pub(crate) fn root_deps_satisfied_atoms(args: RootDepsSatisfiedAtomsArgs<'_>) -> HashSet<String> {
+    let RootDepsSatisfiedAtomsArgs {
+        metadata,
+        use_flags,
+        repos,
+        config,
+        running_root,
+        dep_keys,
+        empty_groups_always_true,
+    } = args;
+    flatten_evaluated_root_deps_atoms(FlattenRootDepsAtomsArgs {
+        metadata,
+        use_flags,
+        repos,
+        config,
+        running_root,
+        dep_keys,
+        empty_groups_always_true,
+    })
+    .into_iter()
+    .filter(|t| running_root_satisfies_atom(t, running_root, config))
+    .collect()
+}
+
+/// Arguments of [`unsatisfied_root_deps_atoms`].
+pub(crate) struct UnsatisfiedRootDepsAtomsArgs<'a> {
+    pub(crate) metadata: &'a HashMap<String, String>,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) running_root: &'a Path,
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) empty_groups_always_true: bool,
+}
+
+/// The complement of `root_deps_satisfied_atoms`: flattened atoms *not* already
+/// satisfied by the running root's vdb, needing recursive resolution there. A
+/// blocker atom is never a build target, so it is excluded like in the
+/// ordinary queueing. Shares the flatten with the shipped function above,
+/// filtering the complement instead of flattening twice.
+// Portage: depgraph.py, _add_pkg_deps (dep_root tuple)
+pub(crate) fn unsatisfied_root_deps_atoms(args: UnsatisfiedRootDepsAtomsArgs<'_>) -> Vec<String> {
+    let UnsatisfiedRootDepsAtomsArgs {
+        metadata,
+        use_flags,
+        repos,
+        config,
+        running_root,
+        dep_keys,
+        empty_groups_always_true,
+    } = args;
+    flatten_evaluated_root_deps_atoms(FlattenRootDepsAtomsArgs {
+        metadata,
+        use_flags,
+        repos,
+        config,
+        running_root,
+        dep_keys,
+        empty_groups_always_true,
+    })
+    .into_iter()
+    // Same producer-side evaluation, so this set is evaluated-keyed too.
+    .filter(|t| portage_dep::parse_atom(t).is_some_and(|a| a.blocker == portage_dep::Blocker::None))
+    .filter(|t| !running_root_satisfies_atom(t, running_root, config))
+    .collect()
 }
 
 /// Metadata and effective USE for `category/package`'s own `version`: the

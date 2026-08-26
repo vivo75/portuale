@@ -4942,6 +4942,74 @@ cat "${ROOT}"/usr/share/othersinslotpkg/shared.txt
 unset CONFIG_PROTECT
 ```
 
+### CONFIG_PROTECT: "confmem rejected this update" -- an already-offered, unmodified-since update now really leaves the live file untouched
+
+The one remaining v1 simplification this whole area's own module doc
+comment used to document is closed: real `_protect()`'s own `move_me`/
+`protected` return values (`vartree.py:5831-5901`), traced line by line
+against the exact real caller (`mergeme()`'s own `obj`/`sym` branches,
+`vartree.py:5468-5481`/`5547`/`5749`) to confirm the real gate precisely.
+`protect_decision` used to conflate "which path to write to" with
+"whether to write at all"; it now returns `(write_dest, moveme)`, and
+`merge_tree`'s own `obj`/`sym` branches only perform the actual copy/
+symlink-write (and its mtime stamp) `if moveme`, matching real
+`mergeme()`'s own `if moveme:` gate around `movefile()`.
+
+Real `moveme` is `false` in exactly the case portuale's own doc
+comment already named: an update whose exact `src_md5` was already
+offered for this path (`cfgfiledict` remembers it from an earlier merge)
+and `NOCONFMEM` is unset -- real `move_me = protected = bool(cfgfiledict
+["IGNORE"])` with `IGNORE == 0` (`vartree.py:5877`), real `mergeme()`'s
+own `zing = "---"`, "confmem rejected this update". Before this slice,
+portuale applied the update directly instead, silently overwriting
+whatever the admin had locally edited into that already-offered file --
+a real, observable divergence from real portage now closed. Real
+`cfgfiledict` is deliberately left untouched in this one branch too:
+reaching it requires `src_md5 == cfgfiledict.get(dest_real)[0]` already
+(the very definition of "already offered"), so real `vartree.py:5888-
+5895`'s own trailing `if move_me: cfgfiledict[...] = [src_md5] elif
+dest_md5 == cfgfiledict.get(...)[0]: del cfgfiledict[...]` hits neither
+branch (`move_me` is `False`, and `dest_md5 != src_md5` was already
+established by the earlier `src_md5 == dest_md5` check having failed).
+
+CONTENTS itself is unaffected either way: it already recorded the
+*source's* own MD5/mtime unconditionally (real `mymtime = mystat.
+st_mtime_ns`, set before the real `if moveme:` gate and never touched
+when it's skipped) -- this package still logically claims ownership of
+the *new* content in `CONTENTS`, even though the live file on disk stays
+whatever the admin left it as.
+
+Verified by correcting an existing test that had pinned the old,
+incorrect behavior (`merge_tree_remembers_an_already_offered_update_
+and_leaves_the_live_file_untouched`, renamed from its own former "...
+_and_stops_re_protecting_it") to assert the real one instead: after a
+third merge of an already-offered update, the live file still holds the
+admin's own local edits, no second `._cfgNNNN_` sibling is spawned, and
+the returned `CONTENTS` text still records the new source's own MD5 for
+that path. Live-verified against the compiled binary too, reusing the
+existing `dev-libs/configpkg` fixture:
+
+```sh
+cd rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export CONFIG_PROTECT=/etc
+BIN=rust/target/release/portuale
+PKG=fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild
+
+"$BIN" ebuild "$PKG" merge
+echo "user's own edits" > "${ROOT}"/etc/configpkg.conf
+"$BIN" ebuild "$PKG" merge   # not yet offered -> diverts to ._cfg0000_
+ls -a "${ROOT}"/etc/ | grep cfg
+# ._cfg0000_configpkg.conf
+"$BIN" ebuild "$PKG" merge   # already offered -> "confmem rejected"
+ls -a "${ROOT}"/etc/ | grep cfg
+# ._cfg0000_configpkg.conf -- still just the one, no ._cfg0001_
+cat "${ROOT}"/etc/configpkg.conf
+# user's own edits -- the admin's own live edits, untouched
+unset CONFIG_PROTECT
+```
+
 ### `FEATURES=collision-protect`: a merge that would overwrite another package's file aborts
 
 CONFIG_PROTECT's own sibling real merge-track feature: real
@@ -6092,6 +6160,91 @@ cat "${ROOT}"/var/lib/portage/preserved_libs_registry
 # }
 ```
 
+### preserve-libs: real `NEEDED.ELF.2` pruning on `remove_from_contents`
+
+The last documented preserve-libs gap in this area is closed: real
+`vardbapi.removeFromContents()`'s own "Also remove corresponding NEEDED
+lines, so that they do no corrupt LinkageMap data for preserve-libs"
+step (`vartree.py:1279-1310`) is real now. `remove_from_contents` (real
+`merge()`'s own post-copy collision-exclusion step, `unregister_
+preserved_libs`'s only caller -- the *unmerge*-time preserve-libs path,
+`preserve_libs_on_unmerge`, filters its own package's in-memory
+`CONTENTS` directly instead, since the whole vdb entry gets deleted
+moments later regardless, see that function's own doc comment) now
+tracks real `removed` (whether any `CONTENTS` line was actually
+dropped, matching real `if removed:`) and the *surviving* `CONTENTS`
+paths. When something was removed and this package's own `NEEDED.ELF.2`
+exists at all (real `if new_needed is not None:` -- a package that
+never had one is left alone, no file conjured into existence), every
+entry whose own `filename` no longer appears among the surviving paths
+is dropped; every other entry survives untouched. Portuale's own
+`CONTENTS`/`NEEDED.ELF.2` convention already stores both `ROOT`-relative
+(no literal `ROOT` prefix baked in), so the comparison needs no
+`os.path.join(root, ...)` step the real Python side requires.
+
+New `NeededEntry::to_needed_line` (`needed_elf.rs`) ports real
+`NeededEntry.__str__` (`NeededEntry.py:67-87`) -- "format this entry for
+writing to a NEEDED.ELF.2 file", the rewrite-side sibling of the
+existing `parse`/`parse_file` read side, with two real, intentional
+asymmetries from what `scanelf` itself would have written: an empty
+`runpaths` serializes as a plain empty string, never the `"  -  "`
+sentinel `scanelf` emits; and the 6th (`multilib_category`) field is
+*always* written, even when `None` (as `""`), unlike the original file
+which may omit it entirely for pre-multilib-category data.
+
+Also fixed in the same slice: this module's own top-of-file "KNOWN,
+DOCUMENTED GAPS" comment had drifted stale across the last several
+preserve-libs slices, still claiming the registration/detection side
+was entirely unattempted and the CONFIG_PROTECT "confmem rejected"
+simplification was still open -- both corrected in place to point at
+the sections that actually shipped them.
+
+Proven via three new, hand-crafted Rust unit tests in `ebuild_merge.rs`
+(a matching entry is pruned while an unrelated one survives; no
+`NEEDED.ELF.2` is created for a package that never had one; the file is
+left completely untouched, byte for byte, when nothing was actually
+removed from `CONTENTS`) plus two round-trip tests for `to_needed_line`
+in `needed_elf.rs` itself (parse -> serialize -> parse yields the same
+entry; the real rewrite format's own two asymmetries from the `scanelf`
+read format). Live-verified against the compiled binary too, reusing
+the existing `dev-libs/preservepkg-old`/`dev-libs/preservepkg-new`
+collision-exclusion fixture pair with a hand-seeded `NEEDED.ELF.2`
+(since neither fixture installs a real ELF binary of its own):
+
+```sh
+cd rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+BIN=rust/target/release/portuale
+FIX=fixtures/repo/dev-libs
+
+"$BIN" ebuild "$FIX/preservepkg-old/preservepkg-old-1.0.ebuild" merge
+VDB="${ROOT}/var/db/pkg/dev-libs/preservepkg-old-1.0"
+cat > "${VDB}/NEEDED.ELF.2" <<'EOF'
+X86_64;/usr/lib/preservedtest/libfoo.so.1;libfoo.so.1;;
+X86_64;/usr/lib/preservedtest/unrelated.so;libunrelated.so;;
+EOF
+echo "unrelated file" > "${ROOT}/usr/lib/preservedtest/unrelated.so"
+echo "obj /usr/lib/preservedtest/unrelated.so abc123 100" >> "${VDB}/CONTENTS"
+mkdir -p "${ROOT}/var/lib/portage"
+cat > "${ROOT}/var/lib/portage/preserved_libs_registry" <<'EOF'
+{
+	"dev-libs/preservepkg-old:0": [
+		"dev-libs/preservepkg-old-1.0",
+		"0",
+		[
+			"/usr/lib/preservedtest/libfoo.so.1"
+		]
+	]
+}
+EOF
+FEATURES="collision-protect" "$BIN" ebuild \
+    "$FIX/preservepkg-new/preservepkg-new-1.0.ebuild" merge
+cat "${VDB}/NEEDED.ELF.2"
+# X86_64;/usr/lib/preservedtest/unrelated.so;libunrelated.so;;;
+# -- the taken-over libfoo.so.1 entry is gone, the unrelated one survives
+```
+
 ### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`
 
 The last item on `ebuild_merge.rs`'s own gap list from the "Real merge/
@@ -6361,6 +6514,93 @@ cat "${ROOT}"/usr/share/mergeblockertest/shared.txt
 # hello from mergeblockerpkg -- no abort, the blocked package's file was simply taken over
 ```
 
+### `ebuild_merge.rs`/`ebuild_unmerge.rs`: real FIFO/device node `CONTENTS` support (`fif`/`dev`)
+
+`merge_tree`'s own last documented gap ("real `mergeme()` handles these
+too, but no fixture portuale has needs them") is closed: real
+`mergeme()`'s own `else:` branch ("we are merging a fifo or device
+node", `vartree.py:5787-5811`) is real now. Neither node type is ever
+`_protect()`'d (that branch doesn't call it at all, unlike `obj`/`sym`),
+and a node is only actually created when the live destination doesn't
+already exist yet (real `if mydmode is None:` -- an existing node at
+that path is left completely alone). The real `fif`/`dev` `CONTENTS`
+line is written unconditionally either way, with no digest/mtime/target
+field at all (real `_format_contents_line(node_type=..., abs_path=
+myrealdest)` only).
+
+Real `movefile()` has no dedicated fifo/device-node logic of its own --
+an ordinary same-filesystem `os.rename()` just works for a special file
+too, since `rename(2)` doesn't care what type of file it's moving (real
+`movefile()`'s own "we don't yet handle special, so we need to fall
+back to /bin/mv" comment only fires on a genuine cross-device `EXDEV`
+failure). Portuale's own merge step never moves `${D}` content at all
+though -- every other branch copies/recreates instead, so `${D}` itself
+stays intact -- so new `create_special_node` recreates a fresh node at
+the destination via real `mkfifo(3)`/`mknod(3)` instead, matching the
+source's own real type, permission bits, and (for a device node) real
+major/minor (`st_rdev`); an explicit `chmod` afterward closes the one
+real gap `mkfifo(3)`/`mknod(3)` themselves have that `std::fs::copy`
+doesn't (both apply the process's own umask to the given mode, unlike
+`std::fs::copy`'s automatic exact permission-bit preservation for a
+regular file).
+
+Real `mknod(2)` genuinely requires root/`CAP_MKNOD` for a real (nonzero
+major:minor) character or block device on a real Linux system -- an
+unrelated real kernel carve-out exists for `mknod(path, S_IFCHR, 0)`
+specifically (`dev_t == 0`, the overlayfs "whiteout" convention, never a
+usable real device), confirmed empirically while building this slice's
+own tests (a naive first attempt at a permission-failure test happened
+to trip this exact carve-out by using an arbitrary regular file, whose
+own `rdev` defaults to `0`, as the stand-in device source -- silently
+succeeding instead of demonstrating the real permission wall it was
+meant to prove). `create_special_node` surfaces a real permission
+failure as an ordinary `Result::Err`, not a panic.
+
+The unmerge side needed no functional change at all: real
+`_unmerge_pkgfiles()`'s own `"fif"`/`"dev"` branches
+(`vartree.py:3062-3068`) never call `unlink()` in the first place --
+both just report a real `"---"` status, portage's own conservative
+"leave a device/fifo node in place" behavior, unlike `obj`/`sym`/`dir`.
+`ebuild_unmerge.rs`'s own catch-all for these two node types already
+happened to do nothing, matching real behavior by coincidence rather
+than by design -- its own doc comment (previously citing the wrong
+reason, "merge_tree doesn't create these either") is corrected in place
+to cite the real one.
+
+Verified end to end with a new `dev-libs/fifopkg` fixture (a real FIFO,
+created via real `mkfifo(1)` in `src_install` -- unlike a device node,
+this needs no special privilege at all, so it's the one of the two real
+node types portuale can actually exercise live): merging creates a
+real FIFO and records a real `fif` line; re-merging over something else
+already planted at that same path leaves it completely untouched;
+unmerging leaves the FIFO in place while still removing the vdb entry
+as normal. Device-node creation itself is verified only via a narrower,
+hand-crafted unit test proving `create_special_node` fails cleanly
+without root (using real `/dev/null` as `src`, so its own real, nonzero
+`rdev` genuinely exercises the real privileged path rather than the
+`dev_t == 0` carve-out above) -- not reproducible as a real, live
+end-to-end merge in this unprivileged dev/test environment.
+
+Running it:
+
+```sh
+cd rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+BIN=rust/target/release/portuale
+PKG=fixtures/repo/dev-libs/fifopkg/fifopkg-1.0.ebuild
+
+"$BIN" ebuild "$PKG" merge
+ls -la "${ROOT}"/usr/lib/fifopkg/
+# prw-r--r-- ... myfifo  -- a real FIFO, not a regular file
+cat "${ROOT}"/var/db/pkg/dev-libs/fifopkg-1.0/CONTENTS
+# fif /usr/lib/fifopkg/myfifo  -- no digest/mtime field at all
+
+"$BIN" ebuild "$PKG" unmerge
+ls -la "${ROOT}"/usr/lib/fifopkg/
+# the FIFO is still there -- real portage never unlinks a fif/dev entry
+```
+
 ### `emerge --pretend --root-deps`: real `ESYSROOT`-vs-`ROOT` dependency resolution
 
 The last genuinely open item in the dry-run backlog's own "Open backlog"
@@ -6499,6 +6739,183 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
     rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rootdepsorpkg
 # [ebuild  N] dev-libs/rootdepsorpkg-1.0
+```
+
+### `emerge --pretend --root-deps`: recursively building a new package against the running root
+
+The scope check paid off before any code was written: re-reading real
+`depgraph.py:4207-4271` directly (not just the summary the previous
+slice's own "still open" note carried) surfaced that the real gap is
+bigger than that note suggested -- real `BDEPEND` *always* targets the
+running root, completely independent of whether `--root-deps` is even
+passed, and real `DEPEND`'s own target root is EAPI-conditional
+(`ESYSROOT` for a `BDEPEND`-capable EAPI, the running root otherwise).
+Confirmed with the user directly before implementing anything: build
+toward the real, full multi-root shape, one confirmed increment at a
+time -- the same "narrow first" rhythm the five-part preserve-libs
+registration buildout already used successfully, not a single giant
+change to a ~10,600-line file.
+
+This first increment: real `DEPEND`/`BDEPEND` atoms that
+`unsatisfied_root_deps_atoms` (new, the complement of the already-
+shipped `root_deps_satisfied_atoms`) reports as *not* satisfied by the
+running root are now resolved there directly -- reusing `resolve_pretend`
+wholesale, just pointed at the running root instead of the target `ROOT`
+(`resolve_root_deps_build_entry`, new). A genuine `New`/`Upgrade`/
+`Reinstall`/`Downgrade` outcome becomes its own real `GraphEntry`, a new
+`targets_running_root: bool` field distinguishing it from every ordinary
+`ROOT`-targeted entry (`false` for all ~30 pre-existing call sites/
+tests, unchanged). Deduplicated separately from the main graph's own
+`resolved_slots`/`other_outcomes` (a `(category, package)` set of its
+own) -- a package can validly need building into *both* roots at once
+(an ordinary `RDEPEND` into `ROOT`, some other package's own `BDEPEND`
+into the running root), which must never collide into one shared dedup
+key. Wired into both real dep-walk sites, same as every other
+`--root-deps` mechanism in this area: the main New/Upgrade/Reinstall
+loop, and `enqueue_dependencies`'s own `--deep`/`AlreadyInstalled`
+recursion.
+
+A real, non-obvious bug surfaced and got fixed in the same slice: an
+unsatisfied `DEPEND`/`BDEPEND` atom used to simply fall through into the
+ordinary `flat_deps` queue (silently resolved against `ROOT` instead,
+since nothing previously excluded it) -- invisible in every existing
+fixture, since `rootdepsprovider`/`rootdepsnonexistent` (the pre-existing
+`rootdepspkg`/`rootdepsorpkg` fixtures) were both deliberately
+tree-invisible, so they never reached that fallback with a resolvable
+candidate at all. The new `dev-libs/rootdepsbuildpkg` fixture (a real,
+tree-visible `BDEPEND` target, `dev-libs/rootdepsbuildtool`) exposed it
+immediately: the atom was resolving *twice*, once as the new
+`targets_running_root` entry and once more via the old `ROOT`-targeted
+fallback. Fixed by excluding the full `unsatisfied_root_deps_atoms` set
+from `flat_deps` too, not just `root_deps_satisfied_atoms`'s own already-
+satisfied subset -- consistent with portuale's own established
+`--root-deps` simplification (real `DEPEND`/`BDEPEND` never targets
+`ROOT`/`ESYSROOT` at all under it, matching `root_deps_satisfied_atoms`'s
+own pre-existing DEPEND-and-BDEPEND-treated-uniformly precedent).
+
+**Deliberately not recursive, confirmed with the user as this slice's
+own scope boundary**: the new entry's *own* further dependencies aren't
+walked. A faithful, fully recursive version means either threading a
+genuinely separate, root-aware queue through the entire existing single-
+root BFS (the real architectural work `agent-context.md`'s own backlog
+already flagged as bigger and riskier than a typical slice), or
+recursively invoking `resolve_pretend_graph` itself per atom -- which
+introduces a real cycle-safety hazard this slice deliberately doesn't
+take on: two packages whose own `BDEPEND`s point at each other (an
+unremarkable pattern for bootstrap-style build tools), neither yet
+satisfied by the running root, would recurse with no cross-call memory
+of "already resolving this atom," right up to a real stack overflow --
+solvable, but only with its own careful, separately-scoped design and
+testing. Left for a follow-up slice, the same "narrow first, recurse
+later" shape preserve-libs registration already used across five slices
+before its own control-flow wiring landed.
+
+Verified with two new Rust unit tests in `portage-repo` (a real build
+entry appears, `targets_running_root: true`, `required_by` naming the
+requesting package -- and the fix above, proven by asserting the atom
+appears *exactly once* in the resolved graph, not twice), mirrored
+exactly in `emerge_pretend_reference.py` (`_unsatisfied_root_deps_atoms`,
+`_resolve_root_deps_build_entry`, the same 13th tuple field and the same
+double-exclusion fix threaded through both dep-walk sites -- including
+three more exhaustive-tuple-unpack sites the extra field's own end-to-end
+plumbing touched: the `required_by`-merge post-pass, `resolve_blockers`,
+and `--json` serialization), and a new dedicated pytest contract test
+(`test_root_deps_recursive_build_entry_matches_between_implementations`)
+proving byte-for-byte Rust/Python parity for the new fixture in both
+`--root-deps` modes.
+
+Running it:
+
+```sh
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rootdepsbuildpkg
+# [ebuild  N] dev-libs/rootdepsbuildpkg-1.0
+# [ebuild  N] dev-libs/rootdepsbuildtool-1.0 to /home/.../fixtures
+# -- rootdepsbuildtool is a real, separate graph entry (targets_running_
+# root: true internally); its own " to <running root>" marker was added
+# in the follow-up slice below.
+```
+
+### `emerge --pretend --root-deps`: the running-root build entry is marked in `--pretend`/`--json`/`--tree` output
+
+The immediately-preceding slice's own last remaining follow-up: a
+`targets_running_root` build entry was resolved and displayed
+identically to any ordinary `ROOT`-targeted entry, so nothing in the
+output told you it installs somewhere else. Real portage annotates
+exactly this -- `lib/_emerge/resolver/output.py:841-862` appends
+`darkgreen("to " + pkg.root)` to any entry whose own
+`pkg.root_config.settings["ROOT"] != "/"`.
+
+New `root_suffix` (`pretend.rs`, mirrored in `emerge_pretend_reference.
+py`) ports that suffix, deliberately narrower than real portage's own
+gate: portuale annotates *only* the running-root build entries, never
+every entry merged under a non-`/` `ROOT`. Porting the real gate
+literally would make every one of portuale's ~30 fixture tests emit
+its own non-deterministic `mktemp -d` `ROOT` path on every line,
+breaking the shared contract suite's determinism -- the same tension
+the parent `--root-deps` slice resolved by scoping its behavior as
+strictly opt-in machinery. The marker text is the running root exactly
+as resolved (`running_root_from_env`): `to /` at the real CLI default
+(matching real portage's own common case), or whatever
+`PORTAGE_RUNNING_ROOT` a test points it at. `--json` grows a matching
+`"builds_against_running_root"` field (the running-root path string for
+such an entry, `null` for every ordinary one -- same `null`-not-absent
+shape as the existing `"slot"` field); `--tree` mode carries the marker
+through the indent unchanged.
+
+Implementing this surfaced a real, pre-existing Rust/Python divergence
+from the parent slice, invisible until now because only flat plain-text
+output (which never renders `required_by`) was contract-tested for the
+`rootdepsbuildpkg` fixture: the Python reference's own `required_by`
+post-pass unconditionally *replaced* every entry's `required_by` with
+`sorted(required_by_map.get(key, ()))`, wiping the `[owner]` that
+`_resolve_root_deps_build_entry` sets at construction (the build entry
+is added outside the normal flat-deps queue, so `required_by_map` has
+no key for it). The Rust side's own post-pass already guards this
+correctly (`if let Some(owners) = required_by_map.remove(...)` -- only
+touches entries the map actually has). Fixed on the Python side to
+match, which is what makes the new `--json`/`--tree` parity assertions
+pass (a build entry now correctly lists its requesting package as an
+owner on both sides, and `--tree` nests it under that package).
+
+Verified with a new dedicated contract test
+(`test_root_deps_build_entry_output_marks_the_running_root`, pinned to
+`PORTAGE_RUNNING_ROOT=/` for a deterministic `to /`) asserting
+byte-for-byte Rust/Python parity across plain, `--json`, and `--tree`
+output, plus an update to
+`test_root_deps_recursive_build_entry_matches_between_implementations`
+(its own "both print an identical plain-text line" claim is now stale --
+the `--root-deps` case is visually distinguished from the fallback).
+
+Running it:
+
+```sh
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
+
+# Default running root (/): real portage's own common case, "to /".
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rootdepsbuildpkg
+# [ebuild  N] dev-libs/rootdepsbuildpkg-1.0
+# [ebuild  N] dev-libs/rootdepsbuildtool-1.0 to /
+
+# --json: a "builds_against_running_root" field, null for the ordinary entry.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    rust/target/release/portuale emerge --pretend --root-deps --json \
+    dev-libs/rootdepsbuildpkg
+# ...{"package":"rootdepsbuildpkg",...,"builds_against_running_root":null,...}
+# ...{"package":"rootdepsbuildtool",...,"builds_against_running_root":"/",...}
+
+# --tree: the marker survives the indent.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    rust/target/release/portuale emerge --pretend --root-deps --tree \
+    dev-libs/rootdepsbuildpkg
+# [ebuild  N] dev-libs/rootdepsbuildpkg-1.0
+# [ebuild  N]   dev-libs/rootdepsbuildtool-1.0 to /
 ```
 
 ### Real `ebuild <file> qmerge`
