@@ -4151,6 +4151,74 @@ cat "${ROOT}"/usr/share/othersinslotpkg/shared.txt
 unset CONFIG_PROTECT
 ```
 
+### CONFIG_PROTECT: "confmem rejected this update" -- an already-offered, unmodified-since update now really leaves the live file untouched
+
+The one remaining v1 simplification this whole area's own module doc
+comment used to document is closed: real `_protect()`'s own `move_me`/
+`protected` return values (`vartree.py:5831-5901`), traced line by line
+against the exact real caller (`mergeme()`'s own `obj`/`sym` branches,
+`vartree.py:5468-5481`/`5547`/`5749`) to confirm the real gate precisely.
+`protect_decision` used to conflate "which path to write to" with
+"whether to write at all"; it now returns `(write_dest, moveme)`, and
+`merge_tree`'s own `obj`/`sym` branches only perform the actual copy/
+symlink-write (and its mtime stamp) `if moveme`, matching real
+`mergeme()`'s own `if moveme:` gate around `movefile()`.
+
+Real `moveme` is `false` in exactly the case this pilot's own doc
+comment already named: an update whose exact `src_md5` was already
+offered for this path (`cfgfiledict` remembers it from an earlier merge)
+and `NOCONFMEM` is unset -- real `move_me = protected = bool(cfgfiledict
+["IGNORE"])` with `IGNORE == 0` (`vartree.py:5877`), real `mergeme()`'s
+own `zing = "---"`, "confmem rejected this update". Before this slice,
+this pilot applied the update directly instead, silently overwriting
+whatever the admin had locally edited into that already-offered file --
+a real, observable divergence from real portage now closed. Real
+`cfgfiledict` is deliberately left untouched in this one branch too:
+reaching it requires `src_md5 == cfgfiledict.get(dest_real)[0]` already
+(the very definition of "already offered"), so real `vartree.py:5888-
+5895`'s own trailing `if move_me: cfgfiledict[...] = [src_md5] elif
+dest_md5 == cfgfiledict.get(...)[0]: del cfgfiledict[...]` hits neither
+branch (`move_me` is `False`, and `dest_md5 != src_md5` was already
+established by the earlier `src_md5 == dest_md5` check having failed).
+
+CONTENTS itself is unaffected either way: it already recorded the
+*source's* own MD5/mtime unconditionally (real `mymtime = mystat.
+st_mtime_ns`, set before the real `if moveme:` gate and never touched
+when it's skipped) -- this package still logically claims ownership of
+the *new* content in `CONTENTS`, even though the live file on disk stays
+whatever the admin left it as.
+
+Verified by correcting an existing test that had pinned the old,
+incorrect behavior (`merge_tree_remembers_an_already_offered_update_
+and_leaves_the_live_file_untouched`, renamed from its own former "...
+_and_stops_re_protecting_it") to assert the real one instead: after a
+third merge of an already-offered update, the live file still holds the
+admin's own local edits, no second `._cfgNNNN_` sibling is spawned, and
+the returned `CONTENTS` text still records the new source's own MD5 for
+that path. Live-verified against the compiled binary too, reusing the
+existing `dev-libs/configpkg` fixture:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+export CONFIG_PROTECT=/etc
+BIN=PORTING/rust/target/release/portuale
+PKG=PORTING/fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild
+
+"$BIN" ebuild "$PKG" merge
+echo "user's own edits" > "${ROOT}"/etc/configpkg.conf
+"$BIN" ebuild "$PKG" merge   # not yet offered -> diverts to ._cfg0000_
+ls -a "${ROOT}"/etc/ | grep cfg
+# ._cfg0000_configpkg.conf
+"$BIN" ebuild "$PKG" merge   # already offered -> "confmem rejected"
+ls -a "${ROOT}"/etc/ | grep cfg
+# ._cfg0000_configpkg.conf -- still just the one, no ._cfg0001_
+cat "${ROOT}"/etc/configpkg.conf
+# user's own edits -- the admin's own live edits, untouched
+unset CONFIG_PROTECT
+```
+
 ### `FEATURES=collision-protect`: a merge that would overwrite another package's file aborts
 
 CONFIG_PROTECT's own sibling real merge-track feature: real

@@ -460,6 +460,29 @@ fn new_protect_filename(dest: &Path, newmd5: &str) -> Result<PathBuf, String> {
 ///     versions" from "the admin hand-edited this file locally", which
 ///     the plain `src_md5 == dest_md5` comparison below can't tell
 ///     apart on its own.
+///
+/// Returns `(write_dest, moveme)` -- real `_protect()` returns three
+/// values (`dest, protected, moveme`), but every real call site only
+/// ever needs `protected` to decide *whether* to call `_protect()` at
+/// all (already handled by this function's own caller, `is_protected`)
+/// and `moveme` to decide whether `mergeme()`'s own `if moveme:` gate
+/// (`vartree.py:5547`/`5749`) actually performs the file write, so this
+/// port only threads those two through. Real `moveme` is `False` in
+/// exactly one case here: `already_offered && !noconfmem` (real `move_me
+/// = protected = bool(cfgfiledict["IGNORE"])` with `IGNORE == 0`,
+/// `vartree.py:5877`) -- "confmem rejected this update"
+/// (`mergeme()`'s own `zing = "---"`). Real `cfgfiledict` is deliberately
+/// left untouched in that one branch too: reaching it requires `src_md5
+/// == cfgfiledict.get(dest_real)[0]` in the first place (that's the very
+/// definition of "already offered"), so the trailing real `if move_me:
+/// cfgfiledict[dest_real] = [src_md5] elif dest_md5 == cfgfiledict.get
+/// (dest_real)[0]: del cfgfiledict[dest_real]` (`vartree.py:5888-5895`)
+/// hits neither branch: `move_me` is `False` (skipping the first), and
+/// `dest_md5 != src_md5` is already established by the earlier `if
+/// src_md5 == dest_md5` check having failed (skipping the second, since
+/// it can only match by being equal to `src_md5` too). Every other
+/// return path keeps `moveme` `true`, matching real `_protect()`'s own
+/// `move_me = True` initial default, never cleared on any other branch.
 #[allow(clippy::too_many_arguments)]
 fn protect_decision(
     root: &Path,
@@ -471,7 +494,7 @@ fn protect_decision(
     src_md5: &str,
     cfgfiledict: &mut BTreeMap<String, String>,
     noconfmem: bool,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, bool), String> {
     let matched: Option<(String, String)> =
         installed_instance_pf.and_then(|pf| owned_node_value_pf(root, category, pf, abs_path));
 
@@ -481,9 +504,9 @@ fn protect_decision(
             // Real bug #523684: force-diverts even though there's
             // nothing on disk to compare against yet.
             cfgfiledict.insert(abs_path.to_string(), src_md5.to_string());
-            return new_protect_filename(dest, src_md5);
+            return Ok((new_protect_filename(dest, src_md5)?, true));
         }
-        return Ok(dest.to_path_buf());
+        return Ok((dest.to_path_buf(), true));
     };
 
     let (dest_md5, dest_link): (Option<String>, Option<String>) =
@@ -507,23 +530,24 @@ fn protect_decision(
                 _ => false,
             };
             if unmodified_since_installed {
-                return Ok(dest.to_path_buf());
+                return Ok((dest.to_path_buf(), true));
             }
         }
     }
 
     if dest_md5.as_deref() == Some(src_md5) {
-        return Ok(dest.to_path_buf());
+        return Ok((dest.to_path_buf(), true));
     }
 
     let already_offered = cfgfiledict.get(abs_path).map(String::as_str) == Some(src_md5);
-    let mut write_dest = dest.to_path_buf();
-    if !already_offered || noconfmem {
-        let newmd5 = dest_link.as_deref().unwrap_or(src_md5);
-        write_dest = new_protect_filename(dest, newmd5)?;
+    if already_offered && !noconfmem {
+        return Ok((dest.to_path_buf(), false));
     }
+
+    let newmd5 = dest_link.as_deref().unwrap_or(src_md5);
+    let write_dest = new_protect_filename(dest, newmd5)?;
     cfgfiledict.insert(abs_path.to_string(), src_md5.to_string());
-    Ok(write_dest)
+    Ok((write_dest, true))
 }
 
 /// Real `vardbapi._conf_mem_file`: `<root>/var/lib/portage/config`, a
@@ -1138,9 +1162,10 @@ fn merge_tree(
                 // dest's own real on-disk type, whatever it actually is
                 // (see that function's own doc comment).
                 let mut write_dest = dest.clone();
+                let mut moveme = true;
                 if is_protected(root, config_protect, config_protect_mask, &dest) {
                     let src_md5 = md5_hex_bytes(target_str.as_bytes());
-                    write_dest = protect_decision(
+                    (write_dest, moveme) = protect_decision(
                         root,
                         category,
                         installed_instance_pf,
@@ -1153,28 +1178,38 @@ fn merge_tree(
                     )?;
                 }
 
-                if let Some(parent) = write_dest.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("{}: {e}", parent.display()))?;
-                }
-                if write_dest.exists() || write_dest.symlink_metadata().is_ok() {
-                    let _ = std::fs::remove_file(&write_dest);
-                }
-                std::os::unix::fs::symlink(&target, &write_dest)
-                    .map_err(|e| format!("{}: {e}", write_dest.display()))?;
                 let mtime = mtime_secs(
                     &std::fs::symlink_metadata(&src)
                         .map_err(|e| format!("{}: {e}", src.display()))?,
                 )?;
-                // Real movefile() preserves the source's own mtime onto
-                // the merged destination -- without this, the freshly
-                // created symlink would get its own "now" mtime, never
-                // matching what's about to be recorded in CONTENTS below
-                // (see ebuild_unmerge.rs's own "!mtime" staleness check,
-                // which relies on this actually holding).
-                let ft = filetime::FileTime::from_unix_time(mtime, 0);
-                filetime::set_symlink_file_times(&write_dest, ft, ft)
-                    .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                // Real `moveme == false` ("confmem rejected this update",
+                // see `protect_decision`'s own doc comment): skip the
+                // write entirely, leaving the live destination completely
+                // untouched -- `mtime` above still uses the *source's* own
+                // mtime for CONTENTS below either way, matching real
+                // `mergeme()`'s own `mymtime = mystat.st_mtime_ns` (set
+                // before the `if moveme:` gate, never touched when it's
+                // skipped, `vartree.py:5403`/`5547`).
+                if moveme {
+                    if let Some(parent) = write_dest.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("{}: {e}", parent.display()))?;
+                    }
+                    if write_dest.exists() || write_dest.symlink_metadata().is_ok() {
+                        let _ = std::fs::remove_file(&write_dest);
+                    }
+                    std::os::unix::fs::symlink(&target, &write_dest)
+                        .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                    // Real movefile() preserves the source's own mtime onto
+                    // the merged destination -- without this, the freshly
+                    // created symlink would get its own "now" mtime, never
+                    // matching what's about to be recorded in CONTENTS below
+                    // (see ebuild_unmerge.rs's own "!mtime" staleness check,
+                    // which relies on this actually holding).
+                    let ft = filetime::FileTime::from_unix_time(mtime, 0);
+                    filetime::set_symlink_file_times(&write_dest, ft, ft)
+                        .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                }
                 // Real CONTENTS always records the package's own logical
                 // path/target (`abs_path`/`target_str`), never the
                 // ._cfgNNNN_ variant a protected write may have actually
@@ -1203,8 +1238,9 @@ fn merge_tree(
                 // re-protection regardless of memory, real `cfgfiledict[
                 // "IGNORE"]`).
                 let mut write_dest = dest.clone();
+                let mut moveme = true;
                 if is_protected(root, config_protect, config_protect_mask, &dest) {
-                    write_dest = protect_decision(
+                    (write_dest, moveme) = protect_decision(
                         root,
                         category,
                         installed_instance_pf,
@@ -1217,21 +1253,35 @@ fn merge_tree(
                     )?;
                 }
 
-                if let Some(parent) = write_dest.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("{}: {e}", parent.display()))?;
-                }
-                std::fs::copy(&src, &write_dest).map_err(|e| format!("{}: {e}", src.display()))?;
                 let mtime = mtime_secs(
                     &std::fs::metadata(&src).map_err(|e| format!("{}: {e}", src.display()))?,
                 )?;
-                // Real movefile() preserves the source's own mtime onto
-                // the destination -- std::fs::copy doesn't (the copy
-                // gets a fresh "now" mtime), which would otherwise never
-                // match what's recorded in CONTENTS below (see
-                // ebuild_unmerge.rs's own "!mtime" staleness check).
-                filetime::set_file_mtime(&write_dest, filetime::FileTime::from_unix_time(mtime, 0))
+                // Real `moveme == false` ("confmem rejected this update",
+                // see `protect_decision`'s own doc comment): skip the copy
+                // entirely, leaving the live destination completely
+                // untouched -- `mtime` above still uses the *source's* own
+                // mtime for CONTENTS below either way, matching real
+                // `mergeme()`'s own `mymtime = mystat.st_mtime_ns` (set
+                // before the `if moveme:` gate, never touched when it's
+                // skipped, `vartree.py:5403`/`5749`).
+                if moveme {
+                    if let Some(parent) = write_dest.parent() {
+                        std::fs::create_dir_all(parent)
+                            .map_err(|e| format!("{}: {e}", parent.display()))?;
+                    }
+                    std::fs::copy(&src, &write_dest)
+                        .map_err(|e| format!("{}: {e}", src.display()))?;
+                    // Real movefile() preserves the source's own mtime onto
+                    // the destination -- std::fs::copy doesn't (the copy
+                    // gets a fresh "now" mtime), which would otherwise never
+                    // match what's recorded in CONTENTS below (see
+                    // ebuild_unmerge.rs's own "!mtime" staleness check).
+                    filetime::set_file_mtime(
+                        &write_dest,
+                        filetime::FileTime::from_unix_time(mtime, 0),
+                    )
                     .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                }
                 // Real CONTENTS always records the package's own logical
                 // path (`abs_path`) and the *source*'s own MD5 -- never
                 // the ._cfgNNNN_ variant a protected write may have
@@ -2669,7 +2719,14 @@ mod tests {
     }
 
     #[test]
-    fn merge_tree_remembers_an_already_offered_update_and_stops_re_protecting_it() {
+    fn merge_tree_remembers_an_already_offered_update_and_leaves_the_live_file_untouched() {
+        // Real `move_me = protected = bool(cfgfiledict["IGNORE"])` with
+        // `IGNORE == 0` (`vartree.py:5877`, "confmem rejected this
+        // update"): re-merging an already-offered, unmodified-since
+        // update skips the write entirely -- the live destination stays
+        // exactly what the admin last left it as, no second `._cfg0001_`
+        // file spawned either. See `protect_decision`'s own doc comment
+        // for the full real trace.
         let tmp = tempdir();
         let d = tmp.join("D");
         let root = tmp.join("ROOT");
@@ -2694,9 +2751,10 @@ mod tests {
         assert!(root.join("etc/._cfg0000_foo.conf").exists());
 
         // Re-merging the exact same new content again: already
-        // remembered in cfgfiledict, so this time it's applied directly
-        // -- no second ._cfg0001_ file spawned.
-        merge_tree(
+        // remembered in cfgfiledict, so real portage leaves the live
+        // destination completely untouched this time -- no second
+        // ._cfg0001_ file spawned either.
+        let contents = merge_tree(
             &d,
             &root,
             "dev-libs",
@@ -2710,9 +2768,22 @@ mod tests {
         .expect("second merge_tree succeeds");
         assert_eq!(
             std::fs::read_to_string(root.join("etc/foo.conf")).unwrap(),
-            "new content"
+            "user's own edits",
+            "the admin's own live edits must survive a re-offered, already-remembered update"
         );
         assert!(!root.join("etc/._cfg0001_foo.conf").exists());
+
+        // CONTENTS still logically records this package as the owner of
+        // the *new* content, using the source's own MD5 -- real
+        // `mergeme()`'s own `mymtime = mystat.st_mtime_ns` (the source's
+        // own mtime, set before the real `if moveme:` gate and never
+        // touched when it's skipped) flowing into `_format_contents_line`
+        // regardless of `moveme`.
+        let new_md5 = md5_hex(&d.join("etc/foo.conf")).unwrap();
+        assert!(
+            contents.contains(&format!("obj /etc/foo.conf {new_md5}")),
+            "{contents}"
+        );
     }
 
     #[test]
