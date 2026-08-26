@@ -1004,6 +1004,95 @@ fn real_merge_copies_a_real_needed_elf2_into_the_vdb() {
     assert!(consumed_somewhere);
 }
 
+/// Unmerging a library still needed by an installed consumer preserves the file
+/// on disk and records it in the on-disk registry (Portage's preserve-libs).
+#[test]
+fn real_unmerge_preserves_a_still_needed_shared_library() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let portage_tmpdir = tmp.join("tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+    let lib_ebuild = collision_fixture("libpreservetest");
+    let consumer_ebuild = collision_fixture("consumepreservetest");
+
+    let lib_status = run_merge(
+        &lib_ebuild,
+        &root,
+        &portage_tmpdir,
+        &MergeOptions::default(),
+        None,
+    )
+    .expect("run_merge (library) succeeds");
+    assert_eq!(lib_status, 0);
+
+    let consumer_status = run_merge(
+        &consumer_ebuild,
+        &root,
+        &portage_tmpdir,
+        &MergeOptions::default(),
+        None,
+    )
+    .expect("run_merge (consumer) succeeds");
+    assert_eq!(consumer_status, 0);
+
+    let lib_path = root.join("usr/lib/libpreservetest.so.1");
+    assert!(
+        lib_path.is_file(),
+        "sanity: the library was really installed"
+    );
+
+    let unmerge_status = crate::ebuild_unmerge::run_unmerge(
+        &lib_ebuild,
+        &root,
+        &portage_tmpdir,
+        &crate::ebuild_unmerge::UnmergeOptions::default(),
+    )
+    .expect("run_unmerge succeeds");
+    assert_eq!(unmerge_status, 0);
+
+    assert!(
+        lib_path.is_file(),
+        "the still-needed shared library must survive unmerge, preserved on disk"
+    );
+    assert!(
+        !root
+            .join("var/db/pkg/dev-libs/libpreservetest-1.0")
+            .exists(),
+        "the vdb entry itself is still removed, same as any other unmerge"
+    );
+
+    let registry = read_plib_registry(&root);
+    let preserved = registry.preserved_libs();
+    let paths = preserved
+        .get("dev-libs/libpreservetest-1.0")
+        .expect("the real registry should record this package as the new keeper");
+    assert!(
+        paths.iter().any(|p| p == "/usr/lib/libpreservetest.so.1"),
+        "{paths:?}"
+    );
+
+    // Once the last consumer is gone the preserved library is orphaned and removed.
+    let consumer_unmerge = crate::ebuild_unmerge::run_unmerge(
+        &consumer_ebuild,
+        &root,
+        &portage_tmpdir,
+        &crate::ebuild_unmerge::UnmergeOptions::default(),
+    )
+    .expect("run_unmerge (consumer) succeeds");
+    assert_eq!(consumer_unmerge, 0);
+
+    assert!(
+        !lib_path.exists(),
+        "the preserved library must be removed once nothing links it any more"
+    );
+    assert!(
+        read_plib_registry(&root).entries.is_empty(),
+        "the registry must be empty after the last consumer is unmerged"
+    );
+}
+
 /// Baseline: with the inert default `config_root` no config/USE resolution runs,
 /// so this pair is an ordinary collision-protect abort, proving a genuine collision.
 #[test]

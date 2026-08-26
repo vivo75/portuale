@@ -106,6 +106,69 @@ fn plib_registry_serialization_is_byte_identical_to_python_json_dumps() {
     );
 }
 
+/// A package owning no files still unregisters its matching stale entry;
+/// with no entry at all, nothing is written.
+/// Portage: `PreservedLibsRegistry.py`, `store`.
+#[test]
+fn preserve_libs_on_unmerge_with_empty_contents_still_unregisters() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let vdb = root.join("var/db/pkg/dev-libs/foo-1.0");
+    std::fs::create_dir_all(&vdb).unwrap();
+    std::fs::write(vdb.join("COUNTER"), "5\n").unwrap();
+    // The stale path exists, so load-time pruning keeps the entry.
+    std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+    std::fs::write(root.join("usr/lib/stale.so"), b"fake elf").unwrap();
+    let mut entries = BTreeMap::new();
+    entries.insert(
+        "dev-libs/foo:0".to_string(),
+        (
+            "dev-libs/foo-1.0".to_string(),
+            "5".to_string(),
+            vec!["/usr/lib/stale.so".to_string()],
+        ),
+    );
+    write_plib_registry(
+        &root,
+        &PlibRegistry {
+            entries,
+            orig_entries: BTreeMap::new(),
+        },
+    )
+    .expect("seeding the registry succeeds");
+
+    let preserved = preserve_libs_on_unmerge(PreserveLibsOnUnmergeArgs {
+        root: &root,
+        category: "dev-libs",
+        pn: "foo",
+        pf: "foo-1.0",
+        slot: "0",
+        contents_text: "",
+        is_replacement: false,
+    })
+    .unwrap();
+    assert!(preserved.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(plib_registry_path(&root)).unwrap(),
+        "{}",
+        "the matching stale entry must be unregistered even with empty CONTENTS"
+    );
+
+    let tmp2 = tempdir();
+    let preserved = preserve_libs_on_unmerge(PreserveLibsOnUnmergeArgs {
+        root: &tmp2,
+        category: "dev-libs",
+        pn: "foo",
+        pf: "foo-1.0",
+        slot: "0",
+        contents_text: "",
+        is_replacement: false,
+    })
+    .unwrap();
+    assert!(preserved.is_empty());
+    assert!(!plib_registry_path(&tmp2).exists());
+}
+
 /// A path in the preserved-libs registry is excluded from collision-protect
 /// and handed over; the emptied record and the old `CONTENTS` claim go with it.
 /// Portage: `vartree.py`, `_collision_protect`.

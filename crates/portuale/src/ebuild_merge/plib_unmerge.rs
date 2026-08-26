@@ -14,6 +14,35 @@ pub(crate) struct PreserveLibsOnUnmergeArgs<'a> {
     pub(crate) is_replacement: bool,
 }
 
+/// Unregisters this package's registry entry, then re-registers libraries still needed
+/// under the package being removed. Replacement mode only unregisters and returns empty.
+/// Returns the preserved paths for the caller to exclude from file removal.
+// Portage: vartree.py, dblink._prune_plib_registry
+#[cfg(test)]
+pub(crate) fn preserve_libs_on_unmerge(
+    args: PreserveLibsOnUnmergeArgs<'_>,
+) -> Result<BTreeSet<String>, String> {
+    let PreserveLibsOnUnmergeArgs {
+        root,
+        category,
+        pn,
+        pf,
+        slot,
+        contents_text,
+        is_replacement,
+    } = args;
+    preserve_libs_on_unmerge_into(PreserveLibsOnUnmergeIntoArgs {
+        root,
+        category,
+        pn,
+        pf,
+        slot,
+        contents_text,
+        is_replacement,
+        retire: None,
+    })
+}
+
 /// Arguments of [`preserve_libs_on_unmerge_into`].
 pub(crate) struct PreserveLibsOnUnmergeIntoArgs<'a> {
     pub(crate) root: &'a Path,

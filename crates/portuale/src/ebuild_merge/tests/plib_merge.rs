@@ -1,5 +1,101 @@
 use super::*;
 
+/// Empty-`paths` unregisters only when the stored `cpv` and `counter` still
+/// match; a different package or a stale counter survives untouched.
+/// Portage: `PreservedLibsRegistry.py`, `unregister`.
+#[test]
+fn register_preserved_libs_unregister_only_matches_the_same_cpv_and_counter() {
+    let mut registry = PlibRegistry {
+        entries: BTreeMap::new(),
+        orig_entries: BTreeMap::new(),
+    };
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &["/usr/lib/libfoo.so.1".to_string()],
+    });
+    assert!(registry.entries.contains_key("dev-libs/foo:0"));
+
+    // Wrong counter: Portage's `unregister` leaves the entry alone.
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "9",
+        paths: &[],
+    });
+    assert!(
+        registry.entries.contains_key("dev-libs/foo:0"),
+        "a stale counter must not unregister someone else's live entry"
+    );
+
+    // Wrong cpv: the same "leave it alone" rule.
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-2.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &[],
+    });
+    assert!(
+        registry.entries.contains_key("dev-libs/foo:0"),
+        "a different cpv must not unregister someone else's live entry"
+    );
+
+    // Matching cpv and counter: Portage's `unregister` removes it.
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &[],
+    });
+    assert!(!registry.entries.contains_key("dev-libs/foo:0"));
+}
+
+/// Non-empty `paths` unconditionally overwrites whatever the key held.
+/// Portage: `PreservedLibsRegistry.py`, `register`.
+#[test]
+fn register_preserved_libs_with_paths_unconditionally_overwrites() {
+    let mut registry = PlibRegistry {
+        entries: BTreeMap::new(),
+        orig_entries: BTreeMap::new(),
+    };
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-1.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "5",
+        paths: &["/usr/lib/libfoo.so.1".to_string()],
+    });
+    register_preserved_libs(RegisterPreservedLibsArgs {
+        registry: &mut registry,
+        cpv: "dev-libs/foo-2.0",
+        category: "dev-libs",
+        pn: "foo",
+        slot: "0",
+        counter: "6",
+        paths: &["/usr/lib/libfoo.so.2".to_string()],
+    });
+
+    let (cpv, counter, paths) = registry.entries.get("dev-libs/foo:0").unwrap();
+    assert_eq!(cpv, "dev-libs/foo-2.0");
+    assert_eq!(counter, "6");
+    assert_eq!(paths, &["/usr/lib/libfoo.so.2".to_string()]);
+}
+
 /// Removing a path from `CONTENTS` also drops its `NEEDED.ELF.2` entry;
 /// entries for still-owned paths survive untouched.
 /// Portage: `vartree.py`, `removeFromContents`.
