@@ -4647,7 +4647,13 @@ def resolve_pretend_graph(
     # portage-repo/src/lib.rs's own identical final loop (run before
     # resolve_blockers below, same order) -- entries are tuples
     # (immutable), so this rebuilds each one rather than mutating in
-    # place.
+    # place. Only entries the map actually has a key for get their
+    # required_by replaced -- matching the Rust side's own `if let
+    # Some(owners) = required_by_map.remove(...)` guard: an entry added
+    # outside the normal flat-deps queue (a --root-deps running-root
+    # build entry, whose own [owner] was set at construction by
+    # _resolve_root_deps_build_entry) keeps that value instead of being
+    # wiped to [].
     entries = [
         (
             category,
@@ -4656,7 +4662,9 @@ def resolve_pretend_graph(
             blockers,
             slot,
             use_display,
-            sorted(required_by_map.get((category, package), ())),
+            sorted(required_by_map[(category, package)])
+            if (category, package) in required_by_map
+            else _required_by,
             source,
             provenance,
             keyword_suggestion,
@@ -5168,7 +5176,7 @@ def _json_bool(b):
     return "true" if b else "false"
 
 
-def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, top_level_pkgs, verbose):
+def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root, top_level_pkgs, verbose, running_root):
     """One JSON object per entry -- a structured mirror of the plain-text
     "[ebuild ...]"/"[binary ...]"/"already installed"/blocker lines in
     run(), plus two fields no plain-text line carries at all: "requested"
@@ -5266,6 +5274,16 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
         f'{{"category":{_json_string(c)},"package":{_json_string(p)}}}' for c, p in required_by
     )
     fields.append(f'"required_by":[{required_by_json}]')
+    # --root-deps's own running-root build entries (see root_suffix in
+    # run() and pretend.rs's own entry_to_json): the same "to <root>"
+    # distinction the plain-text output carries, as an explicit field --
+    # the running-root path string for such an entry, null for every
+    # ordinary ROOT-targeted one. null (rather than absent) universally,
+    # same shape as "slot" above.
+    if targets_running_root and running_root is not None:
+        fields.append(f'"builds_against_running_root":{_json_string(str(running_root))}')
+    else:
+        fields.append('"builds_against_running_root":null')
     if verbose and use_display:
         use_flags = ",".join(f"{_json_string(flag)}:{_json_bool(enabled)}" for flag, enabled in use_display)
         fields.append(f'"use_flags":{{{use_flags}}}')
@@ -5295,16 +5313,16 @@ def _changed_deps_report_entry_to_json(c):
     )
 
 
-def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, verbose):
+def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, verbose, running_root=None):
     """The whole --json output: {"entries": [...], "slot_conflicts": [...],
     "changed_deps_report": [...]}, one line, no pretty-printing (a
     pilot-specific convenience format, not a stable schema -- see run()'s
     own --json handling). Mirrors pretend.rs's own print_json exactly."""
     entries_json = ",".join(
         _entry_to_json(
-            category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, top_level_pkgs, verbose
+            category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root, top_level_pkgs, verbose, running_root
         )
-        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, _targets_running_root in entries
+        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root in entries
     )
     conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)
     changed_deps_report_json = ",".join(
@@ -6725,6 +6743,24 @@ def run(args):
         flags = [flag if enabled else f"-{flag}" for flag, enabled in use_display]
         return '  USE="{}"'.format(" ".join(flags))
 
+    def root_suffix(targets_running_root):
+        # Real lib/_emerge/resolver/output.py:841-862's own
+        # darkgreen("to " + pkg.root) suffix: a --root-deps entry that
+        # builds against the running root rather than the target ROOT
+        # (targets_running_root, the 13th entry-tuple field) is annotated
+        # with where it actually installs -- exactly as real portage
+        # annotates any entry whose own pkg.root_config.settings["ROOT"]
+        # != "/". Deliberately narrower than that real gate, though: this
+        # pilot annotates only the running-root build entries, never
+        # every entry merged under a non-"/" ROOT, since that would make
+        # every fixture test emit its own non-deterministic mktemp -d
+        # ROOT path (see pretend.rs's own root_suffix docstring). "" for
+        # every ordinary entry, and "" defensively if root_deps_running_root
+        # is somehow None. Mirrors pretend.rs's own root_suffix exactly.
+        if not targets_running_root or root_deps_running_root is None:
+            return ""
+        return f" to {root_deps_running_root}"
+
     if json_output:
         _print_json(
             entries,
@@ -6732,6 +6768,7 @@ def run(args):
             result["changed_deps_report"],
             top_level_pkgs,
             verbose,
+            root_deps_running_root,
         )
         return 0
 
@@ -6756,7 +6793,7 @@ def run(args):
             keyword_suggestion,
             use_suggestion,
             parent_use_suggestion,
-            _targets_running_root,
+            targets_running_root,
         ) = entry
         tag = outcome[0]
         # --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
@@ -6770,6 +6807,11 @@ def run(args):
         # ("ebuild"/"binary") -- a binary merge prints "[binary", never
         # "[ebuild", regardless of outcome. Mirrors pretend.rs exactly.
         bracket = "binary" if source == "binary" else "ebuild"
+        # Real output.py:841-862's own "to <root>" annotation for a
+        # running-root build entry -- "" for every ordinary entry (see
+        # root_suffix). Placed right before use_suffix in each arm below,
+        # matching both real portage's own ordering and pretend.rs.
+        root = root_suffix(targets_running_root)
         if tag == "new":
             if not onlydeps_suppressed:
                 if columns:
@@ -6777,11 +6819,12 @@ def run(args):
                         _columns_line(
                             bracket, "N", indent, category, package, outcome[1], "", columnwidth
                         )
+                        + root
                         + use_suffix(use_display)
                     )
                 else:
                     print(
-                        f"[{bracket}  N] {indent}{category}/{package}-{outcome[1]}{use_suffix(use_display)}"
+                        f"[{bracket}  N] {indent}{category}/{package}-{outcome[1]}{root}{use_suffix(use_display)}"
                     )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
@@ -6798,12 +6841,13 @@ def run(args):
                             f"[{outcome[1]}]",
                             columnwidth,
                         )
+                        + root
                         + use_suffix(use_display)
                     )
                 else:
                     print(
                         f"[{bracket}  U] {indent}{category}/{package}-{outcome[2]} "
-                        f"(upgrade from {outcome[1]}){use_suffix(use_display)}"
+                        f"(upgrade from {outcome[1]}){root}{use_suffix(use_display)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "downgrade":
@@ -6820,12 +6864,13 @@ def run(args):
                             f"[{outcome[1]}]",
                             columnwidth,
                         )
+                        + root
                         + use_suffix(use_display)
                     )
                 else:
                     print(
                         f"[{bracket}  D] {indent}{category}/{package}-{outcome[2]} "
-                        f"(downgrade from {outcome[1]}){use_suffix(use_display)}"
+                        f"(downgrade from {outcome[1]}){root}{use_suffix(use_display)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "reinstall":
@@ -6839,6 +6884,7 @@ def run(args):
                     _columns_line(
                         bracket, "r", indent, category, package, outcome[1], "", columnwidth
                     )
+                    + root
                     + use_suffix(use_display)
                 )
             elif not onlydeps_suppressed:
@@ -6852,12 +6898,12 @@ def run(args):
                 if reason is None:
                     print(
                         f"[{bracket}  r] {indent}{category}/{package}-{outcome[1]}"
-                        f"{use_suffix(use_display)}"
+                        f"{root}{use_suffix(use_display)}"
                     )
                 else:
                     print(
                         f"[{bracket}  r] {indent}{category}/{package}-{outcome[1]} "
-                        f"(reinstall for {reason}){use_suffix(use_display)}"
+                        f"(reinstall for {reason}){root}{use_suffix(use_display)}"
                     )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "already_installed":

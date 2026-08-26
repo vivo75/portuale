@@ -322,6 +322,28 @@ fn use_suffix(entry: &GraphEntry, verbose: bool) -> String {
     format!("  USE=\"{}\"", flags.join(" "))
 }
 
+/// Real `lib/_emerge/resolver/output.py:841-862`'s own `darkgreen("to " +
+/// pkg.root)` suffix: an entry that builds against the running root
+/// rather than the target `ROOT` (`GraphEntry::targets_running_root`,
+/// `--root-deps`'s own real `ESYSROOT`-vs-`ROOT` distinction) is
+/// annotated with where it actually installs -- exactly as real portage
+/// annotates any entry whose own `pkg.root_config.settings["ROOT"] !=
+/// "/"`. Deliberately narrower than that real gate, though: this pilot
+/// annotates *only* the running-root build entries, never every entry
+/// merged under a non-`/` `ROOT`. Porting the real gate literally would
+/// make every fixture test emit its own non-deterministic `mktemp -d`
+/// `ROOT` path, breaking the shared contract suite's determinism -- the
+/// same tension the parent `--root-deps` slice resolved by scoping its
+/// behavior as strictly opt-in machinery. Empty for every ordinary
+/// `ROOT`-targeted entry, and empty (defensively) if the caller somehow
+/// has a `targets_running_root` entry but no running-root path in hand.
+fn root_suffix(entry: &GraphEntry, running_root: Option<&Path>) -> String {
+    match (entry.targets_running_root, running_root) {
+        (true, Some(root)) => format!(" to {}", root.display()),
+        _ => String::new(),
+    }
+}
+
 /// The `(reinstall for ...)` note's own reason text, real portage
 /// treating `--newuse`/`--changed-use`, `--changed-deps`,
 /// `--changed-slot`, `--rebuilt-binaries`, and `--newrepo` as
@@ -405,9 +427,19 @@ fn print_entry_line(
     verbose: bool,
     columns: bool,
     columnwidth: i64,
+    running_root: Option<&Path>,
 ) {
     let onlydeps_suppressed =
         onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
+    // Real `output.py:841-862`'s own `to <root>` annotation for a
+    // running-root build entry -- empty for every ordinary entry (see
+    // `root_suffix`'s own doc comment). Placed right before `use_suffix`
+    // in each arm below, matching real portage's own ordering
+    // (`pkg_str + " " + oldbest + "to " + pkg.root`, with the USE display
+    // coming later on the same line) -- though in practice a
+    // `targets_running_root` entry always has an empty `use_flags_display`
+    // anyway (a documented cut, see `GraphEntry::targets_running_root`).
+    let root = root_suffix(entry, running_root);
     // Real --pretend's own bracket word: literally `pkg.type_name`
     // (`lib/_emerge/RootConfig.py`'s own `pkg_tree_map`, the exact
     // two strings `"ebuild"`/`"binary"` this pilot's own
@@ -422,7 +454,7 @@ fn print_entry_line(
             if !onlydeps_suppressed {
                 if columns {
                     println!(
-                        "{}{}",
+                        "{}{root}{}",
                         columns_line(
                             bracket,
                             "N",
@@ -437,7 +469,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  N] {indent}{}/{}-{version}{}",
+                        "[{bracket}  N] {indent}{}/{}-{version}{root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -450,7 +482,7 @@ fn print_entry_line(
             if !onlydeps_suppressed {
                 if columns {
                     println!(
-                        "{}{}",
+                        "{}{root}{}",
                         columns_line(
                             bracket,
                             "U",
@@ -465,7 +497,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  U] {indent}{}/{}-{to} (upgrade from {from}){}",
+                        "[{bracket}  U] {indent}{}/{}-{to} (upgrade from {from}){root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -478,7 +510,7 @@ fn print_entry_line(
             if !onlydeps_suppressed {
                 if columns {
                     println!(
-                        "{}{}",
+                        "{}{root}{}",
                         columns_line(
                             bracket,
                             "D",
@@ -493,7 +525,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  D] {indent}{}/{}-{to} (downgrade from {from}){}",
+                        "[{bracket}  D] {indent}{}/{}-{to} (downgrade from {from}){root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -513,7 +545,7 @@ fn print_entry_line(
             if !onlydeps_suppressed {
                 if columns {
                     println!(
-                        "{}{}",
+                        "{}{root}{}",
                         columns_line(
                             bracket,
                             "r",
@@ -535,13 +567,13 @@ fn print_entry_line(
                         *new_repo,
                     ) {
                         Some(reason) => println!(
-                            "[{bracket}  r] {indent}{}/{}-{version} (reinstall for {reason}){}",
+                            "[{bracket}  r] {indent}{}/{}-{version} (reinstall for {reason}){root}{}",
                             entry.category,
                             entry.package,
                             use_suffix(entry, verbose)
                         ),
                         None => println!(
-                            "[{bracket}  r] {indent}{}/{}-{version}{}",
+                            "[{bracket}  r] {indent}{}/{}-{version}{root}{}",
                             entry.category,
                             entry.package,
                             use_suffix(entry, verbose)
@@ -690,6 +722,7 @@ fn print_tree(
     onlydeps: bool,
     unordered_display: bool,
     verbose: bool,
+    running_root: Option<&Path>,
 ) {
     let mut children: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -717,6 +750,7 @@ fn print_tree(
         top_level_pkgs: &'a HashSet<(String, String)>,
         onlydeps: bool,
         verbose: bool,
+        running_root: Option<&'a Path>,
     }
 
     fn render(i: usize, depth: u32, ctx: &TreeCtx, rendered: &mut HashSet<usize>) {
@@ -736,6 +770,7 @@ fn print_tree(
             ctx.verbose,
             false,
             130,
+            ctx.running_root,
         );
         let key = (
             ctx.entries[i].category.clone(),
@@ -754,6 +789,7 @@ fn print_tree(
         top_level_pkgs,
         onlydeps,
         verbose,
+        running_root,
     };
     let mut rendered: HashSet<usize> = HashSet::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -767,7 +803,16 @@ fn print_tree(
     // somehow never reached, flat, rather than silently dropping it.
     for (i, entry) in entries.iter().enumerate() {
         if !rendered.contains(&i) {
-            print_entry_line(entry, "", top_level_pkgs, onlydeps, verbose, false, 130);
+            print_entry_line(
+                entry,
+                "",
+                top_level_pkgs,
+                onlydeps,
+                verbose,
+                false,
+                130,
+                running_root,
+            );
         }
     }
 }
@@ -835,6 +880,7 @@ fn entry_to_json(
     entry: &GraphEntry,
     top_level_pkgs: &HashSet<(String, String)>,
     verbose: bool,
+    running_root: Option<&Path>,
 ) -> String {
     let requested = top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
     let mut fields: Vec<String> = vec![
@@ -970,6 +1016,22 @@ fn entry_to_json(
         })
         .collect();
     fields.push(format!("\"required_by\":[{}]", required_by.join(",")));
+    // `--root-deps`'s own running-root build entries (see `root_suffix`'s
+    // own doc comment and `GraphEntry::targets_running_root`): the same
+    // `to <root>` distinction the plain-text output carries, as an
+    // explicit field -- the running-root path string for such an entry,
+    // `null` for every ordinary `ROOT`-targeted one. `null` (rather than
+    // absent) universally, same shape as `slot` above.
+    fields.push(format!(
+        "\"builds_against_running_root\":{}",
+        if entry.targets_running_root {
+            running_root
+                .map(|r| json_string(&r.display().to_string()))
+                .unwrap_or_else(|| "null".to_string())
+        } else {
+            "null".to_string()
+        }
+    ));
     if verbose && !entry.use_flags_display.is_empty() {
         let use_flags: Vec<String> = entry
             .use_flags_display
@@ -1026,10 +1088,11 @@ fn print_json(
     changed_deps_report: &[ChangedDepsReportEntry],
     top_level_pkgs: &HashSet<(String, String)>,
     verbose: bool,
+    running_root: Option<&Path>,
 ) {
     let entries_json: Vec<String> = entries
         .iter()
-        .map(|e| entry_to_json(e, top_level_pkgs, verbose))
+        .map(|e| entry_to_json(e, top_level_pkgs, verbose, running_root))
         .collect();
     let conflicts_json: Vec<String> = slot_conflicts.iter().map(slot_conflict_to_json).collect();
     let changed_deps_report_json: Vec<String> = changed_deps_report
@@ -2586,6 +2649,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &result.changed_deps_report,
             &top_level_pkgs,
             verbose,
+            root_deps_running_root.as_deref(),
         );
         return ExitCode::SUCCESS;
     }
@@ -2603,6 +2667,7 @@ pub fn run(args: &[String]) -> ExitCode {
             onlydeps,
             unordered_display,
             verbose,
+            root_deps_running_root.as_deref(),
         );
     } else {
         for entry in entries {
@@ -2614,6 +2679,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 verbose,
                 columns,
                 columnwidth,
+                root_deps_running_root.as_deref(),
             );
         }
     }

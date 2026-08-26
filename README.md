@@ -6019,11 +6019,89 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
     PORTING/rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rootdepsbuildpkg
 # [ebuild  N] dev-libs/rootdepsbuildpkg-1.0
-# [ebuild  N] dev-libs/rootdepsbuildtool-1.0
-# -- rootdepsbuildtool is a real, separate graph entry now (targets_
-# running_root: true internally, though plain-text output doesn't yet
-# distinguish it -- see this section's own doc comment for why that's a
-# deliberate, still-open follow-up rather than an oversight)
+# [ebuild  N] dev-libs/rootdepsbuildtool-1.0 to /home/.../PORTING/fixtures
+# -- rootdepsbuildtool is a real, separate graph entry (targets_running_
+# root: true internally); its own " to <running root>" marker was added
+# in the follow-up slice below.
+```
+
+### `emerge --pretend --root-deps`: the running-root build entry is marked in `--pretend`/`--json`/`--tree` output
+
+The immediately-preceding slice's own last remaining follow-up: a
+`targets_running_root` build entry was resolved and displayed
+identically to any ordinary `ROOT`-targeted entry, so nothing in the
+output told you it installs somewhere else. Real portage annotates
+exactly this -- `lib/_emerge/resolver/output.py:841-862` appends
+`darkgreen("to " + pkg.root)` to any entry whose own
+`pkg.root_config.settings["ROOT"] != "/"`.
+
+New `root_suffix` (`pretend.rs`, mirrored in `emerge_pretend_reference.
+py`) ports that suffix, deliberately narrower than real portage's own
+gate: this pilot annotates *only* the running-root build entries, never
+every entry merged under a non-`/` `ROOT`. Porting the real gate
+literally would make every one of this pilot's ~30 fixture tests emit
+its own non-deterministic `mktemp -d` `ROOT` path on every line,
+breaking the shared contract suite's determinism -- the same tension
+the parent `--root-deps` slice resolved by scoping its behavior as
+strictly opt-in machinery. The marker text is the running root exactly
+as resolved (`running_root_from_env`): `to /` at the real CLI default
+(matching real portage's own common case), or whatever
+`PORTAGE_RUNNING_ROOT` a test points it at. `--json` grows a matching
+`"builds_against_running_root"` field (the running-root path string for
+such an entry, `null` for every ordinary one -- same `null`-not-absent
+shape as the existing `"slot"` field); `--tree` mode carries the marker
+through the indent unchanged.
+
+Implementing this surfaced a real, pre-existing Rust/Python divergence
+from the parent slice, invisible until now because only flat plain-text
+output (which never renders `required_by`) was contract-tested for the
+`rootdepsbuildpkg` fixture: the Python reference's own `required_by`
+post-pass unconditionally *replaced* every entry's `required_by` with
+`sorted(required_by_map.get(key, ()))`, wiping the `[owner]` that
+`_resolve_root_deps_build_entry` sets at construction (the build entry
+is added outside the normal flat-deps queue, so `required_by_map` has
+no key for it). The Rust side's own post-pass already guards this
+correctly (`if let Some(owners) = required_by_map.remove(...)` -- only
+touches entries the map actually has). Fixed on the Python side to
+match, which is what makes the new `--json`/`--tree` parity assertions
+pass (a build entry now correctly lists its requesting package as an
+owner on both sides, and `--tree` nests it under that package).
+
+Verified with a new dedicated contract test
+(`test_root_deps_build_entry_output_marks_the_running_root`, pinned to
+`PORTAGE_RUNNING_ROOT=/` for a deterministic `to /`) asserting
+byte-for-byte Rust/Python parity across plain, `--json`, and `--tree`
+output, plus an update to
+`test_root_deps_recursive_build_entry_matches_between_implementations`
+(its own "both print an identical plain-text line" claim is now stale --
+the `--root-deps` case is visually distinguished from the fallback).
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+
+# Default running root (/): real portage's own common case, "to /".
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rootdepsbuildpkg
+# [ebuild  N] dev-libs/rootdepsbuildpkg-1.0
+# [ebuild  N] dev-libs/rootdepsbuildtool-1.0 to /
+
+# --json: a "builds_against_running_root" field, null for the ordinary entry.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps --json \
+    dev-libs/rootdepsbuildpkg
+# ...{"package":"rootdepsbuildpkg",...,"builds_against_running_root":null,...}
+# ...{"package":"rootdepsbuildtool",...,"builds_against_running_root":"/",...}
+
+# --tree: the marker survives the indent.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps --tree \
+    dev-libs/rootdepsbuildpkg
+# [ebuild  N] dev-libs/rootdepsbuildpkg-1.0
+# [ebuild  N]   dev-libs/rootdepsbuildtool-1.0 to /
 ```
 
 ### Real `ebuild <file> qmerge`

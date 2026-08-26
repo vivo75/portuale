@@ -899,11 +899,13 @@ def test_root_deps_recursive_build_entry_matches_between_implementations(
     --root-deps via this pilot's own pre-existing (unrelated to this
     slice) "BDEPEND resolved as an ordinary ROOT-targeted dependency"
     fallback, with --root-deps via the new targets_running_root entry
-    instead; both happen to print an identical plain-text line, which is
-    exactly why this test exists alongside rootdepspkg/rootdepsorpkg
-    above rather than replacing either: it proves the new code path
-    produces the same real, correct output Python's own mirror does, not
-    that it's visually distinguishable from the pre-existing fallback."""
+    instead. The --root-deps case now carries a " to <running root>"
+    marker on the build entry (real output.py:841-862) that the fallback
+    never has -- see
+    test_root_deps_build_entry_output_marks_the_running_root below for a
+    dedicated, deterministic (PORTAGE_RUNNING_ROOT=/) check of that
+    marker across plain/--json/--tree; this test still proves the two
+    code paths agree between Rust and Python for the non-marker parts."""
     env = dict(fixture_env)
     env["PORTAGE_RUNNING_ROOT"] = env["ROOT"]
     args_without = ["--pretend", "dev-libs/rootdepsbuildpkg"]
@@ -926,7 +928,60 @@ def test_root_deps_recursive_build_entry_matches_between_implementations(
     assert python_with.returncode == 0
     assert rust_with.stdout == python_with.stdout
     assert rust_with.stderr == python_with.stderr
-    assert rust_with.stdout == rust_without.stdout
+    # The running-root build entry is now visually distinguished from the
+    # pre-existing ROOT-targeted fallback (this slice): with --root-deps
+    # the rootdepsbuildtool line carries a " to <running root>" marker.
+    assert rust_with.stdout == (
+        "[ebuild  N] dev-libs/rootdepsbuildpkg-1.0\n"
+        f"[ebuild  N] dev-libs/rootdepsbuildtool-1.0 to {env['ROOT']}\n"
+    )
+    assert rust_with.stdout != rust_without.stdout
+
+
+def test_root_deps_build_entry_output_marks_the_running_root(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The " to <running root>" marker this pilot adds to a --root-deps
+    running-root build entry (real lib/_emerge/resolver/output.py:841-862's
+    own darkgreen("to " + pkg.root), narrowed -- see pretend.rs's own
+    root_suffix docstring). PORTAGE_RUNNING_ROOT is pinned to "/" here so
+    the marker text is deterministic ("to /", real portage's own common
+    case) rather than a per-checkout mktemp path; "/" genuinely has no
+    dev-libs/rootdepsbuildtool installed, so the atom still resolves to a
+    real New entry. Checked across all three output modes -- plain,
+    --json (a "builds_against_running_root" field), and --tree (the
+    marker survives the indent) -- with Rust/Python byte-for-byte parity
+    asserted for each."""
+    env = dict(fixture_env)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    base = ["--pretend", "--root-deps", "dev-libs/rootdepsbuildpkg"]
+
+    rust_plain = _run([str(emerge_binary)], base, env)
+    python_plain = _run(emerge_pretend_python, base, env)
+    assert rust_plain.returncode == 0
+    assert python_plain.returncode == 0
+    assert rust_plain.stdout == python_plain.stdout
+    assert rust_plain.stderr == python_plain.stderr
+    assert rust_plain.stdout == (
+        "[ebuild  N] dev-libs/rootdepsbuildpkg-1.0\n"
+        "[ebuild  N] dev-libs/rootdepsbuildtool-1.0 to /\n"
+    )
+
+    rust_json = _run([str(emerge_binary)], [*base, "--json"], env)
+    python_json = _run(emerge_pretend_python, [*base, "--json"], env)
+    assert rust_json.stdout == python_json.stdout
+    parsed = json.loads(rust_json.stdout)
+    by_pkg = {e["package"]: e for e in parsed["entries"]}
+    assert by_pkg["rootdepsbuildtool"]["builds_against_running_root"] == "/"
+    assert by_pkg["rootdepsbuildpkg"]["builds_against_running_root"] is None
+
+    rust_tree = _run([str(emerge_binary)], [*base, "--tree"], env)
+    python_tree = _run(emerge_pretend_python, [*base, "--tree"], env)
+    assert rust_tree.stdout == python_tree.stdout
+    assert rust_tree.stdout == (
+        "[ebuild  N] dev-libs/rootdepsbuildpkg-1.0\n"
+        "[ebuild  N]   dev-libs/rootdepsbuildtool-1.0 to /\n"
+    )
 
 
 def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
@@ -4921,7 +4976,8 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
         '"version":"1.0","slot":"0","source":"ebuild",'
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,'
-        '"required_by":[],"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[]}\n'
+        '"required_by":[],"builds_against_running_root":null,"blockers":[]}],'
+        '"slot_conflicts":[],"changed_deps_report":[]}\n'
     )
 
 
@@ -4936,7 +4992,8 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
         '{"entries":[{"category":"dev-libs","package":"upgradepkg","outcome":"upgrade",'
         '"version":"2.0","from_version":"1.0","slot":"0","source":"ebuild",'
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
-        '"requested":true,"required_by":[],"blockers":[]}],"slot_conflicts":[],'
+        '"requested":true,"required_by":[],"builds_against_running_root":null,'
+        '"blockers":[]}],"slot_conflicts":[],'
         '"changed_deps_report":[]}\n'
     )
 
