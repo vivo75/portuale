@@ -110,6 +110,30 @@ impl NeededEntry {
     pub fn parse_file(text: &str) -> Vec<Self> {
         text.lines().filter_map(Self::parse).collect()
     }
+
+    /// Real `NeededEntry.__str__` (`NeededEntry.py:67-87`): "format this
+    /// entry for writing to a NEEDED.ELF.2 file" -- used when real
+    /// portage itself *rewrites* the file (`vardbapi.removeFromContents`/
+    /// `writeContentsToContentsFile`, see `ebuild_merge::remove_from_
+    /// contents`'s own doc comment), as opposed to the original real
+    /// `scanelf`-generated file this module's own `parse`/`parse_file`
+    /// read. Two real asymmetries from the read side, both intentional,
+    /// not bugs: an empty `runpaths` serializes as a plain empty string
+    /// here (`":".join([])`), never the `"  -  "` sentinel `scanelf`
+    /// itself emits; and the 6th (`multilib_category`) field is *always*
+    /// present, even when `None` (as `""`), unlike the original file
+    /// which may omit it entirely for pre-multilib-category data.
+    pub fn to_needed_line(&self) -> String {
+        format!(
+            "{};{};{};{};{};{}\n",
+            self.arch,
+            self.filename,
+            self.soname,
+            self.runpaths.join(":"),
+            self.needed.join(","),
+            self.multilib_category.as_deref().unwrap_or("")
+        )
+    }
 }
 
 /// Real `LinkageMap.rebuild()`'s own initial data-gathering loop
@@ -909,6 +933,28 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].filename, "/usr/bin/true");
         assert_eq!(entries[1].filename, "/usr/lib/libfoo.so.1");
+    }
+
+    #[test]
+    fn to_needed_line_round_trips_through_parse() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;;libc.so.6;x86_64").unwrap();
+        let line = entry.to_needed_line();
+        let reparsed = NeededEntry::parse(line.trim_end_matches('\n')).unwrap();
+        assert_eq!(entry, reparsed);
+    }
+
+    /// Real `__str__`'s own two asymmetries from the read side: an empty
+    /// `runpaths` serializes as a plain empty string, never the `"  -  "`
+    /// sentinel `scanelf` itself emits; the 6th field is always present
+    /// (as `""` when `None`), even though the original 5-field line
+    /// omitted it entirely.
+    #[test]
+    fn to_needed_line_writes_the_real_rewrite_format_not_the_scanelf_read_format() {
+        let entry = NeededEntry::parse("X86_64;/usr/bin/true;;  -  ;libc.so.6").unwrap();
+        assert_eq!(
+            entry.to_needed_line(),
+            "X86_64;/usr/bin/true;;;libc.so.6;\n"
+        );
     }
 
     fn tempdir() -> std::path::PathBuf {

@@ -4973,20 +4973,21 @@ over a generic dependency" precedent (`--json` output's own hand-rolled
 emitter, `SRC_URI`'s recursive-descent grammar, `grabdict`-format
 `thirdpartymirrors`).
 
-Deliberately not attempted (see `ebuild_merge.rs`'s own module doc
-comment for the full list): the preserve-libs *registration*/detection
-side itself -- real `_find_libs_to_preserve`/`_linkmap_rebuild` use
-`LinkageMap` (`scanelf`-based ELF `NEEDED`/soname introspection) to
-decide *what* a merge should start preserving in the first place, a
-real, separately-scoped subsystem (ELF parsing, a persistent linkage
-graph) this pilot doesn't implement anywhere yet. This slice only ever
-consults and unregisters a registry some other, unimplemented mechanism
-(or a hand-seeded fixture, for testing) already populated. Also not
-attempted: real `NEEDED`/`LinkageMap` bookkeeping in
-`unregister_preserved_libs` (moot without the registration side ever
-writing `NEEDED` data), and (as already documented in the
-`collision-protect` section above) blocker exclusion and
-`FEATURES=protect-owned`.
+At the time this slice shipped, the preserve-libs *registration*/
+detection side itself (real `_find_libs_to_preserve`/`LinkageMap`,
+`scanelf`-based ELF `NEEDED`/soname introspection) and real `NEEDED`/
+`LinkageMap` bookkeeping in `unregister_preserved_libs` were both
+deliberately not yet attempted -- this slice only ever consulted and
+unregistered a registry some other, unimplemented mechanism (or a
+hand-seeded fixture, for testing) already populated. Both have since
+shipped: the full registration/detection computation across "`preserve-
+libs` registration: a real post-install `NEEDED.ELF.2`" and "the full
+`LinkageMap`/`findConsumers`/decision computation" below, and the real
+`NEEDED`-line stripping in `remove_from_contents` itself in "preserve-
+libs: real `NEEDED.ELF.2` pruning on `remove_from_contents`" further
+below. (As already documented in the `collision-protect` section above,
+blocker exclusion and `FEATURES=protect-owned` have since shipped for
+that feature too, though not for this one.)
 
 Proven via five new Rust unit tests in `ebuild_merge.rs`: a JSON
 round-trip test for the hand-rolled registry parser/writer; a
@@ -5343,6 +5344,91 @@ cat "${ROOT}"/var/lib/portage/preserved_libs_registry
 # 		]
 # 	]
 # }
+```
+
+### preserve-libs: real `NEEDED.ELF.2` pruning on `remove_from_contents`
+
+The last documented preserve-libs gap in this area is closed: real
+`vardbapi.removeFromContents()`'s own "Also remove corresponding NEEDED
+lines, so that they do no corrupt LinkageMap data for preserve-libs"
+step (`vartree.py:1279-1310`) is real now. `remove_from_contents` (real
+`merge()`'s own post-copy collision-exclusion step, `unregister_
+preserved_libs`'s only caller -- the *unmerge*-time preserve-libs path,
+`preserve_libs_on_unmerge`, filters its own package's in-memory
+`CONTENTS` directly instead, since the whole vdb entry gets deleted
+moments later regardless, see that function's own doc comment) now
+tracks real `removed` (whether any `CONTENTS` line was actually
+dropped, matching real `if removed:`) and the *surviving* `CONTENTS`
+paths. When something was removed and this package's own `NEEDED.ELF.2`
+exists at all (real `if new_needed is not None:` -- a package that
+never had one is left alone, no file conjured into existence), every
+entry whose own `filename` no longer appears among the surviving paths
+is dropped; every other entry survives untouched. This pilot's own
+`CONTENTS`/`NEEDED.ELF.2` convention already stores both `ROOT`-relative
+(no literal `ROOT` prefix baked in), so the comparison needs no
+`os.path.join(root, ...)` step the real Python side requires.
+
+New `NeededEntry::to_needed_line` (`needed_elf.rs`) ports real
+`NeededEntry.__str__` (`NeededEntry.py:67-87`) -- "format this entry for
+writing to a NEEDED.ELF.2 file", the rewrite-side sibling of the
+existing `parse`/`parse_file` read side, with two real, intentional
+asymmetries from what `scanelf` itself would have written: an empty
+`runpaths` serializes as a plain empty string, never the `"  -  "`
+sentinel `scanelf` emits; and the 6th (`multilib_category`) field is
+*always* written, even when `None` (as `""`), unlike the original file
+which may omit it entirely for pre-multilib-category data.
+
+Also fixed in the same slice: this module's own top-of-file "KNOWN,
+DOCUMENTED GAPS" comment had drifted stale across the last several
+preserve-libs slices, still claiming the registration/detection side
+was entirely unattempted and the CONFIG_PROTECT "confmem rejected"
+simplification was still open -- both corrected in place to point at
+the sections that actually shipped them.
+
+Proven via three new, hand-crafted Rust unit tests in `ebuild_merge.rs`
+(a matching entry is pruned while an unrelated one survives; no
+`NEEDED.ELF.2` is created for a package that never had one; the file is
+left completely untouched, byte for byte, when nothing was actually
+removed from `CONTENTS`) plus two round-trip tests for `to_needed_line`
+in `needed_elf.rs` itself (parse -> serialize -> parse yields the same
+entry; the real rewrite format's own two asymmetries from the `scanelf`
+read format). Live-verified against the compiled binary too, reusing
+the existing `dev-libs/preservepkg-old`/`dev-libs/preservepkg-new`
+collision-exclusion fixture pair with a hand-seeded `NEEDED.ELF.2`
+(since neither fixture installs a real ELF binary of its own):
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export ROOT="$(mktemp -d)"
+export PORTAGE_TMPDIR="$(mktemp -d)"
+BIN=PORTING/rust/target/release/portuale
+FIX=PORTING/fixtures/repo/dev-libs
+
+"$BIN" ebuild "$FIX/preservepkg-old/preservepkg-old-1.0.ebuild" merge
+VDB="${ROOT}/var/db/pkg/dev-libs/preservepkg-old-1.0"
+cat > "${VDB}/NEEDED.ELF.2" <<'EOF'
+X86_64;/usr/lib/preservedtest/libfoo.so.1;libfoo.so.1;;
+X86_64;/usr/lib/preservedtest/unrelated.so;libunrelated.so;;
+EOF
+echo "unrelated file" > "${ROOT}/usr/lib/preservedtest/unrelated.so"
+echo "obj /usr/lib/preservedtest/unrelated.so abc123 100" >> "${VDB}/CONTENTS"
+mkdir -p "${ROOT}/var/lib/portage"
+cat > "${ROOT}/var/lib/portage/preserved_libs_registry" <<'EOF'
+{
+	"dev-libs/preservepkg-old:0": [
+		"dev-libs/preservepkg-old-1.0",
+		"0",
+		[
+			"/usr/lib/preservedtest/libfoo.so.1"
+		]
+	]
+}
+EOF
+FEATURES="collision-protect" "$BIN" ebuild \
+    "$FIX/preservepkg-new/preservepkg-new-1.0.ebuild" merge
+cat "${VDB}/NEEDED.ELF.2"
+# X86_64;/usr/lib/preservedtest/unrelated.so;libunrelated.so;;;
+# -- the taken-over libfoo.so.1 entry is gone, the unrelated one survives
 ```
 
 ### `env_update()`/`ldconfig` triggering: a merge regenerates `/etc/profile.env`/`/etc/csh.env`/`/etc/ld.so.conf` and runs real `ldconfig`

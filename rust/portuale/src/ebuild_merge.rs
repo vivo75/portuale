@@ -144,28 +144,17 @@
 // config).
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope):
-//   - No preserve-libs *registration*/detection side at all: real
-//     `_find_libs_to_preserve`/`_linkmap_rebuild` use `LinkageMap`
-//     (`scanelf`-based ELF `NEEDED`/soname introspection) to decide
-//     *what* a merge should start preserving in the first place -- a
-//     real, separately-scoped subsystem (ELF parsing, a persistent
-//     linkage graph) this pilot doesn't implement anywhere yet. This
-//     slice only ever consults and unregisters a registry some other,
-//     unimplemented mechanism (or a hand-seeded fixture, for testing)
-//     already populated.
-//   - No real `NEEDED`/`LinkageMap` bookkeeping in
-//     `unregister_preserved_libs` (real `removeFromContents` also
-//     strips matching `NEEDED` lines so stale linkage data doesn't
-//     corrupt a future preserve-libs decision) -- moot without the
-//     registration side above ever writing `NEEDED` data in the first
-//     place.
-//   - An already-offered, unmodified-since update (`cfgfiledict` already
-//     remembers this exact content for this path, `NOCONFMEM` unset) is
-//     applied directly here; real portage instead leaves the live
-//     destination file completely untouched in that case (while still
-//     recording the merge in `CONTENTS`) -- a deliberately narrower v1
-//     simplification, unchanged by this slice's own `NOCONFMEM`/`sym`/
-//     reuse work, all of which builds on top of it unmodified.
+//   - The one non-`NEEDED.ELF.2`-driven branch inside real `LinkageMap.
+//     rebuild()` itself is still not ported: live `scanelf` for
+//     orphaned preserved libs (`LinkageMapELF.py:233-324`) -- the one
+//     real spot a raw ELF header read would matter. Every other real
+//     preserve-libs *registration*/detection computation (`needed_elf.rs`:
+//     `NeededEntry`, `read_all_needed_entries`, `rebuild`, `getlibpaths`,
+//     `find_consumers`, `find_libs_to_preserve`) and the real control-
+//     flow wiring into both merge (`unregister_preserved_libs`, this
+//     module) and unmerge (`preserve_libs_on_unmerge`, this module) are
+//     real now -- see `README.md`'s own "`preserve-libs`" sections for
+//     the full grounding of each slice.
 //   - Real `os.chown`/permission-preserving `os.chmod` per merged file
 //     are not reproduced explicitly -- `std::fs::copy` already preserves
 //     a regular file's permission bits on Unix, which covers the common
@@ -855,34 +844,77 @@ fn unregister_preserved_libs(
     write_plib_registry(root, &registry)
 }
 
-/// Real `vardbapi.removeFromContents`, narrowed to the `CONTENTS`-line
-/// removal itself (real `NEEDED`-line stripping is a documented gap --
-/// see this module's own doc comment). A missing vdb entry for `cpv`
-/// (already unmerged some other way) is silently a no-op, matching real
-/// `removeFromContents`'s own tolerance of a stale registry entry.
+/// Real `vardbapi.removeFromContents` (`vartree.py:1244-1310`). A
+/// missing vdb entry for `cpv` (already unmerged some other way) is
+/// silently a no-op, matching real `removeFromContents`'s own tolerance
+/// of a stale registry entry.
+///
+/// Real `NEEDED`-line stripping ("Also remove corresponding NEEDED
+/// lines, so that they do no corrupt LinkageMap data for preserve-libs",
+/// `vartree.py:1279-1310`) is real now too, closing a gap this module's
+/// own doc comment used to document as moot ("without the registration
+/// side above ever writing NEEDED data in the first place") -- moot no
+/// longer, since real `NEEDED.ELF.2` generation and the full real
+/// `LinkageMap`/preserve-libs computation are both real now (see
+/// `needed_elf.rs`). Real `removed` (whether any `CONTENTS` line was
+/// actually dropped) gates the whole thing, matching real `if removed:`
+/// exactly -- when this package's own `NEEDED.ELF.2` doesn't exist at
+/// all (real `except OSError: ... new_needed` stays `None`), nothing is
+/// written, matching real `if new_needed is not None:` in
+/// `writeContentsToContentsFile`. When it does exist, every entry whose
+/// own `filename` (already `ROOT`-relative, this pilot's own `CONTENTS`/
+/// `NEEDED.ELF.2` convention -- no `os.path.join(root, ...)` needed the
+/// way real Python does, since both sides already agree on the same
+/// convention here) still appears among the *surviving* `CONTENTS`
+/// paths is kept; every other entry (now pointing at a file this package
+/// no longer owns) is dropped -- stale linkage data that would otherwise
+/// corrupt a *later* `LinkageMap.rebuild()`'s own preserve-libs decision
+/// for some *other* package's own future unmerge.
 fn remove_from_contents(root: &Path, cpv: &str, paths: &BTreeSet<String>) -> Result<(), String> {
     let Some((category, pf)) = cpv.split_once('/') else {
         return Ok(());
     };
-    let contents_path = root
-        .join("var/db/pkg")
-        .join(category)
-        .join(pf)
-        .join("CONTENTS");
+    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
+    let contents_path = vdb_dir.join("CONTENTS");
     let Ok(text) = std::fs::read_to_string(&contents_path) else {
         return Ok(());
     };
+    let mut removed = false;
+    let mut surviving_paths: BTreeSet<String> = BTreeSet::new();
     let new_text: String = text
         .lines()
         .filter(|line| {
             let mut parts = line.split_whitespace();
             parts.next();
-            !matches!(parts.next(), Some(p) if paths.contains(p))
+            let abs_path = parts.next();
+            if matches!(abs_path, Some(p) if paths.contains(p)) {
+                removed = true;
+                false
+            } else {
+                if let Some(p) = abs_path {
+                    surviving_paths.insert(p.to_string());
+                }
+                true
+            }
         })
         .map(|l| format!("{l}\n"))
         .collect();
     std::fs::write(&contents_path, new_text)
-        .map_err(|e| format!("{}: {e}", contents_path.display()))
+        .map_err(|e| format!("{}: {e}", contents_path.display()))?;
+
+    if removed {
+        let needed_path = vdb_dir.join("NEEDED.ELF.2");
+        if let Ok(needed_text) = std::fs::read_to_string(&needed_path) {
+            let new_needed: String = crate::needed_elf::NeededEntry::parse_file(&needed_text)
+                .into_iter()
+                .filter(|entry| surviving_paths.contains(&entry.filename))
+                .map(|entry| entry.to_needed_line())
+                .collect();
+            std::fs::write(&needed_path, new_needed)
+                .map_err(|e| format!("{}: {e}", needed_path.display()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Real `PreservedLibsRegistry.register`/`.unregister`
@@ -3837,6 +3869,94 @@ mod tests {
         let registry_text = std::fs::read_to_string(plib_registry_path(&root)).unwrap();
         let registry = parse_plib_registry(&registry_text).unwrap();
         assert!(registry.is_empty());
+    }
+
+    /// Real `removeFromContents`'s own `NEEDED`-line stripping
+    /// (`vartree.py:1279-1310`): a `NEEDED.ELF.2` entry for a path this
+    /// call actually removed from `CONTENTS` is dropped too, while an
+    /// entry for a path that's still owned survives untouched -- real
+    /// stale-linkage-data prevention for a *later* `LinkageMap.
+    /// rebuild()`'s own preserve-libs decision (see `remove_from_
+    /// contents`'s own doc comment).
+    #[test]
+    fn remove_from_contents_prunes_the_matching_needed_elf2_entry_too() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let vdb_dir = root.join("var/db/pkg/dev-libs/foo-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        std::fs::write(
+            vdb_dir.join("CONTENTS"),
+            "obj /usr/lib/a.so abc123 100\nobj /usr/lib/b.so def456 100\n",
+        )
+        .unwrap();
+        std::fs::write(
+            vdb_dir.join("NEEDED.ELF.2"),
+            "X86_64;/usr/lib/a.so;liba.so.1;;\nX86_64;/usr/lib/b.so;libb.so.1;;\n",
+        )
+        .unwrap();
+
+        let mut paths = BTreeSet::new();
+        paths.insert("/usr/lib/a.so".to_string());
+        remove_from_contents(&root, "dev-libs/foo-1.0", &paths)
+            .expect("remove_from_contents succeeds");
+
+        let contents = std::fs::read_to_string(vdb_dir.join("CONTENTS")).unwrap();
+        assert!(!contents.contains("/usr/lib/a.so"));
+        assert!(contents.contains("/usr/lib/b.so"));
+
+        let needed = std::fs::read_to_string(vdb_dir.join("NEEDED.ELF.2")).unwrap();
+        assert!(
+            !needed.contains("/usr/lib/a.so"),
+            "the entry for the removed path must be pruned: {needed}"
+        );
+        assert!(
+            needed.contains("/usr/lib/b.so"),
+            "the entry for the still-owned path must survive: {needed}"
+        );
+    }
+
+    /// Real `if new_needed is not None:` (`writeContentsToContentsFile`):
+    /// when this package never had a `NEEDED.ELF.2` at all, nothing is
+    /// written -- no file is conjured into existence just because a
+    /// `CONTENTS` entry happened to be removed.
+    #[test]
+    fn remove_from_contents_does_not_create_a_needed_elf2_file_that_never_existed() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let vdb_dir = root.join("var/db/pkg/dev-libs/foo-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        std::fs::write(vdb_dir.join("CONTENTS"), "obj /usr/lib/a.so abc123 100\n").unwrap();
+
+        let mut paths = BTreeSet::new();
+        paths.insert("/usr/lib/a.so".to_string());
+        remove_from_contents(&root, "dev-libs/foo-1.0", &paths)
+            .expect("remove_from_contents succeeds");
+
+        assert!(!vdb_dir.join("NEEDED.ELF.2").exists());
+    }
+
+    /// Real `if removed:` (`vartree.py:1279`): when none of the given
+    /// `paths` actually matched a real `CONTENTS` entry, `NEEDED.ELF.2`
+    /// isn't even read, let alone rewritten -- untouched, byte for byte.
+    #[test]
+    fn remove_from_contents_leaves_needed_elf2_untouched_when_nothing_was_removed() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let vdb_dir = root.join("var/db/pkg/dev-libs/foo-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        std::fs::write(vdb_dir.join("CONTENTS"), "obj /usr/lib/a.so abc123 100\n").unwrap();
+        let original_needed = "X86_64;/usr/lib/a.so;liba.so.1;;\n";
+        std::fs::write(vdb_dir.join("NEEDED.ELF.2"), original_needed).unwrap();
+
+        let mut paths = BTreeSet::new();
+        paths.insert("/usr/lib/nonexistent.so".to_string());
+        remove_from_contents(&root, "dev-libs/foo-1.0", &paths)
+            .expect("remove_from_contents succeeds");
+
+        assert_eq!(
+            std::fs::read_to_string(vdb_dir.join("NEEDED.ELF.2")).unwrap(),
+            original_needed
+        );
     }
 
     fn env_update_fixture() -> PathBuf {
