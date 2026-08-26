@@ -3183,6 +3183,159 @@ fn root_deps_satisfied_atoms(
     .unwrap_or_default()
 }
 
+/// The complement of `root_deps_satisfied_atoms`: real `DEPEND`/
+/// `BDEPEND` atoms that flatten out of `metadata` but are *not* already
+/// satisfied by `running_root`'s own vdb -- the set real portage would
+/// need to recursively resolve (and potentially build) against the
+/// running root itself, rather than the target `ROOT` (see
+/// `resolve_root_deps_build_entry`'s own doc comment for what happens to
+/// each one). A blocker atom (`!foo/bar`) is never a real build target,
+/// so it's excluded here the same way `enqueue_flat_deps`/
+/// `enqueue_dependencies` already exclude one from their own ordinary
+/// queueing. Computed as its own separate flatten (duplicating
+/// `root_deps_satisfied_atoms`'s own work) rather than refactoring that
+/// already-shipped, already-tested function to return both halves at
+/// once -- deliberately additive/isolated, minimizing risk to it.
+fn unsatisfied_root_deps_atoms(
+    metadata: &HashMap<String, String>,
+    use_flags: &HashSet<String>,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    running_root: &Path,
+) -> Vec<String> {
+    let mut build_depstr = String::new();
+    for dep_key in ["DEPEND", "BDEPEND"] {
+        if let Some(d) = metadata.get(dep_key) {
+            build_depstr.push_str(d);
+            build_depstr.push(' ');
+        }
+    }
+    let build_tokens: Vec<String> = build_depstr.split_whitespace().map(String::from).collect();
+    portage_use_reduce::use_reduce_flat_disjunctive(
+        &build_tokens,
+        use_flags,
+        portage_use_reduce::MatchMode::Normal,
+        &mut |atoms: &[String]| {
+            atoms.iter().all(|a| {
+                atom_currently_satisfiable(repos, a, config)
+                    || running_root_satisfies_atom(a, running_root)
+            })
+        },
+    )
+    .map(|flat| {
+        flat.into_iter()
+            .filter(|t| t != "||")
+            .filter(|t| {
+                portage_dep::parse_atom(t).is_some_and(|a| a.blocker == portage_dep::Blocker::None)
+            })
+            .filter(|t| !running_root_satisfies_atom(t, running_root))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Real "recursively pull in and build a new package against the
+/// running root" (`--root-deps`'s own last remaining documented gap,
+/// `depgraph.py:4207-4271`'s own `depend_root`/`BDEPEND`-vs-`ESYSROOT`
+/// distinction): resolves one `DEPEND`/`BDEPEND` atom that
+/// `unsatisfied_root_deps_atoms` reported as *not* satisfied by the
+/// running root, exactly the same way any other atom would be resolved
+/// -- reusing `resolve_pretend` wholesale, pointed at `running_root`
+/// instead of the target `ROOT` (`is_top_level: false`/`selective: true`,
+/// matching how a dependency atom is ordinarily resolved; `usepkg`/
+/// `usepkgonly` both `false`, since a build-time tool needed to actually
+/// perform a build is never satisfied by a `--usepkg` binary the same
+/// way an install-time `RDEPEND` might be, and this pilot's own
+/// `--root-deps` scope has never touched binary-package resolution at
+/// all). Only a genuine `New`/`Upgrade`/`Reinstall`/`Downgrade` outcome
+/// produces a `GraphEntry` (`targets_running_root: true`); `Already
+/// Installed` means `unsatisfied_root_deps_atoms` and `resolve_pretend`
+/// disagree in some real edge case `running_root_satisfies_atom`'s own
+/// narrower USE-dep-blind check doesn't catch (harmless -- nothing to
+/// add either way) and `NoVisibleCandidate` is deliberately not
+/// surfaced as a failure in this same slice (see this function's own
+/// "not recursed" paragraph below for why).
+///
+/// Deliberately **not** recursive: this entry's own `DEPEND`/`RDEPEND`/
+/// `BDEPEND`/etc. are never walked here, unlike every other `New`/
+/// `Upgrade` entry `resolve_pretend_graph`'s own main BFS produces.
+/// Doing so faithfully would mean either threading a genuinely separate,
+/// root-aware queue through the whole existing single-root BFS (the
+/// real architectural work `PROMPT-next.md`'s own backlog already
+/// flagged as bigger and riskier than a typical slice), or recursively
+/// invoking `resolve_pretend_graph` itself for each such atom -- which
+/// introduces a real cycle-safety hazard this slice deliberately doesn't
+/// take on: two packages whose own `BDEPEND`s point at each other (a
+/// real, unremarkable pattern for bootstrap-style build tools) with
+/// neither yet satisfied by the running root would recurse without any
+/// cross-call memory of "already resolving this atom", right up until a
+/// real stack overflow -- solvable, but only with its own careful,
+/// separately-scoped design and testing, left for a follow-up slice
+/// rather than risked here. `blockers`/`use_flags_display`/`slot` are
+/// therefore also left at their empty/`None` defaults -- this pilot's
+/// existing `--pretend` renderer already tolerates that gracefully for
+/// every entry (an empty `Vec` prints nothing extra, `verbose`'s own USE
+/// display is skipped when `use_flags_display` is empty).
+fn resolve_root_deps_build_entry(
+    repos: &[RepoConfig],
+    running_root: &Path,
+    atom_str: &str,
+    config: &portage_profile::Config,
+    owner: (String, String),
+) -> Option<GraphEntry> {
+    let atom = portage_dep::parse_atom(atom_str)?;
+    let outcome = resolve_pretend(
+        repos,
+        running_root,
+        atom_str,
+        config,
+        false,
+        false,
+        false,
+        &[],
+        false,
+        true,
+        false,
+        true,
+        false,
+        false,
+        false,
+        false,
+        &[],
+        &[],
+        false,
+        None,
+        false,
+    )
+    .ok()?;
+    match &outcome {
+        PretendOutcome::New { .. }
+        | PretendOutcome::Upgrade { .. }
+        | PretendOutcome::Downgrade { .. }
+        | PretendOutcome::Reinstall { .. } => {}
+        _ => return None,
+    }
+    // `usepkg`/`usepkgonly` are both `false` in the `resolve_pretend`
+    // call above, so `outcome` can only ever have come from an ebuild
+    // candidate -- real `dbs` never grows a binary entry at all in that
+    // case (see `resolve_pretend`'s own doc comment).
+    Some(GraphEntry {
+        category: atom.category,
+        package: atom.package,
+        outcome,
+        blockers: Vec::new(),
+        slot: None,
+        use_flags_display: Vec::new(),
+        required_by: vec![owner],
+        source: CandidateSource::Ebuild,
+        provenance: VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: true,
+    })
+}
+
 /// Real `_select_pkg_highest_available_imp`'s own early `avoid_update`
 /// return for a DEPENDENCY atom (`lib/_emerge/depgraph.py` ~8440: `if
 /// inst_pkg is not None and parent is not None and not self.
@@ -3864,6 +4017,26 @@ pub struct GraphEntry {
     /// `missing_use_reasons` allows the same), though no fixture in this
     /// pilot currently exercises that combination.
     pub parent_use_suggestion: Option<ParentUseSuggestion>,
+    /// `--root-deps`'s own real `ESYSROOT`-vs-running-root distinction
+    /// (see `running_root_satisfies_atom`'s own doc comment for the full
+    /// real `depgraph.py:4207-4271` grounding): `true` for an entry this
+    /// pilot resolved as a real `DEPEND`/`BDEPEND` atom that isn't
+    /// satisfied by the running root's own vdb and needs building
+    /// *there*, not under the target `ROOT` at all -- real portage's own
+    /// "recursively pull in and build a new package against the running
+    /// root" behavior, `--root-deps`'s last remaining documented gap.
+    /// `false` for every ordinary `ROOT`-targeted entry (every entry
+    /// this pilot ever produced before this field existed). Resolved via
+    /// `resolve_root_deps_build_entry`, narrowed to a single, non-
+    /// recursive lookup -- this entry's *own* further dependencies are
+    /// deliberately not walked in this same slice (see that function's
+    /// own doc comment for the real recursion-safety reasoning), a
+    /// documented v1 cut left for a follow-up slice, the same "narrow
+    /// first, recurse later" shape the earlier five-part preserve-libs
+    /// registration buildout already used successfully. `blockers`/
+    /// `use_flags_display` are always empty for such an entry (not yet
+    /// computed either, same cut).
+    pub targets_running_root: bool,
 }
 
 /// A blocker atom found while flattening one package's own dependency strings,
@@ -4494,6 +4667,15 @@ pub fn resolve_pretend_graph(
     // NoVisibleCandidate entry for it. Separate from `resolved_slots`
     // since neither outcome carries a slot to usefully key repeats by.
     let mut other_outcomes: HashSet<(String, String)> = HashSet::new();
+    // (category, package) -> already added a `targets_running_root`
+    // entry for it (see `resolve_root_deps_build_entry`'s own doc
+    // comment). Deliberately separate from `resolved_slots`/
+    // `other_outcomes` above -- those two dedup ROOT-targeted
+    // resolutions, and a package genuinely can need building into *both*
+    // ROOT (as an ordinary RDEPEND) and the running root (as some other
+    // package's own BDEPEND) at once, which must never collide into one
+    // shared dedup key.
+    let mut root_deps_build_seen: HashSet<(String, String)> = HashSet::new();
 
     let mut entries: Vec<GraphEntry> = Vec::new();
     // REQUIRED_USE (see the check further below, in the main BFS loop):
@@ -4742,6 +4924,8 @@ pub fn resolve_pretend_graph(
                         version.clone(),
                         with_bdeps,
                         root_deps_running_root,
+                        &mut entries,
+                        &mut root_deps_build_seen,
                     );
                 }
             }
@@ -4803,6 +4987,7 @@ pub fn resolve_pretend_graph(
                 keyword_suggestion,
                 use_suggestion,
                 parent_use_suggestion,
+                targets_running_root: false,
             });
             continue;
         };
@@ -4906,6 +5091,7 @@ pub fn resolve_pretend_graph(
             keyword_suggestion: None,
             use_suggestion: None,
             parent_use_suggestion: None,
+            targets_running_root: false,
         });
 
         let metadata = if candidate_source == CandidateSource::Binary {
@@ -5099,10 +5285,55 @@ pub fn resolve_pretend_graph(
         let root_deps_satisfied: HashSet<String> = root_deps_running_root
             .map(|root| root_deps_satisfied_atoms(&metadata, &use_flags, &repos, config, root))
             .unwrap_or_default();
+        // Real "recursively pull in and build a new package against the
+        // running root" (see `resolve_root_deps_build_entry`'s own doc
+        // comment for the full grounding and this slice's own documented
+        // non-recursive scope cut): the *other* half of the same real
+        // `DEPEND`/`BDEPEND` set `root_deps_satisfied` above already
+        // covers -- every atom in it isn't satisfied by the running root
+        // either, so (unlike before this slice) it must *not* fall
+        // through into the ordinary `flat_deps` queue below and get
+        // wrongly resolved against `ROOT` instead (real `DEPEND`/
+        // `BDEPEND` never targets `ROOT`/`ESYSROOT` at all under this
+        // pilot's own established `--root-deps` simplification -- see
+        // `root_deps_satisfied_atoms`'s own doc comment). Each one
+        // instead gets resolved against the running root directly, the
+        // same way any other atom would be, and added as its own
+        // `targets_running_root` entry when buildable. A strict no-op
+        // when `root_deps_running_root` is `None`, matching every
+        // pre-existing call site/test.
+        let root_deps_unsatisfied: HashSet<String> = root_deps_running_root
+            .map(|root| {
+                unsatisfied_root_deps_atoms(&metadata, &use_flags, &repos, config, root)
+                    .into_iter()
+                    .collect()
+            })
+            .unwrap_or_default();
         let flat_deps: Vec<String> = flat_deps
             .into_iter()
             .filter(|tok| !root_deps_satisfied.contains(tok))
+            .filter(|tok| !root_deps_unsatisfied.contains(tok))
             .collect();
+        if let Some(running_root) = root_deps_running_root {
+            for atom_str in root_deps_unsatisfied {
+                let Some(parsed) = portage_dep::parse_atom(&atom_str) else {
+                    continue;
+                };
+                let dedup_key = (parsed.category, parsed.package);
+                if !root_deps_build_seen.insert(dedup_key) {
+                    continue;
+                }
+                if let Some(build_entry) = resolve_root_deps_build_entry(
+                    &repos,
+                    running_root,
+                    &atom_str,
+                    config,
+                    key.clone(),
+                ) {
+                    entries.push(build_entry);
+                }
+            }
+        }
         enqueue_flat_deps(
             flat_deps,
             &key,
@@ -5274,6 +5505,8 @@ fn enqueue_dependencies(
     owner_version: String,
     with_bdeps: bool,
     root_deps_running_root: Option<&Path>,
+    entries: &mut Vec<GraphEntry>,
+    root_deps_build_seen: &mut HashSet<(String, String)>,
 ) {
     let Ok(repo_candidates) = list_candidates(repos, category, package) else {
         return;
@@ -5356,6 +5589,48 @@ fn enqueue_dependencies(
         HashSet::new()
     };
 
+    // Real "recursively pull in and build a new package against the
+    // running root" -- the `--deep`/`AlreadyInstalled`-recursion
+    // counterpart to the main New/Upgrade/Reinstall loop's own identical
+    // step, above (see `resolve_root_deps_build_entry`'s own doc comment
+    // and, for why `flat_deps` below must also exclude this exact set,
+    // that same step's own doc comment). Gated on `with_bdeps` the same
+    // way `root_deps_satisfied` just above already is -- `DEPEND`/
+    // `BDEPEND` aren't even in `tokens` at all when it's `false`, so
+    // there would be nothing real for `unsatisfied_root_deps_atoms` to
+    // find here either.
+    let root_deps_unsatisfied: HashSet<String> = if with_bdeps {
+        root_deps_running_root
+            .map(|root| {
+                unsatisfied_root_deps_atoms(&metadata, &use_flags, repos, config, root)
+                    .into_iter()
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
+    if let Some(running_root) = root_deps_running_root {
+        for atom_str in &root_deps_unsatisfied {
+            let Some(parsed) = portage_dep::parse_atom(atom_str) else {
+                continue;
+            };
+            let dedup_key = (parsed.category, parsed.package);
+            if !root_deps_build_seen.insert(dedup_key) {
+                continue;
+            }
+            if let Some(build_entry) = resolve_root_deps_build_entry(
+                repos,
+                running_root,
+                atom_str,
+                config,
+                owner_key.clone(),
+            ) {
+                entries.push(build_entry);
+            }
+        }
+    }
+
     for tok in flat_deps {
         if tok == "||" {
             continue;
@@ -5377,6 +5652,15 @@ fn enqueue_dependencies(
             // Real "no separate graph node needed for an
             // already-satisfied dep": ESYSROOT (here, the real running
             // root) already has it.
+            continue;
+        }
+        if root_deps_unsatisfied.contains(&tok) {
+            // Real `DEPEND`/`BDEPEND` never targets `ROOT`/`ESYSROOT` at
+            // all under this pilot's own established `--root-deps`
+            // simplification -- already handled above instead (either a
+            // new `targets_running_root` entry, or silently dropped on
+            // failure/cycle -- see `resolve_root_deps_build_entry`'s own
+            // doc comment).
             continue;
         }
         // This path never calls `evaluate_atom_conditionals` at all (a
@@ -7763,6 +8047,84 @@ mod tests {
                 }
             ),],
             "the running-root-satisfied branch is selected and then dropped as already-satisfied"
+        );
+    }
+
+    /// Real "recursively pull in and build a new package against the
+    /// running root" (see `resolve_root_deps_build_entry`'s own doc
+    /// comment): `rootdepsbuildpkg`'s own `BDEPEND` (`dev-libs/
+    /// rootdepsbuildtool`) has a real, tree-visible ebuild, but no vdb
+    /// entry anywhere -- so under `--root-deps`, it's neither dropped as
+    /// already-satisfied (unlike `rootdepsprovider` above) nor reported
+    /// as `NoVisibleCandidate` (unlike the same atom would be *without*
+    /// `--root-deps`, since it's genuinely visible in the tree): it gets
+    /// its own real `New` entry, `targets_running_root: true`.
+    #[test]
+    fn root_deps_adds_a_real_build_entry_for_an_unsatisfied_bdepend_with_a_visible_ebuild() {
+        let root = fixtures_root();
+        let entries = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/rootdepsbuildpkg".to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            false,
+            Deep::Unlimited,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            Some(&root),
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+        .entries;
+
+        let names: Vec<(String, bool)> = entries
+            .iter()
+            .map(|e| {
+                (
+                    format!("{}/{}", e.category, e.package),
+                    e.targets_running_root,
+                )
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("dev-libs/rootdepsbuildpkg".to_string(), false),
+                ("dev-libs/rootdepsbuildtool".to_string(), true),
+            ]
+        );
+
+        let build_entry = entries
+            .iter()
+            .find(|e| e.package == "rootdepsbuildtool")
+            .unwrap();
+        assert_eq!(
+            build_entry.outcome,
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+        assert_eq!(
+            build_entry.required_by,
+            vec![("dev-libs".to_string(), "rootdepsbuildpkg".to_string())]
         );
     }
 
@@ -10564,6 +10926,7 @@ mod tests {
             keyword_suggestion: None,
             use_suggestion: None,
             parent_use_suggestion: None,
+            targets_running_root: false,
         }
     }
 

@@ -5859,19 +5859,13 @@ acceptance, never narrows it). New fixture `dev-libs/rootdepsorpkg`
 both Rust and the Python reference mirror, plus a new dedicated pytest
 contract test.
 
-**KNOWN, DOCUMENTED SCOPE CUT (still open)**: real portage's fuller
+~~**KNOWN, DOCUMENTED SCOPE CUT (still open)**: real portage's fuller
 behavior of recursively pulling in and building a *new* package against
-the running root when it's *not* already there is still not attempted.
-Investigated directly this round: real `depgraph.py`'s own `--root-deps`
-support depends on a genuine multi-root architecture (`self.trees
-[myroot]`, `self.roots[myroot]`, separate per-root graphs) -- this
-pilot's own single unified BFS queue has no per-entry root tracking at
-all (its `QueueItem` is a bare tuple used pervasively across a ~10,600-
-line file), so reproducing this would mean touching most of that
-file's own call sites, real risk to already-tested, heavily-used code
-for a single slice. This v1 only answers "is it already there," never
-"what would it take to get it there" -- left as its own, separately-
-scoped future slice.
+the running root when it's *not* already there is still not
+attempted.~~ Partially shipped 2026-08-26 -- see "`emerge --pretend
+--root-deps`: recursively building a new package against the running
+root" below for the real, deliberately non-recursive first increment,
+and that section's own doc comment for exactly what's still left.
 
 New fixture `dev-libs/rootdepspkg` (`BDEPEND="dev-libs/rootdepsprovider"`,
 no ebuild for `rootdepsprovider` anywhere in the fixture repo tree at
@@ -5931,6 +5925,105 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
     PORTING/rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rootdepsorpkg
 # [ebuild  N] dev-libs/rootdepsorpkg-1.0
+```
+
+### `emerge --pretend --root-deps`: recursively building a new package against the running root
+
+The scope check paid off before any code was written: re-reading real
+`depgraph.py:4207-4271` directly (not just the summary the previous
+slice's own "still open" note carried) surfaced that the real gap is
+bigger than that note suggested -- real `BDEPEND` *always* targets the
+running root, completely independent of whether `--root-deps` is even
+passed, and real `DEPEND`'s own target root is EAPI-conditional
+(`ESYSROOT` for a `BDEPEND`-capable EAPI, the running root otherwise).
+Confirmed with the user directly before implementing anything: build
+toward the real, full multi-root shape, one confirmed increment at a
+time -- the same "narrow first" rhythm the five-part preserve-libs
+registration buildout already used successfully, not a single giant
+change to a ~10,600-line file.
+
+This first increment: real `DEPEND`/`BDEPEND` atoms that
+`unsatisfied_root_deps_atoms` (new, the complement of the already-
+shipped `root_deps_satisfied_atoms`) reports as *not* satisfied by the
+running root are now resolved there directly -- reusing `resolve_pretend`
+wholesale, just pointed at the running root instead of the target `ROOT`
+(`resolve_root_deps_build_entry`, new). A genuine `New`/`Upgrade`/
+`Reinstall`/`Downgrade` outcome becomes its own real `GraphEntry`, a new
+`targets_running_root: bool` field distinguishing it from every ordinary
+`ROOT`-targeted entry (`false` for all ~30 pre-existing call sites/
+tests, unchanged). Deduplicated separately from the main graph's own
+`resolved_slots`/`other_outcomes` (a `(category, package)` set of its
+own) -- a package can validly need building into *both* roots at once
+(an ordinary `RDEPEND` into `ROOT`, some other package's own `BDEPEND`
+into the running root), which must never collide into one shared dedup
+key. Wired into both real dep-walk sites, same as every other
+`--root-deps` mechanism in this area: the main New/Upgrade/Reinstall
+loop, and `enqueue_dependencies`'s own `--deep`/`AlreadyInstalled`
+recursion.
+
+A real, non-obvious bug surfaced and got fixed in the same slice: an
+unsatisfied `DEPEND`/`BDEPEND` atom used to simply fall through into the
+ordinary `flat_deps` queue (silently resolved against `ROOT` instead,
+since nothing previously excluded it) -- invisible in every existing
+fixture, since `rootdepsprovider`/`rootdepsnonexistent` (the pre-existing
+`rootdepspkg`/`rootdepsorpkg` fixtures) were both deliberately
+tree-invisible, so they never reached that fallback with a resolvable
+candidate at all. The new `dev-libs/rootdepsbuildpkg` fixture (a real,
+tree-visible `BDEPEND` target, `dev-libs/rootdepsbuildtool`) exposed it
+immediately: the atom was resolving *twice*, once as the new
+`targets_running_root` entry and once more via the old `ROOT`-targeted
+fallback. Fixed by excluding the full `unsatisfied_root_deps_atoms` set
+from `flat_deps` too, not just `root_deps_satisfied_atoms`'s own already-
+satisfied subset -- consistent with this pilot's own established
+`--root-deps` simplification (real `DEPEND`/`BDEPEND` never targets
+`ROOT`/`ESYSROOT` at all under it, matching `root_deps_satisfied_atoms`'s
+own pre-existing DEPEND-and-BDEPEND-treated-uniformly precedent).
+
+**Deliberately not recursive, confirmed with the user as this slice's
+own scope boundary**: the new entry's *own* further dependencies aren't
+walked. A faithful, fully recursive version means either threading a
+genuinely separate, root-aware queue through the entire existing single-
+root BFS (the real architectural work `PROMPT-next.md`'s own backlog
+already flagged as bigger and riskier than a typical slice), or
+recursively invoking `resolve_pretend_graph` itself per atom -- which
+introduces a real cycle-safety hazard this slice deliberately doesn't
+take on: two packages whose own `BDEPEND`s point at each other (an
+unremarkable pattern for bootstrap-style build tools), neither yet
+satisfied by the running root, would recurse with no cross-call memory
+of "already resolving this atom," right up to a real stack overflow --
+solvable, but only with its own careful, separately-scoped design and
+testing. Left for a follow-up slice, the same "narrow first, recurse
+later" shape preserve-libs registration already used across five slices
+before its own control-flow wiring landed.
+
+Verified with two new Rust unit tests in `portage-repo` (a real build
+entry appears, `targets_running_root: true`, `required_by` naming the
+requesting package -- and the fix above, proven by asserting the atom
+appears *exactly once* in the resolved graph, not twice), mirrored
+exactly in `emerge_pretend_reference.py` (`_unsatisfied_root_deps_atoms`,
+`_resolve_root_deps_build_entry`, the same 13th tuple field and the same
+double-exclusion fix threaded through both dep-walk sites -- including
+three more exhaustive-tuple-unpack sites the extra field's own end-to-end
+plumbing touched: the `required_by`-merge post-pass, `resolve_blockers`,
+and `--json` serialization), and a new dedicated pytest contract test
+(`test_root_deps_recursive_build_entry_matches_between_implementations`)
+proving byte-for-byte Rust/Python parity for the new fixture in both
+`--root-deps` modes.
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rootdepsbuildpkg
+# [ebuild  N] dev-libs/rootdepsbuildpkg-1.0
+# [ebuild  N] dev-libs/rootdepsbuildtool-1.0
+# -- rootdepsbuildtool is a real, separate graph entry now (targets_
+# running_root: true internally, though plain-text output doesn't yet
+# distinguish it -- see this section's own doc comment for why that's a
+# deliberate, still-open follow-up rather than an oversight)
 ```
 
 ### Real `ebuild <file> qmerge`

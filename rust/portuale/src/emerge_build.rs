@@ -238,6 +238,7 @@ mod tests {
                 keyword_suggestion: None,
                 use_suggestion: None,
                 parent_use_suggestion: None,
+                targets_running_root: false,
             },
             GraphEntry {
                 category: "dev-libs".into(),
@@ -252,6 +253,7 @@ mod tests {
                 keyword_suggestion: None,
                 use_suggestion: None,
                 parent_use_suggestion: None,
+                targets_running_root: false,
             },
         ];
         let bogus = PathBuf::from("/nonexistent/does/not/exist");
@@ -301,6 +303,7 @@ mod tests {
             keyword_suggestion: None,
             use_suggestion: None,
             parent_use_suggestion: None,
+            targets_running_root: false,
         }];
 
         let result = run_buildpkgonly(
@@ -360,6 +363,7 @@ mod tests {
             keyword_suggestion: None,
             use_suggestion: None,
             parent_use_suggestion: None,
+            targets_running_root: false,
         }];
 
         let result = run_buildpkgonly(
@@ -410,6 +414,7 @@ mod tests {
             keyword_suggestion: None,
             use_suggestion: None,
             parent_use_suggestion: None,
+            targets_running_root: false,
         }
     }
 

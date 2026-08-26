@@ -884,6 +884,51 @@ def test_root_deps_disjunctive_branch_selection_matches_between_implementations(
     assert rust_with.stdout.strip() == "[ebuild  N] dev-libs/rootdepsorpkg-1.0"
 
 
+def test_root_deps_recursive_build_entry_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real "recursively pull in and build a new package against the
+    running root" (--root-deps's own last remaining documented gap, see
+    resolve_root_deps_build_entry's own doc comment in portage-repo/src/
+    lib.rs): unlike rootdepspkg/rootdepsorpkg above, rootdepsbuildpkg's
+    own BDEPEND (dev-libs/rootdepsbuildtool) has a real, tree-visible
+    ebuild -- deliberately, so this exercises the new build-entry path
+    rather than the older running-root-satisfiability check alone. It
+    isn't installed in the running root either way, so both with and
+    without --root-deps it falls through to a real New entry -- without
+    --root-deps via this pilot's own pre-existing (unrelated to this
+    slice) "BDEPEND resolved as an ordinary ROOT-targeted dependency"
+    fallback, with --root-deps via the new targets_running_root entry
+    instead; both happen to print an identical plain-text line, which is
+    exactly why this test exists alongside rootdepspkg/rootdepsorpkg
+    above rather than replacing either: it proves the new code path
+    produces the same real, correct output Python's own mirror does, not
+    that it's visually distinguishable from the pre-existing fallback."""
+    env = dict(fixture_env)
+    env["PORTAGE_RUNNING_ROOT"] = env["ROOT"]
+    args_without = ["--pretend", "dev-libs/rootdepsbuildpkg"]
+    args_with = ["--pretend", "--root-deps", "dev-libs/rootdepsbuildpkg"]
+
+    rust_without = _run([str(emerge_binary)], args_without, env)
+    python_without = _run(emerge_pretend_python, args_without, env)
+    assert rust_without.returncode == 0
+    assert python_without.returncode == 0
+    assert rust_without.stdout == python_without.stdout
+    assert rust_without.stderr == python_without.stderr
+    assert rust_without.stdout.strip() == (
+        "[ebuild  N] dev-libs/rootdepsbuildpkg-1.0\n"
+        "[ebuild  N] dev-libs/rootdepsbuildtool-1.0"
+    )
+
+    rust_with = _run([str(emerge_binary)], args_with, env)
+    python_with = _run(emerge_pretend_python, args_with, env)
+    assert rust_with.returncode == 0
+    assert python_with.returncode == 0
+    assert rust_with.stdout == python_with.stdout
+    assert rust_with.stderr == python_with.stderr
+    assert rust_with.stdout == rust_without.stdout
+
+
 def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
     """Pins the exact recursion output for the diamond fixture (diamond ->
     shared-a, shared-b -> common), not just parity with Python: "common"

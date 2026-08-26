@@ -3167,6 +3167,97 @@ def _root_deps_satisfied_atoms(metadata, use_flags, repos, config, running_root)
     }
 
 
+def _unsatisfied_root_deps_atoms(metadata, use_flags, repos, config, running_root):
+    """The complement of _root_deps_satisfied_atoms: real DEPEND/BDEPEND
+    atoms that flatten out of metadata but are *not* already satisfied by
+    running_root's own vdb -- the set real portage would need to
+    recursively resolve (and potentially build) against the running root
+    itself, rather than the target ROOT (see
+    _resolve_root_deps_build_entry's own docstring for what happens to
+    each one). A blocker atom is never a real build target, so it's
+    excluded here the same way _enqueue_flat_deps/_enqueue_dependencies
+    already exclude one from their own ordinary queueing. Computed as its
+    own separate flatten (duplicating _root_deps_satisfied_atoms's own
+    work) rather than refactoring that already-shipped function to return
+    both halves at once -- deliberately additive/isolated. Mirrors
+    portage-repo/src/lib.rs's unsatisfied_root_deps_atoms exactly."""
+    build_depstr = " ".join(metadata[k] for k in ("DEPEND", "BDEPEND") if metadata.get(k))
+    try:
+        build_flat = _use_reduce_flat_disjunctive(
+            build_depstr,
+            use_flags,
+            lambda atoms: all(
+                _atom_currently_satisfiable(repos, a, config)
+                or _running_root_satisfies_atom(a, running_root)
+                for a in atoms
+            ),
+        )
+    except InvalidDependString:
+        return []
+    result = []
+    for tok in build_flat:
+        if tok == "||":
+            continue
+        dep_atom = _parse_atom(tok)
+        if dep_atom is not None and dep_atom.blocker:
+            continue
+        if _running_root_satisfies_atom(tok, running_root):
+            continue
+        result.append(tok)
+    return result
+
+
+def _resolve_root_deps_build_entry(repos, running_root, atom_str, config, owner):
+    """Real "recursively pull in and build a new package against the
+    running root" (--root-deps's own last remaining documented gap):
+    resolves one DEPEND/BDEPEND atom that _unsatisfied_root_deps_atoms
+    reported as not satisfied by the running root, exactly the same way
+    any other atom would be resolved -- reusing resolve_pretend wholesale,
+    pointed at running_root instead of the target ROOT (is_top_level=
+    False/selective=True, matching how a dependency atom is ordinarily
+    resolved; usepkg/usepkgonly both False, since a build-time tool
+    needed to actually perform a build is never satisfied by a --usepkg
+    binary the same way an install-time RDEPEND might be). Only a
+    genuine new/upgrade/downgrade/reinstall outcome produces an entry
+    (targets_running_root=True); already_installed/no_visible_candidate
+    produce None -- see portage-repo/src/lib.rs's resolve_root_deps_
+    build_entry for the full grounding of why this is deliberately not
+    recursive (real cycle-safety hazard, left for a follow-up slice).
+    Mirrors that function exactly."""
+    atom = _parse_atom(atom_str)
+    if atom is None:
+        return None
+    outcome = resolve_pretend(
+        repos,
+        running_root,
+        atom_str,
+        config,
+        with_bdeps=True,
+        selective=True,
+        is_top_level=False,
+    )
+    if outcome[0] not in ("new", "upgrade", "downgrade", "reinstall"):
+        return None
+    category, package = atom.cp.split("/", 1)
+    # usepkg/usepkgonly are both False in the resolve_pretend call above,
+    # so outcome can only ever have come from an ebuild candidate.
+    return (
+        category,
+        package,
+        outcome,
+        [],
+        None,
+        [],
+        [owner],
+        "ebuild",
+        {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
+        None,
+        None,
+        None,
+        True,
+    )
+
+
 def _dependency_avoid_update_candidate(root, atom, atom_str, category, package, candidates, installed):
     """Real `_select_pkg_highest_available_imp`'s own early avoid_update
     return for a DEPENDENCY atom (`lib/_emerge/depgraph.py` ~8440: "if
@@ -3730,6 +3821,7 @@ def resolve_blockers(root, pending, entries):
             _keyword_suggestion,
             _use_suggestion,
             _parent_use_suggestion,
+            _targets_running_root,
         ) in entries:
             if (category, package) != target_key:
                 continue
@@ -3976,6 +4068,13 @@ def resolve_pretend_graph(
     # NoVisibleCandidate entry for it -- neither outcome carries a slot
     # to usefully key repeats by.
     other_outcomes = set()
+    # (category, package) -> already added a targets_running_root entry
+    # for it (see _resolve_root_deps_build_entry's own docstring).
+    # Deliberately separate from resolved_slots/other_outcomes above --
+    # those two dedup ROOT-targeted resolutions, and a package genuinely
+    # can need building into both ROOT (as an ordinary RDEPEND) and the
+    # running root (as some other package's own BDEPEND) at once.
+    root_deps_build_seen = set()
 
     entries = []
     # REQUIRED_USE (see the check further below, in the main BFS loop):
@@ -4187,6 +4286,8 @@ def resolve_pretend_graph(
                     outcome[1],
                     with_bdeps,
                     root_deps_running_root,
+                    entries,
+                    root_deps_build_seen,
                 )
             # --autounmask's own keyword-suggestion sub-feature, extended
             # here to a *dependency's* own NoVisibleCandidate -- see
@@ -4238,6 +4339,7 @@ def resolve_pretend_graph(
                     keyword_suggestion,
                     use_suggestion,
                     parent_use_suggestion,
+                    False,
                 )
             )
             continue
@@ -4313,6 +4415,7 @@ def resolve_pretend_graph(
                 None,
                 None,
                 None,
+                False,
             )
         )
 
@@ -4430,6 +4533,7 @@ def resolve_pretend_graph(
                 entries[entry_idx][9],
                 entries[entry_idx][10],
                 entries[entry_idx][11],
+                entries[entry_idx][12],
             )
 
         # --nodeps: skip this package's own DEPEND/RDEPEND/etc entirely --
@@ -4480,7 +4584,41 @@ def resolve_pretend_graph(
             if root_deps_running_root is not None
             else set()
         )
-        flat_deps = [tok for tok in flat_deps if tok not in root_deps_satisfied]
+        # Real "recursively pull in and build a new package against the
+        # running root" -- the other half of the same real DEPEND/BDEPEND
+        # set root_deps_satisfied above already covers -- every atom in
+        # it isn't satisfied by the running root either, so it must not
+        # fall through into the ordinary flat_deps queue below and get
+        # wrongly resolved against ROOT instead (real DEPEND/BDEPEND
+        # never targets ROOT/ESYSROOT at all under this pilot's own
+        # established --root-deps simplification -- see
+        # _root_deps_satisfied_atoms's own doc comment). Each one instead
+        # gets resolved against the running root directly, the same way
+        # any other atom would be, and added as its own
+        # targets_running_root entry when buildable. Mirrors
+        # portage-repo/src/lib.rs's identical step exactly.
+        root_deps_unsatisfied = (
+            set(_unsatisfied_root_deps_atoms(metadata, use_flags, repos, config, root_deps_running_root))
+            if root_deps_running_root is not None
+            else set()
+        )
+        flat_deps = [
+            tok for tok in flat_deps if tok not in root_deps_satisfied and tok not in root_deps_unsatisfied
+        ]
+        if root_deps_running_root is not None:
+            for atom_str in root_deps_unsatisfied:
+                dep_atom = _parse_atom(atom_str)
+                if dep_atom is None:
+                    continue
+                dedup_key = tuple(dep_atom.cp.split("/", 1))
+                if dedup_key in root_deps_build_seen:
+                    continue
+                root_deps_build_seen.add(dedup_key)
+                build_entry = _resolve_root_deps_build_entry(
+                    repos, root_deps_running_root, atom_str, config, key
+                )
+                if build_entry is not None:
+                    entries.append(build_entry)
         _enqueue_flat_deps(flat_deps, key, version, depth, use_flags, queue, pending_blockers)
 
         # --with-test-deps: additive on top of the normal deps just
@@ -4524,8 +4662,9 @@ def resolve_pretend_graph(
             keyword_suggestion,
             use_suggestion,
             parent_use_suggestion,
+            targets_running_root,
         )
-        for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion in entries
+        for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root in entries
     ]
 
     # setdefault (not a dict comprehension) so the *first* entry for a
@@ -4547,6 +4686,7 @@ def resolve_pretend_graph(
         _keyword_suggestion,
         _use_suggestion,
         _parent_use_suggestion,
+        _targets_running_root,
     ) in entries:
         blockers_by_owner.setdefault((category, package), blockers)
     for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
@@ -4606,6 +4746,8 @@ def _enqueue_dependencies(
     owner_version,
     with_bdeps=True,
     root_deps_running_root=None,
+    entries=None,
+    root_deps_build_seen=None,
 ):
     """Reads `category/package-version`'s own DEPEND+RDEPEND+BDEPEND+
     PDEPEND+IDEPEND metadata (from whichever repo actually carries this
@@ -4713,6 +4855,32 @@ def _enqueue_dependencies(
         else set()
     )
 
+    # Real "recursively pull in and build a new package against the
+    # running root" -- the --deep/AlreadyInstalled-recursion counterpart
+    # to the main New/Upgrade/Reinstall loop's own identical step (see
+    # _resolve_root_deps_build_entry's own docstring). Gated on
+    # with_bdeps the same way root_deps_satisfied just above already is.
+    root_deps_unsatisfied = (
+        set(_unsatisfied_root_deps_atoms(metadata, use_flags, repos, config, root_deps_running_root))
+        if root_deps_running_root is not None and with_bdeps
+        else set()
+    )
+    if root_deps_running_root is not None:
+        for atom_str in root_deps_unsatisfied:
+            dep_atom = _parse_atom(atom_str)
+            if dep_atom is None:
+                continue
+            dedup_key = tuple(dep_atom.cp.split("/", 1))
+            if root_deps_build_seen is not None:
+                if dedup_key in root_deps_build_seen:
+                    continue
+                root_deps_build_seen.add(dedup_key)
+            build_entry = _resolve_root_deps_build_entry(
+                repos, root_deps_running_root, atom_str, config, owner_key
+            )
+            if build_entry is not None and entries is not None:
+                entries.append(build_entry)
+
     for tok in flat_deps:
         if tok == "||":
             continue
@@ -4733,6 +4901,11 @@ def _enqueue_dependencies(
             # Real "no separate graph node needed for an
             # already-satisfied dep": ESYSROOT (here, the real running
             # root) already has it.
+            continue
+        if tok in root_deps_unsatisfied:
+            # Real DEPEND/BDEPEND never targets ROOT/ESYSROOT at all
+            # under this pilot's own established --root-deps
+            # simplification -- already handled above instead.
             continue
         # This path never calls evaluate_conditionals at all (a real,
         # pre-existing gap unrelated to --autounmask-use: an
@@ -5131,7 +5304,7 @@ def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, ve
         _entry_to_json(
             category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, top_level_pkgs, verbose
         )
-        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion in entries
+        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, _targets_running_root in entries
     )
     conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)
     changed_deps_report_json = ",".join(
@@ -6570,7 +6743,21 @@ def run(args):
         # out so both display modes share one implementation rather than
         # drifting apart. Mirrors pretend.rs's own print_entry_line
         # exactly.
-        category, package, outcome, blockers, _slot, use_display, _required_by, source, _provenance, keyword_suggestion, use_suggestion, parent_use_suggestion = entry
+        (
+            category,
+            package,
+            outcome,
+            blockers,
+            _slot,
+            use_display,
+            _required_by,
+            source,
+            _provenance,
+            keyword_suggestion,
+            use_suggestion,
+            parent_use_suggestion,
+            _targets_running_root,
+        ) = entry
         tag = outcome[0]
         # --onlydeps (man/emerge.1: "Only merge (or pretend to merge) the
         # dependencies of the packages specified, not the packages
