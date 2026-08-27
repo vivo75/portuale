@@ -2,6 +2,63 @@
 
 use crate::*;
 
+/// Every installed package reachable over the installed dependency graph from
+/// the required sets (`@world` ∪ `@selected` ∪ `@system`). Gates
+/// `slot_operator_rebuild_entries`: Portage only slot-op-rebuilds a consumer
+/// that is in the graph.
+// Portage: _emerge/depgraph.py, _complete_graph
+pub fn required_set_reachable_cps(
+    root: &Path,
+    world_selected_atoms: &[String],
+    system_atoms: &[String],
+) -> HashSet<(String, String)> {
+    let installed = all_installed_packages(root);
+    let by_cp: HashMap<(&str, &str), &InstalledPackage> = installed
+        .iter()
+        .map(|p| ((p.category.as_str(), p.package.as_str()), p))
+        .collect();
+    let matches_cp = |atom_str: &str| -> Option<(String, String)> {
+        let a = portage_dep::parse_atom(atom_str)?;
+        let p = by_cp.get(&(a.category.as_str(), a.package.as_str()))?;
+        // A slot/version-constrained seed still only needs cp-level
+        // reachability here.
+        Some((p.category.clone(), p.package.clone()))
+    };
+
+    let mut reachable: HashSet<(String, String)> = HashSet::new();
+    let mut queue: Vec<(String, String)> = Vec::new();
+    for atom_str in world_selected_atoms.iter().chain(system_atoms) {
+        if let Some(cp) = matches_cp(atom_str)
+            && reachable.insert(cp.clone())
+        {
+            queue.push(cp);
+        }
+    }
+    while let Some((cat, pkg)) = queue.pop() {
+        let Some(p) = by_cp.get(&(cat.as_str(), pkg.as_str())) else {
+            continue;
+        };
+        let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+            let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in atoms {
+                if let Some(cp) = matches_cp(&atom_str)
+                    && reachable.insert(cp.clone())
+                {
+                    queue.push(cp);
+                }
+            }
+        }
+    }
+    reachable
+}
+
 /// `<version>` with a trailing `-r<digits>` revision suffix removed.
 /// Returns the input unchanged when there is no such suffix.
 pub(crate) fn strip_revision(version: &str) -> &str {

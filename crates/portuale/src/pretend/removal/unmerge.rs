@@ -139,3 +139,71 @@ pub(crate) fn installed_cp_versions(root: &Path) -> Vec<(String, String, String,
     }
     out
 }
+
+/// Shared `--depclean`/`--prune` argument handling: resolve each bare name
+/// against the vdb null-category scan, then check every resulting atom. One
+/// matching nothing prints `--- Couldn't find 'X' to <action>`; if none
+/// match, print the empty message and return `Err(1)`. Empty `targets` is
+/// `Ok(vec![])` (the full, no-args form).
+/// Portage: _emerge/actions.py, action_depclean
+pub(crate) fn resolve_cleanup_args(
+    targets: &[&str],
+    root: &Path,
+    action: &str,
+) -> Result<Vec<String>, ExitCode> {
+    let mut args: Vec<String> = Vec::new();
+    let installed_scan = installed_cp_versions(root);
+    for t in targets {
+        if t.contains('/') {
+            args.push((*t).to_string());
+        } else {
+            let cats: HashSet<&String> = installed_scan
+                .iter()
+                .filter(|(_, p, _, _)| p == *t)
+                .map(|(c, _, _, _)| c)
+                .collect();
+            match cats.len() {
+                0 => args.push((*t).to_string()), // let the "Couldn't find" path report it
+                1 => args.push(format!("{}/{t}", cats.into_iter().next().unwrap())),
+                _ => {
+                    eprintln!("\n!!! The short package name \"{t}\" is ambiguous. Please specify");
+                    eprintln!("!!! one of the following fully-qualified package names instead:\n");
+                    let mut names: Vec<String> =
+                        cats.into_iter().map(|c| format!("    {c}/{t}")).collect();
+                    names.sort();
+                    for n in names {
+                        println!("{n}");
+                    }
+                    return Err(ExitCode::from(1));
+                }
+            }
+        }
+    }
+
+    if !args.is_empty() {
+        let mut any_matched = false;
+        for a in &args {
+            let matched = portage_dep::parse_atom(a).is_some_and(|atom| {
+                portage_repo::installed_candidates(root, &atom.category, &atom.package)
+                    .iter()
+                    .any(|(v, s, sub)| {
+                        let cs = format!("{}/{}-{v}:{s}/{sub}", atom.category, atom.package);
+                        match_from_list(a, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+                    })
+            });
+            if matched {
+                any_matched = true;
+            } else {
+                eprintln!(
+                    "--- Couldn't find '{}' to {action}.",
+                    a.strip_prefix("null/").unwrap_or(a)
+                );
+            }
+        }
+        if !any_matched {
+            println!(">>> No packages selected for removal by {action}");
+            return Err(ExitCode::from(1));
+        }
+    }
+    Ok(args)
+}

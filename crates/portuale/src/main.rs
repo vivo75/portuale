@@ -70,6 +70,14 @@ fn basename(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
+/// `emerge --pretend` in any spelling: `--pretend` or a short-option
+/// cluster holding `p` (`-p`, `-pv`, `-uDNp`).
+fn emerge_is_pretend(args: &[String]) -> bool {
+    args.iter().any(|a| {
+        a == "--pretend" || (a.starts_with('-') && !a.starts_with("--") && a[1..].contains('p'))
+    })
+}
+
 fn main() -> ExitCode {
     // Applets are wired in here as they become usable.
     eprintln!("portuale: no applet is wired in yet");
