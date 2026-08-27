@@ -6766,16 +6766,21 @@ def _all_installed_packages(root):
     return out
 
 
-def _depclean_cleanlist(root, world_atoms, system_atoms, args):
+def _depclean_cleanlist(root, world_seeds, system_atoms, args):
     """Real emerge --depclean's removal list (_calc_depclean +
     create_cleanlist). No `args`: roots = installed pkgs @world ∪ @system
     match; cleanlist = every installed pkg none reach. With `args`: real
     _complete_graph drops the world "selected" plain atoms (deselect
     default) and makes every non-`args` installed pkg a protected root,
     so roots = @system ∪ {non-arg installed}, cleanlist = the
-    args-matched pkgs nothing reaches. Returns (cleanlist,
-    required_count). Mirrors portage-repo/src/lib.rs's depclean_cleanlist
-    -- see its docstring for the documented narrowings.
+    args-matched pkgs nothing reaches. `world_seeds` is (atom, set_label)
+    pairs (label used only for the --verbose reverse-dep display).
+    Returns (cleanlist, required_count, ordered, kept_parents) --
+    kept_parents mirrors real create_cleanlist's `elif "--verbose":
+    show_parents(pkg)`: [(pkg tuple, [rendered line, ...])] for every
+    kept pkg, cpv-sorted. Mirrors portage-repo/src/lib.rs's
+    depclean_cleanlist -- see its docstring for the documented
+    narrowings.
 
     The build-time keys DEPEND/BDEPEND are followed as well: real
     _calc_depclean builds its graph via the full depgraph in "remove"
@@ -6812,26 +6817,33 @@ def _depclean_cleanlist(root, world_atoms, system_atoms, args):
 
     reachable = set()
     queue = []
+    # Real _dynamic_config._parent_atoms: child key -> [(parent desc,
+    # atom)]; parent desc is a cpv or an @set label.
+    parent_atoms = {}
+
+    def add_edge(child_key, parent_desc, atom):
+        parent_atoms.setdefault(child_key, []).append((parent_desc, atom))
 
     def seed(c, p, v):
         if (c, p, v) not in reachable:
             reachable.add((c, p, v))
             queue.append((c, p, v))
 
-    for atom_str in system_atoms:
-        for (c, p, v, _s) in matches_atom(atom_str):
-            seed(c, p, v)
+    seed_pairs = [(a, "@system") for a in system_atoms]
     if not args:
-        for atom_str in world_atoms:
-            for (c, p, v, _s) in matches_atom(atom_str):
-                seed(c, p, v)
-    else:
+        seed_pairs += [(a, label) for (a, label) in world_seeds]
+    for atom_str, label in seed_pairs:
+        for (c, p, v, _s) in matches_atom(atom_str):
+            add_edge((c, p, v), label, atom_str)
+            seed(c, p, v)
+    if args:
         for pkg in installed:
             if not matched_by_args(pkg):
                 seed(pkg[0], pkg[1], pkg[2])
 
     while queue:
         c, p, v = queue.pop()
+        parent_cpv = f"{c}/{p}-{v}"
         use_flags = _read_vdb_flag_set(root, c, p, v, "USE")
         for dep_key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"):
             depstr = _read_vdb_string(root, c, p, v, dep_key)
@@ -6842,6 +6854,7 @@ def _depclean_cleanlist(root, world_atoms, system_atoms, args):
                 continue
             for atom_str in atoms:
                 for (dc, dp, dv, _ds) in matches_atom(atom_str):
+                    add_edge((dc, dp, dv), parent_cpv, atom_str)
                     if (dc, dp, dv) not in reachable:
                         reachable.add((dc, dp, dv))
                         queue.append((dc, dp, dv))
@@ -6858,9 +6871,43 @@ def _depclean_cleanlist(root, world_atoms, system_atoms, args):
         ),
         key=lambda t: (t[0], t[1], vkey(t[2])),
     )
+
+    def atom_pkg_name(a):
+        parsed = _parse_atom(a)
+        return parsed.cp.split("/", 1)[1] if parsed is not None else ""
+
+    kept = sorted(
+        (
+            (c, p, v)
+            for pkg in installed
+            for (c, p, v) in [(pkg[0], pkg[1], pkg[2])]
+            if (c, p, v) in reachable and (not args or matched_by_args(pkg))
+        ),
+        key=lambda t: (t[0], t[1], vkey(t[2])),
+    )
+    kept_parents = []
+    for k in kept:
+        edges = parent_atoms.get(k)
+        if not edges:
+            continue
+        by_parent = {}
+        for par, atom in edges:
+            by_parent.setdefault(par, [])
+            if atom not in by_parent[par]:
+                by_parent[par].append(atom)
+        lines = sorted(
+            "{} requires {}".format(
+                par,
+                ", ".join(sorted(atoms, key=atom_pkg_name, reverse=True)),
+            )
+            for par, atoms in by_parent.items()
+        )
+        if lines:
+            kept_parents.append((k, lines))
+
     slot_of = {(c, p, v): s for (c, p, v, s) in installed}
     ordered, cleanlist = _topological_removal_order(root, cleanlist, slot_of)
-    return cleanlist, len(reachable), ordered
+    return cleanlist, len(reachable), ordered, kept_parents
 
 
 def _topological_removal_order(root, cleanlist, slot_of):
@@ -7116,7 +7163,7 @@ def _prune_cleanlist(root, args):
     return cleanlist, len(reachable), ordered
 
 
-def _run_depclean_pretend(targets, root, config_root, config):
+def _run_depclean_pretend(targets, root, config_root, config, verbose=False):
     """emerge --pretend --depclean / -pc (real action_depclean +
     _calc_depclean). Mirrors pretend.rs's run_depclean_pretend."""
     try:
@@ -7141,21 +7188,32 @@ def _run_depclean_pretend(targets, root, config_root, config):
         ):
             print(line)
 
-    world = []
+    world_seeds = []
     try:
-        world.extend(_read_world_atoms(root))
+        world_seeds.extend((a, "@selected") for a in _read_world_atoms(root))
         for name in _read_world_sets(root):
             seen = set()
-            world.extend(_resolve_custom_set(config_root, name, seen))
+            world_seeds.extend(
+                (a, f"@{name}") for a in _resolve_custom_set(config_root, name, seen)
+            )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
-    world_atom_count = len(set(world))
+    world_atom_count = len({a for (a, _l) in world_seeds})
 
-    cleanlist, required_count, ordered = _depclean_cleanlist(
-        root, world, config["system_packages"], args
+    cleanlist, required_count, ordered, kept_parents = _depclean_cleanlist(
+        root, world_seeds, config["system_packages"], args
     )
     installed_total = len(_all_installed_packages(root))
+
+    # Real create_cleanlist's `elif "--verbose": show_parents(pkg)` --
+    # after the ` * ` advisory, before the removal-order / empty message.
+    if verbose:
+        for (c, p, v), lines in kept_parents:
+            print(f"  {c}/{p}-{v} pulled in by:")
+            for line in lines:
+                print(f"    {line}")
+            print()
 
     def stats():
         print(f"Packages installed:   {installed_total}")
@@ -7166,7 +7224,8 @@ def _run_depclean_pretend(targets, root, config_root, config):
 
     if not cleanlist:
         print(">>> No packages selected for removal by depclean")
-        print(">>> To see reverse dependencies, use --verbose")
+        if not verbose:
+            print(">>> To see reverse dependencies, use --verbose")
         stats()
         return 0
 
@@ -8200,7 +8259,9 @@ def run(args):
     if unmerge:
         return _run_unmerge_pretend(atom_args, _root(), _config_root(), config)
     if depclean:
-        return _run_depclean_pretend(atom_args, _root(), _config_root(), config)
+        return _run_depclean_pretend(
+            atom_args, _root(), _config_root(), config, verbose=verbose
+        )
     if prune:
         return _run_prune_pretend(atom_args, _root(), _config_root(), config)
 

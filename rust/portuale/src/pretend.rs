@@ -2345,6 +2345,7 @@ fn run_depclean_pretend(
     root: &Path,
     config_root: &Path,
     config: &portage_profile::Config,
+    verbose: bool,
 ) -> ExitCode {
     // Bare-name targets get their category from the vdb, then each atom
     // is checked against the vdb (real `action_depclean`, `:848-863`) --
@@ -2377,11 +2378,13 @@ fn run_depclean_pretend(
         }
     }
 
-    // @world (world file + world_sets) and @system, kept separate --
-    // `depclean_cleanlist` drops the world atoms as roots in `args` mode.
-    let mut world: Vec<String> = Vec::new();
+    // @world = the `world` file (parent `@selected`, real `show_parents`)
+    // plus each `world_sets` nested set's own atoms (parent `@<name>`) --
+    // kept as `(atom, label)` pairs for the `--verbose` reverse-dep
+    // display. `depclean_cleanlist` drops these seeds in `args` mode.
+    let mut world_seeds: Vec<(String, String)> = Vec::new();
     match read_world_atoms(root) {
-        Ok(atoms) => world.extend(atoms),
+        Ok(atoms) => world_seeds.extend(atoms.into_iter().map(|a| (a, "@selected".to_string()))),
         Err(e) => {
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
@@ -2392,7 +2395,10 @@ fn run_depclean_pretend(
             for name in names {
                 let mut seen = HashSet::new();
                 match resolve_custom_set(config_root, &name, &mut seen) {
-                    Ok(atoms) => world.extend(atoms),
+                    Ok(atoms) => {
+                        let label = format!("@{name}");
+                        world_seeds.extend(atoms.into_iter().map(|a| (a, label.clone())));
+                    }
                     Err(e) => {
                         eprintln!("{e}");
                         return ExitCode::from(1);
@@ -2405,9 +2411,28 @@ fn run_depclean_pretend(
             return ExitCode::from(1);
         }
     }
-    let world_atom_count = world.iter().cloned().collect::<HashSet<_>>().len();
+    let world_atom_count = world_seeds
+        .iter()
+        .map(|(a, _)| a.clone())
+        .collect::<HashSet<_>>()
+        .len();
 
-    let result = portage_repo::depclean_cleanlist(root, &world, &config.system_packages, &args);
+    let result =
+        portage_repo::depclean_cleanlist(root, &world_seeds, &config.system_packages, &args);
+
+    // Real `create_cleanlist`'s own `elif "--verbose": show_parents(pkg)`
+    // -- the reverse-dep blocks come right after the `* ` advisory and
+    // before `>>> Calculating removal order...` / the empty-cleanlist
+    // message.
+    if verbose {
+        for (pkg, lines) in &result.kept_parents {
+            println!("  {} pulled in by:", pkg.cpv());
+            for line in lines {
+                println!("    {line}");
+            }
+            println!();
+        }
+    }
 
     let installed_total = portage_repo::all_installed_packages(root).len();
     let stats = || {
@@ -2420,7 +2445,10 @@ fn run_depclean_pretend(
 
     if result.cleanlist.is_empty() {
         println!(">>> No packages selected for removal by depclean");
-        println!(">>> To see reverse dependencies, use --verbose");
+        // Real `create_cleanlist`: `if "--verbose" not in myopts`.
+        if !verbose {
+            println!(">>> To see reverse dependencies, use --verbose");
+        }
         stats();
         return ExitCode::SUCCESS;
     }
@@ -3406,7 +3434,7 @@ pub fn run(args: &[String]) -> ExitCode {
         return run_unmerge_pretend(&atom_args, &root, &config_root, &config, false);
     }
     if depclean {
-        return run_depclean_pretend(&atom_args, &root, &config_root, &config);
+        return run_depclean_pretend(&atom_args, &root, &config_root, &config, verbose);
     }
     if prune {
         return run_prune_pretend(&atom_args, &root, &config_root, &config);

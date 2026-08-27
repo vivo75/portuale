@@ -3069,6 +3069,18 @@ pub struct DepcleanResult {
     pub cleanlist: Vec<InstalledPackage>,
     pub required_count: usize,
     pub ordered: bool,
+    /// Real `create_cleanlist`'s own `elif "--verbose": show_parents(pkg)`
+    /// (`actions.py:1324`/`1331`): for every *kept* installed package
+    /// (no-args: all of them; args: only the `args`-matched ones), the
+    /// reverse-dependency lines real `show_parents` would print. Each
+    /// `(package, parent_lines)` -- `parent_lines` already rendered and
+    /// sorted the way `show_parents` emits them (`<parent> requires
+    /// <atom>, <atom>` per line, lines sorted ascending, atoms within a
+    /// line sorted by atom package-name descending). A kept package
+    /// whose only parent is the internal protected-set (real
+    /// `protected_set_name` filter) contributes no entry. `package`s are
+    /// in cpv order.
+    pub kept_parents: Vec<(InstalledPackage, Vec<String>)>,
 }
 
 /// Real `_calc_depclean`'s own unmerge-order pass (`actions.py:1591-1731`):
@@ -3187,7 +3199,11 @@ fn topological_removal_order(
 
 pub fn depclean_cleanlist(
     root: &Path,
-    world_atoms: &[String],
+    // `(atom, set_label)` -- the `@world` closure's seeds and which set
+    // token real `show_parents` would name as their parent (`@selected`
+    // for a `world` file line, `@<name>` for a `world_sets` nested set).
+    // The label is only used for the `--verbose` reverse-dep display.
+    world_seeds: &[(String, String)],
     system_atoms: &[String],
     args: &[String],
 ) -> DepcleanResult {
@@ -3231,33 +3247,45 @@ pub fn depclean_cleanlist(
     // Roots.
     let mut reachable: HashSet<(String, String, String)> = HashSet::new();
     let mut queue: Vec<InstalledPackage> = Vec::new();
-    let seed = |p: &InstalledPackage, reachable: &mut HashSet<_>, queue: &mut Vec<_>| {
-        if reachable.insert(key(p)) {
-            queue.push(p.clone());
-        }
-    };
-    for atom_str in system_atoms {
+    // Real `_dynamic_config._parent_atoms`: child key -> [(parent
+    // descriptor, atom)], where the parent descriptor is a cpv (a
+    // `Package` parent) or an `@set` label (a `SetArg` parent). Every
+    // dep that resolves to an installed package records an edge, whether
+    // or not it was the one that first pulled that package in.
+    let mut parent_atoms: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
+    for (atom_str, label) in system_atoms.iter().map(|a| (a.as_str(), "@system")).chain(
+        // `args` mode drops the `@world` seeds entirely (real
+        // `_complete_graph` empties `selected_set`); `@system` still
+        // seeds in both modes.
+        world_seeds
+            .iter()
+            .filter(|_| args.is_empty())
+            .map(|(a, l)| (a.as_str(), l.as_str())),
+    ) {
         for p in matches_atom(atom_str) {
-            seed(p, &mut reachable, &mut queue);
-        }
-    }
-    if args.is_empty() {
-        for atom_str in world_atoms {
-            for p in matches_atom(atom_str) {
-                seed(p, &mut reachable, &mut queue);
+            parent_atoms
+                .entry(key(p))
+                .or_default()
+                .push((label.to_string(), atom_str.to_string()));
+            if reachable.insert(key(p)) {
+                queue.push(p.clone());
             }
         }
-    } else {
+    }
+    if !args.is_empty() {
         // `args` mode: every installed package the args *don't* match is
-        // a protected root (real `protected_set`).
+        // a protected root (real `protected_set`). Its parent is the
+        // internal protected-set SetArg, which `show_parents` filters
+        // out -- so no edge is recorded for the seed itself.
         for p in &installed {
-            if !matched_by_args(p) {
-                seed(p, &mut reachable, &mut queue);
+            if !matched_by_args(p) && reachable.insert(key(p)) {
+                queue.push(p.clone());
             }
         }
     }
     while let Some(p) = queue.pop() {
         let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        let parent_cpv = p.cpv();
         for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
             let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
             if depstr.trim().is_empty() {
@@ -3268,6 +3296,10 @@ pub fn depclean_cleanlist(
             };
             for atom_str in atoms {
                 for dep in matches_atom(&atom_str) {
+                    parent_atoms
+                        .entry(key(dep))
+                        .or_default()
+                        .push((parent_cpv.clone(), atom_str.clone()));
                     if reachable.insert(key(dep)) {
                         queue.push(dep.clone());
                     }
@@ -3277,9 +3309,10 @@ pub fn depclean_cleanlist(
     }
 
     let mut cleanlist: Vec<InstalledPackage> = installed
-        .into_iter()
+        .iter()
         .filter(|p| !reachable.contains(&key(p)))
         .filter(|p| args.is_empty() || matched_by_args(p))
+        .cloned()
         .collect();
     cleanlist.sort_by(|a, b| {
         a.category
@@ -3287,12 +3320,62 @@ pub fn depclean_cleanlist(
             .then_with(|| a.package.cmp(&b.package))
             .then_with(|| vercmp_ordering(&a.version, &b.version))
     });
+
+    // Real `show_parents` for every *kept* installed package, cpv-sorted
+    // (no-args: all reachable; args: only `args`-matched reachable ones).
+    let mut kept: Vec<&InstalledPackage> = installed
+        .iter()
+        .filter(|p| reachable.contains(&key(p)))
+        .filter(|p| args.is_empty() || matched_by_args(p))
+        .collect();
+    kept.sort_by(|a, b| {
+        a.category
+            .cmp(&b.category)
+            .then_with(|| a.package.cmp(&b.package))
+            .then_with(|| vercmp_ordering(&a.version, &b.version))
+    });
+    let mut kept_parents: Vec<(InstalledPackage, Vec<String>)> = Vec::new();
+    for p in kept {
+        let Some(edges) = parent_atoms.get(&key(p)) else {
+            continue;
+        };
+        // Group atoms by parent descriptor.
+        let mut by_parent: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (par, atom) in edges {
+            let v = by_parent.entry(par.as_str()).or_default();
+            if !v.contains(&atom.as_str()) {
+                v.push(atom.as_str());
+            }
+        }
+        let mut lines: Vec<String> = by_parent
+            .into_iter()
+            .map(|(par, mut atoms)| {
+                // Real: `sorted(atoms, reverse=True, key=attrgetter("package"))`.
+                atoms.sort_by(|a, b| {
+                    let pa = portage_dep::parse_atom(a)
+                        .map(|x| x.package)
+                        .unwrap_or_default();
+                    let pb = portage_dep::parse_atom(b)
+                        .map(|x| x.package)
+                        .unwrap_or_default();
+                    pb.cmp(&pa)
+                });
+                format!("{par} requires {}", atoms.join(", "))
+            })
+            .collect();
+        lines.sort();
+        if !lines.is_empty() {
+            kept_parents.push((p.clone(), lines));
+        }
+    }
+
     let required_count = reachable.len();
     let (ordered, cleanlist) = topological_removal_order(root, cleanlist);
     DepcleanResult {
         cleanlist,
         required_count,
         ordered,
+        kept_parents,
     }
 }
 
@@ -3445,6 +3528,10 @@ pub fn prune_cleanlist(root: &Path, args: &[String]) -> DepcleanResult {
         cleanlist,
         required_count,
         ordered,
+        // `emerge --prune --verbose`'s own `show_parents` display is a
+        // separate, unported cut (real `create_cleanlist`'s prune
+        // branch, `actions.py:1339`).
+        kept_parents: Vec::new(),
     }
 }
 
@@ -9145,7 +9232,7 @@ mod tests {
 
         let result = depclean_cleanlist(
             &root,
-            &["dev-libs/dcworld".to_string()],
+            &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
             &["dev-libs/systempkg".to_string()],
             &[],
         );
@@ -9165,7 +9252,7 @@ mod tests {
         // private dep dcorphandep is protected, being non-arg).
         let narrowed = depclean_cleanlist(
             &root,
-            &["dev-libs/dcworld".to_string()],
+            &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
             &["dev-libs/systempkg".to_string()],
             &["dev-libs/dcorphan".to_string()],
         );
@@ -9180,12 +9267,68 @@ mod tests {
         // `-c dev-libs/dcsub` -> nothing (dcdep still needs it).
         let needed = depclean_cleanlist(
             &root,
-            &["dev-libs/dcworld".to_string()],
+            &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
             &["dev-libs/systempkg".to_string()],
             &["dev-libs/dcsub".to_string()],
         );
         assert!(needed.cleanlist.is_empty());
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn depclean_cleanlist_records_reverse_dep_parents_for_kept_packages() {
+        let root = masters_test_root("depclean-revdep");
+        let install = |name: &str, rdepend: &str| {
+            let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+            if !rdepend.is_empty() {
+                std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        install("rw", "dev-libs/rdep dev-libs/rshared");
+        install("rdep", "dev-libs/rshared");
+        install("rshared", "");
+        install("rorphan", "");
+
+        let result = depclean_cleanlist(
+            &root,
+            &[("dev-libs/rw".to_string(), "@selected".to_string())],
+            &[],
+            &[],
+        );
+        // rorphan is the cleanlist; kept = rdep, rshared, rw (cpv order).
+        assert_eq!(
+            result.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+            vec!["dev-libs/rorphan-1.0".to_string()]
+        );
+        let parents: Vec<(String, Vec<String>)> = result
+            .kept_parents
+            .iter()
+            .map(|(p, lines)| (p.cpv(), lines.clone()))
+            .collect();
+        assert_eq!(
+            parents,
+            vec![
+                (
+                    "dev-libs/rdep-1.0".to_string(),
+                    vec!["dev-libs/rw-1.0 requires dev-libs/rdep".to_string()],
+                ),
+                (
+                    "dev-libs/rshared-1.0".to_string(),
+                    vec![
+                        "dev-libs/rdep-1.0 requires dev-libs/rshared".to_string(),
+                        "dev-libs/rw-1.0 requires dev-libs/rshared".to_string(),
+                    ],
+                ),
+                (
+                    "dev-libs/rw-1.0".to_string(),
+                    vec!["@selected requires dev-libs/rw".to_string()],
+                ),
+            ]
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -9207,7 +9350,12 @@ mod tests {
         // dcw's `off? ( ... )` group is inactive -> dchidden is orphan.
         install("dcw", "off? ( dev-libs/dchidden )", "");
         install("dchidden", "", "");
-        let result = depclean_cleanlist(&root, &["dev-libs/dcw".to_string()], &[], &[]);
+        let result = depclean_cleanlist(
+            &root,
+            &[("dev-libs/dcw".to_string(), "@selected".to_string())],
+            &[],
+            &[],
+        );
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         assert_eq!(clean, vec!["dev-libs/dchidden-1.0".to_string()]);
         std::fs::remove_dir_all(&root).ok();

@@ -4837,12 +4837,75 @@ def test_depclean_matches_between_implementations(
         ["--pretend", "-c", "dev-libs/nope"],
         ["--pretend", "-c", "dev-libs/dcbuilddep"],
         ["--pretend", "-c", "dev-libs/dcbdep"],
+        ["--pretend", "--depclean", "--verbose"],
+        ["--pretend", "-c", "-v", "dev-libs/dcdep"],
+        ["--pretend", "-c", "-v", "dev-libs/dcorphan"],
     ):
         rust = _run([str(emerge_binary)], args, env)
         python = _run(emerge_pretend_python, args, env)
         assert rust.returncode == python.returncode, args
         assert rust.stdout == python.stdout, args
         assert rust.stderr == python.stderr, args
+
+
+def _depclean_revdep_root(tmp_path):
+    """A ROOT where the kept closure has a shared dependency (dcshared,
+    pulled in by two parents) and a world member (dcworld). dcorphan +
+    dcorphandep are the cleanlist."""
+    portage_dir = tmp_path / "var" / "lib" / "portage"
+    portage_dir.mkdir(parents=True)
+    (portage_dir / "world").write_text("dev-libs/dcworld\n")
+
+    def install(package, rdepend=""):
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / f"{package}-1.0"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text("0\n")
+        if rdepend:
+            (d / "RDEPEND").write_text(rdepend + "\n")
+
+    install("dcworld", rdepend="dev-libs/dcdep dev-libs/dcshared")
+    install("dcdep", rdepend="dev-libs/dcsub dev-libs/dcshared")
+    install("dcsub")
+    install("dcshared")
+    install("dcorphan", rdepend="dev-libs/dcorphandep")
+    install("dcorphandep")
+    return tmp_path
+
+
+def test_depclean_pretend_verbose_shows_reverse_deps(emerge_binary, fixture_env, tmp_path):
+    """emerge -pc --verbose: real create_cleanlist's `elif "--verbose":
+    show_parents(pkg)` -- for every KEPT installed package (cpv-sorted):
+    '  <cpv> pulled in by:\\n    <parent> requires <atom>'. A world-file
+    member's parent is @selected; parent lines are sorted; the blocks
+    come after the ` * ` advisory and before '>>> Calculating removal
+    order...'."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(_depclean_revdep_root(tmp_path))
+    result = _run([str(emerge_binary)], ["--pretend", "--depclean", "--verbose"], env)
+    assert result.returncode == 0
+    out = result.stdout
+    # dcshared is pulled in by both dcdep and dcworld, lines sorted.
+    assert (
+        "  dev-libs/dcshared-1.0 pulled in by:\n"
+        "    dev-libs/dcdep-1.0 requires dev-libs/dcshared\n"
+        "    dev-libs/dcworld-1.0 requires dev-libs/dcshared\n"
+    ) in out
+    assert "  dev-libs/dcworld-1.0 pulled in by:\n    @selected requires dev-libs/dcworld\n" in out
+    # The reverse-dep blocks precede the removal-order line.
+    assert out.index("pulled in by:") < out.index(">>> Calculating removal order...")
+    # dcorphan / dcorphandep are the cleanlist, not reverse-dep'd.
+    assert "  dev-libs/dcorphan-1.0 pulled in by:" not in out
+
+    # --verbose suppresses the "To see reverse dependencies" hint even
+    # when there's nothing to remove.
+    (tmp_path / "var" / "lib" / "portage" / "world").write_text(
+        "dev-libs/dcworld\ndev-libs/dcorphan\n"
+    )
+    nothing = _run([str(emerge_binary)], ["--pretend", "--depclean", "--verbose"], env)
+    assert nothing.returncode == 0
+    assert ">>> No packages selected for removal by depclean" in nothing.stdout
+    assert ">>> To see reverse dependencies" not in nothing.stdout
 
 
 def _depclean_order_root(tmp_path):

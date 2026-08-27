@@ -80,10 +80,16 @@ Ranked roughly by how self-contained each is.
   package unmerged before the ones it depends on; `run_unmerge_pretend`
   gained a `preserve_order` flag) **shipped 2026-08-27** too, bar the
   slot-operator-built priority bump and the cycle-breaking single pop.
+  The **`--verbose` reverse-dependency display** (real `show_parents`,
+  `create_cleanlist:1324`/`1331` -- `<cpv> pulled in by: <parent>
+  requires <atom>` for every kept package; `DepcleanResult.kept_parents`
+  from a `_parent_atoms`-recording BFS; also suppresses the "To see
+  reverse dependencies" hint) **shipped 2026-08-28**.
   **Still open:** `--depclean-lib-check`, slot-operator rebuild edges,
   the "deps unresolved, aborting" halt, `package.provided`,
-  `--deselect=n` in args mode, `world_sets` `@`-refs as roots, and real
-  (non-`--pretend`) removal.
+  `--deselect=n` in args mode, `emerge --prune --verbose`'s own
+  `show_parents`, the exact `@selected`-vs-`@world` set nesting
+  (approximated), and real (non-`--pretend`) removal.
 - **`emerge -p --prune` / `-pP`** **shipped 2026-08-27**
   (`prune_cleanlist`: seed the closure from every installed package
   except the non-highest-in-cp ones an `args_set` matches -- `args_set`

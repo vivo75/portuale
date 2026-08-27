@@ -887,6 +887,35 @@ PORTING/
   dependency cycle -- a cleanlist that still holds a cycle here is
   emitted last, in cpv order.
 
+  **`emerge -pc --verbose`: the reverse-dependency display.** Real
+  `create_cleanlist` (`actions.py:1324`/`1331`) calls `show_parents(pkg)`
+  for every *kept* installed package under `--verbose` (no-args: all of
+  them; args: only the `args`-matched ones), cpv-sorted, printing
+  `  <cpv> pulled in by:` followed by a `    <parent> requires <atom>,
+  <atom>` line per parent -- `<parent>` is a cpv (a `Package` parent) or
+  an `@set` label (a `SetArg` parent), lines sorted ascending, atoms
+  within a line sorted by atom package-name descending
+  (`operator.attrgetter("package")`, `reverse=True`). `--verbose` also
+  suppresses the `>>> To see reverse dependencies, use --verbose` hint.
+  `depclean_cleanlist` now records real
+  `_dynamic_config._parent_atoms` during its BFS -- every dep that
+  resolves to an installed package adds a `(parent descriptor, atom)`
+  edge -- and `DepcleanResult` gained a `kept_parents` field with the
+  already-rendered, already-sorted lines. Seeds are labelled: a `world`
+  file line's parent is `@selected`, a `world_sets` nested set's is
+  `@<name>` (real `_expand_set_args` nesting -- `run_depclean_pretend`
+  passes `(atom, label)` pairs now instead of a flat atom list). The
+  args-mode protected-set seeds (real `protected_set_name`) record no
+  edge, matching `show_parents`'s own filter. `run_depclean_pretend`
+  prints the blocks right after the `* ` advisory and before `>>>
+  Calculating removal order...` / the empty-cleanlist message. New
+  `_depclean_revdep_root` fixture (a shared dep `dcshared` pulled in by
+  two parents). **Deliberately out**: `emerge --prune --verbose`'s own
+  `show_parents` (a separate cut, `create_cleanlist`'s prune branch);
+  and the exact `@selected`-vs-`@world` set nesting real portage's
+  `_complete_graph` produces (approximated -- world-file members are
+  `@selected` here, not `@world`).
+
   **`emerge -p --prune` / `-pP`: the fourth real cleanup action.** Real
   modern `--prune` (without `--nodeps`) routes through the same
   `action_depclean` as `--depclean`, with `action="prune"`
