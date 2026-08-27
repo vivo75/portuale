@@ -323,17 +323,39 @@ fn mask_suffix(entry: &GraphEntry, verbose: bool) -> String {
     }
 }
 
-fn use_suffix(entry: &GraphEntry, verbose: bool) -> String {
+/// The bare flag name inside a rendered `USE=` token, for the
+/// `--alphabetical` re-sort: strip a leading `(` / `-` and any trailing
+/// `)` / `*` / `%` (`(-maskflag)` -> `maskflag`, `foo%*` -> `foo`).
+fn use_flag_sort_key(tok: &str) -> &str {
+    tok.trim_start_matches('(')
+        .trim_start_matches('-')
+        .trim_end_matches([')', '*', '%'])
+}
+
+fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool) -> String {
     if !verbose || entry.use_expand_display.is_empty() {
         return String::new();
     }
     // Real `output.py:_display_use`: `USE="…"` first, then one `VAR="…"`
     // per non-hidden USE_EXPAND group, each already rendered and ordered
-    // by `portage_repo::build_use_expand_display`.
+    // (enabled flags first, then disabled) by
+    // `portage_repo::build_use_expand_display`. With `--alphabetical`,
+    // real `_create_use_string` instead joins one combined list sorted
+    // by bare flag name -- reproduced here by re-sorting each group's
+    // already-rendered tokens.
     let groups: Vec<String> = entry
         .use_expand_display
         .iter()
-        .map(|(name, rendered)| format!("{name}=\"{rendered}\""))
+        .map(|(name, rendered)| {
+            let body = if alphabetical {
+                let mut toks: Vec<&str> = rendered.split(' ').collect();
+                toks.sort_by(|a, b| use_flag_sort_key(a).cmp(use_flag_sort_key(b)));
+                toks.join(" ")
+            } else {
+                rendered.clone()
+            };
+            format!("{name}=\"{body}\"")
+        })
         .collect();
     format!("  {}", groups.join(" "))
 }
@@ -592,6 +614,7 @@ fn print_entry_line(
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
     verbose: bool,
+    alphabetical: bool,
     columns: bool,
     columnwidth: i64,
     running_root: Option<&Path>,
@@ -660,14 +683,14 @@ fn print_entry_line(
                             "",
                             columnwidth
                         ),
-                        use_suffix(entry, verbose)
+                        use_suffix(entry, verbose, alphabetical)
                     );
                 } else {
                     println!(
                         "[{bracket}  {code}{mask}] {indent}{}/{}-{version}{root}{}",
                         entry.category,
                         entry.package,
-                        use_suffix(entry, verbose)
+                        use_suffix(entry, verbose, alphabetical)
                     );
                 }
             }
@@ -689,14 +712,14 @@ fn print_entry_line(
                             &format!("[{from}]"),
                             columnwidth
                         ),
-                        use_suffix(entry, verbose)
+                        use_suffix(entry, verbose, alphabetical)
                     );
                 } else {
                     println!(
                         "[{bracket}  {ix}U{fx}{mask}] {indent}{}/{}-{to} (upgrade from {from}){root}{}",
                         entry.category,
                         entry.package,
-                        use_suffix(entry, verbose)
+                        use_suffix(entry, verbose, alphabetical)
                     );
                 }
             }
@@ -718,14 +741,14 @@ fn print_entry_line(
                             &format!("[{from}]"),
                             columnwidth
                         ),
-                        use_suffix(entry, verbose)
+                        use_suffix(entry, verbose, alphabetical)
                     );
                 } else {
                     println!(
                         "[{bracket}  {ix}D{fx}{mask}] {indent}{}/{}-{to} (downgrade from {from}){root}{}",
                         entry.category,
                         entry.package,
-                        use_suffix(entry, verbose)
+                        use_suffix(entry, verbose, alphabetical)
                     );
                 }
             }
@@ -754,7 +777,7 @@ fn print_entry_line(
                             "",
                             columnwidth
                         ),
-                        use_suffix(entry, verbose)
+                        use_suffix(entry, verbose, alphabetical)
                     );
                 } else {
                     match reinstall_reason(
@@ -768,13 +791,13 @@ fn print_entry_line(
                             "[{bracket}  {ix}r{fx}{mask}] {indent}{}/{}-{version} (reinstall for {reason}){root}{}",
                             entry.category,
                             entry.package,
-                            use_suffix(entry, verbose)
+                            use_suffix(entry, verbose, alphabetical)
                         ),
                         None => println!(
                             "[{bracket}  {ix}r{fx}{mask}] {indent}{}/{}-{version}{root}{}",
                             entry.category,
                             entry.package,
-                            use_suffix(entry, verbose)
+                            use_suffix(entry, verbose, alphabetical)
                         ),
                     }
                 }
@@ -914,12 +937,14 @@ fn print_entry_line(
 /// after the tree itself, rather than silently dropped -- this pilot's
 /// own "never silently lose information" invariant, seen already for
 /// slot conflicts and unresolvable dependencies.
+#[allow(clippy::too_many_arguments)]
 fn print_tree(
     entries: &[GraphEntry],
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
     unordered_display: bool,
     verbose: bool,
+    alphabetical: bool,
     running_root: Option<&Path>,
 ) {
     let mut children: HashMap<(String, String), Vec<usize>> = HashMap::new();
@@ -948,6 +973,7 @@ fn print_tree(
         top_level_pkgs: &'a HashSet<(String, String)>,
         onlydeps: bool,
         verbose: bool,
+        alphabetical: bool,
         running_root: Option<&'a Path>,
     }
 
@@ -966,6 +992,7 @@ fn print_tree(
             ctx.top_level_pkgs,
             ctx.onlydeps,
             ctx.verbose,
+            ctx.alphabetical,
             false,
             130,
             ctx.running_root,
@@ -987,6 +1014,7 @@ fn print_tree(
         top_level_pkgs,
         onlydeps,
         verbose,
+        alphabetical,
         running_root,
     };
     let mut rendered: HashSet<usize> = HashSet::new();
@@ -1007,6 +1035,7 @@ fn print_tree(
                 top_level_pkgs,
                 onlydeps,
                 verbose,
+                alphabetical,
                 false,
                 130,
                 running_root,
@@ -2437,6 +2466,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // anywhere in depgraph.py) -- mutually exclusive with --tree, checked
     // once parsing finishes (see the "can't specify both" check below).
     let mut columns = false;
+    // --alphabetical: display-only, real `output_helpers.py`'s
+    // `conf.alphabetical` -- see use_suffix.
+    let mut alphabetical = false;
     let mut update = false;
     let mut deep = portage_repo::Deep::NotRequested;
     let mut excluded: Vec<String> = Vec::new();
@@ -2548,6 +2580,12 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--columns" {
             columns = true;
+            i += 1;
+        } else if arg == "--alphabetical" {
+            // Real `main.py`'s own plain-boolean "options" list -- only
+            // affects `_create_use_string`'s `USE="…"` ordering (one
+            // combined bare-name-sorted list instead of enabled-first).
+            alphabetical = true;
             i += 1;
         } else if arg == "--update" || arg == "-u" {
             update = true;
@@ -3620,6 +3658,7 @@ pub fn run(args: &[String]) -> ExitCode {
             onlydeps,
             unordered_display,
             verbose,
+            alphabetical,
             root_deps_running_root.as_deref(),
         );
     } else {
@@ -3630,6 +3669,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &top_level_pkgs,
                 onlydeps,
                 verbose,
+                alphabetical,
                 columns,
                 columnwidth,
                 root_deps_running_root.as_deref(),

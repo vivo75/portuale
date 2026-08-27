@@ -129,8 +129,13 @@ Ranked roughly by how self-contained each is.
    `portage_repo::build_use_expand_display`). **Residual:** (a) an
    installed package's USE-dep check uses raw vdb `IUSE` (real portage
    uses that package's vdb-recorded `IUSE_EFFECTIVE`, not persisted
-   here); (b) `-pv` USE display still lacks real portage's ANSI color and
-   the `--all-flags` "removed from IUSE" line. The installed-vs-new
+   here); (b) `-pv` USE display still lacks real portage's ANSI color, the
+   `--all-flags` "removed from IUSE" line, and real portage's *natural*
+   within-group sort (`_alnum_sort_key`; the pilot's plain lexicographic
+   only differs on e.g. `python3_9` vs `python3_12`). The enabled-first
+   within-group order + `emerge --alphabetical` **shipped 2026-08-27**
+   (`build_use_expand_display` enabled-first split, `pretend.rs::
+   use_suffix` `alphabetical` param + `use_flag_sort_key`). The installed-vs-new
    `*`/`%` diff markers (`build_use_expand_display`'s `installed` param),
    the `( … )` forced/masked wrap (`forced_or_masked_flags` +
    `build_use_expand_display`'s `forced` param), and the `[ebuild N ~]`

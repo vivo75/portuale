@@ -3498,10 +3498,15 @@ struct InstalledUseState {
 /// flag -- the prefix is stripped from the grouped flag (real
 /// `map_to_use_expand`: `val[len(exp) + 1:]`). `config.use_expand_hidden`
 /// groups are dropped (real `remove_hidden`). Within each group the
-/// pre-existing bare-name order is kept (this pilot's own established
-/// "alphabetically sorted, no enabled-first split" `-pv` simplification
-/// -- real `_create_use_string` renders enabled flags before disabled
-/// unless `--alphabetical`).
+/// enabled flags render first, then the disabled ones, each in
+/// bare-name order -- real `_create_use_string`'s own
+/// `" ".join(enabled + disabled)`. `emerge --alphabetical` collapses
+/// the two back into one interleaved bare-name-sorted list; that is
+/// applied at render time (`pretend.rs::use_suffix`), not here, since it
+/// needs no resolver state. (Real portage's within-group sort is a
+/// *natural* sort, `_alnum_sort_key`; this pilot uses plain
+/// lexicographic on the full flag name, a pre-existing simplification --
+/// only matters for e.g. `python3_9` vs `python3_12`.)
 ///
 /// When `installed` is `Some` (an `Upgrade`/`Downgrade`/`Reinstall` entry
 /// -- i.e. real `pkg_info.previous_pkg is not None`, `is_new` false),
@@ -3613,7 +3618,13 @@ fn build_use_expand_display(
             continue;
         }
         let prefix = format!("{}_", name.to_lowercase());
-        let rendered: Vec<String> = flags
+        // Real `_create_use_string`: `" ".join(enabled + disabled)` --
+        // the enabled flags first, then the disabled ones, each group
+        // already in the incoming bare-name order. `--alphabetical`
+        // (which collapses the two groups back into one interleaved
+        // list) is applied later, at render time in `pretend.rs`, since
+        // it needs no resolver state.
+        let mut rendered_pairs: Vec<(bool, String)> = flags
             .iter()
             .filter_map(|(full, en)| {
                 let bare = if name.is_empty() {
@@ -3621,9 +3632,11 @@ fn build_use_expand_display(
                 } else {
                     full.strip_prefix(&prefix).unwrap_or(full)
                 };
-                render_flag(bare, full, *en)
+                render_flag(bare, full, *en).map(|tok| (*en, tok))
             })
             .collect();
+        rendered_pairs.sort_by_key(|(en, _)| !*en);
+        let rendered: Vec<String> = rendered_pairs.into_iter().map(|(_, tok)| tok).collect();
         if rendered.is_empty() {
             continue;
         }
@@ -10879,7 +10892,7 @@ mod tests {
                 None,
                 &HashSet::new(),
             ),
-            vec![("VIDEO_CARDS".to_string(), "-amdgpu nvidia".to_string())]
+            vec![("VIDEO_CARDS".to_string(), "nvidia -amdgpu".to_string())]
         );
         // CPU_FLAGS_X86 is USE_EXPAND *and* USE_EXPAND_HIDDEN -> its group
         // is dropped from the display; a plain flag alongside it still
@@ -10923,7 +10936,8 @@ mod tests {
         // now: alpha unchanged (omitted), beta newly enabled (*),
         // gamma brand-new IUSE and enabled (%*), delta brand-new IUSE
         // and disabled (-delta%), video_cards_nvidia now off (was on) ->
-        // `-nvidia*`.
+        // `-nvidia*`. Enabled flags (beta, gamma) render before the
+        // disabled one (delta).
         assert_eq!(
             build_use_expand_display(
                 &[
@@ -10938,7 +10952,7 @@ mod tests {
                 &HashSet::new(),
             ),
             vec![
-                ("USE".to_string(), "beta* -delta% gamma%*".to_string()),
+                ("USE".to_string(), "beta* gamma%* -delta%".to_string()),
                 ("VIDEO_CARDS".to_string(), "-nvidia*".to_string()),
             ]
         );
@@ -10969,7 +10983,8 @@ mod tests {
         ]);
         // New install: forced/masked flags are wrapped in ( ), everything
         // else plain. `forcedon` is force-enabled, `maskedoff`
-        // mask-disabled, `video_cards_nvidia` force-enabled.
+        // mask-disabled, `video_cards_nvidia` force-enabled. Enabled
+        // (forcedon, plain) render before the disabled (maskedoff).
         assert_eq!(
             build_use_expand_display(
                 &[
@@ -10985,7 +11000,7 @@ mod tests {
             vec![
                 (
                     "USE".to_string(),
-                    "(forcedon) (-maskedoff) plain".to_string()
+                    "(forcedon) plain (-maskedoff)".to_string()
                 ),
                 ("VIDEO_CARDS".to_string(), "(nvidia)".to_string()),
             ]

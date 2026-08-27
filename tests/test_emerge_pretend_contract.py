@@ -222,6 +222,11 @@ CASES = [
         0,
     ),
     (
+        "--alphabetical collapses the enabled-first USE split into one bare-name-sorted list",
+        ["--pretend", "-v", "--alphabetical", "dev-libs/iusedefaultpkg"],
+        0,
+    ),
+    (
         "REQUIRED_USE: violated on a dependency, still aborts the whole run",
         ["--pretend", "dev-libs/requiredusebadparentpkg"],
         1,
@@ -1700,7 +1705,7 @@ def test_iuse_plus_minus_defaults_apply_when_nothing_else_says_otherwise(
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"\n'
+        '[ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="enableddefault plainflag -disableddefault"\n'
         "\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n"
     )
 
@@ -2284,7 +2289,7 @@ def test_use_expand_variable_drives_a_dependency(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="-amdgpu nvidia"',
+        '[ebuild  N] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="nvidia -amdgpu"',
         "[ebuild  N] dev-libs/newpkg-1.0",
         "",
         "Total: 2 packages (2 new), Size of downloads: 0 KiB",
@@ -2374,10 +2379,10 @@ def test_pv_groups_use_by_use_expand_variable(
     IUSE flags split into the plain USE="..." group plus one VAR="..."
     group per USE_EXPAND variable (prefix stripped), empty groups omitted.
     dev-libs/useexpandpkg (IUSE video_cards_nvidia video_cards_amdgpu,
-    VIDEO_CARDS a USE_EXPAND var) shows VIDEO_CARDS="-amdgpu nvidia" and
+    VIDEO_CARDS a USE_EXPAND var) shows VIDEO_CARDS="nvidia -amdgpu" and
     no USE="" at all."""
     for pkg, expected in [
-        ("useexpandpkg", 'VIDEO_CARDS="-amdgpu nvidia"'),
+        ("useexpandpkg", 'VIDEO_CARDS="nvidia -amdgpu"'),
         ("packageuseexpandpkg", 'PYTHON_TARGETS="python3_12"'),
     ]:
         args = ["--pretend", "-v", f"dev-libs/{pkg}"]
@@ -2503,7 +2508,7 @@ def test_use_stable_force_and_package_use_stable_mask_apply_when_stable(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/stableusepkg-1.0  USE="(-maskflag) (stableforceflag)"',
+        '[ebuild  N] dev-libs/stableusepkg-1.0  USE="(stableforceflag) (-maskflag)"',
         "[ebuild  N] dev-libs/newpkg-1.0",
         "",
         "Total: 2 packages (2 new), Size of downloads: 0 KiB",
@@ -4222,6 +4227,61 @@ def test_verbose_shows_use_flags_gated_by_profile_and_make_conf(emerge_binary, f
     assert quiet.returncode == 0
     assert quiet.stdout.splitlines()[0] == "[ebuild  N] dev-libs/useflagpkg-1.0"
     assert "USE=" not in quiet.stdout
+
+
+def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real output_helpers.py::_create_use_string joins `enabled +
+    disabled` -- enabled flags first, then disabled, each alphabetical --
+    unless --alphabetical, which joins one combined bare-name-sorted
+    list. dev-libs/iusedefaultpkg resolves enableddefault + plainflag on,
+    disableddefault off; the disabled flag sorts first alphabetically, so
+    the two orderings differ. Applies to USE_EXPAND groups too
+    (dev-libs/useexpandpkg's VIDEO_CARDS)."""
+    default = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "dev-libs/iusedefaultpkg", "dev-libs/useexpandpkg"],
+        fixture_env,
+    )
+    assert default.returncode == 0
+    lines = default.stdout.splitlines()
+    assert lines[0] == (
+        '[ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="enableddefault plainflag -disableddefault"'
+    )
+    assert any(
+        ln == '[ebuild  N] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="nvidia -amdgpu"'
+        for ln in lines
+    )
+
+    alpha = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--alphabetical", "dev-libs/iusedefaultpkg", "dev-libs/useexpandpkg"],
+        fixture_env,
+    )
+    assert alpha.returncode == 0
+    alines = alpha.stdout.splitlines()
+    assert alines[0] == (
+        '[ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"'
+    )
+    assert any(
+        ln == '[ebuild  N] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="-amdgpu nvidia"'
+        for ln in alines
+    )
+
+    # Both implementations agree, both forms.
+    py_default = _run(
+        emerge_pretend_python,
+        ["--pretend", "-v", "dev-libs/iusedefaultpkg", "dev-libs/useexpandpkg"],
+        fixture_env,
+    )
+    py_alpha = _run(
+        emerge_pretend_python,
+        ["--pretend", "-v", "--alphabetical", "dev-libs/iusedefaultpkg", "dev-libs/useexpandpkg"],
+        fixture_env,
+    )
+    assert default.stdout == py_default.stdout
+    assert alpha.stdout == py_alpha.stdout
 
 
 def test_verbose_use_flags_reflect_package_use_overrides(emerge_binary, fixture_env):

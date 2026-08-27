@@ -2142,6 +2142,13 @@ def _libc_provider_cps(root):
     return result
 
 
+def _use_flag_sort_key(tok):
+    """The bare flag name inside a rendered USE= token, for the
+    --alphabetical re-sort: strip a leading '(' / '-' and any trailing
+    ')' / '*' / '%'. Mirrors pretend.rs's use_flag_sort_key."""
+    return tok.lstrip("(-").rstrip(")*%")
+
+
 def _build_use_expand_display(
     use_display, use_expand, use_expand_hidden, installed=None, forced=None
 ):
@@ -2154,8 +2161,11 @@ def _build_use_expand_display(
     groups (real remove_hidden). Returns [(VAR_NAME, "flag -flag"), ...],
     USE first then the USE_EXPAND vars sorted; an empty group produces no
     entry at all (real _create_use_string's `if ret:` guard). Within each
-    group the pre-existing bare-name order is kept (this pilot's own "no
-    enabled-first split" -pv simplification).
+    group the enabled flags render first, then the disabled ones, each in
+    bare-name order -- real _create_use_string's `" ".join(enabled +
+    disabled)`. `emerge --alphabetical` collapses the two back into one
+    interleaved bare-name-sorted list; that is applied at render time
+    (use_suffix), not here.
 
     `installed`, when given, is (old_use, old_iuse) -- the installed
     version's own recorded USE/IUSE (bare names, old_use already
@@ -2216,12 +2226,16 @@ def _build_use_expand_display(
         if name and name in hidden:
             continue
         prefix = name.lower() + "_"
-        rendered = []
+        rendered_pairs = []
         for full, enabled in flags:
             bare = full if not name else (full[len(prefix):] if full.startswith(prefix) else full)
             r = render_flag(bare, full, enabled)
             if r is not None:
-                rendered.append(r)
+                rendered_pairs.append((enabled, r))
+        # Real _create_use_string: `enabled + disabled` -- stable, so the
+        # incoming bare-name order is kept within each group.
+        rendered_pairs.sort(key=lambda p: not p[0])
+        rendered = [tok for _en, tok in rendered_pairs]
         if not rendered:
             continue
         out.append(("USE" if not name else name, " ".join(rendered)))
@@ -7362,6 +7376,8 @@ def run(args):
     # shape as --tree above -- mutually exclusive with --tree, checked
     # once parsing finishes.
     columns = False
+    # --alphabetical: display-only, real output_helpers.py conf.alphabetical.
+    alphabetical = False
     update = False
     deep = 0
     excluded = []
@@ -7442,6 +7458,11 @@ def run(args):
             i += 1
         elif arg == "--columns":
             columns = True
+            i += 1
+        elif arg == "--alphabetical":
+            # Real main.py plain-boolean "options" -- only affects the
+            # USE="..." ordering (see use_suffix). Mirrors pretend.rs.
+            alphabetical = True
             i += 1
         elif arg in ("--update", "-u"):
             update = True
@@ -8430,10 +8451,14 @@ def run(args):
         # VAR="..." per non-hidden USE_EXPAND var, empty groups omitted),
         # for an entry that replaces an installed one appends */% markers
         # vs that installed version's USE/IUSE, and wraps a
-        # force-enabled/mask-disabled flag in ( ). Still not shown: real
-        # portage's ANSI colorization and the removed-from-IUSE line
-        # (documented cuts). Mirrors portage-repo/src/lib.rs's
-        # build_use_expand_display + pretend.rs use_suffix.
+        # force-enabled/mask-disabled flag in ( ). Groups render enabled
+        # flags first, then disabled; --alphabetical re-sorts each group's
+        # rendered tokens into one bare-name-sorted list (real
+        # _create_use_string's `conf.alphabetical` branch). Still not
+        # shown: real portage's ANSI colorization and the
+        # removed-from-IUSE line (documented cuts). Mirrors
+        # portage-repo/src/lib.rs's build_use_expand_display +
+        # pretend.rs's use_suffix.
         if not verbose or not use_display:
             return ""
         groups = _build_use_expand_display(
@@ -8445,7 +8470,15 @@ def run(args):
         )
         if not groups:
             return ""
-        return "  " + " ".join(f'{name}="{rendered}"' for name, rendered in groups)
+
+        def body(rendered):
+            if not alphabetical:
+                return rendered
+            toks = rendered.split(" ")
+            toks.sort(key=_use_flag_sort_key)
+            return " ".join(toks)
+
+        return "  " + " ".join(f'{name}="{body(rendered)}"' for name, rendered in groups)
 
     def root_suffix(targets_running_root):
         # Real lib/_emerge/resolver/output.py:841-862's own

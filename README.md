@@ -2884,16 +2884,18 @@ PORTING/
   match). `portage-profile` grew `Config::use_expand_hidden` (a new
   incremental, `USE_EXPAND_HIDDEN`), display-only -- never consulted by
   `iuse_effective`/visibility/resolution. Deliberately *not* ported at
-  the time (a separate cut, closed by the next slice): real portage's
-  ANSI colorization and its installed-vs-new `*`/`%` diff markers; within
-  each group this keeps the pilot's own established bare-name sort rather
-  than real `_create_use_string`'s enabled-first ordering. Fixture
+  the time (separate cuts, each closed by a later slice): real portage's
+  ANSI colorization; its installed-vs-new `*`/`%` diff markers (closed by
+  the next slice); the enabled-first within-group ordering (closed by the
+  "`emerge --pretend -v`: enabled-first USE order + `--alphabetical`"
+  slice below -- until then this kept the pilot's own bare-name sort).
+  Fixture
   profile's `USE_EXPAND` gained `PYTHON_TARGETS` (so
   `dev-libs/packageuseexpandpkg` groups) and `CPU_FLAGS_X86` with
   `USE_EXPAND_HIDDEN="CPU_FLAGS_X86"`; new `dev-libs/hiddenexpandpkg`
   (`IUSE="cpu_flags_x86_sse2 cpu_flags_x86_avx"`, `sse2` really enabled)
-  shows *no* `-pv` USE line at all. `dev-libs/useexpandpkg` now prints
-  `VIDEO_CARDS="-amdgpu nvidia"`, `dev-libs/wildexpandpkg` `LINGUAS="de
+  shows *no* `-pv` USE line at all. `dev-libs/useexpandpkg` prints
+  `VIDEO_CARDS="nvidia -amdgpu"`, `dev-libs/wildexpandpkg` `LINGUAS="de
   -en"`.
 
   **`emerge --pretend -v`: installed-vs-new USE markers.** The rest of
@@ -2937,6 +2939,31 @@ PORTING/
   -specflag"` -- `specflag` stays unwrapped, proving the wrap tracks the
   *resolved* force/mask set, not the raw entries. Still cut: ANSI color,
   and the `--all-flags` "removed from IUSE" line.
+
+  **`emerge --pretend -v`: enabled-first USE order + `--alphabetical`.**
+  Until this slice `build_use_expand_display` rendered each `USE=`/`VAR=`
+  group's flags fully bare-name-sorted -- but real
+  `output_helpers.py::_create_use_string` joins `" ".join(enabled +
+  disabled)`: the enabled flags first, then the disabled ones, each
+  alphabetical within its half. `--alphabetical` (real `main.py`'s own
+  plain boolean, `conf.alphabetical`) is the *only* thing that collapses
+  the two back into one interleaved list -- `_create_use_string` then
+  aliases `disabled = enabled` and joins just `enabled`. `build_use_
+  expand_display` now does the enabled-first split (a stable
+  `sort_by_key(|(en, _)| !*en)` over the already-name-sorted flags);
+  `pretend.rs::use_suffix` grew an `alphabetical` parameter (threaded
+  through `print_entry_line`/`print_tree`) that, when set, re-sorts each
+  group's already-rendered tokens by their bare flag name (new
+  `use_flag_sort_key`: strip a leading `(`/`-` and trailing `)`/`*`/`%`).
+  `--json`'s own `use_flags` map is untouched -- it's the pilot's
+  structured representation, and real `--json` has no USE display to
+  match. Two pinned fixtures flipped: `dev-libs/iusedefaultpkg` now
+  `USE="enableddefault plainflag -disableddefault"` (was fully
+  alphabetical), `dev-libs/useexpandpkg` `VIDEO_CARDS="nvidia -amdgpu"`.
+  Still cut (unchanged): ANSI color, the `--all-flags` "removed from
+  IUSE" line, and real portage's *natural* within-group sort
+  (`_alnum_sort_key` -- this pilot's plain lexicographic only differs on
+  e.g. `python3_9` vs `python3_12`).
 
   **`emerge --pretend -v`: the `[ebuild N ~]` bracket-mask marker.** Real
   `output.py::gen_mask_str` (only with `-v` -- `include_mask_str` =
