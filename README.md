@@ -6944,12 +6944,11 @@ main repo alone). `find_repos` now resolves all three tiers -- new
 pass between them.
 
 **`repo-name`.** Real `config.py:500-505`: `layout.conf`'s `repo-name`
-overrides the repo's name. This pilot uses the `repos.conf` section
-name as canonical (it doesn't model `profiles/repo_name` or the
-section-vs-file mismatch warning -- a documented cut), so it takes the
-`layout.conf` override directly onto `RepoConfig::name`. The `masters`
-pass is re-keyed by the post-override name so a `masters =` referring
-to a renamed repo still resolves.
+overrides the repo's name, applied onto `RepoConfig::name` after the
+`profiles/repo_name` resolution below. (An earlier version of this
+paragraph said the pilot used the `repos.conf` section name as
+canonical and didn't model `profiles/repo_name` -- both since closed,
+see the next section.)
 
 **`profile-formats` gate.** Real `_config/LocationsManager.py:47`/`259`:
 `_allow_parent_colon = frozenset(["portage-2"])` -- a profile `parent`
@@ -6988,6 +6987,55 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
 # emerge: there are no ebuilds to satisfy "dev-libs/layoutmasterpkg".
 #   -- layoutmasteroverlay masters `overlay` via its own layout.conf, so
 #      overlay's package.mask entry for layoutmasterpkg applies
+```
+
+### `profiles/repo_name` as the canonical name, `aliases`, and the section-name mismatch drop
+
+The follow-up to the `layout.conf` `repo-name` slice above (confirmed
+with the user to port faithfully rather than deviate). Real
+`_read_repo_name` (`config.py:670-688`): a repo's canonical name comes
+from `<location>/profiles/repo_name` (its first line, trimmed) when
+present, and only falls back to the `repos.conf` `[section]` name when
+the file is absent. `find_repos` now reads that file; the name
+precedence is `layout.conf` `repo-name` > `profiles/repo_name` > section.
+
+`aliases` (real `config.py:216-224`/`492-499`): a repo's own
+`layout.conf` `aliases =` (first) plus its `repos.conf` `aliases =`
+(appended), stored on `RepoConfig::aliases`. This pilot acts on aliases
+in exactly one place -- the mismatch escape hatch below;
+`::alias`-constrained atoms and `alias:path` profile parents still use
+the canonical name only (a documented cut).
+
+The mismatch drop (real `config.py:1121-1136`): a repo whose resolved
+name differs from its `repos.conf` `[section]` name is **dropped
+entirely**, with a `!!! Section '<sect>' in repos.conf has name
+different from repository name '<name>' set inside repository` error to
+stderr -- *unless* the section name is one of that repo's aliases (the
+real way to legitimately run two enabled copies of one repo under
+distinct names). Ported faithfully, drop included -- not softened to a
+warning. (`find_repos` is called at more than one layer per `--pretend`
+run, so the error line can repeat; a pre-existing double-call, noted in
+the code.)
+
+`layoutmasteroverlay` (from the previous slice) gains `aliases =
+layoutmasteroverlay` so its `repo-name = layoutrenamed` no longer
+mismatches. New `repnamerepo` (`[repnamesection]`, `profiles/repo_name =
+repnamefromfile`, `aliases = repnamesection`) -- `dev-libs/repnamepkg`
+carries `::repnamefromfile`, not `::repnamesection`. Rust unit test for
+`find_repos` (repo_name file source, alias-kept, mismatch-dropped), a
+dedicated contract test for the canonical name, and a temp-tree
+contract test for the drop + warning; mirrored in
+`emerge_pretend_reference.py`.
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge --pretend \
+    "dev-libs/repnamepkg::repnamefromfile"
+# [ebuild  N] dev-libs/repnamepkg-1.0
+#   -- resolves by the profiles/repo_name name, not the [repnamesection]
+#      section name; the repo is kept only because it aliases the section
 ```
 
 ## Running it

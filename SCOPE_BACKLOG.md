@@ -67,8 +67,14 @@ Ranked roughly by how self-contained each is.
    syntax (`RepoConfig::profile_formats` -> `resolve_config`'s own
    `repo_profile_formats` read -> `expand_parent_colon`). Real portage's
    EAPI-conditional `profile-formats` default when the key is absent is
-   not modeled (absent = "no portage-2"); `profiles/repo_name` +
-   mismatch warning still a cut.
+   not modeled (absent = "no portage-2"). **Also shipped, same day**:
+   `profiles/repo_name` as the canonical name source (precedence
+   `layout.conf repo-name` > `profiles/repo_name` > section), `aliases`
+   (`repos.conf` + `layout.conf`), and the real section-name mismatch
+   **drop** (`config.py:1121` -- a repo whose name != its section name,
+   with no alias covering it, is dropped with a `!!! Section ...` error).
+   **Residual:** `::alias` atom matching / `alias:path` profile parents
+   still use the canonical name only.
 
 2. ~~**`USE_EXPAND_HIDDEN` / `USE_EXPAND_IMPLICIT`.**~~ `USE_EXPAND_IMPLICIT`
    **shipped 2026-08-27** (`Config::iuse_effective`, real EAPI 5+

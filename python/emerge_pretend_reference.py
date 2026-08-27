@@ -196,39 +196,65 @@ def find_repos(config_root):
         if priority is None:
             priority = -1000 if name == main_repo else 0
         repos_conf_masters = parser.get(name, "masters", fallback=None)
+        # Real name resolution: profiles/repo_name file first, else the
+        # section name (real _read_repo_name, config.py:670-688).
+        try:
+            with open(os.path.join(location, "profiles", "repo_name")) as f:
+                repo_name_file = f.readline().strip()
+        except OSError:
+            repo_name_file = ""
         repos.append(
             {
-                "name": name,
+                "name": repo_name_file or name,
                 "location": location,
                 "priority": priority,
                 "is_main": name == main_repo,
+                "_section_name": name,
                 # None = repos.conf key absent (fall through to layout.conf
-                # tier); a string (possibly empty) = explicit.
+                # tier); a list (possibly empty) = explicit.
                 "_repos_conf_masters": (
                     None if repos_conf_masters is None else repos_conf_masters.split()
                 ),
+                "_repos_conf_aliases": parser.get(name, "aliases", fallback="").split(),
             }
         )
 
-    if not any(r["name"] == main_repo for r in repos):
-        raise ResolutionError(f'no location for repo "{main_repo}" in repos.conf')
-
-    # Real layout.conf (lib/portage/repository/config.py): each repo's own
-    # metadata/layout.conf contributes repo-name (an override of the
-    # repos.conf section name -- this pilot uses the section name as
-    # canonical, so it takes the override directly; it does NOT model
-    # profiles/repo_name or the mismatch warning, a documented cut),
-    # profile-formats (the colon-parent gate, see _expand_parent_colon),
-    # and the middle masters tier. Mirrors portage-repo/src/lib.rs.
+    # Real layout.conf (lib/portage/repository/config.py): repo-name
+    # overrides the name (config.py:500-505); aliases are prepended
+    # before the repos.conf ones (config.py:492-499); profile-formats
+    # feeds the colon-parent gate; layout.conf masters is the middle
+    # tier. Mirrors portage-repo/src/lib.rs.
     for repo in repos:
         layout = _parse_layout_conf(repo["location"])
         repo["profile_formats"] = layout.get("profile-formats", "").split()
+        repo["aliases"] = (
+            layout.get("aliases", "").split() + repo["_repos_conf_aliases"]
+        )
         new_name = layout.get("repo-name", "").strip()
         if new_name:
             repo["name"] = new_name
         repo["_layout_masters"] = (
             None if "masters" not in layout else layout["masters"].split()
         )
+
+    # Real config.py:1121-1136: a repo whose resolved name differs from
+    # its repos.conf [section] name is dropped with an error -- unless
+    # the section name is one of its aliases. Ported faithfully, drop
+    # included (not a soft warning).
+    kept = []
+    for repo in repos:
+        if repo["name"] != repo["_section_name"] and repo["_section_name"] not in repo["aliases"]:
+            print(
+                f"!!! Section '{repo['_section_name']}' in repos.conf has name "
+                f"different from repository name '{repo['name']}' set inside repository",
+                file=sys.stderr,
+            )
+            continue
+        kept.append(repo)
+    repos = kept
+
+    if not any(r["name"] == main_repo for r in repos):
+        raise ResolutionError(f'no location for repo "{main_repo}" in repos.conf')
 
     # "masters" resolution -- real three-tier (config.py:237-245/484-490):
     # repos.conf masters wins outright; else layout.conf masters (an empty
@@ -250,8 +276,8 @@ def find_repos(config_root):
             repo["masters"] = []
         else:
             repo["masters"] = [main_repo_location] if main_repo_location else []
-        del repo["_repos_conf_masters"]
-        del repo["_layout_masters"]
+        for k in ("_repos_conf_masters", "_layout_masters", "_section_name", "_repos_conf_aliases"):
+            del repo[k]
 
     repos.sort(key=lambda r: (r["priority"], r["name"]))
     return repos

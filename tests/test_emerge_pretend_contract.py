@@ -2826,6 +2826,77 @@ def test_layout_conf_masters_middle_tier_and_repo_name_override(emerge_binary, f
     )
 
 
+def test_profiles_repo_name_is_the_canonical_name_source(emerge_binary, fixture_env):
+    """repnamerepo's section is [repnamesection] but its
+    profiles/repo_name says "repnamefromfile" -- so its packages carry
+    ::repnamefromfile, not ::repnamesection. It's kept (not dropped for
+    the section-vs-name mismatch) because its layout.conf lists
+    "aliases = repnamesection". dev-libs/repnamepkg::repnamefromfile
+    resolves; ::repnamesection does not (::alias atom matching is a
+    documented cut)."""
+    ok = _run([str(emerge_binary)], ["--pretend", "dev-libs/repnamepkg"], fixture_env)
+    assert ok.returncode == 0
+    assert ok.stdout.strip() == "[ebuild  N] dev-libs/repnamepkg-1.0"
+    assert ok.stderr == ""
+
+    by_file = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/repnamepkg::repnamefromfile"],
+        fixture_env,
+    )
+    assert by_file.returncode == 0
+    assert by_file.stdout.strip() == "[ebuild  N] dev-libs/repnamepkg-1.0"
+
+    by_section = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/repnamepkg::repnamesection"],
+        fixture_env,
+    )
+    assert by_section.returncode == 1
+
+
+def test_repo_name_section_mismatch_drops_the_repo_with_a_warning(
+    emerge_binary, emerge_pretend_python, tmp_path
+):
+    """A repo whose profiles/repo_name differs from its repos.conf
+    [section] name -- and with no matching alias -- is dropped entirely
+    with a "!!! Section ..." error to stderr (real config.py:1121-1136).
+    Its packages then don't resolve."""
+    cfg = tmp_path / "cfg"
+    repo = tmp_path / "the-repo"
+    (cfg / "etc/portage").mkdir(parents=True)
+    (cfg / "etc/portage/repos.conf").write_text(
+        "[DEFAULT]\nmain-repo = main\n\n"
+        "[main]\nlocation = " + str(repo) + "\n\n"
+        "[mismatched-section]\nlocation = " + str(repo) + "\n"
+    )
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "metadata/md5-cache/dev-libs").mkdir(parents=True)
+    (repo / "profiles/repo_name").write_text("main\n")
+    (repo / "profiles/make.defaults").write_text('ACCEPT_KEYWORDS="amd64"\n')
+    (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles")
+    pkgdir = repo / "dev-libs/mainpkg"
+    pkgdir.mkdir(parents=True)
+    (pkgdir / "mainpkg-1.0.ebuild").write_text(
+        'EAPI=8\nDESCRIPTION="x"\nSLOT="0"\nKEYWORDS="amd64"\n'
+    )
+    (repo / "metadata/md5-cache/dev-libs/mainpkg-1.0").write_text(
+        "DEFINED_PHASES=-\nDEPEND=\nDESCRIPTION=x\nEAPI=8\nIUSE=\n"
+        "KEYWORDS=amd64\nRDEPEND=\nSLOT=0\n_md5_=0000000000000000000000000000000\n"
+    )
+    env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
+
+    rust = _run([str(emerge_binary)], ["--pretend", "dev-libs/mainpkg"], env)
+    py = _run(emerge_pretend_python, ["--pretend", "dev-libs/mainpkg"], env)
+    assert rust.returncode == py.returncode == 0  # [main] still fine
+    assert rust.stdout == py.stdout
+    assert rust.stderr == py.stderr
+    assert (
+        "!!! Section 'mismatched-section' in repos.conf has name different"
+        in rust.stderr
+    )
+
+
 def test_overlay_own_package_use_gates_a_dependency(emerge_binary, fixture_env):
     """package.mask/.unmask already read from every repo (task #40), but
     package.use/.mask/.force/.stable.mask/.stable.force were still main-

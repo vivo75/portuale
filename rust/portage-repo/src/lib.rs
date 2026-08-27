@@ -135,6 +135,17 @@ pub struct RepoConfig {
     /// simplification; every real Gentoo repo that uses the syntax
     /// declares it explicitly).
     pub profile_formats: Vec<String>,
+    /// This repo's own `aliases` (real `config.py:216-224`/`492-499`):
+    /// `layout.conf`'s `aliases =` first, then `repos.conf`'s appended.
+    /// This pilot acts on aliases in exactly one place -- the
+    /// section-name-vs-repo-name mismatch escape hatch in `find_repos`
+    /// (real `config.py:1121`: a repo whose resolved `name` differs from
+    /// its `repos.conf` `[section]` name is dropped with an error
+    /// *unless* the section name is one of its aliases). Deliberately
+    /// NOT wired into `::alias` atom matching or `alias:path` profile
+    /// parents -- a documented cut; `::`-constrained atoms and
+    /// cross-repo parents both use the canonical name only.
+    pub aliases: Vec<String>,
 }
 
 fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>) {
@@ -167,10 +178,10 @@ fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>
 /// `lib/portage/repository/config.py:1516`) -- a section-less `key =
 /// value` file. Returns an empty map when the file is absent (every key
 /// this pilot reads has a real "absent" default). This pilot reads
-/// exactly three keys -- `masters`, `repo-name`, `profile-formats` --
-/// out of the ~20 real ones (`sign-manifests`, `manifest-hashes`,
-/// `cache-formats`, `eapis-banned`, `use-manifests`, ...); the rest are
-/// real but out of this pilot's scope.
+/// exactly four keys -- `masters`, `repo-name`, `profile-formats`,
+/// `aliases` -- out of the ~20 real ones (`sign-manifests`,
+/// `manifest-hashes`, `cache-formats`, `eapis-banned`, `use-manifests`,
+/// ...); the rest are real but out of this pilot's scope.
 fn parse_layout_conf(repo_location: &Path) -> HashMap<String, String> {
     let Ok(text) = fs::read_to_string(repo_location.join("metadata/layout.conf")) else {
         return HashMap::new();
@@ -189,6 +200,18 @@ fn parse_layout_conf(repo_location: &Path) -> HashMap<String, String> {
         }
     }
     out
+}
+
+/// Reads `<repo_location>/profiles/repo_name` (real `_read_repo_name`,
+/// `config.py:670-688`), the first line trimmed. `None` when the file is
+/// absent or empty -- real portage falls back to `"x-" + basename` +
+/// `missing = True`, but this pilot's own fallback (the `repos.conf`
+/// `[section]` name) is applied by the caller, so a missing file is
+/// simply `None` here.
+fn read_repo_name_file(repo_location: &Path) -> Option<String> {
+    let text = fs::read_to_string(repo_location.join("profiles/repo_name")).ok()?;
+    let name = text.lines().next().unwrap_or("").trim().to_string();
+    (!name.is_empty()).then_some(name)
 }
 
 /// Parses `repos.conf` (a file, or -- as on this pilot's dev machine -- a
@@ -233,8 +256,19 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, String> {
         .ok_or("no [DEFAULT] main-repo in repos.conf")?
         .clone();
 
+    // First pass: one entry per `[section]` with a `location`. `name` is
+    // resolved now to `profiles/repo_name` (real `_read_repo_name`) when
+    // present, else the section name -- the `layout.conf` `repo-name`
+    // override and the section-name-vs-resolved-name mismatch check both
+    // come after. `sect` is the parallel raw-data buffer (section name,
+    // `repos.conf` `masters`/`aliases`), aligned with `repos` by index.
+    struct SectionInfo {
+        section_name: String,
+        repos_conf_masters: Option<Vec<String>>,
+        repos_conf_aliases: Vec<String>,
+    }
     let mut repos: Vec<RepoConfig> = Vec::new();
-    let mut repos_conf_masters_by_section: HashMap<String, Option<Vec<String>>> = HashMap::new();
+    let mut sect: Vec<SectionInfo> = Vec::new();
     for (name, kv) in &sections {
         if name == "DEFAULT" {
             continue;
@@ -252,76 +286,115 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, String> {
         } else {
             config_root.join(location)
         };
-        // An explicit "priority" wins; otherwise the main repo defaults
-        // to -1000 (real portage's own default -- see
-        // lib/portage/repository/config.py) and every other repo to 0.
         let priority = kv
             .get("priority")
             .and_then(|p| p.parse::<i32>().ok())
             .unwrap_or(if *name == main_repo { -1000 } else { 0 });
-        // `repos.conf` `masters =` (top tier), captured now and resolved
-        // in the second pass below once every repo's location is known.
-        // `None` = key absent (fall through to the `layout.conf` tier);
-        // `Some([])` = an explicit empty key (real "no masters").
-        let repos_conf_masters: Option<Vec<String>> = kv
-            .get("masters")
-            .map(|s| s.split_whitespace().map(String::from).collect());
+        // Real name resolution: `profiles/repo_name` file first, else
+        // the section name.
+        let resolved_name = read_repo_name_file(&location).unwrap_or_else(|| name.clone());
         repos.push(RepoConfig {
-            name: name.clone(),
+            name: resolved_name,
             location,
             priority,
             is_main: *name == main_repo,
-            // Resolved below, once every repo's own location is known --
-            // see this function's own second pass.
             masters: Vec::new(),
             profile_formats: Vec::new(),
+            aliases: Vec::new(),
         });
-        repos_conf_masters_by_section.insert(name.clone(), repos_conf_masters);
+        sect.push(SectionInfo {
+            section_name: name.clone(),
+            // `None` = key absent (fall through to `layout.conf`);
+            // `Some([])` = an explicit empty key (real "no masters").
+            repos_conf_masters: kv
+                .get("masters")
+                .map(|s| s.split_whitespace().map(String::from).collect()),
+            repos_conf_aliases: kv
+                .get("aliases")
+                .map(|s| s.split_whitespace().map(String::from).collect())
+                .unwrap_or_default(),
+        });
+    }
+
+    // Second pass: each repo's own `layout.conf`. `repo-name` overrides
+    // the name (real `config.py:500-505`); `aliases` are prepended
+    // before the `repos.conf` ones (real `config.py:492-499`);
+    // `profile-formats` is captured; `layout.conf` `masters` is the
+    // middle tier.
+    let mut layout_masters: Vec<Option<Vec<String>>> = Vec::with_capacity(repos.len());
+    for (repo, s) in repos.iter_mut().zip(&sect) {
+        let layout = parse_layout_conf(&repo.location);
+        repo.profile_formats = layout
+            .get("profile-formats")
+            .map(|v| v.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        let mut aliases: Vec<String> = layout
+            .get("aliases")
+            .map(|v| v.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        aliases.extend(s.repos_conf_aliases.iter().cloned());
+        repo.aliases = aliases;
+        if let Some(new_name) = layout.get("repo-name").filter(|v| !v.is_empty()) {
+            repo.name = new_name.clone();
+        }
+        layout_masters.push(
+            layout
+                .get("masters")
+                .map(|v| v.split_whitespace().map(String::from).collect()),
+        );
+    }
+
+    // Real `config.py:1121-1136`: a repo whose resolved `name` differs
+    // from its own `repos.conf` `[section]` name is dropped with an
+    // error -- unless the section name is one of its aliases (the real
+    // escape hatch for deliberately having two enabled copies of one
+    // repo). Ported faithfully, including the drop (not a soft warning).
+    // NOTE: this `eprintln!` can fire more than once per `--pretend` run
+    // -- `find_repos` is called both at the CLI layer (to build
+    // `resolve_config`'s inputs) and again inside `resolve_pretend_graph`;
+    // a pre-existing double-call, harmless except for the repeated line.
+    let keep: Vec<bool> = repos
+        .iter()
+        .zip(&sect)
+        .map(|(repo, s)| {
+            let ok = repo.name == s.section_name || repo.aliases.contains(&s.section_name);
+            if !ok {
+                eprintln!(
+                    "!!! Section '{}' in repos.conf has name different from repository name '{}' set inside repository",
+                    s.section_name, repo.name
+                );
+            }
+            ok
+        })
+        .collect();
+    if keep.iter().any(|k| !k) {
+        let mut i = 0;
+        repos.retain(|_| {
+            i += 1;
+            keep[i - 1]
+        });
+        let mut i = 0;
+        sect.retain(|_| {
+            i += 1;
+            keep[i - 1]
+        });
+        let mut i = 0;
+        layout_masters.retain(|_| {
+            i += 1;
+            keep[i - 1]
+        });
     }
 
     if !repos.iter().any(|r| r.name == main_repo) {
         return Err(format!("no location for repo {main_repo:?} in repos.conf"));
     }
 
-    // Real `layout.conf` (`lib/portage/repository/config.py`): each
-    // repo's own `metadata/layout.conf` contributes `repo-name` (an
-    // override of the `repos.conf` section name -- this pilot uses the
-    // section name as canonical, so it takes the override directly; it
-    // does NOT model `profiles/repo_name` or the section-vs-file
-    // mismatch warning, a documented cut), `profile-formats` (the
-    // colon-parent gate, see `RepoConfig::profile_formats`), and the
-    // middle `masters` tier. Keyed by *section* name (the override
-    // hasn't happened yet); `layout_masters_by_final_name` below is
-    // re-keyed by the post-override name so the masters pass finds it.
-    let mut layout_masters_by_final_name: HashMap<String, Option<Vec<String>>> = HashMap::new();
-    for repo in &mut repos {
-        let section_name = repo.name.clone();
-        let layout = parse_layout_conf(&repo.location);
-        repo.profile_formats = layout
-            .get("profile-formats")
-            .map(|s| s.split_whitespace().map(String::from).collect())
-            .unwrap_or_default();
-        if let Some(new_name) = layout.get("repo-name").filter(|s| !s.is_empty()) {
-            repo.name = new_name.clone();
-        }
-        let layout_masters: Option<Vec<String>> = layout
-            .get("masters")
-            .map(|s| s.split_whitespace().map(String::from).collect());
-        layout_masters_by_final_name.insert(repo.name.clone(), layout_masters);
-        // Re-key the repos.conf masters entry to the final name too, so
-        // the masters pass can look up both tiers by `repo.name`.
-        if repo.name != section_name {
-            if let Some(v) = repos_conf_masters_by_section.remove(&section_name) {
-                repos_conf_masters_by_section.insert(repo.name.clone(), v);
-            }
-        }
-    }
-
     // `masters` resolution (real three-tier, `config.py:237-245`/
-    // `484-490`): needs every repo's own final name+location already
-    // known (to resolve a master *name* to a location), so this is a
-    // genuine second pass -- `location_by_name` snapshotted before the
-    // mutable loop to avoid borrowing `repos` both ways at once.
+    // `484-490`): an explicit `repos.conf` `masters =` wins; else the
+    // repo's own `layout.conf` `masters =`; else the implicit default
+    // (main repo alone for every non-main repo). Needs every repo's own
+    // final name+location known first, so `location_by_name` is
+    // snapshotted before the mutable loop.
     let location_by_name: HashMap<String, PathBuf> = repos
         .iter()
         .map(|r| (r.name.clone(), r.location.clone()))
@@ -333,21 +406,11 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, String> {
             .filter_map(|n| location_by_name.get(n).cloned())
             .collect()
     };
-    for repo in &mut repos {
-        let repos_conf = repos_conf_masters_by_section
-            .get(&repo.name)
-            .cloned()
-            .flatten();
-        let layout = layout_masters_by_final_name
-            .get(&repo.name)
-            .cloned()
-            .flatten();
-        repo.masters = match (repos_conf, layout) {
-            (Some(names), _) => resolve_names(&names),
-            (None, Some(names)) => resolve_names(&names),
+    for (i, repo) in repos.iter_mut().enumerate() {
+        repo.masters = match (&sect[i].repos_conf_masters, &layout_masters[i]) {
+            (Some(names), _) => resolve_names(names),
+            (None, Some(names)) => resolve_names(names),
             (None, None) => {
-                // Implicit default: every non-main repo masters the main
-                // repo alone; the main repo can never be its own master.
                 if repo.name == main_repo {
                     Vec::new()
                 } else {
@@ -6049,7 +6112,8 @@ mod tests {
         // `masters = overlay` -> that wins over the implicit `[main]`.
         std::fs::write(
             root.join("downstream/metadata/layout.conf"),
-            "masters = overlay\nrepo-name = renamed-downstream\nprofile-formats = portage-2\n",
+            "masters = overlay\nrepo-name = renamed-downstream\n\
+             aliases = downstream\nprofile-formats = portage-2\n",
         )
         .unwrap();
 
@@ -6084,6 +6148,48 @@ mod tests {
             Vec::<PathBuf>::new(),
             "an explicit (even empty) repos.conf masters wins over layout.conf's"
         );
+    }
+
+    #[test]
+    fn find_repos_reads_profiles_repo_name_and_drops_a_mismatched_section() {
+        // Real `_read_repo_name` + the `config.py:1121` mismatch check:
+        // `profiles/repo_name` is the canonical name source (over the
+        // `[section]` name); a section whose name differs from the
+        // resolved name -- and isn't one of the repo's aliases -- is
+        // dropped entirely.
+        let root = masters_test_root("repo-name-file");
+        std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+        std::fs::write(
+            root.join("etc/portage/repos.conf"),
+            "[DEFAULT]\nmain-repo = main\n\n\
+             [main]\nlocation = main\n\n\
+             [aliased-section]\nlocation = aliased\n\n\
+             [dropped-section]\nlocation = dropped\n",
+        )
+        .unwrap();
+        for r in ["main", "aliased", "dropped"] {
+            std::fs::create_dir_all(root.join(r).join("profiles")).unwrap();
+            std::fs::create_dir_all(root.join(r).join("metadata")).unwrap();
+        }
+        std::fs::write(root.join("main/profiles/repo_name"), "main\n").unwrap();
+        // `aliased`: repo_name file says `aliased-repo`, differs from the
+        // section, but the section is listed as an alias -> kept.
+        std::fs::write(root.join("aliased/profiles/repo_name"), "aliased-repo\n").unwrap();
+        std::fs::write(
+            root.join("aliased/metadata/layout.conf"),
+            "aliases = aliased-section\n",
+        )
+        .unwrap();
+        // `dropped`: repo_name file mismatches the section, no alias.
+        std::fs::write(root.join("dropped/profiles/repo_name"), "dropped-repo\n").unwrap();
+
+        let repos = find_repos(&root).expect("repos.conf resolves");
+        assert!(repos.iter().any(|r| r.name == "aliased-repo"));
+        assert!(
+            !repos.iter().any(|r| r.name == "dropped-repo"),
+            "a section whose name mismatches the repo_name file with no alias is dropped"
+        );
+        assert!(repos.iter().all(|r| r.name != "dropped-section"));
     }
 
     fn resolve(category: &str, package: &str) -> PretendOutcome {
