@@ -3296,6 +3296,158 @@ pub fn depclean_cleanlist(
     }
 }
 
+/// Real `emerge --prune`'s removal list (`_calc_depclean` with
+/// `action="prune"` -- `actions.py:1059-1110` plus `create_cleanlist`'s
+/// own prune branch, `:1334-1340`).
+///
+/// `--prune` removes *superseded* installed versions: for every cp with
+/// more than one version installed, the non-highest versions, kept only
+/// if something still needs that exact old version. Real portage seeds
+/// its `protected_set` with every installed cp as a bare `cp` atom --
+/// which resolves to just the *highest* installed version -- then the
+/// per-package loop additionally, explicitly protects the highest
+/// version of every cp and every non-highest version an argument atom
+/// does not match. With no `args`, `args_set` auto-fills with every
+/// multi-version cp, so the removal candidates are exactly the
+/// non-highest versions of multi-version cps. `emerge --prune <atom>`
+/// uses those atoms as `args_set` instead: only non-highest versions
+/// they match become candidates.
+///
+/// Equivalently: seed the reachability closure from every installed
+/// package *except* the ones that are both non-highest-in-their-cp and
+/// matched by `args_set`; those excepted packages are the candidates,
+/// and the cleanlist is the ones the closure doesn't reach. Same
+/// `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND` closure and
+/// `topological_removal_order` as `depclean_cleanlist`.
+///
+/// **Deliberately out** (matching `depclean_cleanlist`'s own cuts):
+/// `--prune --nodeps` (the obscure `_unmerge_display` prune branch that
+/// skips the closure entirely), the `--deselect` world-file rewrite
+/// (`--pretend` never writes it), `--depclean-lib-check`, and
+/// slot-operator rebuild edges.
+pub fn prune_cleanlist(root: &Path, args: &[String]) -> DepcleanResult {
+    let installed = all_installed_packages(root);
+    let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
+
+    // Highest installed version per cp (real `pkgs_for_cp[-1]`).
+    let mut highest: HashMap<(String, String), String> = HashMap::new();
+    for p in &installed {
+        let cp = (p.category.clone(), p.package.clone());
+        match highest.get(&cp) {
+            Some(v) if vercmp_ordering(&p.version, v) != Ordering::Greater => {}
+            _ => {
+                highest.insert(cp, p.version.clone());
+            }
+        }
+    }
+    let is_highest = |p: &InstalledPackage| {
+        highest
+            .get(&(p.category.clone(), p.package.clone()))
+            .is_some_and(|v| v == &p.version)
+    };
+
+    // `args_set`: the given atoms, or -- with none -- every cp with more
+    // than one installed version (real `actions.py:1071-1075`).
+    let multi_version: HashSet<(String, String)> = {
+        let mut counts: HashMap<(String, String), usize> = HashMap::new();
+        for p in &installed {
+            *counts
+                .entry((p.category.clone(), p.package.clone()))
+                .or_default() += 1;
+        }
+        counts
+            .into_iter()
+            .filter(|(_, n)| *n > 1)
+            .map(|(cp, _)| cp)
+            .collect()
+    };
+    let matched_by_args = |p: &InstalledPackage| -> bool {
+        if args.is_empty() {
+            return multi_version.contains(&(p.category.clone(), p.package.clone()));
+        }
+        let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+        args.iter().any(|a| {
+            portage_dep::parse_atom(a)
+                .is_some_and(|pa| pa.category == p.category && pa.package == p.package)
+                && portage_dep::match_from_list(a, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+        })
+    };
+
+    // A candidate for pruning = a non-highest version its args_set
+    // matches; everything else seeds the closure.
+    let is_candidate = |p: &InstalledPackage| !is_highest(p) && matched_by_args(p);
+
+    let candidate_strs: Vec<(String, &InstalledPackage)> = installed
+        .iter()
+        .map(|p| {
+            (
+                format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot),
+                p,
+            )
+        })
+        .collect();
+    let matches_atom = |atom_str: &str| -> Vec<&InstalledPackage> {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            return Vec::new();
+        };
+        candidate_strs
+            .iter()
+            .filter(|(_, p)| p.category == atom.category && p.package == atom.package)
+            .filter(|(cs, _)| {
+                portage_dep::match_from_list(atom_str, &[cs.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+            })
+            .map(|(_, p)| *p)
+            .collect()
+    };
+
+    let mut reachable: HashSet<(String, String, String)> = HashSet::new();
+    let mut queue: Vec<InstalledPackage> = Vec::new();
+    for p in &installed {
+        if !is_candidate(p) && reachable.insert(key(p)) {
+            queue.push(p.clone());
+        }
+    }
+    while let Some(p) = queue.pop() {
+        let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+            let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in atoms {
+                for dep in matches_atom(&atom_str) {
+                    if reachable.insert(key(dep)) {
+                        queue.push(dep.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cleanlist: Vec<InstalledPackage> = installed
+        .iter()
+        .filter(|p| is_candidate(p) && !reachable.contains(&key(p)))
+        .cloned()
+        .collect();
+    cleanlist.sort_by(|a, b| {
+        a.category
+            .cmp(&b.category)
+            .then_with(|| a.package.cmp(&b.package))
+            .then_with(|| vercmp_ordering(&a.version, &b.version))
+    });
+    let required_count = reachable.len();
+    let (ordered, cleanlist) = topological_removal_order(root, cleanlist);
+    DepcleanResult {
+        cleanlist,
+        required_count,
+        ordered,
+    }
+}
+
 /// Real `strip_slots` (`lib/portage/dep/_slot_operator.py:11`), for one
 /// atom string: rewrites a "built" slot-operator atom (`cat/pkg:2=` -- the
 /// concrete slot portage records in the vdb when a `cat/pkg:=` dependency
@@ -9105,6 +9257,73 @@ mod tests {
                 "dev-libs/ccc-1.0".to_string(),
             ]
         );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&root2).ok();
+    }
+
+    #[test]
+    fn prune_cleanlist_removes_superseded_versions_only() {
+        let root = masters_test_root("prune");
+        let install = |name: &str, version: &str, rdepend: &str| {
+            let d = root
+                .join("var/db/pkg/dev-libs")
+                .join(format!("{name}-{version}"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+            if !rdepend.is_empty() {
+                std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        // aa, zz, mm are all multi-version; single is not. keeper pins
+        // mm-2.0. zz-1.0 pins aa-1.0 (both themselves prunable, so the
+        // pin is only an ordering edge, not a keep).
+        install("aa", "1.0", "");
+        install("aa", "2.0", "");
+        install("zz", "1.0", "=dev-libs/aa-1.0");
+        install("zz", "2.0", "");
+        install("mm", "1.0", "");
+        install("mm", "2.0", "");
+        install("mm", "3.0", "");
+        install("keeper", "1.0", "=dev-libs/mm-2.0");
+        install("single", "1.0", "");
+
+        let result = prune_cleanlist(&root, &[]);
+        assert!(result.ordered);
+        let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
+        // mm-2.0 kept (keeper needs it), mm-3.0/aa-2.0/zz-2.0 highest,
+        // single single-version, keeper protected. Topological order:
+        // level 0 ready {zz-1.0, mm-1.0} cpv-desc, then aa-1.0.
+        assert_eq!(
+            clean,
+            vec![
+                "dev-libs/zz-1.0".to_string(),
+                "dev-libs/mm-1.0".to_string(),
+                "dev-libs/aa-1.0".to_string(),
+            ]
+        );
+
+        // `--prune dev-libs/mm`: only mm's old versions are candidates.
+        let narrowed = prune_cleanlist(&root, &["dev-libs/mm".to_string()]);
+        assert_eq!(
+            narrowed
+                .cleanlist
+                .iter()
+                .map(|p| p.cpv())
+                .collect::<Vec<_>>(),
+            vec!["dev-libs/mm-1.0".to_string()]
+        );
+
+        // A root with only single-version cps -> nothing to prune.
+        let root2 = masters_test_root("prune-none");
+        for n in ["one", "two"] {
+            let d = root2.join("var/db/pkg/dev-libs").join(format!("{n}-1.0"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        }
+        assert!(prune_cleanlist(&root2, &[]).cleanlist.is_empty());
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&root2).ok();

@@ -1354,7 +1354,7 @@ fn report_option(token: &str) -> ExitCode {
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
              --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
-             --unmerge/-C, --depclean/-c, \
+             --unmerge/-C, --depclean/-c, --prune/-P, \
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
              --changed-deps-report, --changed-slot, --with-test-deps, \
              --noreplace/-n, --selective, and --help/-h are implemented \
@@ -2185,31 +2185,19 @@ fn split_pf(dirname: &str) -> Option<(String, String)> {
     None
 }
 
-/// Real `emerge --pretend --depclean` / `-pc` (real `action_depclean` +
-/// `_calc_depclean`, no package arguments): the packages nothing in
-/// `@world` ∪ `@system` needs, at runtime, are the cleanlist -- reported
-/// (never removed, `--pretend`-only, same stance as `--unmerge`). Real
-/// `action_depclean` literally feeds its cleanlist to `unmerge(...,
-/// "unmerge", cleanlist)`, so the per-package block here is exactly
-/// `run_unmerge_pretend`'s (each cleanlist cpv passed as an `=cat/pkg-ver`
-/// atom). See `portage_repo::depclean_cleanlist`'s own doc comment for
-/// the graph and its documented narrowings.
-///
-/// `emerge -pc <atoms>` (the `--depclean <atoms>` narrowing): the world
-/// "selected" plain atoms are dropped (the named packages get deselected
-/// *and* removed), every other installed package becomes a protected
-/// root, and the cleanlist is just the `args`-matched packages nothing
-/// else needs -- see `depclean_cleanlist`'s own doc comment. Real
-/// `action_depclean` only shows the `* ` advisory block with no args, so
-/// this doesn't either.
-fn run_depclean_pretend(
+/// Real `action_depclean`'s own argument handling (`actions.py:848-863`),
+/// shared by `--depclean` and `--prune`: resolve each bare name against
+/// the vdb null-category scan (ambiguous -> `!!! ... ambiguous` +
+/// `Err(1)`), then check every resulting atom -- one matching nothing
+/// prints `--- Couldn't find 'X' to <action>.` (stderr), and if *none*
+/// match, print `>>> No packages selected for removal by <action>` and
+/// return `Err(1)`. An empty `targets` is `Ok(vec![])` (the full,
+/// no-args form).
+fn resolve_cleanup_args(
     targets: &[&str],
     root: &Path,
-    config_root: &Path,
-    config: &portage_profile::Config,
-) -> ExitCode {
-    // Bare-name targets get their category from the vdb (real
-    // `vardb.match`'s null-category lookup), same as `--unmerge`/`-C`.
+    action: &str,
+) -> Result<Vec<String>, ExitCode> {
     let mut args: Vec<String> = Vec::new();
     let installed_scan = installed_cp_versions(root);
     for t in targets {
@@ -2233,15 +2221,12 @@ fn run_depclean_pretend(
                     for n in names {
                         println!("{n}");
                     }
-                    return ExitCode::from(1);
+                    return Err(ExitCode::from(1));
                 }
             }
         }
     }
 
-    // Real `action_depclean`: for each arg, if the vdb has no match ->
-    // `--- Couldn't find 'X' to depclean.` (stderr); if *none* matched ->
-    // `>>> No packages selected` and exit 1.
     if !args.is_empty() {
         let mut any_matched = false;
         for a in &args {
@@ -2257,16 +2242,88 @@ fn run_depclean_pretend(
                 any_matched = true;
             } else {
                 eprintln!(
-                    "--- Couldn't find '{}' to depclean.",
+                    "--- Couldn't find '{}' to {action}.",
                     a.strip_prefix("null/").unwrap_or(a)
                 );
             }
         }
         if !any_matched {
-            println!(">>> No packages selected for removal by depclean");
-            return ExitCode::from(1);
+            println!(">>> No packages selected for removal by {action}");
+            return Err(ExitCode::from(1));
         }
     }
+    Ok(args)
+}
+
+/// Real `emerge --pretend --prune` / `-pP` (real `action_depclean` with
+/// `action="prune"`). Unlike `--depclean`, real `action_depclean`
+/// returns right after the `unmerge()` preview (`actions.py:888`), so
+/// there is **no** `* ` advisory block (only `action == "depclean"`
+/// prints it, `:840`) and **no** `Packages installed:` / `Required
+/// packages:` / `Number to remove:` stats block. The empty-cleanlist
+/// message gains a `>>> To ignore dependencies, use --nodeps` line
+/// (`create_cleanlist`, `:1348`). See `portage_repo::prune_cleanlist`'s
+/// own doc comment for the removal-set semantics.
+fn run_prune_pretend(
+    targets: &[&str],
+    root: &Path,
+    config_root: &Path,
+    config: &portage_profile::Config,
+) -> ExitCode {
+    let args = match resolve_cleanup_args(targets, root, "prune") {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+
+    let result = portage_repo::prune_cleanlist(root, &args);
+
+    if result.cleanlist.is_empty() {
+        println!(">>> No packages selected for removal by prune");
+        println!(">>> To see reverse dependencies, use --verbose");
+        println!(">>> To ignore dependencies, use --nodeps");
+        return ExitCode::SUCCESS;
+    }
+
+    println!(">>> Calculating removal order...");
+    let cpv_atoms: Vec<String> = result
+        .cleanlist
+        .iter()
+        .map(|p| format!("={}", p.cpv()))
+        .collect();
+    let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
+    run_unmerge_pretend(&cpv_refs, root, config_root, config, result.ordered)
+}
+
+/// Real `emerge --pretend --depclean` / `-pc` (real `action_depclean` +
+/// `_calc_depclean`, no package arguments): the packages nothing in
+/// `@world` ∪ `@system` needs, at runtime, are the cleanlist -- reported
+/// (never removed, `--pretend`-only, same stance as `--unmerge`). Real
+/// `action_depclean` literally feeds its cleanlist to `unmerge(...,
+/// "unmerge", cleanlist)`, so the per-package block here is exactly
+/// `run_unmerge_pretend`'s (each cleanlist cpv passed as an `=cat/pkg-ver`
+/// atom). See `portage_repo::depclean_cleanlist`'s own doc comment for
+/// the graph and its documented narrowings.
+///
+/// `emerge -pc <atoms>` (the `--depclean <atoms>` narrowing): the world
+/// "selected" plain atoms are dropped (the named packages get deselected
+/// *and* removed), every other installed package becomes a protected
+/// root, and the cleanlist is just the `args`-matched packages nothing
+/// else needs -- see `depclean_cleanlist`'s own doc comment. Real
+/// `action_depclean` only shows the `* ` advisory block with no args, so
+/// this doesn't either.
+fn run_depclean_pretend(
+    targets: &[&str],
+    root: &Path,
+    config_root: &Path,
+    config: &portage_profile::Config,
+) -> ExitCode {
+    // Bare-name targets get their category from the vdb, then each atom
+    // is checked against the vdb (real `action_depclean`, `:848-863`) --
+    // shared with `--prune`.
+    let args = match resolve_cleanup_args(targets, root, "depclean") {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
 
     // Real `action_depclean`'s own advisory block -- *only* with no
     // package arguments (`not myfiles`), non-quiet. The "Depclean may
@@ -2396,6 +2453,8 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut unmerge = false;
     // --depclean/-c: a standalone action (see run_depclean_pretend).
     let mut depclean = false;
+    // --prune/-P: a standalone action (see run_prune_pretend).
+    let mut prune = false;
     let mut with_bdeps = true;
     let mut with_bdeps_given = false;
     let mut with_bdeps_auto = true;
@@ -2662,6 +2721,13 @@ pub fn run(args: &[String]) -> ExitCode {
             // (`myaction = "depclean"`), dispatched to
             // `run_depclean_pretend` below. Plain boolean.
             depclean = true;
+            i += 1;
+        } else if arg == "--prune" || arg == "-P" {
+            // Real `main.py`: `--prune`/`-P` is a standalone ACTION
+            // (`myaction = "prune"`), routed through the same
+            // `action_depclean` as `--depclean` -- dispatched to
+            // `run_prune_pretend` below. Plain boolean.
+            prune = true;
             i += 1;
         } else if arg == "--with-bdeps" {
             // Real "argument_options" with `"choices": ("y", "n")` --
@@ -3134,6 +3200,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'W' => deselect = true,
                     'C' => unmerge = true,
                     'c' => depclean = true,
+                    'P' => prune = true,
                     'B' => buildpkgonly = true,
                     'X' => {
                         // Unlike every other bundle-compatible short flag
@@ -3202,6 +3269,13 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // `--prune`/`-P`: real `emerge -P` removes; this pilot only previews
+    // it, same `--pretend`-only gate `--depclean` has.
+    if prune && !pretend {
+        eprintln!("emerge (pilot v1): --prune/-P requires --pretend (see PROMPT.md)");
+        return ExitCode::from(2);
+    }
+
     // `--buildpkgonly` without `--pretend` is the one real, non-dry-run
     // execution path this pilot implements for `emerge` itself (see
     // `emerge_build.rs`'s own module doc comment): it only ever builds a
@@ -3221,7 +3295,7 @@ pub fn run(args: &[String]) -> ExitCode {
         return run_deselect(&atom_args, &root_from_env());
     }
 
-    if atom_args.is_empty() && !unmerge && !depclean {
+    if atom_args.is_empty() && !unmerge && !depclean && !prune {
         eprintln!("emerge (pilot v1): expected a package atom, e.g. `emerge --pretend cat/pkg`");
         return ExitCode::from(2);
     }
@@ -3295,6 +3369,9 @@ pub fn run(args: &[String]) -> ExitCode {
     }
     if depclean {
         return run_depclean_pretend(&atom_args, &root, &config_root, &config);
+    }
+    if prune {
+        return run_prune_pretend(&atom_args, &root, &config_root, &config);
     }
 
     // "@world"/"@system" each expand to their own real atom list, in

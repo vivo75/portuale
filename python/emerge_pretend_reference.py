@@ -6098,7 +6098,7 @@ def _report_option(token):
             "but is not implemented in this pilot (only --pretend/-p, "
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
-            "--deselect/-W, --unmerge/-C, --depclean/-c, --with-bdeps, --with-bdeps-auto, --changed-deps, "
+            "--deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --with-bdeps, --with-bdeps-auto, --changed-deps, "
             "--changed-deps-report, --changed-slot, --with-test-deps, "
             "--noreplace/-n, --selective, and --help/-h are implemented so "
             "far; see PROMPT.md)",
@@ -6918,10 +6918,14 @@ def _topological_removal_order(root, cleanlist, slot_of):
     return True, result
 
 
-def _run_depclean_pretend(targets, root, config_root, config):
-    """emerge --pretend --depclean / -pc (real action_depclean +
-    _calc_depclean). Mirrors pretend.rs's run_depclean_pretend."""
-    # Bare-name targets get their category from the vdb.
+def _resolve_cleanup_args(targets, root, action):
+    """Real action_depclean's own argument handling (actions.py:848-863),
+    shared by --depclean and --prune: resolve bare names against the vdb
+    (ambiguous -> '!!! ... ambiguous' + Exception(1)), then check each
+    atom -- one matching nothing prints '--- Couldn't find ...' (stderr),
+    and if none match, print '>>> No packages selected for removal by
+    <action>' + raise _CleanupArgsExit(1). Empty targets -> []. Mirrors
+    pretend.rs's resolve_cleanup_args."""
     args = []
     scan = _installed_cp_versions(root)
     for t in targets:
@@ -6944,7 +6948,7 @@ def _run_depclean_pretend(targets, root, config_root, config):
             )
             for n in sorted(f"    {c}/{t}" for c in cats):
                 print(n)
-            return 1
+            raise _CleanupArgsExit(1)
 
     if args:
         any_matched = False
@@ -6960,12 +6964,151 @@ def _run_depclean_pretend(targets, root, config_root, config):
                 any_matched = True
             else:
                 print(
-                    f"--- Couldn't find '{a.replace('null/', '')}' to depclean.",
+                    f"--- Couldn't find '{a.replace('null/', '')}' to {action}.",
                     file=sys.stderr,
                 )
         if not any_matched:
-            print(">>> No packages selected for removal by depclean")
-            return 1
+            print(f">>> No packages selected for removal by {action}")
+            raise _CleanupArgsExit(1)
+    return args
+
+
+class _CleanupArgsExit(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def _run_prune_pretend(targets, root, config_root, config):
+    """emerge --pretend --prune / -pP (real action_depclean with
+    action="prune"). Unlike --depclean, real action_depclean returns
+    right after the unmerge() preview (actions.py:888): no ' * ' advisory
+    block, no stats block. The empty-cleanlist message gains a '>>> To
+    ignore dependencies, use --nodeps' line. Mirrors pretend.rs's
+    run_prune_pretend. See _prune_cleanlist for the removal-set
+    semantics."""
+    try:
+        args = _resolve_cleanup_args(targets, root, "prune")
+    except _CleanupArgsExit as e:
+        return e.code
+
+    cleanlist, _required_count, ordered = _prune_cleanlist(root, args)
+
+    if not cleanlist:
+        print(">>> No packages selected for removal by prune")
+        print(">>> To see reverse dependencies, use --verbose")
+        print(">>> To ignore dependencies, use --nodeps")
+        return 0
+
+    print(">>> Calculating removal order...")
+    cpv_atoms = [f"={c}/{p}-{v}" for (c, p, v) in cleanlist]
+    return _run_unmerge_pretend(
+        cpv_atoms, root, config_root, config, preserve_order=ordered
+    )
+
+
+def _prune_cleanlist(root, args):
+    """Real emerge --prune's removal list (_calc_depclean with
+    action="prune" -- actions.py:1059-1110 + create_cleanlist's prune
+    branch). Removes superseded installed versions: for every cp with >1
+    version installed, the non-highest ones, kept only if something needs
+    that exact old version. With no args, args_set auto-fills with every
+    multi-version cp. Returns (cleanlist, required_count, ordered).
+    Mirrors portage-repo/src/lib.rs's prune_cleanlist -- see its docstring
+    for the seed/candidate split and the deliberate cuts."""
+    import functools
+
+    installed = _all_installed_packages(root)  # (c, p, v, s)
+
+    vk = functools.cmp_to_key(lambda a, b: (vercmp(a, b) or (a > b) - (a < b)))
+    highest = {}
+    for (c, p, v, _s) in installed:
+        cur = highest.get((c, p))
+        if cur is None or (vercmp(v, cur) or 0) > 0:
+            highest[(c, p)] = v
+
+    def is_highest(pkg):
+        c, p, v, _s = pkg
+        return highest.get((c, p)) == v
+
+    counts = {}
+    for (c, p, _v, _s) in installed:
+        counts[(c, p)] = counts.get((c, p), 0) + 1
+    multi_version = {cp for cp, n in counts.items() if n > 1}
+
+    def matched_by_args(pkg):
+        c, p, v, s = pkg
+        if not args:
+            return (c, p) in multi_version
+        cs = f"{c}/{p}-{v}:{s}"
+        for a in args:
+            parsed = _parse_atom(a)
+            if (
+                parsed is not None
+                and tuple(parsed.cp.split("/", 1)) == (c, p)
+                and match_from_list(a, [cs])
+            ):
+                return True
+        return False
+
+    def is_candidate(pkg):
+        return not is_highest(pkg) and matched_by_args(pkg)
+
+    def matches_atom(atom_str):
+        parsed = _parse_atom(atom_str)
+        if parsed is None:
+            return []
+        cat, pkg = parsed.cp.split("/", 1)
+        return [
+            (c, p, v, s)
+            for (c, p, v, s) in installed
+            if c == cat and p == pkg and match_from_list(atom_str, [f"{c}/{p}-{v}:{s}"])
+        ]
+
+    reachable = set()
+    queue = []
+    for pkg in installed:
+        if not is_candidate(pkg):
+            key = (pkg[0], pkg[1], pkg[2])
+            if key not in reachable:
+                reachable.add(key)
+                queue.append(key)
+    while queue:
+        c, p, v = queue.pop()
+        use_flags = _read_vdb_flag_set(root, c, p, v, "USE")
+        for dep_key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"):
+            depstr = _read_vdb_string(root, c, p, v, dep_key)
+            if not depstr.strip():
+                continue
+            atoms = _flat_dep_atoms(depstr, use_flags)
+            if atoms is None:
+                continue
+            for atom_str in atoms:
+                for (dc, dp, dv, _ds) in matches_atom(atom_str):
+                    if (dc, dp, dv) not in reachable:
+                        reachable.add((dc, dp, dv))
+                        queue.append((dc, dp, dv))
+
+    cleanlist = sorted(
+        (
+            (c, p, v)
+            for (c, p, v, s) in installed
+            if is_candidate((c, p, v, s)) and (c, p, v) not in reachable
+        ),
+        key=lambda t: (t[0], t[1], vk(t[2])),
+    )
+    slot_of = {(c, p, v): s for (c, p, v, s) in installed}
+    ordered, cleanlist = _topological_removal_order(root, cleanlist, slot_of)
+    return cleanlist, len(reachable), ordered
+
+
+def _run_depclean_pretend(targets, root, config_root, config):
+    """emerge --pretend --depclean / -pc (real action_depclean +
+    _calc_depclean). Mirrors pretend.rs's run_depclean_pretend."""
+    try:
+        args = _resolve_cleanup_args(targets, root, "depclean")
+    except _CleanupArgsExit as e:
+        return e.code
 
     if not args:
         for line in (
@@ -7228,6 +7371,7 @@ def run(args):
     deselect = False
     unmerge = False
     depclean = False
+    prune = False
     with_bdeps = True
     with_bdeps_given = False
     with_bdeps_auto = True
@@ -7441,6 +7585,12 @@ def run(args):
             # Real main.py: --depclean/-c is a standalone ACTION,
             # dispatched to _run_depclean_pretend below. Mirrors pretend.rs.
             depclean = True
+            i += 1
+        elif arg in ("--prune", "-P"):
+            # Real main.py: --prune/-P is a standalone ACTION routed
+            # through the same action_depclean as --depclean, dispatched
+            # to _run_prune_pretend below. Mirrors pretend.rs.
+            prune = True
             i += 1
         elif arg == "--with-bdeps":
             # Real "argument_options" with "choices": ("y", "n") --
@@ -7879,6 +8029,8 @@ def run(args):
                     unmerge = True
                 elif c == "c":
                     depclean = True
+                elif c == "P":
+                    prune = True
                 elif c == "B":
                     buildpkgonly = True
                 elif c == "X":
@@ -7949,6 +8101,13 @@ def run(args):
         )
         return 2
 
+    if prune and not pretend:
+        print(
+            "emerge (pilot v1): --prune/-P requires --pretend (see PROMPT.md)",
+            file=sys.stderr,
+        )
+        return 2
+
     # `--buildpkgonly` without `--pretend` is the one real, non-dry-run
     # execution path the Rust side implements for `emerge` itself (see
     # portuale's own emerge_build.rs module doc comment): it only ever
@@ -7970,7 +8129,7 @@ def run(args):
     if deselect:
         return _run_deselect(atom_args, _root())
 
-    if not atom_args and not unmerge and not depclean:
+    if not atom_args and not unmerge and not depclean and not prune:
         print(
             "emerge (pilot v1): expected a package atom, e.g. "
             "`emerge --pretend cat/pkg`",
@@ -8021,6 +8180,8 @@ def run(args):
         return _run_unmerge_pretend(atom_args, _root(), _config_root(), config)
     if depclean:
         return _run_depclean_pretend(atom_args, _root(), _config_root(), config)
+    if prune:
+        return _run_prune_pretend(atom_args, _root(), _config_root(), config)
 
     # "@world"/"@system" each expand to their own real atom list, in
     # place, at whichever position they appear -- see _read_world_atoms's

@@ -4335,7 +4335,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -4843,6 +4843,126 @@ def test_depclean_removal_order_matches_between_implementations(
     assert rust.returncode == python.returncode
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
+
+
+def _prune_root(tmp_path):
+    """A ROOT for --prune: dev-libs/{aa,zz,mm} are each installed at
+    multiple versions; dev-libs/single at one. dev-libs/keeper (world)
+    RDEPENDs =dev-libs/mm-2.0, pinning that middle version. zz-1.0
+    RDEPENDs =dev-libs/aa-1.0 -- both are themselves prunable, so that's
+    only an ordering edge. Prune candidates: the non-highest versions of
+    aa/zz/mm; mm-2.0 survives (pinned), so the cleanlist is
+    {aa-1.0, zz-1.0, mm-1.0}, removal-ordered [zz-1.0, mm-1.0, aa-1.0]."""
+    portage_dir = tmp_path / "var" / "lib" / "portage"
+    portage_dir.mkdir(parents=True)
+    (portage_dir / "world").write_text("dev-libs/keeper\n")
+
+    def install(package, version, rdepend=""):
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / f"{package}-{version}"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text("0\n")
+        if rdepend:
+            (d / "RDEPEND").write_text(rdepend + "\n")
+
+    install("aa", "1.0")
+    install("aa", "2.0")
+    install("zz", "1.0", rdepend="=dev-libs/aa-1.0")
+    install("zz", "2.0")
+    install("mm", "1.0")
+    install("mm", "2.0")
+    install("mm", "3.0")
+    install("keeper", "1.0", rdepend="=dev-libs/mm-2.0")
+    install("single", "1.0")
+    return tmp_path
+
+
+def test_prune_pretend_removes_superseded_versions_in_topological_order(
+    emerge_binary, fixture_env, tmp_path
+):
+    """emerge -p --prune: the non-highest installed versions of
+    multi-version cps, kept only if something needs that exact old
+    version. No advisory block, no stats block (real action_depclean
+    returns right after the unmerge() preview for action=="prune")."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(_prune_root(tmp_path))
+    result = _run([str(emerge_binary)], ["--pretend", "--prune"], env)
+    assert result.returncode == 0
+    assert " * Always study the list" not in result.stdout
+    assert "Packages installed:" not in result.stdout
+    assert "Number to remove:" not in result.stdout
+    out = result.stdout.splitlines()
+    assert ">>> Calculating removal order..." in out
+    blocks = [ln.strip() for ln in out if ln.startswith(" dev-libs/")]
+    assert blocks == ["dev-libs/zz", "dev-libs/mm", "dev-libs/aa"]
+    # mm keeps 2.0 and 3.0 as omitted; aa/zz keep 2.0.
+    mm_omitted = out[out.index(" dev-libs/mm") + 3]
+    assert mm_omitted.strip() == "omitted: 2.0 3.0"
+    line = next(ln for ln in out if ln.startswith("All selected packages:"))
+    assert line == (
+        "All selected packages: =dev-libs/aa-1.0 =dev-libs/mm-1.0 =dev-libs/zz-1.0"
+    )
+
+
+def test_prune_pretend_nothing_to_prune(emerge_binary, fixture_env, tmp_path):
+    """A ROOT with only single-version packages: nothing is superseded."""
+    root = tmp_path
+    portage_dir = root / "var" / "lib" / "portage"
+    portage_dir.mkdir(parents=True)
+    (portage_dir / "world").write_text("")
+    for n in ("one", "two"):
+        d = root / "var" / "db" / "pkg" / "dev-libs" / f"{n}-1.0"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text("0\n")
+    env = dict(fixture_env)
+    env["ROOT"] = str(root)
+    result = _run([str(emerge_binary)], ["--pretend", "--prune"], env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        ">>> No packages selected for removal by prune",
+        ">>> To see reverse dependencies, use --verbose",
+        ">>> To ignore dependencies, use --nodeps",
+    ]
+
+
+def test_prune_requires_pretend(emerge_binary, fixture_env):
+    result = _run([str(emerge_binary)], ["--prune"], fixture_env)
+    assert result.returncode == 2
+    assert "requires --pretend" in result.stderr
+
+
+def test_prune_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    env = dict(fixture_env)
+    env["ROOT"] = str(_prune_root(tmp_path))
+    for args in (
+        ["--pretend", "--prune"],
+        ["--pretend", "-P"],
+        ["--pretend", "--prune", "dev-libs/mm"],
+        ["--pretend", "--prune", "mm"],
+        ["--pretend", "--prune", "dev-libs/single"],
+        ["--pretend", "--prune", "dev-libs/nope"],
+    ):
+        rust = _run([str(emerge_binary)], args, env)
+        python = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == python.returncode, args
+        assert rust.stdout == python.stdout, args
+        assert rust.stderr == python.stderr, args
+
+
+def test_prune_matches_between_implementations_on_the_shared_vdb(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """The committed fixtures install dev-libs/unmergepkg at 1.0 and 2.0
+    -- a real multi-version cp for --prune to act on."""
+    for args in (["--pretend", "--prune"], ["--pretend", "--prune", "dev-libs/unmergepkg"]):
+        rust = _run([str(emerge_binary)], args, fixture_env)
+        python = _run(emerge_pretend_python, args, fixture_env)
+        assert rust.returncode == python.returncode, args
+        assert rust.stdout == python.stdout, args
+        assert rust.stderr == python.stderr, args
 
 
 def test_unmerge_pretend_lists_selected_and_omitted(emerge_binary, fixture_env):
@@ -6528,7 +6648,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -6542,7 +6662,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -6557,7 +6677,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
     expected = (
         'emerge (pilot v1): action "--search" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, "
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, "
         "--with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, "
         "--noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )

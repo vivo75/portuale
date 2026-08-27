@@ -887,6 +887,45 @@ PORTING/
   dependency cycle -- a cleanlist that still holds a cycle here is
   emitted last, in cpv order.
 
+  **`emerge -p --prune` / `-pP`: the fourth real cleanup action.** Real
+  modern `--prune` (without `--nodeps`) routes through the same
+  `action_depclean` as `--depclean`, with `action="prune"`
+  (`actions.py:1059-1110` + `create_cleanlist`'s own prune branch,
+  `:1334-1340`). It removes *superseded* installed versions: for every
+  cp with more than one version installed, the non-highest ones, kept
+  only if something still needs that exact old version. Real portage
+  seeds `protected_set` with every installed cp as a bare `cp` atom
+  (which resolves to just the *highest* version), then the per-package
+  loop explicitly protects the highest version of every cp and every
+  non-highest version an argument atom doesn't match; with no `args`,
+  `args_set` auto-fills with every multi-version cp. New
+  `portage_repo::prune_cleanlist` reproduces that as "seed the closure
+  from every installed package except the ones that are both
+  non-highest-in-their-cp and matched by `args_set`", reusing the exact
+  `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND` closure and
+  `topological_removal_order` `depclean_cleanlist` already has.
+  `portuale::run_prune_pretend` is deliberately thinner than
+  `run_depclean_pretend`: real `action_depclean` returns right after the
+  `unmerge()` preview for `action == "prune"` (`:888`), so there is
+  **no** `* ` advisory block (only `action == "depclean"` prints it,
+  `:840`) and **no** `Packages installed:` / `Required packages:` /
+  `Number to remove:` stats block -- just `>>> Calculating removal
+  order...` + the `_unmerge_display` block, or `>>> No packages selected
+  for removal by prune` followed by both the `--verbose` and (prune-only,
+  `:1348`) `>>> To ignore dependencies, use --nodeps` hint lines. The
+  bare-name resolution + `--- Couldn't find 'X' to <action>.` handling
+  is now a shared `resolve_cleanup_args` helper (real
+  `action_depclean:848-863`), used by both `--depclean` and `--prune`.
+  Same `--pretend`-only gate as the other cleanup actions. The committed
+  fixtures already carry a multi-version cp (`dev-libs/unmergepkg` at
+  1.0 and 2.0); the new `_prune_root` test fixture adds a richer case
+  (`aa`/`zz`/`mm` multi-version, a `keeper` pinning `mm-2.0`, and a
+  `zz-1.0` -> `aa-1.0` ordering edge). **Deliberately out**: `--prune
+  --nodeps` (the obscure `_unmerge_display` prune branch that skips the
+  closure entirely), the `--deselect` world-file rewrite (`--pretend`
+  never writes it), and -- as with `depclean` -- `--depclean-lib-check`
+  and slot-operator rebuild edges.
+
   **`--with-bdeps y|n`: build-time deps for an already-installed
   package's own `--deep` walk.** Grounded against real
   `create_depgraph_params.py`'s own `bdeps` param and `depgraph.py`'s

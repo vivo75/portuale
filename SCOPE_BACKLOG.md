@@ -84,10 +84,15 @@ Ranked roughly by how self-contained each is.
   the "deps unresolved, aborting" halt, `package.provided`,
   `--deselect=n` in args mode, `world_sets` `@`-refs as roots, and real
   (non-`--pretend`) removal.
-- **`--prune`/`-P`**: real modern `--prune` without `--nodeps` routes
-  through `_calc_depclean` too (`action="prune"`, protect-all-but-
-  highest-slot); `--prune --nodeps` is the obscure `_unmerge_display`
-  prune branch. Not started.
+- **`emerge -p --prune` / `-pP`** **shipped 2026-08-27**
+  (`prune_cleanlist`: seed the closure from every installed package
+  except the non-highest-in-cp ones an `args_set` matches -- `args_set`
+  auto-fills with every multi-version cp; `run_prune_pretend`: no
+  advisory block, no stats block, the `--nodeps` hint line, shared
+  `resolve_cleanup_args`). **Still open:** `--prune --nodeps` (the
+  obscure `_unmerge_display` prune branch that skips the closure),
+  `--depclean-lib-check`, slot-operator rebuild edges, real
+  (non-`--pretend`) removal.
 - Minor `-pC` narrowings: the higher-slot refinement on the
   set-protection warning, a bare `=<vdb-path>` argument, the
   Python-interpreter self-skip.
