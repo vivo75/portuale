@@ -732,6 +732,15 @@ mod tests {
     }
 
     #[test]
+    fn digests_variable_formats_like_portage_and_skips_size() {
+        let mut hashes = HashMap::new();
+        hashes.insert("SHA512".to_string(), "bb".to_string());
+        hashes.insert("BLAKE2B".to_string(), "aa".to_string());
+        let digests = DistfileDigests { size: 11, hashes };
+        assert_eq!(digests_variable(&digests), "blake2b:aa sha512:bb");
+    }
+
+    #[test]
     fn parse_manifest_reads_a_real_dist_line_with_both_hashes() {
         let dir = tempdir();
         let manifest = dir.join("Manifest");

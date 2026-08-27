@@ -135,6 +135,11 @@ pub(crate) fn preserve_libs_on_unmerge_into(
     })
 }
 
+/// Every registered preserved-library path, keyed by owning cpv.
+pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> {
+    read_plib_registry(root).preserved_libs()
+}
+
 /// Arguments of [`find_unused_preserved_libs`].
 #[cfg(test)]
 pub(crate) struct FindUnusedPreservedLibsArgs<'a> {

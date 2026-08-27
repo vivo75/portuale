@@ -20,6 +20,7 @@
 use crate::color::{self, Colorizer};
 
 mod args;
+mod config_action;
 mod conflicts;
 mod display;
 mod env_config;
@@ -35,6 +36,7 @@ mod world;
 mod tests;
 
 pub(crate) use args::*;
+pub(crate) use config_action::*;
 pub(crate) use conflicts::*;
 pub(crate) use display::*;
 pub(crate) use env_config::*;
