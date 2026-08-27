@@ -195,9 +195,19 @@
 //     through a different real function that never applies it) IS now
 //     read too, which is why `package.use`'s own bullet above parses
 //     repo-level/profile-level lines separately from user-level ones.
-//     Still out of scope: `USE_EXPAND_UNPREFIXED` (a separate, rarer
-//     unprefixed-expansion mode) and `USE_EXPAND_HIDDEN`/`_IMPLICIT`
-//     (real `emerge --info` display-only concerns).
+//     `USE_EXPAND_UNPREFIXED` (real `config.py`'s own companion to
+//     `USE_EXPAND` -- a separate mode where the variable's own value
+//     folds into `use_flags` with *no* prefix at all, not
+//     `lowercase(name)_`) IS now read too, via the exact same
+//     variable-NAME accumulation + last-level-wins scalar VALUE read:
+//     real Gentoo's own `profiles/arch/amd64/make.defaults` sets
+//     `USE_EXPAND_UNPREFIXED="ARCH"`, which is literally how `amd64`/
+//     `x86`/`arm64` exist as plain USE flags at all -- there is no other
+//     mechanism that defines them. See `Config::use_expand_unprefixed`'s
+//     own field doc. Still out of scope: `USE_EXPAND_HIDDEN`/`_IMPLICIT`
+//     (real `emerge --info` display-only concerns) and IUSE-aware `_*`
+//     wildcard expansion (`linguas_*` -- needs a specific package's own
+//     IUSE, see the `_*` bullet near the top of this comment).
 //   - `use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
 //     (PMS 5+, always recognized here per this pilot's own "no EAPI
 //     parametrization" precedent) ARE now read too, closing the
