@@ -87,14 +87,16 @@ Ranked roughly by how self-contained each is.
 
 ### B. `--root-deps` recursion follow-up
 
-5. **Walk the running-root build entry's own further dependencies.**
-   `resolve_root_deps_build_entry` (`lib.rs:3279`) resolves one unsatisfied
-   `DEPEND`/`BDEPEND` atom against the running root but does **not** recurse
-   into that entry's own `DEPEND`/`BDEPEND`. Needs a cross-call
-   "currently resolving against the running root" set for cycle safety
-   (two bootstrap build tools `BDEPEND`ing each other), plus a decision on
-   `NoVisibleCandidate` handling (currently swallowed). Confirmed with the
-   user as the next increment toward the full real multi-root shape.
+5. ~~**Walk the running-root build entry's own further dependencies.**~~
+   **Shipped 2026-08-27** (`resolve_root_deps_build_entries`): a
+   running-root build entry's own `DEPEND` + `BDEPEND` + `RDEPEND` are
+   walked against the running root recursively, cycle-guarded by the
+   existing `root_deps_build_seen` set; an unbuildable, not-installed
+   build dep is now surfaced as its own `NoVisibleCandidate` entry
+   rather than swallowed. **Residual:** `IDEPEND` of a running-root
+   build entry (real portage resolves it against the running root too),
+   and the full multi-root graph architecture (a `root` carried per
+   dependency edge) this pilot still approximates edge by edge.
 
 ### C. Binary packages / fetch
 

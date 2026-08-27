@@ -984,6 +984,95 @@ def test_root_deps_build_entry_output_marks_the_running_root(
     )
 
 
+def test_root_deps_recursion_walks_the_build_entrys_own_deps(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """A running-root build entry's own DEPEND/BDEPEND/RDEPEND are now
+    walked against the running root too, recursively (real
+    depgraph.py:4207-4271: a package whose pkg.root is the running root
+    has all three keys resolved there). rdrapp BDEPENDs rdrtool, which
+    itself BDEPENDs rdrtooldep and RDEPENDs rdrlib -- so all four appear,
+    the three build-against-/ entries carrying the " to /" marker, and
+    --tree nests each under its immediate requester. RDEPEND being walked
+    (rdrlib) is the deliberately-broader half of this slice."""
+    env = dict(fixture_env)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    base = ["--pretend", "--root-deps", "dev-libs/rdrapp"]
+
+    rust = _run([str(emerge_binary)], base, env)
+    python = _run(emerge_pretend_python, base, env)
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout == (
+        "[ebuild  N] dev-libs/rdrapp-1.0\n"
+        "[ebuild  N] dev-libs/rdrtool-1.0 to /\n"
+        "[ebuild  N] dev-libs/rdrtooldep-1.0 to /\n"
+        "[ebuild  N] dev-libs/rdrlib-1.0 to /\n"
+    )
+
+    rust_tree = _run([str(emerge_binary)], [*base, "--tree"], env)
+    python_tree = _run(emerge_pretend_python, [*base, "--tree"], env)
+    assert rust_tree.stdout == python_tree.stdout
+    assert rust_tree.stdout == (
+        "[ebuild  N] dev-libs/rdrapp-1.0\n"
+        "[ebuild  N]   dev-libs/rdrtool-1.0 to /\n"
+        "[ebuild  N]     dev-libs/rdrlib-1.0 to /\n"
+        "[ebuild  N]     dev-libs/rdrtooldep-1.0 to /\n"
+    )
+
+
+def test_root_deps_recursion_terminates_on_a_bdepend_cycle(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """rdrcyca BDEPENDs rdrcycb which BDEPENDs rdrcyca -- an unremarkable
+    bootstrap pattern. The shared root_deps_build_seen set is the cycle
+    guard (a (category, package) is inserted before its own deps are
+    walked), so the recursion terminates with each cycle node appearing
+    exactly once rather than overflowing the stack."""
+    env = dict(fixture_env)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    base = ["--pretend", "--root-deps", "dev-libs/rdrcyc"]
+
+    rust = _run([str(emerge_binary)], base, env)
+    python = _run(emerge_pretend_python, base, env)
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stdout == (
+        "[ebuild  N] dev-libs/rdrcyc-1.0\n"
+        "[ebuild  N] dev-libs/rdrcyca-1.0 to /\n"
+        "[ebuild  N] dev-libs/rdrcycb-1.0 to /\n"
+    )
+
+
+def test_root_deps_recursion_reports_an_unbuildable_build_dep(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """rdrmisstool (pulled in against the running root) BDEPENDs
+    rdrnothere, which has no ebuild anywhere and isn't installed. Before
+    this slice --root-deps silently swallowed such a dep; now it's
+    surfaced by the renderer's own non-fatal "!!! no visible ebuild for
+    dependency" note, exactly as it would be without --root-deps (exit 0
+    -- it's a dependency, not the top-level atom)."""
+    env = dict(fixture_env)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    base = ["--pretend", "--root-deps", "dev-libs/rdrmiss"]
+
+    rust = _run([str(emerge_binary)], base, env)
+    python = _run(emerge_pretend_python, base, env)
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout == (
+        "[ebuild  N] dev-libs/rdrmiss-1.0\n"
+        "[ebuild  N] dev-libs/rdrmisstool-1.0 to /\n"
+    )
+    assert '!!! no visible ebuild for dependency "dev-libs/rdrnothere"' in rust.stderr
+
+
 def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
     """Pins the exact recursion output for the diamond fixture (diamond ->
     shared-a, shared-b -> common), not just parity with Python: "common"

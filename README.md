@@ -6104,6 +6104,115 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
 # [ebuild  N]   dev-libs/rootdepsbuildtool-1.0 to /
 ```
 
+### `emerge --pretend --root-deps`: the running-root build walk is recursive
+
+The last open piece of `--root-deps`'s own build-entry story. The first
+increment resolved a single unsatisfied `DEPEND`/`BDEPEND` atom against
+the running root and stopped -- that entry's *own* dependencies were
+never walked, a deliberate cut because a faithful recursion has a real
+cycle-safety hazard (two bootstrap build tools `BDEPEND`ing each other
+would recurse forever). This slice takes it on.
+
+`resolve_root_deps_build_entries` (new, replacing the non-recursive
+`resolve_root_deps_build_entry`) resolves the atom against the running
+root exactly as before, and then walks the resolved package's *own*
+`DEPEND` + `BDEPEND` + **`RDEPEND`** against the running root too,
+recursively. `RDEPEND` is the deliberately-broader half, confirmed with
+the user: real `depgraph.py:4207-4271`'s own `_add_pkg_deps` `deps`
+tuple resolves all three of those keys against `pkg.root`, and a package
+pulled in as a build tool has `pkg.root == running_root` -- so its
+runtime deps must be present *there* as well, not under the target
+`ROOT`. `unsatisfied_root_deps_atoms` grew a `dep_keys` parameter
+(`["DEPEND", "BDEPEND"]` at the two ordinary dep-walk sites, `["DEPEND",
+"BDEPEND", "RDEPEND"]` for the recursion); a new
+`resolved_version_meta_and_use` re-looks-up the resolved candidate's own
+md5-cache + effective USE (the same `list_candidates` ->
+highest-`repo_priority` -> `read_md5_cache` pattern `slot_changed`/
+`deps_changed` already use), so each recursed package's conditional deps
+flatten against *its own* USE, not its requester's.
+
+**Cycle safety**: the already-existing `root_deps_build_seen` set (a
+`(category, package)` set threaded through the whole graph resolution) is
+now both the cross-package dedup key *and* the cycle guard -- a package
+is inserted *before* its own dependencies are walked, so a mutual
+`BDEPEND` (`rdrcyca` <-> `rdrcycb`) terminates cleanly with each node
+appearing exactly once. One `required_by` edge is lost at whichever
+point a cycle is cut (real portage's own bidirectional digraph keeps
+both); a bounded, documented imprecision, the same best-effort
+`required_by` tracking already has elsewhere. Each entry's `required_by`
+now names its *immediate* requester, not the original top-level atom, so
+`--tree` nests the recursion correctly.
+
+**Unbuildable build deps are now reported** (confirmed with the user):
+before this slice, a `--root-deps` build dependency that was neither
+installed on the running root nor buildable from the tree was silently
+swallowed. Now `resolve_root_deps_build_entries` produces a real
+`NoVisibleCandidate` entry for it (`targets_running_root: true`), so the
+renderer emits its own non-fatal `!!! no visible ebuild for dependency`
+note exactly as it would without `--root-deps` -- closing a real
+inconsistency where `--root-deps` used to *hide* an unresolvable build
+dep.
+
+New fixtures under `dev-libs/rdr*`: `rdrapp` -> `rdrtool` ->
+(`rdrtooldep` via `BDEPEND`, `rdrlib` via `RDEPEND`); a mutual-`BDEPEND`
+cycle (`rdrcyc` -> `rdrcyca` <-> `rdrcycb`); and `rdrmiss` -> a build
+tool whose own `BDEPEND` (`rdrnothere`) has no ebuild anywhere. Verified
+with three Rust unit tests in `portage-repo` plus three dedicated pytest
+contract tests asserting byte-for-byte Rust/Python parity for all three
+scenarios across plain, `--json`, and `--tree` output, mirrored in
+`emerge_pretend_reference.py` (`_resolve_root_deps_build_entries`,
+`_resolved_version_meta_and_use`, the `dep_keys` parameter, the
+`root_deps_unsatisfied` list-not-set determinism fix threaded through
+both dep-walk sites).
+
+Still open, a separately-scoped follow-up: `IDEPEND` of a running-root
+build entry (real portage resolves `IDEPEND` against the running root
+too; `PDEPEND` correctly stays a target-`ROOT` concern and is not
+walked here), and the full multi-root graph architecture this pilot
+still approximates edge by edge rather than carrying a `root` per
+dependency.
+
+Running it:
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+
+# Recursion through BDEPEND (rdrtooldep) and RDEPEND (rdrlib):
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rdrapp
+# [ebuild  N] dev-libs/rdrapp-1.0
+# [ebuild  N] dev-libs/rdrtool-1.0 to /
+# [ebuild  N] dev-libs/rdrtooldep-1.0 to /
+# [ebuild  N] dev-libs/rdrlib-1.0 to /
+
+# --tree nests each entry under its immediate requester:
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps --tree \
+    dev-libs/rdrapp
+# [ebuild  N] dev-libs/rdrapp-1.0
+# [ebuild  N]   dev-libs/rdrtool-1.0 to /
+# [ebuild  N]     dev-libs/rdrlib-1.0 to /
+# [ebuild  N]     dev-libs/rdrtooldep-1.0 to /
+
+# A mutual BDEPEND cycle terminates, each node once:
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rdrcyc
+# [ebuild  N] dev-libs/rdrcyc-1.0
+# [ebuild  N] dev-libs/rdrcyca-1.0 to /
+# [ebuild  N] dev-libs/rdrcycb-1.0 to /
+
+# An unbuildable build dep is surfaced, not swallowed (exit 0 -- it's a dep):
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rdrmiss
+# [ebuild  N] dev-libs/rdrmiss-1.0
+# [ebuild  N] dev-libs/rdrmisstool-1.0 to /
+# !!! no visible ebuild for dependency "dev-libs/rdrnothere"
+```
+
 ### Real `ebuild <file> qmerge`
 
 `qmerge` is now real too, real `doebuild()`'s own `mydo == "qmerge"`

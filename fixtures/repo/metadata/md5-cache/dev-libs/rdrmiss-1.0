@@ -1,0 +1,10 @@
+BDEPEND=dev-libs/rdrmisstool
+DEFINED_PHASES=-
+DEPEND=
+DESCRIPTION=fixture: --root-deps recursion -- top-level, BDEPENDs a build tool that itself needs an unbuildable dep
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=
+SLOT=0
+_md5_=0000000000000000000000000000000
