@@ -1452,6 +1452,34 @@ def _visibility_provenance(candidate, category, package, config):
     }
 
 
+def _keyword_mask_marker(candidate, category, package, config, mask_entry):
+    """Real output.py:gen_mask_str + Package.get_keyword_mask/isHardMasked,
+    for the -v one-character bracket-mask column: "#" for a candidate
+    hard-masked somewhere but pulled in anyway (isHardMasked, wins first),
+    None for one accepted by the global ACCEPT_KEYWORDS alone (no marker),
+    "~" for one visible only via a ~<our-arch> testing keyword
+    (get_keyword_mask "unstable"), "*" for one visible only via ** or a
+    different arch ("missing"). The ~-vs-* split is read straight off the
+    candidate's own KEYWORDS rather than reconstructing getRawMissing-
+    Keywords -- sufficient for every realistic single-arch case. Mirrors
+    portage-repo/src/lib.rs's keyword_mask_marker exactly."""
+    if mask_entry is not None:
+        return "#"
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}/{candidate['sub_slot']}"
+        f"::{candidate['repo_name']}"
+    )
+    if _keywords_accepted(
+        candidate["keywords"], candidate_str, category, package, config["accept_keywords"], []
+    ):
+        return None
+    testing_for_our_arch = any(
+        k.startswith("~") and k[1:] in config["accept_keywords"]
+        for k in candidate["keywords"]
+    )
+    return "~" if testing_for_our_arch else "*"
+
+
 def _keyword_provenance(
     keywords, candidate_str, category, package, accept_keywords, package_accept_keywords
 ):
@@ -4810,6 +4838,13 @@ def resolve_pretend_graph(
         entry_idx = len(entries)
         resolved_slots[slot_key] = entry_idx
         provenance = _visibility_provenance(resolved, category, package, config)
+        # Real output.py:gen_mask_str's -v bracket-mask column -- stashed
+        # on the provenance dict (not serialized by _entry_to_json, which
+        # picks out specific keys) rather than growing the entry tuple.
+        # Mirrors portage-repo/src/lib.rs's GraphEntry::keyword_mask.
+        provenance["keyword_mask"] = _keyword_mask_marker(
+            resolved, category, package, config, provenance["mask_entry"]
+        )
         entries.append(
             (
                 category,
@@ -6160,7 +6195,7 @@ def _columnwidth_from_env():
         return 130
 
 
-def _columns_line(bracket, code, indent, category, package, version, oldbest, columnwidth):
+def _columns_line(bracket, code, mask, indent, category, package, version, oldbest, columnwidth):
     """One --columns line: real _set_root_columns's own layout algorithm
     (the pkg_info.merge == True branch only -- the "not merging" branch
     never applies to any outcome this pilot prints in brackets at all),
@@ -6178,7 +6213,7 @@ def _columns_line(bracket, code, indent, category, package, version, oldbest, co
     exactly."""
     newlp = max(columnwidth - 60, 0)
     oldlp = max(columnwidth - 30, 0)
-    line = f"[{bracket}  {code}] {indent}{category}/{package}"
+    line = f"[{bracket}  {code}{mask}] {indent}{category}/{package}"
     if newlp > len(line):
         line += " " * (newlp - len(line))
     line += f" [{version}] "
@@ -7280,7 +7315,7 @@ def run(args):
             use_display,
             _required_by,
             source,
-            _provenance,
+            provenance,
             keyword_suggestion,
             use_suggestion,
             parent_use_suggestion,
@@ -7305,19 +7340,24 @@ def run(args):
         root = root_suffix(targets_running_root)
         installed = _installed_use_state(category, package, outcome)
         forced = _forced_flags_for_entry(category, package, outcome)
+        # Real output.py:gen_mask_str's -v one-character mask column,
+        # appended right after the N/U/D/r code letter. Mirrors
+        # pretend.rs's mask_suffix.
+        km = provenance.get("keyword_mask") if isinstance(provenance, dict) else None
+        mask = f" {km}" if (verbose and km) else ""
         if tag == "new":
             if not onlydeps_suppressed:
                 if columns:
                     print(
                         _columns_line(
-                            bracket, "N", indent, category, package, outcome[1], "", columnwidth
+                            bracket, "N", mask, indent, category, package, outcome[1], "", columnwidth
                         )
                         + root
                         + use_suffix(use_display, installed, forced)
                     )
                 else:
                     print(
-                        f"[{bracket}  N] {indent}{category}/{package}-{outcome[1]}{root}{use_suffix(use_display, installed, forced)}"
+                        f"[{bracket}  N{mask}] {indent}{category}/{package}-{outcome[1]}{root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
@@ -7327,6 +7367,7 @@ def run(args):
                         _columns_line(
                             bracket,
                             "U",
+                            mask,
                             indent,
                             category,
                             package,
@@ -7339,7 +7380,7 @@ def run(args):
                     )
                 else:
                     print(
-                        f"[{bracket}  U] {indent}{category}/{package}-{outcome[2]} "
+                        f"[{bracket}  U{mask}] {indent}{category}/{package}-{outcome[2]} "
                         f"(upgrade from {outcome[1]}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
@@ -7350,6 +7391,7 @@ def run(args):
                         _columns_line(
                             bracket,
                             "D",
+                            mask,
                             indent,
                             category,
                             package,
@@ -7362,7 +7404,7 @@ def run(args):
                     )
                 else:
                     print(
-                        f"[{bracket}  D] {indent}{category}/{package}-{outcome[2]} "
+                        f"[{bracket}  D{mask}] {indent}{category}/{package}-{outcome[2]} "
                         f"(downgrade from {outcome[1]}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
@@ -7375,7 +7417,7 @@ def run(args):
             if not onlydeps_suppressed and columns:
                 print(
                     _columns_line(
-                        bracket, "r", indent, category, package, outcome[1], "", columnwidth
+                        bracket, "r", mask, indent, category, package, outcome[1], "", columnwidth
                     )
                     + root
                     + use_suffix(use_display, installed, forced)
@@ -7390,12 +7432,12 @@ def run(args):
                 )
                 if reason is None:
                     print(
-                        f"[{bracket}  r] {indent}{category}/{package}-{outcome[1]}"
+                        f"[{bracket}  r{mask}] {indent}{category}/{package}-{outcome[1]}"
                         f"{root}{use_suffix(use_display, installed, forced)}"
                     )
                 else:
                     print(
-                        f"[{bracket}  r] {indent}{category}/{package}-{outcome[1]} "
+                        f"[{bracket}  r{mask}] {indent}{category}/{package}-{outcome[1]} "
                         f"(reinstall for {reason}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[1], blockers)

@@ -90,10 +90,12 @@ Ranked roughly by how self-contained each is.
    uses that package's vdb-recorded `IUSE_EFFECTIVE`, not persisted
    here); (b) `-pv` USE display still lacks real portage's ANSI color and
    the `--all-flags` "removed from IUSE" line. The installed-vs-new
-   `*`/`%` diff markers (`build_use_expand_display`'s `installed` param)
-   and the `( … )` forced/masked wrap (`forced_or_masked_flags` +
-   `build_use_expand_display`'s `forced` param) both **shipped
-   2026-08-27**, real `_create_use_string`.
+   `*`/`%` diff markers (`build_use_expand_display`'s `installed` param),
+   the `( … )` forced/masked wrap (`forced_or_masked_flags` +
+   `build_use_expand_display`'s `forced` param), and the `[ebuild N ~]`
+   bracket-mask marker (`keyword_mask_marker` + `GraphEntry::keyword_
+   mask` + `pretend.rs::mask_suffix`) all **shipped 2026-08-27**, real
+   `_create_use_string` / `gen_mask_str`.
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag

@@ -286,6 +286,7 @@ fn columnwidth_from_env() -> i64 {
 fn columns_line(
     bracket: &str,
     code: &str,
+    mask: &str,
     indent: &str,
     category: &str,
     package: &str,
@@ -295,7 +296,7 @@ fn columns_line(
 ) -> String {
     let newlp = (columnwidth - 60).max(0) as usize;
     let oldlp = (columnwidth - 30).max(0) as usize;
-    let mut line = format!("[{bracket}  {code}] {indent}{category}/{package}");
+    let mut line = format!("[{bracket}  {code}{mask}] {indent}{category}/{package}");
     if newlp > line.len() {
         line.push_str(&" ".repeat(newlp - line.len()));
     }
@@ -305,6 +306,21 @@ fn columns_line(
     }
     line.push_str(oldbest);
     line
+}
+
+/// Real `output.py::gen_mask_str`'s own one-character mask column
+/// (`include_mask_str` = `verbosity > 1`, so `-v` only): inserted right
+/// after the `N`/`U`/`D`/`r` code letter, `" #"`/`" ~"`/`" *"` for a
+/// candidate that's hard-masked / testing-keyword / missing-keyword but
+/// pulled in anyway (see `GraphEntry::keyword_mask`), empty otherwise.
+/// Real portage gives this its own fixed column in the bracket; this
+/// pilot keeps its compact `[ebuild  N]` bracket and just appends the
+/// marker (` ~`), the same simplification the bracket already is.
+fn mask_suffix(entry: &GraphEntry, verbose: bool) -> String {
+    match (verbose, entry.keyword_mask) {
+        (true, Some(c)) => format!(" {c}"),
+        _ => String::new(),
+    }
 }
 
 fn use_suffix(entry: &GraphEntry, verbose: bool) -> String {
@@ -449,6 +465,7 @@ fn print_entry_line(
         portage_repo::CandidateSource::Binary => "binary",
         portage_repo::CandidateSource::Ebuild => "ebuild",
     };
+    let mask = mask_suffix(entry, verbose);
     match &entry.outcome {
         PretendOutcome::New { version } => {
             if !onlydeps_suppressed {
@@ -458,6 +475,7 @@ fn print_entry_line(
                         columns_line(
                             bracket,
                             "N",
+                            &mask,
                             indent,
                             &entry.category,
                             &entry.package,
@@ -469,7 +487,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  N] {indent}{}/{}-{version}{root}{}",
+                        "[{bracket}  N{mask}] {indent}{}/{}-{version}{root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -486,6 +504,7 @@ fn print_entry_line(
                         columns_line(
                             bracket,
                             "U",
+                            &mask,
                             indent,
                             &entry.category,
                             &entry.package,
@@ -497,7 +516,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  U] {indent}{}/{}-{to} (upgrade from {from}){root}{}",
+                        "[{bracket}  U{mask}] {indent}{}/{}-{to} (upgrade from {from}){root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -514,6 +533,7 @@ fn print_entry_line(
                         columns_line(
                             bracket,
                             "D",
+                            &mask,
                             indent,
                             &entry.category,
                             &entry.package,
@@ -525,7 +545,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  D] {indent}{}/{}-{to} (downgrade from {from}){root}{}",
+                        "[{bracket}  D{mask}] {indent}{}/{}-{to} (downgrade from {from}){root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -549,6 +569,7 @@ fn print_entry_line(
                         columns_line(
                             bracket,
                             "r",
+                            &mask,
                             indent,
                             &entry.category,
                             &entry.package,
@@ -567,13 +588,13 @@ fn print_entry_line(
                         *new_repo,
                     ) {
                         Some(reason) => println!(
-                            "[{bracket}  r] {indent}{}/{}-{version} (reinstall for {reason}){root}{}",
+                            "[{bracket}  r{mask}] {indent}{}/{}-{version} (reinstall for {reason}){root}{}",
                             entry.category,
                             entry.package,
                             use_suffix(entry, verbose)
                         ),
                         None => println!(
-                            "[{bracket}  r] {indent}{}/{}-{version}{root}{}",
+                            "[{bracket}  r{mask}] {indent}{}/{}-{version}{root}{}",
                             entry.category,
                             entry.package,
                             use_suffix(entry, verbose)

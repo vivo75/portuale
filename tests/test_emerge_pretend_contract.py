@@ -494,6 +494,9 @@ CASES = [
     ("package.accept_keywords: \"*\" accepts any stable keyword", ["--pretend", "dev-libs/starkeywordpkg"], 0),
     ("package.accept_keywords: \"~*\" accepts any testing keyword", ["--pretend", "dev-libs/tildestarkeywordpkg"], 0),
     ("package.accept_keywords: bare atom implicitly grants ~arch", ["--pretend", "dev-libs/bareacceptkeywordspkg"], 0),
+    ("-pv bracket mask marker: ~ for a testing keyword", ["--pretend", "-v", "dev-libs/bareacceptkeywordspkg"], 0),
+    ("-pv bracket mask marker: * for a cross-arch keyword", ["--pretend", "-v", "dev-libs/tildestarkeywordpkg"], 0),
+    ("-pv bracket mask marker: # for a masked-then-unmasked package", ["--pretend", "-v", "dev-libs/maskedandunmaskedpkg"], 0),
     ("package.use: wildcard entry enables a flag not on globally", ["--pretend", "dev-libs/packageuseenablepkg"], 0),
     ("package.use: entry disables a flag that is on globally", ["--pretend", "dev-libs/packageusedisablepkg"], 0),
     ("package.use: repo-level entry enables a flag not on globally", ["--pretend", "dev-libs/repouseenablepkg"], 0),
@@ -2316,8 +2319,11 @@ def test_use_stable_force_and_package_use_stable_mask_skip_an_unstable_candidate
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/unstableusepkg"], fixture_env
     )
     assert result.returncode == 0
+    # `~` bracket marker: unstableusepkg (KEYWORDS="~amd64") is visible
+    # only via a "dev-libs/unstableusepkg ~amd64" package.accept_keywords
+    # entry -- a testing keyword for our own arch (real gen_mask_str).
     assert result.stdout == (
-        '[ebuild  N] dev-libs/unstableusepkg-1.0  USE="maskflag -stableforceflag"\n'
+        '[ebuild  N ~] dev-libs/unstableusepkg-1.0  USE="maskflag -stableforceflag"\n'
     )
 
 
@@ -2637,6 +2643,39 @@ def test_package_accept_keywords_bare_atom_implicitly_grants_tilde_arch(
     )
     assert result.returncode == 0
     assert result.stdout.strip() == "[ebuild  N] dev-libs/bareacceptkeywordspkg-1.0"
+
+
+def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_env):
+    """Real output.py::gen_mask_str (verbosity>1 only): the [ebuild N]
+    bracket gains a one-character marker for a package pulled in despite
+    not being visible via the global ACCEPT_KEYWORDS alone --
+
+      - dev-libs/bareacceptkeywordspkg (~amd64 via a bare
+        package.accept_keywords entry): '~' (a testing keyword for our
+        own arch, real get_keyword_mask "unstable")
+      - dev-libs/tildestarkeywordpkg (~arm64 via "~*"): '*' (a different
+        arch, real "missing")
+      - dev-libs/maskedandunmaskedpkg (package.mask'd then unmask'd): '#'
+        (real isHardMasked, ignores package.unmask, wins first)
+
+    Only with -v; a plain `emerge -p` shows no marker, and a plain
+    stable-amd64 package (dev-libs/newpkg) shows none even with -v."""
+    for pkg, marker in [
+        ("bareacceptkeywordspkg", "~"),
+        ("tildestarkeywordpkg", "*"),
+        ("maskedandunmaskedpkg", "#"),
+    ]:
+        v = _run([str(emerge_binary)], ["--pretend", "-v", f"dev-libs/{pkg}"], fixture_env)
+        vp = _run(emerge_pretend_python, ["--pretend", "-v", f"dev-libs/{pkg}"], fixture_env)
+        assert v.returncode == 0
+        assert v.stdout == vp.stdout, pkg
+        assert v.stdout.splitlines()[0] == f"[ebuild  N {marker}] dev-libs/{pkg}-1.0", pkg
+        # No -v -> no marker.
+        p = _run([str(emerge_binary)], ["--pretend", f"dev-libs/{pkg}"], fixture_env)
+        assert p.stdout.splitlines()[0] == f"[ebuild  N] dev-libs/{pkg}-1.0", pkg
+
+    v = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newpkg"], fixture_env)
+    assert v.stdout.strip() == "[ebuild  N] dev-libs/newpkg-1.0"
 
 
 def test_package_accept_keywords_profile_level_entry_extends_visibility(

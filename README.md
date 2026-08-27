@@ -1313,10 +1313,11 @@ PORTING/
   shows only the plain enabled/disabled set, which is a real, useful
   subset rather than an invented one, matching the "documented,
   simplified subset" spirit of every other output-formatting decision in
-  this pilot. (The `USE_EXPAND` grouping, the `*`/`%` diff markers, and
-  the `( … )` forced/masked wrap were all closed later -- see the
-  "`emerge --pretend -v`: …" slices below; only the ANSI colorization
-  and the `--all-flags` "removed from IUSE" line are still cut.)
+  this pilot. (The `USE_EXPAND` grouping, the `*`/`%` diff markers, the
+  `( … )` forced/masked wrap, and the `[ebuild N ~]` bracket-mask column
+  were all closed later -- see the "`emerge --pretend -v`: …" slices
+  below; only the ANSI colorization and the `--all-flags` "removed from
+  IUSE" line are still cut.)
 
   **BDEPEND/PDEPEND/IDEPEND in recursion**: dependency recursion now
   concatenates and flattens all five real dependency-string keys --
@@ -2745,6 +2746,29 @@ PORTING/
   -specflag"` -- `specflag` stays unwrapped, proving the wrap tracks the
   *resolved* force/mask set, not the raw entries. Still cut: ANSI color,
   and the `--all-flags` "removed from IUSE" line.
+
+  **`emerge --pretend -v`: the `[ebuild N ~]` bracket-mask marker.** Real
+  `output.py::gen_mask_str` (only with `-v` -- `include_mask_str` =
+  `verbosity > 1`) gives the bracket a one-character column right after
+  the `N`/`U`/`D`/`r` code letter, for a package that's being installed
+  *despite* not being visible via the global `ACCEPT_KEYWORDS` alone:
+  `#` if it's hard-masked somewhere but was `package.unmask`'d anyway
+  (`isHardMasked`, checked first -- and it deliberately ignores
+  `package.unmask`), `~` if visible only via a `~<our-arch>` testing
+  keyword (`get_keyword_mask` "unstable"), `*` if visible only via `**`
+  or a different arch's keyword ("missing"). New
+  `portage_repo::keyword_mask_marker` ports that: hard-mask via the
+  provenance `mask_entry` this pilot already computes; then
+  `keywords_accepted` against the *global* `ACCEPT_KEYWORDS` alone (empty
+  `package.accept_keywords`) to decide "needs help at all"; then a
+  `~<arch>`-in-`ACCEPT_KEYWORDS` check off the candidate's own `KEYWORDS`
+  to split `~` from `*` (a deliberate narrowing of real
+  `getRawMissingKeywords`, sufficient for single-arch). Carried on a new
+  `GraphEntry::keyword_mask: Option<char>`; `pretend.rs`'s new
+  `mask_suffix` appends it (` ~`) inside the compact bracket, `-v` only.
+  Existing fixtures: `dev-libs/bareacceptkeywordspkg` (`~amd64`) ->
+  `[ebuild  N ~]`, `dev-libs/tildestarkeywordpkg` (`~arm64` via `~*`) ->
+  `[ebuild  N *]`, `dev-libs/maskedandunmaskedpkg` -> `[ebuild  N #]`.
 
   **`use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
   (stable-vs-`~arch` distinction)**. Closes the last named cut in the

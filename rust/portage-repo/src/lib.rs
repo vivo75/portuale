@@ -2348,6 +2348,63 @@ fn keyword_provenance(
     None
 }
 
+/// Real `output.py::gen_mask_str` + `Package.get_keyword_mask` /
+/// `isHardMasked`, for the `-v` one-character bracket-mask column
+/// (`GraphEntry::keyword_mask`). Only ever called on a candidate already
+/// resolved into a `GraphEntry`, i.e. one that *is* visible -- so this
+/// only classifies *why* it needed help, never re-checks visibility.
+///
+///   - `Some('#')` -- real `if pkg.isHardMasked(): "#"`, checked first:
+///     `mask_entry` was set (some `package.mask` matched), even though a
+///     `package.unmask` went on to cancel it (real `isHardMasked` /
+///     `_getRawMaskAtom` deliberately ignores `package.unmask`).
+///   - `None` -- the candidate's own `KEYWORDS` are accepted by the
+///     *global* `ACCEPT_KEYWORDS` alone (real `get_keyword_mask`'s
+///     `missing` is empty): an ordinary stable install, no marker.
+///   - `Some('~')` -- not globally accepted, but the candidate carries a
+///     `~<arch>` keyword whose `<arch>` *is* in `ACCEPT_KEYWORDS` (real
+///     `keyword.lstrip("~") in global_accept_keywords` -> `"unstable"`):
+///     a testing keyword for our own arch, made visible by
+///     `package.accept_keywords`.
+///   - `Some('*')` -- not globally accepted and no such `~<our-arch>`
+///     keyword: visible only via `**` or a different arch's keyword
+///     (real `"missing"`).
+///
+/// Deliberately narrower than real `getRawMissingKeywords`: the `~`-vs-
+/// `*` split is decided straight off the candidate's own `KEYWORDS`
+/// tokens rather than reconstructing the exact `missing` list, which is
+/// sufficient for every realistic single-arch case.
+fn keyword_mask_marker(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+    mask_entry: &Option<String>,
+) -> Option<char> {
+    if mask_entry.is_some() {
+        return Some('#');
+    }
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    if keywords_accepted(
+        &candidate.keywords,
+        &candidate_str,
+        category,
+        package,
+        &config.accept_keywords,
+        &[],
+    ) {
+        return None;
+    }
+    let testing_for_our_arch = candidate.keywords.iter().any(|k| {
+        k.strip_prefix('~')
+            .is_some_and(|arch| config.accept_keywords.contains(arch))
+    });
+    Some(if testing_for_our_arch { '~' } else { '*' })
+}
+
 /// The keyword-matching half of `is_visible` (everything except the
 /// `package.mask`/`.unmask` check), factored out so `is_stable` below
 /// can reuse it against an artificially-unstabilized keyword list
@@ -3910,6 +3967,7 @@ fn resolve_root_deps_build_entries(
         slot: None,
         use_flags_display: Vec::new(),
         use_expand_display: Vec::new(),
+        keyword_mask: None,
         required_by: vec![owner],
         source: CandidateSource::Ebuild,
         provenance: VisibilityProvenance::default(),
@@ -4592,6 +4650,16 @@ pub struct GraphEntry {
     /// instead -- more useful programmatically, and real `--json` has no
     /// USE display of its own to match.
     pub use_expand_display: Vec<(String, String)>,
+    /// Real `output.py::gen_mask_str`'s own one-character mask column
+    /// (`PkgAttrDisplay.mask`), shown only with `-v`
+    /// (`include_mask_str` = `verbosity > 1`): `'#'` for a candidate
+    /// hard-masked in some profile/`package.mask` but pulled in anyway
+    /// (`isHardMasked`, wins first), `'~'` for one visible only via a
+    /// `~<our-arch>` testing keyword (`get_keyword_mask` "unstable"),
+    /// `'*'` for one visible only via `**` or a different arch's keyword
+    /// ("missing"). `None` for an ordinary, globally-keyword-visible,
+    /// unmasked candidate. See `keyword_mask_marker`.
+    pub keyword_mask: Option<char>,
     /// Every `(category, package)` that reached this entry via its own
     /// DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND (sorted, deduplicated) --
     /// empty for a directly-requested top-level atom with no other
@@ -5614,6 +5682,7 @@ pub fn resolve_pretend_graph(
                 slot: None,
                 use_flags_display: Vec::new(),
                 use_expand_display: Vec::new(),
+                keyword_mask: None,
                 required_by: Vec::new(),
                 source: CandidateSource::Ebuild,
                 provenance: VisibilityProvenance::default(),
@@ -5711,6 +5780,8 @@ pub fn resolve_pretend_graph(
         resolved_slots.insert(slot_key, entry_idx);
         let candidate_source = resolved.source;
         let provenance = visibility_provenance(resolved, &key.0, &key.1, config);
+        let keyword_mask =
+            keyword_mask_marker(resolved, &key.0, &key.1, config, &provenance.mask_entry);
         entries.push(GraphEntry {
             category: key.0.clone(),
             package: key.1.clone(),
@@ -5719,6 +5790,7 @@ pub fn resolve_pretend_graph(
             slot: Some(slot.clone()),
             use_flags_display: Vec::new(),
             use_expand_display: Vec::new(),
+            keyword_mask,
             required_by: Vec::new(),
             source: candidate_source,
             provenance,
@@ -8166,6 +8238,34 @@ mod tests {
         // package.accept_keywords help at all.
         let entries = graph_entries_real("dev-libs/newpkg");
         assert_eq!(entries[0].provenance.keyword_entry, None);
+    }
+
+    #[test]
+    fn keyword_mask_marker_classifies_the_bracket_column() {
+        // Plain stable-amd64: no marker (globally keyword-visible).
+        assert_eq!(graph_entries_real("dev-libs/newpkg")[0].keyword_mask, None);
+        // ~amd64, visible only via a package.accept_keywords entry -- a
+        // testing keyword for our own arch -> '~'.
+        assert_eq!(
+            graph_entries_real("dev-libs/wildcardkeywordpkg")[0].keyword_mask,
+            Some('~')
+        );
+        assert_eq!(
+            graph_entries_real("dev-libs/bareacceptkeywordspkg")[0].keyword_mask,
+            Some('~')
+        );
+        // ~arm64, visible only via "~*" -- a different arch's testing
+        // keyword -> '*' (real get_keyword_mask "missing").
+        assert_eq!(
+            graph_entries_real("dev-libs/tildestarkeywordpkg")[0].keyword_mask,
+            Some('*')
+        );
+        // package.mask'd then package.unmask'd -> '#' (real isHardMasked
+        // ignores package.unmask), and it wins over any keyword state.
+        assert_eq!(
+            graph_entries_real("dev-libs/maskedandunmaskedpkg")[0].keyword_mask,
+            Some('#')
+        );
     }
 
     #[test]
@@ -12391,6 +12491,7 @@ mod tests {
             slot: Some("0".to_string()),
             use_flags_display: Vec::new(),
             use_expand_display: Vec::new(),
+            keyword_mask: None,
             required_by: Vec::new(),
             source: CandidateSource::Ebuild,
             provenance: VisibilityProvenance::default(),
