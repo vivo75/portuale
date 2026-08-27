@@ -986,6 +986,7 @@ mod tests_166;
 mod blockers;
 mod candidates;
 mod conflict_use_display;
+mod entry;
 mod graph;
 mod installed;
 mod license;

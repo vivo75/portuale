@@ -164,6 +164,13 @@ pub(crate) fn root_suffix(
     }
 }
 
+/// `math.ceil(num_bytes / 1024)` KiB -- always round up, so small files never
+/// show `0 KiB`. Always `KiB`, never `MiB`/`GiB`. No `LC_NUMERIC` grouping.
+/// Portage: portage.localization, localized_size
+pub(crate) fn localized_size(bytes: u64) -> String {
+    format!("{} KiB", bytes.div_ceil(1024))
+}
+
 /// The version `entry`'s own package line displays; `None` for the
 /// non-merging outcomes. `merge_order`'s own `entry_version` is the same
 /// mapping, but it is private to `portage-repo`.
