@@ -559,3 +559,62 @@ pub struct PlainMissDepReport {
     /// Walked post-pass exactly like [`MaskedDepReport::chain`].
     pub chain: Vec<(String, String)>,
 }
+
+/// The candidates an atom names by version, visibility and USE ignored. `None`
+/// when the atom matches no ebuild at all by version, or when some matching
+/// ebuild is actually visible (the `[use]`-mismatch path handles that instead).
+// Portage: _show_unsatisfied_dep via db.match(atom.without_use)
+pub(crate) fn masked_candidates_for_atom(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+) -> Option<Vec<(String, Vec<String>)>> {
+    let atom = portage_dep::parse_atom(atom_str)?;
+    let candidates = list_candidates(repos, &atom.category, &atom.package).ok()?;
+
+    let strs: Vec<String> = candidates
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    // Version/slot filter, USE and visibility ignored.
+    let matched: std::collections::HashSet<&str> = portage_dep::match_from_list(atom_str, &refs)?
+        .into_iter()
+        .collect();
+
+    let mut masked: Vec<&Candidate> = candidates
+        .iter()
+        .zip(strs.iter())
+        .filter(|(_, s)| matched.contains(s.as_str()))
+        .map(|(c, _)| c)
+        .collect();
+    if masked.is_empty()
+        || masked
+            .iter()
+            .any(|c| is_visible(c, &atom.category, &atom.package, config))
+    {
+        return None;
+    }
+    // Descending version.
+    masked.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for c in masked {
+        let output_cpv = format!(
+            "{}/{}-{}::{}",
+            atom.category, atom.package, c.version, c.repo_name
+        );
+        if !seen.insert(output_cpv.clone()) {
+            continue;
+        }
+        let reasons = candidate_masking_reasons(c, &atom.category, &atom.package, config);
+        out.push((output_cpv, reasons));
+    }
+    Some(out)
+}
