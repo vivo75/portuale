@@ -1,206 +1,178 @@
 # Scope backlog
 
-This is **not** a Python-vs-Rust parity backlog. An inventory scan (CLI flags
-actually implemented, the `BOOLEAN_OPTIONS`/`VALUE_OPTIONS`/`ACTIONS`
-recognition tables, function-level architecture, JSON output fields, git
-history) found zero gaps between `PORTING/python/emerge_pretend_reference.py`
-and the Rust crate: every slice in this pilot is implemented in both
-languages simultaneously and verified byte-for-byte identical via the shared
-contract suite before being considered done (`PORTING/PROMPT.md`'s own hard
-goal — "portability of change, not of source"). 548/548 contract tests pass
-as of this writing, and every commit touching the Python reference in this
-project's history also touched the Rust side in the same commit.
+This is **not** a Python-vs-Rust parity backlog. Every slice in this pilot is
+implemented on both sides in the same commit and verified byte-for-byte
+identical via the shared contract suite before being considered done
+(`PORTING/PROMPT.md`'s own "portability of change, not of source" hard goal).
+733 contract tests pass as of this writing; an inventory scan (CLI flag
+tables, function-level architecture, `--json` fields, git history) still
+finds zero Rust-vs-Python gaps.
 
-What *does* exist is real portage behavior this pilot hasn't ported to
-**either** side yet — deliberate, already-documented scope cuts (see
-`PORTING/README.md`'s "What this proves" narrative and the relevant Rust/
-Python doc comments for each item's own grounding) or explicit `PROMPT.md`
-architecture boundaries. This file inventories those, ranked so that items
-other items depend on come first. Each item was verified against current
-source (not just README prose, which occasionally documents a since-closed
-cut for historical narrative reasons) before being listed here.
+What this file inventories is real portage behavior this pilot hasn't ported
+to **either** side yet — deliberate, documented scope cuts or explicit
+`PROMPT.md` architecture boundaries.
 
-## Tier 0 — foundational (unlocks multiple later items)
+> **Re-derived 2026-08-27** against current source (`portage-repo`,
+> `portage-profile`, `portage-use-reduce`, `portuale/src/fetch.rs`,
+> `git log`), not carried forward from the previous version. The original
+> file was written 2026-08-17 (commit `578246278`) and never updated across
+> the ~90 `PORTING/` commits since; **almost every item it listed has since
+> shipped**. Part 1 records what closed; Part 2 is the genuinely-remaining
+> work; Part 3 is the explicit non-goals. Re-verify against
+> `README.md`/`git log`/the actual source before trusting even this version.
 
-### 1. Sub-slot modeling
-`Candidate`/vdb reading currently keep only the main `SLOT` component;
-`SLOT="0/5"`-style sub-slots are discarded wherever slots are read
-(`list_candidates`, vdb `SLOT` file reads). Real portage tracks
-`(slot, sub_slot)` as a pair. Blocks item 5 (`--changed-slot`) and any
-future real slot-operator (`:=`) rebuild-trigger semantics (currently
-`:=`/`:*` atoms just mean "no slot restriction," matching real
-`match_from_list` but not real *rebuild* tracking).
+---
 
-### 2. Structured (non-flat) `use_reduce`
-`portage_use_reduce::use_reduce_flat` deliberately discards `||`-group
-*structure* pilot-wide (see that crate's own module doc comment) — the one
-exception is the bespoke `LicenseNode`/`parse_license_tree` parser built
-specifically for `LICENSE` masking, which doesn't generalize to `DEPEND`/
-`RDEPEND` structure. This is why `resolve_pretend_graph` resolves *every*
-alternative of an any-of dependency group rather than picking one, why
-`--changed-deps` compares flattened atom *sets* rather than real
-`use_reduce`'s structured trees (a documented, narrower approximation — see
-`deps_changed`'s own doc comment, `portage-repo/src/lib.rs`), and blocks
-real `subset=` semantics needed for item 6 (`--with-test-deps`). A
-genuinely bigger, separately-scoped undertaking, not a small fix.
+## Part 1 — shipped since 2026-08-17 (the original 21 items)
 
-### 3. `repos.conf` `masters` (layout.conf repo inheritance)
-An overlay can declare another repo as its own `masters` in `layout.conf`,
-inheriting/stacking that repo's profiles/`package.mask`/`license_groups`.
-Currently unimplemented — overlays only widen *which ebuilds are
-candidates*, nothing about how they're evaluated once found (see the
-overlays paragraph, `README.md`). Offered as a slice candidate multiple
-times without being picked. Foundational for item 7 (overlay repos' own
-masking) and item 10 (cross-repo profile parents).
+| # | Original item | Status | Landed by |
+|---|---|---|---|
+| 1 | Sub-slot modeling (`SLOT="0/5"`) | **shipped** | `9c926033f` (`Candidate::sub_slot`, real `_match_slot` sub-slot check; fixed a silent dependency-match bug) |
+| 2 | Structured (non-flat) `use_reduce` | **shipped for the depgraph** | `59237ccbb` (`||` groups: resolve only the first satisfiable alternative) + `3ca7a66b4` (`subset=` for `--with-test-deps`). `DepNode`/`build_dep_tree`/`use_reduce_flat_disjunctive` wired into both real dep-walk sites (`lib.rs:5266`/`5569`). *Residual:* `--changed-deps` still compares flat atom sets, not structured trees — see Part 2. `flat=False`/`opconvert` genuinely never needed. |
+| 3 | `repos.conf` `masters` (repo inheritance) | **shipped** | `04601e1a9` (implicit main-repo default) + explicit `masters =` chain resolution (`RepoConfig::masters`, `find_repos`) + `f7057b159`/`5a7bbeff7` (eclass `inherit()` across the masters chain). *Residual:* `layout.conf`'s own `masters =` key and `profile-formats` gating — see Part 2. |
+| 4 | Per-level/per-source config precedence (real `USE_ORDER`) | **partly shipped** | `6fa34677f`/`992a82117`/`5f7c6f059` (real `USE_ORDER` precedence for global force/mask, implicit IUSE, `+/-` defaults). `package.mask`/`.unmask`/`.accept_keywords` now stack per-source (`stack_mask_lines`, `[repo, profile-chain, user]`). *Residual:* `package.use`'s full `configdict["repo"]`/`["defaults"]` per-level interleaving with each level's `make.defaults`, and the `env`/`pkginternal`/`features`/`env.d` `USE_ORDER` layers — see Part 2. |
+| 5 | `--changed-slot` | **shipped** | `97a27a317` (`slot_changed`, real `_changed_slot`, as an independent `Reinstall` trigger) |
+| 6 | `--with-test-deps` | **shipped** | `3ca7a66b4` (real `use_reduce` `subset={"test"}` via `use_reduce_flat_subset`) |
+| 7 | Overlay repos' own `package.mask`/`.unmask`/`profiles`/`license_groups` | **shipped** | `b6c386ef6` + `6e368f28f` (overlay `package.mask`/`.unmask`, `::repo`-auto-scoped) + `9a03b8734` (overlay `package.use`/`.mask`/`.force`/`.stable.*`). Overlay `license_groups` reaches in via cross-repo profile parents (#10) — the same sourcing real `LicenseManager` uses (`profile_locations`), so it is *not* a gap. |
+| 8 | `package.use`'s own full `USE_ORDER` precedence | **partly shipped** — same residual as #4 | `9a03b8734` (all three sources stacked, flat model) |
+| 9 | `--deselect` world_sets/custom-set integration | **shipped** | `2ba3c8a5f` (`emerge --deselect @set` against the combined `world_set`) |
+| 9b | Real `Atom.intersects()` algebra for `--deselect` | **shipped** | `7406bae50` (dropped the narrower category/package check + a bogus installed-check) |
+| 10 | Cross-repo profile parents (`reponame:path` / bare `:path`) | **shipped** | `afd1a210c` (`expand_parent_colon`/`repo_containing`, real `LocationsManager._expand_parent_colon`) |
+| 11 | `USE_EXPAND` corners | **partly shipped** | `66a8a7703` (`USE_EXPAND_UNPREFIXED` — real, load-bearing: it is how `amd64`/`x86`/`arm64` exist as USE flags at all). *Residual:* `USE_EXPAND_HIDDEN`/`_IMPLICIT` and IUSE-aware `_*` wildcard expansion (`linguas_*`) — see Part 2. |
+| 12 | `accept_keywords_defaults` bare-atom substitution | **shipped** | `743cd9b4a` (bare `package.accept_keywords` atom → implicit `~arch` at both profile and user level) |
+| 13 | `strip_libc_deps` in `--changed-deps` | **shipped** | `b29600063` |
+| 14 | `--changed-deps-report` | **shipped** | `69ca60846` (real cosmetic "you might want `--changed-deps`" notice, its own `--json` `changed_deps_report` array) |
+| 15 | `--with-bdeps-auto` | **shipped** | `c505df6eb` |
+| 16 | Real atom-grammar wildcards/build-ids | **descoped** (not a gap) | Decision recorded: the bounded `*/*`/`category/*`/`*/package` matcher is sufficient for `package.mask`-style matching; full wildcard/glob/build-id atoms never reach `DEPEND`/`RDEPEND` parsing. Not on the backlog anymore. |
+| 17 | `--autounmask*` family | **read-only suggestion mode shipped** | `2003e020d` (`--autounmask` keyword suggestion) + `927402f3f` (extended to a dependency's own `NoVisibleCandidate`) + `--autounmask-use`/`--autounmask-keep-keywords`/`--autounmask-write` recognition. *Residual:* `--autounmask-write` itself (writes files) — a `PROMPT.md` "never writes" boundary, see Part 3. |
+| 18 | `--root-deps`/cross-`ROOT` dependency resolution | **substantially shipped** | Real `ESYSROOT`-vs-`ROOT` distinction, `running_root_satisfies_atom`, `||` branch selection fed by running-root satisfiability, `93327d274`, `356088e6c` (recursive build-entry, first increment), `678a8875d` (output marking). *Residual:* the recursion follow-up — see Part 2. |
+| 19 | Binary package support | **local `PKGDIR` shipped** | `3099d9adf` (`--usepkg`/`--usepkgonly`/`--binpkg-respect-use`) + `96d8fbccb` (`--usepkg-exclude`/`-include`) + `0ae1f8be6` (`--rebuilt-binaries`) + `0b18b2140` (downgrade detection) + `7e5a380d7` (real `ebuild … package` builds an xpak binpkg) + real `PORTAGE_COMPRESSION_COMMAND`. *Residual:* `--getbinpkg`/`--getbinpkgonly` (remote), `gpkg` format, `BUILD_ID`/splitdebug/packdebug/RPM, PKGDIR-index locking — see Part 2. |
+| 20 | Real ebuild phase execution | **shipped** | `eeecd96cd` (the `actionmap_deps` phase chain via embedded `brush`) + `2f5a3ddad`/`39907fee6` |
+| 21 | Real merge/install/filesystem mutation | **shipped** | `2f5a3ddad` (`merge`) + `2a52f7d88` (`unmerge`) + `qmerge`/`config`/`info`/`prerm`/`postrm` + real `CONFIG_PROTECT`/`collision-protect`/`preserve-libs`/`env_update` |
 
-### 4. Per-level/per-source config precedence (real `USE_ORDER`)
-Every one of `package.mask`/`package.use.mask`/`.force`/
-`package.accept_keywords`'s own multi-source stacking (repo, profile
-chain, user) is implemented as "concatenate every source into one flat
-list, then fold by atom specificity alone." Real portage instead applies
-each *source* fully before moving to the next (specificity only breaks
-ties *within* one source) — real `USE_ORDER`'s full precedence sequence.
-This is why a negating entry that crosses a source boundary can resolve
-differently here than in real portage (documented explicitly in the
-`package.accept_keywords` negation paragraph, `README.md`) and blocks item
-8 (`package.use`'s own full `USE_ORDER`, which needs a distinct
-`configdict["repo"]`/`configdict["defaults"]` layering this pilot's flat
-model doesn't have at all).
+---
 
-## Tier 1 — mid-sized features
+## Part 2 — genuinely still open
 
-### 5. `--changed-slot`
-Real `depgraph.py`'s `_changed_slot`: reinstalls/rebuilds when an
-installed package's `(slot, sub_slot)` differs from the current ebuild's.
-Needs item 1.
+Ranked roughly by how self-contained each is.
 
-### 6. `--with-test-deps`
-Real `depgraph.py`: pulls in a directly-requested (depth-0) package's own
-`DEPEND` `"test?"` conditional atoms even though the `test` USE flag stays
-off elsewhere. Real portage uses `use_reduce`'s own `subset=` parameter to
-extract just the test-conditional portion (item 2) — a flat-set-difference
-approximation (test-forced-on minus test-off) is possible without it, as a
-documented, narrower simplification, similar in spirit to how
-`--changed-deps` already approximates structured comparison with a flat
-one.
+### A. Small, self-contained dry-run/config slices
 
-### 7. Overlay repos' own `package.mask`/`.unmask`/`profiles`/`license_groups`
-Only the main repo's own repo-level masking/profile data is read; an
-overlay's own equivalent files are never consulted (see the overlays
-paragraph, `README.md`). Independently scopable, or naturally falls out of
-item 3.
+1. **`layout.conf`'s own `masters =` key** (and `profile-formats` gating).
+   `repos.conf`'s `masters =` is fully resolved; `layout.conf`'s equivalent
+   isn't read at all (`RepoConfig::masters` doc comment, `lib.rs:108-110`).
+   Cross-repo profile parents (#10) are also allowed unconditionally here
+   rather than gated on the current node's repo declaring
+   `profile-formats = portage-2` in `layout.conf` (`portage-profile`
+   module doc, "Cross-repo profile parent references … gated in real
+   portage on … `layout.conf`").
 
-### 8. `package.use`'s own full `USE_ORDER` precedence
-Currently flat-concatenated across repo/profile/user sources (a
-deliberate, confirmed-with-the-user simplification — see the
-`package.use` profile-chain-stacking paragraph, `README.md`); real
-`package.use` needs per-level interleaving with that level's own
-`make.defaults` USE. Needs item 4.
+2. **`USE_EXPAND_HIDDEN` / `USE_EXPAND_IMPLICIT`.** Real `emerge --info`
+   display-only concerns (`elibc_*`/`kernel_*` implicit-flag regex modeling).
+   Named as out of scope in `portage-profile`'s module doc (line ~199).
 
-### 9. `--deselect` world_sets/custom-set integration
-`run_deselect`'s own world-atom matching isn't integrated with
-`world_sets`/custom sets at all (`emerge --deselect @some-set` isn't
-supported) — a deliberate, documented cut from the nested-`@set`-
-references slice (see `run_deselect`'s own doc comment, `pretend.rs`).
-Real `action_deselect` operates against the same combined `world_set`
-`@world` itself now fully resolves.
+3. **IUSE-aware `_*` wildcard expansion** (e.g. `linguas_*` in `package.use`
+   or `USE`). Needs a specific package's own `IUSE`, which global config
+   resolution has no access to — would have to move into `portage-repo`'s
+   per-candidate `effective_use_flags` layer, the same way slotted
+   `package.use` matching already did.
 
-### 9b. Real `Atom.intersects()` algebra for `--deselect`
-`run_deselect` uses a narrower category/package(+slot) equality check
-instead of real `Atom.intersects()`'s full version-range/USE-dep
-compatibility algebra — sufficient for the dominant plain-atom usage, but
-a real, documented gap (see `run_deselect`'s own doc comment).
+4. **`--changed-deps` structured (non-flat) tree comparison.** Currently a
+   deliberate flat-atom-set difference (`deps_changed`, `lib.rs:2518-2543`)
+   — a `||`-group reordering that real portage's structured
+   `_changed_deps` would flag as changed is not caught here. A documented,
+   narrow approximation; closing it means giving `deps_changed` the same
+   `DepNode` tree machinery `use_reduce_flat_subset`/`_disjunctive`
+   already built.
 
-### 10. Cross-repo profile parents (`reponame:path` syntax)
-A profile's own `parent` file can reference another repo's profile
-directory by name; only same-repo parents are resolved today (see the
-profile-chain paragraph, `README.md`). Benefits from item 3's own
-repo-name-to-location lookup machinery.
+### B. `--root-deps` recursion follow-up
 
-## Tier 2 — smaller, independently bounded fixes
+5. **Walk the running-root build entry's own further dependencies.**
+   `resolve_root_deps_build_entry` (`lib.rs:3279`) resolves one unsatisfied
+   `DEPEND`/`BDEPEND` atom against the running root but does **not** recurse
+   into that entry's own `DEPEND`/`BDEPEND`. Needs a cross-call
+   "currently resolving against the running root" set for cycle safety
+   (two bootstrap build tools `BDEPEND`ing each other), plus a decision on
+   `NoVisibleCandidate` handling (currently swallowed). Confirmed with the
+   user as the next increment toward the full real multi-root shape.
 
-### 11. `USE_EXPAND` corners
-`USE_EXPAND_UNPREFIXED`, IUSE-aware wildcard expansion (e.g.
-`linguas_*` — needs a specific package's own IUSE, which global config
-resolution doesn't have access to today), and `USE_EXPAND_HIDDEN`/
-`_IMPLICIT` (real `emerge --info` display-only concerns) are all
-confirmed-real, named, out-of-scope corners of the `USE_EXPAND` slice
-(see that paragraph, `README.md`).
+### C. Binary packages / fetch
 
-### 12. `accept_keywords_defaults` bare-atom substitution
-A bare `package.accept_keywords` atom (no keyword tokens at all) has an
-implicit real meaning — accept the `~`-prefixed unstable form of every
-currently-accepted keyword — that this pilot treats as a no-op instead
-(see `keywords_accepted`'s own doc comment, `portage-repo/src/lib.rs`).
+6. **Remote binpkg fetching** — `--getbinpkg`/`--getbinpkgonly` and the
+   remote `PKGDIR`-index/`Packages` negotiation they need. Recognized but
+   unimplemented; a real debug trace is vendored at
+   `PORTING/helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`
+   for reference.
 
-### 13. `strip_libc_deps` in `--changed-deps`
-Real `_changed_deps` strips libc-specific dependency atoms before
-comparing (needs its own "what package provides libc" lookup this pilot
-has nowhere else). Unaddressed; no fixture package represents libc, so
-currently no observable effect (see `deps_changed`'s own doc comment,
-`portage-repo/src/lib.rs`).
+7. **`gpkg` binary package format** (`bin/gpkg-helper.py`,
+   `lib/portage/gpkg.py`). `BINPKG_FORMAT` is hardcoded `xpak`
+   (`ebuild_package.rs:327`). `FEATURES=verify-sig` (GPG) lives here too —
+   it is a `gpkg`/repo-sync concept, **not** `SRC_URI` fetch (the earlier
+   backlog mis-scoped it).
 
-### 14. `--changed-deps-report`
-Real `depgraph.py`: a cosmetic-only "you might want `--changed-deps`"
-notice when it's off, with no reinstall of its own. Stays
-recognized-but-unimplemented (see the `--changed-deps` paragraph,
-`README.md`).
+8. **`BUILD_ID` / `splitdebug` / `packdebug` / RPM**, and PKGDIR-index
+   locking. All named as cuts in `ebuild_package.rs`.
 
-### 15. `--with-bdeps-auto`
-The only other real lever on the same `bdeps` value `--with-bdeps` sets;
-relevant only once binary-package support (item 19) exists. Stays
-recognized-but-unimplemented (see the `--with-bdeps` paragraph,
-`README.md`).
+9. **Fetch: resume support** (`RESUMECOMMAND`'s retry-with-`-c`), **live
+   per-mirror `layout.conf` negotiation**, **`RESTRICT=mirror` /
+   `RESTRICT=primaryuri`**, real candidate ordering/shuffling. All named
+   as cuts in `fetch.rs:28-40`.
 
-### 16. Real atom-grammar wildcards/build-ids
-`portage-dep`'s own top-level atom grammar has a deliberately bounded
-wildcard matcher (`*/*`, `category/*`, `*/package` only, for
-`package.mask`-style matching) rather than real portage's fuller
-wildcard/glob/build-id support (see the wildcard-atom paragraph,
-`README.md`). Distinct from item 11's `USE_EXPAND`-specific wildcards.
+### D. Config-resolution `USE_ORDER` depth
 
-## Tier 3 — large, explicitly deferred by `PROMPT.md` (not oversights)
+10. **`package.use` full per-level `USE_ORDER`.** Real repo-level
+    `package.use` belongs in `configdict["repo"]` and profile-level in
+    `configdict["defaults"]` (merged per-level with that level's own
+    `make.defaults` USE); this pilot flattens all three sources into one
+    incremental list. Also missing: the `env`, `pkginternal`, `features`,
+    and `env.d` `USE_ORDER` layers entirely (`portage-profile` module
+    doc, "Only the `defaults` and `conf` layers … are implemented").
+    A genuinely bigger undertaking — the flat `Config` model has no
+    per-layer structure at all.
 
-These are standing architecture boundaries stated in `PORTING/PROMPT.md`
-itself, not gaps found by this scan — listed here for completeness and
-dependency visibility, not as "pick this next" candidates in the same
-sense as Tiers 0–2.
+### E. brush / shell backend
 
-### 17. `--autounmask*` family
-Auto-suggests (and, with `--autounmask-write`, writes) `package.use`/
-`.mask`/`.accept_keywords`/`.license` changes to make an otherwise-masked
-target resolve. `--autounmask-write` conflicts with this pilot's own
-"never writes" invariant; a read-only "suggest changes" mode is at least
-theoretically scopable independent of that. Entirely unimplemented today.
+11. **brush strategy #2** — rewrite this repo's own `bin/*.sh` to avoid
+    brush-hostile constructs. Low-risk, immediately effective for this
+    tree, doesn't preempt real-world ebuilds.
 
-### 18. `--root-deps`/cross-ROOT dependency resolution
-Real portage distinguishes the build host's own root (`ESYSROOT`) from a
-cross-compilation target `ROOT` for `DEPEND` resolution; this pilot has no
-ROOT-cross distinction anywhere (`DEPEND` resolves against the same
-repo/vdb pool as `RDEPEND`, a pre-existing, pervasive simplification).
+12. **brush strategy #3** — a fork-tracking doc for `vivo75/brush`.
+    PR [reubeno/brush#1274](https://github.com/reubeno/brush/pull/1274)
+    (brace-less function bodies) **merged upstream 2026-08-20** (`18851e7`);
+    the fork now carries only the pipeline-function-stage-deadlock fix
+    (`c78ea429`, branch `fix/pipeline-function-stage-deadlock`), which has
+    no upstream PR yet. `portuale/Cargo.toml` pins the fork by exact rev
+    with no record of upstream-vs-fork-only status and no periodic rebase.
 
-### 19. Binary package support
-`--usepkg`/`--getbinpkg` and everything gated on it
-(`--rebuilt-binaries`, `--rebuild-if-new-slot`/`-rev`/`-unbuilt`,
-`--binpkg-respect-use`, `--usepkg-exclude`, etc.) — "this pilot has no
-binary-package support anywhere" is a standing architectural statement
-repeated across many slices' own doc comments, not an oversight. Blocks
-item 15 and the real usefulness of several other recognized-but-
-unimplemented flags.
+### F. preserve-libs
 
-### 20. Real ebuild phase execution
-`PROMPT.md`'s own "Deferred: ebuild phase execution" — `pkg_setup`,
-`src_compile`, `src_install`, etc. Requires shelling out to system bash
-(an accepted, deliberate dynamic dependency at that later stage, in
-tension with the minimal-Linux goal, which is why it's deferred rather
-than solved now) and real EAPI-gated bash-version checking (see
-`bin/ebuild.sh`'s own `__check_bash_version`).
+13. **The one live-`scanelf` branch inside real `LinkageMapELF.rebuild()`**
+    (`LinkageMapELF.py:233-324`) — orphaned preserved libs with no
+    `NEEDED.ELF.2` entry. Everything else in `rebuild()`/`findConsumers()`/
+    `_find_libs_to_preserve()` is ported (`needed_elf.rs`). Deliberately
+    excluded, **confirmed with the user each time it comes up**: it is the
+    one real spot a raw ELF-header read (not `scanelf` output) would
+    matter.
 
-### 21. Real merge/install/filesystem mutation
-The whole pilot is dry-run-only by design (`PROMPT.md`'s own original
-scope: "No real merges, installs, or filesystem mutations in the first
-port"). `--depclean`/`--unmerge`/an actual `emerge foo` that installs
-something, and every world-file/vdb *write* path (including
-`--deselect`'s and `--select`'s own real write branches, both already
-confirmed unreachable in this pilot) all depend on lifting this. The
-largest single item in this backlog.
+---
+
+## Part 3 — explicit non-goals / architecture boundaries (`PROMPT.md`)
+
+Not oversights — standing decisions, listed for completeness.
+
+- **`--autounmask-write`** (and any file-*writing* autounmask mode).
+  Conflicts with the pilot's "never writes config" invariant. The
+  read-only "suggest changes" half is shipped (#17).
+- **Virtuals as dedicated code / backtracking.** Virtuals are ordinary
+  packages with an any-of `RDEPEND`, already handled; a real backtracking
+  resolver is out of scope.
+- **PyO3 / in-process FFI embedding.** Would foreclose the
+  two-sibling-implementations end state (`PROMPT.md` "Open / deliberately
+  undecided").
+- **EAPI 0/1/2/3/4/6.** Dead in this repo — every profile is EAPI 5+, and
+  the `portage-*` crates go further with no EAPI parametrization at all
+  within the 5+ floor.
+- **`bsd_chflags`.** `lib/portage/__init__.py:311` sets it to `None`
+  unconditionally on non-BSD; the pilot is Linux-only/musl-static.
+- **RPM binary packages, repo syncing (`emerge --sync`), news items.**
+  Not in scope.
