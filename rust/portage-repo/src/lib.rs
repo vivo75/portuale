@@ -1446,6 +1446,44 @@ fn use_flags_if_conditional(
     )
 }
 
+/// A candidate's own `PROPERTIES` (or `RESTRICT`) tokens after real
+/// USE-conditional evaluation against this candidate's own effective USE
+/// -- real `_PackageMetadataWrapper.__getitem__`'s own `use_reduce(...)`
+/// pass over a `_use_conditional_keys` value (`local_config and "?" in
+/// v`), which is exactly what `pkg.properties`/`pkg.restrict` then
+/// `.split()`. Used for the display-only `interactive` bracket-column
+/// check (and available for the `fetch` one, if that lands later).
+/// `PROPERTIES`/`RESTRICT` have no `||`-group semantics (real
+/// `config.py`: "ACCEPT_PROPERTIES works like ACCEPT_LICENSE, without
+/// groups"), so a flat `use_reduce` is faithful -- same reasoning
+/// `metadata_key_accepted` already documents. An unparsable value yields
+/// an empty set (the token simply won't be found), the "can't tell, so
+/// don't claim it" precedent this crate already sets elsewhere.
+fn evaluated_metadata_tokens(
+    value_str: &str,
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    candidate_str: &str,
+    config: &portage_profile::Config,
+) -> HashSet<String> {
+    if value_str.trim().is_empty() {
+        return HashSet::new();
+    }
+    let use_flags = use_flags_if_conditional(
+        value_str,
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+    );
+    let tokens: Vec<String> = value_str.split_whitespace().map(String::from).collect();
+    portage_use_reduce::use_reduce_flat(&tokens, &use_flags, portage_use_reduce::MatchMode::Normal)
+        .map(|flat| flat.into_iter().filter(|t| t != "||").collect())
+        .unwrap_or_default()
+}
+
 /// This candidate's own effective `ACCEPT_LICENSE`/`ACCEPT_PROPERTIES`/
 /// `ACCEPT_RESTRICT`-style symbolic token list: `global_accept`, with
 /// every matching `package_accept` entry's own tokens layered on top,
@@ -3969,6 +4007,7 @@ fn resolve_root_deps_build_entries(
         use_expand_display: Vec::new(),
         keyword_mask: None,
         new_slot: false,
+        interactive: false,
         required_by: vec![owner],
         source: CandidateSource::Ebuild,
         provenance: VisibilityProvenance::default(),
@@ -4711,6 +4750,16 @@ pub struct GraphEntry {
     /// this field only additionally records whether another slot is.
     /// Always `false` for every non-`New` outcome.
     pub new_slot: bool,
+    /// Real `output.py:833`'s own `attr_display.interactive` (the `I`
+    /// bracket column, rendered before the `N`/`r` code letter):
+    /// `"interactive" in pkg.properties and pkg.operation == "merge"` --
+    /// `pkg.properties` being `PROPERTIES` after real USE-conditional
+    /// evaluation against this candidate's own effective USE
+    /// (`_PackageMetadataWrapper.__getitem__`, gated on `"?" in v`).
+    /// `true` only for a merge-bound entry (`New`/`Upgrade`/`Downgrade`/
+    /// `Reinstall`) whose evaluated `PROPERTIES` contains `interactive`;
+    /// always `false` for `AlreadyInstalled`/`NoVisibleCandidate`.
+    pub interactive: bool,
     /// Every `(category, package)` that reached this entry via its own
     /// DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND (sorted, deduplicated) --
     /// empty for a directly-requested top-level atom with no other
@@ -5748,6 +5797,7 @@ pub fn resolve_pretend_graph(
                 use_expand_display: Vec::new(),
                 keyword_mask: None,
                 new_slot: false,
+                interactive: false,
                 required_by: Vec::new(),
                 source: CandidateSource::Ebuild,
                 provenance: VisibilityProvenance::default(),
@@ -5853,6 +5903,26 @@ pub fn resolve_pretend_graph(
         // `resolve_pretend`, so `New` here means nothing in *this* slot).
         let new_slot = matches!(outcome, PretendOutcome::New { .. })
             && !installed_candidates(root, &key.0, &key.1).is_empty();
+        let candidate_str = format!(
+            "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
+            key.0, key.1
+        );
+        // Real `output.py:833`: `if "interactive" in pkg.properties and
+        // pkg.operation == "merge"`. `pkg.properties` is `PROPERTIES`
+        // after real USE-conditional evaluation (`_PackageMetadataWrapper`,
+        // gated on `"?" in v`); every graph entry reaching this point is
+        // a merge (`New`/`Upgrade`/`Downgrade`/`Reinstall` -- the only
+        // outcomes `resolved_slots` ever indexes), so no separate
+        // operation check is needed here.
+        let interactive = evaluated_metadata_tokens(
+            &resolved.properties,
+            resolved,
+            &key.0,
+            &key.1,
+            &candidate_str,
+            config,
+        )
+        .contains("interactive");
         entries.push(GraphEntry {
             category: key.0.clone(),
             package: key.1.clone(),
@@ -5863,6 +5933,7 @@ pub fn resolve_pretend_graph(
             use_expand_display: Vec::new(),
             keyword_mask,
             new_slot,
+            interactive,
             required_by: Vec::new(),
             source: candidate_source,
             provenance,
@@ -5886,10 +5957,6 @@ pub fn resolve_pretend_graph(
             };
             metadata
         };
-        let candidate_str = format!(
-            "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
-            key.0, key.1
-        );
         let use_flags = effective_use_flags(
             metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
             &config.use_tokens,
@@ -8262,6 +8329,30 @@ mod tests {
                 version: "1.0".to_string()
             }
         );
+    }
+
+    #[test]
+    fn fixture_interactive_bracket_column_tracks_evaluated_properties() {
+        // dev-libs/interactivemergepkg has an unconditional
+        // PROPERTIES=interactive and is merge-bound -> real
+        // output.py:833's `attr_display.interactive`.
+        let entries = graph_entries_real("dev-libs/interactivemergepkg");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].interactive);
+        assert!(matches!(entries[0].outcome, PretendOutcome::New { .. }));
+
+        // dev-libs/interactivecondpkg's `interactive` token sits behind a
+        // `gtk? ( ... )` conditional with `gtk` disabled -> the real
+        // USE-conditional evaluation (`_PackageMetadataWrapper`, `"?" in
+        // v`) gates it out.
+        let entries = graph_entries_real("dev-libs/interactivecondpkg");
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].interactive);
+        // (The merge-bound `Reinstall` case -- an already-installed
+        // interactive package under non-selective resolution rendering
+        // `[ebuild Ir]` -- is covered end to end by the contract suite;
+        // `graph_entries_real` is selective, so a bare installed atom
+        // resolves to `AlreadyInstalled` here, which carries no bracket.)
     }
 
     #[test]
@@ -12605,6 +12696,7 @@ mod tests {
             use_expand_display: Vec::new(),
             keyword_mask: None,
             new_slot: false,
+            interactive: false,
             required_by: Vec::new(),
             source: CandidateSource::Ebuild,
             provenance: VisibilityProvenance::default(),

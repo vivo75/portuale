@@ -2798,6 +2798,36 @@ PORTING/
   `:1` (or the bare atom, non-selective) -> `[ebuild  NS]
   dev-libs/newslotpkg-2.0`; `:0` stays an in-slot outcome.
 
+  **`emerge --pretend`: the `[ebuild I..]` interactive bracket column.**
+  Real `output.py:833`: `if "interactive" in pkg.properties and
+  pkg.operation == "merge": pkg_info.attr_display.interactive = True`,
+  and `PkgAttrDisplay.__str__` renders `I` *before* the `N`/`r` code
+  letter. `pkg.properties` is `PROPERTIES` after real USE-conditional
+  evaluation against the candidate's own effective USE
+  (`_PackageMetadataWrapper.__getitem__`, gated on `"?" in v` -- the
+  same "resolve USE only when it could matter" shortcut this pilot
+  already applies to `LICENSE`/`PROPERTIES`/`RESTRICT` masking). New
+  `portage_repo::evaluated_metadata_tokens` (Rust: `use_reduce_flat`
+  with the candidate's `use_flags_if_conditional` USE; Python: real
+  `use_reduce(..., flat=True)`) returns the evaluated token set;
+  `resolve_pretend_graph` sets `GraphEntry::interactive` (Python:
+  stashed on `provenance` like `keyword_mask`/`new_slot`) for a
+  merge-bound entry (`New`/`Upgrade`/`Downgrade`/`Reinstall` -- the only
+  outcomes `resolved_slots` indexes, so real portage's `pkg.operation ==
+  "merge"` needs no separate check) whose evaluated `PROPERTIES` contains
+  `interactive`. `pretend.rs` prepends `I` to the code letter in every
+  merge arm (`[ebuild  IN]`, `[ebuild  IU]`, `[ebuild  ID]`, `[ebuild
+  Ir]`, plus `[ebuild  INS]`), unconditional like the `S` column;
+  `--json` carries `"interactive"` on every merge-bound entry. New
+  fixtures: `dev-libs/interactivemergepkg` (`PROPERTIES="interactive"`)
+  -> `[ebuild  IN]`; `dev-libs/interactivecondpkg`
+  (`PROPERTIES="gtk? ( interactive )"`, `gtk` off) -> plain `[ebuild
+  N]`, proving the conditional gates it out; `dev-libs/
+  interactiveinstalledpkg` (installed) -> `[ebuild  Ir]` on a bare
+  reinstall. Real portage's trailing `N interactive` count in the
+  totals line is deferred (this pilot prints no `_PackageCounters`
+  summary at all yet).
+
   **`use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
   (stable-vs-`~arch` distinction)**. Closes the last named cut in the
   `package.use.mask`/`.force` slice's own paragraph above. Grounded

@@ -104,6 +104,14 @@ Ranked roughly by how self-contained each is.
    `Upgrade`/`Downgrade`. **Residual:** `dependency_avoid_update_candidate`
    (dependency-atom `avoid_update`) still matches version-only across
    slots.
+   The `[ebuild I..]` interactive column (`GraphEntry::interactive` +
+   new `evaluated_metadata_tokens`, real `output.py:833` +
+   `PkgAttrDisplay.__str__`) **shipped 2026-08-27** too — `I` before the
+   code letter for a merge-bound entry whose USE-conditional-evaluated
+   `PROPERTIES` contains `interactive`. **Still open in this bracket
+   area:** the `f`/`F`/`g` fetch-restrict / remote-binary column, and the
+   trailing `_PackageCounters` totals line (`Total: N packages (…)`,
+   which the pilot prints nothing of yet).
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag

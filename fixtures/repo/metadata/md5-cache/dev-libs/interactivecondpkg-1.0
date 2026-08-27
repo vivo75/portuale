@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: PROPERTIES has a USE-conditional interactive token, gated OFF by a disabled flag -> no I column
+EAPI=8
+IUSE=gtk
+KEYWORDS=amd64
+PROPERTIES=gtk? ( interactive )
+SLOT=0
+_md5_=0000000000000000000000000000000

@@ -466,6 +466,14 @@ fn print_entry_line(
         portage_repo::CandidateSource::Ebuild => "ebuild",
     };
     let mask = mask_suffix(entry, verbose);
+    // Real `output.py:833`'s own `I` bracket column
+    // (`PkgAttrDisplay.__str__` renders it *before* the `N`/`r` code
+    // letter): a merge-bound package whose evaluated `PROPERTIES`
+    // contains `interactive` (`GraphEntry::interactive`). Unconditional,
+    // like the `S` column and unlike the `-v`-only `mask` column. Always
+    // paired with a code letter here -- every outcome this renders a
+    // bracket for already has one (`N`/`U`/`D`/`r`).
+    let ix = if entry.interactive { "I" } else { "" };
     match &entry.outcome {
         PretendOutcome::New { version } => {
             // Real `output.py`'s own `S` bracket column
@@ -474,14 +482,14 @@ fn print_entry_line(
             // of it is (`GraphEntry::new_slot`). Rendered right after
             // the `N` code letter, unconditionally -- unlike `mask`,
             // this column is not `-v`-gated in real portage either.
-            let code = if entry.new_slot { "NS" } else { "N" };
+            let code = format!("{ix}{}", if entry.new_slot { "NS" } else { "N" });
             if !onlydeps_suppressed {
                 if columns {
                     println!(
                         "{}{root}{}",
                         columns_line(
                             bracket,
-                            code,
+                            &code,
                             &mask,
                             indent,
                             &entry.category,
@@ -510,7 +518,7 @@ fn print_entry_line(
                         "{}{root}{}",
                         columns_line(
                             bracket,
-                            "U",
+                            &format!("{ix}U"),
                             &mask,
                             indent,
                             &entry.category,
@@ -523,7 +531,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  U{mask}] {indent}{}/{}-{to} (upgrade from {from}){root}{}",
+                        "[{bracket}  {ix}U{mask}] {indent}{}/{}-{to} (upgrade from {from}){root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -539,7 +547,7 @@ fn print_entry_line(
                         "{}{root}{}",
                         columns_line(
                             bracket,
-                            "D",
+                            &format!("{ix}D"),
                             &mask,
                             indent,
                             &entry.category,
@@ -552,7 +560,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  D{mask}] {indent}{}/{}-{to} (downgrade from {from}){root}{}",
+                        "[{bracket}  {ix}D{mask}] {indent}{}/{}-{to} (downgrade from {from}){root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -575,7 +583,7 @@ fn print_entry_line(
                         "{}{root}{}",
                         columns_line(
                             bracket,
-                            "r",
+                            &format!("{ix}r"),
                             &mask,
                             indent,
                             &entry.category,
@@ -595,13 +603,13 @@ fn print_entry_line(
                         *new_repo,
                     ) {
                         Some(reason) => println!(
-                            "[{bracket}  r{mask}] {indent}{}/{}-{version} (reinstall for {reason}){root}{}",
+                            "[{bracket}  {ix}r{mask}] {indent}{}/{}-{version} (reinstall for {reason}){root}{}",
                             entry.category,
                             entry.package,
                             use_suffix(entry, verbose)
                         ),
                         None => println!(
-                            "[{bracket}  r{mask}] {indent}{}/{}-{version}{root}{}",
+                            "[{bracket}  {ix}r{mask}] {indent}{}/{}-{version}{root}{}",
                             entry.category,
                             entry.package,
                             use_suffix(entry, verbose)
@@ -956,6 +964,18 @@ fn entry_to_json(
     // installed in while another slot of it is (`GraphEntry::new_slot`).
     if let PretendOutcome::New { .. } = &entry.outcome {
         fields.push(format!("\"new_slot\":{}", entry.new_slot));
+    }
+    // Real `output.py:833`'s own `I` bracket column, exposed
+    // unconditionally: `true` for a merge-bound entry whose evaluated
+    // `PROPERTIES` contains `interactive` (`GraphEntry::interactive`).
+    if matches!(
+        entry.outcome,
+        PretendOutcome::New { .. }
+            | PretendOutcome::Upgrade { .. }
+            | PretendOutcome::Downgrade { .. }
+            | PretendOutcome::Reinstall { .. }
+    ) {
+        fields.push(format!("\"interactive\":{}", entry.interactive));
     }
     fields.push(format!(
         "\"slot\":{}",

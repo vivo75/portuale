@@ -855,6 +855,36 @@ CASES = [
         ["--pretend", "dev-libs/newslotpkg:0"],
         0,
     ),
+    (
+        "interactive bracket column: unconditional PROPERTIES=interactive -> [ebuild IN]",
+        ["--pretend", "dev-libs/interactivemergepkg"],
+        0,
+    ),
+    (
+        "interactive bracket column: -v keeps I ahead of the mask column",
+        ["--pretend", "-v", "dev-libs/interactivemergepkg"],
+        0,
+    ),
+    (
+        "interactive bracket column: --columns",
+        ["--pretend", "--columns", "dev-libs/interactivemergepkg"],
+        0,
+    ),
+    (
+        "interactive bracket column: --json interactive field",
+        ["--pretend", "--json", "dev-libs/interactivemergepkg"],
+        0,
+    ),
+    (
+        "interactive bracket column: a USE-conditional interactive token gated OFF -> no I",
+        ["--pretend", "dev-libs/interactivecondpkg"],
+        0,
+    ),
+    (
+        "interactive bracket column: an installed interactive package reinstalls as [ebuild Ir]",
+        ["--pretend", "dev-libs/interactiveinstalledpkg"],
+        0,
+    ),
 ]
 
 
@@ -3737,6 +3767,39 @@ def test_new_slot_install_renders_the_S_bracket_column(emerge_binary, fixture_en
     assert "NS]" not in result.stdout
 
 
+def test_interactive_bracket_column(emerge_binary, fixture_env):
+    """Real output.py:833: `if "interactive" in pkg.properties and
+    pkg.operation == "merge": attr_display.interactive = True`, rendered
+    as `I` before the N/r code letter (unconditional, like the S column).
+    pkg.properties is PROPERTIES after real USE-conditional evaluation."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/interactivemergepkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  IN] dev-libs/interactivemergepkg-1.0",
+    ]
+
+    # An installed interactive package reinstalls as [ebuild Ir].
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/interactiveinstalledpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  Ir] dev-libs/interactiveinstalledpkg-1.0",
+    ]
+
+    # `gtk? ( interactive )` with gtk disabled -> the conditional gates
+    # the interactive token out, no I.
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/interactivecondpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/interactivecondpkg-1.0",
+    ]
+
+
 def test_multiple_top_level_atoms_share_dedup_and_slot_conflict_machinery(
     emerge_binary, fixture_env
 ):
@@ -5600,7 +5663,7 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
     assert result.stderr == ""
     assert result.stdout == (
         '{"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new",'
-        '"version":"1.0","new_slot":false,"slot":"0","source":"ebuild",'
+        '"version":"1.0","new_slot":false,"interactive":false,"slot":"0","source":"ebuild",'
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,'
         '"required_by":[],"builds_against_running_root":null,"blockers":[]}],'
@@ -5617,7 +5680,7 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
     assert result.returncode == 0
     assert result.stdout == (
         '{"entries":[{"category":"dev-libs","package":"upgradepkg","outcome":"upgrade",'
-        '"version":"2.0","from_version":"1.0","slot":"0","source":"ebuild",'
+        '"version":"2.0","from_version":"1.0","interactive":false,"slot":"0","source":"ebuild",'
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,"required_by":[],"builds_against_running_root":null,'
         '"blockers":[]}],"slot_conflicts":[],'

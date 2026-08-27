@@ -936,6 +936,26 @@ def _metadata_key_accepted(
     return all(t in acceptable for t in flat)
 
 
+def _evaluated_metadata_tokens(value_str, candidate, category, package, candidate_str, config):
+    """A candidate's own PROPERTIES (or RESTRICT) tokens after real
+    USE-conditional evaluation against this candidate's own effective USE
+    -- real _PackageMetadataWrapper.__getitem__'s own use_reduce(...)
+    pass over a _use_conditional_keys value ("local_config and '?' in
+    v"), which is exactly what pkg.properties/pkg.restrict then .split().
+    Used for the display-only `interactive` bracket-column check. An
+    unparsable value yields an empty set. Mirrors portage-repo/src/
+    lib.rs's evaluated_metadata_tokens exactly."""
+    if not value_str.strip():
+        return set()
+    use_flags = _use_flags_if_conditional(
+        value_str, candidate, category, package, candidate_str, config
+    )
+    try:
+        return {t for t in use_reduce(value_str, uselist=list(use_flags), flat=True) if t != "||"}
+    except InvalidDependString:
+        return set()
+
+
 def is_visible(candidate, category, package, config):
     """A candidate is visible if it isn't masked (matches a package.mask
     entry and no package.unmask entry), its KEYWORDS intersect the
@@ -4898,6 +4918,18 @@ def resolve_pretend_graph(
         provenance["new_slot"] = outcome[0] == "new" and bool(
             installed_candidates(root, category, package)
         )
+        # Real output.py:833: `if "interactive" in pkg.properties and
+        # pkg.operation == "merge"`. pkg.properties is PROPERTIES after
+        # real USE-conditional evaluation; every graph entry reaching
+        # this point is a merge (new/upgrade/downgrade/reinstall -- the
+        # only outcomes resolved_slots ever indexes), so no separate
+        # operation check is needed. Stashed on provenance like
+        # keyword_mask/new_slot above. Mirrors portage-repo/src/lib.rs's
+        # GraphEntry::interactive.
+        _candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
+        provenance["interactive"] = "interactive" in _evaluated_metadata_tokens(
+            resolved.get("properties", ""), resolved, category, package, _candidate_str, config
+        )
         entries.append(
             (
                 category,
@@ -5745,6 +5777,15 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
     if tag == "new":
         new_slot_val = provenance.get("new_slot", False) if isinstance(provenance, dict) else False
         fields.append(f'"new_slot":{_json_bool(new_slot_val)}')
+    # Real output.py:833's own "I" bracket column, exposed
+    # unconditionally: true for a merge-bound entry whose evaluated
+    # PROPERTIES contains "interactive" (provenance["interactive"]).
+    # Mirrors pretend.rs's entry_to_json.
+    if tag in ("new", "upgrade", "downgrade", "reinstall"):
+        interactive_val = (
+            provenance.get("interactive", False) if isinstance(provenance, dict) else False
+        )
+        fields.append(f'"interactive":{_json_bool(interactive_val)}')
     fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
     if tag != "no_visible_candidate":
         fields.append(f'"source":{_json_string(source)}')
@@ -7405,6 +7446,12 @@ def run(args):
         # pretend.rs's mask_suffix.
         km = provenance.get("keyword_mask") if isinstance(provenance, dict) else None
         mask = f" {km}" if (verbose and km) else ""
+        # Real output.py:833's own "I" bracket column (PkgAttrDisplay.
+        # __str__ renders it *before* the N/r code letter): a merge-bound
+        # package whose evaluated PROPERTIES contains "interactive"
+        # (provenance["interactive"]). Unconditional, like the S column.
+        # Mirrors pretend.rs's `ix`.
+        ix = "I" if (isinstance(provenance, dict) and provenance.get("interactive")) else ""
         if tag == "new":
             # Real output.py's own "S" bracket column
             # (PkgAttrDisplay.new_slot): a "new" into a slot the package
@@ -7412,7 +7459,7 @@ def run(args):
             # (provenance["new_slot"]). Rendered right after the N code
             # letter, unconditionally -- unlike mask, this column is not
             # -v-gated in real portage either. Mirrors pretend.rs.
-            code = "NS" if (isinstance(provenance, dict) and provenance.get("new_slot")) else "N"
+            code = ix + ("NS" if (isinstance(provenance, dict) and provenance.get("new_slot")) else "N")
             if not onlydeps_suppressed:
                 if columns:
                     print(
@@ -7433,7 +7480,7 @@ def run(args):
                     print(
                         _columns_line(
                             bracket,
-                            "U",
+                            ix + "U",
                             mask,
                             indent,
                             category,
@@ -7447,7 +7494,7 @@ def run(args):
                     )
                 else:
                     print(
-                        f"[{bracket}  U{mask}] {indent}{category}/{package}-{outcome[2]} "
+                        f"[{bracket}  {ix}U{mask}] {indent}{category}/{package}-{outcome[2]} "
                         f"(upgrade from {outcome[1]}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
@@ -7457,7 +7504,7 @@ def run(args):
                     print(
                         _columns_line(
                             bracket,
-                            "D",
+                            ix + "D",
                             mask,
                             indent,
                             category,
@@ -7471,7 +7518,7 @@ def run(args):
                     )
                 else:
                     print(
-                        f"[{bracket}  D{mask}] {indent}{category}/{package}-{outcome[2]} "
+                        f"[{bracket}  {ix}D{mask}] {indent}{category}/{package}-{outcome[2]} "
                         f"(downgrade from {outcome[1]}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
@@ -7484,7 +7531,7 @@ def run(args):
             if not onlydeps_suppressed and columns:
                 print(
                     _columns_line(
-                        bracket, "r", mask, indent, category, package, outcome[1], "", columnwidth
+                        bracket, ix + "r", mask, indent, category, package, outcome[1], "", columnwidth
                     )
                     + root
                     + use_suffix(use_display, installed, forced)
@@ -7499,12 +7546,12 @@ def run(args):
                 )
                 if reason is None:
                     print(
-                        f"[{bracket}  r{mask}] {indent}{category}/{package}-{outcome[1]}"
+                        f"[{bracket}  {ix}r{mask}] {indent}{category}/{package}-{outcome[1]}"
                         f"{root}{use_suffix(use_display, installed, forced)}"
                     )
                 else:
                     print(
-                        f"[{bracket}  r{mask}] {indent}{category}/{package}-{outcome[1]} "
+                        f"[{bracket}  {ix}r{mask}] {indent}{category}/{package}-{outcome[1]} "
                         f"(reinstall for {reason}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[1], blockers)
