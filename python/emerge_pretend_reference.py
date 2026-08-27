@@ -6267,6 +6267,71 @@ def _reinstall_reason(changed_flags, deps_changed, slot_changed, rebuilt_binary,
     return "; ".join(reasons)
 
 
+def _package_counters_summary(entries, top_level_pkgs, onlydeps):
+    """Real _PackageCounters.__str__ (output_helpers.py), the trailing
+    "Total: ..." summary line real output.py::print_verbose emits via
+    writemsg_stdout(f"\\n{self.counters}\\n") -- gated, in real portage
+    too, on verbosity == 3 (i.e. -v), never plain -p. Ported minus the
+    pieces that need the SRC_URI/Manifest/DISTDIR fetch-size machinery
+    this pilot hasn't built (real getfetchsizes): the ", Size of
+    downloads: ..." suffix and the "\\nFetch Restriction: ..." line. The
+    "Conflict:" line's own "(N unsatisfied)"/"(all satisfied)" suffix is
+    dropped too -- this pilot resolves no blocker. A top-level package
+    suppressed by --onlydeps isn't in real's merge list, so it isn't
+    counted here either. Mirrors pretend.rs's package_counters_summary."""
+    upgrades = downgrades = new = newslot = reinst = 0
+    binary = interactive = blocks = 0
+    for entry in entries:
+        category, package, outcome = entry[0], entry[1], entry[2]
+        source, provenance = entry[7], entry[8]
+        blocks += len(entry[3])
+        if onlydeps and (category, package) in top_level_pkgs:
+            continue
+        tag = outcome[0]
+        merge_bound = True
+        if tag == "new":
+            if isinstance(provenance, dict) and provenance.get("new_slot"):
+                newslot += 1
+            else:
+                new += 1
+        elif tag == "upgrade":
+            upgrades += 1
+        elif tag == "downgrade":
+            downgrades += 1
+        elif tag == "reinstall":
+            reinst += 1
+        else:
+            merge_bound = False
+        if merge_bound:
+            if source == "binary":
+                binary += 1
+            if isinstance(provenance, dict) and provenance.get("interactive"):
+                interactive += 1
+
+    total = upgrades + downgrades + newslot + new + reinst
+    out = f"Total: {total} package" + ("s" if total != 1 else "")
+    details = []
+    if upgrades > 0:
+        details.append(f"{upgrades} upgrade" + ("s" if upgrades > 1 else ""))
+    if downgrades > 0:
+        details.append(f"{downgrades} downgrade" + ("s" if downgrades > 1 else ""))
+    if new > 0:
+        details.append(f"{new} new")
+    if newslot > 0:
+        details.append(f"{newslot} in new slot" + ("s" if newslot > 1 else ""))
+    if reinst > 0:
+        details.append(f"{reinst} reinstall" + ("s" if reinst > 1 else ""))
+    if binary > 0:
+        details.append(f"{binary} " + ("binaries" if binary > 1 else "binary"))
+    if interactive > 0:
+        details.append(f"{interactive} interactive")
+    if total != 0:
+        out += f" ({', '.join(details)})"
+    if blocks > 0:
+        out += f"\nConflict: {blocks} block" + ("s" if blocks > 1 else "")
+    return out
+
+
 def _columnwidth_from_env():
     """Real output_helpers.py's own columnwidth resolution
     (MergeListItem.__init__): 130 by default, overridden by a
@@ -7670,6 +7735,15 @@ def run(args):
     else:
         for entry in entries:
             print_entry_line(entry, "")
+
+    # Real output.py::display: `if self.conf.verbosity == 3:
+    # self.print_verbose(...)` -- the `Total: ...` counters line, printed
+    # after every entry (and blocker) line, only under -v, for the
+    # tree/columns/flat layouts alike. Real emits f"\n{self.counters}\n"
+    # (a leading blank line). Mirrors pretend.rs.
+    if verbose:
+        print()
+        print(_package_counters_summary(entries, top_level_pkgs, onlydeps))
 
     # Purely informational, same as blockers -- see resolve_pretend_graph's
     # doc comment: v1 neither refuses nor changes the exit code for a slot

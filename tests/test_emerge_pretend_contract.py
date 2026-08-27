@@ -885,6 +885,31 @@ CASES = [
         ["--pretend", "dev-libs/interactiveinstalledpkg"],
         0,
     ),
+    (
+        "Total: counters line (-v) with a dependency",
+        ["--pretend", "-v", "dev-libs/useexpandpkg"],
+        0,
+    ),
+    (
+        "Total: counters line (-v) counts a new-slot install separately",
+        ["--pretend", "-v", "dev-libs/newslotpkg:1"],
+        0,
+    ),
+    (
+        "Total: counters line (-v) with a blocker Conflict: line",
+        ["--pretend", "-v", "dev-libs/blockerpkg"],
+        0,
+    ),
+    (
+        "Total: counters line survives --columns",
+        ["--pretend", "-v", "--columns", "dev-libs/interactivemergepkg"],
+        0,
+    ),
+    (
+        "Total: counters line -- nothing to install",
+        ["--pretend", "-v", "--noreplace", "dev-libs/samepkg"],
+        0,
+    ),
 ]
 
 
@@ -1576,6 +1601,7 @@ def test_iuse_plus_minus_defaults_apply_when_nothing_else_says_otherwise(
     assert result.returncode == 0
     assert result.stdout == (
         '[ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"\n'
+        "\nTotal: 1 package (1 new)\n"
     )
 
 
@@ -1603,7 +1629,9 @@ def test_required_use_referencing_an_implicit_arch_flag_resolves_normally(
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == '[ebuild  N] dev-libs/archiuseimplicitpkg-1.0\n'
+    assert result.stdout == (
+        "[ebuild  N] dev-libs/archiuseimplicitpkg-1.0\n\nTotal: 1 package (1 new)\n"
+    )
 
 
 def test_global_use_force_and_use_mask_win_over_a_contradicting_package_use_entry(
@@ -1639,6 +1667,7 @@ def test_global_use_force_and_use_mask_win_over_a_contradicting_package_use_entr
     assert result.returncode == 0
     assert result.stdout == (
         '[ebuild  N] dev-libs/globalprecedencepkg-1.0  USE="(globalforceflag) (-globalmaskflag)"\n'
+        "\nTotal: 1 package (1 new)\n"
     )
 
 
@@ -1661,7 +1690,9 @@ def test_profile_level_minus_flag_genuinely_cancels_an_iuse_plus_default(
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/cancelledpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout == '[ebuild  N] dev-libs/cancelledpkg-1.0  USE="-cancelme"\n'
+    assert result.stdout == (
+        '[ebuild  N] dev-libs/cancelledpkg-1.0  USE="-cancelme"\n\nTotal: 1 package (1 new)\n'
+    )
 
 
 def test_required_use_violated_top_level_aborts_the_whole_run(emerge_binary, fixture_env):
@@ -2155,6 +2186,8 @@ def test_use_expand_variable_drives_a_dependency(emerge_binary, fixture_env):
     assert result.stdout.splitlines() == [
         '[ebuild  N] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="-amdgpu nvidia"',
         "[ebuild  N] dev-libs/newpkg-1.0",
+        "",
+        "Total: 2 packages (2 new)",
     ]
     assert "hiddendep" not in result.stdout
 
@@ -2177,6 +2210,8 @@ def test_package_use_expand_prefix_shorthand_drives_a_dependency(emerge_binary, 
     assert result.stdout.splitlines() == [
         '[ebuild  N] dev-libs/packageuseexpandpkg-1.0  PYTHON_TARGETS="python3_12"',
         "[ebuild  N] dev-libs/newpkg-1.0",
+        "",
+        "Total: 2 packages (2 new)",
     ]
 
 
@@ -2196,6 +2231,8 @@ def test_use_expand_unprefixed_variable_drives_a_dependency(emerge_binary, fixtu
     assert result.stdout.splitlines() == [
         '[ebuild  N] dev-libs/archusepkg-1.0  USE="amd64 -riscv"',
         "[ebuild  N] dev-libs/newpkg-1.0",
+        "",
+        "Total: 2 packages (2 new)",
     ]
     assert "hiddendep" not in result.stdout
 
@@ -2223,6 +2260,8 @@ def test_use_expand_star_wildcard_expands_against_the_packages_own_iuse(
     assert result.stdout.splitlines() == [
         '[ebuild  N] dev-libs/wildexpandpkg-1.0  LINGUAS="de (-en)"',
         "[ebuild  N] dev-libs/wildexpanddep-1.0",
+        "",
+        "Total: 2 packages (2 new)",
     ]
     assert "wildexpandmasked" not in result.stdout
     assert "linguas_*" not in result.stdout
@@ -2267,7 +2306,11 @@ def test_pv_omits_a_use_expand_hidden_group(
     assert python.returncode == 0
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
-    assert rust.stdout.strip() == "[ebuild  N] dev-libs/hiddenexpandpkg-1.0"
+    assert rust.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/hiddenexpandpkg-1.0",
+        "",
+        "Total: 1 package (1 new)",
+    ]
     assert "CPU_FLAGS_X86" not in rust.stdout
     assert "cpu_flags_x86" not in rust.stdout
 
@@ -2297,6 +2340,8 @@ def test_pv_marks_use_changes_against_the_installed_version(
     assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
         '[ebuild  U] dev-libs/upgradeusepkg-2.0 (upgrade from 1.0)  USE="added%* -change*"',
+        "",
+        "Total: 1 package (1 upgrade)",
     ]
 
     # A New install has no installed side -> no markers, every flag plain.
@@ -2360,6 +2405,8 @@ def test_use_stable_force_and_package_use_stable_mask_apply_when_stable(
     assert result.stdout.splitlines() == [
         '[ebuild  N] dev-libs/stableusepkg-1.0  USE="(-maskflag) (stableforceflag)"',
         "[ebuild  N] dev-libs/newpkg-1.0",
+        "",
+        "Total: 2 packages (2 new)",
     ]
 
 
@@ -2384,6 +2431,7 @@ def test_use_stable_force_and_package_use_stable_mask_skip_an_unstable_candidate
     # entry -- a testing keyword for our own arch (real gen_mask_str).
     assert result.stdout == (
         '[ebuild  N ~] dev-libs/unstableusepkg-1.0  USE="maskflag -stableforceflag"\n'
+        "\nTotal: 1 package (1 new)\n"
     )
 
 
@@ -2735,7 +2783,11 @@ def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_en
         assert p.stdout.splitlines()[0] == f"[ebuild  N] dev-libs/{pkg}-1.0", pkg
 
     v = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newpkg"], fixture_env)
-    assert v.stdout.strip() == "[ebuild  N] dev-libs/newpkg-1.0"
+    assert v.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/newpkg-1.0",
+        "",
+        "Total: 1 package (1 new)",
+    ]
 
 
 def test_package_accept_keywords_profile_level_entry_extends_visibility(
@@ -2859,6 +2911,7 @@ def test_package_use_mask_and_force_with_atom_specificity_ordering(emerge_binary
     assert result.returncode == 0
     assert result.stdout == (
         '[ebuild  N] dev-libs/pkgusemaskforcepkg-1.0  USE="(forceflag) (-maskflag) -specflag"\n'
+        "\nTotal: 1 package (1 new)\n"
     )
 
 
@@ -3800,6 +3853,45 @@ def test_interactive_bracket_column(emerge_binary, fixture_env):
     ]
 
 
+def test_pv_totals_summary_line(emerge_binary, fixture_env):
+    """Real output.py::display: `if self.conf.verbosity == 3:
+    self.print_verbose(...)` -> `writemsg_stdout(f"\\n{self.counters}\\n")`
+    -- the trailing `Total: N packages (...)` line, only under `-v`.
+    Ported minus the `, Size of downloads:` suffix and `Fetch
+    Restriction:` line (fetch-size machinery not built yet), and minus
+    the `Conflict:` line's `(N unsatisfied)`/`(all satisfied)` suffix
+    (this pilot resolves no blocker)."""
+    # Plain `-p` (no -v): no Total line at all.
+    plain = _run([str(emerge_binary)], ["--pretend", "dev-libs/newpkg"], fixture_env)
+    assert "Total:" not in plain.stdout
+
+    def totals(args):
+        r = _run([str(emerge_binary)], ["--pretend", "-v", *args], fixture_env)
+        assert r.returncode == 0
+        return r.stdout.splitlines()[-1]
+
+    assert totals(["dev-libs/newpkg"]) == "Total: 1 package (1 new)"
+    assert totals(["--update", "dev-libs/upgradepkg"]) == "Total: 1 package (1 upgrade)"
+    assert totals(["dev-libs/newslotpkg:1"]) == "Total: 1 package (1 in new slot)"
+    assert totals(["dev-libs/interactivemergepkg"]) == "Total: 1 package (1 new, 1 interactive)"
+    assert totals(["--usepkg", "dev-libs/binaryonlypkg"]) == "Total: 1 package (1 new, 1 binary)"
+    assert totals(["dev-libs/multislotparent"]) == "Total: 3 packages (3 new)"
+
+    # Nothing to install -> Total: 0 packages, no parenthetical.
+    installed = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "-n", "dev-libs/samepkg"], fixture_env
+    )
+    assert installed.stdout.splitlines()[-1] == "Total: 0 packages"
+
+    # A blocker adds a trailing Conflict: line (no satisfied/unsatisfied
+    # suffix -- a documented cut).
+    blk = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/blockerpkg"], fixture_env)
+    assert blk.stdout.splitlines()[-2:] == [
+        "Total: 1 package (1 new)",
+        "Conflict: 1 block",
+    ]
+
+
 def test_multiple_top_level_atoms_share_dedup_and_slot_conflict_machinery(
     emerge_binary, fixture_env
 ):
@@ -3965,7 +4057,9 @@ def test_verbose_use_flags_reflect_package_use_overrides(emerge_binary, fixture_
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/packageusedisablepkg"], fixture_env
     )
     assert disable.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/packageusedisablepkg-1.0  USE="-foo"'
+        '[ebuild  N] dev-libs/packageusedisablepkg-1.0  USE="-foo"',
+        "",
+        "Total: 1 package (1 new)",
     ]
 
 
@@ -3976,7 +4070,11 @@ def test_verbose_on_a_package_with_no_iuse_shows_no_use_line(emerge_binary, fixt
     join)."""
     result = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newpkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/newpkg-1.0"]
+    assert result.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/newpkg-1.0",
+        "",
+        "Total: 1 package (1 new)",
+    ]
 
 
 def test_verbose_consumes_an_explicit_y_or_n_value(emerge_binary, fixture_env):
@@ -4742,6 +4840,8 @@ def test_newuse_verbose_shows_use_flags_too(emerge_binary, fixture_env):
     assert result.stdout.splitlines() == [
         '[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)  USE="foo*"',
         "[ebuild  N] dev-libs/newpkg-1.0",
+        "",
+        "Total: 2 packages (1 new, 1 reinstall)",
     ]
 
 
@@ -5189,7 +5289,10 @@ def test_nodeps_still_shows_the_top_level_atoms_own_use_display(emerge_binary, f
         [str(emerge_binary)], ["--pretend", "-O", "-v", "dev-libs/useflagpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout == '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"\n'
+    assert result.stdout == (
+        '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"\n'
+        "\nTotal: 1 package (1 new)\n"
+    )
 
 
 def test_onlydeps_suppresses_the_top_level_atom_but_shows_its_dependencies(

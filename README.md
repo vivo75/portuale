@@ -2824,9 +2824,33 @@ PORTING/
   (`PROPERTIES="gtk? ( interactive )"`, `gtk` off) -> plain `[ebuild
   N]`, proving the conditional gates it out; `dev-libs/
   interactiveinstalledpkg` (installed) -> `[ebuild  Ir]` on a bare
-  reinstall. Real portage's trailing `N interactive` count in the
-  totals line is deferred (this pilot prints no `_PackageCounters`
-  summary at all yet).
+  reinstall.
+
+  **`emerge --pretend -v`: the `Total:` counters summary line.** Real
+  `output.py::display`'s own `if self.conf.verbosity == 3:
+  self.print_verbose(...)` -> `writemsg_stdout(f"\n{self.counters}\n")`,
+  i.e. `_PackageCounters.__str__` (`output_helpers.py`). Gated -- in
+  real portage too -- on `verbosity == 3`, so `-pv` only, never plain
+  `-p`. New `package_counters_summary` (`pretend.rs`, mirrored in
+  `emerge_pretend_reference.py`) reduces the resolved graph's own
+  outcomes into `Total: N package[s][ (A upgrade[s], B downgrade[s], C
+  new, D in new slot[s], E reinstall[s], F binar{y,ies}, G interactive)]`
+  plus a trailing `Conflict: N block[s]` line, faithful to real
+  `__str__`'s exact pluralization (`total != 1` -> `packages`; `> 1` ->
+  `s` for the rest; `binary`/`binaries`; `newslot` counts toward the
+  total but renders as `in new slot`). A `New` entry with `new_slot`
+  counts as `newslot` not `new` (real `output.py:763`); `binary` and
+  `interactive` are additive over their merge-bound entries; an
+  `--onlydeps`-suppressed top-level package isn't counted (real portage
+  drops it from the merge list). Printed after the entry list for the
+  flat/`--columns`/`--tree` layouts alike, with a leading blank line.
+  **Deferred** (need the SRC_URI/Manifest/DISTDIR fetch-size machinery
+  this pilot hasn't built -- real `getfetchsizes`): the `, Size of
+  downloads: …` suffix and the `Fetch Restriction: …` line. **Cut**: the
+  `Conflict:` line's own `(N unsatisfied)`/`(all satisfied)` suffix --
+  this pilot resolves no blocker (report, don't enforce), so it can't
+  honestly classify one. ~18 existing `-pv` pinned-output contract
+  tests updated for the new trailing line.
 
   **`use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
   (stable-vs-`~arch` distinction)**. Closes the last named cut in the

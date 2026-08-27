@@ -403,6 +403,109 @@ fn reinstall_reason(
     Some(reasons.join("; "))
 }
 
+/// Real `_PackageCounters.__str__` (`output_helpers.py`), the trailing
+/// `Total: …` summary line real `output.py::print_verbose` emits via
+/// `writemsg_stdout(f"\n{self.counters}\n")` -- gated, in real portage
+/// too, on `verbosity == 3` (i.e. `-v`), never plain `-p`. Ported minus
+/// the pieces that need the SRC_URI/Manifest/DISTDIR fetch-size
+/// machinery this pilot hasn't built (real `getfetchsizes`): the
+/// `, Size of downloads: …` suffix and the `\nFetch Restriction: …`
+/// line. The `Conflict:` line's own `(N unsatisfied)`/`(all satisfied)`
+/// suffix is dropped too -- this pilot resolves no blocker (its whole
+/// blocker story is "report, don't enforce", see `resolve_pretend_graph`'s
+/// doc comment, portage-repo), so it can't honestly classify one.
+/// `real_pkg_counted` mirrors real portage's own `ordered`/`pkg_info.merge`
+/// gate: a top-level package suppressed by `--onlydeps` isn't in real's
+/// merge list at all, so it isn't counted here either.
+fn package_counters_summary(
+    entries: &[GraphEntry],
+    top_level_pkgs: &HashSet<(String, String)>,
+    onlydeps: bool,
+) -> String {
+    let plural = |n: u64| if n > 1 { "s" } else { "" };
+    let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut binary, mut interactive, mut blocks) = (0u64, 0u64, 0u64);
+    for entry in entries {
+        blocks += entry.blockers.len() as u64;
+        let suppressed =
+            onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
+        if suppressed {
+            continue;
+        }
+        let merge_bound = match &entry.outcome {
+            PretendOutcome::New { .. } => {
+                if entry.new_slot {
+                    newslot += 1;
+                } else {
+                    new += 1;
+                }
+                true
+            }
+            PretendOutcome::Upgrade { .. } => {
+                upgrades += 1;
+                true
+            }
+            PretendOutcome::Downgrade { .. } => {
+                downgrades += 1;
+                true
+            }
+            PretendOutcome::Reinstall { .. } => {
+                reinst += 1;
+                true
+            }
+            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate => false,
+        };
+        if merge_bound {
+            if entry.source == portage_repo::CandidateSource::Binary {
+                binary += 1;
+            }
+            if entry.interactive {
+                interactive += 1;
+            }
+        }
+    }
+
+    // Real `total_installs = upgrades + downgrades + newslot + new + reinst`.
+    let total = upgrades + downgrades + newslot + new + reinst;
+    let mut out = format!(
+        "Total: {total} package{}",
+        if total != 1 { "s" } else { "" }
+    );
+    let mut details: Vec<String> = Vec::new();
+    if upgrades > 0 {
+        details.push(format!("{upgrades} upgrade{}", plural(upgrades)));
+    }
+    if downgrades > 0 {
+        details.push(format!("{downgrades} downgrade{}", plural(downgrades)));
+    }
+    if new > 0 {
+        details.push(format!("{new} new"));
+    }
+    if newslot > 0 {
+        details.push(format!("{newslot} in new slot{}", plural(newslot)));
+    }
+    if reinst > 0 {
+        details.push(format!("{reinst} reinstall{}", plural(reinst)));
+    }
+    if binary > 0 {
+        details.push(format!(
+            "{binary} {}",
+            if binary > 1 { "binaries" } else { "binary" }
+        ));
+    }
+    if interactive > 0 {
+        details.push(format!("{interactive} interactive"));
+    }
+    if total != 0 {
+        out.push_str(&format!(" ({})", details.join(", ")));
+    }
+    if blocks > 0 {
+        out.push_str(&format!("\nConflict: {blocks} block{}", plural(blocks)));
+    }
+    out
+}
+
 fn print_blockers(entry: &GraphEntry, owner_version: &str) {
     for b in &entry.blockers {
         let strength = if b.strong { "hard" } else { "soft" };
@@ -2737,6 +2840,19 @@ pub fn run(args: &[String]) -> ExitCode {
                 root_deps_running_root.as_deref(),
             );
         }
+    }
+
+    // Real `output.py::display`: `if self.conf.verbosity == 3:
+    // self.print_verbose(...)` -- the `Total: …` counters line, printed
+    // after every entry (and blocker) line, only under `-v`, for the
+    // tree/columns/flat layouts alike. Real emits `f"\n{self.counters}\n"`
+    // (a leading blank line).
+    if verbose {
+        println!();
+        println!(
+            "{}",
+            package_counters_summary(entries, &top_level_pkgs, onlydeps)
+        );
     }
 
     // Purely informational, same as blockers -- see resolve_pretend_graph's

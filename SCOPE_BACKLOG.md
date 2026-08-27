@@ -108,10 +108,14 @@ Ranked roughly by how self-contained each is.
    new `evaluated_metadata_tokens`, real `output.py:833` +
    `PkgAttrDisplay.__str__`) **shipped 2026-08-27** too — `I` before the
    code letter for a merge-bound entry whose USE-conditional-evaluated
-   `PROPERTIES` contains `interactive`. **Still open in this bracket
-   area:** the `f`/`F`/`g` fetch-restrict / remote-binary column, and the
-   trailing `_PackageCounters` totals line (`Total: N packages (…)`,
-   which the pilot prints nothing of yet).
+   `PROPERTIES` contains `interactive`. The trailing `_PackageCounters`
+   totals line (`Total: N packages (…)` + `Conflict: N blocks`,
+   `package_counters_summary`, real `output_helpers.py`, `-v`-gated)
+   **shipped 2026-08-27** too — the package-count half only. **Still
+   open in this bracket area:** the `f`/`F`/`g` fetch-restrict /
+   remote-binary column, and the `, Size of downloads: …` /
+   `Fetch Restriction: …` parts of the totals line (all need the
+   SRC_URI/Manifest/DISTDIR fetch-size machinery — real `getfetchsizes`).
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag
