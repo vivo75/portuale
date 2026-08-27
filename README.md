@@ -2770,6 +2770,34 @@ PORTING/
   `[ebuild  N ~]`, `dev-libs/tildestarkeywordpkg` (`~arm64` via `~*`) ->
   `[ebuild  N *]`, `dev-libs/maskedandunmaskedpkg` -> `[ebuild  N #]`.
 
+  **`emerge --pretend`: the `[ebuild NS]` new-slot marker (+ a
+  slot-aware-matching correctness fix).** Real
+  `output.py::_get_installed_best` sets `attr_display.new_slot` (the `S`
+  bracket column, next to `N`) when the resolved candidate's own
+  category/package *is* installed but `not myinslotlist` -- nothing in
+  the candidate's own slot (`vardb.match(pkg.slot_atom)`, main slot
+  only, sub-slot ignored). Grounding this turned up that `resolve_pretend`
+  answered "is this candidate already installed?" against *all* installed
+  versions regardless of slot: `emerge -p dev-libs/foo:1` with only
+  `foo:0` installed wrongly returned `[ebuild  U] foo-2.0 (upgrade from
+  1.0)` (both Rust and the Python oracle agreed -- both wrong; real
+  portage: `[ebuild  NS] foo-2.0`, a `New` into a fresh slot with no
+  "from"). The fix filters the installed-version set to the resolved
+  candidate's own main slot at every "already installed" decision point
+  in `resolve_pretend` (`--exclude` keep, the `!update` selective
+  shortcut, the Reinstall/AlreadyInstalled branch, and the
+  Upgrade/Downgrade/New branch); `dependency_avoid_update_candidate`'s
+  own `avoid_update` matching stays version-only across slots, a
+  documented residual. New `GraphEntry::new_slot: bool` (Python: stashed
+  on the `provenance` dict like `keyword_mask`), set in
+  `resolve_pretend_graph` for a `New` entry whose cp has any installed
+  candidate; `pretend.rs` renders `S` right after the `N` letter
+  unconditionally (not `-v`-gated, unlike the mask column), and `--json`
+  carries `"new_slot"` on every `new` entry. New fixture
+  `dev-libs/newslotpkg` (`-1.0` SLOT 0 installed, `-2.0` SLOT 1 not):
+  `:1` (or the bare atom, non-selective) -> `[ebuild  NS]
+  dev-libs/newslotpkg-2.0`; `:0` stays an in-slot outcome.
+
   **`use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
   (stable-vs-`~arch` distinction)**. Closes the last named cut in the
   `package.use.mask`/`.force` slice's own paragraph above. Grounded

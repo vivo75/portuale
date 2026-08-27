@@ -4081,13 +4081,34 @@ def resolve_pretend(
     if not matched:
         return ("no_visible_candidate",)
 
-    installed = installed_versions(root, category, package)
+    # installed_pairs carries each installed version's own main slot, so
+    # "is this candidate already installed" is answered the way real
+    # output.py::_get_installed_best does -- against
+    # vardb.match(pkg.slot_atom) (the resolved candidate's own main
+    # slot), not merely "this version exists in some slot". Without the
+    # slot filter, `emerge -p cat/foo:1` with only foo:0 installed
+    # mis-classifies a new-slot install as an upgrade/downgrade (real
+    # portage: "[ebuild NS]"). installed (version-only, all slots) is
+    # still what _dependency_avoid_update_candidate consumes -- its own
+    # avoid_update grounding is a separate concern, its slot-awareness a
+    # documented residual. Mirrors portage-repo/src/lib.rs's
+    # resolve_pretend exactly.
+    installed_pairs = installed_candidates(root, category, package)
+    installed = [version for version, _slot, _sub_slot in installed_pairs]
+
+    def _candidate_is_installed(c):
+        # In-slot only, at that version, sub-slot ignored (real
+        # pkg.slot_atom).
+        return any(
+            version == c["version"] and slot == c["slot"]
+            for version, slot, _sub_slot in installed_pairs
+        )
 
     # --exclude/-X: an installed version matching an exclude atom is
     # left exactly as-is, unconditionally, before --update/--newuse/
     # --changed-use ever get a say -- see this function's own docstring.
     if excluded:
-        installed_matched = [c for c in matched if c["version"] in installed]
+        installed_matched = [c for c in matched if _candidate_is_installed(c)]
         if installed_matched:
             installed_best = _best_candidate(installed_matched)
             installed_str = (
@@ -4120,7 +4141,7 @@ def resolve_pretend(
                 root, atom, atom_str, category, package, candidates, installed
             )
         else:
-            installed_matched = [c for c in matched if c["version"] in installed]
+            installed_matched = [c for c in matched if _candidate_is_installed(c)]
             installed_best = _best_candidate(installed_matched) if installed_matched else None
         if installed_best is not None:
             return _already_installed_or_reinstall(
@@ -4167,7 +4188,7 @@ def resolve_pretend(
 
     best = _best_candidate(matched)
 
-    if best["version"] in installed:
+    if _candidate_is_installed(best):
         changed_flags = (
             _reinstall_flags_for_use_change(root, category, package, best, config, newuse)
             if newuse or changed_use
@@ -4209,8 +4230,17 @@ def resolve_pretend(
                 new_repo_flag,
             )
         return ("already_installed", best["version"])
-    if installed:
-        current = _max_version(installed)
+    # Upgrade/downgrade/new is decided against only what's installed in
+    # best's own main slot (real _get_installed_best's myinslotlist =
+    # vardb.match(pkg.slot_atom)). An installed version in a different
+    # slot never makes this a downgrade/upgrade -- it's a "new" into a
+    # fresh slot (the renderer's "[ebuild NS]", see the graph builder's
+    # provenance["new_slot"]).
+    installed_in_slot = [
+        version for version, slot, _sub_slot in installed_pairs if slot == best["slot"]
+    ]
+    if installed_in_slot:
+        current = _max_version(installed_in_slot)
         if vercmp(best["version"], current) < 0:
             return ("downgrade", current, best["version"])
         return ("upgrade", current, best["version"])
@@ -4484,6 +4514,19 @@ def resolve_pretend_graph(
     `depth == 0`, passed at the one call site below -- the same
     equivalence --with-test-deps already established between real
     "argument" and this pilot's own `depth == 0`.
+
+    New-slot installs ("[ebuild NS]", real output.py::
+    _get_installed_best's own new_slot): resolve_pretend's own "is this
+    candidate already installed" checks are slot-aware -- matching is
+    filtered to the resolved candidate's own main slot (pkg.slot_atom,
+    sub-slot ignored), so requesting a slot the package isn't installed
+    in resolves as "new" (with provenance["new_slot"] set when another
+    slot IS installed), never as a bogus upgrade/downgrade off an
+    unrelated slot's version. Residual:
+    _dependency_avoid_update_candidate's own installed matching (the
+    not-update shortcut for a dependency atom, real avoid_update) still
+    compares version-only across all slots -- a documented cut.
+
     Mirrors portage-repo/src/lib.rs's resolve_pretend_graph exactly."""
     repos = find_repos(config_root)
     top_level = set(atoms)
@@ -4844,6 +4887,16 @@ def resolve_pretend_graph(
         # Mirrors portage-repo/src/lib.rs's GraphEntry::keyword_mask.
         provenance["keyword_mask"] = _keyword_mask_marker(
             resolved, category, package, config, provenance["mask_entry"]
+        )
+        # Real output.py::_get_installed_best's own new_slot flag (the
+        # "S" bracket column, PkgAttrDisplay.new_slot): a "new" entry
+        # whose category/package is installed in some *other* slot (the
+        # in-slot new/upgrade decision already happened inside
+        # resolve_pretend, so "new" here means nothing is installed in
+        # *this* slot). Stashed on provenance like keyword_mask above.
+        # Mirrors portage-repo/src/lib.rs's GraphEntry::new_slot.
+        provenance["new_slot"] = outcome[0] == "new" and bool(
+            installed_candidates(root, category, package)
         )
         entries.append(
             (
@@ -5685,6 +5738,13 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
         fields.append(f'"changed_slot":{_json_bool(outcome[4])}')
         fields.append(f'"rebuilt_binary":{_json_bool(outcome[5])}')
         fields.append(f'"new_repo":{_json_bool(outcome[6])}')
+    # Real output.py's own "S" bracket column, exposed unconditionally
+    # (like every other --json field): true for a "new" into a slot the
+    # package isn't installed in while another slot of it is
+    # (provenance["new_slot"]). Mirrors pretend.rs's entry_to_json.
+    if tag == "new":
+        new_slot_val = provenance.get("new_slot", False) if isinstance(provenance, dict) else False
+        fields.append(f'"new_slot":{_json_bool(new_slot_val)}')
     fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
     if tag != "no_visible_candidate":
         fields.append(f'"source":{_json_string(source)}')
@@ -7346,18 +7406,25 @@ def run(args):
         km = provenance.get("keyword_mask") if isinstance(provenance, dict) else None
         mask = f" {km}" if (verbose and km) else ""
         if tag == "new":
+            # Real output.py's own "S" bracket column
+            # (PkgAttrDisplay.new_slot): a "new" into a slot the package
+            # isn't currently installed in, while another slot of it is
+            # (provenance["new_slot"]). Rendered right after the N code
+            # letter, unconditionally -- unlike mask, this column is not
+            # -v-gated in real portage either. Mirrors pretend.rs.
+            code = "NS" if (isinstance(provenance, dict) and provenance.get("new_slot")) else "N"
             if not onlydeps_suppressed:
                 if columns:
                     print(
                         _columns_line(
-                            bracket, "N", mask, indent, category, package, outcome[1], "", columnwidth
+                            bracket, code, mask, indent, category, package, outcome[1], "", columnwidth
                         )
                         + root
                         + use_suffix(use_display, installed, forced)
                     )
                 else:
                     print(
-                        f"[{bracket}  N{mask}] {indent}{category}/{package}-{outcome[1]}{root}{use_suffix(use_display, installed, forced)}"
+                        f"[{bracket}  {code}{mask}] {indent}{category}/{package}-{outcome[1]}{root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":

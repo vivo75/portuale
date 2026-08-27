@@ -468,13 +468,20 @@ fn print_entry_line(
     let mask = mask_suffix(entry, verbose);
     match &entry.outcome {
         PretendOutcome::New { version } => {
+            // Real `output.py`'s own `S` bracket column
+            // (`PkgAttrDisplay.new_slot`): a `New` into a slot the
+            // package isn't currently installed in, while another slot
+            // of it is (`GraphEntry::new_slot`). Rendered right after
+            // the `N` code letter, unconditionally -- unlike `mask`,
+            // this column is not `-v`-gated in real portage either.
+            let code = if entry.new_slot { "NS" } else { "N" };
             if !onlydeps_suppressed {
                 if columns {
                     println!(
                         "{}{root}{}",
                         columns_line(
                             bracket,
-                            "N",
+                            code,
                             &mask,
                             indent,
                             &entry.category,
@@ -487,7 +494,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  N{mask}] {indent}{}/{}-{version}{root}{}",
+                        "[{bracket}  {code}{mask}] {indent}{}/{}-{version}{root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -942,6 +949,13 @@ fn entry_to_json(
             fields.push(format!("\"new_repo\":{new_repo}"));
         }
         PretendOutcome::NoVisibleCandidate => {}
+    }
+    // Real `output.py`'s own `S` bracket column, exposed unconditionally
+    // (like every other `--json` field, see this module's own doc
+    // comment): `true` for a `New` into a slot the package isn't
+    // installed in while another slot of it is (`GraphEntry::new_slot`).
+    if let PretendOutcome::New { .. } = &entry.outcome {
+        fields.push(format!("\"new_slot\":{}", entry.new_slot));
     }
     fields.push(format!(
         "\"slot\":{}",

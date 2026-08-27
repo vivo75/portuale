@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: SLOT 1, not installed; the new-slot candidate when SLOT 0 is already installed
+EAPI=8
+KEYWORDS=amd64
+SLOT=1
+_md5_=0000000000000000000000000000000

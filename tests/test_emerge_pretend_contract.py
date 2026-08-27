@@ -825,6 +825,36 @@ CASES = [
         ["--pretend", "-v", "dev-libs/wildexpandpkg"],
         0,
     ),
+    (
+        "new-slot install: :1 requested while only :0 is installed -> [ebuild NS]",
+        ["--pretend", "dev-libs/newslotpkg:1"],
+        0,
+    ),
+    (
+        "new-slot install: bare atom (non-selective) resolves the highest version into its new slot",
+        ["--pretend", "dev-libs/newslotpkg"],
+        0,
+    ),
+    (
+        "new-slot install: -v keeps the S column ahead of the -v-only mask column",
+        ["--pretend", "-v", "dev-libs/newslotpkg:1"],
+        0,
+    ),
+    (
+        "new-slot install: --columns S column",
+        ["--pretend", "--columns", "dev-libs/newslotpkg:1"],
+        0,
+    ),
+    (
+        "new-slot install: --json new_slot field",
+        ["--pretend", "--json", "dev-libs/newslotpkg:1"],
+        0,
+    ),
+    (
+        "in-slot request (:0, the installed slot) is not a new-slot install",
+        ["--pretend", "dev-libs/newslotpkg:0"],
+        0,
+    ),
 ]
 
 
@@ -3686,6 +3716,27 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
     assert "[slot conflict]" not in result.stdout
 
 
+def test_new_slot_install_renders_the_S_bracket_column(emerge_binary, fixture_env):
+    """dev-libs/newslotpkg-1.0 (SLOT 0) is installed; -2.0 (SLOT 1) is
+    not. Requesting :1 (or the bare atom, non-selective) resolves -2.0
+    into a slot the package isn't installed in -- real
+    output.py::_get_installed_best's new_slot flag: an "S" right after
+    the "N" code letter (rendered with plain -p, not only -v), and NOT
+    an "(upgrade from 1.0)" off the unrelated slot-0 install."""
+    for atom in ("dev-libs/newslotpkg:1", "dev-libs/newslotpkg"):
+        result = _run([str(emerge_binary)], ["--pretend", atom], fixture_env)
+        assert result.returncode == 0
+        assert result.stdout.splitlines() == [
+            "[ebuild  NS] dev-libs/newslotpkg-2.0",
+        ], atom
+        assert "upgrade from" not in result.stdout, atom
+
+    # The slot that IS installed stays an in-slot outcome (no S).
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/newslotpkg:0"], fixture_env)
+    assert result.returncode == 0
+    assert "NS]" not in result.stdout
+
+
 def test_multiple_top_level_atoms_share_dedup_and_slot_conflict_machinery(
     emerge_binary, fixture_env
 ):
@@ -5549,7 +5600,7 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
     assert result.stderr == ""
     assert result.stdout == (
         '{"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new",'
-        '"version":"1.0","slot":"0","source":"ebuild",'
+        '"version":"1.0","new_slot":false,"slot":"0","source":"ebuild",'
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,'
         '"required_by":[],"builds_against_running_root":null,"blockers":[]}],'

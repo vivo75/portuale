@@ -95,7 +95,15 @@ Ranked roughly by how self-contained each is.
    `build_use_expand_display`'s `forced` param), and the `[ebuild N ~]`
    bracket-mask marker (`keyword_mask_marker` + `GraphEntry::keyword_
    mask` + `pretend.rs::mask_suffix`) all **shipped 2026-08-27**, real
-   `_create_use_string` / `gen_mask_str`.
+   `_create_use_string` / `gen_mask_str`. The `[ebuild NS]` new-slot
+   marker (`GraphEntry::new_slot`, real `_get_installed_best`) **shipped
+   2026-08-27** too — rendered unconditionally (not `-v`-gated), and it
+   carried a correctness fix: `resolve_pretend`'s "already installed"
+   checks are now filtered to the resolved candidate's own main slot, so
+   a cross-slot request resolves as `New` instead of a bogus
+   `Upgrade`/`Downgrade`. **Residual:** `dependency_avoid_update_candidate`
+   (dependency-atom `avoid_update`) still matches version-only across
+   slots.
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag

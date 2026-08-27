@@ -3968,6 +3968,7 @@ fn resolve_root_deps_build_entries(
         use_flags_display: Vec::new(),
         use_expand_display: Vec::new(),
         keyword_mask: None,
+        new_slot: false,
         required_by: vec![owner],
         source: CandidateSource::Ebuild,
         provenance: VisibilityProvenance::default(),
@@ -4393,7 +4394,31 @@ pub fn resolve_pretend(
         return Ok(PretendOutcome::NoVisibleCandidate);
     }
 
-    let installed = installed_versions(root, &atom.category, &atom.package);
+    // `installed_pairs` carries each installed version's own main slot,
+    // so "is this candidate already installed" can be answered the way
+    // real `output.py::_get_installed_best` does -- against
+    // `vardb.match(pkg.slot_atom)` (the resolved candidate's *own* main
+    // slot), not merely "this version exists in some slot". Without the
+    // slot filter, `emerge -p cat/foo:1` with only `foo:0` installed
+    // mis-classifies a new-slot install as an `Upgrade`/`Downgrade`
+    // (real portage: `[ebuild NS]`). `installed` (version-only, all
+    // slots) is still what `dependency_avoid_update_candidate` consumes
+    // -- its own `avoid_update` grounding is a separate concern and its
+    // slot-awareness stays a documented residual (see the "KNOWN,
+    // DOCUMENTED SCOPE CUTS" note below).
+    let installed_pairs = installed_candidates(root, &atom.category, &atom.package);
+    let installed: Vec<String> = installed_pairs
+        .iter()
+        .map(|(version, _slot, _sub_slot)| version.clone())
+        .collect();
+    // A matched candidate counts as already-installed only when its own
+    // main slot is installed at that version (sub-slot ignored, exactly
+    // like real `pkg.slot_atom`).
+    let candidate_is_installed = |c: &Candidate| -> bool {
+        installed_pairs
+            .iter()
+            .any(|(version, slot, _sub_slot)| version == &c.version && slot == &c.slot)
+    };
 
     // --exclude/-X: an installed version matching an exclude atom is
     // left exactly as-is, unconditionally, before --update/--newuse/
@@ -4403,7 +4428,7 @@ pub fn resolve_pretend(
         if let Some(installed_best) = matched
             .iter()
             .filter_map(|m| by_str.get(m).copied())
-            .filter(|c| installed.iter().any(|v| v == &c.version))
+            .filter(|c| candidate_is_installed(c))
             .max_by(|a, b| {
                 vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
             })
@@ -4450,7 +4475,7 @@ pub fn resolve_pretend(
             matched
                 .iter()
                 .filter_map(|m| by_str.get(m).copied())
-                .filter(|c| installed.iter().any(|v| v == &c.version))
+                .filter(|c| candidate_is_installed(c))
                 .max_by(|a, b| {
                     vercmp_ordering(&a.version, &b.version)
                         .then(a.repo_priority.cmp(&b.repo_priority))
@@ -4506,7 +4531,7 @@ pub fn resolve_pretend(
         return Ok(PretendOutcome::NoVisibleCandidate);
     };
 
-    if installed.iter().any(|v| v == &best.version) {
+    if candidate_is_installed(best) {
         let changed_flags = if newuse || changed_use {
             reinstall_flags_for_use_change(
                 root,
@@ -4576,7 +4601,21 @@ pub fn resolve_pretend(
         });
     }
 
-    match installed.iter().max_by(|a, b| vercmp_ordering(a, b)) {
+    // Upgrade/Downgrade/New is decided against only what's installed in
+    // `best`'s *own* main slot (real `_get_installed_best`'s `myinslotlist
+    // = vardb.match(pkg.slot_atom)`). An installed version in a different
+    // slot never makes this a downgrade/upgrade -- it's a `New` into a
+    // fresh slot (the renderer's `[ebuild NS]`, see `GraphEntry::new_slot`).
+    let installed_in_slot: Vec<&String> = installed_pairs
+        .iter()
+        .filter(|(_version, slot, _sub_slot)| slot == &best.slot)
+        .map(|(version, _slot, _sub_slot)| version)
+        .collect();
+    match installed_in_slot
+        .iter()
+        .copied()
+        .max_by(|a, b| vercmp_ordering(a, b))
+    {
         Some(current) => {
             if vercmp_ordering(&best.version, current) == Ordering::Less {
                 Ok(PretendOutcome::Downgrade {
@@ -4660,6 +4699,18 @@ pub struct GraphEntry {
     /// ("missing"). `None` for an ordinary, globally-keyword-visible,
     /// unmasked candidate. See `keyword_mask_marker`.
     pub keyword_mask: Option<char>,
+    /// Real `output.py::_get_installed_best`'s own `new_slot` flag -- the
+    /// `S` bracket column (`PkgAttrDisplay.new_slot`, rendered
+    /// unconditionally, not just under `-v` like `keyword_mask`): `true`
+    /// for a `New` entry whose `category/package` *is* installed, just in
+    /// some other slot (real `not myinslotlist` while `vardb.match(pkg.cp)`
+    /// is non-empty). `resolve_pretend` already makes the New/Upgrade/
+    /// Downgrade/Reinstall decision slot-aware (installed matching is
+    /// filtered to the resolved candidate's own main slot), so a `New`
+    /// outcome here already means nothing is installed *in this slot* --
+    /// this field only additionally records whether another slot is.
+    /// Always `false` for every non-`New` outcome.
+    pub new_slot: bool,
     /// Every `(category, package)` that reached this entry via its own
     /// DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND (sorted, deduplicated) --
     /// empty for a directly-requested top-level atom with no other
@@ -5257,6 +5308,19 @@ fn enqueue_flat_deps(
 ///     pre-existing `depth == 0`, passed at the one call site below --
 ///     the same equivalence `--with-test-deps` already established
 ///     between real "argument" and this pilot's own `depth == 0`.
+///   - New-slot installs (`[ebuild NS]`, real `output.py::
+///     _get_installed_best`'s own `new_slot`): `resolve_pretend`'s own
+///     "is this candidate already installed" checks are slot-aware --
+///     matching is filtered to the resolved candidate's *own* main slot
+///     (`pkg.slot_atom`, sub-slot ignored), so requesting a slot the
+///     package isn't installed in resolves as `New` (with `GraphEntry::
+///     new_slot` set when another slot *is* installed), never as a bogus
+///     `Upgrade`/`Downgrade` off an unrelated slot's version. Residual:
+///     `dependency_avoid_update_candidate`'s own installed matching (the
+///     `!update` shortcut for a *dependency* atom, real `avoid_update`)
+///     still compares version-only across all slots -- a documented cut,
+///     its `avoid_update` grounding being a separate concern from the
+///     top-level New/Upgrade decision this bullet covers.
 ///   - `--autounmask` (`autounmask_suggest_keywords`): a deliberately
 ///     narrow v1 of a considerably bigger real feature (real portage's
 ///     own version tracks *why* each candidate was rejected via
@@ -5683,6 +5747,7 @@ pub fn resolve_pretend_graph(
                 use_flags_display: Vec::new(),
                 use_expand_display: Vec::new(),
                 keyword_mask: None,
+                new_slot: false,
                 required_by: Vec::new(),
                 source: CandidateSource::Ebuild,
                 provenance: VisibilityProvenance::default(),
@@ -5782,6 +5847,12 @@ pub fn resolve_pretend_graph(
         let provenance = visibility_provenance(resolved, &key.0, &key.1, config);
         let keyword_mask =
             keyword_mask_marker(resolved, &key.0, &key.1, config, &provenance.mask_entry);
+        // Real `_get_installed_best`'s `new_slot`: a `New` entry whose
+        // `category/package` is installed in some *other* slot (the
+        // in-slot New/Upgrade decision already happened inside
+        // `resolve_pretend`, so `New` here means nothing in *this* slot).
+        let new_slot = matches!(outcome, PretendOutcome::New { .. })
+            && !installed_candidates(root, &key.0, &key.1).is_empty();
         entries.push(GraphEntry {
             category: key.0.clone(),
             package: key.1.clone(),
@@ -5791,6 +5862,7 @@ pub fn resolve_pretend_graph(
             use_flags_display: Vec::new(),
             use_expand_display: Vec::new(),
             keyword_mask,
+            new_slot,
             required_by: Vec::new(),
             source: candidate_source,
             provenance,
@@ -8150,6 +8222,46 @@ mod tests {
             result.entries[1..].iter().map(|e| e.slot.clone()).collect();
         assert_eq!(slots, vec![Some("0".to_string()), Some("1".to_string())]);
         assert!(result.slot_conflicts.is_empty());
+    }
+
+    #[test]
+    fn fixture_new_slot_install_is_new_not_an_upgrade() {
+        // dev-libs/newslotpkg-1.0 (SLOT 0) is installed; -2.0 (SLOT 1) is
+        // not. Requesting `:1` matches only -2.0, whose own slot has
+        // nothing installed -- real portage's `_get_installed_best`
+        // (`not myinslotlist` while `vardb.match(cp)` is non-empty) makes
+        // this a `New` with `new_slot=True` (`[ebuild NS]`), NOT an
+        // `Upgrade` from 1.0. Before installed matching was slot-aware
+        // this pilot mis-reported it as `Upgrade { from: "1.0", to:
+        // "2.0" }` (both this crate and the Python oracle agreed, and
+        // both were wrong).
+        let entries = graph_entries_real("dev-libs/newslotpkg:1");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].outcome,
+            PretendOutcome::New {
+                version: "2.0".to_string()
+            }
+        );
+        assert!(entries[0].new_slot);
+        assert_eq!(entries[0].slot.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn fixture_in_slot_request_is_not_flagged_new_slot() {
+        // Requesting the slot that IS installed (`:0`, holding
+        // newslotpkg-1.0) stays an in-slot outcome -- selective (this
+        // helper's mode) keeps the installed version untouched, and
+        // `new_slot` is never set for anything but a `New`.
+        let entries = graph_entries_real("dev-libs/newslotpkg:0");
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].new_slot);
+        assert_eq!(
+            entries[0].outcome,
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
     }
 
     #[test]
@@ -12492,6 +12604,7 @@ mod tests {
             use_flags_display: Vec::new(),
             use_expand_display: Vec::new(),
             keyword_mask: None,
+            new_slot: false,
             required_by: Vec::new(),
             source: CandidateSource::Ebuild,
             provenance: VisibilityProvenance::default(),
