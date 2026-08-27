@@ -693,6 +693,31 @@ CASES = [
         0,
     ),
     (
+        "--changed-deps: an atom moved between two dep keys is a change (per-key comparison)",
+        ["--pretend", "--changed-deps", "dev-libs/movedkeydepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps: a built := dep's resolved slot is not a change (strip_slots)",
+        ["--pretend", "--changed-deps", "dev-libs/slotopdepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps: a || ( a b ) -> || ( b a ) alternative reorder is a change",
+        ["--pretend", "--changed-deps", "dev-libs/anyofreorderdepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps: a plain 'a b' -> 'b a' reorder is a change (faithful list ==)",
+        ["--pretend", "--changed-deps", "dev-libs/orderchangeddepspkg"],
+        0,
+    ),
+    (
+        "--changed-deps: a redundant-bracket difference is not a change",
+        ["--pretend", "--changed-deps", "dev-libs/redundantbracketdepspkg"],
+        0,
+    ),
+    (
         "--changed-deps: --json includes the changed_deps field",
         ["--pretend", "--changed-deps", "--json", "dev-libs/changeddepspkg"],
         0,
@@ -4612,6 +4637,94 @@ def test_changed_deps_ignores_a_libc_only_dependency_change(emerge_binary, fixtu
     assert result.returncode == 0
     assert (
         result.stdout.strip() == "dev-libs/libcnoisepkg-1.0 is already installed; nothing to do"
+    )
+
+
+def test_changed_deps_detects_an_atom_moved_between_two_dep_keys(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """dev-libs/movedkeydepspkg's vdb recorded RDEPEND="dev-libs/samepkg";
+    its current ebuild has that exact atom in PDEPEND instead, nothing
+    else on either side. The net atom set is identical, so the pre-slice
+    "merge every dep key into one string, then flatten and compare"
+    approach saw no change -- real _changed_deps (depgraph.py:3168)
+    compares built_deps to unbuilt_deps element-wise, one struct per dep
+    key, which this pilot now mirrors: the move registers as changed."""
+    args = ["--pretend", "--changed-deps", "dev-libs/movedkeydepspkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild  r] dev-libs/movedkeydepspkg-1.0 (reinstall for changed dependencies)",
+    ]
+
+
+def test_changed_deps_ignores_a_built_slot_operators_resolved_slot(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """dev-libs/slotopdepspkg's current ebuild has
+    RDEPEND="dev-libs/slotoptarget:="; its vdb recorded the built form
+    "dev-libs/slotoptarget:2=" (the concrete slot portage records when a
+    := dep is merged). Real strip_slots (lib/portage/dep/_slot_operator.py)
+    normalizes the built :2= back to := before comparing, so this is NOT
+    a changed dependency -- without that normalization every := dep would
+    spuriously trigger a --changed-deps reinstall."""
+    args = ["--pretend", "--changed-deps", "dev-libs/slotopdepspkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert (
+        rust.stdout.strip()
+        == "dev-libs/slotopdepspkg-1.0 is already installed; nothing to do"
+    )
+
+
+def test_changed_deps_structured_comparison(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real _changed_deps (depgraph.py:3168) compares structured
+    use_reduce(token_class=Atom) output as Python lists -- order-sensitive
+    everywhere, redundant brackets collapsed. The pilot's
+    portage_use_reduce::use_reduce_structured ports real use_reduce's own
+    flat=False bracket-optimization pass to match:
+
+      - anyofreorderdepspkg: vdb `|| ( reorderdepa reorderdepb )`, ebuild
+        swaps the alternatives -> changed
+      - orderchangeddepspkg: vdb `reorderdepa reorderdepb`, ebuild
+        `reorderdepb reorderdepa` -> changed (faithful to list `!=`,
+        which is order-sensitive in AND context too)
+      - redundantbracketdepspkg: vdb `reorderdepa reorderdepb`, ebuild
+        `( reorderdepa reorderdepb )` -> NOT changed
+    """
+    changed = ["anyofreorderdepspkg", "orderchangeddepspkg"]
+    for pkg in changed:
+        args = ["--pretend", "--changed-deps", f"dev-libs/{pkg}"]
+        rust = _run([str(emerge_binary)], args, fixture_env)
+        python = _run(emerge_pretend_python, args, fixture_env)
+        assert rust.returncode == 0
+        assert python.returncode == 0
+        assert rust.stdout == python.stdout, pkg
+        assert rust.stderr == python.stderr, pkg
+        assert rust.stdout.splitlines() == [
+            f"[ebuild  r] dev-libs/{pkg}-1.0 (reinstall for changed dependencies)",
+        ], pkg
+
+    args = ["--pretend", "--changed-deps", "dev-libs/redundantbracketdepspkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert (
+        rust.stdout.strip()
+        == "dev-libs/redundantbracketdepspkg-1.0 is already installed; nothing to do"
     )
 
 

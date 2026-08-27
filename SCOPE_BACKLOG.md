@@ -28,7 +28,7 @@ to **either** side yet — deliberate, documented scope cuts or explicit
 | # | Original item | Status | Landed by |
 |---|---|---|---|
 | 1 | Sub-slot modeling (`SLOT="0/5"`) | **shipped** | `9c926033f` (`Candidate::sub_slot`, real `_match_slot` sub-slot check; fixed a silent dependency-match bug) |
-| 2 | Structured (non-flat) `use_reduce` | **shipped for the depgraph** | `59237ccbb` (`||` groups: resolve only the first satisfiable alternative) + `3ca7a66b4` (`subset=` for `--with-test-deps`). `DepNode`/`build_dep_tree`/`use_reduce_flat_disjunctive` wired into both real dep-walk sites (`lib.rs:5266`/`5569`). *Residual:* `--changed-deps` still compares flat atom sets, not structured trees — see Part 2. `flat=False`/`opconvert` genuinely never needed. |
+| 2 | Structured (non-flat) `use_reduce` | **shipped for the depgraph** | `59237ccbb` (`||` groups: resolve only the first satisfiable alternative) + `3ca7a66b4` (`subset=` for `--with-test-deps`). `DepNode`/`build_dep_tree`/`use_reduce_flat_disjunctive` wired into both real dep-walk sites (`lib.rs:5266`/`5569`); real `flat=False`/`opconvert=False` (`use_reduce_structured`) shipped 2026-08-27 for `--changed-deps` (see #4). `opconvert` (operator-into-arg-list shape) genuinely never needed. |
 | 3 | `repos.conf` `masters` (repo inheritance) | **shipped** | `04601e1a9` (implicit main-repo default) + explicit `masters =` chain resolution (`RepoConfig::masters`, `find_repos`) + `f7057b159`/`5a7bbeff7` (eclass `inherit()` across the masters chain). *Residual:* `layout.conf`'s own `masters =` key and `profile-formats` gating — see Part 2. |
 | 4 | Per-level/per-source config precedence (real `USE_ORDER`) | **partly shipped** | `6fa34677f`/`992a82117`/`5f7c6f059` (real `USE_ORDER` precedence for global force/mask, implicit IUSE, `+/-` defaults). `package.mask`/`.unmask`/`.accept_keywords` now stack per-source (`stack_mask_lines`, `[repo, profile-chain, user]`). *Residual:* `package.use`'s full `configdict["repo"]`/`["defaults"]` per-level interleaving with each level's `make.defaults`, and the `env`/`pkginternal`/`features`/`env.d` `USE_ORDER` layers — see Part 2. |
 | 5 | `--changed-slot` | **shipped** | `97a27a317` (`slot_changed`, real `_changed_slot`, as an independent `Reinstall` trigger) |
@@ -96,13 +96,18 @@ Ranked roughly by how self-contained each is.
    stripped. Not guarded on `k` being a real `USE_EXPAND` var name (a
    documented simplification). New `dev-libs/wildexpand*` fixtures.
 
-4. **`--changed-deps` structured (non-flat) tree comparison.** Currently a
-   deliberate flat-atom-set difference (`deps_changed`, `lib.rs:2518-2543`)
-   — a `||`-group reordering that real portage's structured
-   `_changed_deps` would flag as changed is not caught here. A documented,
-   narrow approximation; closing it means giving `deps_changed` the same
-   `DepNode` tree machinery `use_reduce_flat_subset`/`_disjunctive`
-   already built.
+4. ~~**`--changed-deps` structured (non-flat) `||`-tree comparison.**~~
+   **Shipped 2026-08-27** in two slices: per-key comparison + `strip_
+   slots` (`:=` normalization) first, then the full structured
+   comparison — new `portage_use_reduce::use_reduce_structured` ports
+   real `use_reduce`'s own `flat=False`/`opconvert=False` bracket-
+   optimization pass (verified byte-for-byte against real
+   `portage.dep.use_reduce` over ~4000 randomized dep strings);
+   `deps_changed` compares the canonical per-key token streams, and the
+   Python mirror calls real `use_reduce` + `strip_slots` +
+   `strip_libc_deps` directly. Faithful to real portage's Python-list
+   `!=` (order-significant everywhere, redundant brackets collapsed),
+   confirmed with the user. No residual.
 
 ### B. `--root-deps` recursion follow-up
 

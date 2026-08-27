@@ -2683,23 +2683,33 @@ fn libc_provider_cps(root: &Path) -> HashSet<(String, String)> {
     result
 }
 
-/// Removes any atom in `atoms` whose own `(category, package)` is in
-/// `libc_cps` -- see `libc_provider_cps`'s own doc comment.
-fn strip_libc_atoms(
-    atoms: HashSet<String>,
-    libc_cps: &HashSet<(String, String)>,
-) -> HashSet<String> {
-    if libc_cps.is_empty() {
-        return atoms;
+/// Real `strip_slots` (`lib/portage/dep/_slot_operator.py:11`), for one
+/// atom string: rewrites a "built" slot-operator atom (`cat/pkg:2=` -- the
+/// concrete slot portage records in the vdb when a `cat/pkg:=` dependency
+/// is merged) back to `cat/pkg:=`, so `deps_changed`'s own vdb-vs-ebuild
+/// comparison doesn't flag every `:=` dependency as changed purely because
+/// the vdb side carries the resolved slot and the current ebuild doesn't.
+/// Only touches atoms whose `slot_operator` is `=` *and* that carry an
+/// explicit slot -- a plain `:=` (no slot), a `:2` / `:2/3` (no operator),
+/// or a `:2*` is left untouched, matching real `strip_slots`'s own
+/// `x.slot_operator == "=" and x.slot is not None` guard. The slot
+/// expression is unique in an atom string (`::repo` uses `::`, use-deps
+/// live inside `[...]`), so a single leftmost replacement is safe.
+fn strip_slot_operator_one(tok: &str) -> String {
+    let Some(atom) = portage_dep::parse_atom(tok) else {
+        return tok.to_string();
+    };
+    if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
+        return tok.to_string();
     }
-    atoms
-        .into_iter()
-        .filter(|a| {
-            portage_dep::parse_atom(a)
-                .map(|atom| !libc_cps.contains(&(atom.category, atom.package)))
-                .unwrap_or(true)
-        })
-        .collect()
+    let Some(slot) = atom.slot.as_deref() else {
+        return tok.to_string();
+    };
+    let slot_text = match atom.sub_slot.as_deref() {
+        Some(sub) => format!(":{slot}/{sub}="),
+        None => format!(":{slot}="),
+    };
+    tok.replacen(&slot_text, ":=", 1)
 }
 
 /// `--changed-deps`: whether `version`'s own vdb-recorded dependency
@@ -2715,32 +2725,41 @@ fn strip_libc_atoms(
 /// own `if self._dynamic_config.myparams.get("bdeps") in ("y", "auto"):
 /// depvars = Package._dep_keys ... else: depvars = Package._runtime_keys`).
 ///
-/// KNOWN, DOCUMENTED SCOPE CUT: real `_changed_deps` compares real
-/// *structured* `use_reduce` output (`||`-group boundaries preserved,
-/// via `token_class=Atom`) key by key, so a dependency moved between
-/// two of the five keys with the same net atom set, or a pure
-/// `||`-group restructuring with the same underlying atoms, would count
-/// as "changed" there but not here. This pilot has no structured
-/// (non-flat) `use_reduce` at all -- `portage_use_reduce::use_reduce_flat`
-/// is a deliberate, already-established simplification used by *every*
-/// dependency-recursion path in this pilot (see this module's own doc
-/// comment on `resolve_pretend_graph`), so this reuses that same flat
-/// comparison rather than building bespoke structured-tree machinery
-/// just for this one feature -- consistent with, not a new exception to,
-/// the rest of this pilot's own dependency handling.
+/// Real `_changed_deps` compares its per-key `use_reduce(token_class=
+/// Atom)` output key by key (`built_deps != unbuilt_deps`, each a list of
+/// one struct per dep key), after `strip_slots` and `strip_libc_deps`.
+/// This function mirrors that key-by-key shape: `DEPEND` moving to
+/// `RDEPEND` with the same overall atom set now registers as changed
+/// (the pre-slice merged-into-one-string comparison missed it), and
+/// `strip_slot_operator_slots` (real `strip_slots`) keeps a built
+/// `cat/pkg:2=` vdb dep from spuriously differing from the ebuild's own
+/// `cat/pkg:=`.
 ///
-/// A vdb-side dependency string that fails to parse counts as
-/// "changed" unconditionally, matching real portage's own `except
-/// InvalidDependString: changed = True`; a repo-side one that fails to
-/// parse instead reports "unchanged" (`false`), the same tolerant
-/// "can't tell, don't crash" fallback `enqueue_dependencies` already
-/// uses for its own unreadable-metadata cases, since real portage has
-/// no equivalent fallback to mirror there (the repo side is assumed
-/// always well-formed).
+/// The comparison is now *structured*, matching real `_changed_deps`
+/// (`built_deps != unbuilt_deps`, each a list of one
+/// `use_reduce(token_class=Atom)` -- i.e. `flat=False` -- struct per dep
+/// key): `portage_use_reduce::use_reduce_structured` ports real
+/// `use_reduce`'s own `flat=False` bracket-optimization pass, so a
+/// `||`-group reorder (`|| ( a b )` -> `|| ( b a )`) *and* -- since real
+/// portage compares Python lists, which are order-sensitive everywhere --
+/// a plain `RDEPEND="a b"` -> `"b a"` reorder both register as changed,
+/// while redundant-bracket differences (`a b` vs `( a b )`) do not. Each
+/// serialized atom token then gets real `Atom.evaluate_conditionals`
+/// (`evaluate_atom_conditionals`, resolving 2-/4-style USE-deps against
+/// the installed package's own `USE`) and real `strip_slots`
+/// (`strip_slot_operator_one`); real `strip_libc_deps` is applied
+/// *top-level only* (real `strip_libc_deps` iterates just the outer
+/// per-key list, never recursing into `||`/nested groups) and by
+/// `(category, package)` identity (`libc_provider_cps`).
 ///
-/// Both atom sets are filtered through `libc_provider_cps` first (see
-/// its own doc comment) -- real `strip_libc_deps`, closing the gap this
-/// function's own doc comment used to name explicitly as unaddressed.
+/// A vdb-side dependency string that fails to parse -- including an
+/// individual atom token real `use_reduce(token_class=Atom)` would
+/// reject -- counts as "changed" unconditionally, matching real portage's
+/// own `except InvalidDependString: changed = True`; a repo-side one that
+/// fails to parse instead reports "unchanged" (`false`), the same
+/// tolerant "can't tell, don't crash" fallback `enqueue_dependencies`
+/// already uses, since real portage has no equivalent fallback to mirror
+/// there (the repo side is assumed always well-formed).
 fn deps_changed(
     root: &Path,
     repos: &[RepoConfig],
@@ -2757,15 +2776,6 @@ fn deps_changed(
 
     let installed_use = read_vdb_flag_set(root, category, package, version, "USE");
 
-    let mut vdb_depstr = String::new();
-    for key in dep_keys {
-        let s = read_vdb_string(root, category, package, version, key);
-        if !s.is_empty() {
-            vdb_depstr.push_str(&s);
-            vdb_depstr.push(' ');
-        }
-    }
-
     let Ok(repo_candidates) = list_candidates(repos, category, package) else {
         return false;
     };
@@ -2780,23 +2790,80 @@ fn deps_changed(
     let Ok(metadata) = read_md5_cache(&resolved.repo_location, category, &pf) else {
         return false;
     };
-    let mut repo_depstr = String::new();
+
+    let libc_cps = libc_provider_cps(root);
+
+    // Real `use_reduce(token_class=Atom)` -> `strip_slots` ->
+    // `strip_libc_deps` for one dep key, reduced to a canonical token
+    // stream (`(`/`)` around every group, `||` markers kept). `None` if
+    // the string -- or any atom in it -- doesn't parse.
+    let canonical_key = |depstr: &str| -> Option<Vec<String>> {
+        let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+        let reduced = portage_use_reduce::use_reduce_structured(
+            &tokens,
+            &installed_use,
+            portage_use_reduce::MatchMode::Normal,
+        )
+        .ok()?;
+        // Per-atom post-pass (real `token_class=Atom`'s own per-token
+        // `evaluate_conditionals`, then `strip_slots`): structural
+        // markers pass through untouched.
+        let mut out: Vec<String> = Vec::with_capacity(reduced.len());
+        let mut depth: usize = 0;
+        for tok in reduced {
+            match tok.as_str() {
+                "(" => {
+                    depth += 1;
+                    out.push(tok);
+                }
+                ")" => {
+                    depth = depth.saturating_sub(1);
+                    out.push(tok);
+                }
+                "||" => out.push(tok),
+                _ => {
+                    let evaluated = portage_dep::evaluate_atom_conditionals(&tok, &installed_use)?;
+                    let stripped = strip_slot_operator_one(&evaluated);
+                    // `strip_libc_deps`: top-level list only, by cp.
+                    if depth == 0 && !libc_cps.is_empty() {
+                        if let Some(atom) = portage_dep::parse_atom(&stripped) {
+                            if libc_cps.contains(&(atom.category, atom.package)) {
+                                continue;
+                            }
+                        }
+                    }
+                    out.push(stripped);
+                }
+            }
+        }
+        Some(out)
+    };
+
+    // vdb side first (real `_changed_deps`'s own `built_deps` loop, whose
+    // `except InvalidDependString: changed = True` makes an unparsable
+    // vdb dependency string an unconditional "changed").
+    let mut vdb_by_key: Vec<Vec<String>> = Vec::with_capacity(dep_keys.len());
     for key in dep_keys {
-        if let Some(d) = metadata.get(*key) {
-            repo_depstr.push_str(d);
-            repo_depstr.push(' ');
+        match canonical_key(&read_vdb_string(root, category, package, version, key)) {
+            Some(canon) => vdb_by_key.push(canon),
+            None => return true,
         }
     }
 
-    let Some(repo_atoms) = flat_dep_atoms(&repo_depstr, &installed_use) else {
-        return false;
-    };
-    let libc_cps = libc_provider_cps(root);
-    let repo_atoms = strip_libc_atoms(repo_atoms, &libc_cps);
-    match flat_dep_atoms(&vdb_depstr, &installed_use) {
-        Some(vdb_atoms) => strip_libc_atoms(vdb_atoms, &libc_cps) != repo_atoms,
-        None => true,
+    // repo side (real `unbuilt_deps` loop) -- the repo's own current
+    // ebuild metadata is assumed well-formed, so an unparsable one here
+    // stays the tolerant "can't tell, don't crash" `false`.
+    let mut repo_by_key: Vec<Vec<String>> = Vec::with_capacity(dep_keys.len());
+    for key in dep_keys {
+        match canonical_key(metadata.get(*key).map(String::as_str).unwrap_or_default()) {
+            Some(canon) => repo_by_key.push(canon),
+            None => return false,
+        }
     }
+
+    // Per-key comparison (real `_changed_deps` compares `built_deps` to
+    // `unbuilt_deps` element-wise, each a per-key struct).
+    vdb_by_key != repo_by_key
 }
 
 /// Splits a raw `SLOT` string into `(slot, sub_slot)` -- real portage:
@@ -6917,6 +6984,94 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+            }
+        );
+    }
+
+    #[test]
+    fn changed_deps_detects_an_atom_moved_between_two_dep_keys() {
+        // dev-libs/movedkeydepspkg's vdb recorded RDEPEND="dev-libs/samepkg";
+        // its current ebuild has that exact atom in PDEPEND instead, with
+        // nothing else on either side. The net atom set is identical, so
+        // the pre-slice merged-into-one-string comparison saw no change;
+        // the per-key comparison catches it (real `_changed_deps` compares
+        // `built_deps` to `unbuilt_deps` element-wise).
+        assert_eq!(
+            resolve_real_changed_deps("dev-libs", "movedkeydepspkg", false),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: true,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+            }
+        );
+    }
+
+    #[test]
+    fn changed_deps_ignores_a_built_slot_operator_deps_resolved_slot() {
+        // dev-libs/slotopdepspkg's current ebuild has
+        // RDEPEND="dev-libs/slotoptarget:="; its vdb recorded the built
+        // form "dev-libs/slotoptarget:2=" (the slot it was merged
+        // against). Real `strip_slots` normalizes the built `:2=` back to
+        // `:=` before comparing, so this is NOT a changed dependency --
+        // without that normalization every `:=` dep would spuriously
+        // trigger a --changed-deps reinstall.
+        assert_eq!(
+            resolve_real_changed_deps("dev-libs", "slotopdepspkg", true),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn changed_deps_detects_an_any_of_group_reorder() {
+        // dev-libs/anyofreorderdepspkg's vdb recorded
+        // RDEPEND="|| ( dev-libs/reorderdepa dev-libs/reorderdepb )";
+        // its current ebuild swaps the two alternatives. Real
+        // `_changed_deps` compares structured `use_reduce(token_class=
+        // Atom)` output, so the `||`-alternative order is significant --
+        // the pre-slice flat set comparison missed it.
+        assert_eq!(
+            resolve_real_changed_deps("dev-libs", "anyofreorderdepspkg", false),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: true,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+            }
+        );
+    }
+
+    #[test]
+    fn changed_deps_detects_a_plain_atom_reorder_but_not_a_redundant_bracket() {
+        // Faithful to real portage's own Python-list `!=`: order is
+        // significant even in AND context, so dev-libs/orderchangeddepspkg
+        // (vdb `reorderdepa reorderdepb`, ebuild `reorderdepb reorderdepa`)
+        // is a change...
+        assert_eq!(
+            resolve_real_changed_deps("dev-libs", "orderchangeddepspkg", false),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: Vec::new(),
+                deps_changed: true,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+            }
+        );
+        // ...but a redundant-bracket difference is not (real `use_reduce`
+        // collapses `( a b )` to `a b`): dev-libs/redundantbracketdepspkg
+        // has vdb `reorderdepa reorderdepb` and ebuild
+        // `( dev-libs/reorderdepa dev-libs/reorderdepb )`.
+        assert_eq!(
+            resolve_real_changed_deps("dev-libs", "redundantbracketdepspkg", false),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
             }
         );
     }

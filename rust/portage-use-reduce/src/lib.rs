@@ -8,9 +8,8 @@
 // error behavior included. What's out of scope is a set of *optional
 // parameters* the harness simply never exercises: `masklist`, `excludeall`
 // (rare flag-override sets), `is_src_uri`/the "->" SRC_URI arrow token
-// (fetch-restriction syntax), `opconvert` and non-flat structured output
-// (`flat=False`'s nested-list bracket-optimization logic is considerably
-// more involved and not needed for a flat token list), and
+// (fetch-restriction syntax), `opconvert` (the operator-into-argument-list
+// shape, which nothing in this pilot needs), and
 // `token_class`/`is_valid_flag` (tokens stay opaque strings here, matching
 // how config.py itself calls use_reduce for RESTRICT/PROPERTIES/IUSE-like
 // values -- see the grep in PORTING/README.md).
@@ -28,6 +27,15 @@
 // fiction): lib/portage/package/ebuild/config.py, _emerge/resolver/, and
 // _emirrordist all call use_reduce(..., flat=True) for exactly this "give
 // me a flat token list" need.
+//
+// `use_reduce_structured` (the `--changed-deps` structured-comparison
+// follow-up) ports real `use_reduce`'s own `flat=False`/`opconvert=False`
+// mode -- the full nested stack reducer with every redundant-bracket
+// optimization (`is_single`/`special_append`/`ends_in_any_of_dep`/
+// `last_any_of_operator_level`), verified byte-for-byte against real
+// `portage.dep.use_reduce` over thousands of randomized dep strings. It
+// stays atom-agnostic (no `token_class=Atom`): the caller re-parses the
+// serialized atom tokens for its own per-atom needs.
 //
 // `use_reduce_flat_disjunctive` (the real "||"-group resolution follow-up)
 // reuses the exact same DepNode/build_dep_tree/serialize_dep_tree
@@ -360,6 +368,191 @@ fn serialize_dep_tree(nodes: &[DepNode], out: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// The placeholder atom real `use_reduce` (EAPI 7+, `empty_groups_always_
+/// true` false, which is also the `eapi=None` default) substitutes for a
+/// `|| ( )` group that reduced to nothing -- kept verbatim so a
+/// structured comparison against the real function agrees.
+const EMPTY_ANY_OF: &str = "__const__/empty-any-of";
+
+fn ends_in_any_of_dep(stack: &[Vec<DepNode>], k: isize) -> bool {
+    if k < 0 {
+        return false;
+    }
+    matches!(
+        stack.get(k as usize).and_then(|l| l.last()),
+        Some(DepNode::Str(s)) if s == "||"
+    )
+}
+
+/// Real `use_reduce`'s own `last_any_of_operator_level`: the level of the
+/// last `||` operator still in effect for the current level, or `-1` if a
+/// non-operator token breaks the chain first.
+fn last_any_of_operator_level(stack: &[Vec<DepNode>], mut k: isize) -> isize {
+    while k >= 0 {
+        if let Some(DepNode::Str(s)) = stack[k as usize].last() {
+            if s == "||" {
+                return k;
+            }
+            if !s.ends_with('?') {
+                return -1;
+            }
+        }
+        k -= 1;
+    }
+    -1
+}
+
+/// Real `use_reduce`'s own `special_append` (non-`opconvert` path): "use
+/// extend instead of append if possible -- this kills all redundant
+/// brackets."
+fn special_append(stack: &mut [Vec<DepNode>], level: usize, l: Vec<DepNode>, is_single: bool) {
+    if !is_single {
+        stack[level].push(DepNode::Group(l));
+        return;
+    }
+    let l0_is_or = matches!(l.first(), Some(DepNode::Str(s)) if s == "||");
+    if l0_is_or && ends_in_any_of_dep(stack, level as isize - 1) {
+        // `l == ["||", Group]` -> splice the group's own contents.
+        if let Some(DepNode::Group(inner)) = l.into_iter().nth(1) {
+            stack[level].extend(inner);
+        }
+    } else if l.len() == 1 && matches!(l[0], DepNode::Group(_)) {
+        let last = last_any_of_operator_level(stack, level as isize - 1);
+        let DepNode::Group(inner) = l.into_iter().next().unwrap() else {
+            unreachable!()
+        };
+        if last == -1 {
+            stack[level].extend(inner);
+        } else {
+            stack[level].push(DepNode::Group(inner));
+        }
+    } else {
+        stack[level].extend(l);
+    }
+}
+
+/// Real `portage.dep.use_reduce`'s own `flat=False`, `opconvert=False`
+/// mode (`_use_reduce_cached`, `lib/portage/dep/__init__.py`): the nested
+/// stack reducer with every redundant-bracket optimization
+/// (`is_single`/`special_append`/`ends_in_any_of_dep`/
+/// `last_any_of_operator_level`) ported as-is, so two dependency strings
+/// that real `use_reduce` would collapse to the same structure collapse
+/// to the same structure here too. Conditionals are evaluated against
+/// `uselist`/`mode` exactly like the flat path; an inactive `flag? ( )`
+/// group is dropped, an emptied `|| ( )` becomes the real
+/// `__const__/empty-any-of` placeholder atom. Stays token/atom-agnostic
+/// (no `token_class=Atom` conversion, no `evaluate_conditionals` on the
+/// atom's own USE-deps -- the caller does both as a per-atom post-pass,
+/// keeping this crate's established "tokens are opaque strings"
+/// architecture). Returns the reduced tree re-serialized to a flat token
+/// stream (`(`/`)` around every `Group`), the same shape
+/// `serialize_dep_tree` already produces for the subset/disjunctive
+/// paths.
+pub fn use_reduce_structured(
+    tokens: &[String],
+    uselist: &HashSet<String>,
+    mode: MatchMode,
+) -> Result<Vec<String>, String> {
+    let mut stack: Vec<Vec<DepNode>> = vec![Vec::new()];
+    let mut need_bracket = false;
+
+    for (pos, token) in tokens.iter().enumerate() {
+        match token.as_str() {
+            "(" => {
+                if tokens.get(pos + 1).map(String::as_str) == Some(")") {
+                    return Err(format!(
+                        "expected: dependency string, got: ')', token {}",
+                        pos + 1
+                    ));
+                }
+                need_bracket = false;
+                stack.push(Vec::new());
+            }
+            ")" => {
+                if need_bracket {
+                    return Err(format!("expected: '(', got: ')', token {}", pos + 1));
+                }
+                if stack.len() <= 1 {
+                    return Err(format!("no matching '(' for ')', token {}", pos + 1));
+                }
+                let mut l = stack.pop().unwrap();
+                let level = stack.len() - 1;
+
+                let is_single =
+                    l.len() == 1 || (l.len() == 2 && matches!(&l[0], DepNode::Str(s) if s == "||"));
+                let mut ignore = false;
+
+                if let Some(DepNode::Str(last)) = stack[level].last() {
+                    let last = last.clone();
+                    if last == "||" && l.is_empty() {
+                        l.push(DepNode::Str(EMPTY_ANY_OF.to_string()));
+                        stack[level].pop();
+                    } else if last.ends_with('?') {
+                        if !is_active(&last, uselist, mode)? {
+                            ignore = true;
+                        }
+                        stack[level].pop();
+                    }
+                }
+
+                if !l.is_empty() && !ignore {
+                    let ends_level = ends_in_any_of_dep(&stack, level as isize);
+                    let ends_above = ends_in_any_of_dep(&stack, level as isize - 1);
+                    if !ends_above && !ends_level {
+                        stack[level].extend(l);
+                    } else if stack[level].is_empty() {
+                        special_append(&mut stack, level, l, is_single);
+                    } else if is_single && ends_level {
+                        stack[level].pop();
+                        special_append(&mut stack, level, l, is_single);
+                    } else if ends_level && ends_above {
+                        stack[level].pop();
+                        stack[level].extend(l);
+                    } else {
+                        special_append(&mut stack, level, l, is_single);
+                    }
+                }
+            }
+            "||" => {
+                if need_bracket {
+                    return Err(format!("expected: '(', got: '||', token {}", pos + 1));
+                }
+                need_bracket = true;
+                stack
+                    .last_mut()
+                    .unwrap()
+                    .push(DepNode::Str("||".to_string()));
+            }
+            "->" => {
+                return Err(format!(
+                    "SRC_URI arrow are only allowed in SRC_URI: token {}",
+                    pos + 1
+                ));
+            }
+            _ => {
+                if need_bracket {
+                    return Err(format!("expected: '(', got: '{token}', token {}", pos + 1));
+                }
+                if token.ends_with('?') {
+                    need_bracket = true;
+                }
+                stack.last_mut().unwrap().push(DepNode::Str(token.clone()));
+            }
+        }
+    }
+
+    if stack.len() != 1 {
+        return Err("Missing ')' at end of string".to_string());
+    }
+    if need_bracket {
+        return Err("Missing '(' at end of string".to_string());
+    }
+
+    let mut out = Vec::new();
+    serialize_dep_tree(&stack.pop().unwrap(), &mut out);
+    Ok(out)
 }
 
 /// Real `use_reduce`'s own `subset` parameter (`lib/portage/dep/
@@ -702,5 +895,124 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
+    }
+
+    /// Every expectation here was captured from real
+    /// `portage.dep.use_reduce(s, uselist=u, token_class=Atom)` (its
+    /// `flat=False`/`opconvert=False` default), serialized the same way
+    /// `serialize_dep_tree` does (`(`/`)` around every sublist).
+    #[test]
+    fn structured_matches_real_use_reduce_normalization() {
+        let cases: &[(&str, &[&str], &[&str])] = &[
+            ("c/a c/b", &[], &["c/a", "c/b"]),
+            ("( c/a c/b )", &[], &["c/a", "c/b"]),
+            ("c/a ( ( c/b ) )", &[], &["c/a", "c/b"]),
+            ("|| ( c/a c/b )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            ("|| ( c/b c/a )", &[], &["||", "(", "c/b", "c/a", ")"]),
+            ("|| ( c/a )", &[], &["c/a"]),
+            (
+                "|| ( ( c/a c/b ) c/c )",
+                &[],
+                &["||", "(", "(", "c/a", "c/b", ")", "c/c", ")"],
+            ),
+            (
+                "|| ( c/a ( c/b c/c ) )",
+                &[],
+                &["||", "(", "c/a", "(", "c/b", "c/c", ")", ")"],
+            ),
+            (
+                "|| ( || ( c/a c/b ) c/c )",
+                &[],
+                &["||", "(", "c/a", "c/b", "c/c", ")"],
+            ),
+            ("c/a foo? ( c/b )", &["foo"], &["c/a", "c/b"]),
+            ("c/a foo? ( c/b )", &[], &["c/a"]),
+            ("|| ( c/a foo? ( c/b ) )", &[], &["c/a"]),
+            (
+                "|| ( c/a foo? ( c/b ) )",
+                &["foo"],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("|| ( foo? ( c/a c/b ) )", &["foo"], &["c/a", "c/b"]),
+            (
+                "|| ( foo? ( c/a ) bar? ( c/b ) )",
+                &[],
+                &["__const__/empty-any-of"],
+            ),
+            ("foo? ( bar? ( c/a ) )", &["foo"], &[]),
+            (
+                "|| ( c/a c/b ) c/c",
+                &[],
+                &["||", "(", "c/a", "c/b", ")", "c/c"],
+            ),
+            (
+                "c/c || ( c/a c/b )",
+                &[],
+                &["c/c", "||", "(", "c/a", "c/b", ")"],
+            ),
+            (
+                "|| ( c/a c/b ) || ( c/c c/d )",
+                &[],
+                &["||", "(", "c/a", "c/b", ")", "||", "(", "c/c", "c/d", ")"],
+            ),
+            ("foo? ( c/a bar? ( c/b ) )", &["foo"], &["c/a"]),
+            (
+                "foo? ( c/a bar? ( c/b ) )",
+                &["foo", "bar"],
+                &["c/a", "c/b"],
+            ),
+            ("|| ( foo? ( c/a ) c/b )", &[], &["c/b"]),
+            (
+                "|| ( foo? ( c/a ) c/b )",
+                &["foo"],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            (
+                "|| ( ( foo? ( c/a ) c/x ) c/b )",
+                &[],
+                &["||", "(", "c/x", "c/b", ")"],
+            ),
+            (
+                "|| ( c/a || ( c/b c/c ) )",
+                &[],
+                &["||", "(", "c/a", "c/b", "c/c", ")"],
+            ),
+            (
+                "|| ( || ( c/a c/b ) )",
+                &[],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("( || ( c/a c/b ) )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            ("|| ( c/a ( c/b ) )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            (
+                "|| ( ( c/a ) ( c/b ) )",
+                &[],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("|| ( ( c/a ) c/b )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            (
+                "foo? ( || ( c/a c/b ) )",
+                &["foo"],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("foo? ( || ( c/a c/b ) )", &[], &[]),
+            (
+                "|| ( foo? ( c/a c/b ) c/c )",
+                &["foo"],
+                &["||", "(", "(", "c/a", "c/b", ")", "c/c", ")"],
+            ),
+            ("|| ( foo? ( c/a c/b ) c/c )", &[], &["c/c"]),
+        ];
+        for (s, u, expected) in cases {
+            let got =
+                use_reduce_structured(&toks(s), &set(u), MatchMode::Normal).unwrap_or_else(|e| {
+                    panic!("use_reduce_structured({s:?}) errored: {e}");
+                });
+            assert_eq!(
+                got,
+                expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "input {s:?} uselist {u:?}"
+            );
+        }
     }
 }

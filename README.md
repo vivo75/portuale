@@ -832,10 +832,15 @@ PORTING/
   mechanism) -- so this reuses the same flat comparison every other
   dependency-recursion path in this pilot already uses, consistent with,
   not a new exception to, the rest of this pilot's own dependency
-  handling. (A narrower, real sibling, `--changed-deps-report` -- a
-  report-only "you might want `--changed-deps`" notice, no reinstall of
-  its own -- was deferred at the time, closed by a later follow-up
-  below.) New fixture package `changeddepspkg`
+  handling. (Fully closed by two later follow-ups below --
+  "`--changed-deps`: per-key comparison and `strip_slots`" and
+  "`--changed-deps`: the structured (non-flat) comparison, in full" --
+  the latter porting real `use_reduce`'s own `flat=False` mode. A
+  narrower, real sibling, `--changed-deps-report` -- a report-only "you
+  might want `--changed-deps`" notice, no reinstall of its own -- was
+  deferred at the time, closed by a later follow-up below.) New fixture
+  package
+  `changeddepspkg`
   (installed, vdb-recorded `RDEPEND="dev-libs/samepkg"`, but its current
   ebuild's own `RDEPEND="dev-libs/newpkg"`) proves the whole path end to
   end, including that the reinstalled package's own recursion walks the
@@ -922,6 +927,61 @@ PORTING/
   fixture -- no new fixture needed, since this reuses the exact same
   vdb-vs-ebuild `RDEPEND` mismatch `--changed-deps` itself already relies
   on.
+
+  **`--changed-deps`: per-key comparison and `strip_slots`.** Two more
+  steps toward real `_changed_deps` (`depgraph.py:3168`), which builds a
+  per-key list `[use_reduce(DEPEND), use_reduce(RDEPEND), ...]` on each
+  side and compares them element-wise, after `strip_slots` and
+  `strip_libc_deps`. The pilot used to concatenate every dep key into one
+  string, flatten once, and compare as a single set -- so (1) an atom
+  moved from one dep key to another with the same overall set showed no
+  change, and (2) a `:=` slot-operator dependency *always* showed a
+  change, because the vdb records the built form `dev-libs/foo:2=` (the
+  slot it was merged against) while the current ebuild says
+  `dev-libs/foo:=`. `deps_changed` now flattens and compares each dep key
+  independently (`Vec<HashSet<String>>` per side, index-wise `!=`), and a
+  new `strip_slot_operator_slots` ports real `strip_slots`
+  (`lib/portage/dep/_slot_operator.py:11`): for any atom whose
+  `slot_operator` is `=` and that carries an explicit slot, the slot
+  expression is rewritten back to a bare `:=` before comparison (the
+  Python mirror uses the real `Atom.with_slot("=")` for the same
+  rewrite). The remaining documented cut is now just the `||`-structure
+  half -- closed by the next slice. Two new fixtures:
+  `dev-libs/movedkeydepspkg` (vdb `RDEPEND= dev-libs/samepkg`, current
+  ebuild `PDEPEND=dev-libs/samepkg` -- same atom, different key) proves
+  the per-key change registers; `dev-libs/slotopdepspkg` (current ebuild
+  `RDEPEND=dev-libs/slotoptarget :=`, vdb recorded
+  `dev-libs/slotoptarget:2=`) proves the built slot is *not* a change.
+
+  **`--changed-deps`: the structured (non-flat) comparison, in full.**
+  Closes the last cut named just above. Real `_changed_deps` compares
+  `use_reduce(k, token_class=Atom)` output -- the `flat=False` *nested*
+  form, with `||`-group boundaries preserved -- key by key, as Python
+  lists (`built_deps != unbuilt_deps`). New
+  `portage_use_reduce::use_reduce_structured` ports real `use_reduce`'s
+  own `flat=False`/`opconvert=False` mode: the full nested stack reducer
+  with every redundant-bracket optimization
+  (`is_single`/`special_append`/`ends_in_any_of_dep`/
+  `last_any_of_operator_level`), the EAPI-7+ `|| ( ) ->
+  __const__/empty-any-of` placeholder, `|| ( A ) -> A` collapse, `|| (
+  || ( ... ) ) -> || ( ... )` flatten -- verified byte-for-byte against
+  real `portage.dep.use_reduce` over ~4000 randomized dep strings.
+  `deps_changed` reduces each key to that canonical token stream, then
+  applies real `Atom.evaluate_conditionals` (`evaluate_atom_conditionals`)
+  and real `strip_slots` per atom and real `strip_libc_deps` *top-level
+  only* (real `strip_libc_deps` iterates just the outer per-key list, by
+  `cp`), and compares the per-key token vectors with `==`. The Python
+  mirror drops its hand-rolled helpers entirely and calls the real
+  `use_reduce` + `strip_slots` + `strip_libc_deps` -- `_changed_deps`
+  ported essentially verbatim. **Faithful to real portage's Python-list
+  `!=`, confirmed with the user: order is significant *everywhere*** --
+  a `|| ( a b ) -> || ( b a )` reorder and a plain `RDEPEND="a b" -> "b
+  a"` reorder both register as changed (real portage does the same);
+  only a redundant-bracket difference (`a b` vs `( a b )`, which
+  `use_reduce` collapses) does not. Three new fixtures:
+  `dev-libs/anyofreorderdepspkg` (`||` alternatives swapped -> changed),
+  `dev-libs/orderchangeddepspkg` (plain atoms swapped -> changed),
+  `dev-libs/redundantbracketdepspkg` (`( ... )` wrap -> not changed).
 
   **`--changed-slot[=y|n]`: reinstall a package whose own recorded `SLOT`
   changed.** Grounded against real `depgraph.py`'s own `_changed_slot`:

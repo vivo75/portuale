@@ -93,6 +93,8 @@ from collections import deque
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "lib"))
 
 from portage.dep import Atom, check_required_use, match_from_list, paren_enclose, use_reduce
+from portage.dep._slot_operator import strip_slots
+from portage.dep.libc import strip_libc_deps
 from portage.exception import InvalidAtom, InvalidDependString
 from portage.versions import vercmp
 
@@ -1918,53 +1920,33 @@ def _libc_provider_cps(root):
     return result
 
 
-def _strip_libc_atoms(atoms, libc_cps):
-    """Removes any atom in `atoms` whose own "cp" is in `libc_cps` -- see
-    _libc_provider_cps's own docstring. Mirrors
-    portage-repo/src/lib.rs's strip_libc_atoms exactly."""
-    if not libc_cps:
-        return atoms
-    result = set()
-    for a in atoms:
-        atom = _parse_atom(a)
-        if atom is None or atom.cp not in libc_cps:
-            result.add(a)
-    return result
-
-
 def _deps_changed(root, repos, category, package, version, with_bdeps):
     """--changed-deps: whether `version`'s own vdb-recorded dependency
     strings differ from the repo's own *current* ebuild for that exact
-    version, once both are flattened against the *same* input -- the
-    installed package's own recorded USE (real depgraph.py's own
-    _changed_deps: uselist=pkg.use.enabled, used for *both* sides of the
-    comparison, so a difference driven purely by a USE change is never
-    what this detects -- that's --newuse/--changed-use's own job, and
-    can fire independently of (or alongside) this one). Which keys are
-    compared respects with_bdeps exactly like _enqueue_dependencies's
+    version -- real depgraph.py's own _changed_deps
+    (lib/_emerge/depgraph.py:3168), ported essentially verbatim: for each
+    dep key, real use_reduce(token_class=Atom) (i.e. flat=False, the
+    structured nested-list form) against the installed package's own
+    recorded USE (real portage's own uselist=pkg.use.enabled, used for
+    *both* sides so a pure USE change is never what this detects), then
+    real strip_slots and real strip_libc_deps, then built_deps !=
+    unbuilt_deps compared element-wise (one struct per key). Which keys
+    are compared respects with_bdeps exactly like _enqueue_dependencies's
     own dep-key list does.
 
-    KNOWN, DOCUMENTED SCOPE CUT: real _changed_deps compares real
-    *structured* use_reduce output (||-group boundaries preserved) key
-    by key, so a dependency moved between two of the five keys with the
-    same net atom set, or a pure ||-group restructuring with the same
-    underlying atoms, would count as "changed" there but not here. This
-    pilot's own dependency-recursion machinery is flat-only everywhere
-    else too (use_reduce(..., flat=True)), so this reuses that same flat
-    comparison rather than building bespoke structured-tree machinery
-    just for this one feature.
-
-    Both atom sets are filtered through _libc_provider_cps first (see
-    its own docstring) -- real strip_libc_deps, closing the gap this
-    docstring used to name explicitly as unaddressed.
+    Because the comparison is a Python list `!=`, it is order-sensitive
+    everywhere -- a ||-group reorder AND a plain "a b" -> "b a" reorder
+    both register as changed (matching real portage), while a
+    redundant-bracket difference ("a b" vs "( a b )") does not
+    (use_reduce collapses those).
 
     A vdb-side dependency string that fails to parse counts as "changed"
     unconditionally, matching real portage's own "except
     InvalidDependString: changed = True"; a repo-side one that fails to
     parse instead reports "unchanged" (False), the same tolerant
     "can't tell, don't crash" fallback _enqueue_dependencies already
-    uses for its own unreadable-metadata cases. Mirrors
-    portage-repo/src/lib.rs's deps_changed exactly."""
+    uses (real portage assumes the repo side is always well-formed).
+    Mirrors portage-repo/src/lib.rs's deps_changed exactly."""
     dep_keys = (
         ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
         if with_bdeps
@@ -1972,12 +1954,6 @@ def _deps_changed(root, repos, category, package, version, with_bdeps):
     )
 
     installed_use = _read_vdb_flag_set(root, category, package, version, "USE")
-
-    vdb_depstr = " ".join(
-        s
-        for s in (_read_vdb_string(root, category, package, version, k) for k in dep_keys)
-        if s
-    )
 
     repo_candidates = [c for c in list_candidates(repos, category, package) if c["version"] == version]
     if not repo_candidates:
@@ -1987,17 +1963,36 @@ def _deps_changed(root, repos, category, package, version, with_bdeps):
         metadata = read_md5_cache(resolved["repo_location"], category, f"{package}-{version}")
     except OSError:
         return False
-    repo_depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
 
-    repo_atoms = _flat_dep_atoms(repo_depstr, installed_use)
-    if repo_atoms is None:
-        return False
-    libc_cps = _libc_provider_cps(root)
-    repo_atoms = _strip_libc_atoms(repo_atoms, libc_cps)
-    vdb_atoms = _flat_dep_atoms(vdb_depstr, installed_use)
-    if vdb_atoms is None:
-        return True
-    return _strip_libc_atoms(vdb_atoms, libc_cps) != repo_atoms
+    libc_deps = {Atom(cp) for cp in _libc_provider_cps(root)}
+
+    def reduced(depstr):
+        ds = use_reduce(depstr, uselist=installed_use, token_class=Atom)
+        strip_slots(ds)
+        strip_libc_deps(ds, libc_deps)
+        return ds
+
+    # vdb side first (real built_deps loop, whose "except
+    # InvalidDependString: changed = True" makes an unparsable vdb
+    # dependency string an unconditional "changed").
+    built_deps = []
+    for k in dep_keys:
+        try:
+            built_deps.append(reduced(_read_vdb_string(root, category, package, version, k)))
+        except InvalidDependString:
+            return True
+
+    # repo side (real unbuilt_deps loop) -- the repo's own current ebuild
+    # metadata is assumed well-formed, so an unparsable one here stays the
+    # tolerant "can't tell, don't crash" False.
+    unbuilt_deps = []
+    for k in dep_keys:
+        try:
+            unbuilt_deps.append(reduced(metadata.get(k, "")))
+        except InvalidDependString:
+            return False
+
+    return built_deps != unbuilt_deps
 
 
 def _split_slot(raw):

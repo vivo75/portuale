@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: --changed-deps structured -- || alternatives reordered vs vdb
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=|| ( dev-libs/reorderdepb dev-libs/reorderdepa )
+SLOT=0
+_md5_=0000000000000000000000000000000

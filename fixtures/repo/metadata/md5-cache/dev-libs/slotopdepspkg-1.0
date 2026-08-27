@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: --changed-deps strip_slots -- := dep, vdb recorded a concrete slot
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/slotoptarget:=
+SLOT=0
+_md5_=0000000000000000000000000000000
