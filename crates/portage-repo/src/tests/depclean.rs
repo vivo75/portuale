@@ -205,6 +205,65 @@ fn depclean_cleanlist_deselect_false_keeps_a_world_member_named_as_an_arg() {
 }
 
 #[test]
+fn depclean_cleanlist_records_reverse_dep_parents_for_kept_packages() {
+    let root = masters_test_root("depclean-revdep");
+    let install = |name: &str, rdepend: &str| {
+        let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        if !rdepend.is_empty() {
+            std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    };
+    install("rw", "dev-libs/rdep dev-libs/rshared");
+    install("rdep", "dev-libs/rshared");
+    install("rshared", "");
+    install("rorphan", "");
+
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[("dev-libs/rw".to_string(), "@selected".to_string())],
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
+    // rorphan is the cleanlist; kept parents render in cpv order.
+    assert_eq!(
+        result.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+        vec!["dev-libs/rorphan-1.0".to_string()]
+    );
+    let parents: Vec<(String, Vec<String>)> = result
+        .kept_parents
+        .iter()
+        .map(|(p, lines)| (p.cpv(), lines.clone()))
+        .collect();
+    assert_eq!(
+        parents,
+        vec![
+            (
+                "dev-libs/rdep-1.0".to_string(),
+                vec!["dev-libs/rw-1.0 requires dev-libs/rdep".to_string()],
+            ),
+            (
+                "dev-libs/rshared-1.0".to_string(),
+                vec![
+                    "dev-libs/rdep-1.0 requires dev-libs/rshared".to_string(),
+                    "dev-libs/rw-1.0 requires dev-libs/rshared".to_string(),
+                ],
+            ),
+            (
+                "dev-libs/rw-1.0".to_string(),
+                vec!["@selected requires dev-libs/rw".to_string()],
+            ),
+        ]
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn depclean_cleanlist_package_provided_intercepts_both_a_world_root_and_a_dependency_edge() {
     // Portage intercepts `package.provided` before the root forms and on the
     // edge, so world membership does not protect either package.
@@ -482,6 +541,120 @@ fn topological_removal_order_breaks_a_cycle_by_priority_and_pops_one() {
         out2.iter().map(|p| p.package.clone()).collect::<Vec<_>>(),
         vec!["zz".to_string(), "yy".to_string()]
     );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&root2).ok();
+}
+
+#[test]
+fn prune_cleanlist_removes_superseded_versions_only() {
+    let root = masters_test_root("prune");
+    let install = |name: &str, version: &str, rdepend: &str| {
+        let d = root
+            .join("var/db/pkg/dev-libs")
+            .join(format!("{name}-{version}"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        if !rdepend.is_empty() {
+            std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    };
+    // keeper pins mm-2.0; zz-1.0's pin on aa-1.0 is only an ordering edge.
+    install("aa", "1.0", "");
+    install("aa", "2.0", "");
+    install("zz", "1.0", "=dev-libs/aa-1.0");
+    install("zz", "2.0", "");
+    install("mm", "1.0", "");
+    install("mm", "2.0", "");
+    install("mm", "3.0", "");
+    install("keeper", "1.0", "=dev-libs/mm-2.0");
+    install("single", "1.0", "");
+
+    let result = prune_cleanlist(&root, &[], &[], &[]);
+    assert!(result.ordered);
+    let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
+    // mm-2.0 kept, the rest pruned in topological order.
+    assert_eq!(
+        clean,
+        vec![
+            "dev-libs/zz-1.0".to_string(),
+            "dev-libs/mm-1.0".to_string(),
+            "dev-libs/aa-1.0".to_string(),
+        ]
+    );
+
+    // Reverse-dep display names only the kept non-highest version with a parent.
+    assert_eq!(
+        result
+            .kept_parents
+            .iter()
+            .map(|(p, lines)| (p.cpv(), lines.clone()))
+            .collect::<Vec<_>>(),
+        vec![(
+            "dev-libs/mm-2.0".to_string(),
+            vec!["dev-libs/keeper-1.0 requires =dev-libs/mm-2.0".to_string()],
+        )]
+    );
+
+    // `--nodeps`: no dependency check, so every non-highest version is selected.
+    let nd = prune_nodeps_selection(&root, &[]);
+    assert_eq!(
+        nd.iter()
+            .map(|cp| (
+                format!("{}/{}", cp.category, cp.package),
+                cp.best_version.clone(),
+                cp.other_versions.clone()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "dev-libs/aa".to_string(),
+                "2.0".to_string(),
+                vec!["1.0".to_string()]
+            ),
+            (
+                "dev-libs/mm".to_string(),
+                "3.0".to_string(),
+                vec!["1.0".to_string(), "2.0".to_string()]
+            ),
+            (
+                "dev-libs/zz".to_string(),
+                "2.0".to_string(),
+                vec!["1.0".to_string()]
+            ),
+        ]
+    );
+    // `--nodeps <atom>`: best/rest split over the atom's own match set.
+    let nd_atom = prune_nodeps_selection(&root, &["<dev-libs/mm-3.0".to_string()]);
+    assert_eq!(
+        nd_atom
+            .iter()
+            .map(|cp| (cp.best_version.clone(), cp.other_versions.clone()))
+            .collect::<Vec<_>>(),
+        vec![("2.0".to_string(), vec!["1.0".to_string()])]
+    );
+
+    // Named package: only its old versions are candidates.
+    let narrowed = prune_cleanlist(&root, &["dev-libs/mm".to_string()], &[], &[]);
+    assert_eq!(
+        narrowed
+            .cleanlist
+            .iter()
+            .map(|p| p.cpv())
+            .collect::<Vec<_>>(),
+        vec!["dev-libs/mm-1.0".to_string()]
+    );
+
+    // Single-version cps: nothing to prune.
+    let root2 = masters_test_root("prune-none");
+    for n in ["one", "two"] {
+        let d = root2.join("var/db/pkg/dev-libs").join(format!("{n}-1.0"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+    }
+    assert!(prune_cleanlist(&root2, &[], &[], &[]).cleanlist.is_empty());
 
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&root2).ok();
