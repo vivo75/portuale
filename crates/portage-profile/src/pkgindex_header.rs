@@ -33,3 +33,11 @@ pub struct PkgIndexHeader {
     pub parent: HeaderSnapshot,
     pub child: HeaderSnapshot,
 }
+
+fn env_tokens(config: &Config, key: &str) -> Vec<String> {
+    config
+        .pkgindex_env_raw
+        .get(key)
+        .map(|v| v.split_whitespace().map(String::from).collect())
+        .unwrap_or_default()
+}
