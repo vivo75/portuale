@@ -49,3 +49,52 @@ pub(crate) fn deselect_from_world(
     txn.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// One `selected:` / `protected:` / `omitted:` row of the per-package block:
+/// the label right-justified into 14 columns, then each version followed by
+/// a trailing space, or the literal `none ` when empty, trailing spaces
+/// included. `selected` versions render red, `protected`/`omitted` green.
+/// Portage: unmerge.py, _unmerge_display
+pub(crate) fn print_unmerge_row(label: &str, versions: &[String], color: &Colorizer) {
+    let head = format!("{label}: ");
+    let padded = format!("{head:>14}");
+    if versions.is_empty() {
+        println!("{padded}none ");
+    } else {
+        let key = if label == "selected" {
+            "UNMERGE_WARN"
+        } else {
+            "GOOD"
+        };
+        let mut line = padded;
+        for v in versions {
+            line.push_str(&color.c(key, &format!("{v} ")));
+        }
+        println!("{line}");
+    }
+}
+
+/// Every installed `(category, package, version, slot)` in the vdb: used only
+/// for the bare-name ("null category") resolution.
+/// Portage: vartree.py, dbapi.cpv_all
+pub(crate) fn installed_cp_versions(root: &Path) -> Vec<(String, String, String, String)> {
+    let mut out = Vec::new();
+    // `-MERGING-<pf>` entries are never a resolution candidate, so skipped.
+    let Ok(entries) = portage_vdb::for_root(root).entries() else {
+        return out;
+    };
+    for key in entries {
+        let (category, dirname) = (key.category, key.pf);
+        if let Some((name, version)) = split_pf(&dirname) {
+            // Through the vdb seam; the main slot only (an absent `SLOT`
+            // reads as `""`, like the old default).
+            let slot = portage_repo::vdb_entry_slot(root, &category, &dirname)
+                .split('/')
+                .next()
+                .unwrap_or("0")
+                .to_string();
+            out.push((category, name, version, slot));
+        }
+    }
+    out
+}
