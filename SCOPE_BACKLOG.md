@@ -65,16 +65,18 @@ Ranked roughly by how self-contained each is.
   the "is part of your system profile" + "still listed in the following
   package sets" warnings (`collect_installed_sets`) -- `_unmerge_display`
   is complete for `unmerge_action == "unmerge"`.
-- **`emerge --pretend --depclean` / `-pc`** (no args) **shipped
-  2026-08-27** — `depclean_cleanlist` (the reachability closure over the
-  installed `RDEPEND`/`PDEPEND` graph from `@world`+`@system`) +
-  `run_depclean_pretend` (advisory block, `>>> Calculating removal
-  order...`, the `-pC` per-package block on the cleanlist, the
-  `Number to remove:` stats block). **Still open (this was a first
-  increment):** build-time-dep edges (`bdeps=auto`),
-  `--depclean-lib-check`, slot-operator rebuild edges, the "deps
-  unresolved, aborting" halt, `package.provided`, `--depclean <atoms>`
-  narrowing (currently rejected), and real (non-`--pretend`) removal.
+- **`emerge --pretend --depclean` / `-pc`** **shipped 2026-08-27**
+  (`depclean_cleanlist`: the reachability closure over the installed
+  `RDEPEND`/`PDEPEND` graph; `run_depclean_pretend`: advisory block,
+  `>>> Calculating removal order...`, the `-pC` per-package block on the
+  cleanlist, the `Number to remove:` stats block). Both the no-args
+  full form and the **`--depclean <atoms>` narrowing** (world atoms
+  dropped, non-arg installed packages protected, `--- Couldn't find`,
+  bare-name resolution). **Still open:** build-time-dep edges
+  (`bdeps=auto`), `--depclean-lib-check`, slot-operator rebuild edges,
+  the "deps unresolved, aborting" halt, `package.provided`,
+  `--deselect=n` in args mode, `world_sets` `@`-refs as roots, and real
+  (non-`--pretend`) removal.
 - **`--prune`/`-P`**: real modern `--prune` without `--nodeps` routes
   through `_calc_depclean` too (`action="prune"`, protect-all-but-
   highest-slot); `--prune --nodeps` is the obscure `_unmerge_display`

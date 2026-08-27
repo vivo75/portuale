@@ -4682,14 +4682,42 @@ def test_depclean_pretend_nothing_to_remove(emerge_binary, fixture_env, tmp_path
     assert result.stdout.splitlines()[-1] == "Number to remove:     0"
 
 
-def test_depclean_pretend_with_args_not_implemented(emerge_binary, fixture_env, tmp_path):
-    result = _run(
-        [str(emerge_binary)],
-        ["--pretend", "--depclean", "dev-libs/dcorphan"],
-        _depclean_env(fixture_env, tmp_path),
-    )
-    assert result.returncode == 2
-    assert "not yet implemented" in result.stderr
+def test_depclean_pretend_with_args_narrows_to_the_named_packages(
+    emerge_binary, fixture_env, tmp_path
+):
+    """`emerge -pc <atom>`: real _calc_depclean drops the world 'selected'
+    atoms and protects every non-arg installed package, so the cleanlist
+    is just the args-matched packages nothing else needs. No advisory
+    block (real portage only shows it with no args)."""
+    env = _depclean_env(fixture_env, tmp_path)
+
+    # dcorphan: nothing needs it -> removable (its private dep dcorphandep
+    # is protected, being non-arg, so it does NOT cascade).
+    orphan = _run([str(emerge_binary)], ["--pretend", "-c", "dev-libs/dcorphan"], env)
+    assert orphan.returncode == 0
+    assert " * Always study the list" not in orphan.stdout
+    assert [ln for ln in orphan.stdout.splitlines() if ln.startswith(" dev-libs/")] == [
+        " dev-libs/dcorphan"
+    ]
+    assert orphan.stdout.splitlines()[-1] == "Number to remove:     1"
+
+    # dcdep: dcworld still RDEPENDs it -> not removable.
+    needed = _run([str(emerge_binary)], ["--pretend", "-c", "dev-libs/dcdep"], env)
+    assert needed.returncode == 0
+    assert ">>> No packages selected for removal by depclean" in needed.stdout
+    assert needed.stdout.splitlines()[-1] == "Number to remove:     0"
+
+    # dcworld: in @world, but -pc <atom> deselects + removes it if
+    # nothing else needs it.
+    world_member = _run([str(emerge_binary)], ["--pretend", "-c", "dev-libs/dcworld"], env)
+    assert world_member.returncode == 0
+    assert " dev-libs/dcworld" in world_member.stdout.splitlines()
+
+    # An atom matching no installed package.
+    missing = _run([str(emerge_binary)], ["--pretend", "-c", "dev-libs/nope"], env)
+    assert missing.returncode == 1
+    assert "--- Couldn't find 'dev-libs/nope' to depclean." in missing.stderr
+    assert ">>> No packages selected for removal by depclean" in missing.stdout
 
 
 def test_depclean_requires_pretend(emerge_binary, fixture_env):
@@ -4705,7 +4733,12 @@ def test_depclean_matches_between_implementations(
     for args in (
         ["--pretend", "--depclean"],
         ["--pretend", "-c"],
-        ["--pretend", "-pc", "dev-libs/dcorphan"],
+        ["--pretend", "-c", "dev-libs/dcorphan"],
+        ["--pretend", "-c", "dev-libs/dcdep"],
+        ["--pretend", "-c", "dev-libs/dcworld"],
+        ["--pretend", "-c", "dcorphan"],
+        ["--pretend", "-c", "dev-libs/dcorphan", "dev-libs/nope"],
+        ["--pretend", "-c", "dev-libs/nope"],
     ):
         rust = _run([str(emerge_binary)], args, env)
         python = _run(emerge_pretend_python, args, env)

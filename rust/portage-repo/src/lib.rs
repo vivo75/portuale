@@ -3015,16 +3015,26 @@ fn split_installed_dir(dirname: &str) -> Option<(String, String)> {
 
 /// Real `emerge --depclean`'s own removal list (`_calc_depclean` +
 /// `create_cleanlist`, no `args_set`): every installed package NOT
-/// reachable, over the *installed* dependency graph, from the packages
-/// the `required_atoms` (`@world` ∪ `@system`) match.
+/// reachable, over the *installed* dependency graph, from the required
+/// roots.
 ///
 /// The graph: node = installed package; edge A -> B when B satisfies one
 /// of A's own vdb-recorded `RDEPEND` or `PDEPEND` atoms, flattened
 /// against A's own vdb-recorded `USE` (`flat_dep_atoms` -- every branch
 /// of a `||` group is kept, the conservative choice for a removal
-/// decision). Roots = installed packages the required atoms match.
-/// Reachable = required; everything else is the cleanlist, returned
-/// sorted by `(category, package, version)`.
+/// decision).
+///
+/// **No `args`** (a full `emerge --depclean`): roots = the installed
+/// packages `world_atoms` ∪ `system_atoms` match; cleanlist = every
+/// installed package none of them reach.
+///
+/// **`args` given** (`emerge --depclean <atoms>`): real `_calc_depclean`
+/// + `_complete_graph` in "remove" mode drop the world "selected" plain
+/// atoms entirely (the default `--deselect` behavior -- the named
+/// packages get removed *and* deselected) and make every installed
+/// package NOT matching an `args` atom a protected root. So here roots =
+/// `system_atoms` ∪ `{=cpv | installed, unmatched by args}`, and the
+/// cleanlist is just the `args`-matched packages none of those reach.
 ///
 /// **Documented narrowings** (real `_calc_depclean` via the full
 /// `depgraph` in "remove" mode does more): build-time deps
@@ -3033,8 +3043,9 @@ fn split_installed_dir(dirname: &str) -> Option<(String, String)> {
 /// intuitive contract is "nothing needs it at *runtime*";
 /// `--depclean-lib-check` (a soname-linkage check via `NEEDED.ELF.2`),
 /// slot-operator rebuild edges, the "dependencies could not be resolved,
-/// aborting" safety halt, `package.provided`, and `--depclean <atoms>`
-/// narrowing are all out of this first increment.
+/// aborting" safety halt, `package.provided`, `--deselect=n` (keeps the
+/// world atoms as roots in `args` mode), and `world_sets` `@`-refs as
+/// roots are all still out.
 /// `depclean_cleanlist`'s result: the packages to remove, plus the size
 /// of the required-set closure (real `req_pkg_count`, the `Required
 /// packages:` stat).
@@ -3044,7 +3055,12 @@ pub struct DepcleanResult {
     pub required_count: usize,
 }
 
-pub fn depclean_cleanlist(root: &Path, required_atoms: &[String]) -> DepcleanResult {
+pub fn depclean_cleanlist(
+    root: &Path,
+    world_atoms: &[String],
+    system_atoms: &[String],
+    args: &[String],
+) -> DepcleanResult {
     let installed = all_installed_packages(root);
     // Candidate strings for `match_from_list`, one per installed package,
     // kept alongside the package itself.
@@ -3073,12 +3089,40 @@ pub fn depclean_cleanlist(root: &Path, required_atoms: &[String]) -> DepcleanRes
     };
 
     let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
+    let matched_by_args = |p: &InstalledPackage| -> bool {
+        let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+        args.iter().any(|a| {
+            portage_dep::parse_atom(a)
+                .is_some_and(|pa| pa.category == p.category && pa.package == p.package)
+                && portage_dep::match_from_list(a, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+        })
+    };
+
+    // Roots.
     let mut reachable: HashSet<(String, String, String)> = HashSet::new();
     let mut queue: Vec<InstalledPackage> = Vec::new();
-    for atom_str in required_atoms {
+    let seed = |p: &InstalledPackage, reachable: &mut HashSet<_>, queue: &mut Vec<_>| {
+        if reachable.insert(key(p)) {
+            queue.push(p.clone());
+        }
+    };
+    for atom_str in system_atoms {
         for p in matches_atom(atom_str) {
-            if reachable.insert(key(p)) {
-                queue.push(p.clone());
+            seed(p, &mut reachable, &mut queue);
+        }
+    }
+    if args.is_empty() {
+        for atom_str in world_atoms {
+            for p in matches_atom(atom_str) {
+                seed(p, &mut reachable, &mut queue);
+            }
+        }
+    } else {
+        // `args` mode: every installed package the args *don't* match is
+        // a protected root (real `protected_set`).
+        for p in &installed {
+            if !matched_by_args(p) {
+                seed(p, &mut reachable, &mut queue);
             }
         }
     }
@@ -3105,6 +3149,7 @@ pub fn depclean_cleanlist(root: &Path, required_atoms: &[String]) -> DepcleanRes
     let mut cleanlist: Vec<InstalledPackage> = installed
         .into_iter()
         .filter(|p| !reachable.contains(&key(p)))
+        .filter(|p| args.is_empty() || matched_by_args(p))
         .collect();
     cleanlist.sort_by(|a, b| {
         a.category
@@ -8788,10 +8833,9 @@ mod tests {
 
         let result = depclean_cleanlist(
             &root,
-            &[
-                "dev-libs/dcworld".to_string(),
-                "dev-libs/systempkg".to_string(),
-            ],
+            &["dev-libs/dcworld".to_string()],
+            &["dev-libs/systempkg".to_string()],
+            &[],
         );
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         assert_eq!(
@@ -8803,6 +8847,27 @@ mod tests {
         );
         // dcworld, dcdep, dcsub, dccond, systempkg.
         assert_eq!(result.required_count, 5);
+
+        // `args` mode: `-c dev-libs/dcorphan` -> just that one (its
+        // private dep dcorphandep is protected, being non-arg).
+        let narrowed = depclean_cleanlist(
+            &root,
+            &["dev-libs/dcworld".to_string()],
+            &["dev-libs/systempkg".to_string()],
+            &["dev-libs/dcorphan".to_string()],
+        );
+        assert_eq!(
+            narrowed.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+            vec!["dev-libs/dcorphan-1.0".to_string()]
+        );
+        // `-c dev-libs/dcsub` -> nothing (dcdep still needs it).
+        let needed = depclean_cleanlist(
+            &root,
+            &["dev-libs/dcworld".to_string()],
+            &["dev-libs/systempkg".to_string()],
+            &["dev-libs/dcsub".to_string()],
+        );
+        assert!(needed.cleanlist.is_empty());
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -8825,7 +8890,8 @@ mod tests {
         // dcw's `off? ( ... )` group is inactive -> dchidden is orphan.
         install("dcw", "off? ( dev-libs/dchidden )", "");
         install("dchidden", "", "");
-        let result = depclean_cleanlist(&root, &["dev-libs/dcw".to_string()]);
+        let result =
+            depclean_cleanlist(&root, &["dev-libs/dcw".to_string()], &[], &[]);
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         assert_eq!(clean, vec!["dev-libs/dchidden-1.0".to_string()]);
         std::fs::remove_dir_all(&root).ok();

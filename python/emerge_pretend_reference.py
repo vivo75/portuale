@@ -6747,14 +6747,16 @@ def _all_installed_packages(root):
     return out
 
 
-def _depclean_cleanlist(root, required_atoms):
+def _depclean_cleanlist(root, world_atoms, system_atoms, args):
     """Real emerge --depclean's removal list (_calc_depclean +
-    create_cleanlist, no args_set): every installed package NOT reachable
-    from @world ∪ @system over the installed RDEPEND/PDEPEND graph
-    (flattened against each package's own vdb USE). Returns
-    (cleanlist, required_count). Mirrors portage-repo/src/lib.rs's
-    depclean_cleanlist -- see its docstring for the documented
-    narrowings."""
+    create_cleanlist). No `args`: roots = installed pkgs @world ∪ @system
+    match; cleanlist = every installed pkg none reach. With `args`: real
+    _complete_graph drops the world "selected" plain atoms (deselect
+    default) and makes every non-`args` installed pkg a protected root,
+    so roots = @system ∪ {non-arg installed}, cleanlist = the
+    args-matched pkgs nothing reaches. Returns (cleanlist,
+    required_count). Mirrors portage-repo/src/lib.rs's depclean_cleanlist
+    -- see its docstring for the documented narrowings."""
     installed = _all_installed_packages(root)
 
     def matches_atom(atom_str):
@@ -6770,13 +6772,38 @@ def _depclean_cleanlist(root, required_atoms):
                 found.append((c, p, v, s))
         return found
 
+    def matched_by_args(pkg):
+        c, p, v, s = pkg
+        for a in args:
+            parsed = _parse_atom(a)
+            if (
+                parsed is not None
+                and tuple(parsed.cp.split("/", 1)) == (c, p)
+                and match_from_list(a, [f"{c}/{p}-{v}:{s}"])
+            ):
+                return True
+        return False
+
     reachable = set()
     queue = []
-    for atom_str in required_atoms:
-        for (c, p, v, s) in matches_atom(atom_str):
-            if (c, p, v) not in reachable:
-                reachable.add((c, p, v))
-                queue.append((c, p, v))
+
+    def seed(c, p, v):
+        if (c, p, v) not in reachable:
+            reachable.add((c, p, v))
+            queue.append((c, p, v))
+
+    for atom_str in system_atoms:
+        for (c, p, v, _s) in matches_atom(atom_str):
+            seed(c, p, v)
+    if not args:
+        for atom_str in world_atoms:
+            for (c, p, v, _s) in matches_atom(atom_str):
+                seed(c, p, v)
+    else:
+        for pkg in installed:
+            if not matched_by_args(pkg):
+                seed(pkg[0], pkg[1], pkg[2])
+
     while queue:
         c, p, v = queue.pop()
         use_flags = _read_vdb_flag_set(root, c, p, v, "USE")
@@ -6797,7 +6824,12 @@ def _depclean_cleanlist(root, required_atoms):
 
     vkey = functools.cmp_to_key(lambda a, b: (vercmp(a, b) or (a > b) - (a < b)))
     cleanlist = sorted(
-        ((c, p, v) for (c, p, v, _s) in installed if (c, p, v) not in reachable),
+        (
+            (c, p, v)
+            for pkg in installed
+            for (c, p, v) in [(pkg[0], pkg[1], pkg[2])]
+            if (c, p, v) not in reachable and (not args or matched_by_args(pkg))
+        ),
         key=lambda t: (t[0], t[1], vkey(t[2])),
     )
     return cleanlist, len(reachable)
@@ -6805,45 +6837,84 @@ def _depclean_cleanlist(root, required_atoms):
 
 def _run_depclean_pretend(targets, root, config_root, config):
     """emerge --pretend --depclean / -pc (real action_depclean +
-    _calc_depclean, no package arguments). Mirrors pretend.rs's
-    run_depclean_pretend."""
-    if targets:
-        print(
-            "emerge (pilot v1): --depclean with package arguments is not yet "
-            "implemented; run it without arguments for a full depclean",
-            file=sys.stderr,
-        )
-        return 2
+    _calc_depclean). Mirrors pretend.rs's run_depclean_pretend."""
+    # Bare-name targets get their category from the vdb.
+    args = []
+    scan = _installed_cp_versions(root)
+    for t in targets:
+        if "/" in t:
+            args.append(t)
+            continue
+        cats = sorted({c for (c, p, _v, _s) in scan if p == t})
+        if len(cats) == 0:
+            args.append(t)
+        elif len(cats) == 1:
+            args.append(f"{cats[0]}/{t}")
+        else:
+            print(
+                f'\n!!! The short package name "{t}" is ambiguous. Please specify',
+                file=sys.stderr,
+            )
+            print(
+                "!!! one of the following fully-qualified package names instead:\n",
+                file=sys.stderr,
+            )
+            for n in sorted(f"    {c}/{t}" for c in cats):
+                print(n)
+            return 1
 
-    for line in (
-        "",
-        " * Always study the list of packages to be cleaned for any obvious",
-        " * mistakes. Packages that are part of the world set will always",
-        " * be kept.  They can be manually added to this set with",
-        " * `emerge --noreplace <atom>`.  Packages that are listed in",
-        " * package.provided (see portage(5)) will be removed by",
-        " * depclean, even if they are part of the world set.",
-        " * ",
-        " * As a safety measure, depclean will not remove any packages",
-        " * unless *all* required dependencies have been resolved.  As a",
-        " * consequence of this, it often becomes necessary to run ",
-        " * `emerge --update --newuse --deep @world` prior to depclean.",
-    ):
-        print(line)
+    if args:
+        any_matched = False
+        for a in args:
+            parsed = _parse_atom(a)
+            matched = parsed is not None and any(
+                match_from_list(a, [f"{parsed.cp.split('/', 1)[0]}/{parsed.cp.split('/', 1)[1]}-{v}:{s}/{sub}"])
+                for (v, s, sub) in installed_candidates(
+                    root, *parsed.cp.split("/", 1)
+                )
+            )
+            if matched:
+                any_matched = True
+            else:
+                print(
+                    f"--- Couldn't find '{a.replace('null/', '')}' to depclean.",
+                    file=sys.stderr,
+                )
+        if not any_matched:
+            print(">>> No packages selected for removal by depclean")
+            return 1
 
-    required = []
+    if not args:
+        for line in (
+            "",
+            " * Always study the list of packages to be cleaned for any obvious",
+            " * mistakes. Packages that are part of the world set will always",
+            " * be kept.  They can be manually added to this set with",
+            " * `emerge --noreplace <atom>`.  Packages that are listed in",
+            " * package.provided (see portage(5)) will be removed by",
+            " * depclean, even if they are part of the world set.",
+            " * ",
+            " * As a safety measure, depclean will not remove any packages",
+            " * unless *all* required dependencies have been resolved.  As a",
+            " * consequence of this, it often becomes necessary to run ",
+            " * `emerge --update --newuse --deep @world` prior to depclean.",
+        ):
+            print(line)
+
+    world = []
     try:
-        required.extend(_read_world_atoms(root))
+        world.extend(_read_world_atoms(root))
         for name in _read_world_sets(root):
             seen = set()
-            required.extend(_resolve_custom_set(config_root, name, seen))
+            world.extend(_resolve_custom_set(config_root, name, seen))
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
-    world_atom_count = len(set(required))
-    required.extend(config["system_packages"])
+    world_atom_count = len(set(world))
 
-    cleanlist, required_count = _depclean_cleanlist(root, required)
+    cleanlist, required_count = _depclean_cleanlist(
+        root, world, config["system_packages"], args
+    )
     installed_total = len(_all_installed_packages(root))
 
     def stats():

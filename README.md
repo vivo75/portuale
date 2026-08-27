@@ -813,11 +813,26 @@ PORTING/
   at *runtime*", and the pilot's vdb fixtures don't record them;
   `--depclean-lib-check` (a `NEEDED.ELF.2` soname-linkage check),
   slot-operator rebuild edges, the "dependencies could not be resolved,
-  aborting" safety halt, `package.provided`, and `--depclean <atoms>`
-  narrowing (rejected here, not silently promoted to a full depclean)
-  are all deferred. Tests use a self-contained `_depclean_root`
-  (isolated vdb + world file, like the `--deselect` tests) so nothing
-  touches the shared fixture tree.
+  aborting" safety halt, and `package.provided` are all deferred. Tests
+  use a self-contained `_depclean_root` (isolated vdb + world file, like
+  the `--deselect` tests) so nothing touches the shared fixture tree.
+
+  **`emerge -pc <atoms>`: the `--depclean <atoms>` narrowing.** Traced
+  through real `_calc_depclean` + `_complete_graph` in "remove" mode: in
+  args mode the world "selected" plain atoms are dropped (the default
+  `--deselect` -- `emerge -pc dev-lang/python` removes python *and*
+  deselects it) and every installed package NOT matching an args atom
+  becomes a protected root, so the cleanlist is just the args-matched
+  packages nothing else installed (or `@system`) needs at runtime.
+  `depclean_cleanlist` gained an `args` parameter (and `world_atoms` /
+  `system_atoms` split out, since world roots drop in args mode);
+  `run_depclean_pretend` resolves bare-name args via the vdb
+  null-category scan (ambiguity -> real `AmbiguousPackageName`), prints
+  `--- Couldn't find 'X' to depclean.` (stderr) for an args atom
+  matching nothing and `>>> No packages selected` + exit 1 when none
+  match, and skips the `* ` advisory block (real portage only shows it
+  with no args). **Still deferred:** `--deselect=n` (keeps the world
+  atoms as roots even in args mode), `world_sets` `@`-refs as roots.
 
   **`--with-bdeps y|n`: build-time deps for an already-installed
   package's own `--deep` walk.** Grounded against real

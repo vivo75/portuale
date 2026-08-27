@@ -2187,50 +2187,110 @@ fn split_pf(dirname: &str) -> Option<(String, String)> {
 /// atom). See `portage_repo::depclean_cleanlist`'s own doc comment for
 /// the graph and its documented narrowings.
 ///
-/// `emerge -pc <atoms>` (the `--depclean <atoms>` narrowing -- restrict
-/// to the given packages and their now-orphaned subtree) is deliberately
-/// not in this first increment: it's rejected rather than silently doing
-/// a full depclean (which would show *more* than the user asked for).
+/// `emerge -pc <atoms>` (the `--depclean <atoms>` narrowing): the world
+/// "selected" plain atoms are dropped (the named packages get deselected
+/// *and* removed), every other installed package becomes a protected
+/// root, and the cleanlist is just the `args`-matched packages nothing
+/// else needs -- see `depclean_cleanlist`'s own doc comment. Real
+/// `action_depclean` only shows the `* ` advisory block with no args, so
+/// this doesn't either.
 fn run_depclean_pretend(
     targets: &[&str],
     root: &Path,
     config_root: &Path,
     config: &portage_profile::Config,
 ) -> ExitCode {
-    if !targets.is_empty() {
-        eprintln!(
-            "emerge (pilot v1): --depclean with package arguments is not yet implemented; \
-             run it without arguments for a full depclean"
-        );
-        return ExitCode::from(2);
+    // Bare-name targets get their category from the vdb (real
+    // `vardb.match`'s null-category lookup), same as `--unmerge`/`-C`.
+    let mut args: Vec<String> = Vec::new();
+    let installed_scan = installed_cp_versions(root);
+    for t in targets {
+        if t.contains('/') {
+            args.push((*t).to_string());
+        } else {
+            let cats: HashSet<&String> = installed_scan
+                .iter()
+                .filter(|(_, p, _, _)| p == *t)
+                .map(|(c, _, _, _)| c)
+                .collect();
+            match cats.len() {
+                0 => args.push((*t).to_string()), // let the "Couldn't find" path report it
+                1 => args.push(format!("{}/{t}", cats.into_iter().next().unwrap())),
+                _ => {
+                    eprintln!(
+                        "\n!!! The short package name \"{t}\" is ambiguous. Please specify"
+                    );
+                    eprintln!("!!! one of the following fully-qualified package names instead:\n");
+                    let mut names: Vec<String> =
+                        cats.into_iter().map(|c| format!("    {c}/{t}")).collect();
+                    names.sort();
+                    for n in names {
+                        println!("{n}");
+                    }
+                    return ExitCode::from(1);
+                }
+            }
+        }
     }
 
-    // Real `action_depclean`'s own advisory block (no-args, non-quiet).
-    // The "Depclean may break link level dependencies" first paragraph
-    // is skipped: real portage gates it on `--depclean-lib-check=n`,
-    // which is not the default.
-    for line in [
-        "",
-        " * Always study the list of packages to be cleaned for any obvious",
-        " * mistakes. Packages that are part of the world set will always",
-        " * be kept.  They can be manually added to this set with",
-        " * `emerge --noreplace <atom>`.  Packages that are listed in",
-        " * package.provided (see portage(5)) will be removed by",
-        " * depclean, even if they are part of the world set.",
-        " * ",
-        " * As a safety measure, depclean will not remove any packages",
-        " * unless *all* required dependencies have been resolved.  As a",
-        " * consequence of this, it often becomes necessary to run ",
-        " * `emerge --update --newuse --deep @world` prior to depclean.",
-    ] {
-        println!("{line}");
+    // Real `action_depclean`: for each arg, if the vdb has no match ->
+    // `--- Couldn't find 'X' to depclean.` (stderr); if *none* matched ->
+    // `>>> No packages selected` and exit 1.
+    if !args.is_empty() {
+        let mut any_matched = false;
+        for a in &args {
+            let matched = portage_dep::parse_atom(a).is_some_and(|atom| {
+                portage_repo::installed_candidates(root, &atom.category, &atom.package)
+                    .iter()
+                    .any(|(v, s, sub)| {
+                        let cs =
+                            format!("{}/{}-{v}:{s}/{sub}", atom.category, atom.package);
+                        match_from_list(a, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+                    })
+            });
+            if matched {
+                any_matched = true;
+            } else {
+                eprintln!(
+                    "--- Couldn't find '{}' to depclean.",
+                    a.strip_prefix("null/").unwrap_or(a)
+                );
+            }
+        }
+        if !any_matched {
+            println!(">>> No packages selected for removal by depclean");
+            return ExitCode::from(1);
+        }
     }
 
-    // Required atoms = @world (world file + world_sets) ∪ @system, the
-    // same expansion `run()`/`run_unmerge_pretend` already do.
-    let mut required: Vec<String> = Vec::new();
+    // Real `action_depclean`'s own advisory block -- *only* with no
+    // package arguments (`not myfiles`), non-quiet. The "Depclean may
+    // break link level dependencies" first paragraph is skipped: real
+    // portage gates it on `--depclean-lib-check=n`, not the default.
+    if args.is_empty() {
+        for line in [
+            "",
+            " * Always study the list of packages to be cleaned for any obvious",
+            " * mistakes. Packages that are part of the world set will always",
+            " * be kept.  They can be manually added to this set with",
+            " * `emerge --noreplace <atom>`.  Packages that are listed in",
+            " * package.provided (see portage(5)) will be removed by",
+            " * depclean, even if they are part of the world set.",
+            " * ",
+            " * As a safety measure, depclean will not remove any packages",
+            " * unless *all* required dependencies have been resolved.  As a",
+            " * consequence of this, it often becomes necessary to run ",
+            " * `emerge --update --newuse --deep @world` prior to depclean.",
+        ] {
+            println!("{line}");
+        }
+    }
+
+    // @world (world file + world_sets) and @system, kept separate --
+    // `depclean_cleanlist` drops the world atoms as roots in `args` mode.
+    let mut world: Vec<String> = Vec::new();
     match read_world_atoms(root) {
-        Ok(atoms) => required.extend(atoms),
+        Ok(atoms) => world.extend(atoms),
         Err(e) => {
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
@@ -2241,7 +2301,7 @@ fn run_depclean_pretend(
             for name in names {
                 let mut seen = HashSet::new();
                 match resolve_custom_set(config_root, &name, &mut seen) {
-                    Ok(atoms) => required.extend(atoms),
+                    Ok(atoms) => world.extend(atoms),
                     Err(e) => {
                         eprintln!("{e}");
                         return ExitCode::from(1);
@@ -2254,10 +2314,10 @@ fn run_depclean_pretend(
             return ExitCode::from(1);
         }
     }
-    let world_atom_count = required.iter().cloned().collect::<HashSet<_>>().len();
-    required.extend(config.system_packages.iter().cloned());
+    let world_atom_count = world.iter().cloned().collect::<HashSet<_>>().len();
 
-    let result = portage_repo::depclean_cleanlist(root, &required);
+    let result =
+        portage_repo::depclean_cleanlist(root, &world, &config.system_packages, &args);
 
     let installed_total = portage_repo::all_installed_packages(root).len();
     let stats = || {
