@@ -160,6 +160,51 @@ fn depclean_flags_a_kept_packages_unsatisfiable_runtime_dep() {
 }
 
 #[test]
+fn depclean_cleanlist_deselect_false_keeps_a_world_member_named_as_an_arg() {
+    // dw (world) has no reverse deps.
+    let root = masters_test_root("depclean-deselect");
+    let d = root.join("var/db/pkg/dev-libs/dw-1.0");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    std::fs::write(d.join("SLOT"), "0\n").unwrap();
+    let world = &[("dev-libs/dw".to_string(), "@selected".to_string())];
+    let args = &["dev-libs/dw".to_string()];
+
+    // Deselect drops the world seed in args mode: dw becomes unreachable.
+    let removed = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: world,
+        system_atoms: &[],
+        args,
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
+    assert_eq!(
+        removed
+            .cleanlist
+            .iter()
+            .map(|p| p.cpv())
+            .collect::<Vec<_>>(),
+        vec!["dev-libs/dw-1.0".to_string()]
+    );
+
+    // `--deselect=n` keeps the seed: @selected still reaches dw.
+    let kept = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: world,
+        system_atoms: &[],
+        args,
+        deselect: false,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
+    assert!(kept.cleanlist.is_empty(), "{:?}", kept.cleanlist);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn depclean_cleanlist_package_provided_intercepts_both_a_world_root_and_a_dependency_edge() {
     // Portage intercepts `package.provided` before the root forms and on the
     // edge, so world membership does not protect either package.
