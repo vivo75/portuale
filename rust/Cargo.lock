@@ -1411,6 +1411,7 @@ dependencies = [
  "portage-profile",
  "portage-repo",
  "portage-use-reduce",
+ "portage-versions",
  "regex",
  "tokio",
 ]

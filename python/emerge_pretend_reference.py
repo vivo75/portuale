@@ -96,7 +96,7 @@ from portage.dep import Atom, check_required_use, match_from_list, paren_enclose
 from portage.dep._slot_operator import strip_slots
 from portage.dep.libc import strip_libc_deps
 from portage.exception import InvalidAtom, InvalidDependString
-from portage.versions import vercmp
+from portage.versions import ververify, vercmp
 
 
 class ResolutionError(Exception):
@@ -6423,6 +6423,201 @@ def _run_deselect(targets, root):
     return 0
 
 
+def _split_pf(dirname):
+    """Splits a vdb directory name (foo-bar-1.2.3-r1) into
+    (package, version): the earliest '-'-split point whose right half
+    real ververify() accepts as a version. Mirrors pretend.rs's
+    split_pf."""
+    parts = dirname.split("-")
+    for i in range(1, len(parts)):
+        candidate = "-".join(parts[i:])
+        if ververify(candidate):
+            return "-".join(parts[:i]), candidate
+    return None
+
+
+def _installed_cp_versions(root):
+    """Every installed (category, package, version, slot) in the vdb --
+    real vartree.dbapi.cpv_all(), used only for --unmerge/-C's own
+    bare-name resolution. Mirrors pretend.rs's installed_cp_versions."""
+    out = []
+    vdb = os.path.join(root, "var", "db", "pkg")
+    try:
+        cats = sorted(os.listdir(vdb))
+    except OSError:
+        return out
+    for category in cats:
+        catdir = os.path.join(vdb, category)
+        if not os.path.isdir(catdir):
+            continue
+        for dirname in sorted(os.listdir(catdir)):
+            pkgdir = os.path.join(catdir, dirname)
+            if not os.path.isdir(pkgdir):
+                continue
+            split = _split_pf(dirname)
+            if split is None:
+                continue
+            name, version = split
+            try:
+                with open(os.path.join(pkgdir, "SLOT")) as fh:
+                    slot = fh.read().strip().split("/", 1)[0] or "0"
+            except OSError:
+                slot = "0"
+            out.append((category, name, version, slot))
+    return out
+
+
+def _print_unmerge_row(label, versions):
+    """One '    selected: 1.0 ' / '   protected: none ' row of
+    _unmerge_display's per-package block -- label right-justified into 14
+    columns (real (mytype + ": ").rjust(14)), each version + trailing
+    space, or the literal 'none ' when empty. Mirrors pretend.rs's
+    print_unmerge_row."""
+    padded = f"{label}: ".rjust(14)
+    if not versions:
+        print(f"{padded}none ")
+    else:
+        print(padded + "".join(f"{v} " for v in versions))
+
+
+def _run_unmerge_pretend(targets, root, config_root, config):
+    """emerge --pretend --unmerge / -pC <atoms>: real
+    _emerge/unmerge.py::_unmerge_display for unmerge_action == "unmerge",
+    narrowed to a preview. Mirrors pretend.rs's run_unmerge_pretend --
+    see its docstring for the algorithm and the documented cuts
+    (set-protection / system-profile warnings, --prune/--depclean,
+    =<vdb-path>, the Python-interpreter self-skip)."""
+    if not targets:
+        print("emerge: no package atoms given to --unmerge", file=sys.stderr)
+        return 1
+
+    expanded = []
+    for target in targets:
+        if target == "@world":
+            try:
+                expanded.extend(_read_world_atoms(root))
+                for name in _read_world_sets(root):
+                    seen = set()
+                    expanded.extend(_resolve_custom_set(config_root, name, seen))
+            except ResolutionError as e:
+                print(f"emerge: {e}", file=sys.stderr)
+                return 1
+        elif target == "@system":
+            expanded.extend(config["system_packages"])
+        elif target.startswith("@"):
+            try:
+                seen = set()
+                expanded.extend(_resolve_custom_set(config_root, target[1:], seen))
+            except ResolutionError as e:
+                print(f"emerge: {e}", file=sys.stderr)
+                return 1
+        else:
+            expanded.append(target)
+
+    print(">>> These are the packages that would be unmerged:")
+
+    portage_self = ("sys-apps", "portage")
+    per_cp = {}  # (cat, pkg) -> [selected, protected]
+    order = []
+    all_selected = set()  # (cat, pkg, version)
+
+    for atom_str in expanded:
+        if "/" not in atom_str:
+            found = [
+                (c, p, v, s)
+                for (c, p, v, s) in _installed_cp_versions(root)
+                if p == atom_str
+            ]
+            cats = {c for (c, _, _, _) in found}
+            if len(cats) > 1:
+                print(
+                    f'\n!!! The short package name "{atom_str}" is ambiguous. Please specify',
+                    file=sys.stderr,
+                )
+                print(
+                    "!!! one of the following fully-qualified package names instead:\n",
+                    file=sys.stderr,
+                )
+                for n in sorted(f"    {c}/{atom_str}" for c in cats):
+                    print(n)
+                return 1
+            matches = found
+        else:
+            atom = _parse_atom(atom_str)
+            if atom is None:
+                print(f"emerge: invalid atom {atom_str!r}", file=sys.stderr)
+                return 1
+            cat, pkg = atom.cp.split("/", 1)
+            matches = []
+            for version, slot, sub_slot in installed_candidates(root, cat, pkg):
+                cs = f"{cat}/{pkg}-{version}:{slot}/{sub_slot}"
+                if match_from_list(atom_str, [cs]):
+                    matches.append((cat, pkg, version, slot))
+
+        if not matches:
+            print(f"\n--- Couldn't find '{atom_str}' to unmerge.")
+            continue
+
+        for cat, pkg, version, _slot in matches:
+            cp = (cat, pkg)
+            if cp not in per_cp:
+                per_cp[cp] = [[], []]
+                order.append(cp)
+            key = (cat, pkg, version)
+            if key not in all_selected:
+                all_selected.add(key)
+                per_cp[cp][0].append(version)
+
+    if not all_selected:
+        print("\n>>> No packages selected for removal by unmerge")
+        return 1
+
+    if portage_self in per_cp and per_cp[portage_self][0]:
+        for v in per_cp[portage_self][0]:
+            print(
+                f"!!! Not unmerging package sys-apps/portage-{v} since there is no "
+                "valid reason for Portage to unmerge itself.",
+                file=sys.stderr,
+            )
+            all_selected.discard((portage_self[0], portage_self[1], v))
+            per_cp[portage_self][1].append(v)
+        per_cp[portage_self][0] = []
+
+    if not all_selected:
+        print("\n>>> No packages selected for removal by unmerge")
+        return 1
+
+    import functools
+
+    vkey = functools.cmp_to_key(lambda a, b: (vercmp(a, b) or (a > b) - (a < b)))
+    all_selected_display = []
+    for cp in sorted(order):
+        selected, protected = per_cp[cp]
+        if not selected:
+            continue
+        selected.sort(key=vkey)
+        protected.sort(key=vkey)
+        omitted = sorted(
+            (
+                v
+                for (v, _slot, _sub) in installed_candidates(root, cp[0], cp[1])
+                if v not in selected and v not in protected
+            ),
+            key=vkey,
+        )
+        print(f"\n {cp[0]}/{cp[1]}")
+        _print_unmerge_row("selected", selected)
+        _print_unmerge_row("protected", protected)
+        _print_unmerge_row("omitted", omitted)
+        all_selected_display.extend(f"={cp[0]}/{cp[1]}-{v}" for v in selected)
+
+    all_selected_display.sort()
+    print(f"\nAll selected packages: {' '.join(all_selected_display)}")
+    print("\n>>> 'Selected' packages are slated for removal.")
+    print(">>> 'Protected' and 'omitted' packages will not be removed.")
+    return 0
+
+
 def _reinstall_reason(changed_flags, deps_changed, slot_changed, rebuilt_binary, new_repo):
     """The "(reinstall for ...)" note's own reason text, real portage
     treating --newuse/--changed-use, --changed-deps, --changed-slot,
@@ -6627,6 +6822,7 @@ def run(args):
     usepkg_include = []
     json_output = False
     deselect = False
+    unmerge = False
     with_bdeps = True
     with_bdeps_given = False
     with_bdeps_auto = True
@@ -6829,6 +7025,12 @@ def run(args):
             i += 1
         elif arg == "--deselect=n":
             deselect = False
+            i += 1
+        elif arg in ("--unmerge", "-C"):
+            # Real main.py: --unmerge/-C is a standalone ACTION
+            # (myaction = "unmerge"), dispatched to _run_unmerge_pretend
+            # below. Plain boolean. Mirrors pretend.rs.
+            unmerge = True
             i += 1
         elif arg == "--with-bdeps":
             # Real "argument_options" with "choices": ("y", "n") --
@@ -7263,6 +7465,8 @@ def run(args):
                     usepkgonly = True
                 elif c == "W":
                     deselect = True
+                elif c == "C":
+                    unmerge = True
                 elif c == "B":
                     buildpkgonly = True
                 elif c == "X":
@@ -7316,6 +7520,16 @@ def run(args):
         )
         return 2
 
+    # --unmerge/-C: real `emerge -C` removes packages; this pilot only
+    # previews it, same --pretend-only gate --deselect has. Mirrors
+    # pretend.rs.
+    if unmerge and not pretend:
+        print(
+            "emerge (pilot v1): --unmerge/-C requires --pretend (see PROMPT.md)",
+            file=sys.stderr,
+        )
+        return 2
+
     # `--buildpkgonly` without `--pretend` is the one real, non-dry-run
     # execution path the Rust side implements for `emerge` itself (see
     # portuale's own emerge_build.rs module doc comment): it only ever
@@ -7337,7 +7551,7 @@ def run(args):
     if deselect:
         return _run_deselect(atom_args, _root())
 
-    if not atom_args:
+    if not atom_args and not unmerge:
         print(
             "emerge (pilot v1): expected a package atom, e.g. "
             "`emerge --pretend cat/pkg`",
@@ -7381,6 +7595,11 @@ def run(args):
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
         return 1
+
+    # --unmerge/-C: a standalone action; resolved config in hand,
+    # dispatch before the ordinary resolve-graph path.
+    if unmerge:
+        return _run_unmerge_pretend(atom_args, _root(), _config_root(), config)
 
     # "@world"/"@system" each expand to their own real atom list, in
     # place, at whichever position they appear -- see _read_world_atoms's

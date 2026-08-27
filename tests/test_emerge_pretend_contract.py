@@ -945,6 +945,51 @@ CASES = [
         ["--pretend", "--json", "dev-libs/fetchrestrictmissingpkg"],
         0,
     ),
+    (
+        "--pretend --unmerge: a plain installed package",
+        ["--pretend", "--unmerge", "dev-libs/unmergepkg"],
+        0,
+    ),
+    (
+        "-pC: a versioned atom, other version omitted",
+        ["--pretend", "-C", "=dev-libs/unmergepkg-1.0"],
+        0,
+    ),
+    (
+        "-pC: a bare package name (null-category vdb lookup)",
+        ["--pretend", "-C", "unmergepkg"],
+        0,
+    ),
+    (
+        "-pC: multiple atoms in one invocation",
+        ["--pretend", "-C", "dev-libs/unmergepkg", "dev-libs/samepkg"],
+        0,
+    ),
+    (
+        "-pC sys-apps/portage: refused, nothing selected",
+        ["--pretend", "-C", "sys-apps/portage"],
+        1,
+    ),
+    (
+        "-pC: an atom that matches no installed package",
+        ["--pretend", "-C", "dev-libs/nonexistent"],
+        1,
+    ),
+    (
+        "-pC @system: none of the @system cps are installed",
+        ["--pretend", "-C", "@system"],
+        1,
+    ),
+    (
+        "-pC with no atoms",
+        ["--pretend", "-C"],
+        1,
+    ),
+    (
+        "-C without --pretend is refused",
+        ["--unmerge", "dev-libs/unmergepkg"],
+        2,
+    ),
 ]
 
 
@@ -4524,6 +4569,61 @@ def _deselect_env(fixture_env, tmp_path):
     env = dict(fixture_env)
     env["ROOT"] = str(_deselect_root(tmp_path))
     return env
+
+
+def test_unmerge_pretend_lists_selected_and_omitted(emerge_binary, fixture_env):
+    """Real _emerge/unmerge.py::_unmerge_display for `unmerge_action ==
+    "unmerge"`: every vdb match goes into `selected`, every other
+    installed version of the same cp into `omitted`. dev-libs/unmergepkg
+    is installed at 1.0 and 2.0. `emerge -pC =dev-libs/unmergepkg-1.0`
+    selects 1.0, omits 2.0."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-C", "=dev-libs/unmergepkg-1.0"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        ">>> These are the packages that would be unmerged:",
+        "",
+        " dev-libs/unmergepkg",
+        "    selected: 1.0 ",
+        "   protected: none ",
+        "     omitted: 2.0 ",
+        "",
+        "All selected packages: =dev-libs/unmergepkg-1.0",
+        "",
+        ">>> 'Selected' packages are slated for removal.",
+        ">>> 'Protected' and 'omitted' packages will not be removed.",
+    ]
+
+    # A bare atom selects every installed version.
+    both = _run([str(emerge_binary)], ["--pretend", "--unmerge", "dev-libs/unmergepkg"], fixture_env)
+    assert both.returncode == 0
+    assert "    selected: 1.0 2.0 " in both.stdout
+    assert "All selected packages: =dev-libs/unmergepkg-1.0 =dev-libs/unmergepkg-2.0" in both.stdout
+
+
+def test_unmerge_pretend_refuses_portage_itself(emerge_binary, fixture_env):
+    """Real _unmerge_display: `sys-apps/portage` (PORTAGE_PACKAGE_ATOM)
+    is moved from `selected` to `protected` with a note, and if it was
+    the only selection the run reports nothing selected and exits 1."""
+    result = _run([str(emerge_binary)], ["--pretend", "-C", "sys-apps/portage"], fixture_env)
+    assert result.returncode == 1
+    assert result.stdout.splitlines() == [
+        ">>> These are the packages that would be unmerged:",
+        "",
+        ">>> No packages selected for removal by unmerge",
+    ]
+    assert (
+        "Not unmerging package sys-apps/portage-1.0 since there is no valid reason"
+        in result.stderr
+    )
+
+
+def test_unmerge_pretend_requires_pretend(emerge_binary, fixture_env):
+    result = _run([str(emerge_binary)], ["--unmerge", "dev-libs/unmergepkg"], fixture_env)
+    assert result.returncode == 2
+    assert "requires --pretend" in result.stderr
+    assert result.stdout == ""
 
 
 def test_deselect_matches_a_plain_world_atom(emerge_binary, fixture_env, tmp_path):

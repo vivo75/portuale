@@ -56,6 +56,19 @@ to **either** side yet — deliberate, documented scope cuts or explicit
 
 Ranked roughly by how self-contained each is.
 
+### 0. `emerge` cleanup actions
+
+- **`emerge --pretend --unmerge` / `-pC`** **shipped 2026-08-27**
+  (`run_unmerge_pretend`, real `_emerge/unmerge.py::_unmerge_display` for
+  `unmerge_action == "unmerge"`): atom → vdb match → `selected`, other
+  installed versions → `omitted`, `sys-apps/portage` self-`protected`.
+  **Still open:** the set-protection / system-profile warnings (a
+  documented follow-up); **`--prune`/`-P`** (best-version-per-slot
+  pruning); **`--depclean`/`-c`** (the reverse-reachability closure from
+  `@world`+`@system` over installed packages — the big one); real
+  (non-`--pretend`) removal via `emerge` (this pilot keeps `ebuild
+  <file> unmerge` as its one real removal path).
+
 ### A. Small, self-contained dry-run/config slices
 
 1. ~~**`layout.conf`'s own `masters =` key** (and `profile-formats`

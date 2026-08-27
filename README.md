@@ -735,6 +735,37 @@ PORTING/
   pilot's existing "not yet implemented" rejection) and `--json` output
   (simply not offered for deselect mode).
 
+  **`emerge --pretend --unmerge` / `-pC <atoms>`: the second real emerge
+  action.** Real `main.py` makes `--unmerge`/`-C` a standalone action
+  (`myaction = "unmerge"`, same shape as `--deselect`), and real `emerge
+  -C` *removes* packages -- this pilot only ever *previews* it (`ebuild
+  <file> unmerge` stays its one real removal path), same `--pretend`-only
+  gate `--deselect` has. New `run_unmerge_pretend` ports
+  `_emerge/unmerge.py::_unmerge_display` for `unmerge_action ==
+  "unmerge"`: each target atom is matched against the vdb
+  (`installed_candidates` + `match_from_list`, exactly real
+  `vartree.dbapi.match`); every match becomes `selected`, every *other*
+  installed version of the same `category/package` becomes `omitted`
+  (real `vartree.dep_match(cp)` minus selected/protected). `sys-apps/
+  portage` itself is force-`protected` with real portage's own "no valid
+  reason for Portage to unmerge itself" note (`PORTAGE_PACKAGE_ATOM`). A
+  bare name resolves via a real "null-category" vdb scan (ambiguity ->
+  the real `AmbiguousPackageName` error); `@world`/`@system`/`@customset`
+  targets expand first, via the same set machinery `run()`/`run_deselect`
+  already use. The per-cp `selected:`/`protected:`/`omitted:` block
+  (label `rjust(14)`, trailing spaces and all), the `All selected
+  packages: =cat/pkg-1.0 …` line, and the `>>> 'Selected' …` / `>>>
+  'Protected' …` footer are reproduced faithfully; `portage-versions`
+  (already transitive) becomes a direct `portuale` dep for the real
+  `cpv_sort_key` version ordering. **Documented cuts, a clean
+  follow-up:** the "still listed in the following package sets"
+  set-protection warning, the "is part of your system profile" warning
+  (real `cp in syslist`), the `--prune`/`--depclean` variants
+  (best-version pruning / reverse-reachability), a bare `=<vdb-path>`
+  argument, the "currently used Python interpreter" self-skip, and any
+  real removal. New fixtures: `dev-libs/unmergepkg` (installed at 1.0
+  *and* 2.0), `sys-apps/portage-1.0`.
+
   **`--with-bdeps y|n`: build-time deps for an already-installed
   package's own `--deep` walk.** Grounded against real
   `create_depgraph_params.py`'s own `bdeps` param and `depgraph.py`'s
