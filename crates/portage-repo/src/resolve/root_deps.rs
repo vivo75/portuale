@@ -170,3 +170,14 @@ pub(crate) fn resolved_version_meta_and_use(
     // Cold path; the shared `Rc` isn't worth threading through.
     Some(((*metadata).clone(), use_flags.as_ref().clone()))
 }
+
+/// Arguments of [`resolve_root_deps_build_entries`].
+pub(crate) struct ResolveRootDepsBuildEntriesArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) running_root: &'a Path,
+    pub(crate) atom_str: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) owner: (String, String),
+    pub(crate) seen: &'a mut HashSet<(String, String)>,
+    pub(crate) local_binpkg: &'a std::sync::Arc<BinaryIndex>,
+}

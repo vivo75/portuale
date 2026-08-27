@@ -5,6 +5,18 @@ use portage_profile::Config;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+/// The values [`filter_root_deps`] reads from its caller.
+pub(crate) struct FilterRootDepsArgs<'a> {
+    pub(crate) flat_deps: Vec<String>,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a Config,
+    pub(crate) metadata: &'a Arc<HashMap<String, String>>,
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) key: &'a (String, String),
+    pub(crate) state: &'a mut PassState,
+    pub(crate) cross_running_root: Option<&'a Path>,
+}
+
 /// The values [`enqueue_test_deps`] reads from its caller.
 pub(crate) struct EnqueueTestDepsArgs<'a> {
     pub(crate) ctx: &'a ResolveCtx<'a>,

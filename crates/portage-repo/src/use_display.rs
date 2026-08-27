@@ -2,6 +2,14 @@
 
 use crate::*;
 
+/// The installed version's recorded `USE` / `IUSE` (both bare flag
+/// names, `USE` already intersected with `IUSE`), for the `*`/`%`
+/// diff markers. `None` for a `New` entry -> no markers.
+pub(crate) struct InstalledUseState {
+    pub(crate) old_use: HashSet<String>,
+    pub(crate) old_iuse: HashSet<String>,
+}
+
 /// Natural sort key: split on runs of digits and compare those as
 /// numbers, so `python3_9` sorts before `python3_12`.
 /// Portage: output_helpers.py, _alnum_sort_key
@@ -41,4 +49,12 @@ pub fn alnum_sort_key(s: &str) -> Vec<AlnumKey> {
 pub enum AlnumKey {
     Str(String),
     Num(u128),
+}
+pub(crate) struct BuildUseExpandDisplayArgs<'a> {
+    pub(crate) use_flags_display: &'a [(String, bool)],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) installed: Option<&'a InstalledUseState>,
+    pub(crate) forced: &'a HashSet<String>,
+    pub(crate) all_flags: bool,
+    pub(crate) reinst_flags: &'a HashSet<String>,
 }

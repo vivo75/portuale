@@ -55,6 +55,19 @@ pub fn eapi_has_slot_operator(eapi: &str) -> bool {
     digits.parse::<u32>().is_ok_and(|n| n >= 5)
 }
 
+/// Whether a `||` group an inactive conditional emptied is dropped (EAPI 6 and
+/// below). Call only with an `eapi_is_supported` EAPI; unparseable input reads
+/// `false`, matching Portage's defaults for `None`/unsupported EAPIs.
+// Portage: _get_eapi_attrs(eapi).empty_groups_always_true
+pub fn eapi_empty_groups_always_true(eapi: &str) -> bool {
+    let digits: String = eapi
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<u32>().is_ok_and(|n| n <= 6)
+}
+
 /// Whether `IUSE_EFFECTIVE` exists in this EAPI (EAPI 5+) and therefore governs
 /// the `PORTAGE_USE` masking and the valid-flag domain. Same numeric-prefix
 /// reading as `eapi_has_slot_operator`.
