@@ -1372,6 +1372,7 @@ name = "portage-repo"
 version = "0.1.0"
 dependencies = [
  "portage-dep",
+ "portage-fetch",
  "portage-profile",
  "portage-required-use",
  "portage-use-reduce",

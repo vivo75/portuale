@@ -9,3 +9,10 @@ portage-dep = { path = "../portage-dep" }
 portage-use-reduce = { path = "../portage-use-reduce" }
 portage-profile = { path = "../portage-profile" }
 portage-required-use = { path = "../portage-required-use" }
+# Real `output.py`'s own `f`/`F` fetch-restrict bracket column
+# (`getfetchsizes(cpv, only_restricted=True)`): the dry-run resolver
+# needs to know whether a `RESTRICT=fetch` package's own `SRC_URI`
+# distfiles are already in `DISTDIR` -- exactly the `SRC_URI` flatten +
+# `Manifest` size lookup `portage-fetch` already implements (and the
+# same layering real `output.py` uses, calling `portdb.getfetchsizes`).
+portage-fetch = { path = "../portage-fetch" }

@@ -920,6 +920,31 @@ CASES = [
         ["--pretend", "--json", "dev-libs/multislotparent"],
         0,
     ),
+    (
+        "fetch-restrict column: RESTRICT=fetch, distfile present -> f",
+        ["--pretend", "dev-libs/fetchrestrictsatisfiedpkg"],
+        0,
+    ),
+    (
+        "fetch-restrict column: RESTRICT=fetch, distfile missing -> F",
+        ["--pretend", "dev-libs/fetchrestrictmissingpkg"],
+        0,
+    ),
+    (
+        "fetch-restrict column: -v keeps f/F ahead of the mask column",
+        ["--pretend", "-v", "dev-libs/fetchrestrictmissingpkg"],
+        0,
+    ),
+    (
+        "fetch-restrict column: --columns",
+        ["--pretend", "--columns", "dev-libs/fetchrestrictsatisfiedpkg"],
+        0,
+    ),
+    (
+        "fetch-restrict column: --json fetch_restrict fields",
+        ["--pretend", "--json", "dev-libs/fetchrestrictmissingpkg"],
+        0,
+    ),
 ]
 
 
@@ -3888,6 +3913,45 @@ def test_interactive_bracket_column(emerge_binary, fixture_env):
     ]
 
 
+def test_fetch_restrict_bracket_column(emerge_binary, fixture_env):
+    """Real output.py:633: for a merge-bound ebuild whose evaluated
+    RESTRICT contains `fetch`, attr_display.fetch_restrict; then
+    fetch_restrict_satisfied if `not getfetchsizes(only_restricted=True)`
+    -- every SRC_URI distfile already in DISTDIR at its Manifest size.
+    __str__ renders green `f` (satisfied) / red `F` (missing), after the
+    S column. fixture_env points DISTDIR at PORTING/fixtures/distfiles/,
+    which holds frs-1.0.tar.gz (matching frs's Manifest) but not
+    frm-1.0.tar.gz."""
+    ok = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/fetchrestrictsatisfiedpkg"], fixture_env
+    )
+    assert ok.returncode == 0
+    assert ok.stdout.splitlines() == [
+        "[ebuild  Nf] dev-libs/fetchrestrictsatisfiedpkg-1.0",
+    ]
+
+    missing = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/fetchrestrictmissingpkg"], fixture_env
+    )
+    assert missing.returncode == 0
+    assert missing.stdout.splitlines() == [
+        "[ebuild  NF] dev-libs/fetchrestrictmissingpkg-1.0",
+    ]
+
+    # Point DISTDIR somewhere empty -> even the pre-seeded one is now F.
+    empty_env = {**fixture_env, "DISTDIR": "/var/empty/no-such-distdir"}
+    both_missing = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/fetchrestrictsatisfiedpkg"], empty_env
+    )
+    assert both_missing.stdout.splitlines() == [
+        "[ebuild  NF] dev-libs/fetchrestrictsatisfiedpkg-1.0",
+    ]
+
+    # A package with no RESTRICT=fetch has no f/F column at all.
+    plain = _run([str(emerge_binary)], ["--pretend", "dev-libs/newpkg"], fixture_env)
+    assert plain.stdout.splitlines() == ["[ebuild  N] dev-libs/newpkg-1.0"]
+
+
 def test_pv_totals_summary_line(emerge_binary, fixture_env):
     """Real output.py::display: `if self.conf.verbosity == 3:
     self.print_verbose(...)` -> `writemsg_stdout(f"\\n{self.counters}\\n")`
@@ -5801,7 +5865,8 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
     assert result.stderr == ""
     assert result.stdout == (
         '{"entries":[{"category":"dev-libs","package":"newpkg","outcome":"new",'
-        '"version":"1.0","new_slot":false,"interactive":false,"slot":"0","source":"ebuild",'
+        '"version":"1.0","new_slot":false,"interactive":false,'
+        '"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild",'
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,'
         '"required_by":[],"builds_against_running_root":null,"blockers":[]}],'
@@ -5818,7 +5883,8 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
     assert result.returncode == 0
     assert result.stdout == (
         '{"entries":[{"category":"dev-libs","package":"upgradepkg","outcome":"upgrade",'
-        '"version":"2.0","from_version":"1.0","interactive":false,"slot":"0","source":"ebuild",'
+        '"version":"2.0","from_version":"1.0","interactive":false,'
+        '"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild",'
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,"required_by":[],"builds_against_running_root":null,'
         '"blockers":[]}],"slot_conflicts":[],'

@@ -2852,6 +2852,38 @@ PORTING/
   honestly classify one. ~18 existing `-pv` pinned-output contract
   tests updated for the new trailing line.
 
+  **`emerge --pretend`: the `f`/`F` fetch-restrict bracket column.**
+  Real `output.py:633`: `if not pkg.built and pkg.operation == "merge"
+  and "fetch" in pkg.restrict: attr_display.fetch_restrict = True`, then
+  `if not portdb.getfetchsizes(cpv, useflags=pkg_info.use,
+  only_restricted=True): attr_display.fetch_restrict_satisfied = True`.
+  `PkgAttrDisplay.__str__` renders it right after the `S`/`R` column:
+  green `f` (satisfied -- every distfile already in `DISTDIR`), red `F`
+  (some missing -- `emerge` won't auto-download a `RESTRICT=fetch`
+  package, you fetch them by hand). Completes `PkgAttrDisplay`'s bracket
+  (`g`, remote binary, stays out -- needs `--getbinpkg`). The `RESTRICT`
+  check reuses `evaluated_metadata_tokens` (built for the `interactive`
+  slice); `fetch_restrict_files_all_present` (new, `portage-repo`, which
+  gained a `portage-fetch` dependency) flattens the candidate's own
+  `SRC_URI` against its effective USE (`portage_fetch::flatten_src_uri`,
+  the `useflags=pkg_info.use` real portage passes) and checks each file
+  against `DISTDIR` (present + `Manifest` `DIST` size match -- an
+  unparsable `SRC_URI` or missing `Manifest` entry counts as `F`, the
+  loud choice). `resolve_pretend_graph` gained a `distdir` parameter
+  (env `DISTDIR`, real `make.globals` default
+  `/var/cache/distfiles`); new `GraphEntry::fetch_restrict` /
+  `fetch_restrict_satisfied`; `--json` carries both. The Python
+  reference grew its own small `_flatten_src_uri` /
+  `_manifest_dist_sizes` (a bespoke `SRC_URI` parser mirroring
+  `portage-fetch`, not real `use_reduce` -- same "two independent
+  implementations" discipline). New fixtures
+  `dev-libs/fetchrestrictsatisfiedpkg` / `fetchrestrictmissingpkg` (both
+  `RESTRICT="fetch"`) + a committed `PORTING/fixtures/distfiles/`
+  (holding only the first's distfile at its `Manifest` size), wired into
+  the test `fixture_env`'s `DISTDIR`. Deferred to a follow-up: the
+  `, Size of downloads: …` suffix and `Fetch Restriction: N package(s)`
+  line on the `Total:` counters line (same machinery, now available).
+
   **`use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
   (stable-vs-`~arch` distinction)**. Closes the last named cut in the
   `package.use.mask`/`.force` slice's own paragraph above. Grounded

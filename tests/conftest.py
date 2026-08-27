@@ -110,8 +110,12 @@ def emerge_pretend_python() -> list[str]:
 @pytest.fixture
 def fixture_env() -> dict[str, str]:
     """PORTAGE_CONFIGROOT/ROOT pointed at PORTING/fixtures, the synthetic
-    repo+vdb tree the emerge --pretend pilot slice is tested against."""
+    repo+vdb tree the emerge --pretend pilot slice is tested against.
+    DISTDIR points at the committed PORTING/fixtures/distfiles/ so the
+    `f`/`F` fetch-restrict bracket column has a deterministic on-disk
+    state to check against."""
     env = dict(os.environ)
     env["PORTAGE_CONFIGROOT"] = str(FIXTURES_ROOT)
     env["ROOT"] = str(FIXTURES_ROOT)
+    env["DISTDIR"] = str(FIXTURES_ROOT / "distfiles")
     return env

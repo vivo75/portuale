@@ -111,11 +111,16 @@ Ranked roughly by how self-contained each is.
    `PROPERTIES` contains `interactive`. The trailing `_PackageCounters`
    totals line (`Total: N packages (…)` + `Conflict: N blocks`,
    `package_counters_summary`, real `output_helpers.py`, `-v`-gated)
-   **shipped 2026-08-27** too — the package-count half only. **Still
-   open in this bracket area:** the `f`/`F`/`g` fetch-restrict /
-   remote-binary column, and the `, Size of downloads: …` /
-   `Fetch Restriction: …` parts of the totals line (all need the
-   SRC_URI/Manifest/DISTDIR fetch-size machinery — real `getfetchsizes`).
+   **shipped 2026-08-27** too — the package-count half only. The `f`/`F`
+   fetch-restrict column (`GraphEntry::fetch_restrict` /
+   `fetch_restrict_satisfied` + new `fetch_restrict_files_all_present`,
+   `portage-repo` gained a `portage-fetch` dep; real `output.py:633` +
+   `getfetchsizes(only_restricted=True)`) **shipped 2026-08-27** —
+   `resolve_pretend_graph` gained a `distdir` param; the SRC_URI /
+   Manifest-size / DISTDIR-presence machinery now exists. **Still open in
+   this bracket area:** `g` (remote binary — needs `--getbinpkg`), and
+   the `, Size of downloads: …` / `Fetch Restriction: …` parts of the
+   totals line (reuse the fetch-size machinery, now available).
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag

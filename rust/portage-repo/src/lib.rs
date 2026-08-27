@@ -1484,6 +1484,52 @@ fn evaluated_metadata_tokens(
         .unwrap_or_default()
 }
 
+/// Real `output.py:636`'s own `not getfetchsizes(cpv, useflags=…,
+/// only_restricted=True)`: whether every distfile this candidate's own
+/// `SRC_URI` names -- flattened against its effective USE (`use_flags`),
+/// exactly the `useflags=pkg_info.use` real portage passes -- is already
+/// present in `distdir` at the byte size its repo `Manifest` records.
+/// (`RESTRICT=fetch` is package-wide, so every `SRC_URI` file is
+/// "restricted" -- there's no per-file `fetch+` syntax -- which makes
+/// `only_restricted=True` a no-op filter here.) An unparsable `SRC_URI`,
+/// or a distfile with no `Manifest` `DIST` line, counts as *not*
+/// satisfied -- the loud `F` column, same "can't tell, so don't claim
+/// it's fine" precedent as `evaluated_metadata_tokens` above. An empty
+/// `SRC_URI` (no distfiles at all) is trivially satisfied.
+fn fetch_restrict_files_all_present(
+    src_uri: &str,
+    use_flags: &HashSet<String>,
+    repo_location: &Path,
+    category: &str,
+    package: &str,
+    distdir: &Path,
+) -> bool {
+    let Ok(files) = portage_fetch::flatten_src_uri(src_uri, |negated, flag| {
+        let on = use_flags.contains(flag);
+        if negated {
+            !on
+        } else {
+            on
+        }
+    }) else {
+        return false;
+    };
+    if files.is_empty() {
+        return true;
+    }
+    let digests =
+        portage_fetch::parse_manifest(&repo_location.join(category).join(package).join("Manifest"))
+            .unwrap_or_default();
+    files.iter().all(|f| {
+        let Some(recorded) = digests.get(&f.filename) else {
+            return false;
+        };
+        std::fs::metadata(distdir.join(&f.filename))
+            .map(|m| m.len() == recorded.size)
+            .unwrap_or(false)
+    })
+}
+
 /// This candidate's own effective `ACCEPT_LICENSE`/`ACCEPT_PROPERTIES`/
 /// `ACCEPT_RESTRICT`-style symbolic token list: `global_accept`, with
 /// every matching `package_accept` entry's own tokens layered on top,
@@ -4008,6 +4054,8 @@ fn resolve_root_deps_build_entries(
         keyword_mask: None,
         new_slot: false,
         interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
         required_by: vec![owner],
         source: CandidateSource::Ebuild,
         provenance: VisibilityProvenance::default(),
@@ -4760,6 +4808,23 @@ pub struct GraphEntry {
     /// `Reinstall`) whose evaluated `PROPERTIES` contains `interactive`;
     /// always `false` for `AlreadyInstalled`/`NoVisibleCandidate`.
     pub interactive: bool,
+    /// Real `output.py:633`'s own `attr_display.fetch_restrict` (the
+    /// `f`/`F` bracket column, after the `S`/`R` one): `true` for a
+    /// merge-bound *ebuild* entry (`not pkg.built`) whose evaluated
+    /// `RESTRICT` contains `fetch` -- a package portage will not
+    /// auto-download, only ever `false` for a binary candidate. See
+    /// `fetch_restrict_satisfied` for the `f`-vs-`F` split.
+    pub fetch_restrict: bool,
+    /// Real `output.py:636`: `not getfetchsizes(cpv, useflags=…,
+    /// only_restricted=True)` -- every one of this candidate's own
+    /// `SRC_URI` distfiles (flattened against its effective USE) is
+    /// already present in `DISTDIR` at the size its `Manifest` records.
+    /// Only meaningful when `fetch_restrict` is `true`: `true` -> the
+    /// green `f` column ("nothing to fetch"), `false` -> the red `F`
+    /// ("fetch these by hand"). A `SRC_URI` this pilot can't parse, or a
+    /// missing `Manifest` entry, counts as not-satisfied (`F`, the loud
+    /// choice).
+    pub fetch_restrict_satisfied: bool,
     /// Every `(category, package)` that reached this entry via its own
     /// DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND (sorted, deduplicated) --
     /// empty for a directly-requested top-level atom with no other
@@ -5452,6 +5517,7 @@ pub fn resolve_pretend_graph(
     newrepo: bool,
     buildpkgonly: bool,
     root_deps_running_root: Option<&Path>,
+    distdir: &Path,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
 
@@ -5798,6 +5864,8 @@ pub fn resolve_pretend_graph(
                 keyword_mask: None,
                 new_slot: false,
                 interactive: false,
+                fetch_restrict: false,
+                fetch_restrict_satisfied: false,
                 required_by: Vec::new(),
                 source: CandidateSource::Ebuild,
                 provenance: VisibilityProvenance::default(),
@@ -5934,6 +6002,13 @@ pub fn resolve_pretend_graph(
             keyword_mask,
             new_slot,
             interactive,
+            // Real `output.py:633`'s `not pkg.built and … "fetch" in
+            // pkg.restrict`. Filled in below, once `metadata`/`use_flags`
+            // (for `SRC_URI` flattening) are read -- a binary candidate
+            // (`pkg.built`) is never fetch-restricted, so it stays
+            // `false` here regardless.
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
             required_by: Vec::new(),
             source: candidate_source,
             provenance,
@@ -5976,6 +6051,38 @@ pub fn resolve_pretend_graph(
             &key.0,
             &key.1,
         );
+
+        // Real `output.py:633-641`'s own `f`/`F` fetch-restrict column
+        // (`not pkg.built` -> ebuild candidates only; a binary is already
+        // built and never re-fetched). `resolved.restrict` is the raw
+        // `RESTRICT`; `evaluated_metadata_tokens` resolves its USE
+        // conditionals the same way it does for `interactive`'s
+        // `PROPERTIES`. `fetch_restrict_satisfied` is real
+        // `not getfetchsizes(only_restricted=True)`.
+        if candidate_source == CandidateSource::Ebuild
+            && evaluated_metadata_tokens(
+                &resolved.restrict,
+                resolved,
+                &key.0,
+                &key.1,
+                &candidate_str,
+                config,
+            )
+            .contains("fetch")
+        {
+            entries[entry_idx].fetch_restrict = true;
+            entries[entry_idx].fetch_restrict_satisfied = fetch_restrict_files_all_present(
+                metadata
+                    .get("SRC_URI")
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+                &use_flags,
+                &repo_location,
+                &key.0,
+                &key.1,
+                distdir,
+            );
+        }
 
         // IUSE's own "+flag"/"-flag" default markers only matter for
         // resolving a flag's default when nothing else decides it --
@@ -7605,6 +7712,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -8367,6 +8475,29 @@ mod tests {
     }
 
     #[test]
+    fn fixture_fetch_restrict_column_tracks_distdir_state() {
+        // Both fixtures are `RESTRICT="fetch"`. The test helpers pass
+        // `fixtures_root().join("distfiles")` as `distdir`, which holds
+        // `frs-1.0.tar.gz` at the size its Manifest records but not
+        // `frm-1.0.tar.gz` -- real `output.py:633-641`'s `fetch_restrict`
+        // / `not getfetchsizes(only_restricted=True)`.
+        let entries = graph_entries_real("dev-libs/fetchrestrictsatisfiedpkg");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].fetch_restrict);
+        assert!(entries[0].fetch_restrict_satisfied);
+
+        let entries = graph_entries_real("dev-libs/fetchrestrictmissingpkg");
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].fetch_restrict);
+        assert!(!entries[0].fetch_restrict_satisfied);
+
+        // A package with no `fetch` in RESTRICT never sets the flag.
+        let entries = graph_entries_real("dev-libs/newpkg");
+        assert!(!entries[0].fetch_restrict);
+        assert!(!entries[0].fetch_restrict_satisfied);
+    }
+
+    #[test]
     fn fixture_virtual_resolves_through_ordinary_category_and_any_of_machinery() {
         // virtual/texteditor is shaped exactly like a real virtual (e.g.
         // virtual/pager in the real Gentoo tree, confirmed by
@@ -8673,6 +8804,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -8713,6 +8845,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -8755,6 +8888,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -8801,6 +8935,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -8864,6 +8999,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -8975,6 +9111,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -9113,6 +9250,7 @@ mod tests {
             false,
             false,
             root_deps_running_root,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -9267,6 +9405,7 @@ mod tests {
             false,
             false,
             Some(&root),
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -9343,6 +9482,7 @@ mod tests {
             false,
             false,
             Some(&root),
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -9423,6 +9563,7 @@ mod tests {
             false,
             false,
             Some(&root),
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -9483,6 +9624,7 @@ mod tests {
                 false,
                 false,
                 root_deps_running_root,
+                &fixtures_root().join("distfiles"),
             )
             .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
             .entries
@@ -9547,6 +9689,7 @@ mod tests {
             false,
             false,
             Some(&root),
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -9600,6 +9743,7 @@ mod tests {
             false,
             false,
             Some(&root),
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -9649,6 +9793,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -9868,6 +10013,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -10071,6 +10217,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -10158,6 +10305,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10337,6 +10485,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -10533,6 +10682,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10581,6 +10731,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10688,6 +10839,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -10734,6 +10886,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10782,6 +10935,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10830,6 +10984,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -11095,6 +11250,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -11155,6 +11311,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -11191,6 +11348,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -11260,6 +11418,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -11323,6 +11482,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -11359,6 +11519,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -11426,6 +11587,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -11502,6 +11664,7 @@ mod tests {
             false,
             false,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -11549,6 +11712,7 @@ mod tests {
             false,
             true,
             None,
+            &fixtures_root().join("distfiles"),
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -12733,6 +12897,8 @@ mod tests {
             keyword_mask: None,
             new_slot: false,
             interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
             required_by: Vec::new(),
             source: CandidateSource::Ebuild,
             provenance: VisibilityProvenance::default(),

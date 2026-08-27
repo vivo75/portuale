@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: RESTRICT=fetch, distfile absent from DISTDIR -> red [ebuild NF], fetch by hand
+EAPI=8
+KEYWORDS=amd64
+RESTRICT=fetch
+SLOT=0
+SRC_URI=https://example.invalid/frm-1.0.tar.gz
+_md5_=0000000000000000000000000000000

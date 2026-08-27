@@ -956,6 +956,108 @@ def _evaluated_metadata_tokens(value_str, candidate, category, package, candidat
         return set()
 
 
+def _flatten_src_uri(src_uri, use_flags):
+    """Flattens a SRC_URI string into the ordered list of local filenames
+    it names -- the "arrow" rename target, or the URI's own basename (PMS
+    3.1.6). Recursive-descent, mirroring portage-fetch::flatten_src_uri /
+    parse_list exactly (a small bespoke parser, not real use_reduce, the
+    same "two independent implementations" approach the rest of this
+    pilot uses). Raises ValueError on a grammar it can't parse."""
+    tokens = src_uri.split()
+    pos = 0
+
+    def parse_list():
+        nonlocal pos
+        out = []
+        while pos < len(tokens) and tokens[pos] != ")":
+            tok = tokens[pos]
+            if tok.endswith("?"):
+                pos += 1
+                if pos >= len(tokens) or tokens[pos] != "(":
+                    raise ValueError(f'SRC_URI: expected "(" after {tok!r}')
+                pos += 1
+                flag = tok[:-1]
+                negated = flag.startswith("!")
+                if negated:
+                    flag = flag[1:]
+                inner = parse_list()
+                if pos >= len(tokens) or tokens[pos] != ")":
+                    raise ValueError(f"SRC_URI: unterminated {tok!r} group")
+                pos += 1
+                on = flag in use_flags
+                if (not on) if negated else on:
+                    out.extend(inner)
+            elif tok in ("(", ")"):
+                raise ValueError(f"SRC_URI: unexpected {tok!r}")
+            else:
+                pos += 1
+                if pos < len(tokens) and tokens[pos] == "->":
+                    pos += 1
+                    if pos >= len(tokens):
+                        raise ValueError('SRC_URI: missing filename after "->"')
+                    out.append(tokens[pos])
+                    pos += 1
+                else:
+                    out.append(tok.rsplit("/", 1)[-1])
+        return out
+
+    result = parse_list()
+    if pos != len(tokens):
+        raise ValueError(f"SRC_URI: unexpected token {tokens[pos]!r}")
+    return result
+
+
+def _manifest_dist_sizes(manifest_path):
+    """Every `DIST <name> <size> ...` line of a repo Manifest, as
+    {name: size}. A missing Manifest is an empty dict (same tolerance the
+    Rust parse_manifest gives). Mirrors portage-fetch::parse_manifest,
+    narrowed to the size field this pilot's f/F column needs."""
+    out = {}
+    try:
+        with open(manifest_path) as fh:
+            text = fh.read()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == "DIST":
+            try:
+                out[parts[1]] = int(parts[2])
+            except ValueError:
+                pass
+    return out
+
+
+def _fetch_restrict_files_all_present(
+    src_uri, use_flags, repo_location, category, package, distdir
+):
+    """Real output.py:636's `not getfetchsizes(cpv, useflags=...,
+    only_restricted=True)`: whether every distfile SRC_URI names
+    (flattened against effective USE) is already in `distdir` at the
+    size its repo Manifest records. Unparsable SRC_URI / missing
+    Manifest entry -> not satisfied (the loud F). Empty SRC_URI ->
+    trivially satisfied. Mirrors portage-repo/src/lib.rs's
+    fetch_restrict_files_all_present."""
+    try:
+        files = _flatten_src_uri(src_uri, use_flags)
+    except ValueError:
+        return False
+    if not files:
+        return True
+    sizes = _manifest_dist_sizes(
+        os.path.join(repo_location, category, package, "Manifest")
+    )
+    for name in files:
+        if name not in sizes:
+            return False
+        try:
+            if os.path.getsize(os.path.join(distdir, name)) != sizes[name]:
+                return False
+        except OSError:
+            return False
+    return True
+
+
 def is_visible(candidate, category, package, config):
     """A candidate is visible if it isn't masked (matches a package.mask
     entry and no package.unmask entry), its KEYWORDS intersect the
@@ -4438,6 +4540,7 @@ def resolve_pretend_graph(
     newrepo=False,
     buildpkgonly=False,
     root_deps_running_root=None,
+    distdir="/var/cache/distfiles",
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -4930,6 +5033,18 @@ def resolve_pretend_graph(
         provenance["interactive"] = "interactive" in _evaluated_metadata_tokens(
             resolved.get("properties", ""), resolved, category, package, _candidate_str, config
         )
+        # Real output.py:633: `not pkg.built and "fetch" in pkg.restrict`
+        # (ebuild candidates only). fetch_restrict_satisfied is filled in
+        # below, once metadata (SRC_URI) + use_flags are read. Stashed on
+        # provenance (shared dict, mutated after append) like interactive.
+        # Mirrors portage-repo/src/lib.rs's GraphEntry::fetch_restrict.
+        provenance["fetch_restrict"] = candidate_source != "binary" and (
+            "fetch"
+            in _evaluated_metadata_tokens(
+                resolved.get("restrict", ""), resolved, category, package, _candidate_str, config
+            )
+        )
+        provenance["fetch_restrict_satisfied"] = False
         entries.append(
             (
                 category,
@@ -4978,6 +5093,18 @@ def resolve_pretend_graph(
             category,
             package,
         )
+
+        # Real output.py:636's `not getfetchsizes(only_restricted=True)`.
+        if provenance["fetch_restrict"]:
+            provenance["fetch_restrict_satisfied"] = _fetch_restrict_files_all_present(
+                metadata.get("SRC_URI", ""),
+                use_flags,
+                repo_location,
+                category,
+                package,
+                distdir,
+            )
+
         # REQUIRED_USE (PMS 7.3.4/8.2): checked once, here, right after a
         # candidate is newly resolved -- real depgraph.py's own "NOTE:
         # REQUIRED_USE checks are delayed until after package selection"
@@ -5786,10 +5913,13 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
     # PROPERTIES contains "interactive" (provenance["interactive"]).
     # Mirrors pretend.rs's entry_to_json.
     if tag in ("new", "upgrade", "downgrade", "reinstall"):
-        interactive_val = (
-            provenance.get("interactive", False) if isinstance(provenance, dict) else False
+        pv = provenance if isinstance(provenance, dict) else {}
+        fields.append(f'"interactive":{_json_bool(pv.get("interactive", False))}')
+        # Real output.py:633's own f/F fetch-restrict column.
+        fields.append(f'"fetch_restrict":{_json_bool(pv.get("fetch_restrict", False))}')
+        fields.append(
+            f'"fetch_restrict_satisfied":{_json_bool(pv.get("fetch_restrict_satisfied", False))}'
         )
-        fields.append(f'"interactive":{_json_bool(interactive_val)}')
     fields.append(f'"slot":{_json_string(slot) if slot is not None else "null"}')
     if tag != "no_visible_candidate":
         fields.append(f'"source":{_json_string(source)}')
@@ -7343,6 +7473,7 @@ def run(args):
             newrepo,
             buildpkgonly,
             root_deps_running_root,
+            os.environ.get("DISTDIR", "/var/cache/distfiles"),
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -7521,6 +7652,14 @@ def run(args):
         # (provenance["interactive"]). Unconditional, like the S column.
         # Mirrors pretend.rs's `ix`.
         ix = "I" if (isinstance(provenance, dict) and provenance.get("interactive")) else ""
+        # Real output.py:637-641's own f/F fetch-restrict bracket column,
+        # right after the S/R one: f = all restricted distfiles already
+        # in DISTDIR, F = some must be fetched by hand. Mirrors
+        # pretend.rs's `fx`.
+        if isinstance(provenance, dict) and provenance.get("fetch_restrict"):
+            fx = "f" if provenance.get("fetch_restrict_satisfied") else "F"
+        else:
+            fx = ""
         if tag == "new":
             # Real output.py's own "S" bracket column
             # (PkgAttrDisplay.new_slot): a "new" into a slot the package
@@ -7528,7 +7667,11 @@ def run(args):
             # (provenance["new_slot"]). Rendered right after the N code
             # letter, unconditionally -- unlike mask, this column is not
             # -v-gated in real portage either. Mirrors pretend.rs.
-            code = ix + ("NS" if (isinstance(provenance, dict) and provenance.get("new_slot")) else "N")
+            code = (
+                ix
+                + ("NS" if (isinstance(provenance, dict) and provenance.get("new_slot")) else "N")
+                + fx
+            )
             if not onlydeps_suppressed:
                 if columns:
                     print(
@@ -7549,7 +7692,7 @@ def run(args):
                     print(
                         _columns_line(
                             bracket,
-                            ix + "U",
+                            ix + "U" + fx,
                             mask,
                             indent,
                             category,
@@ -7563,7 +7706,7 @@ def run(args):
                     )
                 else:
                     print(
-                        f"[{bracket}  {ix}U{mask}] {indent}{category}/{package}-{outcome[2]} "
+                        f"[{bracket}  {ix}U{fx}{mask}] {indent}{category}/{package}-{outcome[2]} "
                         f"(upgrade from {outcome[1]}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
@@ -7573,7 +7716,7 @@ def run(args):
                     print(
                         _columns_line(
                             bracket,
-                            ix + "D",
+                            ix + "D" + fx,
                             mask,
                             indent,
                             category,
@@ -7587,7 +7730,7 @@ def run(args):
                     )
                 else:
                     print(
-                        f"[{bracket}  {ix}D{mask}] {indent}{category}/{package}-{outcome[2]} "
+                        f"[{bracket}  {ix}D{fx}{mask}] {indent}{category}/{package}-{outcome[2]} "
                         f"(downgrade from {outcome[1]}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
@@ -7600,7 +7743,7 @@ def run(args):
             if not onlydeps_suppressed and columns:
                 print(
                     _columns_line(
-                        bracket, ix + "r", mask, indent, category, package, outcome[1], "", columnwidth
+                        bracket, ix + "r" + fx, mask, indent, category, package, outcome[1], "", columnwidth
                     )
                     + root
                     + use_suffix(use_display, installed, forced)
@@ -7615,12 +7758,12 @@ def run(args):
                 )
                 if reason is None:
                     print(
-                        f"[{bracket}  {ix}r{mask}] {indent}{category}/{package}-{outcome[1]}"
+                        f"[{bracket}  {ix}r{fx}{mask}] {indent}{category}/{package}-{outcome[1]}"
                         f"{root}{use_suffix(use_display, installed, forced)}"
                     )
                 else:
                     print(
-                        f"[{bracket}  {ix}r{mask}] {indent}{category}/{package}-{outcome[1]} "
+                        f"[{bracket}  {ix}r{fx}{mask}] {indent}{category}/{package}-{outcome[1]} "
                         f"(reinstall for {reason}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[1], blockers)

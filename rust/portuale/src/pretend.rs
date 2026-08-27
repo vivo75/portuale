@@ -577,6 +577,17 @@ fn print_entry_line(
     // paired with a code letter here -- every outcome this renders a
     // bracket for already has one (`N`/`U`/`D`/`r`).
     let ix = if entry.interactive { "I" } else { "" };
+    // Real `output.py:637-641`'s own `f`/`F` fetch-restrict bracket
+    // column (`PkgAttrDisplay.__str__` renders it right after the
+    // `S`/`R` one): `f` when every restricted distfile is already in
+    // `DISTDIR` (`GraphEntry::fetch_restrict_satisfied`), `F` when some
+    // must be fetched by hand. `g` (remote binary) is out of scope --
+    // needs `--getbinpkg`. Unconditional, like `S`/`I`.
+    let fx = match (entry.fetch_restrict, entry.fetch_restrict_satisfied) {
+        (true, true) => "f",
+        (true, false) => "F",
+        _ => "",
+    };
     match &entry.outcome {
         PretendOutcome::New { version } => {
             // Real `output.py`'s own `S` bracket column
@@ -585,7 +596,7 @@ fn print_entry_line(
             // of it is (`GraphEntry::new_slot`). Rendered right after
             // the `N` code letter, unconditionally -- unlike `mask`,
             // this column is not `-v`-gated in real portage either.
-            let code = format!("{ix}{}", if entry.new_slot { "NS" } else { "N" });
+            let code = format!("{ix}{}{fx}", if entry.new_slot { "NS" } else { "N" });
             if !onlydeps_suppressed {
                 if columns {
                     println!(
@@ -621,7 +632,7 @@ fn print_entry_line(
                         "{}{root}{}",
                         columns_line(
                             bracket,
-                            &format!("{ix}U"),
+                            &format!("{ix}U{fx}"),
                             &mask,
                             indent,
                             &entry.category,
@@ -634,7 +645,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  {ix}U{mask}] {indent}{}/{}-{to} (upgrade from {from}){root}{}",
+                        "[{bracket}  {ix}U{fx}{mask}] {indent}{}/{}-{to} (upgrade from {from}){root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -650,7 +661,7 @@ fn print_entry_line(
                         "{}{root}{}",
                         columns_line(
                             bracket,
-                            &format!("{ix}D"),
+                            &format!("{ix}D{fx}"),
                             &mask,
                             indent,
                             &entry.category,
@@ -663,7 +674,7 @@ fn print_entry_line(
                     );
                 } else {
                     println!(
-                        "[{bracket}  {ix}D{mask}] {indent}{}/{}-{to} (downgrade from {from}){root}{}",
+                        "[{bracket}  {ix}D{fx}{mask}] {indent}{}/{}-{to} (downgrade from {from}){root}{}",
                         entry.category,
                         entry.package,
                         use_suffix(entry, verbose)
@@ -686,7 +697,7 @@ fn print_entry_line(
                         "{}{root}{}",
                         columns_line(
                             bracket,
-                            &format!("{ix}r"),
+                            &format!("{ix}r{fx}"),
                             &mask,
                             indent,
                             &entry.category,
@@ -706,13 +717,13 @@ fn print_entry_line(
                         *new_repo,
                     ) {
                         Some(reason) => println!(
-                            "[{bracket}  {ix}r{mask}] {indent}{}/{}-{version} (reinstall for {reason}){root}{}",
+                            "[{bracket}  {ix}r{fx}{mask}] {indent}{}/{}-{version} (reinstall for {reason}){root}{}",
                             entry.category,
                             entry.package,
                             use_suffix(entry, verbose)
                         ),
                         None => println!(
-                            "[{bracket}  {ix}r{mask}] {indent}{}/{}-{version}{root}{}",
+                            "[{bracket}  {ix}r{fx}{mask}] {indent}{}/{}-{version}{root}{}",
                             entry.category,
                             entry.package,
                             use_suffix(entry, verbose)
@@ -1079,6 +1090,13 @@ fn entry_to_json(
             | PretendOutcome::Reinstall { .. }
     ) {
         fields.push(format!("\"interactive\":{}", entry.interactive));
+        // Real `output.py:633`'s own `f`/`F` fetch-restrict column
+        // (`GraphEntry::fetch_restrict` / `fetch_restrict_satisfied`).
+        fields.push(format!("\"fetch_restrict\":{}", entry.fetch_restrict));
+        fields.push(format!(
+            "\"fetch_restrict_satisfied\":{}",
+            entry.fetch_restrict_satisfied
+        ));
     }
     fields.push(format!(
         "\"slot\":{}",
@@ -2750,6 +2768,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // `PORTAGE_RUNNING_ROOT`'s own pilot-specific, test-only override).
     let root_deps_running_root = root_deps.then(portage_repo::running_root_from_env);
 
+    // Real `make.globals`'s own `DISTDIR="/var/cache/distfiles"` --
+    // env-var-sourced at this CLI boundary, the same "env var / hardcoded
+    // default" shortcut `fetch.rs`'s own `FetchOptions::distdir` already
+    // uses. Consulted only for the `f`/`F` fetch-restrict bracket column
+    // (see `GraphEntry::fetch_restrict`, portage-repo).
+    let distdir = std::env::var_os("DISTDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
     let result = match resolve_pretend_graph(
         &config_root,
         &root,
@@ -2779,6 +2805,7 @@ pub fn run(args: &[String]) -> ExitCode {
         newrepo,
         buildpkgonly,
         root_deps_running_root.as_deref(),
+        &distdir,
     ) {
         Ok(result) => result,
         Err(e) => {
