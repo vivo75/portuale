@@ -2,6 +2,47 @@
 
 use crate::pretend::*;
 
+/// The "still listed in the following package sets" check for one selected
+/// `category/package-version`: names of the user-editable sets that still
+/// directly list a matching atom, minus any set whose atom is also satisfied
+/// by an installed newer version of the same cp in a different slot.
+/// Shared by the unmerge and prune paths.
+/// Portage: unmerge.py, _unmerge_display
+pub(crate) fn still_listed_parents<'a>(
+    root: &Path,
+    installed_sets: &'a [(String, Vec<String>)],
+    cat: &str,
+    pkg: &str,
+    version: &str,
+) -> Vec<&'a str> {
+    let installed = portage_repo::installed_candidates(root, cat, pkg);
+    let selected_slot = installed
+        .iter()
+        .find(|(v, _, _)| v == version)
+        .map(|(_, s, _)| s.as_str());
+    let covered_by_higher_slot = |atom_str: &str| -> bool {
+        installed.iter().any(|(v, s, ss)| {
+            portage_versions::vercmp(v, version).is_some_and(|c| c > 0)
+                && Some(s.as_str()) != selected_slot
+                && match_from_list(atom_str, &[format!("{cat}/{pkg}-{v}:{s}/{ss}").as_str()])
+                    .is_some_and(|m| !m.is_empty())
+        })
+    };
+    let candidate = format!("{cat}/{pkg}-{version}");
+    let mut parents: Vec<&str> = Vec::new();
+    for (set_name, atoms) in installed_sets {
+        let listed = atoms.iter().any(|atom_str| {
+            parse_atom(atom_str).is_some_and(|a| a.category == cat && a.package == pkg)
+                && match_from_list(atom_str, &[candidate.as_str()]).is_some_and(|m| !m.is_empty())
+                && !covered_by_higher_slot(atom_str)
+        });
+        if listed {
+            parents.push(set_name);
+        }
+    }
+    parents
+}
+
 /// Whether a `FEATURES` token is on in the raw process env. This is the
 /// fallback for the CLI boundaries with no resolved config; every
 /// build/merge path reads the resolved list instead.

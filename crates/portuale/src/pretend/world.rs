@@ -138,3 +138,38 @@ pub(crate) fn resolve_custom_set(
     }
     Ok(atoms)
 }
+
+/// Every selected custom set with its direct atoms, for the unmerge
+/// "still listed" warning. Missing sets are dropped.
+/// Portage: unmerge.py, _unmerge_display.
+pub(crate) fn collect_installed_sets(
+    config_root: &Path,
+    root: &Path,
+) -> Result<Vec<(String, Vec<String>)>, String> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut queue: Vec<String> = read_world_sets(root)?;
+    while let Some(name) = queue.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let path = config_root.join("etc/portage/sets").join(&name);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut direct: Vec<String> = Vec::new();
+        for line in text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            if let Some(nested) = line.strip_prefix('@') {
+                queue.push(nested.to_string());
+            } else {
+                direct.push(line.to_string());
+            }
+        }
+        out.push((name, direct));
+    }
+    Ok(out)
+}
