@@ -674,6 +674,13 @@ pub struct InstalledPackage {
     pub slot: String,
 }
 
+impl InstalledPackage {
+    /// `category/package-version`.
+    pub fn cpv(&self) -> String {
+        format!("{}/{}-{}", self.category, self.package, self.version)
+    }
+}
+
 /// Every package recorded under `<root>/var/db/pkg`, each with its main slot. Directory names
 /// split into `package`/`version` at the last `-` boundary whose right half verifies as a version.
 /// Memoised per `root`, keyed by the vdb generation so a same-process merge/unmerge is picked up.

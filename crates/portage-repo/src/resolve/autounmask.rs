@@ -118,3 +118,49 @@ pub(crate) fn render_required_use_block(args: RenderRequiredUseBlockArgs<'_>) ->
     }
     out
 }
+
+/// Arguments of [`check_if_latest_atom_form`].
+pub(crate) struct CheckIfLatestAtomFormArgs<'a> {
+    pub(crate) resolved: &'a Candidate,
+    pub(crate) all_candidates: &'a [Candidate],
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) check_visibility: bool,
+}
+
+/// An autounmask change's left-hand atom: `>=<cpv>` when `resolved` is the
+/// highest candidate of its cp, `>=<cpv>:<slot>` when it's the highest *in
+/// its own slot*, else `=<cpv>`. `>=` for USE and license changes (unlike
+/// keywords, which always use `=`), so the change keeps applying to newer
+/// builds.
+/// Portage: _display_autounmask's check_if_latest.
+///
+/// `check_visibility`: `true` for USE changes (only genuinely-visible
+/// higher builds widen the atom), `false` for license changes (every
+/// higher build counts).
+pub(crate) fn check_if_latest_atom_form(args: CheckIfLatestAtomFormArgs<'_>) -> String {
+    let CheckIfLatestAtomFormArgs {
+        resolved,
+        all_candidates,
+        category,
+        package,
+        config,
+        check_visibility,
+    } = args;
+    let cpv = format!("{category}/{package}-{}", resolved.version);
+    let higher = |same_slot: bool| {
+        all_candidates.iter().any(|c| {
+            (!same_slot || c.slot == resolved.slot)
+                && vercmp_ordering(&c.version, &resolved.version) == std::cmp::Ordering::Greater
+                && (!check_visibility || is_visible(c, category, package, config))
+        })
+    };
+    if !higher(false) {
+        format!(">={cpv}")
+    } else if !higher(true) {
+        format!(">={cpv}:{}", resolved.slot)
+    } else {
+        format!("={cpv}")
+    }
+}
