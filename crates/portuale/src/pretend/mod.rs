@@ -20,6 +20,7 @@
 use crate::color::{self, Colorizer};
 
 mod args;
+mod atoms;
 mod config_action;
 mod conflicts;
 mod deselect;
@@ -37,6 +38,7 @@ mod world;
 mod tests;
 
 pub(crate) use args::*;
+pub(crate) use atoms::*;
 pub(crate) use config_action::*;
 pub(crate) use conflicts::*;
 pub(crate) use deselect::*;
