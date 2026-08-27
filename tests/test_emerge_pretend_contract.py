@@ -5066,6 +5066,28 @@ def test_prune_requires_pretend(emerge_binary, fixture_env):
     assert "requires --pretend" in result.stderr
 
 
+def test_prune_pretend_verbose_shows_reverse_deps(emerge_binary, fixture_env, tmp_path):
+    """emerge -pP --verbose: real create_cleanlist's prune branch
+    (actions.py:1339) also calls show_parents(pkg) -- but only for an
+    args_set-matched KEPT version with a real Package parent. In
+    _prune_root, dev-libs/keeper pins =dev-libs/mm-2.0, so mm-2.0 (kept,
+    non-highest) is the one block; the highest versions (protected by the
+    bare-cp seed, which show_parents filters) get no block. The
+    ">>> To see reverse dependencies" hint is suppressed."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(_prune_root(tmp_path))
+    result = _run([str(emerge_binary)], ["--pretend", "--prune", "--verbose"], env)
+    assert result.returncode == 0
+    out = result.stdout
+    assert (
+        "  dev-libs/mm-2.0 pulled in by:\n"
+        "    dev-libs/keeper-1.0 requires =dev-libs/mm-2.0\n"
+    ) in out
+    assert "  dev-libs/mm-3.0 pulled in by:" not in out
+    assert "  dev-libs/aa-2.0 pulled in by:" not in out
+    assert out.index("pulled in by:") < out.index(">>> Calculating removal order...")
+
+
 def test_prune_matches_between_implementations(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):
@@ -5074,7 +5096,10 @@ def test_prune_matches_between_implementations(
     for args in (
         ["--pretend", "--prune"],
         ["--pretend", "-P"],
+        ["--pretend", "--prune", "--verbose"],
+        ["--pretend", "-pvP"],
         ["--pretend", "--prune", "dev-libs/mm"],
+        ["--pretend", "--prune", "-v", "dev-libs/mm"],
         ["--pretend", "--prune", "mm"],
         ["--pretend", "--prune", "dev-libs/single"],
         ["--pretend", "--prune", "dev-libs/nope"],

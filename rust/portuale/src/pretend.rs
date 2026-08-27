@@ -2356,6 +2356,7 @@ fn run_prune_pretend(
     root: &Path,
     config_root: &Path,
     config: &portage_profile::Config,
+    verbose: bool,
 ) -> ExitCode {
     let args = match resolve_cleanup_args(targets, root, "prune") {
         Ok(a) => a,
@@ -2364,9 +2365,25 @@ fn run_prune_pretend(
 
     let result = portage_repo::prune_cleanlist(root, &args);
 
+    // Real `create_cleanlist`'s prune branch prints `show_parents(pkg)`
+    // inline while it builds the removal list -- before the removal-order
+    // line / empty message.
+    if verbose {
+        for (pkg, lines) in &result.kept_parents {
+            println!("  {} pulled in by:", pkg.cpv());
+            for line in lines {
+                println!("    {line}");
+            }
+            println!();
+        }
+    }
+
     if result.cleanlist.is_empty() {
         println!(">>> No packages selected for removal by prune");
-        println!(">>> To see reverse dependencies, use --verbose");
+        // Real `create_cleanlist`: `if "--verbose" not in myopts`.
+        if !verbose {
+            println!(">>> To see reverse dependencies, use --verbose");
+        }
         println!(">>> To ignore dependencies, use --nodeps");
         return ExitCode::SUCCESS;
     }
@@ -3495,7 +3512,7 @@ pub fn run(args: &[String]) -> ExitCode {
         return run_depclean_pretend(&atom_args, &root, &config_root, &config, verbose);
     }
     if prune {
-        return run_prune_pretend(&atom_args, &root, &config_root, &config);
+        return run_prune_pretend(&atom_args, &root, &config_root, &config, verbose);
     }
 
     // "@world"/"@system" each expand to their own real atom list, in

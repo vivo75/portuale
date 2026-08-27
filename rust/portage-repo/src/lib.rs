@@ -3197,6 +3197,39 @@ fn topological_removal_order(
     (true, result)
 }
 
+/// Real `show_parents`'s own per-package rendering (`actions.py:1274-1291`):
+/// group a kept package's recorded `(parent descriptor, atom)` edges by
+/// parent, render one `"<parent> requires <atom>, <atom>"` line each with
+/// the atoms sorted by atom package-name descending
+/// (`sorted(atoms, reverse=True, key=attrgetter("package"))`), then sort
+/// the lines. Shared by `depclean_cleanlist` and `prune_cleanlist`.
+fn render_show_parents(edges: &[(String, String)]) -> Vec<String> {
+    let mut by_parent: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (par, atom) in edges {
+        let v = by_parent.entry(par.as_str()).or_default();
+        if !v.contains(&atom.as_str()) {
+            v.push(atom.as_str());
+        }
+    }
+    let mut lines: Vec<String> = by_parent
+        .into_iter()
+        .map(|(par, mut atoms)| {
+            atoms.sort_by(|a, b| {
+                let pa = portage_dep::parse_atom(a)
+                    .map(|x| x.package)
+                    .unwrap_or_default();
+                let pb = portage_dep::parse_atom(b)
+                    .map(|x| x.package)
+                    .unwrap_or_default();
+                pb.cmp(&pa)
+            });
+            format!("{par} requires {}", atoms.join(", "))
+        })
+        .collect();
+    lines.sort();
+    lines
+}
+
 pub fn depclean_cleanlist(
     root: &Path,
     // `(atom, set_label)` -- the `@world` closure's seeds and which set
@@ -3339,31 +3372,7 @@ pub fn depclean_cleanlist(
         let Some(edges) = parent_atoms.get(&key(p)) else {
             continue;
         };
-        // Group atoms by parent descriptor.
-        let mut by_parent: HashMap<&str, Vec<&str>> = HashMap::new();
-        for (par, atom) in edges {
-            let v = by_parent.entry(par.as_str()).or_default();
-            if !v.contains(&atom.as_str()) {
-                v.push(atom.as_str());
-            }
-        }
-        let mut lines: Vec<String> = by_parent
-            .into_iter()
-            .map(|(par, mut atoms)| {
-                // Real: `sorted(atoms, reverse=True, key=attrgetter("package"))`.
-                atoms.sort_by(|a, b| {
-                    let pa = portage_dep::parse_atom(a)
-                        .map(|x| x.package)
-                        .unwrap_or_default();
-                    let pb = portage_dep::parse_atom(b)
-                        .map(|x| x.package)
-                        .unwrap_or_default();
-                    pb.cmp(&pa)
-                });
-                format!("{par} requires {}", atoms.join(", "))
-            })
-            .collect();
-        lines.sort();
+        let lines = render_show_parents(edges);
         if !lines.is_empty() {
             kept_parents.push((p.clone(), lines));
         }
@@ -3486,6 +3495,11 @@ pub fn prune_cleanlist(root: &Path, args: &[String]) -> DepcleanResult {
 
     let mut reachable: HashSet<(String, String, String)> = HashSet::new();
     let mut queue: Vec<InstalledPackage> = Vec::new();
+    // Real `_parent_atoms` -- only the dep-walk edges (a `Package`
+    // parent). The prune seeds are all pulled in by the internal
+    // protected-set / bare-`cp` roots, which `show_parents` filters out,
+    // so no edge is recorded for the seed itself.
+    let mut parent_atoms: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
     for p in &installed {
         if !is_candidate(p) && reachable.insert(key(p)) {
             queue.push(p.clone());
@@ -3493,6 +3507,7 @@ pub fn prune_cleanlist(root: &Path, args: &[String]) -> DepcleanResult {
     }
     while let Some(p) = queue.pop() {
         let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        let parent_cpv = p.cpv();
         for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
             let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
             if depstr.trim().is_empty() {
@@ -3503,6 +3518,10 @@ pub fn prune_cleanlist(root: &Path, args: &[String]) -> DepcleanResult {
             };
             for atom_str in atoms {
                 for dep in matches_atom(&atom_str) {
+                    parent_atoms
+                        .entry(key(dep))
+                        .or_default()
+                        .push((parent_cpv.clone(), atom_str.clone()));
                     if reachable.insert(key(dep)) {
                         queue.push(dep.clone());
                     }
@@ -3522,16 +3541,39 @@ pub fn prune_cleanlist(root: &Path, args: &[String]) -> DepcleanResult {
             .then_with(|| a.package.cmp(&b.package))
             .then_with(|| vercmp_ordering(&a.version, &b.version))
     });
+
+    // Real `create_cleanlist`'s prune branch: `elif "--verbose":
+    // show_parents(pkg)` for every `args_set`-matched *kept* version --
+    // i.e. every reachable installed package `matched_by_args` covers,
+    // that has a non-protected-set parent edge. cpv-sorted.
+    let mut kept: Vec<&InstalledPackage> = installed
+        .iter()
+        .filter(|p| reachable.contains(&key(p)) && matched_by_args(p))
+        .collect();
+    kept.sort_by(|a, b| {
+        a.category
+            .cmp(&b.category)
+            .then_with(|| a.package.cmp(&b.package))
+            .then_with(|| vercmp_ordering(&a.version, &b.version))
+    });
+    let mut kept_parents: Vec<(InstalledPackage, Vec<String>)> = Vec::new();
+    for p in kept {
+        let Some(edges) = parent_atoms.get(&key(p)) else {
+            continue;
+        };
+        let lines = render_show_parents(edges);
+        if !lines.is_empty() {
+            kept_parents.push((p.clone(), lines));
+        }
+    }
+
     let required_count = reachable.len();
     let (ordered, cleanlist) = topological_removal_order(root, cleanlist);
     DepcleanResult {
         cleanlist,
         required_count,
         ordered,
-        // `emerge --prune --verbose`'s own `show_parents` display is a
-        // separate, unported cut (real `create_cleanlist`'s prune
-        // branch, `actions.py:1339`).
-        kept_parents: Vec::new(),
+        kept_parents,
     }
 }
 
@@ -9523,6 +9565,22 @@ mod tests {
                 "dev-libs/mm-1.0".to_string(),
                 "dev-libs/aa-1.0".to_string(),
             ]
+        );
+
+        // `--prune --verbose`'s reverse-dep display: only mm-2.0 (a kept
+        // non-highest version with a real Package parent) -- the highest
+        // versions are pulled in only by the internal protected-set seed,
+        // which `show_parents` filters out.
+        assert_eq!(
+            result
+                .kept_parents
+                .iter()
+                .map(|(p, lines)| (p.cpv(), lines.clone()))
+                .collect::<Vec<_>>(),
+            vec![(
+                "dev-libs/mm-2.0".to_string(),
+                vec!["dev-libs/keeper-1.0 requires =dev-libs/mm-2.0".to_string()],
+            )]
         );
 
         // `--prune dev-libs/mm`: only mm's old versions are candidates.

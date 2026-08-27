@@ -6814,6 +6814,31 @@ def _all_installed_packages(root):
     return out
 
 
+def _render_show_parents(edges):
+    """Real show_parents's per-package rendering (actions.py:1274-1291):
+    group (parent, atom) edges by parent, render one "<parent> requires
+    <atom>, <atom>" line each (atoms sorted by atom package-name
+    descending), then sort the lines. Shared by _depclean_cleanlist and
+    _prune_cleanlist. Mirrors portage-repo/src/lib.rs's
+    render_show_parents."""
+
+    def atom_pkg_name(a):
+        parsed = _parse_atom(a)
+        return parsed.cp.split("/", 1)[1] if parsed is not None else ""
+
+    by_parent = {}
+    for par, atom in edges:
+        by_parent.setdefault(par, [])
+        if atom not in by_parent[par]:
+            by_parent[par].append(atom)
+    return sorted(
+        "{} requires {}".format(
+            par, ", ".join(sorted(atoms, key=atom_pkg_name, reverse=True))
+        )
+        for par, atoms in by_parent.items()
+    )
+
+
 def _depclean_cleanlist(root, world_seeds, system_atoms, args):
     """Real emerge --depclean's removal list (_calc_depclean +
     create_cleanlist). No `args`: roots = installed pkgs @world ∪ @system
@@ -6920,10 +6945,6 @@ def _depclean_cleanlist(root, world_seeds, system_atoms, args):
         key=lambda t: (t[0], t[1], vkey(t[2])),
     )
 
-    def atom_pkg_name(a):
-        parsed = _parse_atom(a)
-        return parsed.cp.split("/", 1)[1] if parsed is not None else ""
-
     kept = sorted(
         (
             (c, p, v)
@@ -6935,21 +6956,7 @@ def _depclean_cleanlist(root, world_seeds, system_atoms, args):
     )
     kept_parents = []
     for k in kept:
-        edges = parent_atoms.get(k)
-        if not edges:
-            continue
-        by_parent = {}
-        for par, atom in edges:
-            by_parent.setdefault(par, [])
-            if atom not in by_parent[par]:
-                by_parent[par].append(atom)
-        lines = sorted(
-            "{} requires {}".format(
-                par,
-                ", ".join(sorted(atoms, key=atom_pkg_name, reverse=True)),
-            )
-            for par, atoms in by_parent.items()
-        )
+        lines = _render_show_parents(parent_atoms.get(k) or [])
         if lines:
             kept_parents.append((k, lines))
 
@@ -7088,7 +7095,7 @@ class _CleanupArgsExit(Exception):
         self.code = code
 
 
-def _run_prune_pretend(targets, root, config_root, config):
+def _run_prune_pretend(targets, root, config_root, config, verbose=False):
     """emerge --pretend --prune / -pP (real action_depclean with
     action="prune"). Unlike --depclean, real action_depclean returns
     right after the unmerge() preview (actions.py:888): no ' * ' advisory
@@ -7101,11 +7108,22 @@ def _run_prune_pretend(targets, root, config_root, config):
     except _CleanupArgsExit as e:
         return e.code
 
-    cleanlist, _required_count, ordered = _prune_cleanlist(root, args)
+    cleanlist, _required_count, ordered, kept_parents = _prune_cleanlist(root, args)
+
+    # Real create_cleanlist's prune branch prints show_parents(pkg) inline
+    # while building the removal list -- before the removal-order line /
+    # empty message.
+    if verbose:
+        for (c, p, v), lines in kept_parents:
+            print(f"  {c}/{p}-{v} pulled in by:")
+            for line in lines:
+                print(f"    {line}")
+            print()
 
     if not cleanlist:
         print(">>> No packages selected for removal by prune")
-        print(">>> To see reverse dependencies, use --verbose")
+        if not verbose:
+            print(">>> To see reverse dependencies, use --verbose")
         print(">>> To ignore dependencies, use --nodeps")
         return 0
 
@@ -7122,9 +7140,11 @@ def _prune_cleanlist(root, args):
     branch). Removes superseded installed versions: for every cp with >1
     version installed, the non-highest ones, kept only if something needs
     that exact old version. With no args, args_set auto-fills with every
-    multi-version cp. Returns (cleanlist, required_count, ordered).
-    Mirrors portage-repo/src/lib.rs's prune_cleanlist -- see its docstring
-    for the seed/candidate split and the deliberate cuts."""
+    multi-version cp. Returns (cleanlist, required_count, ordered,
+    kept_parents) -- kept_parents is real create_cleanlist's prune-branch
+    `elif "--verbose": show_parents(pkg)` for every args_set-matched kept
+    version. Mirrors portage-repo/src/lib.rs's prune_cleanlist -- see its
+    docstring for the seed/candidate split and the deliberate cuts."""
     import functools
 
     installed = _all_installed_packages(root)  # (c, p, v, s)
@@ -7176,6 +7196,10 @@ def _prune_cleanlist(root, args):
 
     reachable = set()
     queue = []
+    # Real _parent_atoms -- only dep-walk edges (a Package parent); the
+    # prune seeds' protected-set / bare-cp parents are filtered by
+    # show_parents, so no seed edge is recorded.
+    parent_atoms = {}
     for pkg in installed:
         if not is_candidate(pkg):
             key = (pkg[0], pkg[1], pkg[2])
@@ -7184,6 +7208,7 @@ def _prune_cleanlist(root, args):
                 queue.append(key)
     while queue:
         c, p, v = queue.pop()
+        parent_cpv = f"{c}/{p}-{v}"
         use_flags = _read_vdb_flag_set(root, c, p, v, "USE")
         for dep_key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"):
             depstr = _read_vdb_string(root, c, p, v, dep_key)
@@ -7194,6 +7219,7 @@ def _prune_cleanlist(root, args):
                 continue
             for atom_str in atoms:
                 for (dc, dp, dv, _ds) in matches_atom(atom_str):
+                    parent_atoms.setdefault((dc, dp, dv), []).append((parent_cpv, atom_str))
                     if (dc, dp, dv) not in reachable:
                         reachable.add((dc, dp, dv))
                         queue.append((dc, dp, dv))
@@ -7206,9 +7232,27 @@ def _prune_cleanlist(root, args):
         ),
         key=lambda t: (t[0], t[1], vk(t[2])),
     )
+
+    # Real create_cleanlist's prune branch: `elif "--verbose":
+    # show_parents(pkg)` for every args_set-matched *kept* version with a
+    # non-protected-set parent edge, cpv-sorted.
+    kept = sorted(
+        (
+            (c, p, v)
+            for (c, p, v, s) in installed
+            if (c, p, v) in reachable and matched_by_args((c, p, v, s))
+        ),
+        key=lambda t: (t[0], t[1], vk(t[2])),
+    )
+    kept_parents = []
+    for k in kept:
+        lines = _render_show_parents(parent_atoms.get(k) or [])
+        if lines:
+            kept_parents.append((k, lines))
+
     slot_of = {(c, p, v): s for (c, p, v, s) in installed}
     ordered, cleanlist = _topological_removal_order(root, cleanlist, slot_of)
-    return cleanlist, len(reachable), ordered
+    return cleanlist, len(reachable), ordered, kept_parents
 
 
 def _run_depclean_pretend(targets, root, config_root, config, verbose=False):
@@ -8311,7 +8355,9 @@ def run(args):
             atom_args, _root(), _config_root(), config, verbose=verbose
         )
     if prune:
-        return _run_prune_pretend(atom_args, _root(), _config_root(), config)
+        return _run_prune_pretend(
+            atom_args, _root(), _config_root(), config, verbose=verbose
+        )
 
     # "@world"/"@system" each expand to their own real atom list, in
     # place, at whichever position they appear -- see _read_world_atoms's

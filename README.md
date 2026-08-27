@@ -932,11 +932,27 @@ PORTING/
   prints the blocks right after the `* ` advisory and before `>>>
   Calculating removal order...` / the empty-cleanlist message. New
   `_depclean_revdep_root` fixture (a shared dep `dcshared` pulled in by
-  two parents). **Deliberately out**: `emerge --prune --verbose`'s own
-  `show_parents` (a separate cut, `create_cleanlist`'s prune branch);
-  and the exact `@selected`-vs-`@world` set nesting real portage's
-  `_complete_graph` produces (approximated -- world-file members are
-  `@selected` here, not `@world`).
+  two parents). **Deliberately out**: the exact `@selected`-vs-`@world`
+  set nesting real portage's `_complete_graph` produces (approximated --
+  world-file members are `@selected` here, not `@world`).
+
+  **`emerge --prune --verbose`: `show_parents` for prune.** Real
+  `create_cleanlist`'s prune branch (`actions.py:1339`) also calls
+  `show_parents(pkg)` under `--verbose` -- but only for an
+  `args_set`-matched *kept* version (`for atom in args_set: for pkg in
+  vardb.match_pkgs(atom): ... elif "--verbose": show_parents(pkg)`), and
+  `show_parents` itself filters out the internal protected-set parent,
+  so a highest version pulled in only by the bare-`cp` seed contributes
+  nothing. `prune_cleanlist` now records the same `_parent_atoms`
+  dep-walk edges `depclean_cleanlist` does and fills `kept_parents` for
+  every reachable `matched_by_args` version with a real `Package`
+  parent; the `(parent, atom)` -> line rendering is a shared
+  `render_show_parents` helper. `run_prune_pretend` gained a `verbose`
+  parameter and prints the blocks before `>>> Calculating removal
+  order...` / the empty message, and suppresses the `>>> To see reverse
+  dependencies` hint. In `_prune_root` only `dev-libs/mm-2.0` (kept by
+  `keeper`'s `=dev-libs/mm-2.0` pin) gets a block; `mm-3.0`/`aa-2.0`/
+  `zz-2.0` (highest, protected-set-only) get none.
 
   **`emerge -p --prune` / `-pP`: the fourth real cleanup action.** Real
   modern `--prune` (without `--nodeps`) routes through the same
