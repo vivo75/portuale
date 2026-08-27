@@ -45,7 +45,7 @@ to **either** side yet — deliberate, documented scope cuts or explicit
 | 15 | `--with-bdeps-auto` | **shipped** | `c505df6eb` |
 | 16 | Real atom-grammar wildcards/build-ids | **descoped** (not a gap) | Decision recorded: the bounded `*/*`/`category/*`/`*/package` matcher is sufficient for `package.mask`-style matching; full wildcard/glob/build-id atoms never reach `DEPEND`/`RDEPEND` parsing. Not on the backlog anymore. |
 | 17 | `--autounmask*` family | **read-only suggestion mode shipped** | `2003e020d` (`--autounmask` keyword suggestion) + `927402f3f` (extended to a dependency's own `NoVisibleCandidate`) + `--autounmask-use`/`--autounmask-keep-keywords`/`--autounmask-write` recognition. *Residual:* `--autounmask-write` itself (writes files) — a `PROMPT.md` "never writes" boundary, see Part 3. |
-| 18 | `--root-deps`/cross-`ROOT` dependency resolution | **substantially shipped** | Real `ESYSROOT`-vs-`ROOT` distinction, `running_root_satisfies_atom`, `||` branch selection fed by running-root satisfiability, `93327d274`, `356088e6c` (recursive build-entry, first increment), `678a8875d` (output marking). *Residual:* the recursion follow-up — see Part 2. |
+| 18 | `--root-deps`/cross-`ROOT` dependency resolution | **substantially shipped** | Real `ESYSROOT`-vs-`ROOT` distinction, `running_root_satisfies_atom`, `||` branch selection fed by running-root satisfiability, `93327d274`, `356088e6c` (recursive build-entry, first increment), `678a8875d` (output marking), top-level `IDEPEND` vs running root. *Residual:* see Part 2. |
 | 19 | Binary package support | **local `PKGDIR` shipped** | `3099d9adf` (`--usepkg`/`--usepkgonly`/`--binpkg-respect-use`) + `96d8fbccb` (`--usepkg-exclude`/`-include`) + `0ae1f8be6` (`--rebuilt-binaries`) + `0b18b2140` (downgrade detection) + `7e5a380d7` (real `ebuild … package` builds an xpak binpkg) + real `PORTAGE_COMPRESSION_COMMAND`. *Residual:* `--getbinpkg`/`--getbinpkgonly` (remote), `gpkg` format, `BUILD_ID`/splitdebug/packdebug/RPM, PKGDIR-index locking — see Part 2. |
 | 20 | Real ebuild phase execution | **shipped** | `eeecd96cd` (the `actionmap_deps` phase chain via embedded `brush`) + `2f5a3ddad`/`39907fee6` |
 | 21 | Real merge/install/filesystem mutation | **shipped** | `2f5a3ddad` (`merge`) + `2a52f7d88` (`unmerge`) + `qmerge`/`config`/`info`/`prerm`/`postrm` + real `CONFIG_PROTECT`/`collision-protect`/`preserve-libs`/`env_update` |
@@ -112,13 +112,18 @@ Ranked roughly by how self-contained each is.
    `IDEPEND` are walked against the running root recursively,
    cycle-guarded by the existing `root_deps_build_seen` set; an
    unbuildable, not-installed build dep is now surfaced as its own
-   `NoVisibleCandidate` entry rather than swallowed. **Residual:** a
-   *top-level* package's own `IDEPEND` still resolves against `ROOT`
-   under `--root-deps` (the two ordinary dep-walk sites use `["DEPEND",
-   "BDEPEND"]`); `PDEPEND` of a running-root entry (real portage keeps
-   it a target-`ROOT` concern -- likely a permanent non-gap); and the
-   full multi-root graph architecture (a `root` carried per dependency
-   edge) this pilot still approximates edge by edge.
+   `NoVisibleCandidate` entry rather than swallowed. A *top-level*
+   package's own `IDEPEND` now routes to the running root too, **shipped
+   2026-08-27** (`root_deps_satisfied_atoms` gained a `dep_keys`
+   parameter; both ordinary dep-walk sites pass `["DEPEND", "BDEPEND",
+   "IDEPEND"]`). **Residual:** in the pilot a top-level `IDEPEND` reaches
+   the running root only under `--root-deps` (real portage does it
+   unconditionally -- a consequence of this pilot's opt-in
+   `root_deps_running_root` plumbing, not a per-dependency `root`);
+   `PDEPEND` of a running-root entry (real portage keeps it a
+   target-`ROOT` concern -- likely a permanent non-gap); and the full
+   multi-root graph architecture (a `root` carried per dependency edge)
+   this pilot still approximates edge by edge.
 
 ### C. Binary packages / fetch
 

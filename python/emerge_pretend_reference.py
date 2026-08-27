@@ -3321,12 +3321,18 @@ def _candidate_use_deps_satisfied(atom, c, category, package, config):
     return _use_deps_satisfied(atom, _valid_iuse(iuse, config), use_flags)
 
 
-def _root_deps_satisfied_atoms(metadata, use_flags, repos, config, running_root):
+def _root_deps_satisfied_atoms(
+    metadata, use_flags, repos, config, running_root, dep_keys=("DEPEND", "BDEPEND")
+):
     """--root-deps's own DEPEND/BDEPEND-vs-ESYSROOT distinction, factored
     out so both real dep-walk sites in this file (the main New/Upgrade/
     Reinstall flatten and _enqueue_dependencies's own
     AlreadyInstalled-recursion path) share one implementation rather than
-    drifting apart. Reads metadata's own DEPEND+BDEPEND keys, flattens
+    drifting apart. Reads metadata's own dep_keys (real ("DEPEND",
+    "BDEPEND", "IDEPEND") at both ordinary dep-walk sites -- DEPEND/BDEPEND
+    are the classic ESYSROOT build deps, and IDEPEND always targets the
+    running root for every package, not just recursed build entries --
+    depgraph.py:4247-4252), flattens
     them the exact same way (use_flags/repos/config) the caller already
     flattened its own combined dep string with, *except* for one
     deliberate branch-selection difference: the disjunctive ("||")
@@ -3344,7 +3350,7 @@ def _root_deps_satisfied_atoms(metadata, use_flags, repos, config, running_root)
     on any flatten failure -- never a false negative that could silently
     drop a dep this pilot actually needed to walk. Mirrors
     portage-repo/src/lib.rs's root_deps_satisfied_atoms exactly."""
-    build_depstr = " ".join(metadata[k] for k in ("DEPEND", "BDEPEND") if metadata.get(k))
+    build_depstr = " ".join(metadata[k] for k in dep_keys if metadata.get(k))
     try:
         build_flat = _use_reduce_flat_disjunctive(
             build_depstr,
@@ -3374,8 +3380,10 @@ def _unsatisfied_root_deps_atoms(
     metadata but are *not* already satisfied by running_root's own vdb --
     the set real portage would need to recursively resolve (and
     potentially build) against the running root itself, rather than the
-    target ROOT. dep_keys is ("DEPEND", "BDEPEND") at the two ordinary
-    dep-walk sites, and ("DEPEND", "BDEPEND", "RDEPEND", "IDEPEND") when
+    target ROOT. dep_keys is ("DEPEND", "BDEPEND", "IDEPEND") at the two
+    ordinary dep-walk sites (DEPEND/BDEPEND-vs-ESYSROOT, plus IDEPEND
+    which always targets the running root for every package), and
+    ("DEPEND", "BDEPEND", "RDEPEND", "IDEPEND") when
     recursing into an already-targets_running_root entry (real
     _add_pkg_deps's deps tuple: a package whose own pkg.root is the
     running root has its RDEPEND resolved there too, and IDEPEND always
@@ -4855,7 +4863,14 @@ def resolve_pretend_graph(
         # grounding) -- a strict no-op when root_deps_running_root is
         # None, matching every pre-existing call site/test.
         root_deps_satisfied = (
-            _root_deps_satisfied_atoms(metadata, use_flags, repos, config, root_deps_running_root)
+            _root_deps_satisfied_atoms(
+                metadata,
+                use_flags,
+                repos,
+                config,
+                root_deps_running_root,
+                dep_keys=("DEPEND", "BDEPEND", "IDEPEND"),
+            )
             if root_deps_running_root is not None
             else set()
         )
@@ -4873,7 +4888,12 @@ def resolve_pretend_graph(
         # portage-repo/src/lib.rs's identical step exactly.
         root_deps_unsatisfied = (
             _unsatisfied_root_deps_atoms(
-                metadata, use_flags, repos, config, root_deps_running_root
+                metadata,
+                use_flags,
+                repos,
+                config,
+                root_deps_running_root,
+                dep_keys=("DEPEND", "BDEPEND", "IDEPEND"),
             )
             if root_deps_running_root is not None
             else []
@@ -5127,7 +5147,14 @@ def _enqueue_dependencies(
         return
 
     root_deps_satisfied = (
-        _root_deps_satisfied_atoms(metadata, use_flags, repos, config, root_deps_running_root)
+        _root_deps_satisfied_atoms(
+            metadata,
+            use_flags,
+            repos,
+            config,
+            root_deps_running_root,
+            dep_keys=("DEPEND", "BDEPEND", "IDEPEND"),
+        )
         if root_deps_running_root is not None and with_bdeps
         else set()
     )
@@ -5140,7 +5167,12 @@ def _enqueue_dependencies(
     # Kept as a list (not a set) for deterministic entry order.
     root_deps_unsatisfied = (
         _unsatisfied_root_deps_atoms(
-            metadata, use_flags, repos, config, root_deps_running_root
+            metadata,
+            use_flags,
+            repos,
+            config,
+            root_deps_running_root,
+            dep_keys=("DEPEND", "BDEPEND", "IDEPEND"),
         )
         if root_deps_running_root is not None and with_bdeps
         else []

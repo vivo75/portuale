@@ -1,0 +1,11 @@
+BDEPEND=
+DEFINED_PHASES=-
+DEPEND=
+DESCRIPTION=fixture: --root-deps -- top-level package whose own IDEPEND resolves against the running root (real depgraph.py:4247-4252, IDEPEND always targets _running_root.root, not just recursed build entries)
+EAPI=8
+IDEPEND=dev-libs/topideplib
+IUSE=
+KEYWORDS=amd64
+RDEPEND=
+SLOT=0
+_md5_=0000000000000000000000000000000

@@ -3350,7 +3350,11 @@ fn atom_currently_satisfiable(
 /// grounding), factored out so both real dep-walk sites in this file
 /// (the main New/Upgrade/Reinstall flatten and `enqueue_dependencies`'s
 /// own AlreadyInstalled-recursion path) share one implementation rather
-/// than drifting apart. Reads `metadata`'s own `DEPEND`+`BDEPEND` keys,
+/// than drifting apart. Reads `metadata`'s own `dep_keys` (real
+/// `["DEPEND", "BDEPEND", "IDEPEND"]` at both ordinary dep-walk sites --
+/// `DEPEND`/`BDEPEND` are the classic `ESYSROOT` build deps, and
+/// `IDEPEND` *always* targets the running root for every package, not
+/// just recursed build entries -- `depgraph.py:4247-4252`),
 /// flattens them the exact same way (`use_flags`/`repos`/`config`) the
 /// caller already flattened its own combined dep string with, *except*
 /// for one deliberate branch-selection difference: the disjunctive
@@ -3375,10 +3379,11 @@ fn root_deps_satisfied_atoms(
     repos: &[RepoConfig],
     config: &portage_profile::Config,
     running_root: &Path,
+    dep_keys: &[&str],
 ) -> HashSet<String> {
     let mut build_depstr = String::new();
-    for dep_key in ["DEPEND", "BDEPEND"] {
-        if let Some(d) = metadata.get(dep_key) {
+    for dep_key in dep_keys {
+        if let Some(d) = metadata.get(*dep_key) {
             build_depstr.push_str(d);
             build_depstr.push(' ');
         }
@@ -3412,9 +3417,10 @@ fn root_deps_satisfied_atoms(
 /// satisfied by `running_root`'s own vdb -- the set real portage would
 /// need to recursively resolve (and potentially build) against the
 /// running root itself, rather than the target `ROOT`. `dep_keys` is
-/// `["DEPEND", "BDEPEND"]` at the two ordinary dep-walk sites (real
-/// `DEPEND`/`BDEPEND`-vs-`ESYSROOT`), and `["DEPEND", "BDEPEND",
-/// "RDEPEND", "IDEPEND"]` when recursing into an already-
+/// `["DEPEND", "BDEPEND", "IDEPEND"]` at the two ordinary dep-walk sites
+/// (real `DEPEND`/`BDEPEND`-vs-`ESYSROOT`, plus `IDEPEND` which always
+/// targets the running root for every package), and `["DEPEND",
+/// "BDEPEND", "RDEPEND", "IDEPEND"]` when recursing into an already-
 /// `targets_running_root` entry (real `_add_pkg_deps`'s own `deps`
 /// tuple: a package whose own `pkg.root` is the running root has its
 /// `RDEPEND` resolved there too, and `IDEPEND` *always* targets the
@@ -5597,7 +5603,16 @@ pub fn resolve_pretend_graph(
         // `root_deps_running_root` is `None`, matching every pre-existing
         // call site/test.
         let root_deps_satisfied: HashSet<String> = root_deps_running_root
-            .map(|root| root_deps_satisfied_atoms(&metadata, &use_flags, &repos, config, root))
+            .map(|root| {
+                root_deps_satisfied_atoms(
+                    &metadata,
+                    &use_flags,
+                    &repos,
+                    config,
+                    root,
+                    &["DEPEND", "BDEPEND", "IDEPEND"],
+                )
+            })
             .unwrap_or_default();
         // Real "recursively pull in and build new packages against the
         // running root" (see `resolve_root_deps_build_entries`'s own doc
@@ -5624,7 +5639,7 @@ pub fn resolve_pretend_graph(
                     &repos,
                     config,
                     root,
-                    &["DEPEND", "BDEPEND"],
+                    &["DEPEND", "BDEPEND", "IDEPEND"],
                 )
             })
             .unwrap_or_default();
@@ -5894,7 +5909,16 @@ fn enqueue_dependencies(
 
     let root_deps_satisfied: HashSet<String> = if with_bdeps {
         root_deps_running_root
-            .map(|root| root_deps_satisfied_atoms(&metadata, &use_flags, repos, config, root))
+            .map(|root| {
+                root_deps_satisfied_atoms(
+                    &metadata,
+                    &use_flags,
+                    repos,
+                    config,
+                    root,
+                    &["DEPEND", "BDEPEND", "IDEPEND"],
+                )
+            })
             .unwrap_or_default()
     } else {
         HashSet::new()
@@ -5918,7 +5942,7 @@ fn enqueue_dependencies(
                     repos,
                     config,
                     root,
-                    &["DEPEND", "BDEPEND"],
+                    &["DEPEND", "BDEPEND", "IDEPEND"],
                 )
             })
             .unwrap_or_default()
@@ -8675,6 +8699,73 @@ mod tests {
                 ("dev-libs/rdriapp".to_string(), false),
                 ("dev-libs/rdritool".to_string(), true),
                 ("dev-libs/rdrilib".to_string(), true),
+            ]
+        );
+    }
+
+    /// A *top-level* package's own `IDEPEND` resolves against the running
+    /// root too, not just recursed running-root build entries (real
+    /// `depgraph.py:4247-4252`: `IDEPEND` always targets
+    /// `_running_root.root` for every package). `topidepapp` IDEPENDs
+    /// `topideplib`; under `--root-deps` `topideplib` becomes a
+    /// `targets_running_root` entry rather than an ordinary ROOT entry.
+    #[test]
+    fn root_deps_top_level_idepend_resolves_against_the_running_root() {
+        let root = fixtures_root();
+        let run = |root_deps_running_root: Option<&Path>| -> Vec<(String, bool)> {
+            resolve_pretend_graph(
+                &root,
+                &root,
+                &["dev-libs/topidepapp".to_string()],
+                &test_config(),
+                false,
+                false,
+                false,
+                false,
+                Deep::Unlimited,
+                &[],
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &[],
+                &[],
+                false,
+                None,
+                false,
+                false,
+                root_deps_running_root,
+            )
+            .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+            .entries
+            .iter()
+            .map(|e| {
+                (
+                    format!("{}/{}", e.category, e.package),
+                    e.targets_running_root,
+                )
+            })
+            .collect()
+        };
+        assert_eq!(
+            run(None),
+            vec![
+                ("dev-libs/topidepapp".to_string(), false),
+                ("dev-libs/topideplib".to_string(), false),
+            ]
+        );
+        assert_eq!(
+            run(Some(&root)),
+            vec![
+                ("dev-libs/topidepapp".to_string(), false),
+                ("dev-libs/topideplib".to_string(), true),
             ]
         );
     }

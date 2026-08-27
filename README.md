@@ -6231,11 +6231,8 @@ New `dev-libs/rdri*` fixtures (`rdriapp` -> `rdritool`, whose own
 `IDEPEND` is `rdrilib`). One Rust unit test + one dedicated pytest
 contract test, mirrored in `emerge_pretend_reference.py`.
 
-Still open: a *top-level* package's own `IDEPEND` still resolves against
-`ROOT` under `--root-deps` (real portage targets the running root for it
-too) -- the ordinary dep-walk sites' `["DEPEND", "BDEPEND"]` key set was
-left untouched this slice, a documented cut consistent with "one
-increment at a time".
+Follow-up, now landed (see the next section): a *top-level* package's
+own `IDEPEND` also resolves against the running root under `--root-deps`.
 
 ```sh
 cd PORTING/rust && cargo build --release && cd ../..
@@ -6246,6 +6243,57 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
 # [ebuild  N] dev-libs/rdriapp-1.0
 # [ebuild  N] dev-libs/rdritool-1.0 to /
 # [ebuild  N] dev-libs/rdrilib-1.0 to /   -- rdritool's own IDEPEND
+```
+
+### `emerge --pretend --root-deps`: a top-level package's own `IDEPEND` vs the running root
+
+The preceding slice walked `IDEPEND` against the running root only for
+packages *recursed into* as running-root build entries. But real
+`depgraph.py:4247-4252` resolves `edepend["IDEPEND"]` against
+`self._frozen_config._running_root.root` for **every** package it adds,
+top-level requests included -- `IDEPEND` is install-time tooling and is
+never a target-`ROOT` concern. This slice closes that last gap.
+
+`root_deps_satisfied_atoms` gained the same `dep_keys` parameter its
+complement `unsatisfied_root_deps_atoms` already had, and both ordinary
+dep-walk sites (the main New/Upgrade/Reinstall flatten and
+`enqueue_dependencies`'s own `--deep`/`AlreadyInstalled` recursion) now
+pass `["DEPEND", "BDEPEND", "IDEPEND"]` to *both* functions -- the
+satisfied and unsatisfied subsets must stay in lockstep, since an atom
+in neither would fall through to the ordinary `flat_deps` queue and be
+wrongly resolved against `ROOT`. `DEPEND`/`BDEPEND` keep the pilot's
+established `--root-deps`-gated simplification (real portage's
+`ESYSROOT`-vs-`ROOT` split); `IDEPEND` rides the same gate here, so in
+the pilot a top-level `IDEPEND` still only reaches the running root when
+`--root-deps` is passed -- real portage does it unconditionally, a
+documented residual of this pilot's opt-in `root_deps_running_root`
+plumbing rather than a per-dependency `root`.
+
+New `dev-libs/topidepapp` fixture (`IDEPEND` on `dev-libs/topideplib`,
+no other deps). One Rust unit test asserting `topideplib` flips from an
+ordinary entry to `targets_running_root: true` exactly when the running
+root is supplied, plus one dedicated pytest contract test proving
+byte-for-byte Rust/Python parity with and without `--root-deps`,
+mirrored in `emerge_pretend_reference.py` (`_root_deps_satisfied_atoms`'s
+`dep_keys` parameter, both call sites).
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+
+# Without --root-deps: topideplib is an ordinary ROOT-targeted entry.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    PORTING/rust/target/release/portuale emerge --pretend \
+    dev-libs/topidepapp
+# [ebuild  N] dev-libs/topidepapp-1.0
+# [ebuild  N] dev-libs/topideplib-1.0
+
+# With --root-deps: the top-level package's own IDEPEND goes to the running root.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/topidepapp
+# [ebuild  N] dev-libs/topidepapp-1.0
+# [ebuild  N] dev-libs/topideplib-1.0 to /
 ```
 
 ### Real `ebuild <file> qmerge`

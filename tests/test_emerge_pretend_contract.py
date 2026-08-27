@@ -1064,6 +1064,46 @@ def test_root_deps_recursion_walks_a_build_entrys_own_idepend(
     )
 
 
+def test_root_deps_top_level_idepend_resolves_against_the_running_root(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real portage resolves IDEPEND against the running root for *every*
+    package, not just recursed running-root build entries
+    (depgraph.py:4247-4252). The two ordinary dep-walk sites now route a
+    top-level package's own IDEPEND to the running root under --root-deps,
+    exactly like DEPEND/BDEPEND: topidepapp IDEPENDs topideplib, so with
+    --root-deps topideplib carries the " to /" marker (and is walked
+    against the running root), whereas without --root-deps it is a plain
+    ROOT-targeted entry."""
+    env = dict(fixture_env)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    without = ["--pretend", "dev-libs/topidepapp"]
+    with_ = ["--pretend", "--root-deps", "dev-libs/topidepapp"]
+
+    rust_without = _run([str(emerge_binary)], without, env)
+    python_without = _run(emerge_pretend_python, without, env)
+    assert rust_without.returncode == 0
+    assert python_without.returncode == 0
+    assert rust_without.stdout == python_without.stdout
+    assert rust_without.stderr == python_without.stderr
+    assert rust_without.stdout == (
+        "[ebuild  N] dev-libs/topidepapp-1.0\n"
+        "[ebuild  N] dev-libs/topideplib-1.0\n"
+    )
+
+    rust_with = _run([str(emerge_binary)], with_, env)
+    python_with = _run(emerge_pretend_python, with_, env)
+    assert rust_with.returncode == 0
+    assert python_with.returncode == 0
+    assert rust_with.stdout == python_with.stdout
+    assert rust_with.stderr == python_with.stderr
+    assert rust_with.stdout == (
+        "[ebuild  N] dev-libs/topidepapp-1.0\n"
+        "[ebuild  N] dev-libs/topideplib-1.0 to /\n"
+    )
+    assert rust_with.stdout != rust_without.stdout
+
+
 def test_root_deps_recursion_terminates_on_a_bdepend_cycle(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
