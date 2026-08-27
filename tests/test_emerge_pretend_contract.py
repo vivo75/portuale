@@ -910,6 +910,16 @@ CASES = [
         ["--pretend", "-v", "--noreplace", "dev-libs/samepkg"],
         0,
     ),
+    (
+        "--tree nests every slot of a multi-slot dependency under its parent",
+        ["--pretend", "--tree", "dev-libs/multislotparent"],
+        0,
+    ),
+    (
+        "--json required_by is set on every slot of a multi-slot dependency",
+        ["--pretend", "--json", "dev-libs/multislotparent"],
+        0,
+    ),
 ]
 
 
@@ -3797,6 +3807,31 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
         "[ebuild  N] dev-libs/multislotpkg-2.0",
     ]
     assert "[slot conflict]" not in result.stdout
+
+    # --tree: *both* slots nest under the parent that pulled them in.
+    # (Regression: a destructive required_by merge used to hand the owner
+    # to only the first slot's entry, so the second fell through to the
+    # flush-left safety net.)
+    tree = _run(
+        [str(emerge_binary)], ["--pretend", "--tree", "dev-libs/multislotparent"], fixture_env
+    )
+    assert tree.returncode == 0
+    assert tree.stdout.splitlines() == [
+        "[ebuild  N] dev-libs/multislotparent-1.0",
+        "[ebuild  N]   dev-libs/multislotpkg-1.0",
+        "[ebuild  N]   dev-libs/multislotpkg-2.0",
+    ]
+
+    # --json: every slot's entry names the same owner in required_by.
+    payload = json.loads(
+        _run(
+            [str(emerge_binary)], ["--pretend", "--json", "dev-libs/multislotparent"], fixture_env
+        ).stdout
+    )
+    slots = [e for e in payload["entries"] if e["package"] == "multislotpkg"]
+    assert len(slots) == 2
+    for e in slots:
+        assert e["required_by"] == [{"category": "dev-libs", "package": "multislotparent"}]
 
 
 def test_new_slot_install_renders_the_S_bracket_column(emerge_binary, fixture_env):

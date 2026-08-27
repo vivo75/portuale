@@ -6267,11 +6267,22 @@ pub fn resolve_pretend_graph(
         }
     }
 
+    // `.get()`, not `.remove()`: `entries` can hold more than one entry
+    // for the same `(category, package)` -- one per resolved slot (see
+    // this function's own doc comment on multi-slot support) -- and every
+    // one of them was pulled in by the same owner(s), so every one needs
+    // the same `required_by`. A destructive `.remove()` here handed the
+    // owners to whichever slot's entry the loop reached first and left
+    // the rest with an empty `required_by`, which `--tree` then dropped
+    // to its flush-left safety net instead of nesting under the parent
+    // (and `--json` reported as `"required_by": []`). Entries with no key
+    // in the map keep whatever `required_by` they were built with -- a
+    // `--root-deps` running-root build entry sets its own immediate
+    // requester at construction and must not be wiped to empty here.
     for entry in &mut entries {
-        if let Some(owners) =
-            required_by_map.remove(&(entry.category.clone(), entry.package.clone()))
+        if let Some(owners) = required_by_map.get(&(entry.category.clone(), entry.package.clone()))
         {
-            let mut owners: Vec<(String, String)> = owners.into_iter().collect();
+            let mut owners: Vec<(String, String)> = owners.iter().cloned().collect();
             owners.sort();
             entry.required_by = owners;
         }
@@ -10197,6 +10208,31 @@ mod tests {
                 ("dev-libs".to_string(), "shared-b".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn required_by_is_set_on_every_slot_of_a_multi_slot_dependency() {
+        // dev-libs/multislotparent RDEPENDs on both dev-libs/multislotpkg:0
+        // and :1 -- two separate entries sharing one (category, package).
+        // Both were pulled in by multislotparent, so both must carry it in
+        // `required_by`. The merge post-pass previously used a destructive
+        // `required_by_map.remove(...)`, handing the owner to whichever
+        // slot's entry came first and leaving the other with `[]` (which
+        // `--tree` then dropped to its flush-left safety net).
+        let entries = full_graph("dev-libs/multislotparent");
+        let slots: Vec<&GraphEntry> = entries
+            .iter()
+            .filter(|e| e.category == "dev-libs" && e.package == "multislotpkg")
+            .collect();
+        assert_eq!(slots.len(), 2, "both slots must be present");
+        for e in slots {
+            assert_eq!(
+                e.required_by,
+                vec![("dev-libs".to_string(), "multislotparent".to_string())],
+                "slot {:?} lost its required_by owner",
+                e.slot
+            );
+        }
     }
 
     #[test]

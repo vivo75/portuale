@@ -3662,6 +3662,22 @@ being silently dropped -- this pilot's own "never silently lose
 information" invariant, already established for slot conflicts and
 unresolvable dependencies.
 
+**Bug fix (2026-08-27): a multi-slot dependency lost its `required_by`
+owner on every slot but the first.** The `required_by` merge post-pass
+in `resolve_pretend_graph` used a *destructive* `required_by_map.remove(
+&(category, package))` -- but `entries` can hold more than one entry per
+`(category, package)`, one per resolved slot (`dev-libs/multislotparent`
+pulls in `multislotpkg:0` **and** `:1`). The first slot's entry consumed
+the owners; every later one was left with `required_by: []`. Visible two
+ways: `--tree` dropped the second slot to its flush-left "never reached"
+safety net instead of nesting it under the parent, and `--json` reported
+`"required_by": []` for it. Fixed to a non-destructive `.get(...)` (the
+Python reference already did the equivalent non-destructive dict lookup,
+so this was a real Rust-vs-Python divergence -- Python and real portage
+were correct). New `required_by_is_set_on_every_slot_of_a_multi_slot_
+dependency` unit test + `--tree`/`--json` contract assertions on
+`dev-libs/multislotparent`.
+
 `--json`'s own state-change trace: each entry now carries a
 `"provenance"` object (`{"mask_entry", "unmask_entry", "keyword_entry"}`)
 recording which `package.mask`/`.unmask`/`package.accept_keywords`

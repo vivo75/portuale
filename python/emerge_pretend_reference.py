@@ -5184,11 +5184,15 @@ def resolve_pretend_graph(
     # (immutable), so this rebuilds each one rather than mutating in
     # place. Only entries the map actually has a key for get their
     # required_by replaced -- matching the Rust side's own `if let
-    # Some(owners) = required_by_map.remove(...)` guard: an entry added
+    # Some(owners) = required_by_map.get(...)` guard: an entry added
     # outside the normal flat-deps queue (a --root-deps running-root
     # build entry, whose own [owner] was set at construction by
     # _resolve_root_deps_build_entries) keeps that value instead of being
-    # wiped to [].
+    # wiped to []. Both sides use a non-destructive lookup, not a pop/
+    # remove: more than one entry can share a (category, package) -- one
+    # per resolved slot -- and every one was pulled in by the same
+    # owner(s), so every one needs the same required_by (a destructive
+    # lookup would hand the owners to the first slot's entry only).
     entries = [
         (
             category,
