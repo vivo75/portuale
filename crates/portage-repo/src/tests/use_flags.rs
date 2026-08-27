@@ -1,6 +1,39 @@
 use super::*;
 
 #[test]
+fn use_expand_star_wildcard_strips_the_pseudo_flag_from_the_effective_set() {
+    // `effective_use_flags` never returns a `_*`-suffixed token
+    // (Portage strips them from PORTAGE_USE). Exercised with the
+    // fixture's own `linguas_*` package.use entry against
+    // wildexpandpkg's declared IUSE.
+    let use_flags = euf_flat(EufFlatArgs {
+        iuse: "linguas_en linguas_de",
+        use_tokens: &[],
+        package_use: &[(
+            "dev-libs/wildexpandpkg".to_string(),
+            vec!["linguas_*".to_string()],
+        )],
+        package_use_force: &[],
+        package_use_mask: &[],
+        use_force: &HashSet::new(),
+        use_mask: &HashSet::new(),
+        use_stable_force: &HashSet::new(),
+        use_stable_mask: &HashSet::new(),
+        package_use_stable_force: &[],
+        package_use_stable_mask: &[],
+        keywords: &["amd64".to_string()],
+        accept_keywords: &HashSet::from(["amd64".to_string()]),
+        package_accept_keywords: &[],
+        candidate_str: "dev-libs/wildexpandpkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "wildexpandpkg",
+    });
+    assert!(use_flags.contains("linguas_en"));
+    assert!(use_flags.contains("linguas_de"));
+    assert!(!use_flags.iter().any(|f| f.ends_with("_*")));
+}
+
+#[test]
 fn effective_use_flags_applies_a_plus_iuse_default_when_nothing_else_says_otherwise() {
     let use_flags = euf_flat(EufFlatArgs {
         iuse: "+foo -bar baz",

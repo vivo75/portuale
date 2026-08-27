@@ -7027,6 +7027,38 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
 # !!! no visible ebuild for dependency "dev-libs/rdrnothere"
 ```
 
+### `emerge --pretend --root-deps`: `IDEPEND` of a running-root build entry
+
+A one-key follow-up to the recursion slice above. Real
+`depgraph.py:4247-4252`'s own `deps` tuple resolves `edepend["IDEPEND"]`
+against `self._frozen_config._running_root.root` **always** -- not
+EAPI-conditional like `DEPEND`, not `--root-deps`-gated. So a package
+pulled in as a running-root build entry has its own `IDEPEND` (the
+install-time helpers its `pkg_preinst`/`pkg_postinst` need) resolved
+against the running root too. `resolve_root_deps_build_entries`'s
+recursive dep-key set went from `DEPEND` + `BDEPEND` + `RDEPEND` to
+`+ IDEPEND` (one tuple entry, `unsatisfied_root_deps_atoms`'s existing
+`dep_keys` parameter). `PDEPEND` stays out -- real portage keeps it a
+target-`ROOT` concern.
+
+New `dev-libs/rdri*` fixtures (`rdriapp` -> `rdritool`, whose own
+`IDEPEND` is `rdrilib`). One Rust unit test + one dedicated pytest
+contract test, mirrored in `emerge_pretend_reference.py`.
+
+Follow-up, now landed (see the next section): a *top-level* package's
+own `IDEPEND` also resolves against the running root under `--root-deps`.
+
+```sh
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rdriapp
+# [ebuild  N] dev-libs/rdriapp-1.0
+# [ebuild  N] dev-libs/rdritool-1.0 to /
+# [ebuild  N] dev-libs/rdrilib-1.0 to /   -- rdritool's own IDEPEND
+```
+
 ### Real `ebuild <file> qmerge`
 
 `qmerge` is now real too, real `doebuild()`'s own `mydo == "qmerge"`
@@ -7577,5 +7609,194 @@ rust/target/release/portuale emerge --buildpkgonly --keep-going \
 # dev-libs/fetchpkg-1.0: fetchpkg-1.0.tar.gz: no Manifest entry, ...
 ls "${PKGDIR}/dev-libs"
 # packagepkg-1.0.tbz2
+```
+
+### `USE_EXPAND_IMPLICIT`: `elibc_*`/`kernel_*`/... are valid implicit IUSE
+
+Real `config.py::_calc_iuse_effective` (the EAPI 5+ `IUSE_EFFECTIVE`
+definition): a package's own `pkg.iuse.is_valid_flag` domain includes,
+on top of its declared `IUSE`, every flag derived from a
+`USE_EXPAND_IMPLICIT` variable -- real Gentoo's own
+`profiles/base/make.defaults` sets `USE_EXPAND_IMPLICIT="ARCH ELIBC
+KERNEL USERLAND"`, so `elibc_glibc`, `kernel_linux`, `userland_GNU`,
+etc. count as valid IUSE for *every* package even when unlisted, and a
+USE-dep like `dev-libs/foo[elibc_glibc]` matches a `foo` that never
+declares `elibc_glibc`. Before this slice portuale checked a USE-dep's
+`.required` flags against a candidate's *declared* `IUSE` alone, so such
+a dep spuriously failed and its target went invisible.
+
+New `portage_profile::Config::iuse_effective` computes the real formula:
+`IUSE_IMPLICIT` values, plus every `USE_EXPAND_VALUES_<v>` value for each
+`USE_EXPAND_UNPREFIXED` var `v` also in `USE_EXPAND_IMPLICIT`
+(unprefixed), plus `lowercase(v)_<value>` for each `USE_EXPAND` var `v`
+also in `USE_EXPAND_IMPLICIT`. `USE_EXPAND_IMPLICIT`/`IUSE_IMPLICIT` are
+read as real INCREMENTALS (like `USE_EXPAND`); `USE_EXPAND_VALUES_*` as
+plain scalars (not in real portage's own INCREMENTALS list either). A
+new `valid_iuse(declared, config)` helper unions `iuse_effective` in at
+each `use_deps_satisfied` call site, matching real `is_valid_flag` --
+deliberately *not* inside `candidate_iuse_and_use`, whose result also
+feeds `--newuse`'s own IUSE-*presence* diff (an implicit flag there
+would read as "newly added to IUSE" and spuriously trigger a reinstall).
+`implicit_iuse_set` (the `REQUIRED_USE`/parent-USE-state path) also gains
+`iuse_effective`, so a `REQUIRED_USE` referencing `elibc_*` is
+recognized the same way one referencing `x86` (via `archlist`) already
+was -- **this closes the "`USE_EXPAND_HIDDEN`-derived ... `elibc_.*`/
+`kernel_.*`/`userland_.*` ... a bigger, separate feature" cut named in
+the implicit-IUSE bullet above** (via the EAPI 5+ `USE_EXPAND_IMPLICIT`
+path, with explicit `USE_EXPAND_VALUES` rather than the pre-EAPI-5 regex
+form).
+
+`USE_EXPAND_HIDDEN` stays unimplemented and is genuinely a non-gap: for
+EAPI 5+ it is a pure `emerge --info`/`-pv` USE-*grouping* display
+concern (the pre-EAPI-5 `_get_implicit_iuse` is the only place it fed
+`is_valid_flag`), and portuale's `-pv` shows a flat declared-IUSE list
+with no `USE_EXPAND` grouping to hide from. The two stale
+"`USE_EXPAND_HIDDEN`/`_IMPLICIT` are display-only" comments in
+`portage-profile` (they conflated the two) are corrected in place.
+
+New fixtures: `profiles/base/make.defaults` gains
+`USE_EXPAND_IMPLICIT="ELIBC"` + `USE_EXPAND_VALUES_ELIBC="glibc musl"` +
+`ELIBC="glibc"`; `dev-libs/implicitiusepkg` RDEPENDs
+`implicitiuseprov[elibc_glibc]` (resolves -- valid + enabled) and
+`dev-libs/implicitiusepkgmusl` RDEPENDs `implicitiuseprov[elibc_musl]`
+(unsatisfiable -- valid but not enabled, proving the slice widened the
+*valid* domain, not the *enabled* one). Two Rust unit tests, two
+parametrized contract cases, and a dedicated pinned-output contract test,
+mirrored in `emerge_pretend_reference.py` (`_valid_iuse`,
+`iuse_effective` in `resolve_config`, the `dep_keys` threading through
+`_process_config_lines`/`_process_make_conf_file`).
+
+Deliberately still a documented cut: an *installed* package's USE-dep
+check (`dependency_avoid_update_candidate`) uses the raw vdb `IUSE`,
+since real portage uses that package's own *vdb-recorded*
+`IUSE_EFFECTIVE`, which portuale doesn't persist; and IUSE-aware `_*`
+wildcard expansion (`linguas_*`), which needs a specific package's own
+`IUSE`.
+
+```sh
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
+
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    rust/target/release/portuale emerge --pretend dev-libs/implicitiusepkg
+# [ebuild  N] dev-libs/implicitiusepkg-1.0
+# [ebuild  N] dev-libs/implicitiuseprov-1.0
+#   -- implicitiuseprov[elibc_glibc] resolves, though implicitiuseprov
+#      never lists elibc_glibc in its own IUSE
+
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    rust/target/release/portuale emerge --pretend dev-libs/implicitiusepkgmusl
+# [ebuild  N] dev-libs/implicitiusepkgmusl-1.0
+# !!! no visible ebuild for dependency "dev-libs/implicitiuseprov"
+#   -- elibc_musl is valid implicit IUSE but not enabled (ELIBC="glibc")
+```
+
+### `USE_EXPAND` `_*` wildcard: enable every matching flag in a package's own IUSE
+
+The last `USE_EXPAND` corner. Real `config.py`'s `setcpv` (~line 2242):
+once `package.use` has been folded, a `k_*` flag still in the USE set --
+from `USE="linguas_*"`, from `LINGUAS="*"` being prefix-folded, or from a
+`package.use` `LINGUAS: *` shorthand -- means "enable every `k_<x>` flag
+declared in **this candidate's own `IUSE`** that isn't masked". It is
+inherently per-package (the IUSE-blind global config layer can't do it),
+so this lands in `portage_repo::effective_use_flags`, right after
+`package.use` and before the `use.mask`/`.force` steps: for each
+`_*`-suffixed token, every `IUSE` flag sharing its `k_` prefix is added,
+then the existing `use.mask` steps drop any that are masked (real
+portage's own `x not in usemask` guard), and finally every `_*`-suffixed
+pseudo-flag is stripped from the result (real portage strips them from
+`PORTAGE_USE`).
+
+Deliberately **not** guarded on `k` actually being a declared
+`USE_EXPAND` variable name (real portage checks `use_expand_split`): a
+`_*`-suffixed token in portuale's USE set only ever originates from
+`USE_EXPAND` folding or `package.use`'s own `USE_EXPAND` shorthand
+anyway. This was the "IUSE-aware `_*` wildcard expansion (`linguas_*` --
+needs a specific package's own `IUSE`)" cut named in `portage-profile`'s
+module doc; that note is corrected.
+
+New fixtures: `profiles/base/make.defaults` adds `LINGUAS` to
+`USE_EXPAND`; `etc/portage/package.use` gets `dev-libs/wildexpandpkg
+linguas_*`; `profiles/base/package.use.mask` gets `dev-libs/wildexpandpkg
+linguas_en`; `dev-libs/wildexpandpkg` (`IUSE="linguas_en linguas_de"`,
+`RDEPEND="linguas_de? ( dev-libs/wildexpanddep ) linguas_en? (
+dev-libs/wildexpandmasked )"`) -- so `linguas_de` is wildcard-enabled and
+pulls `wildexpanddep`, while `linguas_en` stays masked off and
+`wildexpandmasked` (which needn't exist) is never referenced. Two Rust
+unit tests, one parametrized contract case, one dedicated pinned-output
+contract test; mirrored in `emerge_pretend_reference.py`.
+
+```sh
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    rust/target/release/portuale emerge --pretend -v dev-libs/wildexpandpkg
+# [ebuild  N] dev-libs/wildexpandpkg-1.0  USE="linguas_de -linguas_en"
+# [ebuild  N] dev-libs/wildexpanddep-1.0
+#   -- linguas_* expanded to the two declared linguas_* IUSE flags;
+#      linguas_en stayed masked, so only linguas_de's RDEPEND clause fired
+```
+
+### `metadata/layout.conf`: `masters =` middle tier, `repo-name`, and the `profile-formats` parent-colon gate
+
+Nothing read `<repo>/metadata/layout.conf` before -- `RepoConfig`'s
+canonical repo name was its `repos.conf` `[section]` name, `masters`
+came only from `repos.conf`, and a profile `parent` line's cross-repo
+`reponame:path`/`:path` syntax was always expanded. This slice ports
+three real `layout.conf` keys.
+
+**`masters =` as a middle tier.** Real `config.py:237-245`/`484-490`:
+an explicit `repos.conf` `masters =` wins; else the repo's own
+`layout.conf` `masters =` (an empty one is a real "no masters",
+distinct from the key being absent); else the implicit default (the
+main repo alone). `find_repos` now resolves all three tiers -- new
+`parse_layout_conf` (a section-less `key = value` reader), a
+`repos_conf_masters` capture in the first pass, and a `layout.conf`
+pass between them.
+
+**`repo-name`.** Real `config.py:500-505`: `layout.conf`'s `repo-name`
+overrides the repo's name, applied onto `RepoConfig::name` after the
+`profiles/repo_name` resolution below. (An earlier version of this
+paragraph said portuale used the `repos.conf` section name as
+canonical and didn't model `profiles/repo_name` -- both since closed,
+see the next section.)
+
+**`profile-formats` gate.** Real `_config/LocationsManager.py:47`/`259`:
+`_allow_parent_colon = frozenset(["portage-2"])` -- a profile `parent`
+line's `:` cross-repo syntax is only expanded for a profile node whose
+own repo declares `profile-formats = portage-2` in `layout.conf`.
+`allow_parent_colon` *defaults* `True` and is only overridden when the
+node intersects a known repo, so a node outside any repo keeps the
+permissive default and a node inside a repo is gated. `resolve_config`
+reads each repo's `layout.conf` directly (`repo_profile_formats`, a
+tiny dedicated reader -- `portage-profile` can't depend on
+`portage-repo`) and threads the allowed-repo-name set through
+`resolve_profile_chain` -> `visit_profile` -> `expand_parent_colon`.
+Real portage's EAPI-conditional `profile-formats` *default* when the
+key is absent (`portage-1`/`portage-1-compat`) is not modeled -- absent
+simply means "no `portage-2`".
+
+`fixtures/repo/metadata/layout.conf` gains `profile-formats =
+portage-2` (its `profiles/default/parent`'s own `overlay:crossrepo-parent`
+line -- shipped by an earlier slice -- keeps working). New overlay
+`layoutmasteroverlay` (repos.conf section, **no** `masters` key) has a
+`layout.conf` declaring `masters = overlay` + `repo-name = layoutrenamed`;
+`dev-libs/layoutmasterpkg` exists only there and is masked only by the
+`overlay` repo's own `profiles/package.mask` -- so it resolves to "no
+ebuilds", proving the `layout.conf` masters tier feeds `package.mask`
+stacking and the overlay loads under its `layout.conf` name. Rust unit
+tests for `find_repos` (all three keys) and for the negative gate (a
+`:` parent in a non-`portage-2` repo is left literal), a parametrized
+contract case, and a dedicated contract test; mirrored in
+`emerge_pretend_reference.py`.
+
+```sh
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    rust/target/release/portuale emerge --pretend dev-libs/layoutmasterpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/layoutmasterpkg".
+#   -- layoutmasteroverlay masters `overlay` via its own layout.conf, so
+#      overlay's package.mask entry for layoutmasterpkg applies
 ```
 
