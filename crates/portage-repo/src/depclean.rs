@@ -2,6 +2,34 @@
 
 use crate::*;
 
+/// Portage `emerge --depclean`'s removal list (`_calc_depclean` +
+/// `create_cleanlist`): every installed package NOT reachable, over the
+/// installed dependency graph (vdb `RDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND`,
+/// flattened against vdb `USE`, every `||` branch kept), from the required
+/// roots. Roots, `args`-mode and lib-check details: see `DepcleanCleanlistArgs`.
+///
+/// **Narrowings** (Portage runs the full `depgraph` in "remove" mode):
+/// slot-operator rebuild edges, `package.provided`, `--deselect=n`, and
+/// `world_sets` `@`-refs are still out.
+///
+/// Result: packages to remove (already in unmerge order -- see
+/// `topological_removal_order`), the required-set size (`required_count`),
+/// and `ordered` -- true when edges exist *between* cleanlist members, so the
+/// caller renders in `cleanlist` order rather than regrouping by `cat/pn`.
+#[derive(Debug, Clone)]
+pub struct DepcleanResult {
+    pub cleanlist: Vec<InstalledPackage>,
+    pub required_count: usize,
+    pub ordered: bool,
+    /// Portage `show_parents` lines for every *kept* package, rendered and
+    /// sorted (`<parent> requires <atom>, <atom>` per line), cpv order.
+    pub kept_parents: Vec<(InstalledPackage, Vec<String>)>,
+    /// `(atom, parent_cpv)` for every *kept* package's hard runtime dependency
+    /// no installed package satisfies: the caller prints the unresolvable
+    /// block and exits 1 without removing anything. Sorted, deduped.
+    pub unresolved: Vec<(String, String)>,
+}
+
 /// Portage `_calc_depclean`'s unmerge-order pass (Portage actions):
 /// topologically sorts the cleanlist digraph so each package unmerges *before*
 /// what it depends on. Returns `(ordered, cleanlist)`: with no edges `ordered`
@@ -313,6 +341,389 @@ pub struct DepcleanCleanlistArgs<'a> {
     pub lib_protected_providers: &'a [InstalledPackage],
     /// `package.provided` (`config.package_provided`). See `pprovided_matches`.
     pub package_provided: &'a [String],
+}
+
+pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
+    let DepcleanCleanlistArgs {
+        root,
+        world_seeds,
+        system_atoms,
+        args,
+        deselect,
+        lib_protected_providers,
+        package_provided,
+    } = args;
+    let installed = all_installed_packages(root);
+    // Candidate strings for `match_from_list`, one per installed package,
+    // kept alongside the package itself.
+    let candidate_strs: Vec<(String, &InstalledPackage)> = installed
+        .iter()
+        .map(|p| {
+            (
+                format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot),
+                p,
+            )
+        })
+        .collect();
+    let matches_atom = |atom_str: &str| -> Vec<&InstalledPackage> {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            return Vec::new();
+        };
+        candidate_strs
+            .iter()
+            .filter(|(_, p)| p.category == atom.category && p.package == atom.package)
+            .filter(|(cs, _)| {
+                portage_dep::match_from_list(atom_str, &[cs.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+            })
+            .map(|(_, p)| *p)
+            .collect()
+    };
+
+    let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
+    let matched_by_args = |p: &InstalledPackage| -> bool {
+        let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+        args.iter().any(|a| {
+            portage_dep::parse_atom(a)
+                .is_some_and(|pa| pa.category == p.category && pa.package == p.package)
+                && portage_dep::match_from_list(a, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+        })
+    };
+
+    // Roots.
+    let mut reachable: HashSet<(String, String, String)> = HashSet::new();
+    let mut queue: Vec<InstalledPackage> = Vec::new();
+    // Portage `_dynamic_config._parent_atoms`: child key -> [(parent, atom)],
+    // recording every resolving dep edge, not just the first puller.
+    let mut parent_atoms: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
+    for (atom_str, label) in system_atoms.iter().map(|a| (a.as_str(), "@system")).chain(
+        // `args` mode drops the `@world` seeds (Portage empties `selected_set`)
+        // unless `--deselect=n`; `@system` seeds in every mode.
+        world_seeds
+            .iter()
+            .filter(|_| args.is_empty() || !deselect)
+            .map(|(a, l)| (a.as_str(), l.as_str())),
+    ) {
+        // `package.provided`: a seed atom this covers never becomes a graph root
+        // (Portage intercepts before `_add_pkg`; the `-pc` "removed even if
+        // in world" case). See `pprovided_matches`.
+        if pprovided_matches(atom_str, package_provided) {
+            continue;
+        }
+        for p in matches_atom(atom_str) {
+            parent_atoms
+                .entry(key(p))
+                .or_default()
+                .push((label.to_string(), atom_str.to_string()));
+            if reachable.insert(key(p)) {
+                queue.push(p.clone());
+            }
+        }
+    }
+    if !args.is_empty() {
+        // `args` mode: every installed package the args *don't* match is a
+        // protected root (Portage `protected_set`); no edge is recorded for
+        // the seed itself, since `show_parents` filters that parent out.
+        for p in &installed {
+            if !matched_by_args(p) && reachable.insert(key(p)) {
+                queue.push(p.clone());
+            }
+        }
+    }
+    // `--depclean-lib-check` feedback: a still-needed provider becomes a root,
+    // dropping it and its closure out of the cleanlist (Portage re-adds via
+    // `_add_pkg` + `_complete_graph`). No parent edge for the provider itself.
+    for p in lib_protected_providers {
+        if reachable.insert(key(p)) {
+            queue.push(p.clone());
+        }
+    }
+    while let Some(p) = queue.pop() {
+        let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        let parent_cpv = p.cpv();
+        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+            let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in atoms {
+                // `package.provided`: satisfied without adding a graph edge to the
+                // installed provider (Portage dep_check intercept).
+                if pprovided_matches(&atom_str, package_provided) {
+                    continue;
+                }
+                for dep in matches_atom(&atom_str) {
+                    parent_atoms
+                        .entry(key(dep))
+                        .or_default()
+                        .push((parent_cpv.clone(), atom_str.clone()));
+                    if reachable.insert(key(dep)) {
+                        queue.push(dep.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cleanlist: Vec<InstalledPackage> = installed
+        .iter()
+        .filter(|p| !reachable.contains(&key(p)))
+        .filter(|p| args.is_empty() || matched_by_args(p))
+        .cloned()
+        .collect();
+    cleanlist.sort_by(|a, b| {
+        a.category
+            .cmp(&b.category)
+            .then_with(|| a.package.cmp(&b.package))
+            .then_with(|| vercmp_ordering(&a.version, &b.version))
+    });
+
+    // Portage `show_parents` for every *kept* package, cpv-sorted (no-args: all
+    // reachable; args: only `args`-matched reachable ones).
+    let mut kept: Vec<&InstalledPackage> = installed
+        .iter()
+        .filter(|p| reachable.contains(&key(p)))
+        .filter(|p| args.is_empty() || matched_by_args(p))
+        .collect();
+    kept.sort_by(|a, b| {
+        a.category
+            .cmp(&b.category)
+            .then_with(|| a.package.cmp(&b.package))
+            .then_with(|| vercmp_ordering(&a.version, &b.version))
+    });
+    let mut kept_parents: Vec<(InstalledPackage, Vec<String>)> = Vec::new();
+    for p in kept {
+        let Some(edges) = parent_atoms.get(&key(p)) else {
+            continue;
+        };
+        let lines = render_show_parents(edges);
+        if !lines.is_empty() {
+            kept_parents.push((p.clone(), lines));
+        }
+    }
+
+    // Portage `unresolved_deps()`, over *every* kept package (the full required
+    // set, not just the `args`-matched ones).
+    let all_kept: Vec<&InstalledPackage> = installed
+        .iter()
+        .filter(|p| reachable.contains(&key(p)))
+        .collect();
+    let unresolved = unresolved_runtime_deps(
+        root,
+        &all_kept,
+        &installed,
+        &libc_provider_cps(root),
+        package_provided,
+    );
+
+    let required_count = reachable.len();
+    let (ordered, cleanlist) = topological_removal_order(root, cleanlist);
+    DepcleanResult {
+        cleanlist,
+        required_count,
+        ordered,
+        kept_parents,
+        unresolved,
+    }
+}
+
+/// Portage `emerge --prune`'s removal list (`_calc_depclean` with
+/// `action="prune"`): seed the closure from every installed package *except*
+/// non-highest versions matched by `args_set` (given atoms, or every
+/// multi-version cp); the cleanlist is what the closure doesn't reach. Same
+/// closure and order as `depclean_cleanlist`, same lib-check wiring.
+///
+/// **Deliberately out**: `--prune --nodeps`, the `--deselect` world-file
+/// rewrite, and slot-operator rebuild edges.
+/// Portage: actions, unmerge `_unmerge_display` prune branch
+pub fn prune_cleanlist(
+    root: &Path,
+    args: &[String],
+    // `--depclean-lib-check` feedback and `package.provided`: see
+    // `depclean_cleanlist`'s params. `--prune` has no atom-seeded roots, so
+    // `package.provided` only reaches the walk and `unresolved_deps()`.
+    lib_protected_providers: &[InstalledPackage],
+    package_provided: &[String],
+) -> DepcleanResult {
+    let installed = all_installed_packages(root);
+    let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
+
+    // Highest installed version per cp (Portage `pkgs_for_cp[-1]`).
+    let mut highest: HashMap<(String, String), String> = HashMap::new();
+    for p in &installed {
+        let cp = (p.category.clone(), p.package.clone());
+        match highest.get(&cp) {
+            Some(v) if vercmp_ordering(&p.version, v) != Ordering::Greater => {}
+            _ => {
+                highest.insert(cp, p.version.clone());
+            }
+        }
+    }
+    let is_highest = |p: &InstalledPackage| {
+        highest
+            .get(&(p.category.clone(), p.package.clone()))
+            .is_some_and(|v| v == &p.version)
+    };
+
+    // `args_set`: the given atoms, or every multi-version cp with none
+    // (Portage actions).
+    let multi_version: HashSet<(String, String)> = {
+        let mut counts: HashMap<(String, String), usize> = HashMap::new();
+        for p in &installed {
+            *counts
+                .entry((p.category.clone(), p.package.clone()))
+                .or_default() += 1;
+        }
+        counts
+            .into_iter()
+            .filter(|(_, n)| *n > 1)
+            .map(|(cp, _)| cp)
+            .collect()
+    };
+    let matched_by_args = |p: &InstalledPackage| -> bool {
+        if args.is_empty() {
+            return multi_version.contains(&(p.category.clone(), p.package.clone()));
+        }
+        let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+        args.iter().any(|a| {
+            portage_dep::parse_atom(a)
+                .is_some_and(|pa| pa.category == p.category && pa.package == p.package)
+                && portage_dep::match_from_list(a, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+        })
+    };
+
+    // A candidate for pruning = a non-highest version its args_set matches;
+    // everything else seeds the closure.
+    let is_candidate = |p: &InstalledPackage| !is_highest(p) && matched_by_args(p);
+
+    let candidate_strs: Vec<(String, &InstalledPackage)> = installed
+        .iter()
+        .map(|p| {
+            (
+                format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot),
+                p,
+            )
+        })
+        .collect();
+    let matches_atom = |atom_str: &str| -> Vec<&InstalledPackage> {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            return Vec::new();
+        };
+        candidate_strs
+            .iter()
+            .filter(|(_, p)| p.category == atom.category && p.package == atom.package)
+            .filter(|(cs, _)| {
+                portage_dep::match_from_list(atom_str, &[cs.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+            })
+            .map(|(_, p)| *p)
+            .collect()
+    };
+
+    let mut reachable: HashSet<(String, String, String)> = HashSet::new();
+    let mut queue: Vec<InstalledPackage> = Vec::new();
+    // Portage `_parent_atoms`: only dep-walk edges here (the prune seeds come
+    // from the internal protected-set roots, which `show_parents` filters out).
+    let mut parent_atoms: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
+    for p in &installed {
+        if !is_candidate(p) && reachable.insert(key(p)) {
+            queue.push(p.clone());
+        }
+    }
+    // `--depclean-lib-check` feedback -- see `depclean_cleanlist`.
+    for p in lib_protected_providers {
+        if reachable.insert(key(p)) {
+            queue.push(p.clone());
+        }
+    }
+    while let Some(p) = queue.pop() {
+        let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        let parent_cpv = p.cpv();
+        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+            let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in atoms {
+                // `package.provided`: same dependency-walk intercept as above.
+                if pprovided_matches(&atom_str, package_provided) {
+                    continue;
+                }
+                for dep in matches_atom(&atom_str) {
+                    parent_atoms
+                        .entry(key(dep))
+                        .or_default()
+                        .push((parent_cpv.clone(), atom_str.clone()));
+                    if reachable.insert(key(dep)) {
+                        queue.push(dep.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cleanlist: Vec<InstalledPackage> = installed
+        .iter()
+        .filter(|p| is_candidate(p) && !reachable.contains(&key(p)))
+        .cloned()
+        .collect();
+    cleanlist.sort_by(|a, b| {
+        a.category
+            .cmp(&b.category)
+            .then_with(|| a.package.cmp(&b.package))
+            .then_with(|| vercmp_ordering(&a.version, &b.version))
+    });
+
+    // Portage `create_cleanlist`'s prune branch: `show_parents(pkg)` for every
+    // `args_set`-matched *kept* version with a non-protected-set parent edge.
+    let mut kept: Vec<&InstalledPackage> = installed
+        .iter()
+        .filter(|p| reachable.contains(&key(p)) && matched_by_args(p))
+        .collect();
+    kept.sort_by(|a, b| {
+        a.category
+            .cmp(&b.category)
+            .then_with(|| a.package.cmp(&b.package))
+            .then_with(|| vercmp_ordering(&a.version, &b.version))
+    });
+    let mut kept_parents: Vec<(InstalledPackage, Vec<String>)> = Vec::new();
+    for p in kept {
+        let Some(edges) = parent_atoms.get(&key(p)) else {
+            continue;
+        };
+        let lines = render_show_parents(edges);
+        if !lines.is_empty() {
+            kept_parents.push((p.clone(), lines));
+        }
+    }
+
+    let all_kept: Vec<&InstalledPackage> = installed
+        .iter()
+        .filter(|p| reachable.contains(&key(p)))
+        .collect();
+    let unresolved = unresolved_runtime_deps(
+        root,
+        &all_kept,
+        &installed,
+        &libc_provider_cps(root),
+        package_provided,
+    );
+
+    let required_count = reachable.len();
+    let (ordered, cleanlist) = topological_removal_order(root, cleanlist);
+    DepcleanResult {
+        cleanlist,
+        required_count,
+        ordered,
+        kept_parents,
+        unresolved,
+    }
 }
 
 /// One cp's `emerge --prune --nodeps` split: `best_version` is
