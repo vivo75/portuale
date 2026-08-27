@@ -995,5 +995,6 @@ mod queue;
 mod reinstall;
 mod repo_config;
 mod tests_184;
+mod use_display;
 mod use_flags;
 mod visibility;

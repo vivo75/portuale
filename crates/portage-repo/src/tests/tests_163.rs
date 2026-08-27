@@ -3,6 +3,51 @@
 use crate::*;
 use portage_util::TempDir;
 
+/// Minimal merge-bound `GraphEntry` for the assembly legs (slot and
+/// `new_slot` as the leg needs; everything display-side left at its
+/// empty default). Mirrors `tests_162::entry_162`, which must stay
+/// untouched.
+fn entry_163(
+    cat: &str,
+    pkg: &str,
+    outcome: PretendOutcome,
+    required_by: &[(&str, &str)],
+) -> GraphEntry {
+    GraphEntry {
+        discovery: 0,
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        outcome,
+        blockers: Vec::new(),
+        slot: None,
+        sub_slot: None,
+        repo_name: Some("testrepo".to_string()),
+        oldbest: Vec::new(),
+        use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: required_by
+            .iter()
+            .map(|(c, p)| (c.to_string(), p.to_string()))
+            .collect(),
+        source: CandidateSource::Ebuild,
+        provenance: VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    }
+}
+
 fn new_163(version: &str) -> PretendOutcome {
     PretendOutcome::New {
         version: version.to_string(),

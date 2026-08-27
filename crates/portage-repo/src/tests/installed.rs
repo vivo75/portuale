@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn candidate_use_flags_display_resolves_use_expand_flags_for_a_resume_entry() {
+    // `emerge --resume` rebuilds each entry from a bare `cat/pkg-ver`; this
+    // re-derives the `USE=` display for the fixture's USE_EXPAND setup.
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf resolves");
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let display = candidate_use_flags_display(&repos, &config, "dev-libs", "useexpandpkg", "1.0");
+    assert_eq!(
+        display,
+        vec![
+            ("video_cards_amdgpu".to_string(), false),
+            ("video_cards_nvidia".to_string(), true),
+        ]
+    );
+    // An unlocatable candidate is an empty list, never a panic.
+    assert!(
+        candidate_use_flags_display(&repos, &config, "dev-libs", "nope-does-not-exist", "9")
+            .is_empty()
+    );
+}
+
+#[test]
 fn running_root_satisfies_atom_checks_the_given_roots_own_real_vdb() {
     // The provider exists only as a hand-seeded vdb entry (no ebuild anywhere).
     let root = fixtures_root();
