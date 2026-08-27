@@ -2169,11 +2169,14 @@ def _build_use_expand_display(
 
     `installed`, when given, is (old_use, old_iuse) -- the installed
     version's own recorded USE/IUSE (bare names, old_use already
-    intersected with old_iuse) -- and each flag is diffed against it
-    exactly as real _create_use_string does with all_flags/reinst_flags
-    both off: enabled+new-IUSE -> flag%*, enabled+newly-on -> flag*,
-    enabled+unchanged -> omitted; disabled+new-IUSE -> -flag%,
-    disabled+was-on -> -flag*, disabled+unchanged -> omitted.
+    intersected with old_iuse). Real _DisplayConfig sets verbosity=3
+    whenever --verbose is given, so all_flags is ALWAYS true for
+    `emerge -pv` and the diff shows every flag: enabled+new-IUSE ->
+    flag%*, enabled+newly-on -> flag*, enabled+unchanged -> flag;
+    disabled+new-IUSE -> -flag%, disabled+was-on -> -flag*,
+    disabled+unchanged -> -flag; a flag dropped from IUSE by the new
+    ebuild -> (-flag%) / (-flag%*). reinst_flags is still not modelled
+    (only widens what all_flags already shows).
 
     `forced` (full flag names -- real self.forced_flags = pkg.use.force |
     pkg.use.mask) is any flag the user can't control: its rendered token
@@ -2185,8 +2188,13 @@ def _build_use_expand_display(
     old_use, old_iuse = installed if installed is not None else (None, None)
     forced = forced or set()
 
-    def render_flag(bare, full, enabled):
+    # state: "enabled" / "disabled" / "removed" (rendered in that order).
+    def render_flag(bare, full, state):
         is_forced = full in forced
+        if state == "removed":
+            in_old_use = installed is not None and full in old_use
+            return f"(-{bare}%{'*' if in_old_use else ''})"
+        enabled = state == "enabled"
         if installed is None:
             core = f"{'' if enabled else '-'}{bare}"
         else:
@@ -2198,44 +2206,47 @@ def _build_use_expand_display(
                 elif not in_old_use:
                     core = f"{bare}*"
                 else:
-                    return None
+                    core = bare
             elif not in_old_iuse:
                 core = f"-{bare}" if is_forced else f"-{bare}%"
             elif in_old_use:
                 core = f"-{bare}*"
             else:
-                return None
+                core = f"-{bare}"
         return f"({core})" if is_forced else core
 
     # Entries keep the FULL flag name; the prefix is stripped at render.
     groups = [("", [])] + [(v.upper(), []) for v in expand_vars]
     by_name = {name: flags for name, flags in groups}
-    for flag, enabled in use_display:
-        placed = False
-        for var in expand_vars:
-            prefix = var.lower() + "_"
-            if flag.startswith(prefix):
-                by_name[var.upper()].append((flag, enabled))
-                placed = True
-                break
-        if not placed:
-            by_name[""].append((flag, enabled))
 
+    def route(flag, state):
+        for var in expand_vars:
+            if flag.startswith(var.lower() + "_"):
+                by_name[var.upper()].append((flag, state))
+                return
+        by_name[""].append((flag, state))
+
+    for flag, enabled in use_display:
+        route(flag, "enabled" if enabled else "disabled")
+    if installed is not None:
+        cur = {f for f, _ in use_display}
+        for flag in sorted(f for f in old_iuse if f not in cur):
+            route(flag, "removed")
+
+    rank = {"enabled": 0, "disabled": 1, "removed": 2}
     out = []
     for name, flags in groups:
         if name and name in hidden:
             continue
         prefix = name.lower() + "_"
         rendered_pairs = []
-        for full, enabled in flags:
+        for full, state in flags:
             bare = full if not name else (full[len(prefix):] if full.startswith(prefix) else full)
-            r = render_flag(bare, full, enabled)
-            if r is not None:
-                rendered_pairs.append((enabled, r))
-        # Real _create_use_string: `enabled + disabled` -- stable, so the
-        # incoming bare-name order is kept within each group.
-        rendered_pairs.sort(key=lambda p: not p[0])
-        rendered = [tok for _en, tok in rendered_pairs]
+            rendered_pairs.append((rank[state], render_flag(bare, full, state)))
+        # Real _create_use_string: `enabled + disabled + removed` --
+        # stable, so the incoming bare-name order is kept within a rank.
+        rendered_pairs.sort(key=lambda p: p[0])
+        rendered = [tok for _r, tok in rendered_pairs]
         if not rendered:
             continue
         out.append(("USE" if not name else name, " ".join(rendered)))

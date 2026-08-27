@@ -3598,12 +3598,19 @@ struct InstalledUseState {
 /// When `installed` is `Some` (an `Upgrade`/`Downgrade`/`Reinstall` entry
 /// -- i.e. real `pkg_info.previous_pkg is not None`, `is_new` false),
 /// each flag is diffed against the installed version's own recorded
-/// `USE`/`IUSE` exactly as real `_create_use_string` does with
-/// `all_flags`/`reinst_flags` both off: an enabled flag not in old IUSE
-/// renders `flag%*`; enabled + in old IUSE + not in old USE renders
-/// `flag*`; a disabled flag not in old IUSE renders `-flag%`; disabled +
-/// was in old USE renders `-flag*`; an unchanged flag (either polarity)
-/// is omitted entirely.
+/// `USE`/`IUSE`. Real `_DisplayConfig` sets `verbosity = 3` whenever
+/// `--verbose` is given (`output_helpers.py:180-187`), so `all_flags =
+/// (verbosity == 3)` is **always true** for `emerge -pv` -- meaning the
+/// diff shows *every* flag, not just the changed ones: an enabled flag
+/// not in old IUSE renders `flag%*`; enabled + in old IUSE + not in old
+/// USE renders `flag*`; enabled + unchanged renders `flag` (plain); a
+/// disabled flag not in old IUSE renders `-flag%`; disabled + was in old
+/// USE renders `-flag*`; disabled + unchanged renders `-flag` (plain);
+/// and a flag that was in old IUSE but is gone from the current ebuild's
+/// IUSE renders `(-flag%)`, or `(-flag%*)` if it was enabled -- real
+/// `_create_use_string`'s own `removed` list. `reinst_flags` (the extra
+/// per-flag "this flag triggered the reinstall" force) is still not
+/// modelled -- it only widens what `all_flags` already shows here.
 ///
 /// `forced` (full flag names -- real `_display_use`'s `self.forced_flags`
 /// = `pkg.use.force | pkg.use.mask`, see `forced_or_masked_flags`) is any
@@ -3612,10 +3619,7 @@ struct InstalledUseState {
 /// `-flag%` (a masked flag brand-new to IUSE renders `(-flag)`, not
 /// `(-flag%)`).
 ///
-/// Deliberately NOT ported (separate cuts): real ANSI colorization; the
-/// `(-flag%)` "removed from IUSE" line (real portage only shows it under
-/// `--all-flags` or when that flag itself triggered the reinstall,
-/// neither of which this pilot models).
+/// Deliberately NOT ported (separate cut): real ANSI colorization.
 ///
 /// Returns `[(VAR_NAME, "rendered")]` with `USE` first, then the
 /// `USE_EXPAND` vars in sorted order (real `sorted(self.use_expand)` with
@@ -3637,12 +3641,28 @@ fn build_use_expand_display(
         .map(|s| s.to_uppercase())
         .collect();
 
+    // One flag's polarity in `_create_use_string`'s own `enabled` /
+    // `disabled` / `removed` split (rendered in that order).
+    #[derive(Clone, Copy, PartialEq)]
+    enum FlagState {
+        Enabled,
+        Disabled,
+        Removed,
+    }
+
     // Real `_create_use_string`'s per-flag marker + `( … )`-wrap logic
     // (see this function's own doc comment). Returns the rendered
-    // `flag`/`-flag` token with any `*`/`%` suffix and `( )` wrap, or
-    // `None` for an unchanged flag real portage omits from a diff.
-    let render_flag = |bare: &str, full: &str, enabled: bool| -> Option<String> {
+    // `flag`/`-flag`/`(-flag%)` token with any `*`/`%` suffix and `( )`
+    // wrap.
+    let render_flag = |bare: &str, full: &str, state: FlagState| -> String {
         let is_forced = forced.contains(full);
+        if state == FlagState::Removed {
+            // Real: `yellow("-" + flag) + "%"`, `+ "*"` if it was on,
+            // always `"(" + ... + ")"`.
+            let in_old_use = installed.is_some_and(|inst| inst.old_use.contains(full));
+            return format!("(-{bare}%{})", if in_old_use { "*" } else { "" });
+        }
+        let enabled = state == FlagState::Enabled;
         let core = match installed {
             None => {
                 let sign = if enabled { "" } else { "-" };
@@ -3657,7 +3677,9 @@ fn build_use_expand_display(
                     } else if !in_old_use {
                         format!("{bare}*")
                     } else {
-                        return None;
+                        // `all_flags` is always on for `emerge -pv`: an
+                        // unchanged enabled flag is still shown, plain.
+                        bare.to_string()
                     }
                 } else if !in_old_iuse {
                     // real: `if flag not in iuse_forced: flag_str += "%"`
@@ -3669,34 +3691,68 @@ fn build_use_expand_display(
                 } else if in_old_use {
                     format!("-{bare}*")
                 } else {
-                    return None;
+                    // Unchanged disabled flag -- shown plain under
+                    // `all_flags`.
+                    format!("-{bare}")
                 }
             }
         };
-        Some(if is_forced { format!("({core})") } else { core })
+        if is_forced {
+            format!("({core})")
+        } else {
+            core
+        }
     };
 
     // Group key: empty string == the plain "USE" group. Entries keep the
     // FULL flag name; the prefix is stripped only at render time (markers
     // are computed against the full name).
-    let mut groups: Vec<(String, Vec<(String, bool)>)> = vec![(String::new(), Vec::new())];
+    let mut groups: Vec<(String, Vec<(String, FlagState)>)> = vec![(String::new(), Vec::new())];
     for var in &expand_vars {
         groups.push((var.to_uppercase(), Vec::new()));
     }
-
-    'flag: for (flag, enabled) in use_flags_display {
-        for var in &expand_vars {
-            let prefix = format!("{}_", var.to_lowercase());
-            if flag.strip_prefix(&prefix).is_some() {
-                let g = groups
-                    .iter_mut()
-                    .find(|(n, _)| *n == var.to_uppercase())
-                    .unwrap();
-                g.1.push((flag.clone(), *enabled));
-                continue 'flag;
+    let route =
+        |groups: &mut Vec<(String, Vec<(String, FlagState)>)>, flag: &str, state: FlagState| {
+            for var in &expand_vars {
+                let prefix = format!("{}_", var.to_lowercase());
+                if flag.strip_prefix(&prefix).is_some() {
+                    groups
+                        .iter_mut()
+                        .find(|(n, _)| *n == var.to_uppercase())
+                        .unwrap()
+                        .1
+                        .push((flag.to_string(), state));
+                    return;
+                }
             }
+            groups[0].1.push((flag.to_string(), state));
+        };
+
+    for (flag, enabled) in use_flags_display {
+        route(
+            &mut groups,
+            flag,
+            if *enabled {
+                FlagState::Enabled
+            } else {
+                FlagState::Disabled
+            },
+        );
+    }
+    // Real `removed_iuse = set(old_iuse).difference(cur_iuse)` -- flags
+    // the current ebuild dropped from IUSE, shown as `(-flag%)` under
+    // `all_flags`.
+    if let Some(inst) = installed {
+        let cur: HashSet<&str> = use_flags_display.iter().map(|(f, _)| f.as_str()).collect();
+        let mut removed: Vec<&String> = inst
+            .old_iuse
+            .iter()
+            .filter(|f| !cur.contains(f.as_str()))
+            .collect();
+        removed.sort();
+        for flag in removed {
+            route(&mut groups, flag, FlagState::Removed);
         }
-        groups[0].1.push((flag.clone(), *enabled));
     }
 
     let mut out = Vec::new();
@@ -3705,24 +3761,28 @@ fn build_use_expand_display(
             continue;
         }
         let prefix = format!("{}_", name.to_lowercase());
-        // Real `_create_use_string`: `" ".join(enabled + disabled)` --
-        // the enabled flags first, then the disabled ones, each group
-        // already in the incoming bare-name order. `--alphabetical`
-        // (which collapses the two groups back into one interleaved
-        // list) is applied later, at render time in `pretend.rs`, since
-        // it needs no resolver state.
-        let mut rendered_pairs: Vec<(bool, String)> = flags
+        // Real `_create_use_string`: `" ".join(enabled + disabled +
+        // removed)` -- in that polarity order, each group already in the
+        // incoming bare-name order. `--alphabetical` (which collapses
+        // them into one interleaved list) is applied later, at render
+        // time in `pretend.rs`, since it needs no resolver state.
+        let mut rendered_pairs: Vec<(u8, String)> = flags
             .iter()
-            .filter_map(|(full, en)| {
+            .map(|(full, state)| {
                 let bare = if name.is_empty() {
                     full.as_str()
                 } else {
                     full.strip_prefix(&prefix).unwrap_or(full)
                 };
-                render_flag(bare, full, *en).map(|tok| (*en, tok))
+                let rank = match state {
+                    FlagState::Enabled => 0,
+                    FlagState::Disabled => 1,
+                    FlagState::Removed => 2,
+                };
+                (rank, render_flag(bare, full, *state))
             })
             .collect();
-        rendered_pairs.sort_by_key(|(en, _)| !*en);
+        rendered_pairs.sort_by_key(|(rank, _)| *rank);
         let rendered: Vec<String> = rendered_pairs.into_iter().map(|(_, tok)| tok).collect();
         if rendered.is_empty() {
             continue;
@@ -11081,10 +11141,11 @@ mod tests {
             ]),
             old_use: HashSet::from(["alpha".to_string(), "video_cards_nvidia".to_string()]),
         };
-        // now: alpha unchanged (omitted), beta newly enabled (*),
-        // gamma brand-new IUSE and enabled (%*), delta brand-new IUSE
-        // and disabled (-delta%), video_cards_nvidia now off (was on) ->
-        // `-nvidia*`. Enabled flags (beta, gamma) render before the
+        // `all_flags` is always on for `emerge -pv`: alpha unchanged ->
+        // `alpha` (plain), beta newly enabled -> `beta*`, gamma brand-new
+        // IUSE and enabled -> `gamma%*`, delta brand-new IUSE and
+        // disabled -> `-delta%`, video_cards_nvidia now off (was on) ->
+        // `-nvidia*`. Enabled (alpha, beta, gamma) render before the
         // disabled one (delta).
         assert_eq!(
             build_use_expand_display(
@@ -11100,22 +11161,46 @@ mod tests {
                 &HashSet::new(),
             ),
             vec![
-                ("USE".to_string(), "beta* gamma%* -delta%".to_string()),
+                ("USE".to_string(), "alpha beta* gamma%* -delta%".to_string()),
                 ("VIDEO_CARDS".to_string(), "-nvidia*".to_string()),
             ]
         );
-        // An entry whose USE is completely unchanged shows no group at
-        // all (real `_create_use_string`'s `if ret:` guard).
-        assert!(build_use_expand_display(
-            &[("alpha".to_string(), true)],
-            &config,
-            Some(&InstalledUseState {
-                old_iuse: HashSet::from(["alpha".to_string()]),
-                old_use: HashSet::from(["alpha".to_string()]),
-            }),
-            &HashSet::new(),
-        )
-        .is_empty());
+        // Even an Upgrade whose USE is completely unchanged still shows
+        // the full `USE=` line under `all_flags` (real
+        // `_create_use_string` returns `USE="alpha"`, non-empty).
+        assert_eq!(
+            build_use_expand_display(
+                &[("alpha".to_string(), true)],
+                &config,
+                Some(&InstalledUseState {
+                    old_iuse: HashSet::from(["alpha".to_string()]),
+                    old_use: HashSet::from(["alpha".to_string()]),
+                }),
+                &HashSet::new(),
+            ),
+            vec![("USE".to_string(), "alpha".to_string())]
+        );
+        // A flag the new ebuild dropped from IUSE renders `(-flag%)`,
+        // `(-flag%*)` if it was enabled -- real `removed_iuse`.
+        assert_eq!(
+            build_use_expand_display(
+                &[("keep".to_string(), true)],
+                &config,
+                Some(&InstalledUseState {
+                    old_iuse: HashSet::from([
+                        "keep".to_string(),
+                        "goneoff".to_string(),
+                        "goneon".to_string(),
+                    ]),
+                    old_use: HashSet::from(["keep".to_string(), "goneon".to_string()]),
+                }),
+                &HashSet::new(),
+            ),
+            vec![(
+                "USE".to_string(),
+                "keep (-goneoff%) (-goneon%*)".to_string()
+            )]
+        );
     }
 
     #[test]

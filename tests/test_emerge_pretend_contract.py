@@ -2426,15 +2426,17 @@ def test_pv_marks_use_changes_against_the_installed_version(
     """Real output_helpers.py::_create_use_string, for an entry that
     replaces an installed one (is_new=False), diffs each flag against the
     installed version's own recorded USE/IUSE and appends `*` (value
-    changed) / `%` (flag newly in IUSE); an unchanged flag is omitted
-    entirely. dev-libs/upgradeusepkg was installed at 1.0 with
+    changed) / `%` (flag newly in IUSE). `emerge -pv` always runs with
+    verbosity 3 -> all_flags on, so EVERY flag is shown (plain for
+    unchanged) plus a `(-flag%)` token for a flag the new ebuild dropped
+    from IUSE. dev-libs/upgradeusepkg was installed at 1.0 with
     IUSE="+keep change drop" / USE="keep change"; its 2.0 ebuild has
     IUSE="+keep -change +added":
 
-      - keep:   on, was on         -> omitted (unchanged)
-      - change: was on, now off    -> -change*
+      - keep:   on, was on          -> keep (plain, unchanged)
+      - change: was on, now off     -> -change*
       - added:  on, not in old IUSE -> added%*
-      - drop:   removed from IUSE   -> not shown (no --all-flags)
+      - drop:   removed from IUSE   -> (-drop%)  (was off)
     """
     args = ["--pretend", "-v", "--update", "dev-libs/upgradeusepkg"]
     rust = _run([str(emerge_binary)], args, fixture_env)
@@ -2444,10 +2446,19 @@ def test_pv_marks_use_changes_against_the_installed_version(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
-        '[ebuild  U] dev-libs/upgradeusepkg-2.0 (upgrade from 1.0)  USE="added%* -change*"',
+        '[ebuild  U] dev-libs/upgradeusepkg-2.0 (upgrade from 1.0)  USE="added%* keep -change* (-drop%)"',
         "",
         "Total: 1 package (1 upgrade), Size of downloads: 0 KiB",
     ]
+    # --alphabetical collapses the polarity split into one bare-name sort.
+    alpha = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--alphabetical", "--update", "dev-libs/upgradeusepkg"],
+        fixture_env,
+    )
+    assert alpha.stdout.splitlines()[0] == (
+        '[ebuild  U] dev-libs/upgradeusepkg-2.0 (upgrade from 1.0)  USE="added%* -change* (-drop%) keep"'
+    )
 
     # A New install has no installed side -> no markers, every flag plain.
     new = _run(

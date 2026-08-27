@@ -1536,8 +1536,8 @@ PORTING/
   this pilot. (The `USE_EXPAND` grouping, the `*`/`%` diff markers, the
   `( … )` forced/masked wrap, and the `[ebuild N ~]` bracket-mask column
   were all closed later -- see the "`emerge --pretend -v`: …" slices
-  below; only the ANSI colorization and the `--all-flags` "removed from
-  IUSE" line are still cut.)
+  below, as was the `all_flags`-driven "show every flag / `(-flag%)`
+  removed-from-IUSE" behavior; only the ANSI colorization is still cut.)
 
   **BDEPEND/PDEPEND/IDEPEND in recursion**: dependency recursion now
   concatenates and flattens all five real dependency-string keys --
@@ -2935,18 +2935,19 @@ PORTING/
   and gets a suffix: `flag%*` (enabled, brand-new IUSE flag), `flag*`
   (enabled, was off), `-flag%` (disabled, brand-new IUSE flag), `-flag*`
   (disabled, was on) -- and an *unchanged* flag is dropped from the line
-  entirely (real `_create_use_string` leaves `flag_str` `None`), so an
-  `[ebuild U]` whose USE didn't actually change shows no `USE=` at all.
+  entirely **[superseded by the "`all_flags`" slice below -- `emerge -pv`
+  always shows every flag]**.
   `build_use_expand_display` grew an `installed: Option<&InstalledUseState>`
   parameter (the call site fills it from `read_vdb_flag_set` for the
   installed version, `None` for a `New`/`AlreadyInstalled` entry -> every
   flag shown plain, unchanged). Named as this slice's boundary when it
   was scoped, still cut then: ANSI color, the `( … )` forced/masked wrap
   (closed by the next slice), and the `(-flag%)` "removed from IUSE"
-  line. New `dev-libs/upgradeusepkg` (installed 1.0 `IUSE="+keep change
+  line (closed by the "`all_flags`" slice below). New
+  `dev-libs/upgradeusepkg` (installed 1.0 `IUSE="+keep change
   drop"` / `USE="keep change"`, 2.0 ebuild `IUSE="+keep -change +added"`)
-  prints `USE="added%* -change*"`; `dev-libs/reinstallpkg`'s own `-v`
-  line goes from `USE="foo"` to `USE="foo*"`.
+  prints `USE="added%* keep -change* (-drop%)"`; `dev-libs/reinstallpkg`'s
+  own `-v` line goes from `USE="foo"` to `USE="foo*"`.
 
   **`emerge --pretend -v`: the `( … )` forced/masked wrap.** Real
   `_display_use` builds `self.forced_flags = pkg.use.force |
@@ -2967,7 +2968,8 @@ PORTING/
   more-specific atom) now prints `USE="(forceflag) (-maskflag)
   -specflag"` -- `specflag` stays unwrapped, proving the wrap tracks the
   *resolved* force/mask set, not the raw entries. Still cut: ANSI color,
-  and the `--all-flags` "removed from IUSE" line.
+  and the `--all-flags` "removed from IUSE" line **(closed by the
+  "`all_flags`" slice below)**.
 
   **`emerge --pretend -v`: enabled-first USE order + `--alphabetical`.**
   Until this slice `build_use_expand_display` rendered each `USE=`/`VAR=`
@@ -2989,10 +2991,31 @@ PORTING/
   match. Two pinned fixtures flipped: `dev-libs/iusedefaultpkg` now
   `USE="enableddefault plainflag -disableddefault"` (was fully
   alphabetical), `dev-libs/useexpandpkg` `VIDEO_CARDS="nvidia -amdgpu"`.
-  Still cut (unchanged): ANSI color, the `--all-flags` "removed from
-  IUSE" line, and real portage's *natural* within-group sort
-  (`_alnum_sort_key` -- this pilot's plain lexicographic only differs on
-  e.g. `python3_9` vs `python3_12`).
+  Still cut (unchanged): ANSI color and real portage's *natural*
+  within-group sort (`_alnum_sort_key` -- this pilot's plain lexicographic
+  only differs on e.g. `python3_9` vs `python3_12`).
+
+  **`emerge --pretend -v`: `all_flags` -- the diff shows every flag.**
+  Real `_DisplayConfig` sets `verbosity = 3` whenever `--verbose` is
+  given (`output_helpers.py:180-187`), so `all_flags = (verbosity == 3)`
+  is *always* true for `emerge -pv`. That changes the
+  `Upgrade`/`Downgrade`/`Reinstall` USE diff: `_create_use_string` shows
+  *every* flag, not just the changed ones -- an unchanged enabled flag
+  renders `flag` (plain, was dropped from the line before), an unchanged
+  disabled flag renders `-flag`, and a flag the new ebuild dropped from
+  IUSE renders `(-flag%)` / `(-flag%*)` (real `removed_iuse`, rendered
+  after the enabled and disabled groups). `render_flag` gained a
+  three-state `FlagState` (`Enabled`/`Disabled`/`Removed`);
+  `build_use_expand_display` now also walks `old_iuse \ cur_iuse` for the
+  removed tokens and ranks the three states 0/1/2 for the within-group
+  order. An `Upgrade` whose USE didn't change now shows the full
+  `USE="…"` line too (real `_create_use_string` returns it non-empty
+  under `all_flags`). The `upgradeusepkg` fixture's own `-v` line goes
+  from `USE="added%* -change*"` to `USE="added%* keep -change* (-drop%)"`
+  -- `keep` unchanged-on, `(-drop%)` gone from IUSE. `reinst_flags` (the
+  extra per-flag reinstall force) is still not modelled; it only widens
+  what `all_flags` already shows. ANSI color stays the sole remaining
+  `_create_use_string` cut.
 
   **`emerge --pretend -v`: the `[ebuild N ~]` bracket-mask marker.** Real
   `output.py::gen_mask_str` (only with `-v` -- `include_mask_str` =
