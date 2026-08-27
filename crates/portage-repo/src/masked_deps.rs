@@ -618,3 +618,30 @@ pub(crate) fn masked_candidates_for_atom(
     }
     Some(out)
 }
+
+pub(crate) fn all_masked_report(
+    repos: &[RepoConfig],
+    atom_str: &str,
+    config: &portage_profile::Config,
+    xinfo: &str,
+) -> Option<String> {
+    // The header/footer live here; the masked list is shared with the
+    // dependency disclosure.
+    let masked = masked_candidates_for_atom(repos, atom_str, config)?;
+
+    let mut out = format!(
+        "\n!!! All ebuilds that could satisfy {xinfo} have been masked.\n\
+         !!! One of the following masked packages is required to complete your request:\n"
+    );
+    for (output_cpv, reasons) in masked {
+        out.push_str(&format!(
+            "- {output_cpv} (masked by: {})\n",
+            reasons.join(", ")
+        ));
+    }
+    out.push_str(
+        "\nFor more information, see the MASKED PACKAGES section in the emerge\n\
+         man page or refer to the Gentoo Handbook.\n",
+    );
+    Some(out)
+}
