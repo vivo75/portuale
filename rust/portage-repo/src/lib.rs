@@ -3056,13 +3056,133 @@ fn split_installed_dir(dirname: &str) -> Option<(String, String)> {
 /// aborting" safety halt, `package.provided`, `--deselect=n` (keeps the
 /// world atoms as roots in `args` mode), and `world_sets` `@`-refs as
 /// roots are all still out.
-/// `depclean_cleanlist`'s result: the packages to remove, plus the size
-/// of the required-set closure (real `req_pkg_count`, the `Required
-/// packages:` stat).
+/// `depclean_cleanlist`'s result: the packages to remove (already in
+/// real `_calc_depclean`'s own unmerge order -- see
+/// `topological_removal_order`), the size of the required-set closure
+/// (real `req_pkg_count`, the `Required packages:` stat), and `ordered`
+/// -- true when there were dependency edges *between* cleanlist members,
+/// so the caller must render them in `cleanlist` order rather than
+/// regrouping by `cat/pn` (real `_unmerge_display`'s own `if not
+/// ordered:` regroup branch, `unmerge.py:459-474`).
 #[derive(Debug, Clone)]
 pub struct DepcleanResult {
     pub cleanlist: Vec<InstalledPackage>,
     pub required_count: usize,
+    pub ordered: bool,
+}
+
+/// Real `_calc_depclean`'s own unmerge-order pass (`actions.py:1591-1731`):
+/// build a digraph over the cleanlist where an edge `depender -> dep`
+/// exists whenever one cleanlist member satisfies another's `DEPEND` /
+/// `RDEPEND` / `BDEPEND` / `PDEPEND` / `IDEPEND` (flattened against the
+/// depender's own vdb `USE`), then topologically sort it so each package
+/// is unmerged *before* the packages it depends on -- real portage does
+/// this "to avoid breaking things that may need to run during pkg_prerm
+/// or pkg_postrm".
+///
+/// Returns `(ordered, cleanlist)`. When the digraph has no edges at all
+/// (`len(graph.order) == len(graph.root_nodes())` in real portage),
+/// `ordered` is `false` and the input order (the `cat`/`pn`/version sort
+/// `depclean_cleanlist` already applied) is kept -- real
+/// `_unmerge_display` then does its own `cat/pn` grouping. When there
+/// are edges, `ordered` is `true` and the returned order is real
+/// portage's own repeated-root-node pop: every current root (nothing
+/// left depends on it) is emitted at once, sorted by cpv descending
+/// (real `nodes.sort(reverse=True)`), then removed.
+///
+/// **Deliberately out of scope** (real `actions.py:1604-1614` +
+/// `1709-1729`): the slot-operator-built-dep priority bump
+/// (`buildtime_slot_op`/`runtime_slot_op`, for cases like bug 916135's
+/// `dev-libs/B:0/0=`) and the priority-ignoring single-node pop that
+/// resolves a genuine dependency cycle. A cleanlist that still contains
+/// a cycle here is emitted last, in cpv order, with `ordered` still
+/// `true`. `flat_dep_atoms` also keeps every `||` branch (real
+/// `_select_atoms` resolves to one), so a disjunctive dep can add a few
+/// extra ordering edges -- the conservative direction.
+fn topological_removal_order(
+    root: &Path,
+    cleanlist: Vec<InstalledPackage>,
+) -> (bool, Vec<InstalledPackage>) {
+    let n = cleanlist.len();
+    if n < 2 {
+        return (false, cleanlist);
+    }
+    let cand_strs: Vec<String> = cleanlist
+        .iter()
+        .map(|p| format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot))
+        .collect();
+    // `deps[i]` = indices `j` such that `cleanlist[i]` depends on
+    // `cleanlist[j]`, i.e. `i` must be unmerged before `j`.
+    let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, p) in cleanlist.iter().enumerate() {
+        let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        let mut atoms: HashSet<String> = HashSet::new();
+        for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
+            let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            if let Some(a) = flat_dep_atoms(&depstr, &use_flags) {
+                atoms.extend(a);
+            }
+        }
+        for atom_str in &atoms {
+            let Some(atom) = portage_dep::parse_atom(atom_str) else {
+                continue;
+            };
+            for (j, q) in cleanlist.iter().enumerate() {
+                if i == j || q.category != atom.category || q.package != atom.package {
+                    continue;
+                }
+                if portage_dep::match_from_list(atom_str, &[cand_strs[j].as_str()])
+                    .is_some_and(|m| !m.is_empty())
+                    && !deps[i].contains(&j)
+                {
+                    deps[i].push(j);
+                }
+            }
+        }
+    }
+    if deps.iter().all(|d| d.is_empty()) {
+        return (false, cleanlist);
+    }
+
+    let mut indeg = vec![0usize; n];
+    for d in &deps {
+        for &j in d {
+            indeg[j] += 1;
+        }
+    }
+    let cpv_cmp = |a: &InstalledPackage, b: &InstalledPackage| {
+        a.category
+            .cmp(&b.category)
+            .then_with(|| a.package.cmp(&b.package))
+            .then_with(|| vercmp_ordering(&a.version, &b.version))
+    };
+    let mut done = vec![false; n];
+    let mut result: Vec<InstalledPackage> = Vec::with_capacity(n);
+    while result.len() < n {
+        let mut ready: Vec<usize> = (0..n).filter(|&k| !done[k] && indeg[k] == 0).collect();
+        if ready.is_empty() {
+            // Leftover cycle -- out of scope; emit in cpv order.
+            let mut rest: Vec<usize> = (0..n).filter(|&k| !done[k]).collect();
+            rest.sort_by(|&a, &b| cpv_cmp(&cleanlist[a], &cleanlist[b]));
+            result.extend(rest.into_iter().map(|k| cleanlist[k].clone()));
+            break;
+        }
+        // Real `nodes.sort(reverse=True)`: cpv descending.
+        ready.sort_by(|&a, &b| cpv_cmp(&cleanlist[b], &cleanlist[a]));
+        for k in ready {
+            done[k] = true;
+            for &j in &deps[k] {
+                if !done[j] {
+                    indeg[j] -= 1;
+                }
+            }
+            result.push(cleanlist[k].clone());
+        }
+    }
+    (true, result)
 }
 
 pub fn depclean_cleanlist(
@@ -3167,9 +3287,12 @@ pub fn depclean_cleanlist(
             .then_with(|| a.package.cmp(&b.package))
             .then_with(|| vercmp_ordering(&a.version, &b.version))
     });
+    let required_count = reachable.len();
+    let (ordered, cleanlist) = topological_removal_order(root, cleanlist);
     DepcleanResult {
         cleanlist,
-        required_count: reachable.len(),
+        required_count,
+        ordered,
     }
 }
 
@@ -8923,6 +9046,68 @@ mod tests {
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         assert_eq!(clean, vec!["dev-libs/dchidden-1.0".to_string()]);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn depclean_cleanlist_is_returned_in_topological_removal_order() {
+        // Two orphan chains where alphabetical order != dependency order:
+        // dev-libs/zztop RDEPENDs dev-libs/aabase, and dev-libs/mmid
+        // RDEPENDs dev-libs/zztop. Real _calc_depclean removes a package
+        // before the ones it depends on, so the order is mmid, zztop,
+        // aabase -- the reverse of the cat/pn sort. dev-libs/loner is a
+        // fourth orphan with no edges: it sorts by cpv among each level's
+        // ready set (emitted descending, real `nodes.sort(reverse=True)`).
+        let root = masters_test_root("depclean-order");
+        let install = |name: &str, rdepend: &str| {
+            let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+            if !rdepend.is_empty() {
+                std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        install("mmid", "dev-libs/zztop");
+        install("zztop", "dev-libs/aabase");
+        install("aabase", "");
+        install("loner", "");
+
+        let result = depclean_cleanlist(&root, &[], &[], &[]);
+        assert!(result.ordered);
+        let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
+        // Level 0 ready = {mmid, loner} (nothing depends on them),
+        // emitted cpv-descending (mmid > loner). Then zztop, then aabase.
+        assert_eq!(
+            clean,
+            vec![
+                "dev-libs/mmid-1.0".to_string(),
+                "dev-libs/loner-1.0".to_string(),
+                "dev-libs/zztop-1.0".to_string(),
+                "dev-libs/aabase-1.0".to_string(),
+            ]
+        );
+
+        // No edges at all -> ordered = false, cat/pn sort kept.
+        let root2 = masters_test_root("depclean-order-flat");
+        for n in ["ccc", "aaa", "bbb"] {
+            let d = root2.join("var/db/pkg/dev-libs").join(format!("{n}-1.0"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        }
+        let flat = depclean_cleanlist(&root2, &[], &[], &[]);
+        assert!(!flat.ordered);
+        assert_eq!(
+            flat.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+            vec![
+                "dev-libs/aaa-1.0".to_string(),
+                "dev-libs/bbb-1.0".to_string(),
+                "dev-libs/ccc-1.0".to_string(),
+            ]
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&root2).ok();
     }
 
     #[test]

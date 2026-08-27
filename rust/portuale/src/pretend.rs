@@ -1827,6 +1827,12 @@ fn run_unmerge_pretend(
     root: &Path,
     config_root: &Path,
     config: &portage_profile::Config,
+    // Real `_unmerge_display`'s `ordered` flag (`unmerge.py:459`): when
+    // `true` the per-package blocks are rendered in `targets` order and
+    // *not* regrouped/re-sorted by `cat/pn`. Only `--depclean`'s own
+    // topologically-sorted cleanlist sets this (`run_depclean_pretend`);
+    // a plain `--unmerge`/`-C` from the CLI is always unordered.
+    preserve_order: bool,
 ) -> ExitCode {
     if targets.is_empty() {
         eprintln!("emerge: no package atoms given to --unmerge");
@@ -2055,7 +2061,9 @@ fn run_unmerge_pretend(
             .map(|c| c.cmp(&0))
             .unwrap_or_else(|| a.cmp(b))
     };
-    order.sort();
+    if !preserve_order {
+        order.sort();
+    }
     let mut all_selected_display: Vec<String> = Vec::new();
     for cp in &order {
         let (selected, protected) = per_cp.get_mut(cp).unwrap();
@@ -2341,7 +2349,7 @@ fn run_depclean_pretend(
         .map(|p| format!("={}", p.cpv()))
         .collect();
     let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
-    let unmerge_rc = run_unmerge_pretend(&cpv_refs, root, config_root, config);
+    let unmerge_rc = run_unmerge_pretend(&cpv_refs, root, config_root, config, result.ordered);
     stats();
     unmerge_rc
 }
@@ -3283,7 +3291,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // (its `@system` target support and system-profile check both need
     // it), dispatch before the ordinary resolve-graph path below.
     if unmerge {
-        return run_unmerge_pretend(&atom_args, &root, &config_root, &config);
+        return run_unmerge_pretend(&atom_args, &root, &config_root, &config, false);
     }
     if depclean {
         return run_depclean_pretend(&atom_args, &root, &config_root, &config);

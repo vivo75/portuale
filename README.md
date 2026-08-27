@@ -858,6 +858,35 @@ PORTING/
   "dependencies could not be resolved, aborting" safety halt,
   `package.provided`.
 
+  **`emerge -pc`: `>>> Calculating removal order...` is real now.** The
+  first two `--depclean` increments printed that line but the cleanlist
+  itself was always `cat`/`pn`/version-sorted, i.e. real
+  `_unmerge_display`'s own `ordered=False` branch
+  (`unmerge.py:459-474`). Real `_calc_depclean` (`actions.py:1591-1731`)
+  builds a digraph over the cleanlist -- an edge `depender -> dep`
+  whenever one member satisfies another's
+  `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND` (flattened against the
+  depender's own vdb `USE`) -- and topologically sorts it so each
+  package is unmerged *before* the ones it depends on, "to avoid
+  breaking things that may need to run during pkg_prerm or pkg_postrm".
+  Only when there are no edges at all does it fall back to the `cat`/`pn`
+  grouping. New `portage_repo::topological_removal_order`: real portage's
+  own repeated-root-node pop (every current root emitted at once, cpv
+  descending -- `nodes.sort(reverse=True)`), returning `(ordered,
+  cleanlist)`. `DepcleanResult` gained an `ordered` field;
+  `run_unmerge_pretend` gained a `preserve_order` parameter (real
+  `_unmerge_display`'s `ordered` flag) that skips the `cat`/`pn`
+  re-sort, set only by `run_depclean_pretend`. New fixture
+  `_depclean_order_root` (`mmid` -> `zztop` -> `aabase`, all orphan)
+  proves the blocks come out `[mmid, zztop, aabase]`, the reverse of
+  alphabetical. The `All selected packages:` line stays sorted in both
+  implementations (real portage iterates a `set` there -- not a
+  meaningful order to reproduce). **Deliberately out of scope**: the
+  slot-operator-built-dep priority bump (bug 916135's `dev-libs/B:0/0=`)
+  and the priority-ignoring single-node pop that breaks a genuine
+  dependency cycle -- a cleanlist that still holds a cycle here is
+  emitted last, in cpv order.
+
   **`--with-bdeps y|n`: build-time deps for an already-installed
   package's own `--deep` walk.** Grounded against real
   `create_depgraph_params.py`'s own `bdeps` param and `depgraph.py`'s

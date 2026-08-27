@@ -4785,6 +4785,66 @@ def test_depclean_matches_between_implementations(
         assert rust.stderr == python.stderr, args
 
 
+def _depclean_order_root(tmp_path):
+    """A ROOT whose orphan cleanlist has dependency edges between its own
+    members, so real _calc_depclean's topological unmerge-order pass
+    (actions.py:1591-1731) applies: dev-libs/mmid RDEPENDs dev-libs/zztop
+    RDEPENDs dev-libs/aabase, all orphan. The removal order (a package
+    before the ones it depends on) is [mmid, zztop, aabase] -- the
+    reverse of the cat/pn sort a no-edge cleanlist would get."""
+    portage_dir = tmp_path / "var" / "lib" / "portage"
+    portage_dir.mkdir(parents=True)
+    (portage_dir / "world").write_text("")
+
+    def install(package, rdepend=""):
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / f"{package}-1.0"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text("0\n")
+        if rdepend:
+            (d / "RDEPEND").write_text(rdepend + "\n")
+
+    install("mmid", rdepend="dev-libs/zztop")
+    install("zztop", rdepend="dev-libs/aabase")
+    install("aabase")
+    return tmp_path
+
+
+def test_depclean_pretend_removal_order_is_topological(emerge_binary, fixture_env, tmp_path):
+    """The per-package blocks follow the topological removal order, not
+    the cat/pn sort; '>>> Calculating removal order...' actually does
+    something now."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(_depclean_order_root(tmp_path))
+    result = _run([str(emerge_binary)], ["--pretend", "--depclean"], env)
+    assert result.returncode == 0
+    blocks = [
+        ln.strip() for ln in result.stdout.splitlines() if ln.startswith(" dev-libs/")
+    ]
+    assert blocks == ["dev-libs/mmid", "dev-libs/zztop", "dev-libs/aabase"]
+    # "All selected packages" stays sorted (real portage's set-iteration
+    # order there is not a meaningful spec; both pilot sides sort it).
+    line = next(
+        ln for ln in result.stdout.splitlines() if ln.startswith("All selected packages:")
+    )
+    assert line == (
+        "All selected packages: =dev-libs/aabase-1.0 =dev-libs/mmid-1.0 =dev-libs/zztop-1.0"
+    )
+
+
+def test_depclean_removal_order_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    env = dict(fixture_env)
+    env["ROOT"] = str(_depclean_order_root(tmp_path))
+    args = ["--pretend", "--depclean"]
+    rust = _run([str(emerge_binary)], args, env)
+    python = _run(emerge_pretend_python, args, env)
+    assert rust.returncode == python.returncode
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+
+
 def test_unmerge_pretend_lists_selected_and_omitted(emerge_binary, fixture_env):
     """Real _emerge/unmerge.py::_unmerge_display for `unmerge_action ==
     "unmerge"`: every vdb match goes into `selected`, every other

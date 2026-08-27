@@ -75,7 +75,12 @@ Ranked roughly by how self-contained each is.
   dropped, non-arg installed packages protected, `--- Couldn't find`,
   bare-name resolution). Build-time-dep edges (`bdeps="auto"` for remove
   mode -- `DEPEND`/`BDEPEND` kept unless `--with-bdeps=n`) **shipped
-  2026-08-27**. **Still open:** `--depclean-lib-check`, slot-operator rebuild edges,
+  2026-08-27**. The **topological removal-order sort**
+  (`topological_removal_order`, real `actions.py:1591-1731` -- each
+  package unmerged before the ones it depends on; `run_unmerge_pretend`
+  gained a `preserve_order` flag) **shipped 2026-08-27** too, bar the
+  slot-operator-built priority bump and the cycle-breaking single pop.
+  **Still open:** `--depclean-lib-check`, slot-operator rebuild edges,
   the "deps unresolved, aborting" halt, `package.provided`,
   `--deselect=n` in args mode, `world_sets` `@`-refs as roots, and real
   (non-`--pretend`) removal.

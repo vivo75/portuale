@@ -6513,13 +6513,18 @@ def _print_unmerge_row(label, versions):
         print(padded + "".join(f"{v} " for v in versions))
 
 
-def _run_unmerge_pretend(targets, root, config_root, config):
+def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=False):
     """emerge --pretend --unmerge / -pC <atoms>: real
     _emerge/unmerge.py::_unmerge_display for unmerge_action == "unmerge",
     narrowed to a preview. Mirrors pretend.rs's run_unmerge_pretend --
     see its docstring for the algorithm and the documented cuts
     (set-protection / system-profile warnings, --prune/--depclean,
-    =<vdb-path>, the Python-interpreter self-skip)."""
+    =<vdb-path>, the Python-interpreter self-skip).
+
+    preserve_order mirrors real _unmerge_display's `ordered` flag
+    (unmerge.py:459): when True the per-package blocks follow `targets`
+    order and are not regrouped/re-sorted by cat/pn -- only --depclean's
+    topologically-sorted cleanlist sets it."""
     if not targets:
         print("emerge: no package atoms given to --unmerge", file=sys.stderr)
         return 1
@@ -6670,7 +6675,7 @@ def _run_unmerge_pretend(targets, root, config_root, config):
 
     vkey = functools.cmp_to_key(lambda a, b: (vercmp(a, b) or (a > b) - (a < b)))
     all_selected_display = []
-    for cp in sorted(order):
+    for cp in (order if preserve_order else sorted(order)):
         selected, protected = per_cp[cp]
         if not selected:
             continue
@@ -6839,7 +6844,78 @@ def _depclean_cleanlist(root, world_atoms, system_atoms, args):
         ),
         key=lambda t: (t[0], t[1], vkey(t[2])),
     )
-    return cleanlist, len(reachable)
+    slot_of = {(c, p, v): s for (c, p, v, s) in installed}
+    ordered, cleanlist = _topological_removal_order(root, cleanlist, slot_of)
+    return cleanlist, len(reachable), ordered
+
+
+def _topological_removal_order(root, cleanlist, slot_of):
+    """Real _calc_depclean's own unmerge-order pass (actions.py:1591-1731):
+    build a digraph over the cleanlist (edge depender -> dep when one
+    member satisfies another's DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND,
+    flattened against the depender's vdb USE), then topologically sort so
+    each package is unmerged before the ones it depends on. Returns
+    (ordered, cleanlist); ordered is False (and the input order kept) only
+    when the digraph has no edges. Mirrors portage-repo/src/lib.rs's
+    topological_removal_order -- see its docstring for the deliberate
+    scope cuts (slot-operator-built priority, the cycle-breaking single
+    pop)."""
+    n = len(cleanlist)
+    if n < 2:
+        return False, cleanlist
+    cand = [f"{c}/{p}-{v}:{slot_of[(c, p, v)]}" for (c, p, v) in cleanlist]
+    deps = [set() for _ in range(n)]
+    for i, (c, p, v) in enumerate(cleanlist):
+        use_flags = _read_vdb_flag_set(root, c, p, v, "USE")
+        atoms = set()
+        for dep_key in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"):
+            depstr = _read_vdb_string(root, c, p, v, dep_key)
+            if not depstr.strip():
+                continue
+            a = _flat_dep_atoms(depstr, use_flags)
+            if a is not None:
+                atoms |= a
+        for atom_str in atoms:
+            parsed = _parse_atom(atom_str)
+            if parsed is None:
+                continue
+            acat, apkg = parsed.cp.split("/", 1)
+            for j, (jc, jp, _jv) in enumerate(cleanlist):
+                if i == j or jc != acat or jp != apkg:
+                    continue
+                if match_from_list(atom_str, [cand[j]]):
+                    deps[i].add(j)
+    if not any(deps):
+        return False, cleanlist
+
+    import functools
+
+    vk = functools.cmp_to_key(lambda a, b: (vercmp(a, b) or (a > b) - (a < b)))
+
+    def cpv_key(idx):
+        c, p, v = cleanlist[idx]
+        return (c, p, vk(v))
+
+    indeg = [0] * n
+    for d in deps:
+        for j in d:
+            indeg[j] += 1
+    done = [False] * n
+    result = []
+    while len(result) < n:
+        ready = [k for k in range(n) if not done[k] and indeg[k] == 0]
+        if not ready:
+            rest = sorted((k for k in range(n) if not done[k]), key=cpv_key)
+            result.extend(cleanlist[k] for k in rest)
+            break
+        ready.sort(key=cpv_key, reverse=True)
+        for k in ready:
+            done[k] = True
+            for j in deps[k]:
+                if not done[j]:
+                    indeg[j] -= 1
+            result.append(cleanlist[k])
+    return True, result
 
 
 def _run_depclean_pretend(targets, root, config_root, config):
@@ -6919,7 +6995,7 @@ def _run_depclean_pretend(targets, root, config_root, config):
         return 1
     world_atom_count = len(set(world))
 
-    cleanlist, required_count = _depclean_cleanlist(
+    cleanlist, required_count, ordered = _depclean_cleanlist(
         root, world, config["system_packages"], args
     )
     installed_total = len(_all_installed_packages(root))
@@ -6939,7 +7015,9 @@ def _run_depclean_pretend(targets, root, config_root, config):
 
     print(">>> Calculating removal order...")
     cpv_atoms = [f"={c}/{p}-{v}" for (c, p, v) in cleanlist]
-    rc = _run_unmerge_pretend(cpv_atoms, root, config_root, config)
+    rc = _run_unmerge_pretend(
+        cpv_atoms, root, config_root, config, preserve_order=ordered
+    )
     stats()
     return rc
 
