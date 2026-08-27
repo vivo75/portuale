@@ -7,5 +7,13 @@ USE="${USE} bar"
 
 # Exercises USE_EXPAND: VIDEO_CARDS="nvidia" expands into the pseudo-USE
 # flag "video_cards_nvidia" (see dev-libs/useexpandpkg).
-USE_EXPAND="VIDEO_CARDS"
+USE_EXPAND="VIDEO_CARDS ELIBC"
 VIDEO_CARDS="nvidia"
+
+# Exercises USE_EXPAND_IMPLICIT: ELIBC is an implicit USE_EXPAND var, so
+# elibc_glibc / elibc_musl are valid implicit IUSE for every package even
+# when unlisted in its own IUSE (real profiles/base/make.defaults sets
+# this for ARCH ELIBC KERNEL USERLAND). See dev-libs/implicitiusepkg.
+USE_EXPAND_IMPLICIT="ELIBC"
+USE_EXPAND_VALUES_ELIBC="glibc musl"
+ELIBC="glibc"

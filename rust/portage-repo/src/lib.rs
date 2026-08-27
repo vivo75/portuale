@@ -1575,7 +1575,7 @@ fn use_masked_only(
     else {
         return false;
     };
-    !portage_dep::use_deps_satisfied(use_deps, &iuse, &use_flags)
+    !portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
 }
 
 /// Whether `flag` can actually be forced to `desired` via a
@@ -1748,6 +1748,16 @@ fn implicit_iuse_set(iuse: &str, config: &portage_profile::Config) -> HashSet<St
     iuse_set.extend(config.use_force.iter().cloned());
     iuse_set.insert("build".to_string());
     iuse_set.insert("bootstrap".to_string());
+    // Real EAPI 5+ `check_required_use` is also called with
+    // `pkg.iuse.is_valid_flag`, which for EAPI 5+ is `explicit ∪
+    // IUSE_EFFECTIVE` -- so a `REQUIRED_USE` that references an
+    // `elibc_*`/`kernel_*`/... implicit flag (via `USE_EXPAND_IMPLICIT`,
+    // `Config::iuse_effective`) is recognized as valid the same way one
+    // referencing `x86` (via `archlist`) already is. `valid_iuse` (used
+    // for `use_deps_satisfied`) is the narrower `declared ∪
+    // iuse_effective` subset of this; this pragmatic superset stays for
+    // the `REQUIRED_USE`/parent-USE-state path.
+    iuse_set.extend(config.iuse_effective.iter().cloned());
     iuse_set
 }
 
@@ -2783,6 +2793,26 @@ fn rebuilt_binary_changed(
     }
 }
 
+/// A candidate's own `is_valid_flag` domain: its declared `IUSE`
+/// (`declared`) unioned with the profile's real EAPI 5+ `IUSE_EFFECTIVE`
+/// (`config.iuse_effective` -- `USE_EXPAND_IMPLICIT`-derived `elibc_*`/
+/// `kernel_*`/... and `IUSE_IMPLICIT` flags). Matches real
+/// `pkg.iuse.is_valid_flag` for an EAPI 5+ package, so a USE-dep like
+/// `foo[elibc_glibc]` matches a `foo` that never lists `elibc_glibc` in
+/// its own `IUSE`. Used only for a USE-dep's own `.required`/`(+)`/`(-)`
+/// check (`use_deps_satisfied`, portage-dep) -- deliberately NOT for
+/// `--newuse`'s own IUSE-*presence* diff, which must stay strictly
+/// declared-IUSE (an implicit flag would otherwise read as "newly added
+/// to IUSE" and spuriously trigger a reinstall). Cheap no-op clone when
+/// `iuse_effective` is empty (every fixture/profile without an explicit
+/// `USE_EXPAND_IMPLICIT`).
+fn valid_iuse(declared: &HashSet<String>, config: &portage_profile::Config) -> HashSet<String> {
+    if config.iuse_effective.is_empty() {
+        return declared.clone();
+    }
+    declared.union(&config.iuse_effective).cloned().collect()
+}
+
 /// `candidate`'s own current IUSE (read fresh from its own md5-cache
 /// entry -- the current tree's metadata, not the vdb) and its own
 /// effective (computed) USE set, via `effective_use_flags`. Shared by
@@ -3120,7 +3150,7 @@ fn atom_currently_satisfiable(
         else {
             return false;
         };
-        portage_dep::use_deps_satisfied(use_deps, &iuse, &use_flags)
+        portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
     })
 }
 
@@ -3469,6 +3499,14 @@ fn dependency_avoid_update_candidate<'a>(
                     read_vdb_flag_set(root, &atom.category, &atom.package, &c.version, "IUSE");
                 let vdb_use =
                     read_vdb_flag_set(root, &atom.category, &atom.package, &c.version, "USE");
+                // Deliberately NOT `valid_iuse`-broadened: real portage's
+                // own installed-`Package.iuse.is_valid_flag` uses that
+                // package's *vdb-recorded* `IUSE_EFFECTIVE`, which this
+                // pilot doesn't persist -- approximating it with the
+                // current profile's `iuse_effective` here would need
+                // `config` threaded into this function; a narrow
+                // avoid-update edge case (`[elibc_*]` on an
+                // already-installed match), left as a documented cut.
                 portage_dep::use_deps_satisfied(use_deps, &vdb_iuse, &vdb_use)
             }
             _ => true,
@@ -3729,7 +3767,7 @@ pub fn resolve_pretend(
                 else {
                     return false;
                 };
-                portage_dep::use_deps_satisfied(use_deps, &iuse, &use_flags)
+                portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
             })
             .collect(),
         _ => matched,
@@ -8980,6 +9018,49 @@ mod tests {
             full_names,
             vec!["dev-libs/packageuseexpandpkg", "dev-libs/newpkg"]
         );
+    }
+
+    #[test]
+    fn use_expand_implicit_flag_is_valid_iuse_even_when_unlisted() {
+        // profiles/base/make.defaults: USE_EXPAND_IMPLICIT="ELIBC",
+        // USE_EXPAND_VALUES_ELIBC="glibc musl", ELIBC="glibc". So
+        // elibc_glibc is valid implicit IUSE for every package AND
+        // enabled -- dev-libs/implicitiusepkg RDEPENDs
+        // implicitiuseprov[elibc_glibc], and implicitiuseprov never
+        // lists elibc_glibc in its own IUSE. Before this slice that
+        // dep's `.required` check failed against the (declared-only)
+        // IUSE and implicitiuseprov was invisible.
+        let entries = graph_real("dev-libs/implicitiusepkg");
+        let prov = entries
+            .iter()
+            .find(|(name, _)| name == "dev-libs/implicitiuseprov")
+            .expect("the dep is in the graph");
+        // Resolved as a real New entry, NOT NoVisibleCandidate -- which
+        // is exactly what it would be without this slice (elibc_glibc
+        // absent from implicitiuseprov's declared IUSE -> `.required`
+        // fails -> no matching candidate).
+        assert_eq!(
+            prov.1,
+            PretendOutcome::New {
+                version: "1.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn use_expand_implicit_flag_valid_but_not_enabled_still_fails_the_use_dep() {
+        // elibc_musl is valid implicit IUSE (in USE_EXPAND_VALUES_ELIBC)
+        // but not enabled (ELIBC="glibc"), so
+        // implicitiuseprov[elibc_musl] is genuinely unsatisfiable --
+        // implicitiusepkgmusl's own dep resolves to NoVisibleCandidate,
+        // exactly like any other unsatisfiable USE-dep (proves the slice
+        // widened the *valid* domain, not the *enabled* one).
+        let entries = graph_real("dev-libs/implicitiusepkgmusl");
+        let prov = entries
+            .iter()
+            .find(|(name, _)| name == "dev-libs/implicitiuseprov")
+            .expect("the unsatisfiable dep is still recorded");
+        assert_eq!(prov.1, PretendOutcome::NoVisibleCandidate);
     }
 
     #[test]

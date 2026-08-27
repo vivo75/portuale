@@ -6800,6 +6800,86 @@ ls "${PKGDIR}/dev-libs"
 # packagepkg-1.0.tbz2
 ```
 
+### `USE_EXPAND_IMPLICIT`: `elibc_*`/`kernel_*`/... are valid implicit IUSE
+
+Real `config.py::_calc_iuse_effective` (the EAPI 5+ `IUSE_EFFECTIVE`
+definition): a package's own `pkg.iuse.is_valid_flag` domain includes,
+on top of its declared `IUSE`, every flag derived from a
+`USE_EXPAND_IMPLICIT` variable -- real Gentoo's own
+`profiles/base/make.defaults` sets `USE_EXPAND_IMPLICIT="ARCH ELIBC
+KERNEL USERLAND"`, so `elibc_glibc`, `kernel_linux`, `userland_GNU`,
+etc. count as valid IUSE for *every* package even when unlisted, and a
+USE-dep like `dev-libs/foo[elibc_glibc]` matches a `foo` that never
+declares `elibc_glibc`. Before this slice the pilot checked a USE-dep's
+`.required` flags against a candidate's *declared* `IUSE` alone, so such
+a dep spuriously failed and its target went invisible.
+
+New `portage_profile::Config::iuse_effective` computes the real formula:
+`IUSE_IMPLICIT` values, plus every `USE_EXPAND_VALUES_<v>` value for each
+`USE_EXPAND_UNPREFIXED` var `v` also in `USE_EXPAND_IMPLICIT`
+(unprefixed), plus `lowercase(v)_<value>` for each `USE_EXPAND` var `v`
+also in `USE_EXPAND_IMPLICIT`. `USE_EXPAND_IMPLICIT`/`IUSE_IMPLICIT` are
+read as real INCREMENTALS (like `USE_EXPAND`); `USE_EXPAND_VALUES_*` as
+plain scalars (not in real portage's own INCREMENTALS list either). A
+new `valid_iuse(declared, config)` helper unions `iuse_effective` in at
+each `use_deps_satisfied` call site, matching real `is_valid_flag` --
+deliberately *not* inside `candidate_iuse_and_use`, whose result also
+feeds `--newuse`'s own IUSE-*presence* diff (an implicit flag there
+would read as "newly added to IUSE" and spuriously trigger a reinstall).
+`implicit_iuse_set` (the `REQUIRED_USE`/parent-USE-state path) also gains
+`iuse_effective`, so a `REQUIRED_USE` referencing `elibc_*` is
+recognized the same way one referencing `x86` (via `archlist`) already
+was -- **this closes the "`USE_EXPAND_HIDDEN`-derived ... `elibc_.*`/
+`kernel_.*`/`userland_.*` ... a bigger, separate feature" cut named in
+the implicit-IUSE bullet above** (via the EAPI 5+ `USE_EXPAND_IMPLICIT`
+path, with explicit `USE_EXPAND_VALUES` rather than the pre-EAPI-5 regex
+form).
+
+`USE_EXPAND_HIDDEN` stays unimplemented and is genuinely a non-gap: for
+EAPI 5+ it is a pure `emerge --info`/`-pv` USE-*grouping* display
+concern (the pre-EAPI-5 `_get_implicit_iuse` is the only place it fed
+`is_valid_flag`), and this pilot's `-pv` shows a flat declared-IUSE list
+with no `USE_EXPAND` grouping to hide from. The two stale
+"`USE_EXPAND_HIDDEN`/`_IMPLICIT` are display-only" comments in
+`portage-profile` (they conflated the two) are corrected in place.
+
+New fixtures: `profiles/base/make.defaults` gains
+`USE_EXPAND_IMPLICIT="ELIBC"` + `USE_EXPAND_VALUES_ELIBC="glibc musl"` +
+`ELIBC="glibc"`; `dev-libs/implicitiusepkg` RDEPENDs
+`implicitiuseprov[elibc_glibc]` (resolves -- valid + enabled) and
+`dev-libs/implicitiusepkgmusl` RDEPENDs `implicitiuseprov[elibc_musl]`
+(unsatisfiable -- valid but not enabled, proving the slice widened the
+*valid* domain, not the *enabled* one). Two Rust unit tests, two
+parametrized contract cases, and a dedicated pinned-output contract test,
+mirrored in `emerge_pretend_reference.py` (`_valid_iuse`,
+`iuse_effective` in `resolve_config`, the `dep_keys` threading through
+`_process_config_lines`/`_process_make_conf_file`).
+
+Deliberately still a documented cut: an *installed* package's USE-dep
+check (`dependency_avoid_update_candidate`) uses the raw vdb `IUSE`,
+since real portage uses that package's own *vdb-recorded*
+`IUSE_EFFECTIVE`, which this pilot doesn't persist; and IUSE-aware `_*`
+wildcard expansion (`linguas_*`), which needs a specific package's own
+`IUSE`.
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge --pretend dev-libs/implicitiusepkg
+# [ebuild  N] dev-libs/implicitiusepkg-1.0
+# [ebuild  N] dev-libs/implicitiuseprov-1.0
+#   -- implicitiuseprov[elibc_glibc] resolves, though implicitiuseprov
+#      never lists elibc_glibc in its own IUSE
+
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge --pretend dev-libs/implicitiusepkgmusl
+# [ebuild  N] dev-libs/implicitiusepkgmusl-1.0
+# !!! no visible ebuild for dependency "dev-libs/implicitiuseprov"
+#   -- elibc_musl is valid implicit IUSE but not enabled (ELIBC="glibc")
+```
+
 ## Running it
 
 Build both Rust binaries:

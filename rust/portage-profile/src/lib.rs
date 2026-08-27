@@ -204,10 +204,14 @@
 //     `USE_EXPAND_UNPREFIXED="ARCH"`, which is literally how `amd64`/
 //     `x86`/`arm64` exist as plain USE flags at all -- there is no other
 //     mechanism that defines them. See `Config::use_expand_unprefixed`'s
-//     own field doc. Still out of scope: `USE_EXPAND_HIDDEN`/`_IMPLICIT`
-//     (real `emerge --info` display-only concerns) and IUSE-aware `_*`
-//     wildcard expansion (`linguas_*` -- needs a specific package's own
-//     IUSE, see the `_*` bullet near the top of this comment).
+//     own field doc. `USE_EXPAND_IMPLICIT` + `IUSE_IMPLICIT` +
+//     `USE_EXPAND_VALUES_<v>` are now read too, feeding the real EAPI
+//     5+ `IUSE_EFFECTIVE` computation (`Config::iuse_effective`) -- a
+//     candidate's `is_valid_flag` domain, not just an `emerge --info`
+//     display concern. Still out of scope: `USE_EXPAND_HIDDEN` (genuinely
+//     display-only for EAPI 5+) and IUSE-aware `_*` wildcard expansion
+//     (`linguas_*` -- needs a specific package's own IUSE, see the `_*`
+//     bullet near the top of this comment).
 //   - `use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
 //     (PMS 5+, always recognized here per this pilot's own "no EAPI
 //     parametrization" precedent) ARE now read too, closing the
@@ -353,6 +357,35 @@ pub struct Config {
     /// `USE_EXPAND_UNPREFIXED` bullet for the full scope writeup.
     /// Exposed here too, same reasoning `use_expand` already has.
     pub use_expand_unprefixed: HashSet<String>,
+    /// `USE_EXPAND_IMPLICIT` (real `config.py`, an INCREMENTAL): the set
+    /// of `USE_EXPAND`/`USE_EXPAND_UNPREFIXED` variable NAMES whose
+    /// expanded flags count as *implicitly*-valid IUSE for every package
+    /// even when unlisted in its own `IUSE` -- real Gentoo's own
+    /// `profiles/base/make.defaults` sets `USE_EXPAND_IMPLICIT="ARCH
+    /// ELIBC KERNEL USERLAND"`. Accumulated incrementally the same way
+    /// `USE_EXPAND` is; drives `iuse_effective` below. Exposed for
+    /// testability, same as `use_expand`.
+    pub use_expand_implicit: HashSet<String>,
+    /// `IUSE_IMPLICIT` (real `config.py`, an INCREMENTAL): literal flag
+    /// names that are implicitly-valid IUSE for every package (real
+    /// Gentoo: `prefix prefix-guest ...`). Accumulated incrementally;
+    /// folded straight into `iuse_effective` below.
+    pub iuse_implicit: HashSet<String>,
+    /// Real EAPI 5+ `IUSE_EFFECTIVE` (`config.py::_calc_iuse_effective`):
+    /// `iuse_implicit`, plus every value of each `USE_EXPAND_UNPREFIXED`
+    /// variable that's also in `use_expand_implicit` (unprefixed), plus
+    /// `lowercase(v)_<value>` for each `USE_EXPAND` variable `v` that's
+    /// also in `use_expand_implicit` -- the values coming from
+    /// `USE_EXPAND_VALUES_<v>`. This is exactly the extra domain real
+    /// `pkg.iuse.is_valid_flag` grants an EAPI 5+ package on top of its
+    /// own declared `IUSE`, so a USE-dep like `foo[elibc_glibc]` matches
+    /// a `foo` that never lists `elibc_glibc` in `IUSE`. `USE_EXPAND_
+    /// HIDDEN` is deliberately NOT part of this -- for EAPI 5+ it is a
+    /// pure `emerge --info`/`-pv` USE-grouping *display* concern (real
+    /// `_get_implicit_iuse` is the pre-EAPI-5 path), and this pilot's
+    /// `-pv` shows a flat declared-IUSE list with no USE_EXPAND grouping
+    /// to hide from.
+    pub iuse_effective: HashSet<String>,
     /// `use.stable.force`: every profile level's own file (in chain
     /// order), stacked the same `-atom`-removal way `use_force` already
     /// is -- but, unlike `use_force`, deliberately NOT folded into
@@ -581,6 +614,8 @@ fn process_lines(text: &str, scalars: &mut HashMap<String, String>, config: &mut
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
             "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
             "USE_EXPAND_UNPREFIXED" => apply_incremental(&value, &mut config.use_expand_unprefixed),
+            "USE_EXPAND_IMPLICIT" => apply_incremental(&value, &mut config.use_expand_implicit),
+            "IUSE_IMPLICIT" => apply_incremental(&value, &mut config.iuse_implicit),
             _ => {}
         }
         scalars.insert(key.to_string(), value);
@@ -760,6 +795,8 @@ fn process_make_conf_file(
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
             "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
             "USE_EXPAND_UNPREFIXED" => apply_incremental(&value, &mut config.use_expand_unprefixed),
+            "USE_EXPAND_IMPLICIT" => apply_incremental(&value, &mut config.use_expand_implicit),
+            "IUSE_IMPLICIT" => apply_incremental(&value, &mut config.iuse_implicit),
             _ => {}
         }
         scalars.insert(key.to_string(), value);
@@ -1253,16 +1290,22 @@ pub fn resolve_config(
     // USE itself already uses, folded directly into `use_flags`.
     // `USE_EXPAND_UNPREFIXED` (real `config.py`'s own companion
     // mechanism -- no prefix at all, applied in the loop right below
-    // this one) IS now read too. Still out of scope, deliberately:
-    // IUSE-aware wildcard expansion
-    // (`linguas_*`, which needs a specific package's own IUSE -- global
-    // config resolution has no such per-package context at all), and
-    // `USE_EXPAND_HIDDEN`/`USE_EXPAND_IMPLICIT` (real `emerge --info`
-    // display-only concerns, irrelevant to a `--pretend`-only pilot with
-    // no `--info` action). `package.use`'s own USE_EXPAND-prefix
-    // shorthand (`VIDEO_CARDS: nvidia` lines) stays a separate,
-    // not-yet-ported follow-up -- this slice is the base/global
-    // mechanism those lines would build on, not that shorthand itself.
+    // this one) IS now read too. `USE_EXPAND_IMPLICIT` + `IUSE_IMPLICIT`
+    // + `USE_EXPAND_VALUES_<v>` are now read as well, feeding the real
+    // EAPI 5+ `IUSE_EFFECTIVE` computation just after the unprefixed loop
+    // -- **the earlier "`USE_EXPAND_HIDDEN`/`USE_EXPAND_IMPLICIT` are
+    // display-only" note here was wrong for `USE_EXPAND_IMPLICIT`**: it
+    // drives `pkg.iuse.is_valid_flag` (so a `foo[elibc_glibc]` USE-dep
+    // matches a `foo` that never lists `elibc_glibc`), not just
+    // `emerge --info` display. `USE_EXPAND_HIDDEN` genuinely *is*
+    // display-only for EAPI 5+ (see `Config::iuse_effective`) and stays
+    // unimplemented -- this pilot's `-pv` shows a flat declared-IUSE
+    // list with no USE_EXPAND grouping to hide from. Still out of scope,
+    // deliberately: IUSE-aware wildcard expansion (`linguas_*`, which
+    // needs a specific package's own IUSE -- global config resolution
+    // has no such per-package context at all). `package.use`'s own
+    // USE_EXPAND-prefix shorthand (`VIDEO_CARDS: nvidia` lines) stays a
+    // separate, not-yet-ported follow-up.
     let use_expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
     for var in use_expand_vars {
         let Some(value) = scalars.get(&var) else {
@@ -1311,6 +1354,39 @@ pub fn resolve_config(
         };
         apply_incremental(value, &mut config.use_flags);
         config.use_tokens.push(value.clone());
+    }
+
+    // Real EAPI 5+ `IUSE_EFFECTIVE` (`config.py::_calc_iuse_effective`) --
+    // computed now that `use_expand`/`use_expand_unprefixed`/
+    // `use_expand_implicit`/`iuse_implicit` are all fully stacked and
+    // every `USE_EXPAND_VALUES_<v>` scalar has been read. See
+    // `Config::iuse_effective`'s own doc comment for what this grants a
+    // candidate's `is_valid_flag` domain on top of its declared `IUSE`.
+    // Deliberately a plain scalar read of each `USE_EXPAND_VALUES_<v>`
+    // (this pilot's established "no incremental merge outside USE/
+    // ACCEPT_KEYWORDS" cut -- `USE_EXPAND_VALUES_*` isn't even in real
+    // portage's own INCREMENTALS list anyway).
+    config.iuse_effective = config.iuse_implicit.clone();
+    for var in &config.use_expand_unprefixed {
+        if !config.use_expand_implicit.contains(var) {
+            continue;
+        }
+        if let Some(values) = scalars.get(&format!("USE_EXPAND_VALUES_{var}")) {
+            config
+                .iuse_effective
+                .extend(values.split_whitespace().map(String::from));
+        }
+    }
+    for var in &config.use_expand_implicit {
+        if !config.use_expand.contains(var) {
+            continue;
+        }
+        let prefix = var.to_lowercase();
+        if let Some(values) = scalars.get(&format!("USE_EXPAND_VALUES_{var}")) {
+            config
+                .iuse_effective
+                .extend(values.split_whitespace().map(|v| format!("{prefix}_{v}")));
+        }
     }
 
     // use.mask/use.force: every profile level's own file (in chain
@@ -1863,11 +1939,28 @@ mod tests {
                 // make.defaults, real Gentoo's own mechanism for how
                 // "amd64" exists as a plain USE flag at all.
                 "amd64".to_string(),
+                // ELIBC="glibc" in profiles/base/make.defaults (ELIBC is
+                // in USE_EXPAND), same USE_EXPAND folding video_cards_*
+                // already exercises -- and ELIBC is also in
+                // USE_EXPAND_IMPLICIT, see the iuse_effective assert below.
+                "elibc_glibc".to_string(),
             ])
         );
         assert_eq!(
             config.use_expand,
-            HashSet::from(["VIDEO_CARDS".to_string()])
+            HashSet::from(["VIDEO_CARDS".to_string(), "ELIBC".to_string()])
+        );
+        assert_eq!(
+            config.use_expand_implicit,
+            HashSet::from(["ELIBC".to_string()])
+        );
+        // Real EAPI 5+ IUSE_EFFECTIVE: ELIBC is in USE_EXPAND ∩
+        // USE_EXPAND_IMPLICIT, so every USE_EXPAND_VALUES_ELIBC value gets
+        // the lowercase "elibc_" prefix -- valid implicit IUSE for every
+        // package even when unlisted in its own IUSE.
+        assert_eq!(
+            config.iuse_effective,
+            HashSet::from(["elibc_glibc".to_string(), "elibc_musl".to_string()])
         );
         assert_eq!(config.accept_keywords, HashSet::from(["amd64".to_string()]));
         // Neither the fixture profile chain nor make.conf sets

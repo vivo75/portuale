@@ -1042,7 +1042,7 @@ def _use_masked_only(candidate, category, package, atom, config):
     if not is_visible(candidate, category, package, config):
         return False
     iuse, use_flags = _candidate_iuse_and_use(candidate, category, package, config)
-    return not _use_deps_satisfied(atom, iuse, use_flags)
+    return not _use_deps_satisfied(atom, _valid_iuse(iuse, config), use_flags)
 
 
 def _flag_is_settable(candidate, category, package, flag, desired, config):
@@ -1171,6 +1171,13 @@ def _implicit_iuse_set(iuse, config):
     iuse_set |= config["use_mask"]
     iuse_set |= config["use_force"]
     iuse_set |= {"build", "bootstrap"}
+    # Real EAPI 5+ check_required_use is called with pkg.iuse.is_valid_flag
+    # = explicit ∪ IUSE_EFFECTIVE, so a REQUIRED_USE referencing an
+    # elibc_*/kernel_*/... implicit flag (USE_EXPAND_IMPLICIT) is valid
+    # the same way one referencing x86 (archlist) is. _valid_iuse (for
+    # _use_deps_satisfied) is the narrower declared ∪ iuse_effective
+    # subset of this.
+    iuse_set |= config.get("iuse_effective", set())
     return iuse_set
 
 
@@ -2099,6 +2106,21 @@ def _use_deps_satisfied(atom, iuse, enabled):
     return True
 
 
+def _valid_iuse(declared, config):
+    """A candidate's own is_valid_flag domain: its declared IUSE unioned
+    with the profile's real EAPI 5+ IUSE_EFFECTIVE (config["iuse_effective"]
+    -- USE_EXPAND_IMPLICIT-derived elibc_*/kernel_*/... and IUSE_IMPLICIT
+    flags). Matches real pkg.iuse.is_valid_flag, so foo[elibc_glibc]
+    matches a foo that never lists elibc_glibc. Used only for a USE-dep's
+    own .required/(+)/(-) check (_use_deps_satisfied) -- deliberately NOT
+    for --newuse's IUSE-presence diff (which must stay strictly
+    declared-IUSE). Mirrors portage-repo/src/lib.rs's valid_iuse exactly."""
+    effective = config.get("iuse_effective")
+    if not effective:
+        return declared
+    return declared | effective
+
+
 def _candidate_iuse_and_use(candidate, category, package, config):
     """`candidate`'s own current IUSE (read fresh from its own md5-cache
     entry -- the current tree's metadata, not the vdb) and its own
@@ -2266,7 +2288,15 @@ def _apply_incremental(tokens, target_set):
 
 
 def _process_config_lines(
-    text, scalars, use_flags, use_tokens, accept_keywords, use_expand, use_expand_unprefixed
+    text,
+    scalars,
+    use_flags,
+    use_tokens,
+    accept_keywords,
+    use_expand,
+    use_expand_unprefixed,
+    use_expand_implicit,
+    iuse_implicit,
 ):
     for line in text.splitlines():
         parsed = _parse_kv_line(line)
@@ -2283,6 +2313,10 @@ def _process_config_lines(
             _apply_incremental(value, use_expand)
         elif key == "USE_EXPAND_UNPREFIXED":
             _apply_incremental(value, use_expand_unprefixed)
+        elif key == "USE_EXPAND_IMPLICIT":
+            _apply_incremental(value, use_expand_implicit)
+        elif key == "IUSE_IMPLICIT":
+            _apply_incremental(value, iuse_implicit)
         scalars[key] = value
 
 
@@ -2375,6 +2409,8 @@ def _process_make_conf_file(
     accept_keywords,
     use_expand,
     use_expand_unprefixed,
+    use_expand_implicit,
+    iuse_implicit,
     visited_sources,
 ):
     """Resolves "source <path>" against config_root as if it were "/"
@@ -2405,6 +2441,8 @@ def _process_make_conf_file(
                 accept_keywords,
                 use_expand,
                 use_expand_unprefixed,
+                use_expand_implicit,
+                iuse_implicit,
                 visited_sources,
             )
             continue
@@ -2422,6 +2460,10 @@ def _process_make_conf_file(
             _apply_incremental(value, use_expand)
         elif key == "USE_EXPAND_UNPREFIXED":
             _apply_incremental(value, use_expand_unprefixed)
+        elif key == "USE_EXPAND_IMPLICIT":
+            _apply_incremental(value, use_expand_implicit)
+        elif key == "IUSE_IMPLICIT":
+            _apply_incremental(value, iuse_implicit)
         scalars[key] = value
 
 
@@ -2440,7 +2482,8 @@ def resolve_config(
     "package_mask", "package_unmask", "package_accept_keywords",
     "package_use", "system_packages", "use_force", "use_mask",
     "package_use_force", "package_use_mask", "use_expand",
-    "use_expand_unprefixed", "use_stable_force",
+    "use_expand_unprefixed", "use_expand_implicit", "iuse_implicit",
+    "iuse_effective", "use_stable_force",
     "use_stable_mask", "package_use_stable_force", "package_use_stable_mask".
 
     main_repo_location (the main repo's own tree root -- see
@@ -2507,6 +2550,8 @@ def resolve_config(
     accept_keywords = set()
     use_expand = set()
     use_expand_unprefixed = set()
+    use_expand_implicit = set()
+    iuse_implicit = set()
     scalars = {}
 
     all_repos = [(main_repo_name, main_repo_location)] + list(overlay_repos)
@@ -2530,6 +2575,8 @@ def resolve_config(
             accept_keywords,
             use_expand,
             use_expand_unprefixed,
+            use_expand_implicit,
+            iuse_implicit,
         )
 
     make_conf = os.path.join(config_root, "etc", "portage", "make.conf")
@@ -2543,6 +2590,8 @@ def resolve_config(
             accept_keywords,
             use_expand,
             use_expand_unprefixed,
+            use_expand_implicit,
+            iuse_implicit,
             set(),
         )
 
@@ -2597,6 +2646,27 @@ def resolve_config(
             continue
         _apply_incremental(value, use_flags)
         use_tokens.append(value)
+
+    # Real EAPI 5+ IUSE_EFFECTIVE (config.py::_calc_iuse_effective) --
+    # iuse_implicit, plus every USE_EXPAND_VALUES_<v> value for each
+    # USE_EXPAND_UNPREFIXED var v that's also in USE_EXPAND_IMPLICIT
+    # (unprefixed), plus lowercase(v)_<value> for each USE_EXPAND var v
+    # that's also in USE_EXPAND_IMPLICIT. The extra domain real
+    # pkg.iuse.is_valid_flag grants a candidate on top of its declared
+    # IUSE, so foo[elibc_glibc] matches a foo that never lists it.
+    # USE_EXPAND_HIDDEN is NOT part of this (display-only for EAPI 5+).
+    # Mirrors portage-profile/src/lib.rs's resolve_config exactly.
+    iuse_effective = set(iuse_implicit)
+    for var in use_expand_unprefixed:
+        if var not in use_expand_implicit:
+            continue
+        iuse_effective.update(scalars.get(f"USE_EXPAND_VALUES_{var}", "").split())
+    for var in use_expand_implicit:
+        if var not in use_expand:
+            continue
+        prefix = var.lower()
+        for v in scalars.get(f"USE_EXPAND_VALUES_{var}", "").split():
+            iuse_effective.add(f"{prefix}_{v}")
 
     # use.mask/use.force: every profile level's own file (in chain
     # order), stacked with the same "-atom" removal semantics
@@ -2972,6 +3042,9 @@ def resolve_config(
         "package_use_mask": _parse_package_use_lines(use_mask_lines),
         "use_expand": use_expand,
         "use_expand_unprefixed": use_expand_unprefixed,
+        "use_expand_implicit": use_expand_implicit,
+        "iuse_implicit": iuse_implicit,
+        "iuse_effective": iuse_effective,
         "use_stable_force": use_stable_force,
         "use_stable_mask": use_stable_mask,
         "package_use_stable_force": _parse_package_use_lines(use_stable_force_lines),
@@ -3116,12 +3189,16 @@ def _atom_currently_satisfiable(repos, atom_str, config):
     matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
 
     if atom.use:
-        matched = [
-            c
-            for c in matched
-            if _use_deps_satisfied(atom, *_candidate_iuse_and_use(c, category, package, config))
-        ]
+        matched = [c for c in matched if _candidate_use_deps_satisfied(atom, c, category, package, config)]
     return bool(matched)
+
+
+def _candidate_use_deps_satisfied(atom, c, category, package, config):
+    """`atom`'s own USE-deps checked against candidate `c` -- its
+    is_valid_flag domain (_valid_iuse) and effective USE. Small shared
+    helper for the two tree-candidate USE-dep filters below."""
+    iuse, use_flags = _candidate_iuse_and_use(c, category, package, config)
+    return _use_deps_satisfied(atom, _valid_iuse(iuse, config), use_flags)
 
 
 def _root_deps_satisfied_atoms(metadata, use_flags, repos, config, running_root):
@@ -3674,7 +3751,7 @@ def resolve_pretend(
         matched = [
             c
             for c in matched
-            if _use_deps_satisfied(atom, *_candidate_iuse_and_use(c, category, package, config))
+            if _candidate_use_deps_satisfied(atom, c, category, package, config)
         ]
 
     # --binpkg-respect-use (real default: "auto", effectively on, unless

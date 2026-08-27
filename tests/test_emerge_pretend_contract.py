@@ -766,6 +766,16 @@ CASES = [
         ["--pretend", "--with-test-deps", "dev-libs/withtestdepconsumer"],
         0,
     ),
+    (
+        "USE_EXPAND_IMPLICIT: a foo[elibc_glibc] dep matches a foo that never lists elibc_glibc",
+        ["--pretend", "dev-libs/implicitiusepkg"],
+        0,
+    ),
+    (
+        "USE_EXPAND_IMPLICIT: elibc_musl is valid implicit IUSE but not enabled, so the dep is unsatisfiable",
+        ["--pretend", "dev-libs/implicitiusepkgmusl"],
+        0,
+    ),
 ]
 
 
@@ -2039,6 +2049,38 @@ def test_use_expand_unprefixed_variable_drives_a_dependency(emerge_binary, fixtu
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
     assert "hiddendep" not in result.stdout
+
+
+def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """PORTING/fixtures/repo/profiles/base/make.defaults declares
+    USE_EXPAND_IMPLICIT="ELIBC", USE_EXPAND_VALUES_ELIBC="glibc musl",
+    ELIBC="glibc" -- real config.py's _calc_iuse_effective: elibc_glibc /
+    elibc_musl become valid *implicit* IUSE for every package (EAPI 5+
+    pkg.iuse.is_valid_flag). dev-libs/implicitiusepkg RDEPENDs
+    implicitiuseprov[elibc_glibc]; implicitiuseprov never lists
+    elibc_glibc in its own IUSE, and elibc_glibc is enabled globally
+    (ELIBC="glibc"), so the dep resolves. dev-libs/implicitiusepkgmusl's
+    own [elibc_musl] dep is valid but unsatisfiable (elibc_musl not
+    enabled), so it's reported as an unresolvable dependency."""
+    ok = _run([str(emerge_binary)], ["--pretend", "dev-libs/implicitiusepkg"], fixture_env)
+    ok_py = _run(emerge_pretend_python, ["--pretend", "dev-libs/implicitiusepkg"], fixture_env)
+    assert ok.returncode == 0
+    assert ok.stdout == ok_py.stdout
+    assert ok.stderr == ok_py.stderr
+    assert ok.stdout == (
+        "[ebuild  N] dev-libs/implicitiusepkg-1.0\n"
+        "[ebuild  N] dev-libs/implicitiuseprov-1.0\n"
+    )
+
+    bad = _run([str(emerge_binary)], ["--pretend", "dev-libs/implicitiusepkgmusl"], fixture_env)
+    bad_py = _run(emerge_pretend_python, ["--pretend", "dev-libs/implicitiusepkgmusl"], fixture_env)
+    assert bad.returncode == 0
+    assert bad.stdout == bad_py.stdout
+    assert bad.stderr == bad_py.stderr
+    assert bad.stdout == "[ebuild  N] dev-libs/implicitiusepkgmusl-1.0\n"
+    assert '!!! no visible ebuild for dependency "dev-libs/implicitiuseprov"' in bad.stderr
 
 
 def test_use_stable_force_and_package_use_stable_mask_apply_when_stable(

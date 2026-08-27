@@ -1,0 +1,9 @@
+DEFINED_PHASES=-
+DEPEND=
+DESCRIPTION=fixture: USE_EXPAND_IMPLICIT -- implicitiusepkgmusl
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/implicitiuseprov[elibc_musl]
+SLOT=0
+_md5_=0000000000000000000000000000000
