@@ -135,3 +135,59 @@ fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
         )]
     );
 }
+
+#[test]
+fn build_use_expand_display_wraps_forced_and_masked_flags() {
+    let config = portage_profile::Config {
+        use_expand: HashSet::from(["VIDEO_CARDS".to_string()]),
+        ..Default::default()
+    };
+    let forced = HashSet::from([
+        "forcedon".to_string(),
+        "maskedoff".to_string(),
+        "video_cards_nvidia".to_string(),
+    ]);
+    // New install: forced/masked flags are wrapped in `( )`, the
+    // rest plain; enabled render before disabled.
+    assert_eq!(
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &[
+                ("forcedon".to_string(), true),
+                ("maskedoff".to_string(), false),
+                ("plain".to_string(), true),
+                ("video_cards_nvidia".to_string(), true),
+            ],
+            config: &config,
+            installed: None,
+            forced: &forced,
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
+        vec![
+            (
+                "USE".to_string(),
+                "(forcedon) plain (-maskedoff)".to_string()
+            ),
+            ("VIDEO_CARDS".to_string(), "(nvidia)".to_string()),
+        ]
+    );
+    // A masked flag brand-new to IUSE renders `(-flag)`, not
+    // `(-flag%)` (Portage skips `%` for forced flags).
+    assert_eq!(
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &[
+                ("maskednew".to_string(), false),
+                ("plainnew".to_string(), false)
+            ],
+            config: &config,
+            installed: Some(&InstalledUseState {
+                old_iuse: HashSet::new(),
+                old_use: HashSet::new(),
+            }),
+            forced: &HashSet::from(["maskednew".to_string()]),
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
+        vec![("USE".to_string(), "(-maskednew) -plainnew%".to_string())]
+    );
+}
