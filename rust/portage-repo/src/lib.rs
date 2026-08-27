@@ -3185,17 +3185,19 @@ fn root_deps_satisfied_atoms(
 
 /// The complement of `root_deps_satisfied_atoms`: real `DEPEND`/
 /// `BDEPEND` atoms (or, for the recursive walk into a package that is
-/// *itself* being built against the running root, `RDEPEND` too -- see
-/// `dep_keys` and `resolve_root_deps_build_entries`'s own doc comment)
-/// that flatten out of `metadata` but are *not* already satisfied by
-/// `running_root`'s own vdb -- the set real portage would need to
-/// recursively resolve (and potentially build) against the running root
-/// itself, rather than the target `ROOT`. `dep_keys` is `["DEPEND",
-/// "BDEPEND"]` at the two ordinary dep-walk sites (real `DEPEND`/
-/// `BDEPEND`-vs-`ESYSROOT`), and `["DEPEND", "BDEPEND", "RDEPEND"]` when
-/// recursing into an already-`targets_running_root` entry (real
-/// `_add_pkg_deps`: a package whose own `pkg.root` is the running root
-/// has its `RDEPEND` resolved there too, not against the target `ROOT`).
+/// *itself* being built against the running root, `RDEPEND` + `IDEPEND`
+/// too -- see `dep_keys` and `resolve_root_deps_build_entries`'s own doc
+/// comment) that flatten out of `metadata` but are *not* already
+/// satisfied by `running_root`'s own vdb -- the set real portage would
+/// need to recursively resolve (and potentially build) against the
+/// running root itself, rather than the target `ROOT`. `dep_keys` is
+/// `["DEPEND", "BDEPEND"]` at the two ordinary dep-walk sites (real
+/// `DEPEND`/`BDEPEND`-vs-`ESYSROOT`), and `["DEPEND", "BDEPEND",
+/// "RDEPEND", "IDEPEND"]` when recursing into an already-
+/// `targets_running_root` entry (real `_add_pkg_deps`'s own `deps`
+/// tuple: a package whose own `pkg.root` is the running root has its
+/// `RDEPEND` resolved there too, and `IDEPEND` *always* targets the
+/// running root regardless -- `depgraph.py:4247-4252`).
 /// A blocker atom (`!foo/bar`) is never a real build target, so it's
 /// excluded here the same way `enqueue_flat_deps`/`enqueue_dependencies`
 /// already exclude one from their own ordinary queueing. Computed as its
@@ -3280,11 +3282,15 @@ fn resolved_version_meta_and_use(
 /// tool needed to actually perform a build is never satisfied by a
 /// `--usepkg` binary, and this pilot's `--root-deps` scope has never
 /// touched binary packages) -- and then walks the resolved package's
-/// *own* `DEPEND`/`BDEPEND`/`RDEPEND` against the running root too,
-/// recursively: real portage resolves all three of those against
-/// `pkg.root` when `pkg.root` is the running root (a package pulled in as
-/// a build tool is installed *there*, so its runtime deps must be
-/// present there as well, not under the target `ROOT`).
+/// *own* `DEPEND` + `BDEPEND` + `RDEPEND` + `IDEPEND` against the running
+/// root too, recursively: real portage resolves all four of those
+/// against the running root when `pkg.root` is the running root (a
+/// package pulled in as a build tool is installed *there*, so its
+/// runtime + install-time deps must be present there as well, not under
+/// the target `ROOT`; `IDEPEND` in real portage always targets the
+/// running root regardless -- `depgraph.py:4247-4252`). Still not
+/// walked: this entry's own `PDEPEND` (real portage keeps it a
+/// target-`ROOT` concern) -- a documented cut, not an oversight.
 ///
 /// `seen` (the shared `root_deps_build_seen` set, threaded through the
 /// whole graph resolution) is both the cross-package dedup key *and* the
@@ -3398,7 +3404,7 @@ fn resolve_root_deps_build_entries(
                 repos,
                 config,
                 running_root,
-                &["DEPEND", "BDEPEND", "RDEPEND"],
+                &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"],
             ) {
                 result.extend(resolve_root_deps_build_entries(
                     repos,
@@ -4100,19 +4106,21 @@ pub struct GraphEntry {
     /// (see `running_root_satisfies_atom`'s own doc comment for the full
     /// real `depgraph.py:4207-4271` grounding): `true` for an entry this
     /// pilot resolved as a real `DEPEND`/`BDEPEND` (or, one recursion
-    /// level deeper, `RDEPEND`) atom that isn't satisfied by the running
-    /// root's own vdb and needs building *there*, not under the target
-    /// `ROOT` at all -- real portage's own "recursively pull in and build
-    /// new packages against the running root" behavior. `false` for
-    /// every ordinary `ROOT`-targeted entry (every entry this pilot ever
-    /// produced before this field existed). Resolved via
+    /// level deeper, `RDEPEND`/`IDEPEND`) atom that isn't satisfied by
+    /// the running root's own vdb and needs building *there*, not under
+    /// the target `ROOT` at all -- real portage's own "recursively pull
+    /// in and build new packages against the running root" behavior.
+    /// `false` for every ordinary `ROOT`-targeted entry (every entry this
+    /// pilot ever produced before this field existed). Resolved via
     /// `resolve_root_deps_build_entries`, which walks such an entry's own
-    /// `DEPEND`/`BDEPEND`/`RDEPEND` against the running root recursively,
-    /// cycle-guarded by the shared `root_deps_build_seen` set (see that
-    /// function's own doc comment). `blockers`/`use_flags_display` are
-    /// always empty for such an entry (not computed -- a documented cut).
-    /// Residual: `IDEPEND` of such an entry, and the full multi-root
-    /// graph architecture, both still approximated edge by edge.
+    /// `DEPEND` + `BDEPEND` + `RDEPEND` + `IDEPEND` against the running
+    /// root recursively, cycle-guarded by the shared `root_deps_build_seen`
+    /// set (see that function's own doc comment). `blockers`/
+    /// `use_flags_display` are always empty for such an entry (not
+    /// computed -- a documented cut). Residual: a *top-level* package's
+    /// own `IDEPEND` still resolves against `ROOT` (real portage targets
+    /// the running root for it too), and the full multi-root graph
+    /// architecture, both still approximated edge by edge.
     pub targets_running_root: bool,
 }
 
@@ -8276,6 +8284,64 @@ mod tests {
                     true,
                     "dev-libs/rdrtool".to_string(),
                 ),
+            ]
+        );
+    }
+
+    /// `IDEPEND` of a running-root build entry is walked against the
+    /// running root too (real portage: `IDEPEND` *always* targets
+    /// `_running_root.root`, `depgraph.py:4247-4252`). `rdriapp`
+    /// BDEPENDs `rdritool`, whose own `IDEPEND` (`rdrilib`) must be
+    /// pulled in as its own `targets_running_root` entry.
+    #[test]
+    fn root_deps_recursion_walks_a_build_entrys_own_idepend() {
+        let root = fixtures_root();
+        let names: Vec<(String, bool)> = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/rdriapp".to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            false,
+            Deep::Unlimited,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            Some(&root),
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
+        .entries
+        .iter()
+        .map(|e| {
+            (
+                format!("{}/{}", e.category, e.package),
+                e.targets_running_root,
+            )
+        })
+        .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("dev-libs/rdriapp".to_string(), false),
+                ("dev-libs/rdritool".to_string(), true),
+                ("dev-libs/rdrilib".to_string(), true),
             ]
         );
     }

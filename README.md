@@ -6213,6 +6213,41 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
 # !!! no visible ebuild for dependency "dev-libs/rdrnothere"
 ```
 
+### `emerge --pretend --root-deps`: `IDEPEND` of a running-root build entry
+
+A one-key follow-up to the recursion slice above. Real
+`depgraph.py:4247-4252`'s own `deps` tuple resolves `edepend["IDEPEND"]`
+against `self._frozen_config._running_root.root` **always** -- not
+EAPI-conditional like `DEPEND`, not `--root-deps`-gated. So a package
+pulled in as a running-root build entry has its own `IDEPEND` (the
+install-time helpers its `pkg_preinst`/`pkg_postinst` need) resolved
+against the running root too. `resolve_root_deps_build_entries`'s
+recursive dep-key set went from `DEPEND` + `BDEPEND` + `RDEPEND` to
+`+ IDEPEND` (one tuple entry, `unsatisfied_root_deps_atoms`'s existing
+`dep_keys` parameter). `PDEPEND` stays out -- real portage keeps it a
+target-`ROOT` concern.
+
+New `dev-libs/rdri*` fixtures (`rdriapp` -> `rdritool`, whose own
+`IDEPEND` is `rdrilib`). One Rust unit test + one dedicated pytest
+contract test, mirrored in `emerge_pretend_reference.py`.
+
+Still open: a *top-level* package's own `IDEPEND` still resolves against
+`ROOT` under `--root-deps` (real portage targets the running root for it
+too) -- the ordinary dep-walk sites' `["DEPEND", "BDEPEND"]` key set was
+left untouched this slice, a documented cut consistent with "one
+increment at a time".
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
+    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    dev-libs/rdriapp
+# [ebuild  N] dev-libs/rdriapp-1.0
+# [ebuild  N] dev-libs/rdritool-1.0 to /
+# [ebuild  N] dev-libs/rdrilib-1.0 to /   -- rdritool's own IDEPEND
+```
+
 ### Real `ebuild <file> qmerge`
 
 `qmerge` is now real too, real `doebuild()`'s own `mydo == "qmerge"`

@@ -89,14 +89,17 @@ Ranked roughly by how self-contained each is.
 
 5. ~~**Walk the running-root build entry's own further dependencies.**~~
    **Shipped 2026-08-27** (`resolve_root_deps_build_entries`): a
-   running-root build entry's own `DEPEND` + `BDEPEND` + `RDEPEND` are
-   walked against the running root recursively, cycle-guarded by the
-   existing `root_deps_build_seen` set; an unbuildable, not-installed
-   build dep is now surfaced as its own `NoVisibleCandidate` entry
-   rather than swallowed. **Residual:** `IDEPEND` of a running-root
-   build entry (real portage resolves it against the running root too),
-   and the full multi-root graph architecture (a `root` carried per
-   dependency edge) this pilot still approximates edge by edge.
+   running-root build entry's own `DEPEND` + `BDEPEND` + `RDEPEND` +
+   `IDEPEND` are walked against the running root recursively,
+   cycle-guarded by the existing `root_deps_build_seen` set; an
+   unbuildable, not-installed build dep is now surfaced as its own
+   `NoVisibleCandidate` entry rather than swallowed. **Residual:** a
+   *top-level* package's own `IDEPEND` still resolves against `ROOT`
+   under `--root-deps` (the two ordinary dep-walk sites use `["DEPEND",
+   "BDEPEND"]`); `PDEPEND` of a running-root entry (real portage keeps
+   it a target-`ROOT` concern -- likely a permanent non-gap); and the
+   full multi-root graph architecture (a `root` carried per dependency
+   edge) this pilot still approximates edge by edge.
 
 ### C. Binary packages / fetch
 

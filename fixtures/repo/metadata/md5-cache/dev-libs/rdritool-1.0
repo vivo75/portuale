@@ -1,0 +1,11 @@
+BDEPEND=
+DEFINED_PHASES=-
+DEPEND=
+DESCRIPTION=fixture: --root-deps recursion -- a running-root build tool whose own IDEPEND must be walked against the running root (real IDEPEND always targets _running_root.root)
+EAPI=8
+IDEPEND=dev-libs/rdrilib
+IUSE=
+KEYWORDS=amd64
+RDEPEND=
+SLOT=0
+_md5_=0000000000000000000000000000000

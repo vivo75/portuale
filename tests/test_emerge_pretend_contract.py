@@ -1023,6 +1023,31 @@ def test_root_deps_recursion_walks_the_build_entrys_own_deps(
     )
 
 
+def test_root_deps_recursion_walks_a_build_entrys_own_idepend(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real portage resolves IDEPEND against the running root always
+    (depgraph.py:4247-4252, independent of --root-deps). The recursion
+    into a running-root build entry now covers IDEPEND alongside
+    DEPEND/BDEPEND/RDEPEND: rdriapp BDEPENDs rdritool, whose own IDEPEND
+    (rdrilib) is pulled in as its own " to /" entry."""
+    env = dict(fixture_env)
+    env["PORTAGE_RUNNING_ROOT"] = "/"
+    base = ["--pretend", "--root-deps", "dev-libs/rdriapp"]
+
+    rust = _run([str(emerge_binary)], base, env)
+    python = _run(emerge_pretend_python, base, env)
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout == (
+        "[ebuild  N] dev-libs/rdriapp-1.0\n"
+        "[ebuild  N] dev-libs/rdritool-1.0 to /\n"
+        "[ebuild  N] dev-libs/rdrilib-1.0 to /\n"
+    )
+
+
 def test_root_deps_recursion_terminates_on_a_bdepend_cycle(
     emerge_binary, emerge_pretend_python, fixture_env
 ):

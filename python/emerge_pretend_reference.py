@@ -3172,16 +3172,18 @@ def _unsatisfied_root_deps_atoms(
 ):
     """The complement of _root_deps_satisfied_atoms: real DEPEND/BDEPEND
     atoms (or, recursing into a package that is *itself* being built
-    against the running root, RDEPEND too -- see dep_keys and
+    against the running root, RDEPEND + IDEPEND too -- see dep_keys and
     _resolve_root_deps_build_entries's own docstring) that flatten out of
     metadata but are *not* already satisfied by running_root's own vdb --
     the set real portage would need to recursively resolve (and
     potentially build) against the running root itself, rather than the
     target ROOT. dep_keys is ("DEPEND", "BDEPEND") at the two ordinary
-    dep-walk sites, and ("DEPEND", "BDEPEND", "RDEPEND") when recursing
-    into an already-targets_running_root entry (real _add_pkg_deps: a
-    package whose own pkg.root is the running root has its RDEPEND
-    resolved there too). A blocker atom is never a real build target, so
+    dep-walk sites, and ("DEPEND", "BDEPEND", "RDEPEND", "IDEPEND") when
+    recursing into an already-targets_running_root entry (real
+    _add_pkg_deps's deps tuple: a package whose own pkg.root is the
+    running root has its RDEPEND resolved there too, and IDEPEND always
+    targets the running root regardless -- depgraph.py:4247-4252). A
+    blocker atom is never a real build target, so
     it's excluded here the same way _enqueue_flat_deps/
     _enqueue_dependencies already exclude one from their own ordinary
     queueing. Computed as its own separate flatten (duplicating
@@ -3244,9 +3246,11 @@ def _resolve_root_deps_build_entries(repos, running_root, atom_str, config, owne
     against running_root the same way any dependency atom is resolved
     (reusing resolve_pretend wholesale, is_top_level=False/selective=True,
     usepkg/usepkgonly both False), then walks the resolved package's *own*
-    DEPEND/BDEPEND/RDEPEND against the running root too, recursively --
-    real portage resolves all three of those against pkg.root when
-    pkg.root is the running root.
+    DEPEND + BDEPEND + RDEPEND + IDEPEND against the running root too,
+    recursively -- real portage resolves all four of those against the
+    running root when pkg.root is the running root (IDEPEND always,
+    regardless -- depgraph.py:4247-4252). PDEPEND stays a target-ROOT
+    concern and is not walked here.
 
     `seen` (the shared root_deps_build_seen set) is both the cross-package
     dedup key *and* the cycle guard: a (category, package) is added
@@ -3321,7 +3325,7 @@ def _resolve_root_deps_build_entries(repos, running_root, atom_str, config, owne
                 repos,
                 config,
                 running_root,
-                dep_keys=("DEPEND", "BDEPEND", "RDEPEND"),
+                dep_keys=("DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"),
             ):
                 result.extend(
                     _resolve_root_deps_build_entries(
