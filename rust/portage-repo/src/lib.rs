@@ -3019,28 +3019,38 @@ fn split_installed_dir(dirname: &str) -> Option<(String, String)> {
 /// roots.
 ///
 /// The graph: node = installed package; edge A -> B when B satisfies one
-/// of A's own vdb-recorded `RDEPEND` or `PDEPEND` atoms, flattened
-/// against A's own vdb-recorded `USE` (`flat_dep_atoms` -- every branch
-/// of a `||` group is kept, the conservative choice for a removal
-/// decision).
+/// of A's own vdb-recorded `RDEPEND`, `PDEPEND`, `DEPEND` or `BDEPEND`
+/// atoms, flattened against A's own vdb-recorded `USE` (`flat_dep_atoms`
+/// -- every branch of a `||` group is kept, the conservative choice for a
+/// removal decision).
+///
+/// The build-time keys (`DEPEND`/`BDEPEND`) are followed because real
+/// `_calc_depclean` builds its graph via the full `depgraph` in "remove"
+/// mode, where `create_depgraph_params(myopts, "remove")` sets
+/// `bdeps="auto"` (`create_depgraph_params.py:100-103`) and
+/// `depgraph.py:4208-4213` only discards `DEPEND`/`BDEPEND` from a
+/// removal walk when `--with-bdeps=n` is given explicitly. So a package
+/// that is *only* a build-time dependency of a kept package is itself
+/// kept -- `emerge --depclean` will not remove something the tree still
+/// needs in order to rebuild what stays installed. Real removal walks
+/// build deps against the root being cleaned (`depend_root = myroot`,
+/// `depgraph.py:4218-4219`), i.e. the same vdb, so this pilot reads them
+/// from the same `<root>` vdb as the runtime keys.
 ///
 /// **No `args`** (a full `emerge --depclean`): roots = the installed
 /// packages `world_atoms` ∪ `system_atoms` match; cleanlist = every
 /// installed package none of them reach.
 ///
 /// **`args` given** (`emerge --depclean <atoms>`): real `_calc_depclean`
-/// + `_complete_graph` in "remove" mode drop the world "selected" plain
-/// atoms entirely (the default `--deselect` behavior -- the named
+/// plus `_complete_graph` in "remove" mode drop the world "selected"
+/// plain atoms entirely (the default `--deselect` behavior -- the named
 /// packages get removed *and* deselected) and make every installed
 /// package NOT matching an `args` atom a protected root. So here roots =
 /// `system_atoms` ∪ `{=cpv | installed, unmatched by args}`, and the
 /// cleanlist is just the `args`-matched packages none of those reach.
 ///
 /// **Documented narrowings** (real `_calc_depclean` via the full
-/// `depgraph` in "remove" mode does more): build-time deps
-/// (`DEPEND`/`BDEPEND`, real `bdeps="auto"` for remove mode) aren't
-/// followed -- the pilot's vdb fixtures don't record them and depclean's
-/// intuitive contract is "nothing needs it at *runtime*";
+/// `depgraph` in "remove" mode does more):
 /// `--depclean-lib-check` (a soname-linkage check via `NEEDED.ELF.2`),
 /// slot-operator rebuild edges, the "dependencies could not be resolved,
 /// aborting" safety halt, `package.provided`, `--deselect=n` (keeps the
@@ -3128,7 +3138,7 @@ pub fn depclean_cleanlist(
     }
     while let Some(p) = queue.pop() {
         let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
-        for dep_key in ["RDEPEND", "PDEPEND"] {
+        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
             let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
             if depstr.trim().is_empty() {
                 continue;
@@ -8811,7 +8821,7 @@ mod tests {
         // dcsub, dcworld -[bar?, USE=bar]-> dccond; dcorphan -> dcorphandep
         // (both orphan). systempkg is required too (passed as a root).
         let root = masters_test_root("depclean");
-        let install = |name: &str, rdepend: &str, use_str: &str| {
+        let install = |name: &str, rdepend: &str, use_str: &str, depend: &str, bdepend: &str| {
             let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
             std::fs::create_dir_all(&d).unwrap();
             std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
@@ -8819,17 +8829,31 @@ mod tests {
             if !rdepend.is_empty() {
                 std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
             }
+            if !depend.is_empty() {
+                std::fs::write(d.join("DEPEND"), format!("{depend}\n")).unwrap();
+            }
+            if !bdepend.is_empty() {
+                std::fs::write(d.join("BDEPEND"), format!("{bdepend}\n")).unwrap();
+            }
             if !use_str.is_empty() {
                 std::fs::write(d.join("USE"), format!("{use_str}\n")).unwrap();
             }
         };
-        install("dcworld", "dev-libs/dcdep bar? ( dev-libs/dccond )", "bar");
-        install("dcdep", "dev-libs/dcsub", "");
-        install("dcsub", "", "");
-        install("dccond", "", "");
-        install("dcorphan", "dev-libs/dcorphandep", "");
-        install("dcorphandep", "", "");
-        install("systempkg", "", "");
+        install(
+            "dcworld",
+            "dev-libs/dcdep bar? ( dev-libs/dccond )",
+            "bar",
+            "dev-libs/dcbuilddep",
+            "",
+        );
+        install("dcdep", "dev-libs/dcsub", "", "", "dev-libs/dcbdep");
+        install("dcsub", "", "", "", "");
+        install("dccond", "", "", "", "");
+        install("dcbuilddep", "", "", "", "");
+        install("dcbdep", "", "", "", "");
+        install("dcorphan", "dev-libs/dcorphandep", "", "", "");
+        install("dcorphandep", "", "", "", "");
+        install("systempkg", "", "", "", "");
 
         let result = depclean_cleanlist(
             &root,
@@ -8845,8 +8869,9 @@ mod tests {
                 "dev-libs/dcorphandep-1.0".to_string(),
             ]
         );
-        // dcworld, dcdep, dcsub, dccond, systempkg.
-        assert_eq!(result.required_count, 5);
+        // dcworld, dcdep, dcsub, dccond, dcbuilddep (DEPEND), dcbdep
+        // (BDEPEND), systempkg.
+        assert_eq!(result.required_count, 7);
 
         // `args` mode: `-c dev-libs/dcorphan` -> just that one (its
         // private dep dcorphandep is protected, being non-arg).
@@ -8857,7 +8882,11 @@ mod tests {
             &["dev-libs/dcorphan".to_string()],
         );
         assert_eq!(
-            narrowed.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+            narrowed
+                .cleanlist
+                .iter()
+                .map(|p| p.cpv())
+                .collect::<Vec<_>>(),
             vec!["dev-libs/dcorphan-1.0".to_string()]
         );
         // `-c dev-libs/dcsub` -> nothing (dcdep still needs it).
@@ -8890,8 +8919,7 @@ mod tests {
         // dcw's `off? ( ... )` group is inactive -> dchidden is orphan.
         install("dcw", "off? ( dev-libs/dchidden )", "");
         install("dchidden", "", "");
-        let result =
-            depclean_cleanlist(&root, &["dev-libs/dcw".to_string()], &[], &[]);
+        let result = depclean_cleanlist(&root, &["dev-libs/dcw".to_string()], &[], &[]);
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         assert_eq!(clean, vec!["dev-libs/dchidden-1.0".to_string()]);
         std::fs::remove_dir_all(&root).ok();

@@ -808,9 +808,9 @@ PORTING/
   `in system:` / `Required packages:` / `Number to remove:` stats block
   after. **Documented narrowings, this being a first increment** (real
   `_calc_depclean` runs the full backtracking `depgraph` in "remove"
-  mode): build-time deps (`DEPEND`/`BDEPEND`, real `bdeps="auto"`)
-  aren't followed -- depclean's intuitive contract is "nothing needs it
-  at *runtime*", and the pilot's vdb fixtures don't record them;
+  mode): build-time deps (`DEPEND`/`BDEPEND`, real `bdeps="auto"`) aren't
+  followed **[since shipped -- see "`emerge -pc`: build-time deps are
+  kept too" below]**;
   `--depclean-lib-check` (a `NEEDED.ELF.2` soname-linkage check),
   slot-operator rebuild edges, the "dependencies could not be resolved,
   aborting" safety halt, and `package.provided` are all deferred. Tests
@@ -833,6 +833,30 @@ PORTING/
   match, and skips the `* ` advisory block (real portage only shows it
   with no args). **Still deferred:** `--deselect=n` (keeps the world
   atoms as roots even in args mode), `world_sets` `@`-refs as roots.
+
+  **`emerge -pc`: build-time deps are kept too (`bdeps="auto"`).** The
+  first `--depclean` increment above deliberately walked only the
+  runtime keys (`RDEPEND`/`PDEPEND`). But real `_calc_depclean` builds
+  its graph through the full `depgraph` in "remove" mode, and
+  `create_depgraph_params(myopts, "remove")` sets `bdeps="auto"`
+  (`create_depgraph_params.py:100-103`); `depgraph.py:4208-4213` only
+  discards `DEPEND`/`BDEPEND` from a removal walk when `--with-bdeps=n`
+  is passed explicitly, walking them against the root being cleaned
+  (`depend_root = myroot`, `:4218-4219`) otherwise. So a package that is
+  *only* a build-time dependency of a kept package is itself kept --
+  `emerge --depclean` will not remove something the installed tree still
+  needs in order to rebuild what stays. `depclean_cleanlist`'s
+  reachability walk (both sides) now follows `["RDEPEND", "PDEPEND",
+  "DEPEND", "BDEPEND"]`, reading the build-time keys from the same
+  `<root>` vdb as the runtime ones. The `_depclean_root` fixture gained
+  `dcworld DEPEND=dev-libs/dcbuilddep` and `dcdep BDEPEND=dev-libs/dcbdep`
+  (nothing `RDEPEND`s either) -- both are now kept, not cleaned, and
+  `emerge -pc dev-libs/dcbuilddep` reports nothing to remove. The
+  `Packages installed:` / `Required packages:` counts in the pinned
+  no-args test moved from 7/5 to 9/7 accordingly. **Still deferred**
+  (unchanged): `--depclean-lib-check`, slot-operator rebuild edges, the
+  "dependencies could not be resolved, aborting" safety halt,
+  `package.provided`.
 
   **`--with-bdeps y|n`: build-time deps for an already-installed
   package's own `--deep` walk.** Grounded against real

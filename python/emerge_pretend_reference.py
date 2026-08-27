@@ -6756,7 +6756,14 @@ def _depclean_cleanlist(root, world_atoms, system_atoms, args):
     so roots = @system ∪ {non-arg installed}, cleanlist = the
     args-matched pkgs nothing reaches. Returns (cleanlist,
     required_count). Mirrors portage-repo/src/lib.rs's depclean_cleanlist
-    -- see its docstring for the documented narrowings."""
+    -- see its docstring for the documented narrowings.
+
+    The build-time keys DEPEND/BDEPEND are followed as well: real
+    _calc_depclean builds its graph via the full depgraph in "remove"
+    mode, where create_depgraph_params(myopts, "remove") sets
+    bdeps="auto" and depgraph.py:4208-4213 only drops DEPEND/BDEPEND from
+    a removal walk when --with-bdeps=n is passed explicitly. So a package
+    that is only a build-time dep of a kept package is itself kept."""
     installed = _all_installed_packages(root)
 
     def matches_atom(atom_str):
@@ -6807,7 +6814,7 @@ def _depclean_cleanlist(root, world_atoms, system_atoms, args):
     while queue:
         c, p, v = queue.pop()
         use_flags = _read_vdb_flag_set(root, c, p, v, "USE")
-        for dep_key in ("RDEPEND", "PDEPEND"):
+        for dep_key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"):
             depstr = _read_vdb_string(root, c, p, v, dep_key)
             if not depstr.strip():
                 continue

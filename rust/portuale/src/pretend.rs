@@ -2217,9 +2217,7 @@ fn run_depclean_pretend(
                 0 => args.push((*t).to_string()), // let the "Couldn't find" path report it
                 1 => args.push(format!("{}/{t}", cats.into_iter().next().unwrap())),
                 _ => {
-                    eprintln!(
-                        "\n!!! The short package name \"{t}\" is ambiguous. Please specify"
-                    );
+                    eprintln!("\n!!! The short package name \"{t}\" is ambiguous. Please specify");
                     eprintln!("!!! one of the following fully-qualified package names instead:\n");
                     let mut names: Vec<String> =
                         cats.into_iter().map(|c| format!("    {c}/{t}")).collect();
@@ -2243,8 +2241,7 @@ fn run_depclean_pretend(
                 portage_repo::installed_candidates(root, &atom.category, &atom.package)
                     .iter()
                     .any(|(v, s, sub)| {
-                        let cs =
-                            format!("{}/{}-{v}:{s}/{sub}", atom.category, atom.package);
+                        let cs = format!("{}/{}-{v}:{s}/{sub}", atom.category, atom.package);
                         match_from_list(a, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
                     })
             });
@@ -2316,8 +2313,7 @@ fn run_depclean_pretend(
     }
     let world_atom_count = world.iter().cloned().collect::<HashSet<_>>().len();
 
-    let result =
-        portage_repo::depclean_cleanlist(root, &world, &config.system_packages, &args);
+    let result = portage_repo::depclean_cleanlist(root, &world, &config.system_packages, &args);
 
     let installed_total = portage_repo::all_installed_packages(root).len();
     let stats = || {

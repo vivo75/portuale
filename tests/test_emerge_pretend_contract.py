@@ -4601,27 +4601,40 @@ def _depclean_root(tmp_path):
 
     Reachable from @world (dev-libs/dcworld) + @system (dev-libs/
     systempkg): dcworld -> dcdep -> dcsub, dcworld -[bar?]-> dccond
-    (USE="bar"), and systempkg itself. dev-libs/dcorphan (nothing needs
-    it) and dev-libs/dcorphandep (only dcorphan's RDEPEND) are the
-    cleanlist."""
+    (USE="bar"), and systempkg itself. dcworld also DEPENDs dcbuilddep
+    and dcdep BDEPENDs dcbdep -- real `emerge --depclean` follows
+    build-time deps (bdeps="auto" in remove mode), so both are kept.
+    dev-libs/dcorphan (nothing needs it) and dev-libs/dcorphandep (only
+    dcorphan's RDEPEND) are the cleanlist."""
     portage_dir = tmp_path / "var" / "lib" / "portage"
     portage_dir.mkdir(parents=True)
     (portage_dir / "world").write_text("dev-libs/dcworld\n")
 
-    def install(package, rdepend="", use="", version="1.0", slot="0"):
+    def install(package, rdepend="", use="", version="1.0", slot="0", depend="", bdepend=""):
         d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / f"{package}-{version}"
         d.mkdir(parents=True)
         (d / "CATEGORY").write_text("dev-libs\n")
         (d / "SLOT").write_text(f"{slot}\n")
         if rdepend:
             (d / "RDEPEND").write_text(rdepend + "\n")
+        if depend:
+            (d / "DEPEND").write_text(depend + "\n")
+        if bdepend:
+            (d / "BDEPEND").write_text(bdepend + "\n")
         if use:
             (d / "USE").write_text(use + "\n")
 
-    install("dcworld", rdepend="dev-libs/dcdep bar? ( dev-libs/dccond )", use="bar")
-    install("dcdep", rdepend="dev-libs/dcsub")
+    install(
+        "dcworld",
+        rdepend="dev-libs/dcdep bar? ( dev-libs/dccond )",
+        use="bar",
+        depend="dev-libs/dcbuilddep",
+    )
+    install("dcdep", rdepend="dev-libs/dcsub", bdepend="dev-libs/dcbdep")
     install("dcsub")
     install("dccond")
+    install("dcbuilddep")
+    install("dcbdep")
     install("dcorphan", rdepend="dev-libs/dcorphandep")
     install("dcorphandep")
     install("systempkg")
@@ -4652,14 +4665,14 @@ def test_depclean_pretend_lists_orphans(emerge_binary, fixture_env, tmp_path):
         " dev-libs/dcorphan",
         " dev-libs/dcorphandep",
     ]
-    for kept in ("dcworld", "dcdep", "dcsub", "dccond", "systempkg"):
+    for kept in ("dcworld", "dcdep", "dcsub", "dccond", "dcbuilddep", "dcbdep", "systempkg"):
         assert f" dev-libs/{kept}\n" not in result.stdout
     assert "All selected packages: =dev-libs/dcorphan-1.0 =dev-libs/dcorphandep-1.0" in out
     assert out[-5:] == [
-        "Packages installed:   7",
+        "Packages installed:   9",
         "Packages in world:    1",
         "Packages in system:   3",
-        "Required packages:    5",
+        "Required packages:    7",
         "Number to remove:     2",
     ]
 
@@ -4680,6 +4693,29 @@ def test_depclean_pretend_nothing_to_remove(emerge_binary, fixture_env, tmp_path
     assert ">>> To see reverse dependencies, use --verbose" in result.stdout
     assert ">>> Calculating removal order..." not in result.stdout
     assert result.stdout.splitlines()[-1] == "Number to remove:     0"
+
+
+def test_depclean_keeps_a_build_only_dependency(emerge_binary, fixture_env, tmp_path):
+    """Real _calc_depclean runs the depgraph in "remove" mode, where
+    create_depgraph_params(myopts, "remove") sets bdeps="auto" and
+    depgraph.py:4208-4213 keeps DEPEND/BDEPEND in the walk unless
+    --with-bdeps=n. dcbuilddep is reachable *only* through dcworld's
+    DEPEND, dcbdep *only* through dcdep's BDEPEND -- nothing RDEPENDs
+    either -- yet both are kept, not cleaned."""
+    env = _depclean_env(fixture_env, tmp_path)
+    result = _run([str(emerge_binary)], ["--pretend", "--depclean"], env)
+    assert result.returncode == 0
+    cleaned = [ln for ln in result.stdout.splitlines() if ln.startswith(" dev-libs/")]
+    assert cleaned == [" dev-libs/dcorphan", " dev-libs/dcorphandep"]
+    assert " dev-libs/dcbuilddep" not in cleaned
+    assert " dev-libs/dcbdep" not in cleaned
+
+    # args mode: naming the build dep directly still won't remove it,
+    # because its build-time parent is protected.
+    for dep in ("dev-libs/dcbuilddep", "dev-libs/dcbdep"):
+        r = _run([str(emerge_binary)], ["--pretend", "-c", dep], env)
+        assert r.returncode == 0
+        assert ">>> No packages selected for removal by depclean" in r.stdout
 
 
 def test_depclean_pretend_with_args_narrows_to_the_named_packages(
@@ -4739,6 +4775,8 @@ def test_depclean_matches_between_implementations(
         ["--pretend", "-c", "dcorphan"],
         ["--pretend", "-c", "dev-libs/dcorphan", "dev-libs/nope"],
         ["--pretend", "-c", "dev-libs/nope"],
+        ["--pretend", "-c", "dev-libs/dcbuilddep"],
+        ["--pretend", "-c", "dev-libs/dcbdep"],
     ):
         rust = _run([str(emerge_binary)], args, env)
         python = _run(emerge_pretend_python, args, env)
