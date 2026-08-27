@@ -142,3 +142,74 @@ pub type RootCp = (bool, String, String);
 /// both ends. Built in `resolve_pretend_graph`; read by merge-order and cycles.
 /// Portage: resolver/package_tracker.py (PackageTracker).
 pub(crate) type EdgeKindMap = HashMap<(RootCp, RootCp), (bool, bool)>;
+
+/// Which root an edge's child lands in: `RDEPEND`/`PDEPEND` stay with the owner;
+/// `IDEPEND`/`DEPEND`/`BDEPEND` go to the running root. Key ordinals are
+/// `DepEdge::key`'s: 0=`RDEPEND`, 1=`IDEPEND`, 2=`PDEPEND`, 3=`DEPEND`, 4=`BDEPEND`.
+/// Portage: depgraph.py, _add_pkg_deps.
+pub(crate) fn dep_child_root(owner_targets_running_root: bool, key: u8) -> bool {
+    match key {
+        // `RDEPEND` / `PDEPEND`: the owner's own root (`myroot`).
+        0 | 2 => owner_targets_running_root,
+        // `IDEPEND` / `DEPEND` / `BDEPEND`: the running root.
+        1 | 3 | 4 => true,
+        // Unreachable; kept owner-local like the run-time keys.
+        _ => owner_targets_running_root,
+    }
+}
+
+/// Attribute a skipped-update row's missed node and merge parent to their resolving
+/// roots, for the per-node `to '<root>'` suffix and per-root USE. The parent sits in
+/// its entry's root (first merge-match wins); the miss sits where the rejecting
+/// parent's edge points (buildtime off a target parent: the running root). Both are
+/// `false` on a single-root run; installed parents attribute target, not derived.
+pub(crate) fn skipped_update_roots(
+    entries: &[GraphEntry],
+    missed: (&str, &str),
+    parent: (&str, &str, &str),
+    atom: &str,
+) -> (bool, bool) {
+    fn merge_version(e: &GraphEntry) -> Option<&str> {
+        match &e.outcome {
+            PretendOutcome::New { version } => Some(version.as_str()),
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                Some(to.as_str())
+            }
+            PretendOutcome::Reinstall { version, .. } => Some(version.as_str()),
+            _ => None,
+        }
+    }
+    let (cc, cp2, cv) = parent;
+    let parent = entries
+        .iter()
+        .find(|e| {
+            e.category.as_str() == cc
+                && e.package.as_str() == cp2
+                && merge_version(e).is_some_and(|v| v == cv)
+        })
+        .or_else(|| {
+            entries.iter().find(|e| {
+                e.category.as_str() == cc && e.package.as_str() == cp2 && merge_version(e).is_some()
+            })
+        });
+    let Some(parent) = parent else {
+        return (false, false);
+    };
+    let consumer_running = parent.targets_running_root;
+    let edge = parent
+        .deps
+        .iter()
+        .find(|d| d.category == missed.0 && d.package == missed.1 && d.atom == atom)
+        .or_else(|| {
+            parent
+                .deps
+                .iter()
+                .find(|d| d.category == missed.0 && d.package == missed.1)
+        });
+    let cross_active = entries.iter().any(|e| e.targets_running_root);
+    let missed_running = match edge {
+        Some(d) => cross_active && dep_child_root(parent.targets_running_root, d.key),
+        None => false,
+    };
+    (missed_running, consumer_running)
+}
