@@ -1058,6 +1058,44 @@ def _fetch_restrict_files_all_present(
     return True
 
 
+def _fetch_bytes_to_download(src_uri, use_flags, repo_location, category, package, distdir):
+    """Real output.py:300-332's _calc_size -> counters.totalsize:
+    (filename, size) for each SRC_URI distfile whose on-disk size in
+    `distdir` isn't already its Manifest size. (filename, _) carried so
+    the caller can dedup a shared distfile across the graph (real
+    myfetchlist). Unparsable SRC_URI / incomplete Manifest -> [] (real
+    getfetchsizes returns None, _calc_size adds nothing). Mirrors
+    portage-repo/src/lib.rs's fetch_bytes_to_download."""
+    try:
+        files = _flatten_src_uri(src_uri, use_flags)
+    except ValueError:
+        return []
+    if not files:
+        return []
+    sizes = _manifest_dist_sizes(os.path.join(repo_location, category, package, "Manifest"))
+    out = []
+    for name in files:
+        if name not in sizes:
+            return []
+        try:
+            on_disk = os.path.getsize(os.path.join(distdir, name))
+        except OSError:
+            on_disk = None
+        if on_disk != sizes[name]:
+            out.append((name, sizes[name]))
+    return out
+
+
+def _localized_size(num_bytes):
+    """Real portage.localization.localized_size: math.ceil(num_bytes /
+    1024) KiB ("always round up, so small files don't end up as
+    '0 KiB'"). This pilot drops real portage's LC_NUMERIC thousands
+    grouping of the KiB count -- only observable above 999 KiB, and a
+    locale-dependent separator would break the contract suite. Always
+    KiB. Mirrors pretend.rs's localized_size."""
+    return f"{-(-num_bytes // 1024)} KiB"
+
+
 def is_visible(candidate, category, package, config):
     """A candidate is visible if it isn't masked (matches a package.mask
     entry and no package.unmask entry), its KEYWORDS intersect the
@@ -5104,6 +5142,19 @@ def resolve_pretend_graph(
                 package,
                 distdir,
             )
+        # Real output.py:300-332's _calc_size -> counters.totalsize (the
+        # -v Total: line's "Size of downloads"), for every merge-bound
+        # ebuild entry. Stashed on provenance like the other bracket
+        # data. Mirrors portage-repo/src/lib.rs's GraphEntry::download_files.
+        if candidate_source != "binary":
+            provenance["download_files"] = _fetch_bytes_to_download(
+                metadata.get("SRC_URI", ""),
+                use_flags,
+                repo_location,
+                category,
+                package,
+                distdir,
+            )
 
         # REQUIRED_USE (PMS 7.3.4/8.2): checked once, here, right after a
         # candidate is newly resolved -- real depgraph.py's own "NOTE:
@@ -6405,16 +6456,21 @@ def _package_counters_summary(entries, top_level_pkgs, onlydeps):
     """Real _PackageCounters.__str__ (output_helpers.py), the trailing
     "Total: ..." summary line real output.py::print_verbose emits via
     writemsg_stdout(f"\\n{self.counters}\\n") -- gated, in real portage
-    too, on verbosity == 3 (i.e. -v), never plain -p. Ported minus the
-    pieces that need the SRC_URI/Manifest/DISTDIR fetch-size machinery
-    this pilot hasn't built (real getfetchsizes): the ", Size of
-    downloads: ..." suffix and the "\\nFetch Restriction: ..." line. The
-    "Conflict:" line's own "(N unsatisfied)"/"(all satisfied)" suffix is
-    dropped too -- this pilot resolves no blocker. A top-level package
-    suppressed by --onlydeps isn't in real's merge list, so it isn't
-    counted here either. Mirrors pretend.rs's package_counters_summary."""
+    too, on verbosity == 3 (i.e. -v), never plain -p. Now includes
+    ", Size of downloads: ..." (real _calc_size/counters.totalsize, via
+    provenance["download_files"], deduped by filename like real
+    myfetchlist) and the "\\nFetch Restriction: N package[s][ (M
+    unsatisfied)]" line (from provenance["fetch_restrict"] /
+    "fetch_restrict_satisfied"). The "Conflict:" line's own "(N
+    unsatisfied)"/"(all satisfied)" suffix is still dropped -- this pilot
+    resolves no blocker. A top-level package suppressed by --onlydeps
+    isn't in real's merge list, so it isn't counted here either. Mirrors
+    pretend.rs's package_counters_summary."""
     upgrades = downgrades = new = newslot = reinst = 0
     binary = interactive = blocks = 0
+    restrict_fetch = restrict_fetch_satisfied = 0
+    totalsize = 0
+    fetched = set()
     for entry in entries:
         category, package, outcome = entry[0], entry[1], entry[2]
         source, provenance = entry[7], entry[8]
@@ -6437,10 +6493,21 @@ def _package_counters_summary(entries, top_level_pkgs, onlydeps):
         else:
             merge_bound = False
         if merge_bound:
+            pv = provenance if isinstance(provenance, dict) else {}
             if source == "binary":
                 binary += 1
-            if isinstance(provenance, dict) and provenance.get("interactive"):
+            if pv.get("interactive"):
                 interactive += 1
+            if pv.get("fetch_restrict"):
+                restrict_fetch += 1
+            if pv.get("fetch_restrict_satisfied"):
+                restrict_fetch_satisfied += 1
+            # Real _calc_size: sum the bytes still to fetch, counting a
+            # shared distfile once (real myfetchlist).
+            for name, size in pv.get("download_files", []):
+                if name not in fetched:
+                    fetched.add(name)
+                    totalsize += size
 
     total = upgrades + downgrades + newslot + new + reinst
     out = f"Total: {total} package" + ("s" if total != 1 else "")
@@ -6461,6 +6528,15 @@ def _package_counters_summary(entries, top_level_pkgs, onlydeps):
         details.append(f"{interactive} interactive")
     if total != 0:
         out += f" ({', '.join(details)})"
+    # Real __str__: `f", Size of downloads: {localized_size(...)}"` --
+    # appended to the Total: line unconditionally.
+    out += f", Size of downloads: {_localized_size(totalsize)}"
+    if restrict_fetch > 0:
+        out += f"\nFetch Restriction: {restrict_fetch} package" + (
+            "s" if restrict_fetch > 1 else ""
+        )
+        if restrict_fetch_satisfied < restrict_fetch:
+            out += f" ({restrict_fetch - restrict_fetch_satisfied} unsatisfied)"
     if blocks > 0:
         out += f"\nConflict: {blocks} block" + ("s" if blocks > 1 else "")
     return out

@@ -116,11 +116,13 @@ Ranked roughly by how self-contained each is.
    `fetch_restrict_satisfied` + new `fetch_restrict_files_all_present`,
    `portage-repo` gained a `portage-fetch` dep; real `output.py:633` +
    `getfetchsizes(only_restricted=True)`) **shipped 2026-08-27** —
-   `resolve_pretend_graph` gained a `distdir` param; the SRC_URI /
-   Manifest-size / DISTDIR-presence machinery now exists. **Still open in
-   this bracket area:** `g` (remote binary — needs `--getbinpkg`), and
-   the `, Size of downloads: …` / `Fetch Restriction: …` parts of the
-   totals line (reuse the fetch-size machinery, now available).
+   `resolve_pretend_graph` gained a `distdir` param. `, Size of
+   downloads: N KiB` + the `Fetch Restriction: N package[s]` line
+   (`GraphEntry::download_files` + new `fetch_bytes_to_download` +
+   `localized_size`, real `_calc_size`/`counters.totalsize`) **shipped
+   2026-08-27** too, completing `_PackageCounters.__str__`. **Still open
+   in this bracket area:** just `g` (remote binary — needs
+   `--getbinpkg`). The `-pv` output arc is otherwise complete.
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag

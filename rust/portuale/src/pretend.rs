@@ -403,20 +403,34 @@ fn reinstall_reason(
     Some(reasons.join("; "))
 }
 
+/// Real `math.ceil(num_bytes / 1024)` KiB (`portage.localization.
+/// localized_size`) -- "always round up, so that small files don't end
+/// up as '0 KiB'". Real portage additionally applies `LC_NUMERIC`
+/// thousands grouping to the KiB count; this pilot doesn't -- only
+/// observable above 999 KiB of downloads, which no fixture reaches, and
+/// a locale-dependent separator would break the contract suite's
+/// byte-exact determinism. Always `KiB`, never `MiB`/`GiB` (real
+/// `localized_size` is the same -- its docstring: "The output will be in
+/// kibibytes").
+fn localized_size(bytes: u64) -> String {
+    format!("{} KiB", bytes.div_ceil(1024))
+}
+
 /// Real `_PackageCounters.__str__` (`output_helpers.py`), the trailing
 /// `Total: …` summary line real `output.py::print_verbose` emits via
 /// `writemsg_stdout(f"\n{self.counters}\n")` -- gated, in real portage
-/// too, on `verbosity == 3` (i.e. `-v`), never plain `-p`. Ported minus
-/// the pieces that need the SRC_URI/Manifest/DISTDIR fetch-size
-/// machinery this pilot hasn't built (real `getfetchsizes`): the
-/// `, Size of downloads: …` suffix and the `\nFetch Restriction: …`
-/// line. The `Conflict:` line's own `(N unsatisfied)`/`(all satisfied)`
-/// suffix is dropped too -- this pilot resolves no blocker (its whole
-/// blocker story is "report, don't enforce", see `resolve_pretend_graph`'s
-/// doc comment, portage-repo), so it can't honestly classify one.
-/// `real_pkg_counted` mirrors real portage's own `ordered`/`pkg_info.merge`
-/// gate: a top-level package suppressed by `--onlydeps` isn't in real's
-/// merge list at all, so it isn't counted here either.
+/// too, on `verbosity == 3` (i.e. `-v`), never plain `-p`. Now includes
+/// `, Size of downloads: …` (real `_calc_size`/`counters.totalsize`, via
+/// `GraphEntry::download_files`, deduped by filename across the graph
+/// like real `myfetchlist`) and the `\nFetch Restriction: N package[s][
+/// (M unsatisfied)]` line (from `GraphEntry::fetch_restrict` /
+/// `fetch_restrict_satisfied`). The `Conflict:` line's own `(N
+/// unsatisfied)`/`(all satisfied)` suffix is still dropped -- this pilot
+/// resolves no blocker (its whole blocker story is "report, don't
+/// enforce", see `resolve_pretend_graph`'s doc comment, portage-repo),
+/// so it can't honestly classify one. A top-level package suppressed by
+/// `--onlydeps` isn't in real's merge list at all (`pkg_info.ordered`),
+/// so it isn't counted here either.
 fn package_counters_summary(
     entries: &[GraphEntry],
     top_level_pkgs: &HashSet<(String, String)>,
@@ -426,6 +440,9 @@ fn package_counters_summary(
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
         (0u64, 0u64, 0u64, 0u64, 0u64);
     let (mut binary, mut interactive, mut blocks) = (0u64, 0u64, 0u64);
+    let (mut restrict_fetch, mut restrict_fetch_satisfied) = (0u64, 0u64);
+    let mut totalsize: u64 = 0;
+    let mut fetched: HashSet<&str> = HashSet::new();
     for entry in entries {
         blocks += entry.blockers.len() as u64;
         let suppressed =
@@ -463,6 +480,19 @@ fn package_counters_summary(
             if entry.interactive {
                 interactive += 1;
             }
+            if entry.fetch_restrict {
+                restrict_fetch += 1;
+            }
+            if entry.fetch_restrict_satisfied {
+                restrict_fetch_satisfied += 1;
+            }
+            // Real `_calc_size`: sum the bytes still to fetch, counting
+            // a shared distfile once (real `myfetchlist`).
+            for (name, size) in &entry.download_files {
+                if fetched.insert(name.as_str()) {
+                    totalsize += size;
+                }
+            }
         }
     }
 
@@ -499,6 +529,24 @@ fn package_counters_summary(
     }
     if total != 0 {
         out.push_str(&format!(" ({})", details.join(", ")));
+    }
+    // Real `__str__`: `f", Size of downloads: {localized_size(self.totalsize)}"`
+    // -- appended to the `Total:` line unconditionally.
+    out.push_str(&format!(
+        ", Size of downloads: {}",
+        localized_size(totalsize)
+    ));
+    if restrict_fetch > 0 {
+        out.push_str(&format!(
+            "\nFetch Restriction: {restrict_fetch} package{}",
+            plural(restrict_fetch)
+        ));
+        if restrict_fetch_satisfied < restrict_fetch {
+            out.push_str(&format!(
+                " ({} unsatisfied)",
+                restrict_fetch - restrict_fetch_satisfied
+            ));
+        }
     }
     if blocks > 0 {
         out.push_str(&format!("\nConflict: {blocks} block{}", plural(blocks)));

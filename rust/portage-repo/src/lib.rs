@@ -1504,14 +1504,7 @@ fn fetch_restrict_files_all_present(
     package: &str,
     distdir: &Path,
 ) -> bool {
-    let Ok(files) = portage_fetch::flatten_src_uri(src_uri, |negated, flag| {
-        let on = use_flags.contains(flag);
-        if negated {
-            !on
-        } else {
-            on
-        }
-    }) else {
+    let Ok(files) = flatten_src_uri_with_use(src_uri, use_flags) else {
         return false;
     };
     if files.is_empty() {
@@ -1528,6 +1521,67 @@ fn fetch_restrict_files_all_present(
             .map(|m| m.len() == recorded.size)
             .unwrap_or(false)
     })
+}
+
+/// `portage_fetch::flatten_src_uri` with the `active` closure this crate
+/// always wants: a real USE membership check (positive `flag?` group
+/// active iff the flag is on; `!flag?` iff off), the `useflags=pkg.use`
+/// real portage passes `getfetchsizes`/`getFetchMap`.
+fn flatten_src_uri_with_use(
+    src_uri: &str,
+    use_flags: &HashSet<String>,
+) -> Result<Vec<portage_fetch::SrcUriEntry>, String> {
+    portage_fetch::flatten_src_uri(src_uri, |negated, flag| {
+        let on = use_flags.contains(flag);
+        if negated {
+            !on
+        } else {
+            on
+        }
+    })
+}
+
+/// Real `output.py:300-332`'s own per-package `_calc_size` contribution
+/// to `counters.totalsize` -- `db.getfetchsizes(cpv, useflags=pkg.use,
+/// myrepo=…)` (no `only_restricted`): every one of this candidate's own
+/// `SRC_URI` distfiles whose on-disk size in `distdir` isn't already the
+/// size its repo `Manifest` records, paired with that recorded size (the
+/// bytes still to download). Returned as `(filename, size)` pairs so the
+/// caller can dedup a shared distfile across the whole graph exactly as
+/// real portage's own `myfetchlist` does. An unparsable `SRC_URI`, or a
+/// distfile with no `Manifest` `DIST` line, yields an empty list -- real
+/// `getfetchsizes` returns `None` for an incomplete digest map and
+/// `_calc_size` then adds nothing (`"[empty/missing/bad digest]"`).
+fn fetch_bytes_to_download(
+    src_uri: &str,
+    use_flags: &HashSet<String>,
+    repo_location: &Path,
+    category: &str,
+    package: &str,
+    distdir: &Path,
+) -> Vec<(String, u64)> {
+    let Ok(files) = flatten_src_uri_with_use(src_uri, use_flags) else {
+        return Vec::new();
+    };
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let digests =
+        portage_fetch::parse_manifest(&repo_location.join(category).join(package).join("Manifest"))
+            .unwrap_or_default();
+    let mut out = Vec::new();
+    for f in &files {
+        let Some(recorded) = digests.get(&f.filename) else {
+            return Vec::new();
+        };
+        let on_disk = std::fs::metadata(distdir.join(&f.filename))
+            .map(|m| m.len())
+            .ok();
+        if on_disk != Some(recorded.size) {
+            out.push((f.filename.clone(), recorded.size));
+        }
+    }
+    out
 }
 
 /// This candidate's own effective `ACCEPT_LICENSE`/`ACCEPT_PROPERTIES`/
@@ -4056,6 +4110,7 @@ fn resolve_root_deps_build_entries(
         interactive: false,
         fetch_restrict: false,
         fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
         required_by: vec![owner],
         source: CandidateSource::Ebuild,
         provenance: VisibilityProvenance::default(),
@@ -4825,6 +4880,21 @@ pub struct GraphEntry {
     /// missing `Manifest` entry, counts as not-satisfied (`F`, the loud
     /// choice).
     pub fetch_restrict_satisfied: bool,
+    /// Real `output.py:300-332`'s own `_calc_size` input to
+    /// `counters.totalsize` -- `(filename, size)` for each of this
+    /// merge-bound *ebuild* entry's own `SRC_URI` distfiles not already
+    /// in `DISTDIR` at its `Manifest` size (`db.getfetchsizes(cpv,
+    /// useflags=pkg.use)`, no `only_restricted`). `(filename, _)` is
+    /// carried, not just a summed count, so `package_counters_summary`
+    /// can dedup a distfile shared by two entries once, exactly as real
+    /// portage's own `myfetchlist` does. Empty for every non-`New`/
+    /// `Upgrade`/`Downgrade`/`Reinstall` entry, for a binary candidate
+    /// (real `_calc_size` runs for binaries too, but this pilot has no
+    /// remote-binpkg fetch so a local `PKGDIR` binary is always already
+    /// present -> 0), and for an unparsable `SRC_URI` / incomplete
+    /// `Manifest` (real `getfetchsizes` returns `None` and `_calc_size`
+    /// adds nothing).
+    pub download_files: Vec<(String, u64)>,
     /// Every `(category, package)` that reached this entry via its own
     /// DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND (sorted, deduplicated) --
     /// empty for a directly-requested top-level atom with no other
@@ -5866,6 +5936,7 @@ pub fn resolve_pretend_graph(
                 interactive: false,
                 fetch_restrict: false,
                 fetch_restrict_satisfied: false,
+                download_files: Vec::new(),
                 required_by: Vec::new(),
                 source: CandidateSource::Ebuild,
                 provenance: VisibilityProvenance::default(),
@@ -6009,6 +6080,7 @@ pub fn resolve_pretend_graph(
             // `false` here regardless.
             fetch_restrict: false,
             fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
             required_by: Vec::new(),
             source: candidate_source,
             provenance,
@@ -6072,6 +6144,25 @@ pub fn resolve_pretend_graph(
         {
             entries[entry_idx].fetch_restrict = true;
             entries[entry_idx].fetch_restrict_satisfied = fetch_restrict_files_all_present(
+                metadata
+                    .get("SRC_URI")
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+                &use_flags,
+                &repo_location,
+                &key.0,
+                &key.1,
+                distdir,
+            );
+        }
+
+        // Real `output.py:300-332`'s own `_calc_size` -> `counters.
+        // totalsize` (the `-v` `Total:` line's `Size of downloads`): the
+        // bytes still to fetch for this ebuild merge, per distfile.
+        // Runs for every merge-bound ebuild entry, not just
+        // fetch-restricted ones. See `GraphEntry::download_files`.
+        if candidate_source == CandidateSource::Ebuild {
+            entries[entry_idx].download_files = fetch_bytes_to_download(
                 metadata
                     .get("SRC_URI")
                     .map(String::as_str)
@@ -12899,6 +12990,7 @@ mod tests {
             interactive: false,
             fetch_restrict: false,
             fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
             required_by: Vec::new(),
             source: CandidateSource::Ebuild,
             provenance: VisibilityProvenance::default(),

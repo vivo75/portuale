@@ -2844,13 +2844,39 @@ PORTING/
   `--onlydeps`-suppressed top-level package isn't counted (real portage
   drops it from the merge list). Printed after the entry list for the
   flat/`--columns`/`--tree` layouts alike, with a leading blank line.
-  **Deferred** (need the SRC_URI/Manifest/DISTDIR fetch-size machinery
-  this pilot hasn't built -- real `getfetchsizes`): the `, Size of
-  downloads: …` suffix and the `Fetch Restriction: …` line. **Cut**: the
+  **Cut**: the
   `Conflict:` line's own `(N unsatisfied)`/`(all satisfied)` suffix --
   this pilot resolves no blocker (report, don't enforce), so it can't
   honestly classify one. ~18 existing `-pv` pinned-output contract
-  tests updated for the new trailing line.
+  tests updated for the new trailing line. Then (once the `f`/`F`
+  fetch-restrict slice built the machinery) completed with `, Size of
+  downloads: N KiB` and the `Fetch Restriction:` line -- see the next
+  paragraph.
+
+  **`emerge --pretend -v`: `Size of downloads` + `Fetch Restriction:`,
+  completing `_PackageCounters`.** Real `output.py:300-332`'s own
+  `_calc_size` sums `counters.totalsize` from
+  `db.getfetchsizes(cpv, useflags=pkg.use)` (no `only_restricted`) over
+  every merge-bound entry -- the Manifest bytes of each `SRC_URI`
+  distfile not already in `DISTDIR` at that size, a shared distfile
+  counted once (real `myfetchlist`). Ported as
+  `GraphEntry::download_files: Vec<(String, u64)>` (new
+  `fetch_bytes_to_download`, sharing `flatten_src_uri` +
+  `parse_manifest` with the `f`/`F` helper), summed with a
+  filename-`HashSet` dedup in `package_counters_summary`, formatted by
+  `localized_size` (real `portage.localization.localized_size`:
+  `ceil(bytes/1024)` KiB, always KiB -- this pilot drops real portage's
+  `LC_NUMERIC` thousands grouping of the KiB count, only observable
+  above 999 KiB and locale-dependent). The `Fetch Restriction: N
+  package[s][ (M unsatisfied)]` line comes straight from the
+  `GraphEntry::fetch_restrict` / `fetch_restrict_satisfied` counts.
+  Every `-pv` `Total:` line now ends `, Size of downloads: 0 KiB` for a
+  no-`SRC_URI` package (real portage always shows it); ~18 more pinned
+  tests updated. `--json` is unchanged (`download_files` is a
+  display-time detail). Binary candidates contribute 0 (real
+  `_calc_size` runs for them too, but this pilot has no remote-binpkg
+  fetch -- a local `PKGDIR` binary is always already present). This
+  closes `_PackageCounters.__str__`.
 
   **`emerge --pretend`: the `f`/`F` fetch-restrict bracket column.**
   Real `output.py:633`: `if not pkg.built and pkg.operation == "merge"
@@ -2880,9 +2906,9 @@ PORTING/
   `dev-libs/fetchrestrictsatisfiedpkg` / `fetchrestrictmissingpkg` (both
   `RESTRICT="fetch"`) + a committed `PORTING/fixtures/distfiles/`
   (holding only the first's distfile at its `Manifest` size), wired into
-  the test `fixture_env`'s `DISTDIR`. Deferred to a follow-up: the
-  `, Size of downloads: …` suffix and `Fetch Restriction: N package(s)`
-  line on the `Total:` counters line (same machinery, now available).
+  the test `fixture_env`'s `DISTDIR`. (The `, Size of downloads` /
+  `Fetch Restriction:` parts of the `-pv` `Total:` line landed in the
+  next slice, reusing this machinery.)
 
   **`use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
   (stable-vs-`~arch` distinction)**. Closes the last named cut in the
