@@ -281,6 +281,14 @@ fn s2_conflict(rows: Vec<S2Row<'_>>) -> SlotConflict {
     }
 }
 
+fn mk_at(root: &std::path::Path, name: &str, key: &str, dep: &str) {
+    let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    std::fs::write(d.join("SLOT"), "0\n").unwrap();
+    std::fs::write(d.join(key), format!("{dep}\n")).unwrap();
+}
+
 fn abi_probe_entries(consumer_outcome: PretendOutcome) -> Vec<GraphEntry> {
     let provider = |version: &str, sub: &str| GraphEntry {
         outcome: PretendOutcome::New {

@@ -30,6 +30,15 @@ fn cand_166(version: &str) -> Candidate {
     }
 }
 
+/// One installed instance with the given `BUILD_TIME` (plus `SLOT`,
+/// which the vdb scan expects beside every instance).
+fn install_166(root: &Path, cat: &str, pf: &str, build_time: &str) {
+    let d = root.join("var/db/pkg").join(cat).join(pf);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("SLOT"), "0\n").unwrap();
+    std::fs::write(d.join("BUILD_TIME"), build_time).unwrap();
+}
+
 // ---- `direct_solve_arg_mode` (Portage `_want_installed_pkg`). ----
 
 /// Minimal visibility config in the `test_config` shape
@@ -62,6 +71,14 @@ fn conflict_166(versions: Vec<(&str, bool)>) -> SlotConflict {
             })
             .collect(),
     }
+}
+
+/// One installed instance with the given `USE` record.
+fn use_install_166(root: &Path, cat: &str, pf: &str, use_flags: &str) {
+    let d = root.join("var/db/pkg").join(cat).join(pf);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("SLOT"), "0\n").unwrap();
+    std::fs::write(d.join("USE"), use_flags).unwrap();
 }
 
 /// Merge-bound `GraphEntry` carrying resolved display flags (the

@@ -373,3 +373,71 @@ fn depclean_cleanlist_is_returned_in_topological_removal_order() {
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&root2).ok();
 }
+
+#[test]
+fn topological_removal_order_breaks_a_cycle_by_priority_and_pops_one() {
+    // Two-node cycle with no true root: Portage's priority scan pops `lo` first,
+    // then `hi` falls out as a plain root.
+    let root = masters_test_root("depclean-cycle");
+    let mk = |name: &str, key: &str, dep: &str| {
+        let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        std::fs::write(d.join(key), format!("{dep}\n")).unwrap();
+    };
+    mk("hi", "DEPEND", "dev-libs/lo");
+    mk("lo", "RDEPEND", "dev-libs/hi");
+
+    let (ordered, out) = topological_removal_order(
+        &root,
+        vec![
+            InstalledPackage {
+                category: "dev-libs".into(),
+                package: "hi".into(),
+                version: "1.0".into(),
+                slot: "0".into(),
+            },
+            InstalledPackage {
+                category: "dev-libs".into(),
+                package: "lo".into(),
+                version: "1.0".into(),
+                slot: "0".into(),
+            },
+        ],
+    );
+    assert!(ordered);
+    assert_eq!(
+        out.iter().map(|p| p.package.clone()).collect::<Vec<_>>(),
+        vec!["lo".to_string(), "hi".to_string()]
+    );
+
+    // Mutual RDEPEND: the cpv-max node pops first.
+    let root2 = masters_test_root("depclean-cycle-rr");
+    mk_at(&root2, "zz", "RDEPEND", "dev-libs/yy");
+    mk_at(&root2, "yy", "RDEPEND", "dev-libs/zz");
+    let (_o, out2) = topological_removal_order(
+        &root2,
+        vec![
+            InstalledPackage {
+                category: "dev-libs".into(),
+                package: "zz".into(),
+                version: "1.0".into(),
+                slot: "0".into(),
+            },
+            InstalledPackage {
+                category: "dev-libs".into(),
+                package: "yy".into(),
+                version: "1.0".into(),
+                slot: "0".into(),
+            },
+        ],
+    );
+    assert_eq!(
+        out2.iter().map(|p| p.package.clone()).collect::<Vec<_>>(),
+        vec!["zz".to_string(), "yy".to_string()]
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+    std::fs::remove_dir_all(&root2).ok();
+}
