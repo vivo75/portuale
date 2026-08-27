@@ -2398,6 +2398,121 @@ fn run_prune_pretend(
     run_unmerge_pretend(&cpv_refs, root, config_root, config, result.ordered)
 }
 
+/// Real `emerge --pretend --prune --nodeps` (`actions.py:2684-2697`):
+/// `--nodeps` routes prune to `unmerge()`'s own `_unmerge_display` prune
+/// branch (`unmerge.py:245-272`) *instead of* `_calc_depclean` -- so
+/// there is NO dependency/reachability check at all, no `>>>
+/// Calculating removal order...`, and no `show_parents` (`--verbose` is
+/// inert here). For every cp with more than one version installed the
+/// best (highest) version is `protected` and every other version is
+/// `selected` for removal (see `portage_repo::prune_nodeps_selection`).
+/// `_unmerge_display` renders it unordered: the header, per-cp
+/// `selected:`/`protected:`/`omitted:` blocks (`omitted` is always
+/// `none` here -- every version is either selected or protected), the
+/// `sys-apps/portage` self-skip, the "still listed in package sets"
+/// warning, and the footer. Empty result: `>>> No outdated packages
+/// were found on your system.` with no args (real `global_unmerge`),
+/// else `>>> No packages selected for removal by prune` -- both exit 1
+/// (real `_unmerge_display` returns `(1, {})`, unlike plain `--prune`'s
+/// exit 0).
+fn run_prune_nodeps_pretend(targets: &[&str], root: &Path, config_root: &Path) -> ExitCode {
+    let args = match resolve_cleanup_args(targets, root, "prune") {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+
+    let mut selection = portage_repo::prune_nodeps_selection(root, &args);
+
+    println!(">>> These are the packages that would be unmerged:");
+
+    // Real `sys-apps/portage` self-skip (`unmerge.py:368-391`): move any
+    // selected `sys-apps/portage` version into `protected` with the
+    // eerror. Realistically dead code -- `sys-apps/portage` is never
+    // installed at more than one version -- kept for fidelity.
+    for cp in &mut selection {
+        if (cp.category.as_str(), cp.package.as_str()) == ("sys-apps", "portage") {
+            for v in std::mem::take(&mut cp.other_versions) {
+                eprintln!(
+                    "!!! Not unmerging package sys-apps/portage-{v} since there is no valid \
+                     reason for Portage to prune itself."
+                );
+            }
+        }
+    }
+
+    let total_selected: usize = selection.iter().map(|cp| cp.other_versions.len()).sum();
+    if total_selected == 0 {
+        if args.is_empty() {
+            println!("\n>>> No outdated packages were found on your system.");
+        } else {
+            println!("\n>>> No packages selected for removal by prune");
+        }
+        return ExitCode::from(1);
+    }
+
+    // "still listed in package sets" warning (real `_unmerge_display`,
+    // `unmerge.py:393-447`) -- same machinery `run_unmerge_pretend` uses.
+    let installed_sets: Vec<(String, Vec<String>)> = match collect_installed_sets(config_root, root)
+    {
+        Ok(sets) => sets,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let mut selected_flat: Vec<(String, String, String)> = Vec::new();
+    for cp in &selection {
+        for v in &cp.other_versions {
+            selected_flat.push((cp.category.clone(), cp.package.clone(), v.clone()));
+        }
+    }
+    selected_flat.sort();
+    for (cat, pkg, version) in &selected_flat {
+        let candidate = format!("{cat}/{pkg}-{version}");
+        let mut parents: Vec<&str> = Vec::new();
+        for (set_name, atoms) in &installed_sets {
+            let listed = atoms.iter().any(|atom_str| {
+                parse_atom(atom_str).is_some_and(|a| a.category == *cat && a.package == *pkg)
+                    && match_from_list(atom_str, &[candidate.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+            });
+            if listed {
+                parents.push(set_name);
+            }
+        }
+        if !parents.is_empty() {
+            parents.sort_unstable();
+            println!("Package {cat}/{pkg}-{version} is going to be unmerged,");
+            println!("but still listed in the following package sets:");
+            println!("    {}\n", parents.join(", "));
+        }
+    }
+
+    // Per-cp blocks (already cp-sorted by `prune_nodeps_selection`).
+    let mut all_selected_display: Vec<String> = Vec::new();
+    for cp in &selection {
+        if cp.other_versions.is_empty() {
+            continue;
+        }
+        println!("\n {}/{}", cp.category, cp.package);
+        print_unmerge_row("selected", &cp.other_versions);
+        print_unmerge_row("protected", std::slice::from_ref(&cp.best_version));
+        print_unmerge_row("omitted", &[]);
+        for v in &cp.other_versions {
+            all_selected_display.push(format!("={}/{}-{v}", cp.category, cp.package));
+        }
+    }
+
+    all_selected_display.sort();
+    println!(
+        "\nAll selected packages: {}",
+        all_selected_display.join(" ")
+    );
+    println!("\n>>> 'Selected' packages are slated for removal.");
+    println!(">>> 'Protected' and 'omitted' packages will not be removed.");
+    ExitCode::SUCCESS
+}
+
 /// Real `emerge --pretend --depclean` / `-pc` (real `action_depclean` +
 /// `_calc_depclean`, no package arguments): the packages nothing in
 /// `@world` ∪ `@system` needs, at runtime, are the cleanlist -- reported
@@ -3512,6 +3627,9 @@ pub fn run(args: &[String]) -> ExitCode {
         return run_depclean_pretend(&atom_args, &root, &config_root, &config, verbose);
     }
     if prune {
+        if nodeps {
+            return run_prune_nodeps_pretend(&atom_args, &root, &config_root);
+        }
         return run_prune_pretend(&atom_args, &root, &config_root, &config, verbose);
     }
 

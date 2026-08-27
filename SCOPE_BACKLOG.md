@@ -98,10 +98,12 @@ Ranked roughly by how self-contained each is.
   `resolve_cleanup_args`). The `--verbose` `show_parents` display
   (real `create_cleanlist`'s prune branch, `actions.py:1339` -- only for
   an `args_set`-matched kept version with a real `Package` parent;
-  shared `render_show_parents`) **shipped 2026-08-28**. **Still open:**
-  `--prune --nodeps` (the obscure `_unmerge_display` prune branch that
-  skips the closure), `--depclean-lib-check`, slot-operator rebuild
-  edges, real (non-`--pretend`) removal.
+  shared `render_show_parents`) **shipped 2026-08-28**. `--prune
+  --nodeps` (routes to `_unmerge_display`'s own prune branch instead of
+  `_calc_depclean` -- no dep check at all; `prune_nodeps_selection` +
+  `run_prune_nodeps_pretend`; best-version `COUNTER` tiebreak narrowed
+  out) **shipped 2026-08-28**. **Still open:** `--depclean-lib-check`,
+  slot-operator rebuild edges, real (non-`--pretend`) removal.
 - Minor `-pC` narrowings: the higher-slot refinement on the
   set-protection warning, and the Python-interpreter self-skip. The
   literal vdb-path argument (`emerge -C /var/db/pkg/cat/pkg-ver`,

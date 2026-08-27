@@ -5066,6 +5066,77 @@ def test_prune_requires_pretend(emerge_binary, fixture_env):
     assert "requires --pretend" in result.stderr
 
 
+def test_prune_nodeps_pretend_prunes_every_old_version(emerge_binary, fixture_env, tmp_path):
+    """emerge -pP --nodeps (actions.py:2684): --nodeps bypasses
+    _calc_depclean entirely and routes to _unmerge_display's prune branch
+    -- NO dependency check, so EVERY non-highest version is selected even
+    one something needs (in _prune_root, keeper pins =dev-libs/mm-2.0,
+    but --nodeps prunes it anyway). The best version is `protected`,
+    `omitted` is always `none`, and there's no ">>> Calculating removal
+    order..." line."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(_prune_root(tmp_path))
+    result = _run([str(emerge_binary)], ["--pretend", "--prune", "--nodeps"], env)
+    assert result.returncode == 0
+    out = result.stdout
+    assert ">>> Calculating removal order..." not in out
+    assert (
+        "\n dev-libs/mm\n"
+        "    selected: 1.0 2.0 \n"
+        "   protected: 3.0 \n"
+        "     omitted: none \n"
+    ) in out
+    assert (
+        "All selected packages: =dev-libs/aa-1.0 =dev-libs/mm-1.0 "
+        "=dev-libs/mm-2.0 =dev-libs/zz-1.0" in out
+    )
+    # --verbose is inert here (show_parents lives on the _calc_depclean path).
+    v = _run([str(emerge_binary)], ["--pretend", "--prune", "--nodeps", "-v"], env)
+    assert "pulled in by:" not in v.stdout
+
+
+def test_prune_nodeps_pretend_nothing_outdated(emerge_binary, fixture_env, tmp_path):
+    """No multi-version cp -> real `global_unmerge and not numselected`
+    prints ">>> No outdated packages were found on your system." and
+    exits 1 (unlike plain --prune's exit 0). With an arg it's the
+    ordinary "No packages selected" message instead."""
+    root = tmp_path
+    for n in ("one", "two"):
+        d = root / "var" / "db" / "pkg" / "dev-libs" / f"{n}-1.0"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text("0\n")
+    env = dict(fixture_env)
+    env["ROOT"] = str(root)
+    noargs = _run([str(emerge_binary)], ["--pretend", "--prune", "--nodeps"], env)
+    assert noargs.returncode == 1
+    assert ">>> No outdated packages were found on your system." in noargs.stdout
+    witharg = _run([str(emerge_binary)], ["--pretend", "--prune", "--nodeps", "dev-libs/one"], env)
+    assert witharg.returncode == 1
+    assert ">>> No packages selected for removal by prune" in witharg.stdout
+
+
+def test_prune_nodeps_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    env = dict(fixture_env)
+    env["ROOT"] = str(_prune_root(tmp_path))
+    for args in (
+        ["--pretend", "--prune", "--nodeps"],
+        ["-pPO"],
+        ["--pretend", "--prune", "--nodeps", "-v"],
+        ["--pretend", "--prune", "--nodeps", "dev-libs/mm"],
+        ["--pretend", "--prune", "--nodeps", "mm"],
+        ["--pretend", "--prune", "--nodeps", "dev-libs/single"],
+        ["--pretend", "--prune", "--nodeps", "dev-libs/nope"],
+    ):
+        rust = _run([str(emerge_binary)], args, env)
+        python = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == python.returncode, args
+        assert rust.stdout == python.stdout, args
+        assert rust.stderr == python.stderr, args
+
+
 def test_prune_pretend_verbose_shows_reverse_deps(emerge_binary, fixture_env, tmp_path):
     """emerge -pP --verbose: real create_cleanlist's prune branch
     (actions.py:1339) also calls show_parents(pkg) -- but only for an

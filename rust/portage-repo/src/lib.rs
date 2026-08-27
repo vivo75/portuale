@@ -3577,6 +3577,84 @@ pub fn prune_cleanlist(root: &Path, args: &[String]) -> DepcleanResult {
     }
 }
 
+/// One cp's `emerge --prune --nodeps` split: `best_version` is
+/// `protected` (kept), `other_versions` (ascending) are all `selected`
+/// for removal.
+#[derive(Debug, Clone)]
+pub struct PruneNodepsCp {
+    pub category: String,
+    pub package: String,
+    pub best_version: String,
+    pub other_versions: Vec<String>,
+}
+
+/// Real `emerge --prune --nodeps`'s own selection (`unmerge.py:245-272`,
+/// the `_unmerge_display` prune branch that `--nodeps` routes to
+/// *instead of* `_calc_depclean` -- `actions.py:2684`). No dependency
+/// check at all: for every cp with more than one version matched,
+/// protect the "best" version and select every other for removal.
+///
+/// "Best" is real portage's own: the highest version, except that on a
+/// same-slot collision (two versions in one slot -- a broken vdb) the
+/// one with the highest `COUNTER` (most recently installed) wins. This
+/// pilot's single-slot fixtures never hit that collision, so `best` is
+/// just the highest version -- the `COUNTER` tiebreak is a documented
+/// narrowing, the same category as the other `-pC` slot refinements.
+///
+/// **`args` empty** (`emerge --prune --nodeps`): every installed cp
+/// (real `vardb.cp_all()`); a single-version cp is skipped (real `if
+/// len(mymatch) == 1: continue`).
+///
+/// **`args` given**: each atom's `vardb.match` set; the best/rest split
+/// is over *that* set (so `--prune --nodeps '<cat/pkg-3'` keeps
+/// `pkg-2` even if `pkg-3` is also installed). A cp matched by several
+/// atoms appears once -- the `selected` sets unioned, `best` taken over
+/// the union (real `_unmerge_display`'s own `if not ordered:` regroup).
+pub fn prune_nodeps_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
+    let installed = all_installed_packages(root);
+    let matched: Vec<&InstalledPackage> = if args.is_empty() {
+        installed.iter().collect()
+    } else {
+        installed
+            .iter()
+            .filter(|p| {
+                let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+                args.iter().any(|a| {
+                    portage_dep::parse_atom(a)
+                        .is_some_and(|pa| pa.category == p.category && pa.package == p.package)
+                        && portage_dep::match_from_list(a, &[cs.as_str()])
+                            .is_some_and(|m| !m.is_empty())
+                })
+            })
+            .collect()
+    };
+
+    let mut by_cp: HashMap<(String, String), Vec<String>> = HashMap::new();
+    for p in matched {
+        by_cp
+            .entry((p.category.clone(), p.package.clone()))
+            .or_default()
+            .push(p.version.clone());
+    }
+    let mut out: Vec<PruneNodepsCp> = Vec::new();
+    for ((category, package), mut versions) in by_cp {
+        versions.sort_by(|a, b| vercmp_ordering(a, b));
+        versions.dedup();
+        if versions.len() < 2 {
+            continue;
+        }
+        let best_version = versions.pop().unwrap();
+        out.push(PruneNodepsCp {
+            category,
+            package,
+            best_version,
+            other_versions: versions,
+        });
+    }
+    out.sort_by(|a, b| a.category.cmp(&b.category).then(a.package.cmp(&b.package)));
+    out
+}
+
 /// Real `strip_slots` (`lib/portage/dep/_slot_operator.py:11`), for one
 /// atom string: rewrites a "built" slot-operator atom (`cat/pkg:2=` -- the
 /// concrete slot portage records in the vdb when a `cat/pkg:=` dependency
@@ -9581,6 +9659,47 @@ mod tests {
                 "dev-libs/mm-2.0".to_string(),
                 vec!["dev-libs/keeper-1.0 requires =dev-libs/mm-2.0".to_string()],
             )]
+        );
+
+        // `--prune --nodeps`: NO dependency check -- every non-highest
+        // version of every multi-version cp is selected, mm-2.0 included
+        // (unlike `--prune`, which keeps it for `keeper`).
+        let nd = prune_nodeps_selection(&root, &[]);
+        assert_eq!(
+            nd.iter()
+                .map(|cp| (
+                    format!("{}/{}", cp.category, cp.package),
+                    cp.best_version.clone(),
+                    cp.other_versions.clone()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "dev-libs/aa".to_string(),
+                    "2.0".to_string(),
+                    vec!["1.0".to_string()]
+                ),
+                (
+                    "dev-libs/mm".to_string(),
+                    "3.0".to_string(),
+                    vec!["1.0".to_string(), "2.0".to_string()]
+                ),
+                (
+                    "dev-libs/zz".to_string(),
+                    "2.0".to_string(),
+                    vec!["1.0".to_string()]
+                ),
+            ]
+        );
+        // `--prune --nodeps <atom>`: best/rest split over the atom's own
+        // match set -- `<dev-libs/mm-3.0` keeps mm-2.0, prunes mm-1.0.
+        let nd_atom = prune_nodeps_selection(&root, &["<dev-libs/mm-3.0".to_string()]);
+        assert_eq!(
+            nd_atom
+                .iter()
+                .map(|cp| (cp.best_version.clone(), cp.other_versions.clone()))
+                .collect::<Vec<_>>(),
+            vec![("2.0".to_string(), vec!["1.0".to_string()])]
         );
 
         // `--prune dev-libs/mm`: only mm's old versions are candidates.

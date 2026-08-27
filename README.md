@@ -987,11 +987,33 @@ PORTING/
   fixtures already carry a multi-version cp (`dev-libs/unmergepkg` at
   1.0 and 2.0); the new `_prune_root` test fixture adds a richer case
   (`aa`/`zz`/`mm` multi-version, a `keeper` pinning `mm-2.0`, and a
-  `zz-1.0` -> `aa-1.0` ordering edge). **Deliberately out**: `--prune
-  --nodeps` (the obscure `_unmerge_display` prune branch that skips the
-  closure entirely), the `--deselect` world-file rewrite (`--pretend`
-  never writes it), and -- as with `depclean` -- `--depclean-lib-check`
-  and slot-operator rebuild edges.
+  `zz-1.0` -> `aa-1.0` ordering edge). **Deliberately out**: the
+  `--deselect` world-file rewrite (`--pretend` never writes it), and --
+  as with `depclean` -- `--depclean-lib-check` and slot-operator rebuild
+  edges.
+
+  **`emerge --prune --nodeps`: the no-dependency-check branch.** Real
+  `actions.py:2684-2697`: `--nodeps` routes prune to `unmerge()`'s own
+  `_unmerge_display` prune branch (`unmerge.py:245-272`) *instead of*
+  `_calc_depclean` -- so there is no reachability check at all, no `>>>
+  Calculating removal order...`, and no `show_parents` (`--verbose` is
+  inert). For every cp with more than one version installed the best
+  (highest) version is `protected` and *every* other version is
+  `selected` -- even one something still needs (in `_prune_root`
+  `keeper` pins `=dev-libs/mm-2.0`, but `--prune --nodeps` prunes it
+  anyway). New `portage_repo::prune_nodeps_selection` (best/rest split,
+  no-args = every `vardb.cp_all()` cp, args = each atom's own
+  `vardb.match` set); new `portuale::run_prune_nodeps_pretend` renders
+  it -- header, per-cp `selected:`/`protected:`/`omitted:` blocks
+  (`omitted` is always `none`), the `sys-apps/portage` self-skip, the
+  "still listed in package sets" warning, footer. Empty: `>>> No
+  outdated packages were found on your system.` with no args (real
+  `global_unmerge`), else `>>> No packages selected for removal by
+  prune` -- both **exit 1** (real `_unmerge_display` returns `(1, {})`,
+  unlike plain `--prune`'s exit 0). **Narrowed**: `best` is just the
+  highest version -- real portage's same-slot `COUNTER` tiebreak (a
+  broken-vdb case) is out, the same category as the other `-pC` slot
+  refinements.
 
   **`--with-bdeps y|n`: build-time deps for an already-installed
   package's own `--deep` walk.** Grounded against real

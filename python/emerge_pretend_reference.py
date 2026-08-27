@@ -7134,6 +7134,128 @@ def _run_prune_pretend(targets, root, config_root, config, verbose=False):
     )
 
 
+def _prune_nodeps_selection(root, args):
+    """Real emerge --prune --nodeps's own selection (unmerge.py:245-272):
+    NO dependency check -- for every cp with >1 matched version, protect
+    the highest (best) version, select every other. Returns a cp-sorted
+    list of (cat, pkg, best_version, [other_versions asc]). Mirrors
+    portage-repo/src/lib.rs's prune_nodeps_selection -- see its docstring
+    for the args-vs-no-args split and the COUNTER-tiebreak narrowing."""
+    import functools
+
+    vk = functools.cmp_to_key(lambda a, b: (vercmp(a, b) or (a > b) - (a < b)))
+    installed = _all_installed_packages(root)  # (c, p, v, s)
+    if args:
+        matched = [
+            (c, p, v, s)
+            for (c, p, v, s) in installed
+            if any(
+                (parsed := _parse_atom(a)) is not None
+                and tuple(parsed.cp.split("/", 1)) == (c, p)
+                and match_from_list(a, [f"{c}/{p}-{v}:{s}"])
+                for a in args
+            )
+        ]
+    else:
+        matched = installed
+
+    by_cp = {}
+    for (c, p, v, _s) in matched:
+        by_cp.setdefault((c, p), [])
+        if v not in by_cp[(c, p)]:
+            by_cp[(c, p)].append(v)
+
+    out = []
+    for (c, p), versions in by_cp.items():
+        versions = sorted(versions, key=vk)
+        if len(versions) < 2:
+            continue
+        out.append((c, p, versions[-1], versions[:-1]))
+    out.sort(key=lambda t: (t[0], t[1]))
+    return out
+
+
+def _run_prune_nodeps_pretend(targets, root, config_root):
+    """emerge --pretend --prune --nodeps (actions.py:2684-2697): --nodeps
+    routes prune to unmerge()'s _unmerge_display prune branch instead of
+    _calc_depclean -- no dependency check, no '>>> Calculating removal
+    order...', no show_parents. Mirrors pretend.rs's
+    run_prune_nodeps_pretend -- see its docstring."""
+    try:
+        args = _resolve_cleanup_args(targets, root, "prune")
+    except _CleanupArgsExit as e:
+        return e.code
+
+    selection = _prune_nodeps_selection(root, args)
+
+    print(">>> These are the packages that would be unmerged:")
+
+    # sys-apps/portage self-skip (realistically dead code).
+    fixed = []
+    for (c, p, best, others) in selection:
+        if (c, p) == ("sys-apps", "portage"):
+            for v in others:
+                print(
+                    f"!!! Not unmerging package sys-apps/portage-{v} since there is no "
+                    "valid reason for Portage to prune itself.",
+                    file=sys.stderr,
+                )
+            others = []
+        fixed.append((c, p, best, others))
+    selection = fixed
+
+    total_selected = sum(len(others) for (_c, _p, _b, others) in selection)
+    if total_selected == 0:
+        if not args:
+            print("\n>>> No outdated packages were found on your system.")
+        else:
+            print("\n>>> No packages selected for removal by prune")
+        return 1
+
+    try:
+        installed_sets = _collect_installed_sets(config_root, root)
+    except ResolutionError as e:
+        print(f"emerge: {e}", file=sys.stderr)
+        return 1
+    selected_flat = sorted(
+        (c, p, v)
+        for (c, p, _b, others) in selection
+        for v in others
+    )
+    for (c, p, v) in selected_flat:
+        candidate = f"{c}/{p}-{v}"
+        parents = []
+        for set_name, atoms in installed_sets:
+            if any(
+                (parsed := _parse_atom(a)) is not None
+                and parsed.cp.split("/", 1) == [c, p]
+                and match_from_list(a, [candidate])
+                for a in atoms
+            ):
+                parents.append(set_name)
+        if parents:
+            parents.sort()
+            print(f"Package {c}/{p}-{v} is going to be unmerged,")
+            print("but still listed in the following package sets:")
+            print(f"    {', '.join(parents)}\n")
+
+    all_selected_display = []
+    for (c, p, best, others) in selection:
+        if not others:
+            continue
+        print(f"\n {c}/{p}")
+        _print_unmerge_row("selected", others)
+        _print_unmerge_row("protected", [best])
+        _print_unmerge_row("omitted", [])
+        all_selected_display.extend(f"={c}/{p}-{v}" for v in others)
+
+    all_selected_display.sort()
+    print(f"\nAll selected packages: {' '.join(all_selected_display)}")
+    print("\n>>> 'Selected' packages are slated for removal.")
+    print(">>> 'Protected' and 'omitted' packages will not be removed.")
+    return 0
+
+
 def _prune_cleanlist(root, args):
     """Real emerge --prune's removal list (_calc_depclean with
     action="prune" -- actions.py:1059-1110 + create_cleanlist's prune
@@ -8355,6 +8477,8 @@ def run(args):
             atom_args, _root(), _config_root(), config, verbose=verbose
         )
     if prune:
+        if nodeps:
+            return _run_prune_nodeps_pretend(atom_args, _root(), _config_root())
         return _run_prune_pretend(
             atom_args, _root(), _config_root(), config, verbose=verbose
         )
