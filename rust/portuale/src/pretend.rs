@@ -224,14 +224,17 @@ use std::process::ExitCode;
 /// would happen" spirit: v1 neither refuses nor changes the exit code for
 /// a blocker match, strong or weak (see resolve_pretend_graph's doc
 /// comment).
-/// `  USE="flag1 -flag2"` (two leading spaces, matching real `--pretend
-/// -v`'s own line format), or an empty string when `--verbose` wasn't
-/// given or this entry has no IUSE-declared flags at all -- see
-/// `GraphEntry::use_flags_display`'s doc comment. Real portage's own USE
-/// display additionally colorizes and diffs against the previously
-/// installed version's IUSE (`*`/`%` markers) and groups by USE_EXPAND;
-/// this pilot shows none of that, just the plain enabled/disabled set,
-/// alphabetically sorted.
+/// `  USE="flag1 -flag2" VIDEO_CARDS="-amdgpu nvidia"` (two leading
+/// spaces, matching real `--pretend -v`'s own line format), or an empty
+/// string when `--verbose` wasn't given or this entry has no displayable
+/// flags at all. The `USE_EXPAND` grouping (plain `USE` group, then one
+/// `VAR="…"` per non-hidden `USE_EXPAND` variable, empty groups omitted)
+/// is real -- `output.py::_display_use`, computed in
+/// `portage_repo::build_use_expand_display` and carried on
+/// `GraphEntry::use_expand_display`. Still not shown: real portage's own
+/// ANSI colorization and its installed-vs-new `*`/`%` diff markers
+/// (a separate documented cut -- this shows the plain enabled/disabled
+/// set, `_alnum_sort_key`-ordered within each group).
 /// Real `output_helpers.py`'s own `columnwidth` resolution
 /// (`MergeListItem.__init__`): 130 by default, overridden by a
 /// `COLUMNWIDTH` setting -- this pilot only ever reads it as a plain
@@ -305,21 +308,18 @@ fn columns_line(
 }
 
 fn use_suffix(entry: &GraphEntry, verbose: bool) -> String {
-    if !verbose || entry.use_flags_display.is_empty() {
+    if !verbose || entry.use_expand_display.is_empty() {
         return String::new();
     }
-    let flags: Vec<String> = entry
-        .use_flags_display
+    // Real `output.py:_display_use`: `USE="…"` first, then one `VAR="…"`
+    // per non-hidden USE_EXPAND group, each already rendered and ordered
+    // by `portage_repo::build_use_expand_display`.
+    let groups: Vec<String> = entry
+        .use_expand_display
         .iter()
-        .map(|(flag, enabled)| {
-            if *enabled {
-                flag.clone()
-            } else {
-                format!("-{flag}")
-            }
-        })
+        .map(|(name, rendered)| format!("{name}=\"{rendered}\""))
         .collect();
-    format!("  USE=\"{}\"", flags.join(" "))
+    format!("  {}", groups.join(" "))
 }
 
 /// Real `lib/_emerge/resolver/output.py:841-862`'s own `darkgreen("to " +

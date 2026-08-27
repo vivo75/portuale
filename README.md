@@ -1309,13 +1309,13 @@ PORTING/
   package with no IUSE. Real portage's own USE display is considerably
   more elaborate than this -- colorized, diffed against the previously
   installed version's IUSE with `*`/`%` change markers, forced/masked
-  flags in parens, `USE_EXPAND` grouping (`VIDEO_CARDS`, etc.) -- none of
-  which this pilot has the underlying data (or terminal-color
-  infrastructure, unused anywhere else in this pilot) to reproduce; v1
+  flags in parens, `USE_EXPAND` grouping (`VIDEO_CARDS`, etc.); v1
   shows only the plain enabled/disabled set, which is a real, useful
   subset rather than an invented one, matching the "documented,
   simplified subset" spirit of every other output-formatting decision in
-  this pilot.
+  this pilot. (The `USE_EXPAND` grouping half was closed later -- see
+  "`emerge --pretend -v`: `USE_EXPAND` grouping" below; the colorization
+  and `*`/`%` diff markers are still cut.)
 
   **BDEPEND/PDEPEND/IDEPEND in recursion**: dependency recursion now
   concatenates and flattens all five real dependency-string keys --
@@ -2594,9 +2594,11 @@ PORTING/
   (closed by a later follow-up below),
   IUSE-aware wildcard expansion (needs a specific package's own IUSE,
   which global config resolution has no access to, still open), and
-  `USE_EXPAND_HIDDEN`/`_IMPLICIT` (real `emerge --info` display-only
-  concerns, irrelevant to a `--pretend`-only pilot with no `--info`
-  action at all -- not worth ever closing). **Now stale**: `package.use`'s own `USE_EXPAND`-prefix
+  `USE_EXPAND_HIDDEN`/`_IMPLICIT` (originally called `emerge --info`
+  display-only and out of scope -- both since closed: `_IMPLICIT` drives
+  `is_valid_flag`, not just display, and `_HIDDEN` is honoured by
+  `emerge -pv`'s own `USE_EXPAND` grouping -- see the dedicated
+  paragraphs below). **Now stale**: `package.use`'s own `USE_EXPAND`-prefix
   shorthand (`VIDEO_CARDS: nvidia` lines) used to be listed here as a
   separate, not-yet-ported follow-up -- see the dedicated paragraph
   further below for the follow-up that closed it. `dev-libs/useexpandpkg` (`IUSE="video_cards_nvidia
@@ -2667,7 +2669,38 @@ PORTING/
   `USE_EXPAND` variable anywhere (confirmed by reading the real parsing
   loop: it's a purely syntactic transform), this fixture needed no
   change to the base `USE_EXPAND` slice's own profile fixture state at
-  all.
+  the time. (A *later* slice -- the `-pv` `USE_EXPAND` grouping below --
+  did add `PYTHON_TARGETS` to the fixture profile's `USE_EXPAND`, so
+  that this same fixture's `-pv` line groups under `PYTHON_TARGETS="…"`;
+  that has no effect on the shorthand itself.)
+
+  **`emerge --pretend -v`: `USE_EXPAND` grouping (+ `USE_EXPAND_HIDDEN`).**
+  The `-v` USE line used to be a flat `USE="video_cards_nvidia
+  -video_cards_amdgpu …"`. Real `output.py::_display_use` /
+  `map_to_use_expand` / `output_helpers.py::_create_use_string` instead
+  split the IUSE-declared flags into the plain `USE` group plus one
+  `VAR="…"` group per `USE_EXPAND` variable whose `lowercase(name)_`
+  prefixes the flag (prefix stripped), omitting any `USE_EXPAND_HIDDEN`
+  group (`remove_hidden`) and any group that came out empty (the
+  `if ret:` guard -- so a package whose flags are *all* `USE_EXPAND`
+  flags shows only `VIDEO_CARDS="…"` and no `USE=""`). New
+  `portage_repo::build_use_expand_display` ports exactly that, carried
+  on a new `GraphEntry::use_expand_display` field (the raw flat
+  `use_flags_display` stays for `--json`'s own `use_flags` map -- more
+  useful programmatically, and real `--json` has no USE display to
+  match). `portage-profile` grew `Config::use_expand_hidden` (a new
+  incremental, `USE_EXPAND_HIDDEN`), display-only -- never consulted by
+  `iuse_effective`/visibility/resolution. Deliberately *not* ported (a
+  separate, still-open cut): real portage's ANSI colorization and its
+  installed-vs-new `*`/`%` diff markers; within each group this keeps
+  the pilot's own established bare-name sort rather than real
+  `_create_use_string`'s enabled-first ordering. Fixture profile's
+  `USE_EXPAND` gained `PYTHON_TARGETS` (so `dev-libs/packageuseexpandpkg`
+  groups) and `CPU_FLAGS_X86` with `USE_EXPAND_HIDDEN="CPU_FLAGS_X86"`;
+  new `dev-libs/hiddenexpandpkg` (`IUSE="cpu_flags_x86_sse2
+  cpu_flags_x86_avx"`, `sse2` really enabled) shows *no* `-pv` USE line
+  at all. `dev-libs/useexpandpkg` now prints `VIDEO_CARDS="-amdgpu
+  nvidia"`, `dev-libs/wildexpandpkg` `LINGUAS="de -en"`.
 
   **`use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
   (stable-vs-`~arch` distinction)**. Closes the last named cut in the

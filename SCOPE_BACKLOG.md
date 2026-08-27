@@ -38,7 +38,7 @@ to **either** side yet — deliberate, documented scope cuts or explicit
 | 9 | `--deselect` world_sets/custom-set integration | **shipped** | `2ba3c8a5f` (`emerge --deselect @set` against the combined `world_set`) |
 | 9b | Real `Atom.intersects()` algebra for `--deselect` | **shipped** | `7406bae50` (dropped the narrower category/package check + a bogus installed-check) |
 | 10 | Cross-repo profile parents (`reponame:path` / bare `:path`) | **shipped** | `afd1a210c` (`expand_parent_colon`/`repo_containing`, real `LocationsManager._expand_parent_colon`) |
-| 11 | `USE_EXPAND` corners | **shipped** | `66a8a7703` (`USE_EXPAND_UNPREFIXED`) + `USE_EXPAND_IMPLICIT`/`IUSE_IMPLICIT`/`IUSE_EFFECTIVE` (2026-08-27) + IUSE-aware `_*` wildcard expansion (2026-08-27, `effective_use_flags`'s `_*` block). *Residual:* `USE_EXPAND_HIDDEN` only — a genuine non-gap, display-only for EAPI 5+. |
+| 11 | `USE_EXPAND` corners | **shipped** | `66a8a7703` (`USE_EXPAND_UNPREFIXED`) + `USE_EXPAND_IMPLICIT`/`IUSE_IMPLICIT`/`IUSE_EFFECTIVE` (2026-08-27) + IUSE-aware `_*` wildcard expansion (2026-08-27) + `USE_EXPAND` grouping in `emerge -pv` + `USE_EXPAND_HIDDEN` (2026-08-27, `Config::use_expand_hidden` + `build_use_expand_display`). No residual (real `-pv` ANSI color / `*`/`%` diff markers tracked under A.2). |
 | 12 | `accept_keywords_defaults` bare-atom substitution | **shipped** | `743cd9b4a` (bare `package.accept_keywords` atom → implicit `~arch` at both profile and user level) |
 | 13 | `strip_libc_deps` in `--changed-deps` | **shipped** | `b29600063` |
 | 14 | `--changed-deps-report` | **shipped** | `69ca60846` (real cosmetic "you might want `--changed-deps`" notice, its own `--json` `changed_deps_report` array) |
@@ -82,12 +82,14 @@ Ranked roughly by how self-contained each is.
    `USE_EXPAND_IMPLICIT` + `USE_EXPAND_VALUES_*` + `IUSE_IMPLICIT` are now
    valid implicit IUSE for every package, wired into `use_deps_satisfied`
    (`valid_iuse`) and the `REQUIRED_USE` path (`implicit_iuse_set`). It
-   was **not** display-only — it drives `is_valid_flag`. `USE_EXPAND_HIDDEN`
-   stays unimplemented and is a genuine non-gap: for EAPI 5+ it is a pure
-   `emerge --info`/`-pv` USE-grouping *display* concern, and this pilot's
-   `-pv` has no `USE_EXPAND` grouping to hide from. **Residual:** an
+   was **not** display-only — it drives `is_valid_flag`.
+   `USE_EXPAND_HIDDEN` **shipped 2026-08-27** too, once `emerge -pv` grew
+   real `USE_EXPAND` grouping to hide from (`Config::use_expand_hidden` +
+   `portage_repo::build_use_expand_display`). **Residual:** (a) an
    installed package's USE-dep check uses raw vdb `IUSE` (real portage
-   uses that package's vdb-recorded `IUSE_EFFECTIVE`, not persisted here).
+   uses that package's vdb-recorded `IUSE_EFFECTIVE`, not persisted
+   here); (b) `-pv` USE display still lacks real portage's ANSI color
+   and its installed-vs-new `*`/`%` diff markers.
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag

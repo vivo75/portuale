@@ -2712,6 +2712,91 @@ fn strip_slot_operator_one(tok: &str) -> String {
     tok.replacen(&slot_text, ":=", 1)
 }
 
+/// Real `output.py::_display_use` + `map_to_use_expand` +
+/// `output_helpers.py::_create_use_string`, for `emerge --pretend -v`'s
+/// own `USE="…" VAR="…"` line -- narrowed to a fresh entry's display (no
+/// installed-vs-new `*`/`%` diff markers, a separate documented cut).
+///
+/// Splits `use_flags_display` (already IUSE-declared, enabled-resolved,
+/// and sorted by bare flag name the way this pilot's `-pv` has always
+/// ordered its flat list) into the plain `USE` group plus one group per
+/// `config.use_expand` variable whose `lowercase(name)_` prefixes the
+/// flag -- the prefix is stripped from the grouped flag (real
+/// `map_to_use_expand`: `val[len(exp) + 1:]`). `config.use_expand_hidden`
+/// groups are dropped (real `remove_hidden`). Within each group the
+/// pre-existing bare-name order is kept and flags are rendered `flag` /
+/// `-flag` (this pilot's own established "alphabetically sorted, no
+/// enabled-first split" `-pv` simplification -- real
+/// `_create_use_string` renders enabled flags before disabled unless
+/// `--alphabetical`; unchanged by this slice, which only adds the
+/// grouping).
+///
+/// Returns `[(VAR_NAME, "rendered")]` with `USE` first, then the
+/// `USE_EXPAND` vars in sorted order (real `sorted(self.use_expand)` with
+/// `"USE"` inserted at position 0). An empty group produces no entry at
+/// all (real `_create_use_string`'s own `if ret:` guard), so a package
+/// whose flags are *all* USE_EXPAND flags shows only `VAR="…"` and no
+/// `USE=""`, and a package with no displayable flags returns `[]`.
+fn build_use_expand_display(
+    use_flags_display: &[(String, bool)],
+    config: &portage_profile::Config,
+) -> Vec<(String, String)> {
+    let mut expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
+    expand_vars.sort();
+    let hidden: HashSet<String> = config
+        .use_expand_hidden
+        .iter()
+        .map(|s| s.to_uppercase())
+        .collect();
+
+    // Group key: empty string == the plain "USE" group.
+    let mut groups: Vec<(String, Vec<(String, bool)>)> = vec![(String::new(), Vec::new())];
+    for var in &expand_vars {
+        groups.push((var.to_uppercase(), Vec::new()));
+    }
+
+    'flag: for (flag, enabled) in use_flags_display {
+        for var in &expand_vars {
+            let prefix = format!("{}_", var.to_lowercase());
+            if let Some(rest) = flag.strip_prefix(&prefix) {
+                let g = groups
+                    .iter_mut()
+                    .find(|(n, _)| *n == var.to_uppercase())
+                    .unwrap();
+                g.1.push((rest.to_string(), *enabled));
+                continue 'flag;
+            }
+        }
+        groups[0].1.push((flag.clone(), *enabled));
+    }
+
+    let mut out = Vec::new();
+    for (name, flags) in groups {
+        if !name.is_empty() && hidden.contains(&name) {
+            continue;
+        }
+        if flags.is_empty() {
+            continue;
+        }
+        // `flags` is already in the bare-name order `use_flags_display`
+        // arrived in (see this function's own doc comment).
+        let rendered = flags
+            .iter()
+            .map(|(f, en)| if *en { f.clone() } else { format!("-{f}") })
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push((
+            if name.is_empty() {
+                "USE".to_string()
+            } else {
+                name
+            },
+            rendered,
+        ));
+    }
+    out
+}
+
 /// `--changed-deps`: whether `version`'s own vdb-recorded dependency
 /// strings differ from the repo's own *current* ebuild for that exact
 /// version, once both are flattened against the *same* input -- the
@@ -3679,6 +3764,7 @@ fn resolve_root_deps_build_entries(
         blockers: Vec::new(),
         slot: None,
         use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
         required_by: vec![owner],
         source: CandidateSource::Ebuild,
         provenance: VisibilityProvenance::default(),
@@ -4347,6 +4433,20 @@ pub struct GraphEntry {
     /// computed regardless of `--verbose` (cheap; the CLI layer decides
     /// whether to print it) -- see pretend.rs.
     pub use_flags_display: Vec<(String, bool)>,
+    /// The same flags as `use_flags_display`, but rendered the way real
+    /// `emerge --pretend -v` shows them: split into the plain `USE` group
+    /// plus one group per `Config::use_expand` variable whose
+    /// `lowercase(name)_` prefixes the flag (prefix stripped), with
+    /// `Config::use_expand_hidden` groups omitted -- real
+    /// `output.py::_display_use`/`map_to_use_expand`/`_create_use_string`
+    /// (see `build_use_expand_display`). `(VAR_NAME, "flag -flag …")`
+    /// pairs, `USE` first, then the `USE_EXPAND` vars in sorted order;
+    /// only non-empty groups appear, so this is `[]` whenever
+    /// `use_flags_display` is (and `pretend.rs` prints no `USE=` line).
+    /// The `--json` `use_flags` map keeps the raw, ungrouped flags
+    /// instead -- more useful programmatically, and real `--json` has no
+    /// USE display of its own to match.
+    pub use_expand_display: Vec<(String, String)>,
     /// Every `(category, package)` that reached this entry via its own
     /// DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND (sorted, deduplicated) --
     /// empty for a directly-requested top-level atom with no other
@@ -5368,6 +5468,7 @@ pub fn resolve_pretend_graph(
                 blockers: Vec::new(),
                 slot: None,
                 use_flags_display: Vec::new(),
+                use_expand_display: Vec::new(),
                 required_by: Vec::new(),
                 source: CandidateSource::Ebuild,
                 provenance: VisibilityProvenance::default(),
@@ -5472,6 +5573,7 @@ pub fn resolve_pretend_graph(
             blockers: Vec::new(),
             slot: Some(slot.clone()),
             use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
             required_by: Vec::new(),
             source: candidate_source,
             provenance,
@@ -5608,6 +5710,7 @@ pub fn resolve_pretend_graph(
                 })
                 .collect();
             display.sort_by(|a, b| a.0.cmp(&b.0));
+            entries[entry_idx].use_expand_display = build_use_expand_display(&display, config);
             entries[entry_idx].use_flags_display = display;
         }
 
@@ -9296,6 +9399,100 @@ mod tests {
     }
 
     #[test]
+    fn build_use_expand_display_groups_and_hides() {
+        let config = portage_profile::Config {
+            use_expand: HashSet::from(["VIDEO_CARDS".to_string(), "CPU_FLAGS_X86".to_string()]),
+            use_expand_hidden: HashSet::from(["CPU_FLAGS_X86".to_string()]),
+            ..Default::default()
+        };
+        // VIDEO_CARDS is a USE_EXPAND var: the two video_cards_* flags
+        // move into a `VIDEO_CARDS` group (prefix stripped), the plain
+        // USE group is empty and so omitted entirely.
+        assert_eq!(
+            build_use_expand_display(
+                &[
+                    ("video_cards_amdgpu".to_string(), false),
+                    ("video_cards_nvidia".to_string(), true),
+                ],
+                &config,
+            ),
+            vec![("VIDEO_CARDS".to_string(), "-amdgpu nvidia".to_string())]
+        );
+        // CPU_FLAGS_X86 is USE_EXPAND *and* USE_EXPAND_HIDDEN -> its group
+        // is dropped from the display; a plain flag alongside it still
+        // shows.
+        assert_eq!(
+            build_use_expand_display(
+                &[
+                    ("cpu_flags_x86_sse2".to_string(), true),
+                    ("plainflag".to_string(), true),
+                    ("video_cards_nvidia".to_string(), true),
+                ],
+                &config,
+            ),
+            vec![
+                ("USE".to_string(), "plainflag".to_string()),
+                ("VIDEO_CARDS".to_string(), "nvidia".to_string()),
+            ]
+        );
+        // No displayable flags -> no groups at all.
+        assert!(build_use_expand_display(&[], &config).is_empty());
+    }
+
+    #[test]
+    fn use_expand_hidden_group_is_absent_from_the_pv_display() {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config resolves");
+        let entry = resolve_pretend_graph(
+            &root,
+            &root,
+            &["dev-libs/hiddenexpandpkg".to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+        )
+        .expect("resolve_pretend_graph must succeed")
+        .entries
+        .remove(0);
+        // cpu_flags_x86_sse2 is a real enabled flag...
+        assert!(entry
+            .use_flags_display
+            .contains(&("cpu_flags_x86_sse2".to_string(), true)));
+        // ...but CPU_FLAGS_X86 is USE_EXPAND_HIDDEN, so it never reaches
+        // the `-pv` display.
+        assert!(entry.use_expand_display.is_empty());
+    }
+
+    #[test]
     fn recursion_walks_bdepend_pdepend_idepend_same_as_depend_rdepend() {
         for pkg in ["bdependpkg", "pdependpkg", "idependpkg"] {
             let entries = graph(&format!("dev-libs/{pkg}"));
@@ -11915,6 +12112,7 @@ mod tests {
             blockers: Vec::new(),
             slot: Some("0".to_string()),
             use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
             required_by: Vec::new(),
             source: CandidateSource::Ebuild,
             provenance: VisibilityProvenance::default(),

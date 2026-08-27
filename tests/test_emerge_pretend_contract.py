@@ -456,6 +456,16 @@ CASES = [
         0,
     ),
     (
+        "-pv groups IUSE by USE_EXPAND variable (VIDEO_CARDS=\"...\")",
+        ["--pretend", "-v", "dev-libs/useexpandpkg"],
+        0,
+    ),
+    (
+        "-pv omits a USE_EXPAND_HIDDEN group (CPU_FLAGS_X86)",
+        ["--pretend", "-v", "dev-libs/hiddenexpandpkg"],
+        0,
+    ),
+    (
         "use.stable.force/package.use.stable.mask apply to a genuinely stable candidate",
         ["--pretend", "-v", "dev-libs/stableusepkg"],
         0,
@@ -2075,7 +2085,7 @@ def test_use_expand_variable_drives_a_dependency(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/useexpandpkg-1.0  USE="-video_cards_amdgpu video_cards_nvidia"',
+        '[ebuild  N] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="-amdgpu nvidia"',
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
     assert "hiddendep" not in result.stdout
@@ -2097,7 +2107,7 @@ def test_package_use_expand_prefix_shorthand_drives_a_dependency(emerge_binary, 
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/packageuseexpandpkg-1.0  USE="python_targets_python3_12"',
+        '[ebuild  N] dev-libs/packageuseexpandpkg-1.0  PYTHON_TARGETS="python3_12"',
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
 
@@ -2143,11 +2153,55 @@ def test_use_expand_star_wildcard_expands_against_the_packages_own_iuse(
     assert result.stdout == result_py.stdout
     assert result.stderr == result_py.stderr
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/wildexpandpkg-1.0  USE="linguas_de -linguas_en"',
+        '[ebuild  N] dev-libs/wildexpandpkg-1.0  LINGUAS="de -en"',
         "[ebuild  N] dev-libs/wildexpanddep-1.0",
     ]
     assert "wildexpandmasked" not in result.stdout
     assert "linguas_*" not in result.stdout
+
+
+def test_pv_groups_use_by_use_expand_variable(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real output.py:_display_use / map_to_use_expand: `emerge -pv` shows
+    IUSE flags split into the plain USE="..." group plus one VAR="..."
+    group per USE_EXPAND variable (prefix stripped), empty groups omitted.
+    dev-libs/useexpandpkg (IUSE video_cards_nvidia video_cards_amdgpu,
+    VIDEO_CARDS a USE_EXPAND var) shows VIDEO_CARDS="-amdgpu nvidia" and
+    no USE="" at all."""
+    for pkg, expected in [
+        ("useexpandpkg", 'VIDEO_CARDS="-amdgpu nvidia"'),
+        ("packageuseexpandpkg", 'PYTHON_TARGETS="python3_12"'),
+    ]:
+        args = ["--pretend", "-v", f"dev-libs/{pkg}"]
+        rust = _run([str(emerge_binary)], args, fixture_env)
+        python = _run(emerge_pretend_python, args, fixture_env)
+        assert rust.returncode == 0
+        assert rust.stdout == python.stdout, pkg
+        assert rust.stdout.splitlines()[0] == f"[ebuild  N] dev-libs/{pkg}-1.0  {expected}", pkg
+        assert 'USE="' not in rust.stdout.splitlines()[0], pkg
+
+
+def test_pv_omits_a_use_expand_hidden_group(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """USE_EXPAND_HIDDEN="CPU_FLAGS_X86" (fixtures/repo/profiles/base/
+    make.defaults): real output.py:map_to_use_expand's remove_hidden
+    drops that group from the -pv display entirely. dev-libs/
+    hiddenexpandpkg (IUSE cpu_flags_x86_sse2 cpu_flags_x86_avx, sse2
+    enabled via CPU_FLAGS_X86="sse2") therefore shows no USE display at
+    all -- the flags are still real (they'd gate a dependency), just not
+    printed."""
+    args = ["--pretend", "-v", "dev-libs/hiddenexpandpkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.strip() == "[ebuild  N] dev-libs/hiddenexpandpkg-1.0"
+    assert "CPU_FLAGS_X86" not in rust.stdout
+    assert "cpu_flags_x86" not in rust.stdout
 
 
 def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(

@@ -215,8 +215,10 @@
 //     candidate's `is_valid_flag` domain, not just an `emerge --info`
 //     display concern. IUSE-aware `_*` wildcard expansion (`linguas_*`)
 //     is done too, in `portage_repo::effective_use_flags` (see the `_*`
-//     bullet near the top of this comment). Still out of scope:
-//     `USE_EXPAND_HIDDEN` (genuinely display-only for EAPI 5+).
+//     bullet near the top of this comment). `USE_EXPAND_HIDDEN` is read
+//     too now (`Config::use_expand_hidden`) -- genuinely display-only
+//     for EAPI 5+, honoured only by `emerge --pretend -v`'s own
+//     `USE_EXPAND` grouping (`portage_repo`), never by resolution.
 //   - `use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
 //     (PMS 5+, always recognized here per this pilot's own "no EAPI
 //     parametrization" precedent) ARE now read too, closing the
@@ -387,10 +389,18 @@ pub struct Config {
     /// a `foo` that never lists `elibc_glibc` in `IUSE`. `USE_EXPAND_
     /// HIDDEN` is deliberately NOT part of this -- for EAPI 5+ it is a
     /// pure `emerge --info`/`-pv` USE-grouping *display* concern (real
-    /// `_get_implicit_iuse` is the pre-EAPI-5 path), and this pilot's
-    /// `-pv` shows a flat declared-IUSE list with no USE_EXPAND grouping
-    /// to hide from.
+    /// `_get_implicit_iuse` is the pre-EAPI-5 path). See
+    /// `use_expand_hidden` below, which `emerge --pretend -v`'s own
+    /// `USE_EXPAND` grouping honours.
     pub iuse_effective: HashSet<String>,
+    /// `USE_EXPAND_HIDDEN` (real `config.py`, an INCREMENTAL): the subset
+    /// of `USE_EXPAND` variable NAMES whose expanded flags real portage
+    /// omits from `emerge --info`/`emerge -pv`'s own `USE_EXPAND` grouping
+    /// (`output.py::map_to_use_expand`'s own `remove_hidden`). Accumulated
+    /// incrementally the same way `USE_EXPAND` is. Display-only: never
+    /// consulted by `iuse_effective`/visibility/dependency resolution --
+    /// only `portage_repo`'s own `-pv` `USE=`-line grouping reads it.
+    pub use_expand_hidden: HashSet<String>,
     /// `use.stable.force`: every profile level's own file (in chain
     /// order), stacked the same `-atom`-removal way `use_force` already
     /// is -- but, unlike `use_force`, deliberately NOT folded into
@@ -621,6 +631,7 @@ fn process_lines(text: &str, scalars: &mut HashMap<String, String>, config: &mut
             "USE_EXPAND_UNPREFIXED" => apply_incremental(&value, &mut config.use_expand_unprefixed),
             "USE_EXPAND_IMPLICIT" => apply_incremental(&value, &mut config.use_expand_implicit),
             "IUSE_IMPLICIT" => apply_incremental(&value, &mut config.iuse_implicit),
+            "USE_EXPAND_HIDDEN" => apply_incremental(&value, &mut config.use_expand_hidden),
             _ => {}
         }
         scalars.insert(key.to_string(), value);
@@ -861,6 +872,7 @@ fn process_make_conf_file(
             "USE_EXPAND_UNPREFIXED" => apply_incremental(&value, &mut config.use_expand_unprefixed),
             "USE_EXPAND_IMPLICIT" => apply_incremental(&value, &mut config.use_expand_implicit),
             "IUSE_IMPLICIT" => apply_incremental(&value, &mut config.iuse_implicit),
+            "USE_EXPAND_HIDDEN" => apply_incremental(&value, &mut config.use_expand_hidden),
             _ => {}
         }
         scalars.insert(key.to_string(), value);
@@ -1376,9 +1388,10 @@ pub fn resolve_config(
     // drives `pkg.iuse.is_valid_flag` (so a `foo[elibc_glibc]` USE-dep
     // matches a `foo` that never lists `elibc_glibc`), not just
     // `emerge --info` display. `USE_EXPAND_HIDDEN` genuinely *is*
-    // display-only for EAPI 5+ (see `Config::iuse_effective`) and stays
-    // unimplemented -- this pilot's `-pv` shows a flat declared-IUSE
-    // list with no USE_EXPAND grouping to hide from. IUSE-aware `_*`
+    // display-only for EAPI 5+ (see `Config::iuse_effective`); it is read
+    // now (`Config::use_expand_hidden`) and honoured only by
+    // `emerge --pretend -v`'s own `USE_EXPAND` grouping in `portage_repo`.
+    // IUSE-aware `_*`
     // wildcard expansion (`linguas_*`) IS now done, but in
     // `portage_repo::effective_use_flags` (it needs a specific
     // candidate's own IUSE). `package.use`'s own USE_EXPAND-prefix
@@ -2022,6 +2035,10 @@ mod tests {
                 // already exercises -- and ELIBC is also in
                 // USE_EXPAND_IMPLICIT, see the iuse_effective assert below.
                 "elibc_glibc".to_string(),
+                // CPU_FLAGS_X86="sse2" (CPU_FLAGS_X86 is in USE_EXPAND);
+                // it is also USE_EXPAND_HIDDEN, but that only affects the
+                // `emerge -pv` display, never the resolved flag set.
+                "cpu_flags_x86_sse2".to_string(),
             ])
         );
         assert_eq!(
@@ -2033,7 +2050,16 @@ mod tests {
                 // (dev-libs/wildexpandpkg) -- no LINGUAS= value set, so
                 // it folds nothing here.
                 "LINGUAS".to_string(),
+                // PYTHON_TARGETS + CPU_FLAGS_X86 exist for the
+                // `emerge -pv` USE_EXPAND-grouping fixtures
+                // (packageuseexpandpkg / hiddenexpandpkg).
+                "PYTHON_TARGETS".to_string(),
+                "CPU_FLAGS_X86".to_string(),
             ])
+        );
+        assert_eq!(
+            config.use_expand_hidden,
+            HashSet::from(["CPU_FLAGS_X86".to_string()])
         );
         assert_eq!(
             config.use_expand_implicit,

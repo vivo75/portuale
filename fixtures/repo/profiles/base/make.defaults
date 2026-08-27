@@ -6,9 +6,19 @@ USE="foo"
 USE="${USE} bar"
 
 # Exercises USE_EXPAND: VIDEO_CARDS="nvidia" expands into the pseudo-USE
-# flag "video_cards_nvidia" (see dev-libs/useexpandpkg).
-USE_EXPAND="VIDEO_CARDS ELIBC LINGUAS"
+# flag "video_cards_nvidia" (see dev-libs/useexpandpkg). PYTHON_TARGETS
+# is here too so dev-libs/packageuseexpandpkg's package.use shorthand
+# groups under PYTHON_TARGETS="..." in `emerge -pv`. CPU_FLAGS_X86 is a
+# USE_EXPAND var that USE_EXPAND_HIDDEN then hides from that display.
+USE_EXPAND="VIDEO_CARDS ELIBC LINGUAS PYTHON_TARGETS CPU_FLAGS_X86"
 VIDEO_CARDS="nvidia"
+
+# Exercises USE_EXPAND_HIDDEN: `emerge -pv` omits the CPU_FLAGS_X86="..."
+# group from its USE_EXPAND display (real output.py map_to_use_expand's
+# own remove_hidden). Display-only -- cpu_flags_x86_sse2 is still a real
+# enabled flag (see dev-libs/hiddenexpandpkg).
+USE_EXPAND_HIDDEN="CPU_FLAGS_X86"
+CPU_FLAGS_X86="sse2"
 
 # Exercises USE_EXPAND_IMPLICIT: ELIBC is an implicit USE_EXPAND var, so
 # elibc_glibc / elibc_musl are valid implicit IUSE for every package even

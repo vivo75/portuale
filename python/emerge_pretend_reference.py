@@ -1920,6 +1920,48 @@ def _libc_provider_cps(root):
     return result
 
 
+def _build_use_expand_display(use_display, use_expand, use_expand_hidden):
+    """Real output.py:_display_use + map_to_use_expand +
+    output_helpers.py:_create_use_string, for `emerge --pretend -v`'s USE
+    line -- narrowed to a fresh entry's display (no installed-vs-new */%
+    markers). Splits `use_display` (already-bare-name-sorted (flag,
+    enabled) pairs) into the plain USE group plus one group per
+    `use_expand` variable whose lowercase(name)_ prefixes the flag (prefix
+    stripped, real map_to_use_expand's val[len(exp)+1:]); drops
+    `use_expand_hidden` groups (real remove_hidden). Returns
+    [(VAR_NAME, "flag -flag"), ...], USE first then the USE_EXPAND vars
+    sorted; an empty group produces no entry at all (real
+    _create_use_string's `if ret:` guard). Within each group the
+    pre-existing bare-name order is kept (this pilot's own "no
+    enabled-first split" -pv simplification). Mirrors
+    portage-repo/src/lib.rs's build_use_expand_display exactly."""
+    expand_vars = sorted(use_expand)
+    hidden = {v.upper() for v in use_expand_hidden}
+
+    groups = [("", [])] + [(v.upper(), []) for v in expand_vars]
+    by_name = {name: flags for name, flags in groups}
+    for flag, enabled in use_display:
+        placed = False
+        for var in expand_vars:
+            prefix = var.lower() + "_"
+            if flag.startswith(prefix):
+                by_name[var.upper()].append((flag[len(prefix):], enabled))
+                placed = True
+                break
+        if not placed:
+            by_name[""].append((flag, enabled))
+
+    out = []
+    for name, flags in groups:
+        if name and name in hidden:
+            continue
+        if not flags:
+            continue
+        rendered = " ".join(f if en else f"-{f}" for f, en in flags)
+        out.append(("USE" if not name else name, rendered))
+    return out
+
+
 def _deps_changed(root, repos, category, package, version, with_bdeps):
     """--changed-deps: whether `version`'s own vdb-recorded dependency
     strings differ from the repo's own *current* ebuild for that exact
@@ -2385,6 +2427,7 @@ def _process_config_lines(
     use_expand_unprefixed,
     use_expand_implicit,
     iuse_implicit,
+    use_expand_hidden,
 ):
     for line in text.splitlines():
         parsed = _parse_kv_line(line)
@@ -2405,6 +2448,8 @@ def _process_config_lines(
             _apply_incremental(value, use_expand_implicit)
         elif key == "IUSE_IMPLICIT":
             _apply_incremental(value, iuse_implicit)
+        elif key == "USE_EXPAND_HIDDEN":
+            _apply_incremental(value, use_expand_hidden)
         scalars[key] = value
 
 
@@ -2507,6 +2552,7 @@ def _process_make_conf_file(
     use_expand_unprefixed,
     use_expand_implicit,
     iuse_implicit,
+    use_expand_hidden,
     visited_sources,
 ):
     """Resolves "source <path>" against config_root as if it were "/"
@@ -2539,6 +2585,7 @@ def _process_make_conf_file(
                 use_expand_unprefixed,
                 use_expand_implicit,
                 iuse_implicit,
+                use_expand_hidden,
                 visited_sources,
             )
             continue
@@ -2560,6 +2607,8 @@ def _process_make_conf_file(
             _apply_incremental(value, use_expand_implicit)
         elif key == "IUSE_IMPLICIT":
             _apply_incremental(value, iuse_implicit)
+        elif key == "USE_EXPAND_HIDDEN":
+            _apply_incremental(value, use_expand_hidden)
         scalars[key] = value
 
 
@@ -2648,6 +2697,7 @@ def resolve_config(
     use_expand_unprefixed = set()
     use_expand_implicit = set()
     iuse_implicit = set()
+    use_expand_hidden = set()
     scalars = {}
 
     all_repos = [(main_repo_name, main_repo_location)] + list(overlay_repos)
@@ -2689,6 +2739,7 @@ def resolve_config(
             use_expand_unprefixed,
             use_expand_implicit,
             iuse_implicit,
+            use_expand_hidden,
         )
 
     make_conf = os.path.join(config_root, "etc", "portage", "make.conf")
@@ -2704,6 +2755,7 @@ def resolve_config(
             use_expand_unprefixed,
             use_expand_implicit,
             iuse_implicit,
+            use_expand_hidden,
             set(),
         )
 
@@ -3158,6 +3210,7 @@ def resolve_config(
         "use_expand": use_expand,
         "use_expand_unprefixed": use_expand_unprefixed,
         "use_expand_implicit": use_expand_implicit,
+        "use_expand_hidden": use_expand_hidden,
         "iuse_implicit": iuse_implicit,
         "iuse_effective": iuse_effective,
         "use_stable_force": use_stable_force,
@@ -7026,17 +7079,24 @@ def run(args):
             )
 
     def use_suffix(use_display):
-        # "  USE=\"flag1 -flag2\"", matching real --pretend -v's own line
-        # format, or "" when --verbose wasn't given or there's no
-        # IUSE-declared flags at all. Real portage's own USE display
-        # additionally colorizes and diffs against the previously
-        # installed version's IUSE (*/% markers) and groups by
-        # USE_EXPAND; this pilot shows none of that, just the plain
-        # enabled/disabled set, alphabetically sorted.
+        # "  USE=\"a -b\" VIDEO_CARDS=\"-amdgpu nvidia\"", matching real
+        # --pretend -v's own line format. Real output.py:_display_use
+        # groups the flags by USE_EXPAND (plain USE group, then one
+        # VAR="..." per non-hidden USE_EXPAND var, empty groups omitted);
+        # that grouping is real here now. Still not shown: real portage's
+        # ANSI colorization and its installed-vs-new */% diff markers (a
+        # separate documented cut -- the plain enabled/disabled set,
+        # bare-name sorted within each group). Mirrors
+        # portage-repo/src/lib.rs's build_use_expand_display + pretend.rs
+        # use_suffix.
         if not verbose or not use_display:
             return ""
-        flags = [flag if enabled else f"-{flag}" for flag, enabled in use_display]
-        return '  USE="{}"'.format(" ".join(flags))
+        groups = _build_use_expand_display(
+            use_display, config["use_expand"], config["use_expand_hidden"]
+        )
+        if not groups:
+            return ""
+        return "  " + " ".join(f'{name}="{rendered}"' for name, rendered in groups)
 
     def root_suffix(targets_running_root):
         # Real lib/_emerge/resolver/output.py:841-862's own
