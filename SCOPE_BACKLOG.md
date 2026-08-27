@@ -172,13 +172,15 @@ Ranked roughly by how self-contained each is.
     brush-hostile constructs. Low-risk, immediately effective for this
     tree, doesn't preempt real-world ebuilds.
 
-12. **brush strategy #3** — a fork-tracking doc for `vivo75/brush`.
-    PR [reubeno/brush#1274](https://github.com/reubeno/brush/pull/1274)
-    (brace-less function bodies) **merged upstream 2026-08-20** (`18851e7`);
-    the fork now carries only the pipeline-function-stage-deadlock fix
-    (`c78ea429`, branch `fix/pipeline-function-stage-deadlock`), which has
-    no upstream PR yet. `portuale/Cargo.toml` pins the fork by exact rev
-    with no record of upstream-vs-fork-only status and no periodic rebase.
+12. ~~**brush strategy #3** — a fork-tracking doc for `vivo75/brush`.~~
+    **Shipped 2026-08-27**: `PORTING/BRUSH_FORK.md` records the pinned
+    rev's ancestry, which fixes are upstream-merged
+    ([#1274](https://github.com/reubeno/brush/pull/1274), `18851e7`,
+    2026-08-20) vs fork-only
+    ([#1276](https://github.com/reubeno/brush/pull/1276), the pipeline
+    deadlock fix — open, no review yet), and a re-pin checklist for when
+    #1276 merges. Still to do: the actual bump to upstream (blocked on
+    #1276) and any periodic rebase in the meantime.
 
 ### F. preserve-libs
 

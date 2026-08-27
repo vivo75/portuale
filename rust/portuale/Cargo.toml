@@ -14,20 +14,21 @@ portage-use-reduce = { path = "../portage-use-reduce" }
 # dependency (this pilot's own "near-zero dependencies" discipline is
 # explicitly waived here, see that doc's own "bash-execution-backend
 # question" writeup) -- pinned to an exact commit on a fork
-# (vivo75/brush, branch fix/pipeline-function-stage-deadlock, itself
-# based on branch fix/function-body-extended-test) carrying two real
-# fixes not yet merged upstream:
-#   - a parser fix (brace-less function bodies, e.g. `name() [[ ... ]]`,
-#     used 60 times by bin/eapi.sh), submitted as reubeno/brush#1274;
-#   - a pipeline-execution fix (a shell function used as a non-last
-#     pipeline stage previously ran inline instead of as a background
-#     task, deadlocking once it wrote more than the OS pipe buffer
-#     (~64KiB) to stdout before returning -- found via real
-#     app-arch/xz-utils/sys-fs/fuse hangs after the eclass inherit()
-#     fix below, root-caused with a portage-free repro, and fixed by
-#     mirroring execute_via_builtin_in_owned_shell's own
-#     spawn_blocking pattern; see README.md's own eclass section for
-#     the full writeup).
+# (vivo75/brush, branch fix/pipeline-function-stage-deadlock). See
+# PORTING/BRUSH_FORK.md for the full tracking record. In short:
+#   - brace-less function bodies (`name() [[ ... ]]`, used 60 times by
+#     bin/eapi.sh): MERGED upstream as reubeno/brush#1274 (18851e7,
+#     2026-08-20); the fork carries a now-redundant pre-merge copy as an
+#     ancestor of this pin.
+#   - pipeline function-stage deadlock (a function used as a non-last
+#     pipeline stage ran inline, deadlocking once it wrote > ~64KiB to
+#     stdout before returning -- found via real app-arch/xz-utils/
+#     sys-fs/fuse hangs, fixed in brush-core/src/commands.rs by mirroring
+#     execute_via_builtin_in_owned_shell's spawn_blocking pattern; see
+#     README.md's eclass section): OPEN upstream as reubeno/brush#1276,
+#     no review yet -- this is the one fork-only fix, the reason the pin
+#     exists. When #1276 merges, re-pin to upstream (BRUSH_FORK.md's
+#     "Rebase / bump checklist").
 brush-core = { git = "https://github.com/vivo75/brush", rev = "c78ea42965023fe0c1b2b708939c44228f262f03" }
 brush-builtins = { git = "https://github.com/vivo75/brush", rev = "c78ea42965023fe0c1b2b708939c44228f262f03" }
 # "rt-multi-thread", not just "rt": a single-threaded runtime deadlocks

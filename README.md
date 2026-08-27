@@ -3838,16 +3838,20 @@ via `ebuild <file> install` (`portuale/src/ebuild.rs`, previously a pure
 dry-run stub).
 
 **Bash-execution backend**: an embedded [`brush`](https://github.com/reubeno/brush)
-shell (`brush_core::Shell`, pinned to a fork -- `vivo75/brush`, branch
-`fix/function-body-extended-test` -- carrying a real parser fix for
-bash's brace-less function-definition form, `name() [[ ... ]]`, used 60
-times by `bin/eapi.sh`; submitted upstream as
-[reubeno/brush#1274](https://github.com/reubeno/brush/pull/1274), open,
-unmerged as of this writing). A deliberate, accepted departure from this
-pilot's own near-zero-dependencies discipline elsewhere -- the
-alternative (shelling out to the system's real bash) was rejected
-earlier for tension with the "runs on even the most minimal Linux
-system" hard goal.
+shell (`brush_core::Shell`), pinned by exact commit to the fork
+`vivo75/brush` (branch `fix/pipeline-function-stage-deadlock`). Two real
+fixes: the brace-less function-definition form `name() [[ ... ]]` (used
+60 times by `bin/eapi.sh`) **merged upstream** as
+[reubeno/brush#1274](https://github.com/reubeno/brush/pull/1274)
+(`18851e7`, 2026-08-20); the pipeline function-stage deadlock fix is
+**fork-only**, open upstream as
+[reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276) — the
+one reason the pin isn't just upstream `main`. Full tracking record and
+the re-pin checklist live in **`PORTING/BRUSH_FORK.md`**. A deliberate,
+accepted departure from this pilot's own near-zero-dependencies
+discipline elsewhere -- the alternative (shelling out to the system's
+real bash) was rejected earlier for tension with the "runs on even the
+most minimal Linux system" hard goal.
 
 **What's real, what's Rust**: `portuale/src/ebuild_phases.rs` computes
 the environment `doebuild_environment()` would (`CATEGORY`/`PN`/`PV`/
@@ -4881,8 +4885,12 @@ tiny `pilotcheck.eclass` fixture stays under 64KiB so it never
 triggered this; the multilib family (dozens of functions,
 `toolchain-funcs.eclass` alone is ~1300 lines) easily does.
 
-Fixed upstream in the pinned fork (`brush-core/src/commands.rs`) by
-splitting `execute_via_function` the same way `execute_via_builtin`
+Fixed in the pinned `vivo75/brush` fork (`brush-core/src/commands.rs`),
+and submitted upstream as
+[reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276) (open,
+no review yet -- this is the one fork-only fix keeping the pin off
+upstream `main`; see `PORTING/BRUSH_FORK.md`). The fix splits
+`execute_via_function` the same way `execute_via_builtin`
 already was: an owned-shell path that spawns the function's body as a
 background task (`tokio::task::spawn_blocking` + `rt.block_on`,
 mirroring `execute_via_builtin_in_owned_shell` exactly) so pipeline
