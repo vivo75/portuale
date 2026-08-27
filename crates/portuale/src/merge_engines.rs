@@ -9,6 +9,50 @@ use mrg_director::{MergeKind, MergeUnit};
 use portage_repo::{CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
+/// Rebuild the [`GraphEntry`] a merge function needs from a [`MergeUnit`].
+/// The outcome is always `New { version }`: the merge functions only read
+/// the version out of it, and display-only fields are never consulted
+/// mid-merge. `None` when the unit's `cpv` does not parse.
+fn rebuild_entry(unit: &MergeUnit, source: CandidateSource) -> Option<GraphEntry> {
+    let candidate = portage_dep::parse_candidate(&unit.cpv)?;
+    // The `-rN` revision is split off `version`; the merge reads the full
+    // `package-version[-rN]`.
+    let version = match &candidate.revision {
+        Some(r) => format!("{}-r{r}", candidate.version),
+        None => candidate.version.clone(),
+    };
+    Some(GraphEntry {
+        discovery: 0,
+        category: candidate.category,
+        package: candidate.package,
+        outcome: PretendOutcome::New { version },
+        blockers: Vec::new(),
+        slot: unit.slot.clone(),
+        sub_slot: unit.sub_slot.clone(),
+        repo_name: unit.repo.clone(),
+        oldbest: Vec::new(),
+        use_flags_display: unit.use_flags.clone(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: Vec::new(),
+        source,
+        provenance: Default::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: unit.remote_binary,
+        build_id: unit.build_id.clone(),
+        deps: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
