@@ -737,6 +737,57 @@ pub struct PruneNodepsCp {
     pub other_versions: Vec<String>,
 }
 
+/// Portage `emerge --prune --nodeps` (Portage unmerge, routed *instead of*
+/// `_calc_depclean`): no dependency check -- per matched cp, protect the "best"
+/// version (highest; highest `COUNTER` on a same-slot collision, never hit in
+/// fixtures), select the rest. With `args` the split is over each atom's match
+/// set; without, over every installed cp (Portage `vardb.cp_all()`), skipping
+/// single-version cps.
+pub fn prune_nodeps_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
+    let installed = all_installed_packages(root);
+    let matched: Vec<&InstalledPackage> = if args.is_empty() {
+        installed.iter().collect()
+    } else {
+        installed
+            .iter()
+            .filter(|p| {
+                let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+                args.iter().any(|a| {
+                    portage_dep::parse_atom(a)
+                        .is_some_and(|pa| pa.category == p.category && pa.package == p.package)
+                        && portage_dep::match_from_list(a, &[cs.as_str()])
+                            .is_some_and(|m| !m.is_empty())
+                })
+            })
+            .collect()
+    };
+
+    let mut by_cp: HashMap<(String, String), Vec<String>> = HashMap::new();
+    for p in matched {
+        by_cp
+            .entry((p.category.clone(), p.package.clone()))
+            .or_default()
+            .push(p.version.clone());
+    }
+    let mut out: Vec<PruneNodepsCp> = Vec::new();
+    for ((category, package), mut versions) in by_cp {
+        versions.sort_by(|a, b| vercmp_ordering(a, b));
+        versions.dedup();
+        if versions.len() < 2 {
+            continue;
+        }
+        let best_version = versions.pop().unwrap();
+        out.push(PruneNodepsCp {
+            category,
+            package,
+            best_version,
+            other_versions: versions,
+        });
+    }
+    out.sort_by(|a, b| a.category.cmp(&b.category).then(a.package.cmp(&b.package)));
+    out
+}
+
 /// Portage `strip_slots` (Portage dep) for one atom:
 /// rewrites a "built" slot-operator atom (`cat/pkg:2=`, the concrete slot
 /// Portage records in the vdb) back to `cat/pkg:=`, so `deps_changed`'s
