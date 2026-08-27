@@ -758,13 +758,33 @@ PORTING/
   'Protected' …` footer are reproduced faithfully; `portage-versions`
   (already transitive) becomes a direct `portuale` dep for the real
   `cpv_sort_key` version ordering. **Documented cuts, a clean
-  follow-up:** the "still listed in the following package sets"
-  set-protection warning, the "is part of your system profile" warning
-  (real `cp in syslist`), the `--prune`/`--depclean` variants
-  (best-version pruning / reverse-reachability), a bare `=<vdb-path>`
-  argument, the "currently used Python interpreter" self-skip, and any
-  real removal. New fixtures: `dev-libs/unmergepkg` (installed at 1.0
-  *and* 2.0), `sys-apps/portage-1.0`.
+  follow-up:** the `--prune`/`--depclean` variants (best-version pruning
+  / reverse-reachability), a bare `=<vdb-path>` argument, the "currently
+  used Python interpreter" self-skip, and any real removal. New
+  fixtures: `dev-libs/unmergepkg` (installed at 1.0 *and* 2.0),
+  `sys-apps/portage-1.0`.
+
+  **`-pC`: the two `_unmerge_display` warnings.** Completes
+  `_unmerge_display` for `unmerge_action == "unmerge"`. (1) `!!! 'cp' is
+  part of your system profile. / !!! Unmerging it may be damaging to
+  your system.` (to stderr) when a cp that would be *fully* removed
+  (nothing `protected`/`omitted`) is a `@system` member -- real `if not
+  (protected or omitted) and cp in syslist`, `syslist` built from
+  `config.system_packages`. (2) `Package cat/pkg-ver is going to be
+  unmerged, / but still listed in the following package sets: @foo` (to
+  stdout) when a `selected` package is still in a user-editable set
+  reached via `world_sets` -- new `collect_installed_sets` (real
+  `_unmerge_display`'s own `installed_sets`, a BFS over the `@`-refs
+  keeping each set's *direct* atoms), minus the sets the user is
+  `-C`-targeting (real `setconfig.active`). **Narrowed:** real portage
+  also suppresses (2) when a *higher slot* of the same cp satisfies the
+  set atom -- a refinement the single-slot fixtures never exercise; and
+  a referenced-but-missing set is dropped silently here (real `eerror`s
+  "Unknown set"). New fixtures: `dev-libs/systempkg` (a `*`-prefixed
+  `@system` atom in `profiles/base/packages`, installed);
+  `dev-libs/nestedsetpkg` installed (it's in `@nestedtestset`, which
+  `world_sets` selects). ~4 pinned `@world`/`@system` tests gained an
+  "already installed" line for the two now-installed set members.
 
   **`--with-bdeps y|n`: build-time deps for an already-installed
   package's own `--deep` walk.** Grounded against real

@@ -6301,6 +6301,39 @@ def _resolve_custom_set(config_root, name, seen):
     return atoms
 
 
+def _collect_installed_sets(config_root, root):
+    """Real _unmerge_display's own `installed_sets` -- every custom set
+    directly/indirectly selected via world_sets, paired with its DIRECT
+    atoms only (the "still listed" warning names the set that directly
+    contains the package). BFS over the @-references, cycle-guarded. A
+    referenced-but-missing set is dropped silently (real portage eerrors
+    "Unknown set"). Mirrors pretend.rs's collect_installed_sets."""
+    out = []
+    seen = set()
+    queue = list(_read_world_sets(root))
+    while queue:
+        name = queue.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        path = os.path.join(config_root, "etc", "portage", "sets", name)
+        try:
+            with open(path) as f:
+                text = f.read()
+        except OSError:
+            continue
+        direct = []
+        for line in (raw.strip() for raw in text.splitlines()):
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("@"):
+                queue.append(line[1:])
+            else:
+                direct.append(line)
+        out.append((name, direct))
+    return out
+
+
 def _run_deselect(targets, root):
     """Ports real action_deselect (lib/_emerge/actions.py, lines
     1740-1835) exactly: needs no repo/config resolution at all, only the
@@ -6492,6 +6525,9 @@ def _run_unmerge_pretend(targets, root, config_root, config):
         return 1
 
     expanded = []
+    # Real root_config.setconfig.active -- the @set targets, excluded
+    # from the "still listed in package sets" check below.
+    active_sets = {t[1:] for t in targets if t.startswith("@")}
     for target in targets:
         if target == "@world":
             try:
@@ -6587,6 +6623,49 @@ def _run_unmerge_pretend(targets, root, config_root, config):
         print("\n>>> No packages selected for removal by unmerge")
         return 1
 
+    # Real syslist = root_config.sets["system"].getAtoms() -> the
+    # @system cps, for the "is part of your system profile" warning.
+    syslist = set()
+    for a in config["system_packages"]:
+        parsed = _parse_atom(a)
+        if parsed is not None:
+            syslist.add(tuple(parsed.cp.split("/", 1)))
+
+    # Real _unmerge_display's "still listed in the following package
+    # sets" warning: a selected package a user-editable set (reached via
+    # world_sets) still lists would be re-pulled on the next @world
+    # update. Real portage additionally suppresses the flag when a higher
+    # slot of the same cp satisfies the set atom -- a refinement this
+    # pilot's single-slot fixtures never exercise (cp-and-atom-match only
+    # here). Mirrors pretend.rs.
+    try:
+        installed_sets = [
+            (name, atoms)
+            for (name, atoms) in _collect_installed_sets(config_root, root)
+            if name not in active_sets
+        ]
+    except ResolutionError as e:
+        print(f"emerge: {e}", file=sys.stderr)
+        return 1
+    for (cat, pkg, version) in sorted(all_selected):
+        candidate = f"{cat}/{pkg}-{version}"
+        parents = []
+        for set_name, atoms in installed_sets:
+            for atom_str in atoms:
+                parsed = _parse_atom(atom_str)
+                if (
+                    parsed is not None
+                    and tuple(parsed.cp.split("/", 1)) == (cat, pkg)
+                    and match_from_list(atom_str, [candidate])
+                ):
+                    parents.append(set_name)
+                    break
+        if parents:
+            parents.sort()
+            print(f"Package {cat}/{pkg}-{version} is going to be unmerged,")
+            print("but still listed in the following package sets:")
+            print(f"    {', '.join(parents)}\n")
+
     import functools
 
     vkey = functools.cmp_to_key(lambda a, b: (vercmp(a, b) or (a > b) - (a < b)))
@@ -6605,6 +6684,14 @@ def _run_unmerge_pretend(targets, root, config_root, config):
             ),
             key=vkey,
         )
+        # Real _unmerge_display: `if not (protected or omitted) and cp in
+        # syslist` -- a cp fully removed and a @system member. To stderr.
+        if not protected and not omitted and cp in syslist:
+            print(
+                f"\n\n!!! '{cp[0]}/{cp[1]}' is part of your system profile.",
+                file=sys.stderr,
+            )
+            print("!!! Unmerging it may be damaging to your system.\n", file=sys.stderr)
         print(f"\n {cp[0]}/{cp[1]}")
         _print_unmerge_row("selected", selected)
         _print_unmerge_row("protected", protected)

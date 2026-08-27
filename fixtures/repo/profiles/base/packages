@@ -4,3 +4,6 @@
 # that must never contribute an atom of its own.
 *dev-libs/newpkg
 dev-libs/hintonly
+# dev-libs/systempkg: an installed @system member, exercising -pC's
+# "is part of your system profile" warning (README's unmerge slice).
+*dev-libs/systempkg

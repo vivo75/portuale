@@ -61,13 +61,18 @@ Ranked roughly by how self-contained each is.
 - **`emerge --pretend --unmerge` / `-pC`** **shipped 2026-08-27**
   (`run_unmerge_pretend`, real `_emerge/unmerge.py::_unmerge_display` for
   `unmerge_action == "unmerge"`): atom → vdb match → `selected`, other
-  installed versions → `omitted`, `sys-apps/portage` self-`protected`.
-  **Still open:** the set-protection / system-profile warnings (a
-  documented follow-up); **`--prune`/`-P`** (best-version-per-slot
-  pruning); **`--depclean`/`-c`** (the reverse-reachability closure from
-  `@world`+`@system` over installed packages — the big one); real
+  installed versions → `omitted`, `sys-apps/portage` self-`protected`,
+  the "is part of your system profile" + "still listed in the following
+  package sets" warnings (`collect_installed_sets`) -- `_unmerge_display`
+  is complete for `unmerge_action == "unmerge"`.
+  **Still open:** **`--prune`/`-P`** (real modern `--prune` without
+  `--nodeps` routes through `_calc_depclean` — see below); **`--depclean`
+  /`-c`** (the reverse-reachability closure from `@world`+`@system` over
+  installed packages — the big one, several slices); real
   (non-`--pretend`) removal via `emerge` (this pilot keeps `ebuild
-  <file> unmerge` as its one real removal path).
+  <file> unmerge` as its one real removal path). Minor `-pC` narrowings:
+  the higher-slot refinement on the set-protection warning, a bare
+  `=<vdb-path>` argument, the Python-interpreter self-skip.
 
 ### A. Small, self-contained dry-run/config slices
 

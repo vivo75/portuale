@@ -976,9 +976,9 @@ CASES = [
         1,
     ),
     (
-        "-pC @system: none of the @system cps are installed",
+        "-pC @system: selects the installed @system member, with the profile warning",
         ["--pretend", "-C", "@system"],
-        1,
+        0,
     ),
     (
         "-pC with no atoms",
@@ -989,6 +989,26 @@ CASES = [
         "-C without --pretend is refused",
         ["--unmerge", "dev-libs/unmergepkg"],
         2,
+    ),
+    (
+        "-pC: the 'is part of your system profile' warning",
+        ["--pretend", "-C", "dev-libs/systempkg"],
+        0,
+    ),
+    (
+        "-pC: the 'still listed in package sets' warning",
+        ["--pretend", "-C", "dev-libs/nestedsetpkg"],
+        0,
+    ),
+    (
+        "-pC @nestedtestset: the set is active, so no set-protection warning",
+        ["--pretend", "-C", "@nestedtestset"],
+        0,
+    ),
+    (
+        "-pC: system-profile + set warnings + a plain package in one run",
+        ["--pretend", "-C", "dev-libs/systempkg", "dev-libs/nestedsetpkg", "dev-libs/unmergepkg"],
+        0,
     ),
 ]
 
@@ -4425,7 +4445,9 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
     separate code path. PORTING/fixtures/var/lib/portage/world_sets
     lists "@nestedtestset" (PORTING/fixtures/etc/portage/sets/
     nestedtestset), which itself contributes dev-libs/nestedsetpkg
-    directly and nests a further "@innernestedset" reference
+    directly (installed since the `-pC` set-protection slice, so it
+    shows as "already installed; nothing to do" here rather than
+    "[ebuild N]") and nests a further "@innernestedset" reference
     (contributing dev-libs/innernestedsetpkg, and -- proving the cycle
     guard -- referencing "@nestedtestset" right back without looping
     forever or erroring). --update is added purely so upgradepkg's own
@@ -4437,7 +4459,7 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
     assert result.stdout.splitlines() == [
         "[ebuild  N] dev-libs/newpkg-1.0",
         "[ebuild  N] dev-libs/withdeps-1.0",
-        "[ebuild  N] dev-libs/nestedsetpkg-1.0",
+        "dev-libs/nestedsetpkg-1.0 is already installed; nothing to do",
         "[ebuild  N] dev-libs/innernestedsetpkg-1.0",
         "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
     ]
@@ -4458,7 +4480,7 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
         "dev-libs/samepkg-1.0 is already installed; nothing to do",
         "[ebuild  N] dev-libs/newpkg-1.0",
         "[ebuild  N] dev-libs/withdeps-1.0",
-        "[ebuild  N] dev-libs/nestedsetpkg-1.0",
+        "dev-libs/nestedsetpkg-1.0 is already installed; nothing to do",
         "[ebuild  N] dev-libs/innernestedsetpkg-1.0",
         "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
     ]
@@ -4624,6 +4646,41 @@ def test_unmerge_pretend_requires_pretend(emerge_binary, fixture_env):
     assert result.returncode == 2
     assert "requires --pretend" in result.stderr
     assert result.stdout == ""
+
+
+def test_unmerge_pretend_system_profile_warning(emerge_binary, fixture_env):
+    """Real _unmerge_display: `if not (protected or omitted) and cp in
+    syslist` -- a cp that would be fully removed and is a @system member
+    (dev-libs/systempkg, a *-prefixed atom in profiles/base/packages).
+    The two `!!!` lines go to stderr."""
+    result = _run([str(emerge_binary)], ["--pretend", "-C", "dev-libs/systempkg"], fixture_env)
+    assert result.returncode == 0
+    assert "'dev-libs/systempkg' is part of your system profile." in result.stderr
+    assert "Unmerging it may be damaging to your system." in result.stderr
+    assert result.stdout.splitlines()[2:6] == [
+        " dev-libs/systempkg",
+        "    selected: 1.0 ",
+        "   protected: none ",
+        "     omitted: none ",
+    ]
+
+
+def test_unmerge_pretend_still_listed_in_package_sets_warning(emerge_binary, fixture_env):
+    """Real _unmerge_display: a `selected` package a user-editable set
+    reached via world_sets still lists. dev-libs/nestedsetpkg is in
+    etc/portage/sets/nestedtestset, which var/lib/portage/world_sets
+    directly selects. The warning (stdout) names that set."""
+    result = _run([str(emerge_binary)], ["--pretend", "-C", "dev-libs/nestedsetpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines()[:4] == [
+        ">>> These are the packages that would be unmerged:",
+        "Package dev-libs/nestedsetpkg-1.0 is going to be unmerged,",
+        "but still listed in the following package sets:",
+        "    nestedtestset",
+    ]
+    # Targeting the set itself makes it "active" -> no warning for its members.
+    active = _run([str(emerge_binary)], ["--pretend", "-C", "@nestedtestset"], fixture_env)
+    assert "still listed in the following package sets" not in active.stdout
 
 
 def test_deselect_matches_a_plain_world_atom(emerge_binary, fixture_env, tmp_path):
@@ -4981,6 +5038,9 @@ def test_system_expands_to_the_fixture_profile_chains_own_packages_files(
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
         "[ebuild  N] dev-libs/newpkg-1.0",
+        # dev-libs/systempkg is a third *-prefixed @system atom (base/
+        # packages), installed since the -pC system-profile slice.
+        "dev-libs/systempkg-1.0 is already installed; nothing to do",
         "[ebuild  N] dev-libs/withdeps-1.0",
         "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
     ]
@@ -5000,6 +5060,7 @@ def test_system_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     assert result.stdout.splitlines() == [
         "dev-libs/samepkg-1.0 is already installed; nothing to do",
         "[ebuild  N] dev-libs/newpkg-1.0",
+        "dev-libs/systempkg-1.0 is already installed; nothing to do",
         "[ebuild  N] dev-libs/withdeps-1.0",
         "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
     ]

@@ -1567,6 +1567,47 @@ fn resolve_custom_set(
     Ok(atoms)
 }
 
+/// Real `_unmerge_display`'s own `installed_sets` -- every custom set
+/// directly or indirectly selected via `world_sets` (real
+/// `WorldSelectedSetsSet`), paired with its *direct* atoms only (not
+/// recursively flattened, unlike `resolve_custom_set` -- the "still
+/// listed in the following package sets" warning names the set that
+/// *directly* contains the package). BFS over the `@`-references, cycle-
+/// guarded. A referenced-but-missing set is dropped silently here (real
+/// portage `eerror`s "Unknown set" and moves on) -- a documented
+/// narrowing.
+fn collect_installed_sets(
+    config_root: &Path,
+    root: &Path,
+) -> Result<Vec<(String, Vec<String>)>, String> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut queue: Vec<String> = read_world_sets(root)?;
+    while let Some(name) = queue.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let path = config_root.join("etc/portage/sets").join(&name);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut direct: Vec<String> = Vec::new();
+        for line in text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        {
+            if let Some(nested) = line.strip_prefix('@') {
+                queue.push(nested.to_string());
+            } else {
+                direct.push(line.to_string());
+            }
+        }
+        out.push((name, direct));
+    }
+    Ok(out)
+}
+
 /// `emerge --deselect <atom-or-bare-name> [...]`: real `action_deselect`
 /// (`lib/_emerge/actions.py`), ported for `--pretend` mode only -- this
 /// pilot's whole CLI requires `--pretend` (see the "only --pretend is
@@ -1797,7 +1838,14 @@ fn run_unmerge_pretend(
     // `@system` are the two built-in sets; anything else `@name` is a
     // custom set file (recursively expanded, cycle-guarded).
     let mut expanded: Vec<String> = Vec::new();
+    // Real `root_config.setconfig.active` -- the sets the user passed as
+    // `-C` targets. Excluded from the "still listed in package sets"
+    // check below (their members are being removed from the set anyway).
+    let mut active_sets: HashSet<String> = HashSet::new();
     for target in targets {
+        if let Some(name) = target.strip_prefix('@') {
+            active_sets.insert(name.to_string());
+        }
         match *target {
             "@world" => match read_world_atoms(root) {
                 Ok(atoms) => {
@@ -1950,6 +1998,57 @@ fn run_unmerge_pretend(
         return ExitCode::from(1);
     }
 
+    // Real `syslist = root_config.sets["system"].getAtoms()` -> the
+    // `@system` cps, for the "is part of your system profile" warning.
+    let syslist: HashSet<(String, String)> = config
+        .system_packages
+        .iter()
+        .filter_map(|a| parse_atom(a))
+        .map(|a| (a.category, a.package))
+        .collect();
+
+    // Real `_unmerge_display`'s "still listed in the following package
+    // sets" warning: a `selected` package that a user-editable set
+    // (reached via `world_sets`) still lists would be re-pulled on the
+    // next `@world` update, so it's flagged. Real portage additionally
+    // suppresses the flag when a *higher slot* of the same cp is
+    // installed and satisfies the set atom -- a refinement this pilot's
+    // single-slot fixtures never exercise, left as a documented
+    // narrowing (the check below is cp-and-atom-match only).
+    let installed_sets: Vec<(String, Vec<String>)> =
+        match collect_installed_sets(config_root, root) {
+            Ok(sets) => sets
+                .into_iter()
+                .filter(|(name, _)| !active_sets.contains(name))
+                .collect(),
+            Err(e) => {
+                eprintln!("emerge: {e}");
+                return ExitCode::from(1);
+            }
+        };
+    let mut selected_sorted: Vec<&(String, String, String)> = all_selected.iter().collect();
+    selected_sorted.sort();
+    for (cat, pkg, version) in selected_sorted {
+        let candidate = format!("{cat}/{pkg}-{version}");
+        let mut parents: Vec<&str> = Vec::new();
+        for (set_name, atoms) in &installed_sets {
+            let listed = atoms.iter().any(|atom_str| {
+                parse_atom(atom_str).is_some_and(|a| a.category == *cat && a.package == *pkg)
+                    && match_from_list(atom_str, &[candidate.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+            });
+            if listed {
+                parents.push(set_name);
+            }
+        }
+        if !parents.is_empty() {
+            parents.sort_unstable();
+            println!("Package {cat}/{pkg}-{version} is going to be unmerged,");
+            println!("but still listed in the following package sets:");
+            println!("    {}\n", parents.join(", "));
+        }
+    }
+
     let vercmp_key = |a: &String, b: &String| {
         portage_versions::vercmp(a, b)
             .map(|c| c.cmp(&0))
@@ -1972,6 +2071,15 @@ fn run_unmerge_pretend(
             .filter(|v| !selected.contains(v) && !protected.contains(v))
             .collect();
         omitted.sort_by(vercmp_key);
+
+        // Real `_unmerge_display`: `if not (protected or omitted) and cp
+        // in syslist` -- a cp that would be *fully* removed and is a
+        // `@system` member. To stderr (real `writemsg_level(...,
+        // level=logging.WARNING)`).
+        if protected.is_empty() && omitted.is_empty() && syslist.contains(cp) {
+            eprintln!("\n\n!!! '{}/{}' is part of your system profile.", cp.0, cp.1);
+            eprintln!("!!! Unmerging it may be damaging to your system.\n");
+        }
 
         println!("\n {}/{}", cp.0, cp.1);
         print_unmerge_row("selected", selected);
