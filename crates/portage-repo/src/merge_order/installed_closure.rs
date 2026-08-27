@@ -33,6 +33,23 @@ pub(crate) fn edge_satisfied_with(
     true
 }
 
+/// Every installed package's `cat/pkg-version:slot/sub_slot` candidate string,
+/// grouped by `cat/pkg`.
+pub(crate) fn installed_candidates_by_cp(root: &Path) -> HashMap<(String, String), Vec<String>> {
+    let mut by_cp: HashMap<(String, String), Vec<String>> = HashMap::new();
+    for p in all_installed_packages(root) {
+        let (slot, sub_slot) = read_vdb_slot(root, &p.category, &p.package, &p.version);
+        by_cp
+            .entry((p.category.clone(), p.package.clone()))
+            .or_default()
+            .push(format!(
+                "{}/{}-{}:{slot}/{sub_slot}",
+                p.category, p.package, p.version
+            ));
+    }
+    by_cp
+}
+
 /// A synthetic `AlreadyInstalled` node for an installed package the resolve never
 /// made an entry for. Filtered back out of the scheduled list before returning.
 pub(crate) fn synthetic_installed_entry(
