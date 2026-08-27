@@ -1575,7 +1575,7 @@ def test_global_use_force_and_use_mask_win_over_a_contradicting_package_use_entr
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N] dev-libs/globalprecedencepkg-1.0  USE="globalforceflag -globalmaskflag"\n'
+        '[ebuild  N] dev-libs/globalprecedencepkg-1.0  USE="(globalforceflag) (-globalmaskflag)"\n'
     )
 
 
@@ -2158,7 +2158,7 @@ def test_use_expand_star_wildcard_expands_against_the_packages_own_iuse(
     assert result.stdout == result_py.stdout
     assert result.stderr == result_py.stderr
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/wildexpandpkg-1.0  LINGUAS="de -en"',
+        '[ebuild  N] dev-libs/wildexpandpkg-1.0  LINGUAS="de (-en)"',
         "[ebuild  N] dev-libs/wildexpanddep-1.0",
     ]
     assert "wildexpandmasked" not in result.stdout
@@ -2295,7 +2295,7 @@ def test_use_stable_force_and_package_use_stable_mask_apply_when_stable(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/stableusepkg-1.0  USE="-maskflag stableforceflag"',
+        '[ebuild  N] dev-libs/stableusepkg-1.0  USE="(-maskflag) (stableforceflag)"',
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
 
@@ -2749,13 +2749,17 @@ def test_package_use_mask_and_force_with_atom_specificity_ordering(emerge_binary
     overridden by a more-specific one from a LATER level. Final USE:
     forceflag on (forced), maskflag off (masked, nothing un-masks it),
     specflag off (un-masked but not enabled by anything else, so stays
-    at its off-by-default)."""
+    at its off-by-default). In `-pv`, real `_create_use_string` wraps a
+    force-enabled / mask-disabled flag in `( … )` (`self.forced_flags =
+    pkg.use.force | pkg.use.mask`): `(forceflag)` and `(-maskflag)`, but
+    `-specflag` plain since its mask was cancelled by the more-specific
+    `-specflag` entry."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/pkgusemaskforcepkg"], fixture_env
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N] dev-libs/pkgusemaskforcepkg-1.0  USE="forceflag -maskflag -specflag"\n'
+        '[ebuild  N] dev-libs/pkgusemaskforcepkg-1.0  USE="(forceflag) (-maskflag) -specflag"\n'
     )
 
 

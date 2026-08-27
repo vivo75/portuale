@@ -1313,11 +1313,10 @@ PORTING/
   shows only the plain enabled/disabled set, which is a real, useful
   subset rather than an invented one, matching the "documented,
   simplified subset" spirit of every other output-formatting decision in
-  this pilot. (The `USE_EXPAND` grouping and the `*`/`%` diff markers
-  were both closed later -- see "`emerge --pretend -v`: `USE_EXPAND`
-  grouping" and "`emerge --pretend -v`: installed-vs-new USE markers"
-  below; the ANSI colorization and the `( … )` forced/masked wrap are
-  still cut.)
+  this pilot. (The `USE_EXPAND` grouping, the `*`/`%` diff markers, and
+  the `( … )` forced/masked wrap were all closed later -- see the
+  "`emerge --pretend -v`: …" slices below; only the ANSI colorization
+  and the `--all-flags` "removed from IUSE" line are still cut.)
 
   **BDEPEND/PDEPEND/IDEPEND in recursion**: dependency recursion now
   concatenates and flattens all five real dependency-string keys --
@@ -2719,15 +2718,33 @@ PORTING/
   parameter (the call site fills it from `read_vdb_flag_set` for the
   installed version, `None` for a `New`/`AlreadyInstalled` entry -> every
   flag shown plain, unchanged). Named as this slice's boundary when it
-  was scoped, still cut: ANSI color, the `( … )` forced/masked wrap (no
-  per-candidate `pkg.use.force`/`.mask` here) and its knock-on to the
-  `%` suffix, and the `(-flag%)` "removed from IUSE" line (real portage
-  only shows it under `--all-flags` or when that removed flag itself
-  triggered the reinstall). New `dev-libs/upgradeusepkg` (installed 1.0
-  `IUSE="+keep change drop"` / `USE="keep change"`, 2.0 ebuild
-  `IUSE="+keep -change +added"`) prints `USE="added%* -change*"`;
-  `dev-libs/reinstallpkg`'s own `-v` line goes from `USE="foo"` to
-  `USE="foo*"`.
+  was scoped, still cut then: ANSI color, the `( … )` forced/masked wrap
+  (closed by the next slice), and the `(-flag%)` "removed from IUSE"
+  line. New `dev-libs/upgradeusepkg` (installed 1.0 `IUSE="+keep change
+  drop"` / `USE="keep change"`, 2.0 ebuild `IUSE="+keep -change +added"`)
+  prints `USE="added%* -change*"`; `dev-libs/reinstallpkg`'s own `-v`
+  line goes from `USE="foo"` to `USE="foo*"`.
+
+  **`emerge --pretend -v`: the `( … )` forced/masked wrap.** Real
+  `_display_use` builds `self.forced_flags = pkg.use.force |
+  pkg.use.mask` and `_create_use_string` wraps any such flag's rendered
+  token in `( … )` -- it's not under the user's control. New
+  `portage_repo::forced_or_masked_flags` computes that set for a
+  candidate from the exact same `use.force`/`use.mask` +
+  `package.use.force`/`.mask` (+ stable variants when stable) layering
+  `effective_use_flags` already applies (reusing
+  `specificity_ordered_flags`, so a more-specific `-flag` cancels a
+  less-specific force/mask), intersected with the candidate's IUSE.
+  `build_use_expand_display` grew a `forced: &HashSet<String>` parameter;
+  besides the `( )` wrap it also suppresses the trailing `%` on a
+  `-flag%` (real: `if flag not in iuse_forced: flag_str += "%"` -- a
+  masked brand-new IUSE flag renders `(-flag)`, not `(-flag%)`). The
+  existing `dev-libs/pkgusemaskforcepkg` fixture (`forceflag`
+  force-enabled, `maskflag` masked, `specflag` masked-then-unmasked by a
+  more-specific atom) now prints `USE="(forceflag) (-maskflag)
+  -specflag"` -- `specflag` stays unwrapped, proving the wrap tracks the
+  *resolved* force/mask set, not the raw entries. Still cut: ANSI color,
+  and the `--all-flags` "removed from IUSE" line.
 
   **`use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
   (stable-vs-`~arch` distinction)**. Closes the last named cut in the

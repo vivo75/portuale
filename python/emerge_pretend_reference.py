@@ -1730,6 +1730,40 @@ def effective_use_flags(
     return use_flags
 
 
+def _forced_or_masked_flags(iuse, keywords, candidate_str, category, package, config):
+    """Real _display_use's self.forced_flags = pkg.use.force | pkg.use.mask
+    (fed to map_to_use_expand(..., forced_flags=True)), restricted to
+    `iuse`'s own declared flags: the IUSE flags `emerge -pv` wraps in
+    ( ... ) because they're force-enabled or mask-disabled. Built from
+    the exact same use.force/use.mask + package.use.force/.mask (+ the
+    stable variants when stable) layering effective_use_flags applies.
+    Mirrors portage-repo/src/lib.rs's forced_or_masked_flags exactly."""
+    iuse_names = {tok.lstrip("+-") for tok in iuse.split()}
+    result = set(config["use_force"]) | set(config["use_mask"])
+    result |= _specificity_ordered_flags(
+        config["package_use_force"], candidate_str, category, package
+    )
+    result |= _specificity_ordered_flags(
+        config["package_use_mask"], candidate_str, category, package
+    )
+    if _is_stable(
+        keywords,
+        candidate_str,
+        category,
+        package,
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+    ):
+        result |= set(config["use_stable_force"]) | set(config["use_stable_mask"])
+        result |= _specificity_ordered_flags(
+            config["package_use_stable_force"], candidate_str, category, package
+        )
+        result |= _specificity_ordered_flags(
+            config["package_use_stable_mask"], candidate_str, category, package
+        )
+    return result & iuse_names
+
+
 def _atom_specificity(entry):
     """Simplified port of real best_match_to_list's own specificity
     ranking table (used by ordered_by_atom_specificity). Mirrors
@@ -1920,7 +1954,9 @@ def _libc_provider_cps(root):
     return result
 
 
-def _build_use_expand_display(use_display, use_expand, use_expand_hidden, installed=None):
+def _build_use_expand_display(
+    use_display, use_expand, use_expand_hidden, installed=None, forced=None
+):
     """Real output.py:_display_use + map_to_use_expand +
     output_helpers.py:_create_use_string, for `emerge --pretend -v`'s USE
     line. Splits `use_display` (already-bare-name-sorted (flag, enabled)
@@ -1939,33 +1975,39 @@ def _build_use_expand_display(use_display, use_expand, use_expand_hidden, instal
     exactly as real _create_use_string does with all_flags/reinst_flags
     both off: enabled+new-IUSE -> flag%*, enabled+newly-on -> flag*,
     enabled+unchanged -> omitted; disabled+new-IUSE -> -flag%,
-    disabled+was-on -> -flag*, disabled+unchanged -> omitted. Mirrors
-    portage-repo/src/lib.rs's build_use_expand_display exactly."""
+    disabled+was-on -> -flag*, disabled+unchanged -> omitted.
+
+    `forced` (full flag names -- real self.forced_flags = pkg.use.force |
+    pkg.use.mask) is any flag the user can't control: its rendered token
+    is wrapped in ( ... ), and the trailing "%" on a -flag% is skipped
+    (a masked flag brand-new to IUSE renders "(-flag)", not "(-flag%)").
+    Mirrors portage-repo/src/lib.rs's build_use_expand_display exactly."""
     expand_vars = sorted(use_expand)
     hidden = {v.upper() for v in use_expand_hidden}
     old_use, old_iuse = installed if installed is not None else (None, None)
+    forced = forced or set()
 
     def render_flag(bare, full, enabled):
-        sign = "" if enabled else "-"
+        is_forced = full in forced
         if installed is None:
-            return f"{sign}{bare}"
-        in_old_iuse = full in old_iuse
-        in_old_use = full in old_use
-        if enabled:
-            if not in_old_iuse:
-                marker = "%*"
-            elif not in_old_use:
-                marker = "*"
-            else:
-                return None
+            core = f"{'' if enabled else '-'}{bare}"
         else:
-            if not in_old_iuse:
-                marker = "%"
+            in_old_iuse = full in old_iuse
+            in_old_use = full in old_use
+            if enabled:
+                if not in_old_iuse:
+                    core = f"{bare}%*"
+                elif not in_old_use:
+                    core = f"{bare}*"
+                else:
+                    return None
+            elif not in_old_iuse:
+                core = f"-{bare}" if is_forced else f"-{bare}%"
             elif in_old_use:
-                marker = "*"
+                core = f"-{bare}*"
             else:
                 return None
-        return f"{sign}{bare}{marker}"
+        return f"({core})" if is_forced else core
 
     # Entries keep the FULL flag name; the prefix is stripped at render.
     groups = [("", [])] + [(v.upper(), []) for v in expand_vars]
@@ -7131,21 +7173,62 @@ def run(args):
             return (old_use, old_iuse)
         return None
 
-    def use_suffix(use_display, installed=None):
+    def _forced_flags_for_entry(category, package, outcome):
+        # Real _display_use's self.forced_flags = pkg.use.force |
+        # pkg.use.mask, for the ( ... ) wrap -- re-resolves the displayed
+        # candidate (portage-repo computes this inline where the
+        # candidate is already resolved; this render loop is separate, so
+        # it re-derives from list_candidates). Mirrors pretend.rs.
+        tag = outcome[0]
+        if tag not in ("new", "upgrade", "downgrade", "reinstall"):
+            return set()
+        version = outcome[2] if tag in ("upgrade", "downgrade") else outcome[1]
+        cands = [
+            c
+            for c in list_candidates(all_repos, category, package)
+            if c["version"] == version
+        ]
+        if not cands:
+            return set()
+        resolved = max(cands, key=lambda c: c["repo_priority"])
+        try:
+            metadata = read_md5_cache(
+                resolved["repo_location"], category, f"{package}-{version}"
+            )
+        except OSError:
+            return set()
+        candidate_str = (
+            f"{category}/{package}-{version}:{resolved['slot']}/"
+            f"{resolved['sub_slot']}::{resolved['repo_name']}"
+        )
+        return _forced_or_masked_flags(
+            metadata.get("IUSE", ""),
+            resolved["keywords"],
+            candidate_str,
+            category,
+            package,
+            config,
+        )
+
+    def use_suffix(use_display, installed=None, forced=None):
         # "  USE=\"a -b\" VIDEO_CARDS=\"-amdgpu nvidia\"", matching real
         # --pretend -v's own line format. Real output.py:_display_use
         # groups the flags by USE_EXPAND (plain USE group, then one
         # VAR="..." per non-hidden USE_EXPAND var, empty groups omitted),
-        # and for an entry that replaces an installed one appends */%
-        # markers vs that installed version's USE/IUSE. Still not shown:
-        # real portage's ANSI colorization, the ( ) forced/masked wrap,
-        # and the removed-from-IUSE line (documented cuts). Mirrors
-        # portage-repo/src/lib.rs's build_use_expand_display + pretend.rs
-        # use_suffix.
+        # for an entry that replaces an installed one appends */% markers
+        # vs that installed version's USE/IUSE, and wraps a
+        # force-enabled/mask-disabled flag in ( ). Still not shown: real
+        # portage's ANSI colorization and the removed-from-IUSE line
+        # (documented cuts). Mirrors portage-repo/src/lib.rs's
+        # build_use_expand_display + pretend.rs use_suffix.
         if not verbose or not use_display:
             return ""
         groups = _build_use_expand_display(
-            use_display, config["use_expand"], config["use_expand_hidden"], installed
+            use_display,
+            config["use_expand"],
+            config["use_expand_hidden"],
+            installed,
+            forced,
         )
         if not groups:
             return ""
@@ -7221,6 +7304,7 @@ def run(args):
         # matching both real portage's own ordering and pretend.rs.
         root = root_suffix(targets_running_root)
         installed = _installed_use_state(category, package, outcome)
+        forced = _forced_flags_for_entry(category, package, outcome)
         if tag == "new":
             if not onlydeps_suppressed:
                 if columns:
@@ -7229,11 +7313,11 @@ def run(args):
                             bracket, "N", indent, category, package, outcome[1], "", columnwidth
                         )
                         + root
-                        + use_suffix(use_display, installed)
+                        + use_suffix(use_display, installed, forced)
                     )
                 else:
                     print(
-                        f"[{bracket}  N] {indent}{category}/{package}-{outcome[1]}{root}{use_suffix(use_display, installed)}"
+                        f"[{bracket}  N] {indent}{category}/{package}-{outcome[1]}{root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
@@ -7251,12 +7335,12 @@ def run(args):
                             columnwidth,
                         )
                         + root
-                        + use_suffix(use_display, installed)
+                        + use_suffix(use_display, installed, forced)
                     )
                 else:
                     print(
                         f"[{bracket}  U] {indent}{category}/{package}-{outcome[2]} "
-                        f"(upgrade from {outcome[1]}){root}{use_suffix(use_display, installed)}"
+                        f"(upgrade from {outcome[1]}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "downgrade":
@@ -7274,12 +7358,12 @@ def run(args):
                             columnwidth,
                         )
                         + root
-                        + use_suffix(use_display, installed)
+                        + use_suffix(use_display, installed, forced)
                     )
                 else:
                     print(
                         f"[{bracket}  D] {indent}{category}/{package}-{outcome[2]} "
-                        f"(downgrade from {outcome[1]}){root}{use_suffix(use_display, installed)}"
+                        f"(downgrade from {outcome[1]}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "reinstall":
@@ -7294,7 +7378,7 @@ def run(args):
                         bracket, "r", indent, category, package, outcome[1], "", columnwidth
                     )
                     + root
-                    + use_suffix(use_display, installed)
+                    + use_suffix(use_display, installed, forced)
                 )
             elif not onlydeps_suppressed:
                 reason = _reinstall_reason(
@@ -7307,12 +7391,12 @@ def run(args):
                 if reason is None:
                     print(
                         f"[{bracket}  r] {indent}{category}/{package}-{outcome[1]}"
-                        f"{root}{use_suffix(use_display, installed)}"
+                        f"{root}{use_suffix(use_display, installed, forced)}"
                     )
                 else:
                     print(
                         f"[{bracket}  r] {indent}{category}/{package}-{outcome[1]} "
-                        f"(reinstall for {reason}){root}{use_suffix(use_display, installed)}"
+                        f"(reinstall for {reason}){root}{use_suffix(use_display, installed, forced)}"
                     )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "already_installed":

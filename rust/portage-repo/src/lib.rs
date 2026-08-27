@@ -1088,6 +1088,74 @@ fn specificity_ordered_flags(
     seed
 }
 
+/// Real `_display_use`'s own `self.forced_flags = pkg.use.force |
+/// pkg.use.mask` (fed to `map_to_use_expand(..., forced_flags=True)`),
+/// restricted to `iuse`'s own declared flags: the set of this candidate's
+/// IUSE flags that `emerge --pretend -v` wraps in `( … )` because they're
+/// force-enabled or mask-disabled and so not actually under the user's
+/// control. Built from the exact same `use.force`/`use.mask` +
+/// `package.use.force`/`.mask` (+ the stable variants when the candidate
+/// is stable) layering `effective_use_flags` already applies -- reusing
+/// `specificity_ordered_flags` so a more-specific `-flag` cancels a
+/// less-specific force/mask identically.
+fn forced_or_masked_flags(
+    iuse: &str,
+    keywords: &[String],
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> HashSet<String> {
+    let iuse_names: HashSet<String> = iuse
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let mut result: HashSet<String> = HashSet::new();
+    result.extend(config.use_force.iter().cloned());
+    result.extend(config.use_mask.iter().cloned());
+    result.extend(specificity_ordered_flags(
+        &config.package_use_force,
+        candidate_str,
+        category,
+        package,
+        HashSet::new(),
+    ));
+    result.extend(specificity_ordered_flags(
+        &config.package_use_mask,
+        candidate_str,
+        category,
+        package,
+        HashSet::new(),
+    ));
+    if is_stable(
+        keywords,
+        candidate_str,
+        category,
+        package,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
+    ) {
+        result.extend(config.use_stable_force.iter().cloned());
+        result.extend(config.use_stable_mask.iter().cloned());
+        result.extend(specificity_ordered_flags(
+            &config.package_use_stable_force,
+            candidate_str,
+            category,
+            package,
+            HashSet::new(),
+        ));
+        result.extend(specificity_ordered_flags(
+            &config.package_use_stable_mask,
+            candidate_str,
+            category,
+            package,
+            HashSet::new(),
+        ));
+    }
+    result.retain(|f| iuse_names.contains(f));
+    result
+}
+
 /// Simplified port of real `best_match_to_list`'s own specificity
 /// ranking table: versioned/slotted bare atoms and this pilot's own
 /// bounded wildcard atoms only, matching `portage-dep`'s v1 grammar
@@ -2748,11 +2816,16 @@ struct InstalledUseState {
 /// was in old USE renders `-flag*`; an unchanged flag (either polarity)
 /// is omitted entirely.
 ///
+/// `forced` (full flag names -- real `_display_use`'s `self.forced_flags`
+/// = `pkg.use.force | pkg.use.mask`, see `forced_or_masked_flags`) is any
+/// flag the user can't actually control: real `_create_use_string` wraps
+/// its rendered token in `( … )`, and skips the trailing `%` on a
+/// `-flag%` (a masked flag brand-new to IUSE renders `(-flag)`, not
+/// `(-flag%)`).
+///
 /// Deliberately NOT ported (separate cuts): real ANSI colorization; the
-/// `( … )` wrap around forced/masked flags (and its effect on the `%`
-/// suffix -- this pilot has no per-candidate `pkg.use.force`/`.mask`);
-/// the `(-flag%)` "removed from IUSE" line (real portage only shows it
-/// under `--all-flags` or when that flag itself triggered the reinstall,
+/// `(-flag%)` "removed from IUSE" line (real portage only shows it under
+/// `--all-flags` or when that flag itself triggered the reinstall,
 /// neither of which this pilot models).
 ///
 /// Returns `[(VAR_NAME, "rendered")]` with `USE` first, then the
@@ -2765,6 +2838,7 @@ fn build_use_expand_display(
     use_flags_display: &[(String, bool)],
     config: &portage_profile::Config,
     installed: Option<&InstalledUseState>,
+    forced: &HashSet<String>,
 ) -> Vec<(String, String)> {
     let mut expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
     expand_vars.sort();
@@ -2774,33 +2848,43 @@ fn build_use_expand_display(
         .map(|s| s.to_uppercase())
         .collect();
 
-    // Real `_create_use_string`'s per-flag marker logic (see this
-    // function's own doc comment). Returns the rendered `flag`/`-flag`
-    // token with any `*`/`%` suffix, or `None` for an unchanged flag that
-    // real portage omits from an installed-vs-new diff.
+    // Real `_create_use_string`'s per-flag marker + `( … )`-wrap logic
+    // (see this function's own doc comment). Returns the rendered
+    // `flag`/`-flag` token with any `*`/`%` suffix and `( )` wrap, or
+    // `None` for an unchanged flag real portage omits from a diff.
     let render_flag = |bare: &str, full: &str, enabled: bool| -> Option<String> {
-        let sign = if enabled { "" } else { "-" };
-        let Some(inst) = installed else {
-            return Some(format!("{sign}{bare}"));
-        };
-        let in_old_iuse = inst.old_iuse.contains(full);
-        let in_old_use = inst.old_use.contains(full);
-        let marker = if enabled {
-            if !in_old_iuse {
-                "%*"
-            } else if !in_old_use {
-                "*"
-            } else {
-                return None;
+        let is_forced = forced.contains(full);
+        let core = match installed {
+            None => {
+                let sign = if enabled { "" } else { "-" };
+                format!("{sign}{bare}")
             }
-        } else if !in_old_iuse {
-            "%"
-        } else if in_old_use {
-            "*"
-        } else {
-            return None;
+            Some(inst) => {
+                let in_old_iuse = inst.old_iuse.contains(full);
+                let in_old_use = inst.old_use.contains(full);
+                if enabled {
+                    if !in_old_iuse {
+                        format!("{bare}%*")
+                    } else if !in_old_use {
+                        format!("{bare}*")
+                    } else {
+                        return None;
+                    }
+                } else if !in_old_iuse {
+                    // real: `if flag not in iuse_forced: flag_str += "%"`
+                    if is_forced {
+                        format!("-{bare}")
+                    } else {
+                        format!("-{bare}%")
+                    }
+                } else if in_old_use {
+                    format!("-{bare}*")
+                } else {
+                    return None;
+                }
+            }
         };
-        Some(format!("{sign}{bare}{marker}"))
+        Some(if is_forced { format!("({core})") } else { core })
     };
 
     // Group key: empty string == the plain "USE" group. Entries keep the
@@ -5790,8 +5874,12 @@ pub fn resolve_pretend_graph(
                 old_use.retain(|f| old_iuse.contains(f));
                 InstalledUseState { old_use, old_iuse }
             });
+            // Real `_display_use`'s `self.forced_flags` (`pkg.use.force |
+            // pkg.use.mask`): the flags `-pv` wraps in `( … )`.
+            let forced =
+                forced_or_masked_flags(iuse, &keywords, &candidate_str, &key.0, &key.1, config);
             entries[entry_idx].use_expand_display =
-                build_use_expand_display(&display, config, installed.as_ref());
+                build_use_expand_display(&display, config, installed.as_ref(), &forced);
             entries[entry_idx].use_flags_display = display;
         }
 
@@ -9497,6 +9585,7 @@ mod tests {
                 ],
                 &config,
                 None,
+                &HashSet::new(),
             ),
             vec![("VIDEO_CARDS".to_string(), "-amdgpu nvidia".to_string())]
         );
@@ -9512,6 +9601,7 @@ mod tests {
                 ],
                 &config,
                 None,
+                &HashSet::new(),
             ),
             vec![
                 ("USE".to_string(), "plainflag".to_string()),
@@ -9519,7 +9609,7 @@ mod tests {
             ]
         );
         // No displayable flags -> no groups at all.
-        assert!(build_use_expand_display(&[], &config, None).is_empty());
+        assert!(build_use_expand_display(&[], &config, None, &HashSet::new()).is_empty());
     }
 
     #[test]
@@ -9553,6 +9643,7 @@ mod tests {
                 ],
                 &config,
                 Some(&installed),
+                &HashSet::new(),
             ),
             vec![
                 ("USE".to_string(), "beta* -delta% gamma%*".to_string()),
@@ -9568,8 +9659,62 @@ mod tests {
                 old_iuse: HashSet::from(["alpha".to_string()]),
                 old_use: HashSet::from(["alpha".to_string()]),
             }),
+            &HashSet::new(),
         )
         .is_empty());
+    }
+
+    #[test]
+    fn build_use_expand_display_wraps_forced_and_masked_flags() {
+        let config = portage_profile::Config {
+            use_expand: HashSet::from(["VIDEO_CARDS".to_string()]),
+            ..Default::default()
+        };
+        let forced = HashSet::from([
+            "forcedon".to_string(),
+            "maskedoff".to_string(),
+            "video_cards_nvidia".to_string(),
+        ]);
+        // New install: forced/masked flags are wrapped in ( ), everything
+        // else plain. `forcedon` is force-enabled, `maskedoff`
+        // mask-disabled, `video_cards_nvidia` force-enabled.
+        assert_eq!(
+            build_use_expand_display(
+                &[
+                    ("forcedon".to_string(), true),
+                    ("maskedoff".to_string(), false),
+                    ("plain".to_string(), true),
+                    ("video_cards_nvidia".to_string(), true),
+                ],
+                &config,
+                None,
+                &forced,
+            ),
+            vec![
+                (
+                    "USE".to_string(),
+                    "(forcedon) (-maskedoff) plain".to_string()
+                ),
+                ("VIDEO_CARDS".to_string(), "(nvidia)".to_string()),
+            ]
+        );
+        // On a diff, a masked flag brand-new to IUSE renders `(-flag)`,
+        // NOT `(-flag%)` (real: `if flag not in iuse_forced: += "%"`).
+        assert_eq!(
+            build_use_expand_display(
+                &[
+                    ("maskednew".to_string(), false),
+                    ("plainnew".to_string(), false)
+                ],
+                &config,
+                Some(&InstalledUseState {
+                    old_iuse: HashSet::new(),
+                    old_use: HashSet::new(),
+                }),
+                &HashSet::from(["maskednew".to_string()]),
+            ),
+            vec![("USE".to_string(), "(-maskednew) -plainnew%".to_string())]
+        );
     }
 
     #[test]
