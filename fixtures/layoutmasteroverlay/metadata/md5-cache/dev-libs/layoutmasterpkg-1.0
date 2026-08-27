@@ -1,0 +1,9 @@
+DEFINED_PHASES=-
+DEPEND=
+DESCRIPTION=fixture: layout.conf masters= + repo-name= override
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=
+SLOT=0
+_md5_=0000000000000000000000000000000

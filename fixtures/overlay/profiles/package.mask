@@ -14,3 +14,9 @@ dev-libs/overlaymaskedthenunmaskedpkg
 # explicit, non-main masters chain actually applies, not just an
 # on/off switch for the main repo alone.
 dev-libs/independentmasteroverlaypkg
+# layout.conf masters= (middle tier): layoutmasteroverlay declares
+# "masters = overlay" in its OWN metadata/layout.conf (NOT repos.conf),
+# and is loaded under its layout.conf "repo-name = layoutrenamed". This
+# entry MUST mask dev-libs/layoutmasterpkg (exists only there), proving
+# the layout.conf masters tier feeds package.mask stacking.
+dev-libs/layoutmasterpkg

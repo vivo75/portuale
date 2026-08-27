@@ -496,6 +496,7 @@ CASES = [
     ("overlay: package.unmask cancels a masters-inherited mask", ["--pretend", "dev-libs/mastermaskedthenoverlayunmaskedpkg"], 0),
     ("repos.conf explicit masters=: does not inherit the main repo's mask", ["--pretend", "dev-libs/independentmastermainonlypkg"], 0),
     ("repos.conf explicit masters=: inherits a non-main declared master's mask", ["--pretend", "dev-libs/independentmasteroverlaypkg"], 1),
+    ("layout.conf masters= middle tier + repo-name= override", ["--pretend", "dev-libs/layoutmasterpkg"], 1),
     ("slot conflict: two incompatible version constraints on one slot", ["--pretend", "dev-libs/slotconflictparent"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
@@ -2801,6 +2802,27 @@ def test_explicit_masters_inherits_a_non_main_declared_masters_mask(emerge_binar
     assert (
         result.stderr.strip()
         == 'emerge: there are no ebuilds to satisfy "dev-libs/independentmasteroverlaypkg".'
+    )
+
+
+def test_layout_conf_masters_middle_tier_and_repo_name_override(emerge_binary, fixture_env):
+    """layoutmasteroverlay has NO repos.conf masters key; its own
+    metadata/layout.conf declares "masters = overlay" (the middle tier,
+    below repos.conf and above the implicit main-repo default) and
+    "repo-name = layoutrenamed". dev-libs/layoutmasterpkg exists only
+    there and is masked only by the OVERLAY repo's own
+    profiles/package.mask -- so it resolves to "no ebuilds" exactly like
+    the repos.conf-masters sibling above, proving the layout.conf masters
+    tier feeds package.mask stacking and the overlay loads under its
+    layout.conf name."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/layoutmasterpkg"], fixture_env
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert (
+        result.stderr.strip()
+        == 'emerge: there are no ebuilds to satisfy "dev-libs/layoutmasterpkg".'
     )
 
 

@@ -12,13 +12,16 @@
 // KNOWN, DOCUMENTED SCOPE CUTS (confirmed with the user before
 // implementing):
 //   - Cross-repo profile parent references (`reponame:path` syntax, a
-//     bare `:path` too) ARE now resolved -- see `expand_parent_colon`/
-//     `repo_containing`/`resolve_config`'s own doc comment -- gated in
-//     real portage on the current profile node's own repo declaring
-//     `profile-formats = portage-2` in `layout.conf`; since this pilot
-//     doesn't model `layout.conf` profile-formats at all, it's always
-//     allowed here (every real Gentoo profile fixture this pilot ships
-//     already implies it).
+//     bare `:path` too) ARE resolved -- see `expand_parent_colon`/
+//     `repo_containing` -- and now correctly gated on the current
+//     profile node's own repo declaring `profile-formats = portage-2`
+//     in `metadata/layout.conf` (real `_config/LocationsManager.py:47`/
+//     `259`'s own `_allow_parent_colon` frozenset). `resolve_config`
+//     reads each repo's `layout.conf` directly (`repo_profile_formats`)
+//     rather than threading a param through every call site. Real
+//     portage's EAPI-conditional `profile-formats` *default* when the
+//     key is absent (`portage-1`/`portage-1-compat`) isn't modeled --
+//     absent just means "no `portage-2`".
 //   - ARCH-based KEYWORDS-format validation is out of scope. Wildcard
 //     `_*` IUSE-aware expansion (e.g. `linguas_*`) IS now done, but in
 //     `portage_repo::effective_use_flags` (it needs a specific
@@ -648,6 +651,32 @@ fn read_parent_lines(profile_dir: &Path) -> Result<Vec<String>, String> {
 /// that doesn't exist on disk in a test fixture -- it simply won't match
 /// any real profile dir either way), since `dir` itself is always
 /// already canonicalized by `visit_profile`.
+/// The `profile-formats` token list from a repo's own
+/// `metadata/layout.conf` (real `parse_layout_conf`), or an empty list
+/// when the file/key is absent. A tiny dedicated reader: `portage-profile`
+/// can't depend on `portage-repo` (where the fuller `parse_layout_conf`
+/// lives), and this is the only `layout.conf` key this crate needs --
+/// the same "duplicate a small, stable chunk rather than share across a
+/// dependency edge that only runs one way" precedent `keyword_masked_
+/// only`/`is_visible` already set in `portage-repo`.
+fn repo_profile_formats(repo_location: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(repo_location.join("metadata/layout.conf")) else {
+        return Vec::new();
+    };
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            if key.trim() == "profile-formats" {
+                return value.split_whitespace().map(String::from).collect();
+            }
+        }
+    }
+    Vec::new()
+}
+
 fn repo_containing(dir: &Path, repos: &[(String, PathBuf)]) -> Option<(String, PathBuf)> {
     repos
         .iter()
@@ -666,22 +695,38 @@ fn repo_containing(dir: &Path, repos: &[(String, PathBuf)]) -> Option<(String, P
 /// `repos`. Both forms expand to `<repo_location>/profiles/<rest>`. A
 /// line with no `:` at all (the plain relative-path form) is returned
 /// unchanged. Real portage only allows this syntax when the *current*
-/// profile node's own repo declares `profile-formats = portage-2` (or
-/// similar) in `layout.conf` -- this pilot doesn't model `layout.conf`
-/// profile-formats at all, so it's always allowed here, matching every
-/// real Gentoo profile fixture this pilot already ships (the same "real
-/// default, ported without modeling the mechanism that technically
-/// gates it" treatment already applied to `ACCEPT_LICENSE`'s own
-/// hardcoded `"* -@EULA"` default).
+/// profile node's own repo declares `profile-formats = portage-2` in
+/// `layout.conf` (real `_config/LocationsManager.py:47`/`259`'s own
+/// `_allow_parent_colon = frozenset(["portage-2"])` gate) --
+/// `parent_colon_repos` is the set of repo names that do (built from
+/// `portage_repo::RepoConfig::profile_formats` at the CLI boundary). A
+/// `parent` line containing a `:` whose current repo isn't in that set
+/// is returned *unchanged*, matching real portage: the `:` then becomes
+/// a literal path component that fails to resolve downstream exactly as
+/// it would there.
 fn expand_parent_colon(
     parent: &str,
     current_repo: Option<&(String, PathBuf)>,
     repos: &[(String, PathBuf)],
     parents_file: &Path,
+    parent_colon_repos: &HashSet<String>,
 ) -> Result<String, String> {
     let Some(colon) = parent.find(':') else {
         return Ok(parent.to_string());
     };
+    // Real `if not abs_parent and allow_parent_colon:` gate
+    // (`_config/LocationsManager.py:207`/`259`): `allow_parent_colon`
+    // defaults `True` and is only *overridden* when the current profile
+    // node intersects a known repo -- so a node outside any repo keeps
+    // the permissive default, and a node inside a repo is gated on that
+    // repo declaring `portage-2` in `layout.conf`.
+    let allowed = match current_repo {
+        None => true,
+        Some((name, _)) => parent_colon_repos.contains(name),
+    };
+    if !allowed {
+        return Ok(parent.to_string());
+    }
     let repo_loc = if colon == 0 {
         &current_repo
             .ok_or_else(|| {
@@ -718,16 +763,21 @@ fn expand_parent_colon(
 /// overlay, name + location) is only needed to resolve a cross-repo
 /// `parent` entry (see `expand_parent_colon`); a chain with none never
 /// consults it.
-fn resolve_profile_chain(leaf: &Path, repos: &[(String, PathBuf)]) -> Result<Vec<PathBuf>, String> {
+fn resolve_profile_chain(
+    leaf: &Path,
+    repos: &[(String, PathBuf)],
+    parent_colon_repos: &HashSet<String>,
+) -> Result<Vec<PathBuf>, String> {
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut chain: Vec<PathBuf> = Vec::new();
-    visit_profile(leaf, repos, &mut visited, &mut chain)?;
+    visit_profile(leaf, repos, parent_colon_repos, &mut visited, &mut chain)?;
     Ok(chain)
 }
 
 fn visit_profile(
     dir: &Path,
     repos: &[(String, PathBuf)],
+    parent_colon_repos: &HashSet<String>,
     visited: &mut HashSet<PathBuf>,
     chain: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
@@ -740,8 +790,20 @@ fn visit_profile(
     let current_repo = repo_containing(&canon, repos);
     let parents_file = canon.join("parent");
     for parent in read_parent_lines(&canon)? {
-        let expanded = expand_parent_colon(&parent, current_repo.as_ref(), repos, &parents_file)?;
-        visit_profile(&canon.join(&expanded), repos, visited, chain)?;
+        let expanded = expand_parent_colon(
+            &parent,
+            current_repo.as_ref(),
+            repos,
+            &parents_file,
+            parent_colon_repos,
+        )?;
+        visit_profile(
+            &canon.join(&expanded),
+            repos,
+            parent_colon_repos,
+            visited,
+            chain,
+        )?;
     }
     chain.push(canon);
     Ok(())
@@ -1244,9 +1306,23 @@ pub fn resolve_config(
             .chain(overlay_repos.iter().cloned())
             .collect();
 
+    // Real `layout.conf` `profile-formats = portage-2` gate on a profile
+    // `parent` line's own `reponame:path`/`:path` cross-repo syntax
+    // (real `_config/LocationsManager.py:47`/`259`): the set of repo
+    // names that declare it. Read here directly (a tiny dedicated
+    // layout.conf reader -- see `repo_profile_formats` -- rather than
+    // threading a param through every `resolve_config` call site) so
+    // `masters` resolution in `portage_repo::find_repos` and this gate
+    // stay independently minimal.
+    let parent_colon_repos: HashSet<String> = all_repos
+        .iter()
+        .filter(|(_, loc)| repo_profile_formats(loc).iter().any(|f| f == "portage-2"))
+        .map(|(name, _)| name.clone())
+        .collect();
+
     let make_profile = config_root.join("etc/portage/make.profile");
     let chain: Vec<PathBuf> = if make_profile.exists() {
-        resolve_profile_chain(&make_profile, &all_repos)?
+        resolve_profile_chain(&make_profile, &all_repos, &parent_colon_repos)?
     } else {
         Vec::new()
     };
@@ -2096,6 +2172,14 @@ mod tests {
         )
         .unwrap();
         fs::write(main_repo.join("profiles/leaf/parent"), ":base\n").unwrap();
+        // Real `_allow_parent_colon` gate: a profile node inside a repo
+        // needs that repo's own `layout.conf` to declare `portage-2`.
+        fs::create_dir_all(main_repo.join("metadata")).unwrap();
+        fs::write(
+            main_repo.join("metadata/layout.conf"),
+            "profile-formats = portage-2\n",
+        )
+        .unwrap();
 
         let portage_dir = root.join("etc/portage");
         fs::create_dir_all(&portage_dir).unwrap();
@@ -2107,6 +2191,33 @@ mod tests {
         let config = resolve_config(&root, &main_repo, &[], "testrepo", &HashMap::new())
             .expect("same-repo colon parent must resolve");
         assert!(config.use_flags.contains("samerepocolon"));
+    }
+
+    #[test]
+    fn colon_profile_parent_is_not_expanded_when_the_repo_lacks_portage_2() {
+        // Real `_allow_parent_colon` gate: the identical setup as
+        // `same_repo_colon_profile_parent_resolves` but with NO
+        // `metadata/layout.conf` (so `profile-formats` doesn't contain
+        // `portage-2`). The `:base` line is then left literal, and
+        // resolution fails trying to open `<leaf>/:base` -- proving the
+        // gate actually gates.
+        let root = std::env::temp_dir().join("portage-profile-test-colon-no-portage2");
+        let main_repo = root.join("repo");
+        fs::create_dir_all(main_repo.join("profiles/leaf")).unwrap();
+        fs::create_dir_all(main_repo.join("profiles/base")).unwrap();
+        fs::write(main_repo.join("profiles/base/make.defaults"), "USE=\"x\"\n").unwrap();
+        fs::write(main_repo.join("profiles/leaf/parent"), ":base\n").unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(main_repo.join("profiles/leaf"), &make_profile).unwrap();
+
+        let err = resolve_config(&root, &main_repo, &[], "testrepo", &HashMap::new())
+            .expect_err("a colon parent in a non-portage-2 repo must not resolve");
+        assert!(err.contains(":base"), "unexpected error: {err}");
     }
 
     #[test]

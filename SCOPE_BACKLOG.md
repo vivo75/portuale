@@ -58,14 +58,17 @@ Ranked roughly by how self-contained each is.
 
 ### A. Small, self-contained dry-run/config slices
 
-1. **`layout.conf`'s own `masters =` key** (and `profile-formats` gating).
-   `repos.conf`'s `masters =` is fully resolved; `layout.conf`'s equivalent
-   isn't read at all (`RepoConfig::masters` doc comment, `lib.rs:108-110`).
-   Cross-repo profile parents (#10) are also allowed unconditionally here
-   rather than gated on the current node's repo declaring
-   `profile-formats = portage-2` in `layout.conf` (`portage-profile`
-   module doc, "Cross-repo profile parent references … gated in real
-   portage on … `layout.conf`").
+1. ~~**`layout.conf`'s own `masters =` key** (and `profile-formats`
+   gating, and `repo-name`)~~ **shipped 2026-08-27**: `find_repos` now
+   parses `<repo>/metadata/layout.conf` -- `masters =` is a middle tier
+   (repos.conf wins, layout.conf next, implicit main-repo default last);
+   `repo-name` overrides the section name (`RepoConfig::name`);
+   `profile-formats = portage-2` gates the cross-repo `parent`-colon
+   syntax (`RepoConfig::profile_formats` -> `resolve_config`'s own
+   `repo_profile_formats` read -> `expand_parent_colon`). Real portage's
+   EAPI-conditional `profile-formats` default when the key is absent is
+   not modeled (absent = "no portage-2"); `profiles/repo_name` +
+   mismatch warning still a cut.
 
 2. ~~**`USE_EXPAND_HIDDEN` / `USE_EXPAND_IMPLICIT`.**~~ `USE_EXPAND_IMPLICIT`
    **shipped 2026-08-27** (`Config::iuse_effective`, real EAPI 5+

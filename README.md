@@ -6926,6 +6926,70 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
 #      linguas_en stayed masked, so only linguas_de's RDEPEND clause fired
 ```
 
+### `metadata/layout.conf`: `masters =` middle tier, `repo-name`, and the `profile-formats` parent-colon gate
+
+Nothing read `<repo>/metadata/layout.conf` before -- `RepoConfig`'s
+canonical repo name was its `repos.conf` `[section]` name, `masters`
+came only from `repos.conf`, and a profile `parent` line's cross-repo
+`reponame:path`/`:path` syntax was always expanded. This slice ports
+three real `layout.conf` keys.
+
+**`masters =` as a middle tier.** Real `config.py:237-245`/`484-490`:
+an explicit `repos.conf` `masters =` wins; else the repo's own
+`layout.conf` `masters =` (an empty one is a real "no masters",
+distinct from the key being absent); else the implicit default (the
+main repo alone). `find_repos` now resolves all three tiers -- new
+`parse_layout_conf` (a section-less `key = value` reader), a
+`repos_conf_masters` capture in the first pass, and a `layout.conf`
+pass between them.
+
+**`repo-name`.** Real `config.py:500-505`: `layout.conf`'s `repo-name`
+overrides the repo's name. This pilot uses the `repos.conf` section
+name as canonical (it doesn't model `profiles/repo_name` or the
+section-vs-file mismatch warning -- a documented cut), so it takes the
+`layout.conf` override directly onto `RepoConfig::name`. The `masters`
+pass is re-keyed by the post-override name so a `masters =` referring
+to a renamed repo still resolves.
+
+**`profile-formats` gate.** Real `_config/LocationsManager.py:47`/`259`:
+`_allow_parent_colon = frozenset(["portage-2"])` -- a profile `parent`
+line's `:` cross-repo syntax is only expanded for a profile node whose
+own repo declares `profile-formats = portage-2` in `layout.conf`.
+`allow_parent_colon` *defaults* `True` and is only overridden when the
+node intersects a known repo, so a node outside any repo keeps the
+permissive default and a node inside a repo is gated. `resolve_config`
+reads each repo's `layout.conf` directly (`repo_profile_formats`, a
+tiny dedicated reader -- `portage-profile` can't depend on
+`portage-repo`) and threads the allowed-repo-name set through
+`resolve_profile_chain` -> `visit_profile` -> `expand_parent_colon`.
+Real portage's EAPI-conditional `profile-formats` *default* when the
+key is absent (`portage-1`/`portage-1-compat`) is not modeled -- absent
+simply means "no `portage-2`".
+
+`PORTING/fixtures/repo/metadata/layout.conf` gains `profile-formats =
+portage-2` (its `profiles/default/parent`'s own `overlay:crossrepo-parent`
+line -- shipped by an earlier slice -- keeps working). New overlay
+`layoutmasteroverlay` (repos.conf section, **no** `masters` key) has a
+`layout.conf` declaring `masters = overlay` + `repo-name = layoutrenamed`;
+`dev-libs/layoutmasterpkg` exists only there and is masked only by the
+`overlay` repo's own `profiles/package.mask` -- so it resolves to "no
+ebuilds", proving the `layout.conf` masters tier feeds `package.mask`
+stacking and the overlay loads under its `layout.conf` name. Rust unit
+tests for `find_repos` (all three keys) and for the negative gate (a
+`:` parent in a non-`portage-2` repo is left literal), a parametrized
+contract case, and a dedicated contract test; mirrored in
+`emerge_pretend_reference.py`.
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge --pretend dev-libs/layoutmasterpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/layoutmasterpkg".
+#   -- layoutmasteroverlay masters `overlay` via its own layout.conf, so
+#      overlay's package.mask entry for layoutmasterpkg applies
+```
+
 ## Running it
 
 Build both Rust binaries:

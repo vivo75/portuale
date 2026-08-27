@@ -122,6 +122,29 @@ def _running_root():
     return os.environ.get("PORTAGE_RUNNING_ROOT") or "/"
 
 
+def _parse_layout_conf(repo_location):
+    """Parses a repo's own metadata/layout.conf (real parse_layout_conf,
+    lib/portage/repository/config.py:1516) -- a section-less key = value
+    file. Empty dict when absent. This pilot reads exactly three keys:
+    masters, repo-name, profile-formats. Mirrors portage-repo/src/lib.rs's
+    parse_layout_conf exactly."""
+    path = os.path.join(repo_location, "metadata", "layout.conf")
+    out = {}
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, _, value = line.partition("=")
+            out[key.strip()] = value.strip()
+    return out
+
+
 def find_repos(config_root):
     """Parses repos.conf and returns every [reponame] section that has a
     location (the main repo plus any overlays) as a list of dicts with
@@ -172,41 +195,63 @@ def find_repos(config_root):
             priority = None
         if priority is None:
             priority = -1000 if name == main_repo else 0
+        repos_conf_masters = parser.get(name, "masters", fallback=None)
         repos.append(
             {
                 "name": name,
                 "location": location,
                 "priority": priority,
                 "is_main": name == main_repo,
+                # None = repos.conf key absent (fall through to layout.conf
+                # tier); a string (possibly empty) = explicit.
+                "_repos_conf_masters": (
+                    None if repos_conf_masters is None else repos_conf_masters.split()
+                ),
             }
         )
 
     if not any(r["name"] == main_repo for r in repos):
         raise ResolutionError(f'no location for repo "{main_repo}" in repos.conf')
 
-    # "masters" resolution (real RepoConfigLoader.__init__,
-    # lib/portage/repository/config.py:1229-1260): needs every repo's own
-    # location already known (to resolve a master *name* to a location),
-    # so this is a genuine second pass over the now-complete repos list.
-    # Mirrors portage-repo/src/lib.rs's own find_repos exactly, including
-    # its own real default (every non-main repo implicitly masters the
-    # main repo alone; the main repo can never be its own master) and its
-    # own real override (an explicit "masters =" key -- even an empty
-    # one -- replaces that default outright; an unknown master name is
-    # silently dropped, matching real config.py's own warn-and-continue).
+    # Real layout.conf (lib/portage/repository/config.py): each repo's own
+    # metadata/layout.conf contributes repo-name (an override of the
+    # repos.conf section name -- this pilot uses the section name as
+    # canonical, so it takes the override directly; it does NOT model
+    # profiles/repo_name or the mismatch warning, a documented cut),
+    # profile-formats (the colon-parent gate, see _expand_parent_colon),
+    # and the middle masters tier. Mirrors portage-repo/src/lib.rs.
+    for repo in repos:
+        layout = _parse_layout_conf(repo["location"])
+        repo["profile_formats"] = layout.get("profile-formats", "").split()
+        new_name = layout.get("repo-name", "").strip()
+        if new_name:
+            repo["name"] = new_name
+        repo["_layout_masters"] = (
+            None if "masters" not in layout else layout["masters"].split()
+        )
+
+    # "masters" resolution -- real three-tier (config.py:237-245/484-490):
+    # repos.conf masters wins outright; else layout.conf masters (an empty
+    # one is a real "no masters"); else the implicit default (main repo
+    # alone for every non-main repo; the main repo can never be its own
+    # master). Unknown master names are silently dropped at every tier.
     location_by_name = {r["name"]: r["location"] for r in repos}
     main_repo_location = location_by_name.get(main_repo)
+
+    def _resolve(names):
+        return [location_by_name[n] for n in names if n in location_by_name]
+
     for repo in repos:
-        raw_masters = parser.get(repo["name"], "masters", fallback=None)
-        if raw_masters is None:
-            if repo["name"] == main_repo:
-                repo["masters"] = []
-            else:
-                repo["masters"] = [main_repo_location] if main_repo_location else []
+        if repo["_repos_conf_masters"] is not None:
+            repo["masters"] = _resolve(repo["_repos_conf_masters"])
+        elif repo["_layout_masters"] is not None:
+            repo["masters"] = _resolve(repo["_layout_masters"])
+        elif repo["name"] == main_repo:
+            repo["masters"] = []
         else:
-            repo["masters"] = [
-                location_by_name[n] for n in raw_masters.split() if n in location_by_name
-            ]
+            repo["masters"] = [main_repo_location] if main_repo_location else []
+        del repo["_repos_conf_masters"]
+        del repo["_layout_masters"]
 
     repos.sort(key=lambda r: (r["priority"], r["name"]))
     return repos
@@ -2365,20 +2410,24 @@ def _repo_containing(directory, repos):
     return best
 
 
-def _expand_parent_colon(parent, current_repo, repos, parents_file):
+def _expand_parent_colon(parent, current_repo, repos, parents_file, parent_colon_repos):
     """Expands a profile "parent" file line's real cross-repo ":path"/
     "reponame:path" syntax (LocationsManager._expand_parent_colon): a
     ":" with nothing before it means "this same repo" (current_repo),
     anything else before the ":" is another repo's own name, looked up
     in repos. Both forms expand to "<repo_location>/profiles/<rest>". A
     line with no ":" at all is returned unchanged. Real portage only
-    allows this syntax when the current profile node's own repo
-    declares profile-formats = portage-2 in layout.conf -- this pilot
-    doesn't model layout.conf profile-formats at all, so it's always
-    allowed here (see resolve_config's own docstring). Mirrors
+    allows this syntax when the current profile node's own repo declares
+    profile-formats = portage-2 in layout.conf (_allow_parent_colon gate,
+    _config/LocationsManager.py:207/259) -- allow_parent_colon defaults
+    True and is only *overridden* when the node intersects a known repo,
+    so a node outside any repo keeps the permissive default and a node
+    inside a repo is gated on parent_colon_repos membership. Mirrors
     portage-profile/src/lib.rs's expand_parent_colon exactly."""
     colon = parent.find(":")
     if colon == -1:
+        return parent
+    if current_repo is not None and current_repo[0] not in parent_colon_repos:
         return parent
     if colon == 0:
         if current_repo is None:
@@ -2400,7 +2449,7 @@ def _expand_parent_colon(parent, current_repo, repos, parents_file):
     return os.path.join(repo_loc, "profiles", rest)
 
 
-def _visit_profile(directory, repos, visited, chain):
+def _visit_profile(directory, repos, parent_colon_repos, visited, chain):
     canon = os.path.realpath(directory)
     if not os.path.isdir(canon):
         raise ResolutionError(f"resolving profile {directory}: not a directory")
@@ -2410,15 +2459,19 @@ def _visit_profile(directory, repos, visited, chain):
     current_repo = _repo_containing(canon, repos)
     parents_file = os.path.join(canon, "parent")
     for parent in _read_parent_lines(canon):
-        expanded = _expand_parent_colon(parent, current_repo, repos, parents_file)
-        _visit_profile(os.path.join(canon, expanded), repos, visited, chain)
+        expanded = _expand_parent_colon(
+            parent, current_repo, repos, parents_file, parent_colon_repos
+        )
+        _visit_profile(
+            os.path.join(canon, expanded), repos, parent_colon_repos, visited, chain
+        )
     chain.append(canon)
 
 
-def _resolve_profile_chain(leaf, repos):
+def _resolve_profile_chain(leaf, repos, parent_colon_repos):
     visited = set()
     chain = []
-    _visit_profile(leaf, repos, visited, chain)
+    _visit_profile(leaf, repos, parent_colon_repos, visited, chain)
     return chain
 
 
@@ -2578,8 +2631,24 @@ def resolve_config(
 
     all_repos = [(main_repo_name, main_repo_location)] + list(overlay_repos)
 
+    # Real layout.conf profile-formats = portage-2 gate on a profile
+    # "parent" line's own reponame:path/:path cross-repo syntax
+    # (_config/LocationsManager.py:47/259): the set of repo names that
+    # declare it. Read here directly (via _parse_layout_conf) rather than
+    # threading a param through every resolve_config call site. Mirrors
+    # portage-profile/src/lib.rs's resolve_config exactly.
+    parent_colon_repos = {
+        name
+        for name, loc in all_repos
+        if "portage-2" in _parse_layout_conf(loc).get("profile-formats", "").split()
+    }
+
     make_profile = os.path.join(config_root, "etc", "portage", "make.profile")
-    chain = _resolve_profile_chain(make_profile, all_repos) if os.path.exists(make_profile) else []
+    chain = (
+        _resolve_profile_chain(make_profile, all_repos, parent_colon_repos)
+        if os.path.exists(make_profile)
+        else []
+    )
     for level in chain:
         make_defaults = os.path.join(level, "make.defaults")
         if not os.path.isfile(make_defaults):
