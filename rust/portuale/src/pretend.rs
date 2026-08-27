@@ -1354,6 +1354,7 @@ fn report_option(token: &str) -> ExitCode {
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
              --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
+             --unmerge/-C, --depclean/-c, \
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
              --changed-deps-report, --changed-slot, --with-test-deps, \
              --noreplace/-n, --selective, and --help/-h are implemented \
@@ -2015,17 +2016,17 @@ fn run_unmerge_pretend(
     // installed and satisfies the set atom -- a refinement this pilot's
     // single-slot fixtures never exercise, left as a documented
     // narrowing (the check below is cp-and-atom-match only).
-    let installed_sets: Vec<(String, Vec<String>)> =
-        match collect_installed_sets(config_root, root) {
-            Ok(sets) => sets
-                .into_iter()
-                .filter(|(name, _)| !active_sets.contains(name))
-                .collect(),
-            Err(e) => {
-                eprintln!("emerge: {e}");
-                return ExitCode::from(1);
-            }
-        };
+    let installed_sets: Vec<(String, Vec<String>)> = match collect_installed_sets(config_root, root)
+    {
+        Ok(sets) => sets
+            .into_iter()
+            .filter(|(name, _)| !active_sets.contains(name))
+            .collect(),
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
     let mut selected_sorted: Vec<&(String, String, String)> = all_selected.iter().collect();
     selected_sorted.sort();
     for (cat, pkg, version) in selected_sorted {
@@ -2077,7 +2078,10 @@ fn run_unmerge_pretend(
         // `@system` member. To stderr (real `writemsg_level(...,
         // level=logging.WARNING)`).
         if protected.is_empty() && omitted.is_empty() && syslist.contains(cp) {
-            eprintln!("\n\n!!! '{}/{}' is part of your system profile.", cp.0, cp.1);
+            eprintln!(
+                "\n\n!!! '{}/{}' is part of your system profile.",
+                cp.0, cp.1
+            );
             eprintln!("!!! Unmerging it may be damaging to your system.\n");
         }
 
@@ -2173,6 +2177,119 @@ fn split_pf(dirname: &str) -> Option<(String, String)> {
     None
 }
 
+/// Real `emerge --pretend --depclean` / `-pc` (real `action_depclean` +
+/// `_calc_depclean`, no package arguments): the packages nothing in
+/// `@world` ∪ `@system` needs, at runtime, are the cleanlist -- reported
+/// (never removed, `--pretend`-only, same stance as `--unmerge`). Real
+/// `action_depclean` literally feeds its cleanlist to `unmerge(...,
+/// "unmerge", cleanlist)`, so the per-package block here is exactly
+/// `run_unmerge_pretend`'s (each cleanlist cpv passed as an `=cat/pkg-ver`
+/// atom). See `portage_repo::depclean_cleanlist`'s own doc comment for
+/// the graph and its documented narrowings.
+///
+/// `emerge -pc <atoms>` (the `--depclean <atoms>` narrowing -- restrict
+/// to the given packages and their now-orphaned subtree) is deliberately
+/// not in this first increment: it's rejected rather than silently doing
+/// a full depclean (which would show *more* than the user asked for).
+fn run_depclean_pretend(
+    targets: &[&str],
+    root: &Path,
+    config_root: &Path,
+    config: &portage_profile::Config,
+) -> ExitCode {
+    if !targets.is_empty() {
+        eprintln!(
+            "emerge (pilot v1): --depclean with package arguments is not yet implemented; \
+             run it without arguments for a full depclean"
+        );
+        return ExitCode::from(2);
+    }
+
+    // Real `action_depclean`'s own advisory block (no-args, non-quiet).
+    // The "Depclean may break link level dependencies" first paragraph
+    // is skipped: real portage gates it on `--depclean-lib-check=n`,
+    // which is not the default.
+    for line in [
+        "",
+        " * Always study the list of packages to be cleaned for any obvious",
+        " * mistakes. Packages that are part of the world set will always",
+        " * be kept.  They can be manually added to this set with",
+        " * `emerge --noreplace <atom>`.  Packages that are listed in",
+        " * package.provided (see portage(5)) will be removed by",
+        " * depclean, even if they are part of the world set.",
+        " * ",
+        " * As a safety measure, depclean will not remove any packages",
+        " * unless *all* required dependencies have been resolved.  As a",
+        " * consequence of this, it often becomes necessary to run ",
+        " * `emerge --update --newuse --deep @world` prior to depclean.",
+    ] {
+        println!("{line}");
+    }
+
+    // Required atoms = @world (world file + world_sets) ∪ @system, the
+    // same expansion `run()`/`run_unmerge_pretend` already do.
+    let mut required: Vec<String> = Vec::new();
+    match read_world_atoms(root) {
+        Ok(atoms) => required.extend(atoms),
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    }
+    match read_world_sets(root) {
+        Ok(names) => {
+            for name in names {
+                let mut seen = HashSet::new();
+                match resolve_custom_set(config_root, &name, &mut seen) {
+                    Ok(atoms) => required.extend(atoms),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    }
+    let world_atom_count = required.iter().cloned().collect::<HashSet<_>>().len();
+    required.extend(config.system_packages.iter().cloned());
+
+    let result = portage_repo::depclean_cleanlist(root, &required);
+
+    let installed_total = portage_repo::all_installed_packages(root).len();
+    let stats = || {
+        println!("Packages installed:   {installed_total}");
+        println!("Packages in world:    {world_atom_count}");
+        println!("Packages in system:   {}", config.system_packages.len());
+        println!("Required packages:    {}", result.required_count);
+        println!("Number to remove:     {}", result.cleanlist.len());
+    };
+
+    if result.cleanlist.is_empty() {
+        println!(">>> No packages selected for removal by depclean");
+        println!(">>> To see reverse dependencies, use --verbose");
+        stats();
+        return ExitCode::SUCCESS;
+    }
+
+    // Real `_calc_depclean`: this line only when there's something to
+    // remove; then `unmerge(..., "unmerge", cleanlist)` renders the
+    // per-package block.
+    println!(">>> Calculating removal order...");
+    let cpv_atoms: Vec<String> = result
+        .cleanlist
+        .iter()
+        .map(|p| format!("={}", p.cpv()))
+        .collect();
+    let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
+    let unmerge_rc = run_unmerge_pretend(&cpv_refs, root, config_root, config);
+    stats();
+    unmerge_rc
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     if wants_help(args) {
         print_help();
@@ -2213,6 +2330,8 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut deselect = false;
     // --unmerge/-C: a standalone action (see run_unmerge_pretend).
     let mut unmerge = false;
+    // --depclean/-c: a standalone action (see run_depclean_pretend).
+    let mut depclean = false;
     let mut with_bdeps = true;
     let mut with_bdeps_given = false;
     let mut with_bdeps_auto = true;
@@ -2473,6 +2592,12 @@ pub fn run(args: &[String]) -> ExitCode {
             // `run_unmerge_pretend` below, not a modifier on ordinary
             // resolution. Plain boolean (no value).
             unmerge = true;
+            i += 1;
+        } else if arg == "--depclean" || arg == "-c" {
+            // Real `main.py`: `--depclean`/`-c` is a standalone ACTION
+            // (`myaction = "depclean"`), dispatched to
+            // `run_depclean_pretend` below. Plain boolean.
+            depclean = true;
             i += 1;
         } else if arg == "--with-bdeps" {
             // Real "argument_options" with `"choices": ("y", "n")` --
@@ -2944,6 +3069,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'K' => usepkgonly = true,
                     'W' => deselect = true,
                     'C' => unmerge = true,
+                    'c' => depclean = true,
                     'B' => buildpkgonly = true,
                     'X' => {
                         // Unlike every other bundle-compatible short flag
@@ -3005,6 +3131,13 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // `--depclean`/`-c`: real `emerge -c` removes; this pilot only
+    // previews it, same `--pretend`-only gate.
+    if depclean && !pretend {
+        eprintln!("emerge (pilot v1): --depclean/-c requires --pretend (see PROMPT.md)");
+        return ExitCode::from(2);
+    }
+
     // `--buildpkgonly` without `--pretend` is the one real, non-dry-run
     // execution path this pilot implements for `emerge` itself (see
     // `emerge_build.rs`'s own module doc comment): it only ever builds a
@@ -3024,7 +3157,7 @@ pub fn run(args: &[String]) -> ExitCode {
         return run_deselect(&atom_args, &root_from_env());
     }
 
-    if atom_args.is_empty() && !unmerge {
+    if atom_args.is_empty() && !unmerge && !depclean {
         eprintln!("emerge (pilot v1): expected a package atom, e.g. `emerge --pretend cat/pkg`");
         return ExitCode::from(2);
     }
@@ -3095,6 +3228,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // it), dispatch before the ordinary resolve-graph path below.
     if unmerge {
         return run_unmerge_pretend(&atom_args, &root, &config_root, &config);
+    }
+    if depclean {
+        return run_depclean_pretend(&atom_args, &root, &config_root, &config);
     }
 
     // "@world"/"@system" each expand to their own real atom list, in

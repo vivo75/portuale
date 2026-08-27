@@ -786,6 +786,39 @@ PORTING/
   `world_sets` selects). ~4 pinned `@world`/`@system` tests gained an
   "already installed" line for the two now-installed set members.
 
+  **`emerge --pretend --depclean` / `-pc`: the third real emerge action
+  (core increment).** Real `action_depclean` + `_calc_depclean` (no
+  package arguments): everything nothing in `@world` ∪ `@system` needs,
+  at runtime, is the removal list -- reported, never removed
+  (`--pretend`-only, same stance as `--unmerge`). New
+  `portage_repo::depclean_cleanlist` builds the *installed* dependency
+  graph (node = installed package; edge A -> B when B satisfies one of
+  A's own vdb `RDEPEND`/`PDEPEND` atoms, flattened against A's own vdb
+  `USE` via `flat_dep_atoms`, every `||` branch kept -- the conservative
+  choice for a removal decision), roots = installed packages the
+  `@world`+`@system` atoms match, and everything unreachable is the
+  cleanlist (`+ new all_installed_packages` = real `vardb.cpv_all()`).
+  `portuale::run_depclean_pretend` prints real `action_depclean`'s own
+  `* ` advisory block, then -- since real `action_depclean` literally
+  calls `unmerge(..., "unmerge", cleanlist)` -- feeds each cleanlist cpv
+  straight into `run_unmerge_pretend` as an `=cat/pkg-ver` atom (so the
+  `sys-apps/portage` skip, set-protection, and system-profile warnings
+  all apply to the cleanlist too), with `>>> Calculating removal
+  order...` ahead of it and the `Packages installed:` / `in world:` /
+  `in system:` / `Required packages:` / `Number to remove:` stats block
+  after. **Documented narrowings, this being a first increment** (real
+  `_calc_depclean` runs the full backtracking `depgraph` in "remove"
+  mode): build-time deps (`DEPEND`/`BDEPEND`, real `bdeps="auto"`)
+  aren't followed -- depclean's intuitive contract is "nothing needs it
+  at *runtime*", and the pilot's vdb fixtures don't record them;
+  `--depclean-lib-check` (a `NEEDED.ELF.2` soname-linkage check),
+  slot-operator rebuild edges, the "dependencies could not be resolved,
+  aborting" safety halt, `package.provided`, and `--depclean <atoms>`
+  narrowing (rejected here, not silently promoted to a full depclean)
+  are all deferred. Tests use a self-contained `_depclean_root`
+  (isolated vdb + world file, like the `--deselect` tests) so nothing
+  touches the shared fixture tree.
+
   **`--with-bdeps y|n`: build-time deps for an already-installed
   package's own `--deep` walk.** Grounded against real
   `create_depgraph_params.py`'s own `bdeps` param and `depgraph.py`'s

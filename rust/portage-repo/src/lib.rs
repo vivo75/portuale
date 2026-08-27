@@ -2946,6 +2946,178 @@ fn libc_provider_cps(root: &Path) -> HashSet<(String, String)> {
     result
 }
 
+/// One installed package in the vdb, `category/package-version` plus its
+/// own recorded main `SLOT` -- real `vartree.dbapi.cpv_all()` / `_pkg_str`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledPackage {
+    pub category: String,
+    pub package: String,
+    pub version: String,
+    pub slot: String,
+}
+
+impl InstalledPackage {
+    /// `category/package-version` -- the vdb cpv.
+    pub fn cpv(&self) -> String {
+        format!("{}/{}-{}", self.category, self.package, self.version)
+    }
+}
+
+/// Every package recorded under `<root>/var/db/pkg` (real
+/// `vartree.dbapi.cpv_all()`), each with its own main slot. Directory
+/// names are split into `package`/`version` by finding the last
+/// `-`-separated boundary whose right half `ververify`s -- the same
+/// "a version always starts like a version, a package-name word may
+/// not" disambiguation `strip_version_prefix` already makes, generalised
+/// to a name whose own package isn't known ahead of time.
+pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
+    let mut out = Vec::new();
+    let vdb = root.join("var/db/pkg");
+    let Ok(cats) = fs::read_dir(&vdb) else {
+        return out;
+    };
+    for cat in cats.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+        let category = cat.file_name().to_string_lossy().to_string();
+        let Ok(pkgs) = fs::read_dir(cat.path()) else {
+            continue;
+        };
+        for pkg in pkgs.filter_map(Result::ok).filter(|e| e.path().is_dir()) {
+            let dirname = pkg.file_name().to_string_lossy().to_string();
+            let Some((name, version)) = split_installed_dir(&dirname) else {
+                continue;
+            };
+            let (slot, _sub) = split_slot(
+                fs::read_to_string(pkg.path().join("SLOT"))
+                    .unwrap_or_default()
+                    .trim(),
+            );
+            out.push(InstalledPackage {
+                category: category.clone(),
+                package: name,
+                version,
+                slot,
+            });
+        }
+    }
+    out
+}
+
+fn split_installed_dir(dirname: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = dirname.split('-').collect();
+    for i in 1..parts.len() {
+        let version = parts[i..].join("-");
+        if portage_versions::ververify(&version) {
+            return Some((parts[..i].join("-"), version));
+        }
+    }
+    None
+}
+
+/// Real `emerge --depclean`'s own removal list (`_calc_depclean` +
+/// `create_cleanlist`, no `args_set`): every installed package NOT
+/// reachable, over the *installed* dependency graph, from the packages
+/// the `required_atoms` (`@world` ∪ `@system`) match.
+///
+/// The graph: node = installed package; edge A -> B when B satisfies one
+/// of A's own vdb-recorded `RDEPEND` or `PDEPEND` atoms, flattened
+/// against A's own vdb-recorded `USE` (`flat_dep_atoms` -- every branch
+/// of a `||` group is kept, the conservative choice for a removal
+/// decision). Roots = installed packages the required atoms match.
+/// Reachable = required; everything else is the cleanlist, returned
+/// sorted by `(category, package, version)`.
+///
+/// **Documented narrowings** (real `_calc_depclean` via the full
+/// `depgraph` in "remove" mode does more): build-time deps
+/// (`DEPEND`/`BDEPEND`, real `bdeps="auto"` for remove mode) aren't
+/// followed -- the pilot's vdb fixtures don't record them and depclean's
+/// intuitive contract is "nothing needs it at *runtime*";
+/// `--depclean-lib-check` (a soname-linkage check via `NEEDED.ELF.2`),
+/// slot-operator rebuild edges, the "dependencies could not be resolved,
+/// aborting" safety halt, `package.provided`, and `--depclean <atoms>`
+/// narrowing are all out of this first increment.
+/// `depclean_cleanlist`'s result: the packages to remove, plus the size
+/// of the required-set closure (real `req_pkg_count`, the `Required
+/// packages:` stat).
+#[derive(Debug, Clone)]
+pub struct DepcleanResult {
+    pub cleanlist: Vec<InstalledPackage>,
+    pub required_count: usize,
+}
+
+pub fn depclean_cleanlist(root: &Path, required_atoms: &[String]) -> DepcleanResult {
+    let installed = all_installed_packages(root);
+    // Candidate strings for `match_from_list`, one per installed package,
+    // kept alongside the package itself.
+    let candidate_strs: Vec<(String, &InstalledPackage)> = installed
+        .iter()
+        .map(|p| {
+            (
+                format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot),
+                p,
+            )
+        })
+        .collect();
+    let matches_atom = |atom_str: &str| -> Vec<&InstalledPackage> {
+        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            return Vec::new();
+        };
+        candidate_strs
+            .iter()
+            .filter(|(_, p)| p.category == atom.category && p.package == atom.package)
+            .filter(|(cs, _)| {
+                portage_dep::match_from_list(atom_str, &[cs.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+            })
+            .map(|(_, p)| *p)
+            .collect()
+    };
+
+    let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
+    let mut reachable: HashSet<(String, String, String)> = HashSet::new();
+    let mut queue: Vec<InstalledPackage> = Vec::new();
+    for atom_str in required_atoms {
+        for p in matches_atom(atom_str) {
+            if reachable.insert(key(p)) {
+                queue.push(p.clone());
+            }
+        }
+    }
+    while let Some(p) = queue.pop() {
+        let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        for dep_key in ["RDEPEND", "PDEPEND"] {
+            let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in atoms {
+                for dep in matches_atom(&atom_str) {
+                    if reachable.insert(key(dep)) {
+                        queue.push(dep.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cleanlist: Vec<InstalledPackage> = installed
+        .into_iter()
+        .filter(|p| !reachable.contains(&key(p)))
+        .collect();
+    cleanlist.sort_by(|a, b| {
+        a.category
+            .cmp(&b.category)
+            .then_with(|| a.package.cmp(&b.package))
+            .then_with(|| vercmp_ordering(&a.version, &b.version))
+    });
+    DepcleanResult {
+        cleanlist,
+        required_count: reachable.len(),
+    }
+}
+
 /// Real `strip_slots` (`lib/portage/dep/_slot_operator.py:11`), for one
 /// atom string: rewrites a "built" slot-operator atom (`cat/pkg:2=` -- the
 /// concrete slot portage records in the vdb when a `cat/pkg:=` dependency
@@ -8586,6 +8758,77 @@ mod tests {
         let entries = graph_entries_real("dev-libs/newpkg");
         assert!(!entries[0].fetch_restrict);
         assert!(!entries[0].fetch_restrict_satisfied);
+    }
+
+    #[test]
+    fn depclean_cleanlist_keeps_the_required_closure_and_lists_the_rest() {
+        // A tiny installed graph: dcworld (required, world) -> dcdep ->
+        // dcsub, dcworld -[bar?, USE=bar]-> dccond; dcorphan -> dcorphandep
+        // (both orphan). systempkg is required too (passed as a root).
+        let root = masters_test_root("depclean");
+        let install = |name: &str, rdepend: &str, use_str: &str| {
+            let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+            if !rdepend.is_empty() {
+                std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+            if !use_str.is_empty() {
+                std::fs::write(d.join("USE"), format!("{use_str}\n")).unwrap();
+            }
+        };
+        install("dcworld", "dev-libs/dcdep bar? ( dev-libs/dccond )", "bar");
+        install("dcdep", "dev-libs/dcsub", "");
+        install("dcsub", "", "");
+        install("dccond", "", "");
+        install("dcorphan", "dev-libs/dcorphandep", "");
+        install("dcorphandep", "", "");
+        install("systempkg", "", "");
+
+        let result = depclean_cleanlist(
+            &root,
+            &[
+                "dev-libs/dcworld".to_string(),
+                "dev-libs/systempkg".to_string(),
+            ],
+        );
+        let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
+        assert_eq!(
+            clean,
+            vec![
+                "dev-libs/dcorphan-1.0".to_string(),
+                "dev-libs/dcorphandep-1.0".to_string(),
+            ]
+        );
+        // dcworld, dcdep, dcsub, dccond, systempkg.
+        assert_eq!(result.required_count, 5);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn depclean_cleanlist_a_use_conditional_dep_that_is_off_does_not_keep_its_target() {
+        let root = masters_test_root("depclean-usecond");
+        let install = |name: &str, rdepend: &str, use_str: &str| {
+            let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+            if !rdepend.is_empty() {
+                std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+            if !use_str.is_empty() {
+                std::fs::write(d.join("USE"), format!("{use_str}\n")).unwrap();
+            }
+        };
+        // dcw's `off? ( ... )` group is inactive -> dchidden is orphan.
+        install("dcw", "off? ( dev-libs/dchidden )", "");
+        install("dchidden", "", "");
+        let result = depclean_cleanlist(&root, &["dev-libs/dcw".to_string()]);
+        let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
+        assert_eq!(clean, vec!["dev-libs/dchidden-1.0".to_string()]);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

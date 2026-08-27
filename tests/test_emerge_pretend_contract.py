@@ -4335,7 +4335,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -4591,6 +4591,127 @@ def _deselect_env(fixture_env, tmp_path):
     env = dict(fixture_env)
     env["ROOT"] = str(_deselect_root(tmp_path))
     return env
+
+
+def _depclean_root(tmp_path):
+    """A self-contained ROOT for --depclean: a small installed dependency
+    graph plus its own world file. PORTAGE_CONFIGROOT stays at the shared
+    fixtures (so @system = {newpkg, withdeps, systempkg} from the profile
+    packages files), but only systempkg of those is installed here.
+
+    Reachable from @world (dev-libs/dcworld) + @system (dev-libs/
+    systempkg): dcworld -> dcdep -> dcsub, dcworld -[bar?]-> dccond
+    (USE="bar"), and systempkg itself. dev-libs/dcorphan (nothing needs
+    it) and dev-libs/dcorphandep (only dcorphan's RDEPEND) are the
+    cleanlist."""
+    portage_dir = tmp_path / "var" / "lib" / "portage"
+    portage_dir.mkdir(parents=True)
+    (portage_dir / "world").write_text("dev-libs/dcworld\n")
+
+    def install(package, rdepend="", use="", version="1.0", slot="0"):
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / f"{package}-{version}"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text(f"{slot}\n")
+        if rdepend:
+            (d / "RDEPEND").write_text(rdepend + "\n")
+        if use:
+            (d / "USE").write_text(use + "\n")
+
+    install("dcworld", rdepend="dev-libs/dcdep bar? ( dev-libs/dccond )", use="bar")
+    install("dcdep", rdepend="dev-libs/dcsub")
+    install("dcsub")
+    install("dccond")
+    install("dcorphan", rdepend="dev-libs/dcorphandep")
+    install("dcorphandep")
+    install("systempkg")
+    return tmp_path
+
+
+def _depclean_env(fixture_env, tmp_path):
+    env = dict(fixture_env)
+    env["ROOT"] = str(_depclean_root(tmp_path))
+    return env
+
+
+def test_depclean_pretend_lists_orphans(emerge_binary, fixture_env, tmp_path):
+    """emerge --pretend --depclean: everything nothing in @world+@system
+    needs at runtime. dcorphan + its private dep dcorphandep are the
+    cleanlist; the dcworld subtree and the @system member systempkg are
+    kept."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--depclean"], _depclean_env(fixture_env, tmp_path)
+    )
+    assert result.returncode == 0
+    out = result.stdout.splitlines()
+    assert " * Always study the list of packages to be cleaned for any obvious" in out
+    assert ">>> Calculating removal order..." in out
+    assert ">>> These are the packages that would be unmerged:" in out
+    # The cleanlist is exactly the two orphans, sorted.
+    assert [ln for ln in out if ln.startswith(" dev-libs/")] == [
+        " dev-libs/dcorphan",
+        " dev-libs/dcorphandep",
+    ]
+    for kept in ("dcworld", "dcdep", "dcsub", "dccond", "systempkg"):
+        assert f" dev-libs/{kept}\n" not in result.stdout
+    assert "All selected packages: =dev-libs/dcorphan-1.0 =dev-libs/dcorphandep-1.0" in out
+    assert out[-5:] == [
+        "Packages installed:   7",
+        "Packages in world:    1",
+        "Packages in system:   3",
+        "Required packages:    5",
+        "Number to remove:     2",
+    ]
+
+
+def test_depclean_pretend_nothing_to_remove(emerge_binary, fixture_env, tmp_path):
+    """When every installed package is reachable, depclean reports
+    nothing (and hints at --verbose)."""
+    root = _depclean_root(tmp_path)
+    # World-list the two orphans too -> nothing is unreachable.
+    (root / "var" / "lib" / "portage" / "world").write_text(
+        "dev-libs/dcworld\ndev-libs/dcorphan\n"
+    )
+    env = dict(fixture_env)
+    env["ROOT"] = str(root)
+    result = _run([str(emerge_binary)], ["--pretend", "--depclean"], env)
+    assert result.returncode == 0
+    assert ">>> No packages selected for removal by depclean" in result.stdout
+    assert ">>> To see reverse dependencies, use --verbose" in result.stdout
+    assert ">>> Calculating removal order..." not in result.stdout
+    assert result.stdout.splitlines()[-1] == "Number to remove:     0"
+
+
+def test_depclean_pretend_with_args_not_implemented(emerge_binary, fixture_env, tmp_path):
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--depclean", "dev-libs/dcorphan"],
+        _depclean_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 2
+    assert "not yet implemented" in result.stderr
+
+
+def test_depclean_requires_pretend(emerge_binary, fixture_env):
+    result = _run([str(emerge_binary)], ["--depclean"], fixture_env)
+    assert result.returncode == 2
+    assert "requires --pretend" in result.stderr
+
+
+def test_depclean_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    env = _depclean_env(fixture_env, tmp_path)
+    for args in (
+        ["--pretend", "--depclean"],
+        ["--pretend", "-c"],
+        ["--pretend", "-pc", "dev-libs/dcorphan"],
+    ):
+        rust = _run([str(emerge_binary)], args, env)
+        python = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == python.returncode, args
+        assert rust.stdout == python.stdout, args
+        assert rust.stderr == python.stderr, args
 
 
 def test_unmerge_pretend_lists_selected_and_omitted(emerge_binary, fixture_env):
@@ -6276,7 +6397,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -6290,25 +6411,28 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
 def test_real_action_not_implemented_message_says_action_not_option(emerge_binary, fixture_env):
-    """--depclean is a real emerge action (see main.py's actions
+    """--search is a real emerge action (see main.py's actions
     frozenset), not an option -- the error must say "action", and its
-    short alias -c (see shortmapping) must report the same canonical
-    "--depclean" name."""
-    result = _run([str(emerge_binary)], ["--depclean"], fixture_env)
+    short alias -s (see shortmapping) must report the same canonical
+    "--search" name. (--depclean/-c and --unmerge/-C used to be the
+    example here; both are implemented now.)"""
+    result = _run([str(emerge_binary)], ["--search"], fixture_env)
     assert result.returncode == 2
     expected = (
-        'emerge (pilot v1): action "--depclean" is a real emerge action, but is not '
+        'emerge (pilot v1): action "--search" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, "
+        "--with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, "
+        "--noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected
 
-    short_result = _run([str(emerge_binary)], ["-c"], fixture_env)
+    short_result = _run([str(emerge_binary)], ["-s"], fixture_env)
     assert short_result.returncode == 2
     assert short_result.stderr.strip() == expected
 

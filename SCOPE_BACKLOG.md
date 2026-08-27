@@ -65,14 +65,23 @@ Ranked roughly by how self-contained each is.
   the "is part of your system profile" + "still listed in the following
   package sets" warnings (`collect_installed_sets`) -- `_unmerge_display`
   is complete for `unmerge_action == "unmerge"`.
-  **Still open:** **`--prune`/`-P`** (real modern `--prune` without
-  `--nodeps` routes through `_calc_depclean` — see below); **`--depclean`
-  /`-c`** (the reverse-reachability closure from `@world`+`@system` over
-  installed packages — the big one, several slices); real
-  (non-`--pretend`) removal via `emerge` (this pilot keeps `ebuild
-  <file> unmerge` as its one real removal path). Minor `-pC` narrowings:
-  the higher-slot refinement on the set-protection warning, a bare
-  `=<vdb-path>` argument, the Python-interpreter self-skip.
+- **`emerge --pretend --depclean` / `-pc`** (no args) **shipped
+  2026-08-27** — `depclean_cleanlist` (the reachability closure over the
+  installed `RDEPEND`/`PDEPEND` graph from `@world`+`@system`) +
+  `run_depclean_pretend` (advisory block, `>>> Calculating removal
+  order...`, the `-pC` per-package block on the cleanlist, the
+  `Number to remove:` stats block). **Still open (this was a first
+  increment):** build-time-dep edges (`bdeps=auto`),
+  `--depclean-lib-check`, slot-operator rebuild edges, the "deps
+  unresolved, aborting" halt, `package.provided`, `--depclean <atoms>`
+  narrowing (currently rejected), and real (non-`--pretend`) removal.
+- **`--prune`/`-P`**: real modern `--prune` without `--nodeps` routes
+  through `_calc_depclean` too (`action="prune"`, protect-all-but-
+  highest-slot); `--prune --nodeps` is the obscure `_unmerge_display`
+  prune branch. Not started.
+- Minor `-pC` narrowings: the higher-slot refinement on the
+  set-protection warning, a bare `=<vdb-path>` argument, the
+  Python-interpreter self-skip.
 
 ### A. Small, self-contained dry-run/config slices
 

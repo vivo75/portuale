@@ -6098,7 +6098,7 @@ def _report_option(token):
             "but is not implemented in this pilot (only --pretend/-p, "
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
-            "--deselect/-W, --with-bdeps, --with-bdeps-auto, --changed-deps, "
+            "--deselect/-W, --unmerge/-C, --depclean/-c, --with-bdeps, --with-bdeps-auto, --changed-deps, "
             "--changed-deps-report, --changed-slot, --with-test-deps, "
             "--noreplace/-n, --selective, and --help/-h are implemented so "
             "far; see PROMPT.md)",
@@ -6705,6 +6705,167 @@ def _run_unmerge_pretend(targets, root, config_root, config):
     return 0
 
 
+def _split_installed_dir(dirname):
+    """Split a vdb dir name into (package, version): the earliest
+    '-'-split whose right half real ververify() accepts. Mirrors
+    portage-repo/src/lib.rs's split_installed_dir."""
+    parts = dirname.split("-")
+    for i in range(1, len(parts)):
+        version = "-".join(parts[i:])
+        if ververify(version):
+            return "-".join(parts[:i]), version
+    return None
+
+
+def _all_installed_packages(root):
+    """Every package under <root>/var/db/pkg -- real
+    vartree.dbapi.cpv_all(), (category, package, version, slot) each.
+    Mirrors portage-repo/src/lib.rs's all_installed_packages."""
+    out = []
+    vdb = os.path.join(root, "var", "db", "pkg")
+    try:
+        cats = sorted(os.listdir(vdb))
+    except OSError:
+        return out
+    for category in cats:
+        catdir = os.path.join(vdb, category)
+        if not os.path.isdir(catdir):
+            continue
+        for dirname in sorted(os.listdir(catdir)):
+            if not os.path.isdir(os.path.join(catdir, dirname)):
+                continue
+            split = _split_installed_dir(dirname)
+            if split is None:
+                continue
+            name, version = split
+            try:
+                with open(os.path.join(catdir, dirname, "SLOT")) as fh:
+                    slot = fh.read().strip().split("/", 1)[0] or "0"
+            except OSError:
+                slot = "0"
+            out.append((category, name, version, slot))
+    return out
+
+
+def _depclean_cleanlist(root, required_atoms):
+    """Real emerge --depclean's removal list (_calc_depclean +
+    create_cleanlist, no args_set): every installed package NOT reachable
+    from @world ∪ @system over the installed RDEPEND/PDEPEND graph
+    (flattened against each package's own vdb USE). Returns
+    (cleanlist, required_count). Mirrors portage-repo/src/lib.rs's
+    depclean_cleanlist -- see its docstring for the documented
+    narrowings."""
+    installed = _all_installed_packages(root)
+
+    def matches_atom(atom_str):
+        parsed = _parse_atom(atom_str)
+        if parsed is None:
+            return []
+        cat, pkg = parsed.cp.split("/", 1)
+        found = []
+        for (c, p, v, s) in installed:
+            if c != cat or p != pkg:
+                continue
+            if match_from_list(atom_str, [f"{c}/{p}-{v}:{s}"]):
+                found.append((c, p, v, s))
+        return found
+
+    reachable = set()
+    queue = []
+    for atom_str in required_atoms:
+        for (c, p, v, s) in matches_atom(atom_str):
+            if (c, p, v) not in reachable:
+                reachable.add((c, p, v))
+                queue.append((c, p, v))
+    while queue:
+        c, p, v = queue.pop()
+        use_flags = _read_vdb_flag_set(root, c, p, v, "USE")
+        for dep_key in ("RDEPEND", "PDEPEND"):
+            depstr = _read_vdb_string(root, c, p, v, dep_key)
+            if not depstr.strip():
+                continue
+            atoms = _flat_dep_atoms(depstr, use_flags)
+            if atoms is None:
+                continue
+            for atom_str in atoms:
+                for (dc, dp, dv, _ds) in matches_atom(atom_str):
+                    if (dc, dp, dv) not in reachable:
+                        reachable.add((dc, dp, dv))
+                        queue.append((dc, dp, dv))
+
+    import functools
+
+    vkey = functools.cmp_to_key(lambda a, b: (vercmp(a, b) or (a > b) - (a < b)))
+    cleanlist = sorted(
+        ((c, p, v) for (c, p, v, _s) in installed if (c, p, v) not in reachable),
+        key=lambda t: (t[0], t[1], vkey(t[2])),
+    )
+    return cleanlist, len(reachable)
+
+
+def _run_depclean_pretend(targets, root, config_root, config):
+    """emerge --pretend --depclean / -pc (real action_depclean +
+    _calc_depclean, no package arguments). Mirrors pretend.rs's
+    run_depclean_pretend."""
+    if targets:
+        print(
+            "emerge (pilot v1): --depclean with package arguments is not yet "
+            "implemented; run it without arguments for a full depclean",
+            file=sys.stderr,
+        )
+        return 2
+
+    for line in (
+        "",
+        " * Always study the list of packages to be cleaned for any obvious",
+        " * mistakes. Packages that are part of the world set will always",
+        " * be kept.  They can be manually added to this set with",
+        " * `emerge --noreplace <atom>`.  Packages that are listed in",
+        " * package.provided (see portage(5)) will be removed by",
+        " * depclean, even if they are part of the world set.",
+        " * ",
+        " * As a safety measure, depclean will not remove any packages",
+        " * unless *all* required dependencies have been resolved.  As a",
+        " * consequence of this, it often becomes necessary to run ",
+        " * `emerge --update --newuse --deep @world` prior to depclean.",
+    ):
+        print(line)
+
+    required = []
+    try:
+        required.extend(_read_world_atoms(root))
+        for name in _read_world_sets(root):
+            seen = set()
+            required.extend(_resolve_custom_set(config_root, name, seen))
+    except ResolutionError as e:
+        print(f"emerge: {e}", file=sys.stderr)
+        return 1
+    world_atom_count = len(set(required))
+    required.extend(config["system_packages"])
+
+    cleanlist, required_count = _depclean_cleanlist(root, required)
+    installed_total = len(_all_installed_packages(root))
+
+    def stats():
+        print(f"Packages installed:   {installed_total}")
+        print(f"Packages in world:    {world_atom_count}")
+        print(f"Packages in system:   {len(config['system_packages'])}")
+        print(f"Required packages:    {required_count}")
+        print(f"Number to remove:     {len(cleanlist)}")
+
+    if not cleanlist:
+        print(">>> No packages selected for removal by depclean")
+        print(">>> To see reverse dependencies, use --verbose")
+        stats()
+        return 0
+
+    print(">>> Calculating removal order...")
+    cpv_atoms = [f"={c}/{p}-{v}" for (c, p, v) in cleanlist]
+    rc = _run_unmerge_pretend(cpv_atoms, root, config_root, config)
+    stats()
+    return rc
+
+
 def _reinstall_reason(changed_flags, deps_changed, slot_changed, rebuilt_binary, new_repo):
     """The "(reinstall for ...)" note's own reason text, real portage
     treating --newuse/--changed-use, --changed-deps, --changed-slot,
@@ -6910,6 +7071,7 @@ def run(args):
     json_output = False
     deselect = False
     unmerge = False
+    depclean = False
     with_bdeps = True
     with_bdeps_given = False
     with_bdeps_auto = True
@@ -7118,6 +7280,11 @@ def run(args):
             # (myaction = "unmerge"), dispatched to _run_unmerge_pretend
             # below. Plain boolean. Mirrors pretend.rs.
             unmerge = True
+            i += 1
+        elif arg in ("--depclean", "-c"):
+            # Real main.py: --depclean/-c is a standalone ACTION,
+            # dispatched to _run_depclean_pretend below. Mirrors pretend.rs.
+            depclean = True
             i += 1
         elif arg == "--with-bdeps":
             # Real "argument_options" with "choices": ("y", "n") --
@@ -7554,6 +7721,8 @@ def run(args):
                     deselect = True
                 elif c == "C":
                     unmerge = True
+                elif c == "c":
+                    depclean = True
                 elif c == "B":
                     buildpkgonly = True
                 elif c == "X":
@@ -7617,6 +7786,13 @@ def run(args):
         )
         return 2
 
+    if depclean and not pretend:
+        print(
+            "emerge (pilot v1): --depclean/-c requires --pretend (see PROMPT.md)",
+            file=sys.stderr,
+        )
+        return 2
+
     # `--buildpkgonly` without `--pretend` is the one real, non-dry-run
     # execution path the Rust side implements for `emerge` itself (see
     # portuale's own emerge_build.rs module doc comment): it only ever
@@ -7638,7 +7814,7 @@ def run(args):
     if deselect:
         return _run_deselect(atom_args, _root())
 
-    if not atom_args and not unmerge:
+    if not atom_args and not unmerge and not depclean:
         print(
             "emerge (pilot v1): expected a package atom, e.g. "
             "`emerge --pretend cat/pkg`",
@@ -7687,6 +7863,8 @@ def run(args):
     # dispatch before the ordinary resolve-graph path.
     if unmerge:
         return _run_unmerge_pretend(atom_args, _root(), _config_root(), config)
+    if depclean:
+        return _run_depclean_pretend(atom_args, _root(), _config_root(), config)
 
     # "@world"/"@system" each expand to their own real atom list, in
     # place, at whichever position they appear -- see _read_world_atoms's
