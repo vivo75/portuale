@@ -759,10 +759,11 @@ PORTING/
   (already transitive) becomes a direct `portuale` dep for the real
   `cpv_sort_key` version ordering. **Documented cuts, a clean
   follow-up:** the `--prune`/`--depclean` variants (best-version pruning
-  / reverse-reachability), a bare `=<vdb-path>` argument, the "currently
-  used Python interpreter" self-skip, and any real removal. New
-  fixtures: `dev-libs/unmergepkg` (installed at 1.0 *and* 2.0),
-  `sys-apps/portage-1.0`.
+  / reverse-reachability -- since shipped, see below), a bare
+  `=<vdb-path>` argument (since shipped -- see "`-pC`: a literal vdb path"
+  below), the "currently used Python interpreter" self-skip, and any real
+  removal. New fixtures: `dev-libs/unmergepkg` (installed at 1.0 *and*
+  2.0), `sys-apps/portage-1.0`.
 
   **`-pC`: the two `_unmerge_display` warnings.** Completes
   `_unmerge_display` for `unmerge_action == "unmerge"`. (1) `!!! 'cp' is
@@ -785,6 +786,27 @@ PORTING/
   `dev-libs/nestedsetpkg` installed (it's in `@nestedtestset`, which
   `world_sets` selects). ~4 pinned `@world`/`@system` tests gained an
   "already installed" line for the two now-installed set members.
+
+  **`-pC`: a literal vdb path.** Real `unmerge.py:137-182`: an
+  `--unmerge`/`-C` argument that starts with `.` or `/`, or ends with
+  `.ebuild`, is treated as a path into the vdb rather than an atom --
+  `emerge -C /var/db/pkg/dev-libs/foo-1.0` (or `.../foo-1.0/foo-1.0.ebuild`).
+  New `resolve_vdb_path_arg` (`pretend.rs`, mirrored in
+  `emerge_pretend_reference.py`), wired into `run_unmerge_pretend`'s own
+  target-expansion loop: the path must exist (`!!! The path '…' doesn't
+  exist.`), a `.ebuild` suffix is stripped, the directory must have a
+  `CONTENTS` file (`!!! Not a valid db dir: …`) and sit inside
+  `<ROOT>/var/db/pkg` (`!!! … is not inside …; aborting.`), and the
+  `category/pkg-ver` tail is echoed and selected as `=category/pkg-ver`
+  -- exactly real portage's own `print("=" + …)`. Only for
+  `--unmerge`/`-C` (real `--prune`/`--clean` reject an ebuild path with
+  a different message; `--depclean`/`--prune` here never see a path,
+  they feed `=cpv` atoms). The path is resolved with `realpath`
+  (`canonicalize`), not `os.path.abspath` -- it follows symlinks, but
+  resolves the vdb root the same way, which is what keeps a symlinked
+  test `ROOT` working. Real portage's stray `print(sp_absx)` /
+  `print(absx)` debug lines (a raw list repr) before the "not inside"
+  message are deliberately omitted. New `_vdb_path_root` test fixture.
 
   **`emerge --pretend --depclean` / `-pc`: the third real emerge action
   (core increment).** Real `action_depclean` + `_calc_depclean` (no

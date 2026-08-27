@@ -1847,10 +1847,64 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
 /// slice can add them): the "still listed in the following package
 /// sets" set-protection warning, the "is part of your system profile"
 /// warning (real `cp in syslist`), the `--prune`/`--depclean` variants
-/// (best-version pruning / reverse-reachability), a bare `=<vdb-path>`
-/// argument, the "currently used Python interpreter" self-skip (needs a
-/// `CONTENTS` owner scan this pilot doesn't do here), and any real
-/// removal.
+/// (best-version pruning / reverse-reachability), the "currently used
+/// Python interpreter" self-skip (needs a `CONTENTS` owner scan this
+/// pilot doesn't do here), and any real removal.
+/// Real `unmerge.py:137-182`'s own installed-ebuild-path handling: an
+/// `--unmerge`/`-C` argument that starts with `.` or `/`, or ends with
+/// `.ebuild`, is a path into the vdb, not an atom. Returns `Ok(None)` if
+/// `arg` isn't path-shaped, `Ok(Some("=cat/pkg-ver"))` for a valid vdb
+/// entry (real portage also echoes that `=atom` to stdout, reproduced
+/// here), or `Err(code)` after printing the matching diagnostic for a
+/// bad path.
+///
+/// The path is resolved with `canonicalize` (real portage uses
+/// `os.path.abspath`, which doesn't follow symlinks -- `canonicalize`
+/// does, but it resolves the vdb root the same way, so `strip_prefix`
+/// still works, and it is what actually keeps a symlinked test `ROOT`
+/// working). Real portage's own stray `print(sp_absx)` / `print(absx)`
+/// debug lines before the "not inside …; aborting" message (a raw
+/// list repr -- clearly unintended output) are deliberately omitted.
+fn resolve_vdb_path_arg(arg: &str, root: &Path) -> Result<Option<String>, ExitCode> {
+    let path_shaped = arg.starts_with('.') || arg.starts_with('/') || arg.ends_with(".ebuild");
+    if !path_shaped {
+        return Ok(None);
+    }
+    let Ok(mut absx) = std::fs::canonicalize(arg) else {
+        println!("\n!!! The path '{arg}' doesn't exist.\n");
+        return Err(ExitCode::from(1));
+    };
+    // Real: `if sp_absx[-1][-7:] == ".ebuild": del sp_absx[-1]`.
+    if absx
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().ends_with(".ebuild"))
+    {
+        absx.pop();
+    }
+    if !absx.join("CONTENTS").exists() {
+        println!("!!! Not a valid db dir: {}", absx.display());
+        return Err(ExitCode::from(1));
+    }
+    let vdb =
+        std::fs::canonicalize(root.join("var/db/pkg")).unwrap_or_else(|_| root.join("var/db/pkg"));
+    let Ok(rel) = absx.strip_prefix(&vdb) else {
+        println!("\n!!! {arg} is not inside {}; aborting.\n", vdb.display());
+        return Err(ExitCode::from(1));
+    };
+    let rel = rel.to_string_lossy();
+    // Real: `sp_absx_len <= sp_vdb_len` -> "cannot be inside …".
+    if rel.is_empty() || !rel.contains('/') {
+        println!(
+            "\n!!! {arg} cannot be inside {}; aborting.\n",
+            vdb.display()
+        );
+        return Err(ExitCode::from(1));
+    }
+    let atom = format!("={rel}");
+    println!("{atom}");
+    Ok(Some(atom))
+}
+
 fn run_unmerge_pretend(
     targets: &[&str],
     root: &Path,
@@ -1921,7 +1975,11 @@ fn run_unmerge_pretend(
                     }
                 }
             }
-            other => expanded.push(other.to_string()),
+            other => match resolve_vdb_path_arg(other, root) {
+                Ok(Some(atom)) => expanded.push(atom),
+                Ok(None) => expanded.push(other.to_string()),
+                Err(code) => return code,
+            },
         }
     }
 

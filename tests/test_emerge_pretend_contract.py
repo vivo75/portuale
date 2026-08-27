@@ -5130,6 +5130,74 @@ def test_unmerge_pretend_lists_selected_and_omitted(emerge_binary, fixture_env):
     assert "All selected packages: =dev-libs/unmergepkg-1.0 =dev-libs/unmergepkg-2.0" in both.stdout
 
 
+def _vdb_path_root(tmp_path):
+    """A ROOT with one installed package (dev-libs/foo-1.0) whose vdb
+    entry has a CONTENTS file and a copied <pf>.ebuild, so a literal path
+    into it can be given to `emerge -C`."""
+    d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / "foo-1.0"
+    d.mkdir(parents=True)
+    (d / "CATEGORY").write_text("dev-libs\n")
+    (d / "SLOT").write_text("0\n")
+    (d / "CONTENTS").write_text("obj /usr/bin/foo 0000 1700000000\n")
+    (d / "foo-1.0.ebuild").write_text("")
+    return tmp_path, d
+
+
+def test_unmerge_pretend_accepts_a_literal_vdb_path(emerge_binary, fixture_env, tmp_path):
+    """Real unmerge.py:137-182: an `-C` argument that starts with `.`/`/`
+    or ends `.ebuild` is a path into the vdb -- validated, echoed as the
+    derived `=cat/pkg-ver`, and selected. A `.ebuild` suffix is stripped
+    first."""
+    root, pkgdir = _vdb_path_root(tmp_path)
+    env = dict(fixture_env)
+    env["ROOT"] = str(root)
+
+    for target in (str(pkgdir), str(pkgdir / "foo-1.0.ebuild")):
+        result = _run([str(emerge_binary)], ["--pretend", "-C", target], env)
+        assert result.returncode == 0, target
+        out = result.stdout.splitlines()
+        assert out[0] == "=dev-libs/foo-1.0", target
+        assert out[1] == ">>> These are the packages that would be unmerged:", target
+        assert "    selected: 1.0 " in out, target
+        assert "All selected packages: =dev-libs/foo-1.0" in out, target
+
+    # A path that doesn't exist.
+    missing = _run(
+        [str(emerge_binary)], ["--pretend", "-C", str(root / "var/db/pkg/dev-libs/nope-9")], env
+    )
+    assert missing.returncode == 1
+    assert missing.stdout.startswith("\n!!! The path '")
+    assert "doesn't exist." in missing.stdout
+
+    # An existing dir with no CONTENTS.
+    bad = tmp_path / "notadb"
+    bad.mkdir()
+    nocont = _run([str(emerge_binary)], ["--pretend", "-C", str(bad)], env)
+    assert nocont.returncode == 1
+    assert nocont.stdout.rstrip() == f"!!! Not a valid db dir: {bad}"
+
+
+def test_unmerge_pretend_vdb_path_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    root, pkgdir = _vdb_path_root(tmp_path)
+    env = dict(fixture_env)
+    env["ROOT"] = str(root)
+    (tmp_path / "notadb").mkdir()
+    for target in (
+        str(pkgdir),
+        str(pkgdir / "foo-1.0.ebuild"),
+        str(root / "var/db/pkg/dev-libs/nope-9"),
+        str(tmp_path / "notadb"),
+    ):
+        args = ["--pretend", "-C", target]
+        rust = _run([str(emerge_binary)], args, env)
+        python = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == python.returncode, target
+        assert rust.stdout == python.stdout, target
+        assert rust.stderr == python.stderr, target
+
+
 def test_unmerge_pretend_refuses_portage_itself(emerge_binary, fixture_env):
     """Real _unmerge_display: `sys-apps/portage` (PORTAGE_PACKAGE_ATOM)
     is moved from `selected` to `protected` with a note, and if it was

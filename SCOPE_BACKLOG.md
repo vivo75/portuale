@@ -100,8 +100,9 @@ Ranked roughly by how self-contained each is.
   `--depclean-lib-check`, slot-operator rebuild edges, real
   (non-`--pretend`) removal.
 - Minor `-pC` narrowings: the higher-slot refinement on the
-  set-protection warning, a bare `=<vdb-path>` argument, the
-  Python-interpreter self-skip.
+  set-protection warning, and the Python-interpreter self-skip. The
+  literal vdb-path argument (`emerge -C /var/db/pkg/cat/pkg-ver`,
+  `unmerge.py:137-182` -- `resolve_vdb_path_arg`) **shipped 2026-08-28**.
 
 ### A. Small, self-contained dry-run/config slices
 

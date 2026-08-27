@@ -6538,13 +6538,46 @@ def _print_unmerge_row(label, versions):
         print(padded + "".join(f"{v} " for v in versions))
 
 
+def _resolve_vdb_path_arg(arg, root):
+    """Real unmerge.py:137-182's own installed-ebuild-path handling: a
+    --unmerge/-C argument that starts with '.' or '/', or ends with
+    '.ebuild', is a path into the vdb, not an atom. Returns None if not
+    path-shaped, '=cat/pkg-ver' for a valid vdb entry (echoed to stdout,
+    like real portage), or raises _CleanupArgsExit after printing the
+    diagnostic. Mirrors pretend.rs's resolve_vdb_path_arg -- see its
+    docstring (path resolved with realpath; real portage's stray
+    print(sp_absx)/print(absx) debug lines omitted)."""
+    if not (arg.startswith((".", "/")) or arg.endswith(".ebuild")):
+        return None
+    if not os.path.exists(arg):
+        print(f"\n!!! The path '{arg}' doesn't exist.\n")
+        raise _CleanupArgsExit(1)
+    absx = os.path.realpath(arg)
+    if absx.rsplit("/", 1)[-1].endswith(".ebuild"):
+        absx = absx.rsplit("/", 1)[0]
+    if not os.path.exists(os.path.join(absx, "CONTENTS")):
+        print(f"!!! Not a valid db dir: {absx}")
+        raise _CleanupArgsExit(1)
+    vdb = os.path.realpath(os.path.join(str(root), "var/db/pkg"))
+    if not (absx == vdb or absx.startswith(vdb + "/")):
+        print(f"\n!!! {arg} is not inside {vdb}; aborting.\n")
+        raise _CleanupArgsExit(1)
+    rel = absx[len(vdb) + 1 :]
+    if "/" not in rel:
+        print(f"\n!!! {arg} cannot be inside {vdb}; aborting.\n")
+        raise _CleanupArgsExit(1)
+    atom = "=" + rel
+    print(atom)
+    return atom
+
+
 def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=False):
     """emerge --pretend --unmerge / -pC <atoms>: real
     _emerge/unmerge.py::_unmerge_display for unmerge_action == "unmerge",
     narrowed to a preview. Mirrors pretend.rs's run_unmerge_pretend --
     see its docstring for the algorithm and the documented cuts
     (set-protection / system-profile warnings, --prune/--depclean,
-    =<vdb-path>, the Python-interpreter self-skip).
+    the Python-interpreter self-skip).
 
     preserve_order mirrors real _unmerge_display's `ordered` flag
     (unmerge.py:459): when True the per-package blocks follow `targets`
@@ -6578,7 +6611,11 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
                 print(f"emerge: {e}", file=sys.stderr)
                 return 1
         else:
-            expanded.append(target)
+            try:
+                atom = _resolve_vdb_path_arg(target, root)
+            except _CleanupArgsExit as e:
+                return e.code
+            expanded.append(atom if atom is not None else target)
 
     print(">>> These are the packages that would be unmerged:")
 
