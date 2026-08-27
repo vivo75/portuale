@@ -19,10 +19,12 @@
 //     doesn't model `layout.conf` profile-formats at all, it's always
 //     allowed here (every real Gentoo profile fixture this pilot ships
 //     already implies it).
-//   - Wildcard `_*` IUSE-aware expansion (e.g. `linguas_*`, which needs a
-//     specific package's own IUSE -- global config resolution has no
-//     such per-package context at all) and ARCH-based KEYWORDS-format
-//     validation are out of scope. **Now stale**: `USE_EXPAND` itself
+//   - ARCH-based KEYWORDS-format validation is out of scope. Wildcard
+//     `_*` IUSE-aware expansion (e.g. `linguas_*`) IS now done, but in
+//     `portage_repo::effective_use_flags` (it needs a specific
+//     candidate's own IUSE, which this global config layer doesn't
+//     have) -- see that function's own `_*` block. **Now stale**:
+//     `USE_EXPAND` itself
 //     and `package.use`'s own `USE_EXPAND`-prefix shorthand (`VIDEO_CARDS:
 //     nvidia` lines) used to be listed here too -- see the dedicated
 //     `USE_EXPAND` bullet further below for the follow-up that closed
@@ -208,10 +210,10 @@
 //     `USE_EXPAND_VALUES_<v>` are now read too, feeding the real EAPI
 //     5+ `IUSE_EFFECTIVE` computation (`Config::iuse_effective`) -- a
 //     candidate's `is_valid_flag` domain, not just an `emerge --info`
-//     display concern. Still out of scope: `USE_EXPAND_HIDDEN` (genuinely
-//     display-only for EAPI 5+) and IUSE-aware `_*` wildcard expansion
-//     (`linguas_*` -- needs a specific package's own IUSE, see the `_*`
-//     bullet near the top of this comment).
+//     display concern. IUSE-aware `_*` wildcard expansion (`linguas_*`)
+//     is done too, in `portage_repo::effective_use_flags` (see the `_*`
+//     bullet near the top of this comment). Still out of scope:
+//     `USE_EXPAND_HIDDEN` (genuinely display-only for EAPI 5+).
 //   - `use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
 //     (PMS 5+, always recognized here per this pilot's own "no EAPI
 //     parametrization" precedent) ARE now read too, closing the
@@ -1300,12 +1302,12 @@ pub fn resolve_config(
     // `emerge --info` display. `USE_EXPAND_HIDDEN` genuinely *is*
     // display-only for EAPI 5+ (see `Config::iuse_effective`) and stays
     // unimplemented -- this pilot's `-pv` shows a flat declared-IUSE
-    // list with no USE_EXPAND grouping to hide from. Still out of scope,
-    // deliberately: IUSE-aware wildcard expansion (`linguas_*`, which
-    // needs a specific package's own IUSE -- global config resolution
-    // has no such per-package context at all). `package.use`'s own
-    // USE_EXPAND-prefix shorthand (`VIDEO_CARDS: nvidia` lines) stays a
-    // separate, not-yet-ported follow-up.
+    // list with no USE_EXPAND grouping to hide from. IUSE-aware `_*`
+    // wildcard expansion (`linguas_*`) IS now done, but in
+    // `portage_repo::effective_use_flags` (it needs a specific
+    // candidate's own IUSE). `package.use`'s own USE_EXPAND-prefix
+    // shorthand (`VIDEO_CARDS: nvidia` lines) is read too (see the
+    // `package.use` bullet in this comment).
     let use_expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
     for var in use_expand_vars {
         let Some(value) = scalars.get(&var) else {
@@ -1948,7 +1950,14 @@ mod tests {
         );
         assert_eq!(
             config.use_expand,
-            HashSet::from(["VIDEO_CARDS".to_string(), "ELIBC".to_string()])
+            HashSet::from([
+                "VIDEO_CARDS".to_string(),
+                "ELIBC".to_string(),
+                // LINGUAS is in USE_EXPAND for the _* wildcard fixture
+                // (dev-libs/wildexpandpkg) -- no LINGUAS= value set, so
+                // it folds nothing here.
+                "LINGUAS".to_string(),
+            ])
         );
         assert_eq!(
             config.use_expand_implicit,

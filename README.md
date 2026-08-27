@@ -6880,6 +6880,52 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
 #   -- elibc_musl is valid implicit IUSE but not enabled (ELIBC="glibc")
 ```
 
+### `USE_EXPAND` `_*` wildcard: enable every matching flag in a package's own IUSE
+
+The last `USE_EXPAND` corner. Real `config.py`'s `setcpv` (~line 2242):
+once `package.use` has been folded, a `k_*` flag still in the USE set --
+from `USE="linguas_*"`, from `LINGUAS="*"` being prefix-folded, or from a
+`package.use` `LINGUAS: *` shorthand -- means "enable every `k_<x>` flag
+declared in **this candidate's own `IUSE`** that isn't masked". It is
+inherently per-package (the IUSE-blind global config layer can't do it),
+so this lands in `portage_repo::effective_use_flags`, right after
+`package.use` and before the `use.mask`/`.force` steps: for each
+`_*`-suffixed token, every `IUSE` flag sharing its `k_` prefix is added,
+then the existing `use.mask` steps drop any that are masked (real
+portage's own `x not in usemask` guard), and finally every `_*`-suffixed
+pseudo-flag is stripped from the result (real portage strips them from
+`PORTAGE_USE`).
+
+Deliberately **not** guarded on `k` actually being a declared
+`USE_EXPAND` variable name (real portage checks `use_expand_split`): a
+`_*`-suffixed token in this pilot's USE set only ever originates from
+`USE_EXPAND` folding or `package.use`'s own `USE_EXPAND` shorthand
+anyway. This was the "IUSE-aware `_*` wildcard expansion (`linguas_*` --
+needs a specific package's own `IUSE`)" cut named in `portage-profile`'s
+module doc; that note is corrected.
+
+New fixtures: `profiles/base/make.defaults` adds `LINGUAS` to
+`USE_EXPAND`; `etc/portage/package.use` gets `dev-libs/wildexpandpkg
+linguas_*`; `profiles/base/package.use.mask` gets `dev-libs/wildexpandpkg
+linguas_en`; `dev-libs/wildexpandpkg` (`IUSE="linguas_en linguas_de"`,
+`RDEPEND="linguas_de? ( dev-libs/wildexpanddep ) linguas_en? (
+dev-libs/wildexpandmasked )"`) -- so `linguas_de` is wildcard-enabled and
+pulls `wildexpanddep`, while `linguas_en` stays masked off and
+`wildexpandmasked` (which needn't exist) is never referenced. Two Rust
+unit tests, one parametrized contract case, one dedicated pinned-output
+contract test; mirrored in `emerge_pretend_reference.py`.
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge --pretend -v dev-libs/wildexpandpkg
+# [ebuild  N] dev-libs/wildexpandpkg-1.0  USE="linguas_de -linguas_en"
+# [ebuild  N] dev-libs/wildexpanddep-1.0
+#   -- linguas_* expanded to the two declared linguas_* IUSE flags;
+#      linguas_en stayed masked, so only linguas_de's RDEPEND clause fired
+```
+
 ## Running it
 
 Build both Rust binaries:

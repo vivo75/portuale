@@ -774,6 +774,35 @@ pub fn effective_use_flags(
         }
     }
 
+    // `_*` wildcard USE_EXPAND expansion (real `config.py` `setcpv`
+    // ~2242): once `package.use` has been applied, a `k_*` flag still in
+    // the set (from `USE="linguas_*"`, `LINGUAS="*"` folding, or a
+    // `package.use` `LINGUAS: *` shorthand) means "enable every `k_<x>`
+    // flag declared in THIS candidate's own `IUSE`" -- the per-package
+    // expansion the IUSE-blind global config layer can't do. Any masked
+    // `k_<x>` is dropped again by the `use.mask` steps below, exactly as
+    // real portage's own `x not in usemask` guard intends. Deliberately
+    // NOT guarded on `k` actually being a `USE_EXPAND` variable name
+    // (real portage's own `use_expand_split` check): a `_*`-suffixed
+    // token in this pilot's USE set only ever originates from
+    // `USE_EXPAND` folding or `package.use`'s own `USE_EXPAND` shorthand.
+    let iuse_names: Vec<String> = iuse
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+        .collect();
+    let wildcard_prefixes: Vec<String> = use_flags
+        .iter()
+        .filter_map(|f| f.strip_suffix('*').map(|p| p.to_string()))
+        .filter(|p| p.ends_with('_'))
+        .collect();
+    for pfx in &wildcard_prefixes {
+        for name in &iuse_names {
+            if name.starts_with(pfx) {
+                use_flags.insert(name.clone());
+            }
+        }
+    }
+
     let stable = is_stable(
         keywords,
         candidate_str,
@@ -853,6 +882,10 @@ pub fn effective_use_flags(
             use_flags.remove(&flag);
         }
     }
+    // The `k_*` pseudo-flags themselves are not real USE flags -- real
+    // portage strips every `_*`-suffixed token from `PORTAGE_USE`
+    // (config.py ~2260) once they've done their expansion job above.
+    use_flags.retain(|f| !f.ends_with("_*"));
     use_flags
 }
 
@@ -9018,6 +9051,58 @@ mod tests {
             full_names,
             vec!["dev-libs/packageuseexpandpkg", "dev-libs/newpkg"]
         );
+    }
+
+    #[test]
+    fn use_expand_star_wildcard_enables_every_matching_iuse_flag() {
+        // fixtures/etc/portage/package.use has "dev-libs/wildexpandpkg
+        // linguas_*" -- real config.py setcpv's own _* wildcard: enable
+        // every linguas_<x> in this package's OWN IUSE
+        // ("linguas_en linguas_de") that isn't masked. profiles/base/
+        // package.use.mask keeps linguas_en off, so only linguas_de is
+        // enabled -> RDEPEND's "linguas_de? ( wildexpanddep )" fires and
+        // "linguas_en? ( wildexpandmasked )" does not.
+        let full_names: Vec<String> = graph_real("dev-libs/wildexpandpkg")
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            full_names,
+            vec!["dev-libs/wildexpandpkg", "dev-libs/wildexpanddep"]
+        );
+    }
+
+    #[test]
+    fn use_expand_star_wildcard_strips_the_pseudo_flag_from_the_effective_set() {
+        // `effective_use_flags` never returns a `_*`-suffixed token (real
+        // config.py strips them from PORTAGE_USE). Exercised directly
+        // with the fixture's own `linguas_*` package.use entry against
+        // wildexpandpkg's declared IUSE.
+        let use_flags = effective_use_flags(
+            "linguas_en linguas_de",
+            &[],
+            &[(
+                "dev-libs/wildexpandpkg".to_string(),
+                vec!["linguas_*".to_string()],
+            )],
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &["amd64".to_string()],
+            &HashSet::from(["amd64".to_string()]),
+            &[],
+            "dev-libs/wildexpandpkg-1.0:0/0::testrepo",
+            "dev-libs",
+            "wildexpandpkg",
+        );
+        assert!(use_flags.contains("linguas_en"));
+        assert!(use_flags.contains("linguas_de"));
+        assert!(!use_flags.iter().any(|f| f.ends_with("_*")));
     }
 
     #[test]

@@ -38,7 +38,7 @@ to **either** side yet — deliberate, documented scope cuts or explicit
 | 9 | `--deselect` world_sets/custom-set integration | **shipped** | `2ba3c8a5f` (`emerge --deselect @set` against the combined `world_set`) |
 | 9b | Real `Atom.intersects()` algebra for `--deselect` | **shipped** | `7406bae50` (dropped the narrower category/package check + a bogus installed-check) |
 | 10 | Cross-repo profile parents (`reponame:path` / bare `:path`) | **shipped** | `afd1a210c` (`expand_parent_colon`/`repo_containing`, real `LocationsManager._expand_parent_colon`) |
-| 11 | `USE_EXPAND` corners | **mostly shipped** | `66a8a7703` (`USE_EXPAND_UNPREFIXED`) + `USE_EXPAND_IMPLICIT`/`IUSE_IMPLICIT`/`IUSE_EFFECTIVE` (2026-08-27, `Config::iuse_effective` — `elibc_*`/`kernel_*` valid implicit IUSE). *Residual:* `USE_EXPAND_HIDDEN` (genuine non-gap, display-only for EAPI 5+) and IUSE-aware `_*` wildcard expansion (`linguas_*`) — see Part 2. |
+| 11 | `USE_EXPAND` corners | **shipped** | `66a8a7703` (`USE_EXPAND_UNPREFIXED`) + `USE_EXPAND_IMPLICIT`/`IUSE_IMPLICIT`/`IUSE_EFFECTIVE` (2026-08-27) + IUSE-aware `_*` wildcard expansion (2026-08-27, `effective_use_flags`'s `_*` block). *Residual:* `USE_EXPAND_HIDDEN` only — a genuine non-gap, display-only for EAPI 5+. |
 | 12 | `accept_keywords_defaults` bare-atom substitution | **shipped** | `743cd9b4a` (bare `package.accept_keywords` atom → implicit `~arch` at both profile and user level) |
 | 13 | `strip_libc_deps` in `--changed-deps` | **shipped** | `b29600063` |
 | 14 | `--changed-deps-report` | **shipped** | `69ca60846` (real cosmetic "you might want `--changed-deps`" notice, its own `--json` `changed_deps_report` array) |
@@ -80,11 +80,12 @@ Ranked roughly by how self-contained each is.
    installed package's USE-dep check uses raw vdb `IUSE` (real portage
    uses that package's vdb-recorded `IUSE_EFFECTIVE`, not persisted here).
 
-3. **IUSE-aware `_*` wildcard expansion** (e.g. `linguas_*` in `package.use`
-   or `USE`). Needs a specific package's own `IUSE`, which global config
-   resolution has no access to — would have to move into `portage-repo`'s
-   per-candidate `effective_use_flags` layer, the same way slotted
-   `package.use` matching already did.
+3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
+   (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag
+   still in the USE set after `package.use` enables every `k_<x>` in the
+   candidate's own `IUSE` not masked, then the `_*` pseudo-flags are
+   stripped. Not guarded on `k` being a real `USE_EXPAND` var name (a
+   documented simplification). New `dev-libs/wildexpand*` fixtures.
 
 4. **`--changed-deps` structured (non-flat) tree comparison.** Currently a
    deliberate flat-atom-set difference (`deps_changed`, `lib.rs:2518-2543`)

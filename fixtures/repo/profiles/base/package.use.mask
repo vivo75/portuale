@@ -5,3 +5,4 @@
 # proving atom-specificity ordering (not just profile-chain order)
 # decides which entry wins when more than one matches.
 dev-libs/pkgusemaskforcepkg maskflag specflag
+dev-libs/wildexpandpkg linguas_en

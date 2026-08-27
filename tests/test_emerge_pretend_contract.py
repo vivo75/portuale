@@ -776,6 +776,11 @@ CASES = [
         ["--pretend", "dev-libs/implicitiusepkgmusl"],
         0,
     ),
+    (
+        "USE_EXPAND _* wildcard enables every matching flag in the package's own IUSE",
+        ["--pretend", "-v", "dev-libs/wildexpandpkg"],
+        0,
+    ),
 ]
 
 
@@ -2049,6 +2054,34 @@ def test_use_expand_unprefixed_variable_drives_a_dependency(emerge_binary, fixtu
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
     assert "hiddendep" not in result.stdout
+
+
+def test_use_expand_star_wildcard_expands_against_the_packages_own_iuse(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """fixtures/etc/portage/package.use: "dev-libs/wildexpandpkg
+    linguas_*" -- real config.py setcpv's own _* wildcard: enable every
+    linguas_<x> flag declared in THIS package's own IUSE
+    ("linguas_en linguas_de") that isn't masked. profiles/base/
+    package.use.mask keeps linguas_en off, so USE ends up
+    "linguas_de -linguas_en" (the linguas_* pseudo-flag itself stripped),
+    and RDEPEND's "linguas_de? ( wildexpanddep )" fires while
+    "linguas_en? ( wildexpandmasked )" does not."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/wildexpandpkg"], fixture_env
+    )
+    result_py = _run(
+        emerge_pretend_python, ["--pretend", "-v", "dev-libs/wildexpandpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == result_py.stdout
+    assert result.stderr == result_py.stderr
+    assert result.stdout.splitlines() == [
+        '[ebuild  N] dev-libs/wildexpandpkg-1.0  USE="linguas_de -linguas_en"',
+        "[ebuild  N] dev-libs/wildexpanddep-1.0",
+    ]
+    assert "wildexpandmasked" not in result.stdout
+    assert "linguas_*" not in result.stdout
 
 
 def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(

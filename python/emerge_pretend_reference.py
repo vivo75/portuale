@@ -1610,6 +1610,24 @@ def effective_use_flags(
         if _matches_config_entry(entry, candidate_str, category, package):
             _apply_incremental(" ".join(tokens), use_flags)
 
+    # _* wildcard USE_EXPAND expansion (real config.py setcpv ~2242):
+    # once package.use has been applied, a "k_*" flag still in the set
+    # (from USE="linguas_*" / LINGUAS="*" folding / package.use "LINGUAS: *"
+    # shorthand) means "enable every k_<x> flag declared in THIS
+    # candidate's own IUSE" -- the per-package expansion the IUSE-blind
+    # global config layer can't do. Masked k_<x> are dropped again by the
+    # use.mask steps below (real portage's own "x not in usemask" guard).
+    # Not guarded on k being a USE_EXPAND var name -- a "_*" token in
+    # this pilot's USE set only ever comes from USE_EXPAND folding or
+    # package.use's USE_EXPAND shorthand. Mirrors portage-repo/src/lib.rs's
+    # effective_use_flags exactly.
+    iuse_names = [tok.lstrip("+-") for tok in iuse.split()]
+    wildcard_prefixes = [f[:-1] for f in use_flags if f.endswith("_*")]
+    for pfx in wildcard_prefixes:
+        for name in iuse_names:
+            if name.startswith(pfx):
+                use_flags.add(name)
+
     stable = _is_stable(
         keywords, candidate_str, category, package, accept_keywords, package_accept_keywords
     )
@@ -1632,6 +1650,10 @@ def effective_use_flags(
         use_flags -= _specificity_ordered_flags(
             package_use_stable_mask, candidate_str, category, package
         )
+    # The "k_*" pseudo-flags themselves are not real USE flags -- real
+    # portage strips every "_*"-suffixed token from PORTAGE_USE
+    # (config.py ~2260) once they've done their expansion job above.
+    use_flags = {f for f in use_flags if not f.endswith("_*")}
     return use_flags
 
 
@@ -2610,11 +2632,14 @@ def resolve_config(
     # the exact same _apply_incremental token semantics USE itself
     # already uses, folded directly into use_flags. USE_EXPAND_UNPREFIXED
     # (real config.py's own companion mechanism -- no prefix at all,
-    # applied in the loop right below this one) IS now read too. Still
-    # out of scope, deliberately: IUSE-aware wildcard expansion,
-    # USE_EXPAND_HIDDEN/_IMPLICIT, and package.use's own USE_EXPAND-prefix
-    # shorthand (a separate, not-yet-ported follow-up). Mirrors
-    # portage-profile/src/lib.rs's resolve_config exactly.
+    # applied in the loop right below this one) IS now read too, as are
+    # USE_EXPAND_IMPLICIT/IUSE_IMPLICIT/USE_EXPAND_VALUES_* (iuse_effective,
+    # computed after the unprefixed loop). IUSE-aware _* wildcard
+    # expansion (linguas_*) is done in effective_use_flags (needs a
+    # candidate's own IUSE); package.use's USE_EXPAND-prefix shorthand is
+    # read too. Still out of scope: USE_EXPAND_HIDDEN (display-only for
+    # EAPI 5+). Mirrors portage-profile/src/lib.rs's resolve_config
+    # exactly.
     for var in use_expand:
         value = scalars.get(var)
         if value is None:

@@ -1,0 +1,9 @@
+DEFINED_PHASES=-
+DEPEND=
+DESCRIPTION=fixture: IUSE-aware _* wildcard USE_EXPAND expansion -- package.use linguas_* enables every linguas_X in this package's own IUSE; package.use.mask keeps linguas_en off
+EAPI=8
+IUSE=linguas_en linguas_de
+KEYWORDS=amd64
+RDEPEND=linguas_de? ( dev-libs/wildexpanddep ) linguas_en? ( dev-libs/wildexpandmasked )
+SLOT=0
+_md5_=0000000000000000000000000000000

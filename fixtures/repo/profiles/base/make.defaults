@@ -7,7 +7,7 @@ USE="${USE} bar"
 
 # Exercises USE_EXPAND: VIDEO_CARDS="nvidia" expands into the pseudo-USE
 # flag "video_cards_nvidia" (see dev-libs/useexpandpkg).
-USE_EXPAND="VIDEO_CARDS ELIBC"
+USE_EXPAND="VIDEO_CARDS ELIBC LINGUAS"
 VIDEO_CARDS="nvidia"
 
 # Exercises USE_EXPAND_IMPLICIT: ELIBC is an implicit USE_EXPAND var, so
