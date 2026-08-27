@@ -1168,4 +1168,120 @@ mod tests {
         .unwrap();
         assert_eq!(result, vec!["dev-libs/a", "dev-libs/b"]);
     }
+
+    /// Expected values from Portage's `use_reduce` (`flat=False` default).
+    #[test]
+    fn structured_matches_portage_use_reduce_normalization() {
+        let cases: &[(&str, &[&str], &[&str])] = &[
+            ("c/a c/b", &[], &["c/a", "c/b"]),
+            ("( c/a c/b )", &[], &["c/a", "c/b"]),
+            ("c/a ( ( c/b ) )", &[], &["c/a", "c/b"]),
+            ("|| ( c/a c/b )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            ("|| ( c/b c/a )", &[], &["||", "(", "c/b", "c/a", ")"]),
+            ("|| ( c/a )", &[], &["c/a"]),
+            (
+                "|| ( ( c/a c/b ) c/c )",
+                &[],
+                &["||", "(", "(", "c/a", "c/b", ")", "c/c", ")"],
+            ),
+            (
+                "|| ( c/a ( c/b c/c ) )",
+                &[],
+                &["||", "(", "c/a", "(", "c/b", "c/c", ")", ")"],
+            ),
+            (
+                "|| ( || ( c/a c/b ) c/c )",
+                &[],
+                &["||", "(", "c/a", "c/b", "c/c", ")"],
+            ),
+            ("c/a foo? ( c/b )", &["foo"], &["c/a", "c/b"]),
+            ("c/a foo? ( c/b )", &[], &["c/a"]),
+            ("|| ( c/a foo? ( c/b ) )", &[], &["c/a"]),
+            (
+                "|| ( c/a foo? ( c/b ) )",
+                &["foo"],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("|| ( foo? ( c/a c/b ) )", &["foo"], &["c/a", "c/b"]),
+            (
+                "|| ( foo? ( c/a ) bar? ( c/b ) )",
+                &[],
+                &["__const__/empty-any-of"],
+            ),
+            ("foo? ( bar? ( c/a ) )", &["foo"], &[]),
+            (
+                "|| ( c/a c/b ) c/c",
+                &[],
+                &["||", "(", "c/a", "c/b", ")", "c/c"],
+            ),
+            (
+                "c/c || ( c/a c/b )",
+                &[],
+                &["c/c", "||", "(", "c/a", "c/b", ")"],
+            ),
+            (
+                "|| ( c/a c/b ) || ( c/c c/d )",
+                &[],
+                &["||", "(", "c/a", "c/b", ")", "||", "(", "c/c", "c/d", ")"],
+            ),
+            ("foo? ( c/a bar? ( c/b ) )", &["foo"], &["c/a"]),
+            (
+                "foo? ( c/a bar? ( c/b ) )",
+                &["foo", "bar"],
+                &["c/a", "c/b"],
+            ),
+            ("|| ( foo? ( c/a ) c/b )", &[], &["c/b"]),
+            (
+                "|| ( foo? ( c/a ) c/b )",
+                &["foo"],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            (
+                "|| ( ( foo? ( c/a ) c/x ) c/b )",
+                &[],
+                &["||", "(", "c/x", "c/b", ")"],
+            ),
+            (
+                "|| ( c/a || ( c/b c/c ) )",
+                &[],
+                &["||", "(", "c/a", "c/b", "c/c", ")"],
+            ),
+            (
+                "|| ( || ( c/a c/b ) )",
+                &[],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("( || ( c/a c/b ) )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            ("|| ( c/a ( c/b ) )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            (
+                "|| ( ( c/a ) ( c/b ) )",
+                &[],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("|| ( ( c/a ) c/b )", &[], &["||", "(", "c/a", "c/b", ")"]),
+            (
+                "foo? ( || ( c/a c/b ) )",
+                &["foo"],
+                &["||", "(", "c/a", "c/b", ")"],
+            ),
+            ("foo? ( || ( c/a c/b ) )", &[], &[]),
+            (
+                "|| ( foo? ( c/a c/b ) c/c )",
+                &["foo"],
+                &["||", "(", "(", "c/a", "c/b", ")", "c/c", ")"],
+            ),
+            ("|| ( foo? ( c/a c/b ) c/c )", &[], &["c/c"]),
+        ];
+        for (s, u, expected) in cases {
+            let got =
+                use_reduce_structured(&toks(s), &set(u), MatchMode::Normal).unwrap_or_else(|e| {
+                    panic!("use_reduce_structured({s:?}) errored: {e}");
+                });
+            assert_eq!(
+                got,
+                expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "input {s:?} uselist {u:?}"
+            );
+        }
+    }
 }
