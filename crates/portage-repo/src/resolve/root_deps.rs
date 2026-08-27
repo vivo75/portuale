@@ -181,3 +181,147 @@ pub(crate) struct ResolveRootDepsBuildEntriesArgs<'a> {
     pub(crate) seen: &'a mut HashSet<(String, String)>,
     pub(crate) local_binpkg: &'a std::sync::Arc<BinaryIndex>,
 }
+
+/// Resolves `atom_str` against the running root and walks the resolved
+/// package's own `DEPEND` + `BDEPEND` + `RDEPEND` + `IDEPEND` there too,
+/// recursively (`--root-deps`: a build tool is installed on the running root,
+/// so its runtime deps must be present there as well). `PDEPEND` stays a
+/// target-`ROOT` concern, a documented cut.
+/// `seen` dedups cross-package and guards cycles (inserted before recursing;
+/// one `required_by` edge is lost where a cycle is cut).
+/// Per outcome: merge-bound outcomes gain an entry plus recursion;
+/// `AlreadyInstalled` and errors yield nothing.
+/// `blockers` stay empty, and the display fields reuse the main walk's seam.
+// Portage: depgraph.py, _add_pkg_deps (depend_root / dep_root selection)
+pub(crate) fn resolve_root_deps_build_entries(
+    args: ResolveRootDepsBuildEntriesArgs<'_>,
+) -> Vec<GraphEntry> {
+    let ResolveRootDepsBuildEntriesArgs {
+        repos,
+        running_root,
+        atom_str,
+        config,
+        owner,
+        seen,
+        local_binpkg,
+    } = args;
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return Vec::new();
+    };
+    let key = (atom.category.clone(), atom.package.clone());
+    if !seen.insert(key.clone()) {
+        return Vec::new();
+    }
+    let Ok(outcome) = resolve_pretend(
+        &SelectSource {
+            repos,
+            root: running_root,
+            config,
+            local_binpkg,
+        },
+        atom_str,
+        &SelectOptions {
+            // `--emptytree`, `--getbinpkg` and `--autounmask` never reach
+            // running-root build entries.
+            empty: false,
+            getbinpkg: false,
+            autounmask_keywords: false,
+            ..SelectOptions::default()
+        },
+    ) else {
+        return Vec::new();
+    };
+
+    // `Some(version)` for exactly the outcomes worth recursing into;
+    // `None` for `NoVisibleCandidate` (an entry, but nothing to walk);
+    // an early return for `AlreadyInstalled` (no entry, nothing to walk).
+    let recurse_version = match &outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            Some(version.clone())
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+            Some(to.clone())
+        }
+        // A removal is never walked (it has no deps).
+        PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
+        PretendOutcome::AlreadyInstalled { .. } => return Vec::new(),
+    };
+
+    // Both `false` above, so the outcome can only come from an ebuild.
+    let mut entry = GraphEntry {
+        discovery: 0,
+        category: atom.category.clone(),
+        package: atom.package.clone(),
+        outcome,
+        blockers: Vec::new(),
+        slot: None,
+        sub_slot: None,
+        repo_name: None,
+        oldbest: Vec::new(),
+        use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: vec![owner],
+        source: CandidateSource::Ebuild,
+        provenance: VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: true,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    };
+    // Slot/repo identity plus USE display, diffed against the running vdb.
+    if let Some(version) = recurse_version.as_ref() {
+        let (sub, repo, slot) = slot_conflict_meta(repos, &atom.category, &atom.package, version);
+        entry.slot = Some(slot);
+        entry.sub_slot = Some(sub);
+        entry.repo_name = Some(repo);
+    }
+    refresh_entry_use_display(
+        std::slice::from_mut(&mut entry),
+        repos,
+        running_root,
+        &key,
+        config,
+    );
+    let mut result = vec![entry];
+
+    if let Some(version) = recurse_version
+        && let Some((metadata, use_flags)) =
+            resolved_version_meta_and_use(repos, &atom.category, &atom.package, &version, config)
+    {
+        for dep_atom in unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
+            metadata: &metadata,
+            use_flags: &use_flags,
+            repos,
+            config,
+            running_root,
+            dep_keys: &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"],
+            empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+                metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+            ),
+        }) {
+            result.extend(resolve_root_deps_build_entries(
+                ResolveRootDepsBuildEntriesArgs {
+                    repos,
+                    running_root,
+                    atom_str: &dep_atom,
+                    config,
+                    owner: key.clone(),
+                    seen,
+                    local_binpkg,
+                },
+            ));
+        }
+    }
+
+    result
+}

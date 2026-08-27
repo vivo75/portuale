@@ -17,3 +17,37 @@ pub(crate) fn contents_owned_paths(text: &str) -> Vec<String> {
         })
         .collect()
 }
+
+/// Every merge-bound entry must be `Binary` in a remote plan (the
+/// `--getbinpkgonly` resolve guarantees it); anything else is a usage
+/// error naming the offenders (exit 2 at the call site).
+pub(crate) fn check_binary_plan(entries: &[portage_repo::GraphEntry]) -> Result<(), String> {
+    use portage_repo::{CandidateSource, PretendOutcome};
+    let mut offenders = Vec::new();
+    for entry in entries {
+        let merge_bound = !matches!(
+            entry.outcome,
+            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+        );
+        if merge_bound && entry.source != CandidateSource::Binary {
+            let version = match &entry.outcome {
+                PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                    version.clone()
+                }
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    to.clone()
+                }
+                _ => String::new(),
+            };
+            offenders.push(format!("{}/{}-{version}", entry.category, entry.package));
+        }
+    }
+    if offenders.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "remote plan is not binary-only (needs --getbinpkgonly): {}",
+            offenders.join(" ")
+        ))
+    }
+}

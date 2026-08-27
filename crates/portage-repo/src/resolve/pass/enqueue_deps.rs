@@ -17,6 +17,96 @@ pub(crate) struct FilterRootDepsArgs<'a> {
     pub(crate) cross_running_root: Option<&'a Path>,
 }
 
+/// Apply the `--root-deps` existence split: atoms one root satisfies never
+/// reach the ordinary queue, atoms neither satisfies become their own
+/// running-root entries. No-op unless cross-root with a split root.
+pub(crate) fn filter_root_deps(args: FilterRootDepsArgs<'_>) -> Vec<String> {
+    let FilterRootDepsArgs {
+        flat_deps,
+        ctx,
+        config,
+        metadata,
+        use_flags,
+        key,
+        state,
+        cross_running_root,
+    } = args;
+    // The existence-check split only runs for flag-on coinciding-roots builds;
+    // on a cross-root run the per-group walk above already resolved every build
+    // atom against its own root, so filtering here would double-resolve them.
+    let root_deps_split: Option<&Path> = ctx
+        .root_deps_running_root
+        .filter(|_| cross_running_root.is_none());
+    // The `ESYSROOT`-vs-`ROOT` distinction; a strict no-op when
+    // `root_deps_split` is `None`. See `root_deps_satisfied_atoms`.
+    let root_deps_satisfied: HashSet<String> = root_deps_split
+        .map(|root| {
+            root_deps_satisfied_atoms(RootDepsSatisfiedAtomsArgs {
+                metadata,
+                use_flags,
+                repos: &ctx.repos,
+                config,
+                running_root: root,
+                dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
+                empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+                    metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+                ),
+            })
+        })
+        .unwrap_or_default();
+    // Atoms neither root satisfies become their own running-root entries (resolved
+    // against the running root directly, in order). Never falls through to the
+    // ordinary queue: Portage `DEPEND`/`BDEPEND` never targets `ROOT`/`ESYSROOT`.
+    // See `resolve_root_deps_build_entries`. No-op when `root_deps_split` is `None`.
+    let root_deps_unsatisfied: Vec<String> = root_deps_split
+        .map(|root| {
+            unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
+                metadata,
+                use_flags,
+                repos: &ctx.repos,
+                config,
+                running_root: root,
+                dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
+                empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+                    metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+                ),
+            })
+        })
+        .unwrap_or_default();
+    // The two sets above are evaluated-keyed while `flat_deps` is still raw
+    // (Portage evaluates at every producer; `enqueue_flat_deps` evaluates at
+    // queue time), so membership compares evaluated forms; survivors stay raw.
+    let flat_deps: Vec<String> = flat_deps
+        .into_iter()
+        .filter(|tok| {
+            let evaluated = portage_dep::evaluate_atom_conditionals(tok, use_flags)
+                .unwrap_or_else(|| tok.clone());
+            !root_deps_satisfied.contains(&evaluated)
+        })
+        .filter(|tok| {
+            let evaluated = portage_dep::evaluate_atom_conditionals(tok, use_flags)
+                .unwrap_or_else(|| tok.clone());
+            !root_deps_unsatisfied.contains(&evaluated)
+        })
+        .collect();
+    if let Some(running_root) = root_deps_split {
+        for atom_str in &root_deps_unsatisfied {
+            state.entries.extend(resolve_root_deps_build_entries(
+                ResolveRootDepsBuildEntriesArgs {
+                    repos: &ctx.repos,
+                    running_root,
+                    atom_str,
+                    config,
+                    owner: (*key).clone(),
+                    seen: &mut state.root_deps_build_seen,
+                    local_binpkg: &ctx.local_binpkg,
+                },
+            ));
+        }
+    }
+    flat_deps
+}
+
 /// The values [`enqueue_test_deps`] reads from its caller.
 pub(crate) struct EnqueueTestDepsArgs<'a> {
     pub(crate) ctx: &'a ResolveCtx<'a>,
