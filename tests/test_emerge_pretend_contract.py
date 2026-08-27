@@ -466,6 +466,11 @@ CASES = [
         0,
     ),
     (
+        "-pv marks installed-vs-new USE changes (*/%) on an [ebuild U] line",
+        ["--pretend", "-v", "--update", "dev-libs/upgradeusepkg"],
+        0,
+    ),
+    (
         "use.stable.force/package.use.stable.mask apply to a genuinely stable candidate",
         ["--pretend", "-v", "dev-libs/stableusepkg"],
         0,
@@ -2202,6 +2207,42 @@ def test_pv_omits_a_use_expand_hidden_group(
     assert rust.stdout.strip() == "[ebuild  N] dev-libs/hiddenexpandpkg-1.0"
     assert "CPU_FLAGS_X86" not in rust.stdout
     assert "cpu_flags_x86" not in rust.stdout
+
+
+def test_pv_marks_use_changes_against_the_installed_version(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real output_helpers.py::_create_use_string, for an entry that
+    replaces an installed one (is_new=False), diffs each flag against the
+    installed version's own recorded USE/IUSE and appends `*` (value
+    changed) / `%` (flag newly in IUSE); an unchanged flag is omitted
+    entirely. dev-libs/upgradeusepkg was installed at 1.0 with
+    IUSE="+keep change drop" / USE="keep change"; its 2.0 ebuild has
+    IUSE="+keep -change +added":
+
+      - keep:   on, was on         -> omitted (unchanged)
+      - change: was on, now off    -> -change*
+      - added:  on, not in old IUSE -> added%*
+      - drop:   removed from IUSE   -> not shown (no --all-flags)
+    """
+    args = ["--pretend", "-v", "--update", "dev-libs/upgradeusepkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines() == [
+        '[ebuild  U] dev-libs/upgradeusepkg-2.0 (upgrade from 1.0)  USE="added%* -change*"',
+    ]
+
+    # A New install has no installed side -> no markers, every flag plain.
+    new = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/useflagpkg"], fixture_env
+    )
+    assert new.stdout.splitlines()[0] == (
+        '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+    )
 
 
 def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
@@ -4532,14 +4573,17 @@ def test_newuse_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
 
 
 def test_newuse_verbose_shows_use_flags_too(emerge_binary, fixture_env):
-    """-v combines with -N exactly like it does with New/Upgrade: shows
-    this package's own IUSE-declared flags, alphabetically sorted."""
+    """-v combines with -N exactly like it does with New/Upgrade. For a
+    Reinstall (an installed side exists), real output_helpers.py::
+    _create_use_string diffs each flag against the installed version's
+    recorded USE/IUSE: `foo` was in old IUSE but off, is now on -> `foo*`.
+    """
     result = _run(
         [str(emerge_binary)], ["--pretend", "-N", "-v", "dev-libs/reinstallpkg"], fixture_env
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)  USE="foo"',
+        '[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)  USE="foo*"',
         "[ebuild  N] dev-libs/newpkg-1.0",
     ]
 

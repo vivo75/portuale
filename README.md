@@ -1313,9 +1313,11 @@ PORTING/
   shows only the plain enabled/disabled set, which is a real, useful
   subset rather than an invented one, matching the "documented,
   simplified subset" spirit of every other output-formatting decision in
-  this pilot. (The `USE_EXPAND` grouping half was closed later -- see
-  "`emerge --pretend -v`: `USE_EXPAND` grouping" below; the colorization
-  and `*`/`%` diff markers are still cut.)
+  this pilot. (The `USE_EXPAND` grouping and the `*`/`%` diff markers
+  were both closed later -- see "`emerge --pretend -v`: `USE_EXPAND`
+  grouping" and "`emerge --pretend -v`: installed-vs-new USE markers"
+  below; the ANSI colorization and the `( … )` forced/masked wrap are
+  still cut.)
 
   **BDEPEND/PDEPEND/IDEPEND in recursion**: dependency recursion now
   concatenates and flattens all five real dependency-string keys --
@@ -2690,17 +2692,42 @@ PORTING/
   useful programmatically, and real `--json` has no USE display to
   match). `portage-profile` grew `Config::use_expand_hidden` (a new
   incremental, `USE_EXPAND_HIDDEN`), display-only -- never consulted by
-  `iuse_effective`/visibility/resolution. Deliberately *not* ported (a
-  separate, still-open cut): real portage's ANSI colorization and its
-  installed-vs-new `*`/`%` diff markers; within each group this keeps
-  the pilot's own established bare-name sort rather than real
-  `_create_use_string`'s enabled-first ordering. Fixture profile's
-  `USE_EXPAND` gained `PYTHON_TARGETS` (so `dev-libs/packageuseexpandpkg`
-  groups) and `CPU_FLAGS_X86` with `USE_EXPAND_HIDDEN="CPU_FLAGS_X86"`;
-  new `dev-libs/hiddenexpandpkg` (`IUSE="cpu_flags_x86_sse2
-  cpu_flags_x86_avx"`, `sse2` really enabled) shows *no* `-pv` USE line
-  at all. `dev-libs/useexpandpkg` now prints `VIDEO_CARDS="-amdgpu
-  nvidia"`, `dev-libs/wildexpandpkg` `LINGUAS="de -en"`.
+  `iuse_effective`/visibility/resolution. Deliberately *not* ported at
+  the time (a separate cut, closed by the next slice): real portage's
+  ANSI colorization and its installed-vs-new `*`/`%` diff markers; within
+  each group this keeps the pilot's own established bare-name sort rather
+  than real `_create_use_string`'s enabled-first ordering. Fixture
+  profile's `USE_EXPAND` gained `PYTHON_TARGETS` (so
+  `dev-libs/packageuseexpandpkg` groups) and `CPU_FLAGS_X86` with
+  `USE_EXPAND_HIDDEN="CPU_FLAGS_X86"`; new `dev-libs/hiddenexpandpkg`
+  (`IUSE="cpu_flags_x86_sse2 cpu_flags_x86_avx"`, `sse2` really enabled)
+  shows *no* `-pv` USE line at all. `dev-libs/useexpandpkg` now prints
+  `VIDEO_CARDS="-amdgpu nvidia"`, `dev-libs/wildexpandpkg` `LINGUAS="de
+  -en"`.
+
+  **`emerge --pretend -v`: installed-vs-new USE markers.** The rest of
+  real `output_helpers.py::_create_use_string`. For an entry that
+  replaces an installed one (`Upgrade`/`Downgrade`/`Reinstall` -- real
+  `pkg_info.previous_pkg is not None`, `is_new` false), each flag is
+  diffed against the installed version's own vdb-recorded `USE`/`IUSE`
+  and gets a suffix: `flag%*` (enabled, brand-new IUSE flag), `flag*`
+  (enabled, was off), `-flag%` (disabled, brand-new IUSE flag), `-flag*`
+  (disabled, was on) -- and an *unchanged* flag is dropped from the line
+  entirely (real `_create_use_string` leaves `flag_str` `None`), so an
+  `[ebuild U]` whose USE didn't actually change shows no `USE=` at all.
+  `build_use_expand_display` grew an `installed: Option<&InstalledUseState>`
+  parameter (the call site fills it from `read_vdb_flag_set` for the
+  installed version, `None` for a `New`/`AlreadyInstalled` entry -> every
+  flag shown plain, unchanged). Named as this slice's boundary when it
+  was scoped, still cut: ANSI color, the `( … )` forced/masked wrap (no
+  per-candidate `pkg.use.force`/`.mask` here) and its knock-on to the
+  `%` suffix, and the `(-flag%)` "removed from IUSE" line (real portage
+  only shows it under `--all-flags` or when that removed flag itself
+  triggered the reinstall). New `dev-libs/upgradeusepkg` (installed 1.0
+  `IUSE="+keep change drop"` / `USE="keep change"`, 2.0 ebuild
+  `IUSE="+keep -change +added"`) prints `USE="added%* -change*"`;
+  `dev-libs/reinstallpkg`'s own `-v` line goes from `USE="foo"` to
+  `USE="foo*"`.
 
   **`use.stable.mask`/`.force`/`package.use.stable.mask`/`.force`
   (stable-vs-`~arch` distinction)**. Closes the last named cut in the

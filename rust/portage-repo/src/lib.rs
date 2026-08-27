@@ -2713,9 +2713,18 @@ fn strip_slot_operator_one(tok: &str) -> String {
 }
 
 /// Real `output.py::_display_use` + `map_to_use_expand` +
+/// The installed version's own recorded `USE` / `IUSE` (both bare flag
+/// names, `USE` already intersected with `IUSE`), for
+/// `build_use_expand_display`'s own `*`/`%` diff markers -- real
+/// `_display_use`'s `old_use` / `old_iuse`. `None` at the call site for a
+/// `New` entry (no installed side) -> no markers, every flag shown plain.
+struct InstalledUseState {
+    old_use: HashSet<String>,
+    old_iuse: HashSet<String>,
+}
+
 /// `output_helpers.py::_create_use_string`, for `emerge --pretend -v`'s
-/// own `USE="…" VAR="…"` line -- narrowed to a fresh entry's display (no
-/// installed-vs-new `*`/`%` diff markers, a separate documented cut).
+/// own `USE="…" VAR="…"` line.
 ///
 /// Splits `use_flags_display` (already IUSE-declared, enabled-resolved,
 /// and sorted by bare flag name the way this pilot's `-pv` has always
@@ -2724,22 +2733,38 @@ fn strip_slot_operator_one(tok: &str) -> String {
 /// flag -- the prefix is stripped from the grouped flag (real
 /// `map_to_use_expand`: `val[len(exp) + 1:]`). `config.use_expand_hidden`
 /// groups are dropped (real `remove_hidden`). Within each group the
-/// pre-existing bare-name order is kept and flags are rendered `flag` /
-/// `-flag` (this pilot's own established "alphabetically sorted, no
-/// enabled-first split" `-pv` simplification -- real
-/// `_create_use_string` renders enabled flags before disabled unless
-/// `--alphabetical`; unchanged by this slice, which only adds the
-/// grouping).
+/// pre-existing bare-name order is kept (this pilot's own established
+/// "alphabetically sorted, no enabled-first split" `-pv` simplification
+/// -- real `_create_use_string` renders enabled flags before disabled
+/// unless `--alphabetical`).
+///
+/// When `installed` is `Some` (an `Upgrade`/`Downgrade`/`Reinstall` entry
+/// -- i.e. real `pkg_info.previous_pkg is not None`, `is_new` false),
+/// each flag is diffed against the installed version's own recorded
+/// `USE`/`IUSE` exactly as real `_create_use_string` does with
+/// `all_flags`/`reinst_flags` both off: an enabled flag not in old IUSE
+/// renders `flag%*`; enabled + in old IUSE + not in old USE renders
+/// `flag*`; a disabled flag not in old IUSE renders `-flag%`; disabled +
+/// was in old USE renders `-flag*`; an unchanged flag (either polarity)
+/// is omitted entirely.
+///
+/// Deliberately NOT ported (separate cuts): real ANSI colorization; the
+/// `( … )` wrap around forced/masked flags (and its effect on the `%`
+/// suffix -- this pilot has no per-candidate `pkg.use.force`/`.mask`);
+/// the `(-flag%)` "removed from IUSE" line (real portage only shows it
+/// under `--all-flags` or when that flag itself triggered the reinstall,
+/// neither of which this pilot models).
 ///
 /// Returns `[(VAR_NAME, "rendered")]` with `USE` first, then the
 /// `USE_EXPAND` vars in sorted order (real `sorted(self.use_expand)` with
 /// `"USE"` inserted at position 0). An empty group produces no entry at
-/// all (real `_create_use_string`'s own `if ret:` guard), so a package
-/// whose flags are *all* USE_EXPAND flags shows only `VAR="…"` and no
-/// `USE=""`, and a package with no displayable flags returns `[]`.
+/// all (real `_create_use_string`'s own `if ret:` guard), so an
+/// `Upgrade` whose USE didn't actually change shows *no* `USE=` line, and
+/// a package with no displayable flags returns `[]`.
 fn build_use_expand_display(
     use_flags_display: &[(String, bool)],
     config: &portage_profile::Config,
+    installed: Option<&InstalledUseState>,
 ) -> Vec<(String, String)> {
     let mut expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
     expand_vars.sort();
@@ -2749,7 +2774,38 @@ fn build_use_expand_display(
         .map(|s| s.to_uppercase())
         .collect();
 
-    // Group key: empty string == the plain "USE" group.
+    // Real `_create_use_string`'s per-flag marker logic (see this
+    // function's own doc comment). Returns the rendered `flag`/`-flag`
+    // token with any `*`/`%` suffix, or `None` for an unchanged flag that
+    // real portage omits from an installed-vs-new diff.
+    let render_flag = |bare: &str, full: &str, enabled: bool| -> Option<String> {
+        let sign = if enabled { "" } else { "-" };
+        let Some(inst) = installed else {
+            return Some(format!("{sign}{bare}"));
+        };
+        let in_old_iuse = inst.old_iuse.contains(full);
+        let in_old_use = inst.old_use.contains(full);
+        let marker = if enabled {
+            if !in_old_iuse {
+                "%*"
+            } else if !in_old_use {
+                "*"
+            } else {
+                return None;
+            }
+        } else if !in_old_iuse {
+            "%"
+        } else if in_old_use {
+            "*"
+        } else {
+            return None;
+        };
+        Some(format!("{sign}{bare}{marker}"))
+    };
+
+    // Group key: empty string == the plain "USE" group. Entries keep the
+    // FULL flag name; the prefix is stripped only at render time (markers
+    // are computed against the full name).
     let mut groups: Vec<(String, Vec<(String, bool)>)> = vec![(String::new(), Vec::new())];
     for var in &expand_vars {
         groups.push((var.to_uppercase(), Vec::new()));
@@ -2758,12 +2814,12 @@ fn build_use_expand_display(
     'flag: for (flag, enabled) in use_flags_display {
         for var in &expand_vars {
             let prefix = format!("{}_", var.to_lowercase());
-            if let Some(rest) = flag.strip_prefix(&prefix) {
+            if flag.strip_prefix(&prefix).is_some() {
                 let g = groups
                     .iter_mut()
                     .find(|(n, _)| *n == var.to_uppercase())
                     .unwrap();
-                g.1.push((rest.to_string(), *enabled));
+                g.1.push((flag.clone(), *enabled));
                 continue 'flag;
             }
         }
@@ -2775,23 +2831,28 @@ fn build_use_expand_display(
         if !name.is_empty() && hidden.contains(&name) {
             continue;
         }
-        if flags.is_empty() {
+        let prefix = format!("{}_", name.to_lowercase());
+        let rendered: Vec<String> = flags
+            .iter()
+            .filter_map(|(full, en)| {
+                let bare = if name.is_empty() {
+                    full.as_str()
+                } else {
+                    full.strip_prefix(&prefix).unwrap_or(full)
+                };
+                render_flag(bare, full, *en)
+            })
+            .collect();
+        if rendered.is_empty() {
             continue;
         }
-        // `flags` is already in the bare-name order `use_flags_display`
-        // arrived in (see this function's own doc comment).
-        let rendered = flags
-            .iter()
-            .map(|(f, en)| if *en { f.clone() } else { format!("-{f}") })
-            .collect::<Vec<_>>()
-            .join(" ");
         out.push((
             if name.is_empty() {
                 "USE".to_string()
             } else {
                 name
             },
-            rendered,
+            rendered.join(" "),
         ));
     }
     out
@@ -5710,7 +5771,27 @@ pub fn resolve_pretend_graph(
                 })
                 .collect();
             display.sort_by(|a, b| a.0.cmp(&b.0));
-            entries[entry_idx].use_expand_display = build_use_expand_display(&display, config);
+            // Real `_display_use`'s `previous_pkg`: the installed
+            // version's own recorded USE/IUSE, for the `*`/`%` diff
+            // markers -- only for an entry that actually replaces an
+            // installed one (`Upgrade`/`Downgrade` from `from`,
+            // `Reinstall` at the same version). `New`/`AlreadyInstalled`/
+            // `NoVisibleCandidate` have no installed side to diff.
+            let installed_version = match &entries[entry_idx].outcome {
+                PretendOutcome::Upgrade { from, .. } | PretendOutcome::Downgrade { from, .. } => {
+                    Some(from.clone())
+                }
+                PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
+                _ => None,
+            };
+            let installed = installed_version.map(|v| {
+                let old_iuse = read_vdb_flag_set(root, &key.0, &key.1, &v, "IUSE");
+                let mut old_use = read_vdb_flag_set(root, &key.0, &key.1, &v, "USE");
+                old_use.retain(|f| old_iuse.contains(f));
+                InstalledUseState { old_use, old_iuse }
+            });
+            entries[entry_idx].use_expand_display =
+                build_use_expand_display(&display, config, installed.as_ref());
             entries[entry_idx].use_flags_display = display;
         }
 
@@ -9415,6 +9496,7 @@ mod tests {
                     ("video_cards_nvidia".to_string(), true),
                 ],
                 &config,
+                None,
             ),
             vec![("VIDEO_CARDS".to_string(), "-amdgpu nvidia".to_string())]
         );
@@ -9429,6 +9511,7 @@ mod tests {
                     ("video_cards_nvidia".to_string(), true),
                 ],
                 &config,
+                None,
             ),
             vec![
                 ("USE".to_string(), "plainflag".to_string()),
@@ -9436,7 +9519,57 @@ mod tests {
             ]
         );
         // No displayable flags -> no groups at all.
-        assert!(build_use_expand_display(&[], &config).is_empty());
+        assert!(build_use_expand_display(&[], &config, None).is_empty());
+    }
+
+    #[test]
+    fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
+        let config = portage_profile::Config {
+            use_expand: HashSet::from(["VIDEO_CARDS".to_string()]),
+            ..Default::default()
+        };
+        let installed = InstalledUseState {
+            // installed with `alpha` enabled, `beta` in IUSE but off;
+            // video_cards had `nvidia` enabled.
+            old_iuse: HashSet::from([
+                "alpha".to_string(),
+                "beta".to_string(),
+                "video_cards_nvidia".to_string(),
+            ]),
+            old_use: HashSet::from(["alpha".to_string(), "video_cards_nvidia".to_string()]),
+        };
+        // now: alpha unchanged (omitted), beta newly enabled (*),
+        // gamma brand-new IUSE and enabled (%*), delta brand-new IUSE
+        // and disabled (-delta%), video_cards_nvidia now off (was on) ->
+        // `-nvidia*`.
+        assert_eq!(
+            build_use_expand_display(
+                &[
+                    ("alpha".to_string(), true),
+                    ("beta".to_string(), true),
+                    ("delta".to_string(), false),
+                    ("gamma".to_string(), true),
+                    ("video_cards_nvidia".to_string(), false),
+                ],
+                &config,
+                Some(&installed),
+            ),
+            vec![
+                ("USE".to_string(), "beta* -delta% gamma%*".to_string()),
+                ("VIDEO_CARDS".to_string(), "-nvidia*".to_string()),
+            ]
+        );
+        // An entry whose USE is completely unchanged shows no group at
+        // all (real `_create_use_string`'s `if ret:` guard).
+        assert!(build_use_expand_display(
+            &[("alpha".to_string(), true)],
+            &config,
+            Some(&InstalledUseState {
+                old_iuse: HashSet::from(["alpha".to_string()]),
+                old_use: HashSet::from(["alpha".to_string()]),
+            }),
+        )
+        .is_empty());
     }
 
     #[test]

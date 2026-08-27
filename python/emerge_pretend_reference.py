@@ -1920,24 +1920,54 @@ def _libc_provider_cps(root):
     return result
 
 
-def _build_use_expand_display(use_display, use_expand, use_expand_hidden):
+def _build_use_expand_display(use_display, use_expand, use_expand_hidden, installed=None):
     """Real output.py:_display_use + map_to_use_expand +
     output_helpers.py:_create_use_string, for `emerge --pretend -v`'s USE
-    line -- narrowed to a fresh entry's display (no installed-vs-new */%
-    markers). Splits `use_display` (already-bare-name-sorted (flag,
-    enabled) pairs) into the plain USE group plus one group per
-    `use_expand` variable whose lowercase(name)_ prefixes the flag (prefix
-    stripped, real map_to_use_expand's val[len(exp)+1:]); drops
-    `use_expand_hidden` groups (real remove_hidden). Returns
-    [(VAR_NAME, "flag -flag"), ...], USE first then the USE_EXPAND vars
-    sorted; an empty group produces no entry at all (real
-    _create_use_string's `if ret:` guard). Within each group the
-    pre-existing bare-name order is kept (this pilot's own "no
-    enabled-first split" -pv simplification). Mirrors
+    line. Splits `use_display` (already-bare-name-sorted (flag, enabled)
+    pairs) into the plain USE group plus one group per `use_expand`
+    variable whose lowercase(name)_ prefixes the flag (prefix stripped,
+    real map_to_use_expand's val[len(exp)+1:]); drops `use_expand_hidden`
+    groups (real remove_hidden). Returns [(VAR_NAME, "flag -flag"), ...],
+    USE first then the USE_EXPAND vars sorted; an empty group produces no
+    entry at all (real _create_use_string's `if ret:` guard). Within each
+    group the pre-existing bare-name order is kept (this pilot's own "no
+    enabled-first split" -pv simplification).
+
+    `installed`, when given, is (old_use, old_iuse) -- the installed
+    version's own recorded USE/IUSE (bare names, old_use already
+    intersected with old_iuse) -- and each flag is diffed against it
+    exactly as real _create_use_string does with all_flags/reinst_flags
+    both off: enabled+new-IUSE -> flag%*, enabled+newly-on -> flag*,
+    enabled+unchanged -> omitted; disabled+new-IUSE -> -flag%,
+    disabled+was-on -> -flag*, disabled+unchanged -> omitted. Mirrors
     portage-repo/src/lib.rs's build_use_expand_display exactly."""
     expand_vars = sorted(use_expand)
     hidden = {v.upper() for v in use_expand_hidden}
+    old_use, old_iuse = installed if installed is not None else (None, None)
 
+    def render_flag(bare, full, enabled):
+        sign = "" if enabled else "-"
+        if installed is None:
+            return f"{sign}{bare}"
+        in_old_iuse = full in old_iuse
+        in_old_use = full in old_use
+        if enabled:
+            if not in_old_iuse:
+                marker = "%*"
+            elif not in_old_use:
+                marker = "*"
+            else:
+                return None
+        else:
+            if not in_old_iuse:
+                marker = "%"
+            elif in_old_use:
+                marker = "*"
+            else:
+                return None
+        return f"{sign}{bare}{marker}"
+
+    # Entries keep the FULL flag name; the prefix is stripped at render.
     groups = [("", [])] + [(v.upper(), []) for v in expand_vars]
     by_name = {name: flags for name, flags in groups}
     for flag, enabled in use_display:
@@ -1945,7 +1975,7 @@ def _build_use_expand_display(use_display, use_expand, use_expand_hidden):
         for var in expand_vars:
             prefix = var.lower() + "_"
             if flag.startswith(prefix):
-                by_name[var.upper()].append((flag[len(prefix):], enabled))
+                by_name[var.upper()].append((flag, enabled))
                 placed = True
                 break
         if not placed:
@@ -1955,10 +1985,16 @@ def _build_use_expand_display(use_display, use_expand, use_expand_hidden):
     for name, flags in groups:
         if name and name in hidden:
             continue
-        if not flags:
+        prefix = name.lower() + "_"
+        rendered = []
+        for full, enabled in flags:
+            bare = full if not name else (full[len(prefix):] if full.startswith(prefix) else full)
+            r = render_flag(bare, full, enabled)
+            if r is not None:
+                rendered.append(r)
+        if not rendered:
             continue
-        rendered = " ".join(f if en else f"-{f}" for f, en in flags)
-        out.append(("USE" if not name else name, rendered))
+        out.append(("USE" if not name else name, " ".join(rendered)))
     return out
 
 
@@ -7078,21 +7114,38 @@ def run(args):
                 f'("{b["atom_str"]}")'
             )
 
-    def use_suffix(use_display):
+    def _installed_use_state(category, package, outcome):
+        # Real _display_use's previous_pkg: the installed version's own
+        # recorded USE/IUSE for the */% diff markers -- only for an entry
+        # that replaces an installed one (Upgrade/Downgrade from
+        # outcome[1], Reinstall at outcome[1]). Mirrors pretend.rs.
+        tag = outcome[0]
+        if tag in ("upgrade", "downgrade", "reinstall"):
+            version = outcome[1]
+            old_iuse = _read_vdb_flag_set(_root(), category, package, version, "IUSE")
+            old_use = {
+                f
+                for f in _read_vdb_flag_set(_root(), category, package, version, "USE")
+                if f in old_iuse
+            }
+            return (old_use, old_iuse)
+        return None
+
+    def use_suffix(use_display, installed=None):
         # "  USE=\"a -b\" VIDEO_CARDS=\"-amdgpu nvidia\"", matching real
         # --pretend -v's own line format. Real output.py:_display_use
         # groups the flags by USE_EXPAND (plain USE group, then one
-        # VAR="..." per non-hidden USE_EXPAND var, empty groups omitted);
-        # that grouping is real here now. Still not shown: real portage's
-        # ANSI colorization and its installed-vs-new */% diff markers (a
-        # separate documented cut -- the plain enabled/disabled set,
-        # bare-name sorted within each group). Mirrors
+        # VAR="..." per non-hidden USE_EXPAND var, empty groups omitted),
+        # and for an entry that replaces an installed one appends */%
+        # markers vs that installed version's USE/IUSE. Still not shown:
+        # real portage's ANSI colorization, the ( ) forced/masked wrap,
+        # and the removed-from-IUSE line (documented cuts). Mirrors
         # portage-repo/src/lib.rs's build_use_expand_display + pretend.rs
         # use_suffix.
         if not verbose or not use_display:
             return ""
         groups = _build_use_expand_display(
-            use_display, config["use_expand"], config["use_expand_hidden"]
+            use_display, config["use_expand"], config["use_expand_hidden"], installed
         )
         if not groups:
             return ""
@@ -7167,6 +7220,7 @@ def run(args):
         # root_suffix). Placed right before use_suffix in each arm below,
         # matching both real portage's own ordering and pretend.rs.
         root = root_suffix(targets_running_root)
+        installed = _installed_use_state(category, package, outcome)
         if tag == "new":
             if not onlydeps_suppressed:
                 if columns:
@@ -7175,11 +7229,11 @@ def run(args):
                             bracket, "N", indent, category, package, outcome[1], "", columnwidth
                         )
                         + root
-                        + use_suffix(use_display)
+                        + use_suffix(use_display, installed)
                     )
                 else:
                     print(
-                        f"[{bracket}  N] {indent}{category}/{package}-{outcome[1]}{root}{use_suffix(use_display)}"
+                        f"[{bracket}  N] {indent}{category}/{package}-{outcome[1]}{root}{use_suffix(use_display, installed)}"
                     )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
@@ -7197,12 +7251,12 @@ def run(args):
                             columnwidth,
                         )
                         + root
-                        + use_suffix(use_display)
+                        + use_suffix(use_display, installed)
                     )
                 else:
                     print(
                         f"[{bracket}  U] {indent}{category}/{package}-{outcome[2]} "
-                        f"(upgrade from {outcome[1]}){root}{use_suffix(use_display)}"
+                        f"(upgrade from {outcome[1]}){root}{use_suffix(use_display, installed)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "downgrade":
@@ -7220,12 +7274,12 @@ def run(args):
                             columnwidth,
                         )
                         + root
-                        + use_suffix(use_display)
+                        + use_suffix(use_display, installed)
                     )
                 else:
                     print(
                         f"[{bracket}  D] {indent}{category}/{package}-{outcome[2]} "
-                        f"(downgrade from {outcome[1]}){root}{use_suffix(use_display)}"
+                        f"(downgrade from {outcome[1]}){root}{use_suffix(use_display, installed)}"
                     )
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "reinstall":
@@ -7240,7 +7294,7 @@ def run(args):
                         bracket, "r", indent, category, package, outcome[1], "", columnwidth
                     )
                     + root
-                    + use_suffix(use_display)
+                    + use_suffix(use_display, installed)
                 )
             elif not onlydeps_suppressed:
                 reason = _reinstall_reason(
@@ -7253,12 +7307,12 @@ def run(args):
                 if reason is None:
                     print(
                         f"[{bracket}  r] {indent}{category}/{package}-{outcome[1]}"
-                        f"{root}{use_suffix(use_display)}"
+                        f"{root}{use_suffix(use_display, installed)}"
                     )
                 else:
                     print(
                         f"[{bracket}  r] {indent}{category}/{package}-{outcome[1]} "
-                        f"(reinstall for {reason}){root}{use_suffix(use_display)}"
+                        f"(reinstall for {reason}){root}{use_suffix(use_display, installed)}"
                     )
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "already_installed":

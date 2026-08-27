@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: -pv installed-vs-new USE markers on an [ebuild U] line
+EAPI=8
+IUSE=+keep -change +added
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000
