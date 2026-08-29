@@ -28,3 +28,17 @@ pub(crate) struct EnqueueOptions<'a> {
     /// `update` (`--update`): the downgrade-guard's queued-update lookahead.
     pub update: bool,
 }
+
+/// The pass state [`enqueue_dependencies`] appends to.
+pub(crate) struct EnqueueSinks<'a> {
+    pub queue: &'a mut VecDeque<QueueItem>,
+    pub pending_blockers: &'a mut Vec<PendingBlocker>,
+    pub entries: &'a mut Vec<GraphEntry>,
+    pub root_deps_build_seen: &'a mut HashSet<(String, String)>,
+    /// Per-pass `installed_dep_string` memo: keyed
+    /// `(category, package, version, key)`, Effective results only.
+    pub installed_meta_memo: &'a mut HashMap<(String, String, String, String), String>,
+    /// This installed package's own flattened non-blocker atoms become
+    /// slot-conflict pullers, like the main loop's own recording.
+    pub slot_pullers: &'a mut SlotPullers,
+}

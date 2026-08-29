@@ -245,6 +245,24 @@ pub(crate) struct PendingRemoval {
     /// them so they print inline right after its `[uninstall]` row.
     pub(crate) blockers: Vec<BlockerConflict>,
 }
+
+/// Arguments of [`collect_unwalked_installed_blockers`].
+pub(crate) struct CollectUnwalkedInstalledBlockersArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) dynamic_deps: bool,
+    pub(crate) ignore_built_slot_operator_deps: bool,
+    pub(crate) disj_constraints: &'a HashMap<(String, String), Vec<String>>,
+    /// No `circular_dependency` map: this scan only processes installed
+    /// packages whose cp was never walked, while the map is keyed by
+    /// merge-bound cycle-node cps only -- the lookup always misses, so the
+    /// empty map is exactly faithful here.
+    pub(crate) root_deps_running_root: Option<&'a Path>,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) pending_blockers: &'a mut Vec<PendingBlocker>,
+    pub(crate) installed_meta_memo: &'a mut HashMap<(String, String, String, String), String>,
+}
 /// Arguments of [`resolve_blockers_with_seeds`].
 pub(crate) struct ResolveBlockersWithSeedsArgs<'a> {
     pub(crate) root: &'a Path,

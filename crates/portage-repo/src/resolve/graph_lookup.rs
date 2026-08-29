@@ -246,6 +246,35 @@ pub(crate) fn atom_cp_present_in_graph(
     })
 }
 
+pub(crate) fn atoms_all_in_graph(
+    atoms: &[String],
+    entries: &[GraphEntry],
+    config: &portage_profile::Config,
+    queued: &[QueueItem],
+) -> bool {
+    let non_blocker: Vec<&String> = atoms
+        .iter()
+        .filter(|a| {
+            portage_dep::parse_atom(a).is_some_and(|p| p.blocker == portage_dep::Blocker::None)
+        })
+        .collect();
+    if non_blocker.is_empty() {
+        return false;
+    }
+    // Portage resolves `||` groups only after the main dep stack drained, so by
+    // resolution time every plain dep is already graphed. Portuale resolves eagerly;
+    // a queued-but-unresolved atom (cp-level) approximates that drain state.
+    let queued_cps: HashSet<(String, String)> = queued
+        .iter()
+        .filter_map(|q| {
+            portage_dep::parse_atom(&q.atom).map(|a| (a.category.clone(), a.package.clone()))
+        })
+        .collect();
+    non_blocker
+        .iter()
+        .all(|a| atom_matches_graph(a, entries, config, &queued_cps))
+}
+
 /// The visible tree candidates matching `atom_str` (USE deps ignored) after the
 /// backtrack loop's `runtime_pkg_mask` constraints, as `(version, slot)` -- the listing
 /// half of `atom_currently_satisfiable`, returned rather than collapsed to a bool so
