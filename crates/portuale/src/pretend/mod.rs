@@ -36,6 +36,7 @@ mod problem_reports;
 mod prompt;
 mod removal;
 mod resolve_plan;
+mod search;
 mod world;
 
 #[cfg(test)]
@@ -58,6 +59,7 @@ pub(crate) use problem_reports::*;
 pub(crate) use prompt::*;
 pub(crate) use removal::*;
 pub(crate) use resolve_plan::*;
+pub(crate) use search::*;
 pub(crate) use world::*;
 
 use crate::ebuild_merge;

@@ -14,6 +14,7 @@ mod extract;
 mod gpg;
 mod inner;
 mod manifest;
+mod metadata;
 mod outer;
 
 #[cfg(test)]
@@ -24,6 +25,7 @@ pub use extract::*;
 pub use gpg::*;
 pub(crate) use inner::*;
 pub(crate) use manifest::*;
+pub use metadata::*;
 pub(crate) use outer::*;
 
 use std::collections::HashMap;
@@ -127,6 +129,9 @@ impl ScratchDir {
         ));
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(Self(dir))
+    }
+    fn path(&self) -> &Path {
+        &self.0
     }
 }
 

@@ -7,3 +7,5 @@ fn fixture(name: &str) -> PathBuf {
         .join("../../fixtures")
         .join(name)
 }
+mod inner;
+mod metadata;

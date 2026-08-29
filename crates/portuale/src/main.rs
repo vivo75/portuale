@@ -37,6 +37,7 @@ mod regen;
 mod remote;
 mod remote_bundle;
 mod self_exe;
+mod vdb_cmd;
 mod vdb_ipc;
 #[cfg(feature = "vdb-fuse")]
 mod vdb_rw;

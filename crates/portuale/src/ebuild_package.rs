@@ -1903,6 +1903,73 @@ mod tests {
         );
     }
 
+    /// `FEATURES=unmerge-backup` / `quickpkg` with `BINPKG_FORMAT=gpkg`: the
+    /// installed files and the vdb entry become a gpkg through the natively
+    /// routed `gpkg-helper.py compress`.
+    #[test]
+    fn quickpkg_from_vdb_with_gpkg_format_builds_a_readable_gpkg() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let scratch = tmp.join("scratch");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            // Not the default zstd: the test must not need zstd installed.
+            binpkg_compress: "bzip2".to_string(),
+            binpkg_format: "gpkg".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(root.join("etc")).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        std::fs::write(root.join("etc/probe.conf"), "probe\n").unwrap();
+
+        let vdb_dir = root.join("var/db/pkg/dev-libs/probe-1.0");
+        std::fs::create_dir_all(&vdb_dir).unwrap();
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        std::fs::copy(
+            repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild"),
+            vdb_dir.join("probe-1.0.ebuild"),
+        )
+        .unwrap();
+        for (name, content) in [
+            ("EAPI", "8\n"),
+            ("SLOT", "0\n"),
+            ("CATEGORY", "dev-libs\n"),
+            ("PF", "probe-1.0\n"),
+            ("KEYWORDS", "amd64\n"),
+            ("LICENSE", "GPL-2\n"),
+            ("USE", "amd64\n"),
+            ("BUILD_TIME", "1790541998\n"),
+            ("REPO_REVISIONS", "{}\n"),
+            ("repository", "testrepo\n"),
+            ("CONTENTS", "obj /etc/probe.conf\n"),
+        ] {
+            std::fs::write(vdb_dir.join(name), content).unwrap();
+        }
+
+        let built = quickpkg_from_vdb(QuickpkgFromVdbArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "probe",
+            pf: "probe-1.0",
+            scratch_ebuild_dir: &scratch,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            config_protect: "",
+            config_protect_mask: "",
+        })
+        .expect("quickpkg_from_vdb succeeds")
+        .expect("archive built");
+        assert_eq!(built, options.pkgdir.join("dev-libs/probe-1.0.gpkg.tar"));
+        let meta = crate::binpkg::read_gpkg_metadata(&built)
+            .expect("portuale's gpkg reader parses the native writer's output");
+        assert_eq!(meta.get("PF").map(String::as_str), Some("probe-1.0"));
+        assert_eq!(meta.get("CATEGORY").map(String::as_str), Some("dev-libs"));
+    }
+
     /// Expected values from Portage: after a package step `build-info` holds
     /// `BINPKGMD5` and, when the archive carries one, `BUILD_ID`.
     #[test]
