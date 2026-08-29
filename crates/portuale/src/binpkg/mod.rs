@@ -56,6 +56,11 @@ impl BinpkgError {
         matches!(self, BinpkgError::Invalid(_))
     }
 
+    /// `true` for the abort class.
+    pub fn is_fatal(&self) -> bool {
+        matches!(self, BinpkgError::Fatal(_))
+    }
+
     /// The message, without the class.
     pub fn message(&self) -> &str {
         match self {

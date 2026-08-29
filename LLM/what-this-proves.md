@@ -8248,3 +8248,130 @@ target still fails — the avoid-update-against-vdb path is dependency-only.
 2 contract `CASES` + 1 dedicated pinned test + 1 `portage-repo` unit test;
 mirrored in `emerge_pretend_reference.py`.
 
+### `$PKGDIR` directory-scan fallback + the `gpkg`/`xpak` metadata readers
+
+Every binary-package path in portuale so far is `<pkgdir>/Packages`-
+index-driven and format-agnostic: `portage-repo` never opens a binpkg
+file, so a `gpkg` (`.gpkg.tar`) listed in the index already resolves for
+`--pretend` exactly like an `xpak` `.tbz2` (verified: `PATH:
+…gpkg.tar` → `[binary … g]`, `::repo`, `SIZE`, recursive dep walk, all
+unchanged). What portuale **can't** do is the real
+`bintree._populate_local` fallback: scan `$PKGDIR` for binpkg *files*
+when there is no `Packages` index and rebuild it from each file's own
+embedded metadata. That needs a real per-format metadata reader.
+
+This is the `gpkg` half. New `portuale/src/binpkg.rs` ::
+`read_gpkg_metadata` ports real `portage.gpkg.gpkg.get_metadata()` /
+`unpack_metadata(want=None)` (`lib/portage/gpkg.py:838-870`): a
+`.gpkg.tar` is a plain tar container with `<basename>/{gpkg-1,
+metadata.tar[.<comp>], image.tar[.<comp>], Manifest}` members; the reader
+unpacks the outer container, classifies the `metadata.tar[.<comp>]`
+member exactly as real `_extract_filename_compression`
+(`gpkg.py:2176` + `ext_list`) does, decompresses it via the same
+`_compressors` decompress argv real portage uses (all seven —
+`gzip`/`bzip2`/`lz4`/`lzip`/`lzop`/`xz`/`zstd`), unpacks the inner
+`metadata.tar`, and returns the `metadata/<KEY>` → value map (real
+`_strip_metadata_prefix`). It shells out to `tar` + the decompressor
+rather than parsing the archive natively or adding a Rust
+tar/compression crate — consistent with every other real-execution path
+here (`wget`, `ldconfig`, `scanelf`, `bash`/`brush`, the compressors
+`ebuild_package.rs` already invokes), and `tar` + these compressors are
+hard Gentoo requirements anyway (real `gpkg.py` is `tarfile` + the exact
+same compressor subprocesses).
+
+**v1 cuts** (matching portuale's own `Packages`-index reader, which
+"trusts the index outright" — real `pkgdir-index-trusted`): NO `Manifest`
+digest verification and NO GPG `.sig` signature check (real
+`gpkg._verify_binpkg`). Those are `gpkg`'s whole point, but portuale
+has no crypto anywhere and its `--pretend` binary path has never verified
+a binpkg's integrity — a separately-scoped follow-up. The `gpkg-1`
+version-marker presence check is still enforced (real
+`_get_inner_tarinfo`'s `InvalidBinaryPackageFormat` guard).
+
+New fixture `fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar` —
+a real, hand-built container (`tar` + `zstd`, real member layout). 3
+`portuale` unit tests; also verified by hand against a real-world
+`/var/cache/binpkgs/*.gpkg.tar` (with `.sig` members, `environment.bz2`,
+a build-id basename).
+
+**Increment 2** — the `xpak` (`.tbz2`) reader — adds
+`binpkg::read_xpak_metadata`, porting real `portage.xpak.tbz2`'s own
+`scan` + `getindex_mem`/`searchindex` (`lib/portage/xpak.py:395-460` /
+`234-266`). An `xpak` binpkg is `[image tarball]` immediately followed by
+a fully self-describing trailer — `"XPAKPACK" be32(indexsize)
+be32(datasize) <index> <data> "XPAKSTOP" be32(infosize) "STOP"` — so the
+reader parses it in **pure Rust** (no `tar`, no subprocess), reading only
+the bounded `infosize + 8` file tail; the image tarball itself is never
+touched. `<index>` is a flat run of `be32(namelen) name be32(datapos)
+be32(datalen)` records into `<data>`; every metadata key is one record.
+`CONTENTS` is never present in a *binary* package's own xpak (real
+`xpak()` skips it — it's a merge-time artifact). Codec-agnostic (the
+trailer is raw whatever compressed the tarball). New committed fixture
+`fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2` — a genuine
+`.tbz2` built once by portuale's own `ebuild <file> package` (real
+`xpak-helper.py recompose` → real `xpak.py`) rather than rebuilt
+per-test (the read side needs no reproducible bytes, and driving the
+full brush phase chain in a unit test adds parallel-load pressure to the
+suite's brush-heavy tests for no reader-coverage gain). 3 more `portuale`
+unit tests (a synthetic multi-key XPAK segment, the committed real
+`.tbz2`, a no-trailer rejection).
+
+**Discovered while writing the real-`.tbz2` test**: portuale's own
+`build-info` generation is a *subset* of real portage's — it writes
+`EAPI`/`SLOT`/`CATEGORY`/`PF`/`KEYWORDS`/`USE`/`DEFINED_PHASES`/
+`BUILD_TIME` + the bundled `<pf>.ebuild` + `environment.bz2`, but **not**
+the dependency-string files (`DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/
+`IDEPEND`/`IUSE`/`LICENSE`/`PROPERTIES`/`RESTRICT`/`INHERITED`/
+`IUSE_EFFECTIVE`/`SIZE`/`PROVIDES`/`REQUIRES`/…). Those come through into
+portuale's `Packages` index anyway (from `md5-cache`), so `--pretend`
+binary resolution is unaffected — but a `$PKGDIR` scan of a portuale-built
+`.tbz2` would see an incomplete candidate. Tracked as its own
+`ebuild_package.rs` / phase-execution follow-up, orthogonal to these
+readers.
+
+**Increment 3** — the `$PKGDIR` directory scan, wired in. New
+`binpkg::scan_pkgdir` walks `<pkgdir>/<cat>/<pf>.{tbz2,gpkg.tar}` (one
+level deep — `$PKGDIR`'s real layout), reads each file with the matching
+reader, and synthesizes one `Packages`-style entry per file (`CPV` from
+the path, `SIZE` from the file's own byte size, `REPO` from the embedded
+`repository`, `PATH`, `CPV`-sorted for a deterministic pool). `pretend.rs`
+runs it once, after flag parsing, only when `--usepkg`/`--usepkgonly` is
+given and `<pkgdir>/Packages` is *absent*; the result lands on the new
+`portage_profile::Config::scanned_binpkgs` field. **Not written back to
+`Packages`** — real portage caches it there, but that would make
+`--pretend` mutate `$PKGDIR` and break contract-suite determinism, so
+portuale recomputes each run (same "recompute, don't persist" stance
+as not persisting vdb `IUSE_EFFECTIVE`).
+
+The plumbing decision (`portage-repo` is deliberately subprocess-free —
+`scan_pkgdir` shells out) landed as a **refactor**: a new
+`portage_repo::BinaryIndex` value (`from_pkgdir` — parse
+`<pkgdir>/Packages`; `from_entries` — the scan's synthesized entries)
+threads through every binary-candidate function
+(`list_binary_candidates`/`read_binary_metadata`/
+`list_remote_binary_candidates`/`read_binary_metadata_any`/
+`rebuilt_binary_changed`) in place of a re-read `pkgdir: &Path`, so "read
+the index file or scan the files" is decided exactly once
+(`local_binpkg_index`, from `config`). The scan itself stays in
+`portuale`. A present `Packages` is always trusted as is — no
+mtime-staleness revalidation (real `FEATURES=pkgdir-index-trusted`
+behavior, portuale's long-standing stance for the index).
+
+v1 cuts (at the time of this increment): `.xpak` files and
+multi-instance subdirs were skipped — **since lifted**, see
+"`FEATURES=binpkg-multi-instance` writes and scans the real subdir
+layout" below. A file that fails to parse aborted the scan at the time of
+this increment — **since corrected by backlog #60** (2026-09-16): real
+portage's `PortagePackageException` class is now skipped with real's own
+`!!! Invalid binary package: ...` warning while its uncaught class still
+aborts; see the #60 paragraph at the end of this file.
+The Python mirror scans too (`_scan_pkgdir` — `portage.xpak.tbz2` for
+`.tbz2`, a hand-rolled `tarfile` + decompressor-subprocess reader for
+`.gpkg.tar` that matches the Rust reader's cuts, since real
+`portage.gpkg` would reject a `Manifest`-less container). New contract
+test builds an ad-hoc `$PKGDIR` with no `Packages` holding both fixture
+binpkgs and resolves each under `--usepkgonly`, Rust ≡ Python; a
+regression test confirms the committed `fixtures/pkgdir` (which
+has a `Packages` *and* the two loose fixture files) still resolves via
+the index alone. 3 more `portuale` + 1 `portage-repo` unit tests.
+
