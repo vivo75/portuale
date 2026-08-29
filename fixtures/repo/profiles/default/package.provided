@@ -1,0 +1,8 @@
+# fixture: dev-libs/providedpkg-1.0 is treated as already installed even
+# though an ebuild for it exists in this repo. A dependency on it is
+# silently dropped from the dep walk; a direct `emerge -p providedpkg`
+# triggers the real package.provided WARNING block. Exercises real
+# config.py:970-1027 (pprovideddict) + dep_check.py:1052 +
+# depgraph.py:5497-5615/11192.
+dev-libs/providedpkg-1.0
+dev-libs/providedpkg2-1.0

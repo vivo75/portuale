@@ -2928,8 +2928,8 @@ def resolve_config(
     crate's doc comment for the full algorithm and its documented scope
     cuts. Returns a dict with keys "use_flags", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
-    "package_use", "system_packages", "use_force", "use_mask",
-    "package_use_force", "package_use_mask", "use_expand",
+    "package_use", "system_packages", "package_provided", "use_force",
+    "use_mask", "package_use_force", "package_use_mask", "use_expand",
     "use_expand_unprefixed", "use_expand_implicit", "iuse_implicit",
     "iuse_effective", "use_stable_force",
     "use_stable_mask", "package_use_stable_force", "package_use_stable_mask".
@@ -3410,6 +3410,23 @@ def resolve_config(
         line[1:] for line in _stack_mask_lines(packages_sources) if line.startswith("*")
     ]
 
+    # package.provided (real config.py:970-1027's pprovideddict),
+    # flattened: every profile level's own file (chain order) + the
+    # user-level /etc/portage/profile/package.provided, stacked with the
+    # same stack_lists(incremental=1) `-atom` removal. See
+    # portage-profile/src/lib.rs's Config::package_provided -- including
+    # why the flat list (not a cp-keyed dict) is equivalent, and why the
+    # real EAPI 7+ gate isn't ported.
+    pprovided_sources = [
+        _read_config_lines(os.path.join(level, "package.provided")) for level in chain
+    ]
+    pprovided_sources.append(
+        _read_config_lines(
+            os.path.join(config_root, "etc", "portage", "profile", "package.provided")
+        )
+    )
+    package_provided = _stack_mask_lines(pprovided_sources)
+
     # license_groups: every profile level's own file, in chain order,
     # plus the user-level one -- see _parse_license_groups_lines's own
     # docstring for the "extend, don't stack/replace" semantics. Read
@@ -3505,6 +3522,7 @@ def resolve_config(
             + _parse_package_use_lines(user_use_lines, use_expand_shorthand=True)
         ),
         "system_packages": system_packages,
+        "package_provided": package_provided,
         "use_force": use_force,
         "use_mask": use_mask,
         "archlist": archlist,
@@ -4825,6 +4843,10 @@ def resolve_pretend_graph(
     # parent to ever flip a flag on).
     queue = deque((a, 0, None, None) for a in atoms)
     pending_blockers = []
+    # Top-level atoms matched by package.provided -- see
+    # portage-repo/src/lib.rs's GraphResult::pprovided_atoms.
+    package_provided = config["package_provided"]
+    pprovided_atoms = []
     # (category, package) -> set of every distinct owner that reached it
     # via a dependency string, accumulated separately from the BFS's own
     # dedup/recursion decisions below (visited_atoms/resolved_slots/
@@ -4843,6 +4865,18 @@ def resolve_pretend_graph(
         if atom is None:
             continue
         if atom.blocker:
+            continue
+        # package.provided (real dep_check.py:1052 for a dependency,
+        # depgraph.py:5497-5615 for a top-level target): an atom matched
+        # by a listed CPV is treated as already installed. A dependency
+        # is silently dropped (no entry, no required_by edge); a
+        # top-level atom is recorded for the WARNING block. Mirrors
+        # portage-repo/src/lib.rs's resolve_pretend_graph.
+        if package_provided and match_from_list(
+            Atom(current_atom_str, allow_wildcard=True), package_provided
+        ):
+            if depth == 0 and current_atom_str not in pprovided_atoms:
+                pprovided_atoms.append(current_atom_str)
             continue
         category, package = atom.cp.split("/", 1)
         key = (category, package)
@@ -5511,6 +5545,7 @@ def resolve_pretend_graph(
         "slot_conflicts": slot_conflicts,
         "changed_deps_report": changed_deps_report_entries,
         "buildpkgonly_deps_unsatisfied": buildpkgonly_deps_unsatisfied,
+        "pprovided_atoms": pprovided_atoms,
     }
 
 
@@ -8993,6 +9028,28 @@ def run(args):
         print(f"emerge: {e}", file=sys.stderr)
         return 1
     entries = result["entries"]
+
+    # Real depgraph.py:11192-11235's display_problems() block for a
+    # directly-requested atom that matched package.provided -- to stderr,
+    # before the merge list. No SetArg tracking here, so the "pulled in
+    # by" ref is always 'args' and the real @world/@selected "A) B) C)"
+    # solution text is never reached. Mirrors pretend.rs.
+    if result["pprovided_atoms"]:
+        sys.stderr.write(color.c("BAD", "\nWARNING: "))
+        if len(result["pprovided_atoms"]) > 1:
+            print(
+                "Requested packages will not be merged because they are listed in",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "A requested package will not be merged because it is listed in",
+                file=sys.stderr,
+            )
+        print("package.provided:\n", file=sys.stderr)
+        for atom in result["pprovided_atoms"]:
+            print(f"  {color.c('INFORM', atom)} pulled in by 'args'", file=sys.stderr)
+        print(file=sys.stderr)
 
     def print_blockers(category, package, owner_version, blockers):
         # Purely informational (see resolve_pretend_graph's doc comment):

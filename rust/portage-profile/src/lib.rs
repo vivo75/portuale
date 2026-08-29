@@ -309,6 +309,27 @@ pub struct Config {
     /// (the `*` stripped) -- see the module doc comment's `packages`
     /// bullet and `PackagesSystemSet.load`.
     pub system_packages: Vec<String>,
+    /// `package.provided` -- real `config.py:970-1027`'s `pprovideddict`,
+    /// flattened: every profile level's own `package.provided` file
+    /// (chain order) + the user-level
+    /// `/etc/portage/profile/package.provided`, stacked with the same
+    /// `stack_lists(incremental=1)` `-atom` removal `package.mask`/
+    /// `packages` use, as a flat list of bare `cat/pkg-version` CPVs. A
+    /// dependency atom (or a top-level target) that `match_from_list`
+    /// against this list is treated as already satisfied and never
+    /// pulled in (real `dep_check.py:1052` / `depgraph.py:5497-5615`;
+    /// real portage cp-keys this into a dict, but `match_from_list`
+    /// already filters by cp, so the flat list is equivalent). Each line
+    /// should be a bare CPV -- real portage validates with `isvalidatom(
+    /// "=" + line)` and drops invalid ones with a warning; this pilot
+    /// carries every stacked line through and lets `match_from_list`
+    /// simply never match a malformed one (a documented simplification).
+    /// The real EAPI 7+ gate (`allows_package_provided`, disallowed for
+    /// EAPI 7+) is NOT ported: this pilot tracks no per-profile-level
+    /// EAPI, consistent with its "no EAPI parametrization within the 5+
+    /// floor" precedent (and EAPI 5 -- what every fixture profile is --
+    /// does allow it).
+    pub package_provided: Vec<String>,
     /// Flags forced on by every profile level's own `use.force` file.
     /// Deliberately *not* folded into `use_flags` -- real config.py's
     /// own `regenerate()` applies this (combined with the atom-scoped
@@ -1823,6 +1844,20 @@ pub fn resolve_config(
         .filter_map(|line| line.strip_prefix('*').map(String::from))
         .collect();
 
+    // package.provided (real config.py:970-1027): every profile level's
+    // own file (chain order) + the user-level
+    // /etc/portage/profile/package.provided, stacked with the same
+    // stack_lists(incremental=1) `-atom` removal package.mask/`packages`
+    // use. See `Config::package_provided`.
+    let mut pprovided_sources: Vec<Vec<String>> = Vec::new();
+    for level in &chain {
+        pprovided_sources.push(read_config_lines(&level.join("package.provided"))?);
+    }
+    pprovided_sources.push(read_config_lines(
+        &config_root.join("etc/portage/profile/package.provided"),
+    )?);
+    config.package_provided = stack_mask_lines(&pprovided_sources);
+
     // license_groups: every profile level's own file, in chain order,
     // plus the user-level one -- see `parse_license_groups_lines`'s own
     // doc comment for the "extend, don't stack/replace" semantics. Read
@@ -2739,6 +2774,46 @@ mod tests {
         let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(config.system_packages, vec!["dev-libs/b".to_string()]);
+    }
+
+    #[test]
+    fn package_provided_stacks_the_profile_chain_plus_the_user_file_with_atom_removal() {
+        // base: provides dev-libs/a-1.0 and dev-libs/b-1.0.
+        // leaf (parent -> base): removes b, adds dev-libs/c-1.0.
+        // user (/etc/portage/profile/package.provided): removes a.
+        // Final: just dev-libs/c-1.0.
+        let root = std::env::temp_dir().join("portage-profile-test-package-provided");
+        let repo = root.join("repo");
+        let base = repo.join("profiles/base");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(
+            base.join("package.provided"),
+            "dev-libs/a-1.0\ndev-libs/b-1.0\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("parent"), "../repo/profiles/base\n").unwrap();
+        fs::write(
+            leaf.join("package.provided"),
+            "-dev-libs/b-1.0\ndev-libs/c-1.0\n",
+        )
+        .unwrap();
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(portage_dir.join("profile")).unwrap();
+        fs::write(
+            portage_dir.join("profile/package.provided"),
+            "-dev-libs/a-1.0\n",
+        )
+        .unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+            .expect("config must resolve");
+        assert_eq!(config.package_provided, vec!["dev-libs/c-1.0".to_string()]);
     }
 
     #[test]

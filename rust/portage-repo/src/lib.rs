@@ -5961,6 +5961,16 @@ pub struct GraphResult {
     /// `display_problems()`). Always `false` when `buildpkgonly` wasn't
     /// requested at all.
     pub buildpkgonly_deps_unsatisfied: bool,
+    /// Directly-requested (top-level) atoms that matched a
+    /// `package.provided` entry (`config.package_provided`) and were
+    /// therefore *not* resolved -- real `depgraph.py:5497-5615`'s own
+    /// `_pprovided_args`. The caller (`pretend.rs`) prints real
+    /// `depgraph.py:11192-11235`'s `WARNING: … listed in
+    /// package.provided:` block for these, in requested order. A
+    /// *dependency* atom matching `package.provided` is silently dropped
+    /// from the dep walk instead (real `dep_check.py:1052`), never
+    /// recorded here.
+    pub pprovided_atoms: Vec<String>,
 }
 
 /// `--deep`/`-D` (real `lib/_emerge/main.py`'s own `"--deep": valid_integers`
@@ -6497,6 +6507,10 @@ pub fn resolve_pretend_graph(
     }
 
     let mut pending_blockers: Vec<PendingBlocker> = Vec::new();
+    // Top-level atoms matched by `package.provided` -- see
+    // `GraphResult::pprovided_atoms`.
+    let mut pprovided_atoms: Vec<String> = Vec::new();
+    let pprovided_refs: Vec<&str> = config.package_provided.iter().map(String::as_str).collect();
     // (category, package) -> every distinct owner that reached it via a
     // dependency string, accumulated separately from the BFS's own
     // dedup/recursion decisions below (`visited_atoms`/`resolved_slots`/
@@ -6512,6 +6526,23 @@ pub fn resolve_pretend_graph(
             continue;
         };
         if atom.blocker != portage_dep::Blocker::None {
+            continue;
+        }
+        // `package.provided` (real `dep_check.py:1052` for a dependency,
+        // `depgraph.py:5497-5615` for a top-level target): an atom whose
+        // `cat/pkg` is listed and whose constraint one of that cp's
+        // provided CPVs satisfies is treated as already installed. A
+        // dependency is silently dropped (no entry, no `required_by`
+        // edge -- real portage removes it from the deplist); a top-level
+        // atom is recorded for the `WARNING: … package.provided:` block
+        // and otherwise skipped.
+        if !pprovided_refs.is_empty()
+            && portage_dep::match_from_list(&current_atom, &pprovided_refs)
+                .is_some_and(|m| !m.is_empty())
+        {
+            if depth == 0 && !pprovided_atoms.contains(&current_atom) {
+                pprovided_atoms.push(current_atom.clone());
+            }
             continue;
         }
         let key = (atom.category.clone(), atom.package.clone());
@@ -7355,6 +7386,7 @@ pub fn resolve_pretend_graph(
         slot_conflicts,
         changed_deps_report: changed_deps_report_entries,
         buildpkgonly_deps_unsatisfied,
+        pprovided_atoms,
     })
 }
 
@@ -13227,6 +13259,33 @@ mod tests {
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn package_provided_drops_a_matching_dependency_from_the_walk() {
+        // dev-libs/needsprovided RDEPENDs dev-libs/providedpkg (listed in
+        // profiles/default/package.provided) + dev-libs/newpkg. The
+        // provided dep is silently dropped -- only needsprovided +
+        // newpkg show, and pprovided_atoms stays empty (it's a
+        // dependency, not a top-level target).
+        let result = graph_result_real("dev-libs/needsprovided");
+        let names: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(names, vec!["needsprovided", "newpkg"]);
+        assert!(result.pprovided_atoms.is_empty());
+    }
+
+    #[test]
+    fn package_provided_records_a_matching_top_level_target_for_the_warning() {
+        // A direct `emerge providedpkg` resolves nothing (no entry) and
+        // records the atom in pprovided_atoms -- real depgraph.py's own
+        // _pprovided_args, which pretend.rs turns into the `WARNING: …
+        // package.provided:` block.
+        let result = graph_result_real("dev-libs/providedpkg");
+        assert!(result.entries.is_empty());
+        assert_eq!(
+            result.pprovided_atoms,
+            vec!["dev-libs/providedpkg".to_string()]
+        );
     }
 
     #[test]

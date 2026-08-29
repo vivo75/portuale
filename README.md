@@ -7913,6 +7913,75 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
 #      section name; the repo is kept only because it aliases the section
 ```
 
+### `package.provided`: a package portage is told to treat as already installed
+
+Real `config.py:970-1027` builds `pprovideddict` from every profile
+level's own `package.provided` file (chain order) plus the user-level
+`/etc/portage/profile/package.provided`, stacked with the same
+`stack_lists(incremental=1)` `-atom` removal `package.mask`/`packages`
+already use. Each line is a bare `cat/pkg-version` CPV. This pilot's
+`portage_profile::Config` gains a flat `package_provided: Vec<String>`
+(real cp-keys it into a dict, but `match_from_list` already filters by cp,
+so the flat list is equivalent -- and it keeps `portage-profile`
+dependency-free of `portage-dep`/`portage-versions`).
+
+Two consumers in `resolve_pretend_graph`'s own BFS loop, right after the
+blocker check, before any resolution:
+
+- a **dependency** atom whose `cat/pkg` is listed and whose constraint one
+  of that cp's provided CPVs satisfies is silently dropped from the walk
+  -- no entry, no `required_by` edge (real `dep_check.py:1052` removes it
+  from the deplist entirely);
+- a **directly-requested** atom that matches is not resolved and is
+  collected on `GraphResult::pprovided_atoms` (real
+  `depgraph.py:5497-5615`'s `_pprovided_args`), which `pretend.rs` turns
+  into real `depgraph.py:11192-11235`'s `WARNING: … listed in
+  package.provided:` block -- to stderr, before the merge list,
+  `bad("\nWARNING: ")` (red) + one `INFORM`-coloured (`darkgreen`) atom
+  line per match, singular/plural phrasing on the count, exit `0`.
+
+**Documented cuts**: the real EAPI 7+ gate (`allows_package_provided`
+disallows `package.provided` for EAPI 7+) isn't ported -- this pilot
+tracks no per-profile-level EAPI, consistent with its "no EAPI
+parametrization within the 5+ floor" precedent (EAPI 5 -- what every
+fixture profile is -- does allow it). Real portage validates each line
+with `isvalidatom("=" + line)` and drops malformed ones with a warning;
+this pilot carries every stacked line through and simply lets
+`match_from_list` never match a malformed one. The pilot has no `SetArg`,
+so the "pulled in by" ref is always `'args'` and real portage's
+`@world`/`@selected` "A) B) C)" solution text is unreachable. Directory-
+form `package.provided` (portage-1 `recursive`) is not read (no
+`package.*` file in this pilot is).
+
+New fixtures: `profiles/default/package.provided` lists
+`dev-libs/providedpkg-1.0` + `dev-libs/providedpkg2-1.0` (both have
+ebuilds in the repo), `dev-libs/needsprovided` RDEPENDs `providedpkg` +
+`newpkg`. Rust unit tests in `portage-profile` (chain+user stacking with
+`-atom` removal) and `portage-repo` (dep dropped / top-level recorded), a
+dedicated pinned contract test, and 5 `CASES`; mirrored in
+`emerge_pretend_reference.py`. **Motivation** (from the request): useful
+for byte-for-byte comparison against a real system tree, where
+`package.provided` is a real, common configuration (manually-built
+toolchains, external kernel sources, …).
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge --pretend dev-libs/needsprovided
+# [ebuild  N    ] dev-libs/needsprovided-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
+#   -- needsprovided RDEPENDs dev-libs/providedpkg too, but that's in
+#      package.provided, so the dep is silently dropped
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge --pretend dev-libs/providedpkg
+#   (stdout empty; to stderr:)
+# WARNING: A requested package will not be merged because it is listed in
+# package.provided:
+#
+#   dev-libs/providedpkg pulled in by 'args'
+```
+
 ## Running it
 
 Build both Rust binaries:

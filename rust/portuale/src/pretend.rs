@@ -4115,6 +4115,27 @@ pub fn run(args: &[String]) -> ExitCode {
     };
     let entries = &result.entries;
 
+    // Real `depgraph.py:11192-11235`'s `display_problems()` block for a
+    // directly-requested atom that matched `package.provided` -- printed
+    // to stderr, before the merge list (matching real portage's own
+    // `display_problems()` -> `display()` order). This pilot tracks no
+    // `SetArg`, so the "pulled in by" ref is always `'args'` and the real
+    // `@world`/`@selected` "A) B) C)" solution text is never reached (a
+    // documented divergence -- see `GraphResult::pprovided_atoms`).
+    if !result.pprovided_atoms.is_empty() {
+        eprint!("{}", color.c("BAD", "\nWARNING: "));
+        if result.pprovided_atoms.len() > 1 {
+            eprintln!("Requested packages will not be merged because they are listed in");
+        } else {
+            eprintln!("A requested package will not be merged because it is listed in");
+        }
+        eprintln!("package.provided:\n");
+        for atom in &result.pprovided_atoms {
+            eprintln!("  {} pulled in by 'args'", color.c("INFORM", atom));
+        }
+        eprintln!();
+    }
+
     // Which (category, package) pairs were directly requested (as opposed
     // to reached only as a dependency) -- a top-level atom that's
     // AlreadyInstalled gets its own "nothing to do" line, unlike a

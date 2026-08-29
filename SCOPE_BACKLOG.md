@@ -85,11 +85,18 @@ Ranked roughly by how self-contained each is.
   requires <atom>` for every kept package; `DepcleanResult.kept_parents`
   from a `_parent_atoms`-recording BFS; also suppresses the "To see
   reverse dependencies" hint) **shipped 2026-08-28**.
+  `package.provided` (the general resolver behavior -- a listed CPV
+  satisfies a dependency atom silently / triggers the `WARNING:` block
+  for a direct target) **shipped 2026-08-29** (`Config::package_provided`,
+  `GraphResult::pprovided_atoms`, real `config.py:970-1027` +
+  `dep_check.py:1052` + `depgraph.py:5497-5615`/`11192-11235`); the
+  depclean-specific corner (a provided entry as a depclean root, and the
+  advisory's "will be removed by depclean even if in world" claim) is a
+  separate, minor residual.
   **Still open:** `--depclean-lib-check`, slot-operator rebuild edges,
-  the "deps unresolved, aborting" halt, `package.provided`,
-  `--deselect=n` in args mode, `emerge --prune --verbose`'s own
-  `show_parents`, the exact `@selected`-vs-`@world` set nesting
-  (approximated), and real (non-`--pretend`) removal.
+  the "deps unresolved, aborting" halt, `--deselect=n` in args mode, the
+  exact `@selected`-vs-`@world` set nesting (approximated), and real
+  (non-`--pretend`) removal.
 - **`emerge -p --prune` / `-pP`** **shipped 2026-08-27**
   (`prune_cleanlist`: seed the closure from every installed package
   except the non-highest-in-cp ones an `args_set` matches -- `args_set`

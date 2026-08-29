@@ -83,6 +83,11 @@ CASES = [
     ("--emptytree -v: reinstall counters", ["--pretend", "-v", "--emptytree", "dev-libs/deeppkg"], 0),
     ("--emptytree --update: still upgrades", ["--pretend", "--emptytree", "--update", "dev-libs/withdeps"], 0),
     ("--emptytree --json", ["--pretend", "--emptytree", "--json", "dev-libs/deeppkg"], 0),
+    ("package.provided: a matching dependency is silently dropped", ["--pretend", "dev-libs/needsprovided"], 0),
+    ("package.provided: a matching top-level target triggers the WARNING block", ["--pretend", "dev-libs/providedpkg"], 0),
+    ("package.provided: WARNING block coloured", ["--pretend", "--color=y", "dev-libs/providedpkg"], 0),
+    ("package.provided: plural WARNING for two matching targets", ["--pretend", "dev-libs/providedpkg", "dev-libs/providedpkg2"], 0),
+    ("package.provided: --json unaffected by the dropped dep", ["--pretend", "--json", "dev-libs/needsprovided"], 0),
     ("--exclude: leaves an installed package alone despite --update", ["--pretend", "--update", "--exclude", "dev-libs/upgradepkg", "dev-libs/upgradepkg"], 0),
     ("-X short alias for --exclude", ["--pretend", "--update", "-X", "dev-libs/upgradepkg", "dev-libs/upgradepkg"], 0),
     ("--exclude=ATOM inline form", ["--pretend", "--update", "--exclude=dev-libs/upgradepkg", "dev-libs/upgradepkg"], 0),
@@ -6683,6 +6688,74 @@ def test_deep_bounded_depth_stops_short_of_the_full_chain(emerge_binary, fixture
         'dev-libs/deeppkg-1.0 is already installed; nothing to do',
         '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
+
+
+def test_package_provided_drops_the_dep_and_warns_on_a_direct_target(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """profiles/default/package.provided lists dev-libs/providedpkg-1.0
+    and dev-libs/providedpkg2-1.0 (both have ebuilds in the fixture repo).
+    Real config.py:970-1027 builds pprovideddict; a dependency atom
+    matching one is silently dropped from the dep walk
+    (dep_check.py:1052), and a directly-requested one is not resolved and
+    triggers real depgraph.py:11192-11235's `WARNING: … listed in
+    package.provided:` block (to stderr, exit 0). No SetArg tracking here,
+    so the ref is always `'args'`."""
+    # dev-libs/needsprovided RDEPENDs providedpkg (dropped) + newpkg (New).
+    dep = _run([str(emerge_binary)], ["--pretend", "dev-libs/needsprovided"], fixture_env)
+    dep_py = _run(emerge_pretend_python, ["--pretend", "dev-libs/needsprovided"], fixture_env)
+    assert dep.returncode == 0
+    assert dep.stdout == dep_py.stdout
+    assert dep.stderr == dep_py.stderr
+    assert dep.stdout.splitlines() == [
+        "[ebuild  N    ] dev-libs/needsprovided-1.0 ",
+        "[ebuild  N    ] dev-libs/newpkg-1.0 ",
+    ]
+    assert dep.stderr == ""
+
+    # A direct target -> no merge-list line, the singular WARNING block.
+    one = _run([str(emerge_binary)], ["--pretend", "dev-libs/providedpkg"], fixture_env)
+    one_py = _run(emerge_pretend_python, ["--pretend", "dev-libs/providedpkg"], fixture_env)
+    assert one.returncode == 0
+    assert one.stdout == "" and one.stdout == one_py.stdout
+    assert one.stderr == one_py.stderr
+    assert one.stderr == (
+        "\nWARNING: A requested package will not be merged because it is listed in\n"
+        "package.provided:\n"
+        "\n"
+        "  dev-libs/providedpkg pulled in by 'args'\n"
+        "\n"
+    )
+
+    # Two direct targets -> the plural phrasing.
+    two = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/providedpkg", "dev-libs/providedpkg2"],
+        fixture_env,
+    )
+    two_py = _run(
+        emerge_pretend_python,
+        ["--pretend", "dev-libs/providedpkg", "dev-libs/providedpkg2"],
+        fixture_env,
+    )
+    assert two.stderr == two_py.stderr
+    assert two.stderr == (
+        "\nWARNING: Requested packages will not be merged because they are listed in\n"
+        "package.provided:\n"
+        "\n"
+        "  dev-libs/providedpkg pulled in by 'args'\n"
+        "  dev-libs/providedpkg2 pulled in by 'args'\n"
+        "\n"
+    )
+
+    # --color=y: `WARNING: ` is BAD (red), the atom is INFORM (darkgreen).
+    R = "\x1b[39;49;00m"
+    col = _run([str(emerge_binary)], ["--pretend", "--color=y", "dev-libs/providedpkg"], fixture_env)
+    assert col.stderr == _run(
+        emerge_pretend_python, ["--pretend", "--color=y", "dev-libs/providedpkg"], fixture_env
+    ).stderr
+    assert col.stderr.startswith(f"\x1b[31;01m\nWARNING: {R}A requested package")
+    assert f"  \x1b[32mdev-libs/providedpkg{R} pulled in by 'args'\n" in col.stderr
 
 
 def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
