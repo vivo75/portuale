@@ -8194,6 +8194,42 @@ contract `CASES` + 2 dedicated pinned-output contract tests + 3
 download / `layout.conf` negotiation / `gpkg`, and `--getbinpkg` for a
 real (non-`--pretend`) merge.
 
+### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
+
+The pilot's blocker report was pilot-shaped (`[blocks] cat/foo-1.0 hard
+blocks cat/bar-2.0 ("!!cat/bar")`, printed inline right after its
+owner's `[ebuild …]` line). Now it ports real `ResolverOutput._blockers`
+(`lib/_emerge/resolver/output.py:75-123`):
+
+```
+[blocks B     ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)
+```
+
+the fixed-width `[blocks B     ]` bracket (`B` + 5 spaces + a 6th mask-
+column space at `-v`, real `empty_space_in_brackets`); the `!`-stripped
+atom (real `dep_expand(str(atom).lstrip("!"))` — category-qualification
+only, and every pilot blocker atom is already `cat/pkg[…]`); then
+`("<atom>" is {hard,soft} blocking <parent cpv>)` — `hard` for a `!!`
+blocker (real `blocker.atom.blocker.overlap.forbid`), `soft` for `!`.
+Under `--color=y` the `blocks` word, the `B`, the atom, and the
+parenthetical are each `colorize("PKG_BLOCKER", …)` — style `red`
+(`\x1b[31;01m`); the teal `b` / `PKG_BLOCKER_SATISFIED` branch is
+unreachable here (this pilot only ever *reports* a blocker, never
+resolves one away, so `blocker.satisfied` is always false), as is real's
+`(is <desc> <parents>)` alternative (`resolved` drops the `!` while
+`blocker.atom` keeps it).
+
+Blocker lines are now also **collected and printed as one group after
+every package line** (real `Display.display` → `print_messages()` then
+`print_blockers()`), not interleaved — before the `-v` counters line.
+New fixture `dev-libs/blockerorderpkg` (`RDEPEND="!!dev-libs/samepkg
+dev-libs/newpkg"` — its blocker's owner is the first graph entry, a
+plain dep follows) proves the deferral. 8 contract `CASES` + 4 dedicated
+pinned-output contract tests (including the exact `--color=y` ANSI
+codes); mirrored in `emerge_pretend_reference.py`. This closes the
+blocker half of the `-pv` layout gap; only `--autounmask` message colour
+is left (its own future slice — that text is pilot-invented, not a port).
+
 ## Running it
 
 Build both Rust binaries:
@@ -8678,18 +8714,27 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/profileuseena
 # [ebuild  N    ] dev-libs/newpkg-1.0
 
 # a strong (!!) blocker matching an already-installed package is reported
-# (not enforced -- exit code is still 0, same as real --pretend)
+# (not enforced -- exit code is still 0, same as real --pretend); the
+# line follows real output.py::_blockers now
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/blockerpkg
 # [ebuild  N    ] dev-libs/blockerpkg-1.0
-# [blocks] dev-libs/blockerpkg-1.0 hard blocks dev-libs/samepkg-1.0 ("!!dev-libs/samepkg")
+# [blocks B     ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)
 
 # a weak (!) blocker matching another package this same run would also
-# newly merge (not just an installed one)
+# newly merge (not just an installed one) -- "soft blocking"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/graphblockerparent
 # [ebuild  N    ] dev-libs/graphblockerparent-1.0
 # [ebuild  N    ] dev-libs/blockerpartnerpkg-1.0
 # [ebuild  N    ] dev-libs/weakblockerpkg-1.0
-# [blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")
+# [blocks B     ] dev-libs/blockerpartnerpkg ("dev-libs/blockerpartnerpkg" is soft blocking dev-libs/weakblockerpkg-1.0)
+
+# blocker lines print as one group AFTER every package line (real
+# Display.print_blockers), not interleaved: blockerorderpkg's own blocker
+# owner is the first entry, but the [blocks] line still lands last
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/blockerorderpkg
+# [ebuild  N    ] dev-libs/blockerorderpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [blocks B     ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerorderpkg-1.0)
 
 # overlays: a package that exists only in the overlay repo (see
 # PORTING/fixtures/etc/portage/repos.conf) is found

@@ -584,6 +584,12 @@ CASES = [
     ("package.use: profile-level entry enables a flag not on globally", ["--pretend", "dev-libs/profileuseenablepkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
+    ("blocker: -v widens the [blocks B ] bracket by the mask column", ["--pretend", "-v", "dev-libs/blockerpkg"], 0),
+    ("blocker: line prints after every package line, not inline", ["--pretend", "dev-libs/blockerorderpkg"], 0),
+    ("blocker: --color=y colours the [blocks B ] line (PKG_BLOCKER red)", ["--pretend", "--color=y", "dev-libs/blockerpkg"], 0),
+    ("blocker: --color=y -v coloured + widened", ["--pretend", "--color=y", "-v", "dev-libs/blockerorderpkg"], 0),
+    ("blocker: --tree still ends with the deferred [blocks B ] line", ["--pretend", "--tree", "dev-libs/blockerorderpkg"], 0),
+    ("blocker: --json blocker payload is unchanged by the line reformat", ["--pretend", "--json", "dev-libs/blockerorderpkg"], 0),
     ("overlay: package exists only in the overlay repo", ["--pretend", "dev-libs/overlayonlypkg"], 0),
     ("overlay: best version wins across repos", ["--pretend", "dev-libs/overlaynewerpkg"], 0),
     ("overlay: same-version tie broken toward higher priority", ["--pretend", "dev-libs/overlaytiepkg"], 0),
@@ -3427,35 +3433,85 @@ def test_package_use_mask_and_force_with_atom_specificity_ordering(emerge_binary
     )
 
 
-def test_strong_blocker_matches_an_installed_package(emerge_binary, fixture_env):
+def test_strong_blocker_matches_an_installed_package(emerge_binary, emerge_pretend_python, fixture_env):
     """dev-libs/blockerpkg's RDEPEND is "!!dev-libs/samepkg", and
     dev-libs/samepkg-1.0 is already installed per the fixture vdb -- a
-    strong blocker match is reported (not enforced: exit code stays 0)."""
+    strong blocker match is reported (not enforced: exit code stays 0).
+    Real ResolverOutput._blockers (output.py:75-123): a `[blocks B     ]`
+    fixed-width bracket, the `!`-stripped (real dep_expand'd) atom, then
+    `("<atom>" is hard blocking <parent cpv>)` -- `hard` for a `!!`
+    blocker (real blocker.atom.blocker.overlap.forbid)."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/blockerpkg"], fixture_env)
+    rp = _run(emerge_pretend_python, ["--pretend", "dev-libs/blockerpkg"], fixture_env)
     assert result.returncode == 0
+    assert result.stdout == rp.stdout
     assert result.stdout.splitlines() == [
         '[ebuild  N    ] dev-libs/blockerpkg-1.0 ',
-        '[blocks] dev-libs/blockerpkg-1.0 hard blocks dev-libs/samepkg-1.0 ("!!dev-libs/samepkg")',
+        '[blocks B     ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)',
     ]
 
 
-def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binary, fixture_env):
+def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binary, emerge_pretend_python, fixture_env):
     """dev-libs/graphblockerparent pulls in both dev-libs/blockerpartnerpkg
     and dev-libs/weakblockerpkg (whose RDEPEND is
     "!dev-libs/blockerpartnerpkg") as New in the same run, so the weak
     blocker is matched against blockerpartnerpkg's graph-resolved version,
-    not just the (empty, for this package) vdb -- printed right after its
-    owner's own [ebuild ...] line."""
+    not just the (empty, for this package) vdb. `soft blocking` for a `!`
+    blocker; the line is printed after every `[ebuild ...]` line (real
+    Display.print_blockers, called after print_messages)."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/graphblockerparent"], fixture_env
     )
+    rp = _run(emerge_pretend_python, ["--pretend", "dev-libs/graphblockerparent"], fixture_env)
     assert result.returncode == 0
+    assert result.stdout == rp.stdout
     assert result.stdout.splitlines() == [
         '[ebuild  N    ] dev-libs/graphblockerparent-1.0 ',
         '[ebuild  N    ] dev-libs/blockerpartnerpkg-1.0 ',
         '[ebuild  N    ] dev-libs/weakblockerpkg-1.0 ',
-        '[blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")',
+        '[blocks B     ] dev-libs/blockerpartnerpkg ("dev-libs/blockerpartnerpkg" is soft blocking dev-libs/weakblockerpkg-1.0)',
     ]
+
+
+def test_blocker_lines_print_after_every_package_line_not_inline(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """dev-libs/blockerorderpkg RDEPENDs "!!dev-libs/samepkg" *and*
+    dev-libs/newpkg, so its blocker's owner (blockerorderpkg itself) is
+    the first graph entry while a non-blocker dep follows it. Real
+    Display collects blocker lines and prints them as one group after
+    print_messages() -- so the `[blocks B ...]` line lands after
+    dev-libs/newpkg, not interleaved right after its owner."""
+    result = _run([str(emerge_binary)], ["--pretend", "dev-libs/blockerorderpkg"], fixture_env)
+    rp = _run(emerge_pretend_python, ["--pretend", "dev-libs/blockerorderpkg"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout == rp.stdout
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/blockerorderpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        '[blocks B     ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerorderpkg-1.0)',
+    ]
+
+
+def test_blocker_line_is_coloured_under_color_y(emerge_binary, emerge_pretend_python, fixture_env):
+    """Real _blockers wraps `blocks`, the `B`, the resolved atom, and the
+    parenthetical in colorize(PKG_BLOCKER, ...) -- style "red"
+    (\\x1b[31;01m). `-v` widens the bracket by the mask column's own
+    space (real empty_space_in_brackets)."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--color=y", "-v", "dev-libs/blockerpkg"], fixture_env
+    )
+    rp = _run(
+        emerge_pretend_python, ["--pretend", "--color=y", "-v", "dev-libs/blockerpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout == rp.stdout
+    R = "\x1b[31;01m"
+    Z = "\x1b[39;49;00m"
+    assert result.stdout.splitlines()[1] == (
+        f"[{R}blocks{Z} {R}B{Z}      ] {R}dev-libs/samepkg{Z}"
+        f'{R} ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0){Z}'
+    )
 
 
 def test_unrelated_package_reports_no_blockers(emerge_binary, fixture_env):
@@ -3463,7 +3519,7 @@ def test_unrelated_package_reports_no_blockers(emerge_binary, fixture_env):
     resolving it must not gain a spurious [blocks] line."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/diamond"], fixture_env)
     assert result.returncode == 0
-    assert "[blocks]" not in result.stdout
+    assert "[blocks" not in result.stdout
 
 
 def test_overlay_only_package_is_found(emerge_binary, fixture_env):

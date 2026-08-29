@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: a strong (!!) blocker against dev-libs/samepkg PLUS a further dep (dev-libs/newpkg) -- proves blocker lines print after every package line, not inline
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=!!dev-libs/samepkg dev-libs/newpkg
+SLOT=0
+_md5_=0000000000000000000000000000000

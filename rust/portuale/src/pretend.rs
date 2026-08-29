@@ -716,19 +716,55 @@ fn package_counters_summary(
     out
 }
 
-fn print_blockers(entry: &GraphEntry, owner_version: &str) {
-    for b in &entry.blockers {
-        let strength = if b.strong { "hard" } else { "soft" };
-        println!(
-            "[blocks] {}/{}-{owner_version} {strength} blocks {}/{}-{} (\"{}\")",
-            entry.category,
-            entry.package,
-            b.matched_category,
-            b.matched_package,
-            b.matched_version,
-            b.atom_str
-        );
-    }
+/// Real `ResolverOutput._blockers` (`output.py:75-123`): one
+/// `[blocks B     ] <resolved> ("<atom>" is {hard,soft} blocking
+/// <parents>)` line per blocker on `entry`. Purely informational (see
+/// `resolve_pretend_graph`'s doc comment) -- v1 neither refuses nor
+/// changes the exit code for a blocker match. Collected into a `Vec`
+/// rather than printed inline: real `Display` gathers blocker lines
+/// while walking the entries and prints them as one group *after* every
+/// package line (real `output.py::display` -> `print_messages()` then
+/// `print_blockers()`).
+///
+/// This pilot only ever reports an *unsatisfied* blocker (it never
+/// resolves one away), so real `blocker.satisfied` is always `false`
+/// here: the bracket letter is always the red `B` / style `PKG_BLOCKER`,
+/// never the teal `b` / `PKG_BLOCKER_SATISFIED` branch. `resolved` is
+/// real `dep_expand(str(atom).lstrip("!"))` -- a category-qualification
+/// only, and every pilot blocker atom is already `cat/pkg[...]`, so it
+/// reduces to stripping the leading `!`/`!!`. Real's `(is <desc>
+/// <parents>)` alternative (`self.resolved == blocker.atom`) is
+/// unreachable -- `resolved` drops the `!` while `blocker.atom` keeps
+/// it. `empty_space_in_brackets()` adds the mask column's own space only
+/// at verbosity > 1 (`-v`).
+fn format_blocker_lines(
+    entry: &GraphEntry,
+    owner_version: &str,
+    verbose: bool,
+    color: &Colorizer,
+) -> Vec<String> {
+    let style = "PKG_BLOCKER";
+    let pad = if verbose { "      " } else { "     " };
+    entry
+        .blockers
+        .iter()
+        .map(|b| {
+            let resolved = b.atom_str.trim_start_matches('!');
+            let desc = if b.strong {
+                "hard blocking"
+            } else {
+                "soft blocking"
+            };
+            let parents = format!("{}/{}-{owner_version}", entry.category, entry.package);
+            format!(
+                "[{} {}{pad}] {}{}",
+                color.c(style, "blocks"),
+                color.c(style, "B"),
+                color.c(style, resolved),
+                color.c(style, &format!(" (\"{resolved}\" is {desc} {parents})")),
+            )
+        })
+        .collect()
 }
 
 /// One `GraphEntry`'s own display line, `indent` prepended right before
@@ -761,6 +797,7 @@ fn print_entry_line(
     color: &Colorizer,
     system_atoms: &[String],
     world_atoms: &[String],
+    blocker_lines: &mut Vec<String>,
 ) {
     let onlydeps_suppressed =
         onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
@@ -964,7 +1001,7 @@ fn print_entry_line(
             // (this pilot doesn't carry the other-slot versions on the
             // entry yet).
             emit(&field(true, entry.new_slot, false, false, false), version);
-            print_blockers(entry, version);
+            blocker_lines.extend(format_blocker_lines(entry, version, verbose, color));
         }
         PretendOutcome::Upgrade { from: _, to } => {
             // Real: an in-slot version bump -> `attr.new_version` only
@@ -972,13 +1009,13 @@ fn print_entry_line(
             // stays clear -> `U`, no `R`). oldbest = the in-slot
             // installed version(s) (`myinslotlist`), from `entry.oldbest`.
             emit(&field(false, false, false, true, false), to);
-            print_blockers(entry, to);
+            blocker_lines.extend(format_blocker_lines(entry, to, verbose, color));
         }
         PretendOutcome::Downgrade { from: _, to } => {
             // Real: in-slot downgrade -> `attr.new_version` *and*
             // `attr.downgrade` (`U` and `D`). oldbest as for `Upgrade`.
             emit(&field(false, false, false, true, true), to);
-            print_blockers(entry, to);
+            blocker_lines.extend(format_blocker_lines(entry, to, verbose, color));
         }
         PretendOutcome::Reinstall {
             version,
@@ -998,7 +1035,7 @@ fn print_entry_line(
             // `--changed-use`; `--changed-deps`/`--changed-slot` reasons
             // are genuinely invisible in real `-pv` too).
             emit(&field(false, false, true, false, false), version);
-            print_blockers(entry, version);
+            blocker_lines.extend(format_blocker_lines(entry, version, verbose, color));
         }
         PretendOutcome::AlreadyInstalled { version } => {
             // Already-satisfied dependencies aren't shown, matching
@@ -1145,6 +1182,7 @@ fn print_tree(
     color: &Colorizer,
     system_atoms: &[String],
     world_atoms: &[String],
+    blocker_lines: &mut Vec<String>,
 ) {
     let mut children: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -1179,7 +1217,13 @@ fn print_tree(
         world_atoms: &'a [String],
     }
 
-    fn render(i: usize, depth: u32, ctx: &TreeCtx, rendered: &mut HashSet<usize>) {
+    fn render(
+        i: usize,
+        depth: u32,
+        ctx: &TreeCtx,
+        rendered: &mut HashSet<usize>,
+        blocker_lines: &mut Vec<String>,
+    ) {
         if !rendered.insert(i) {
             return;
         }
@@ -1201,6 +1245,7 @@ fn print_tree(
             ctx.color,
             ctx.system_atoms,
             ctx.world_atoms,
+            blocker_lines,
         );
         let key = (
             ctx.entries[i].category.clone(),
@@ -1208,7 +1253,7 @@ fn print_tree(
         );
         if let Some(kids) = ctx.children.get(&key) {
             for &child in kids {
-                render(child, depth + 1, ctx, rendered);
+                render(child, depth + 1, ctx, rendered, blocker_lines);
             }
         }
     }
@@ -1228,7 +1273,7 @@ fn print_tree(
     let mut rendered: HashSet<usize> = HashSet::new();
     for (i, entry) in entries.iter().enumerate() {
         if top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone())) {
-            render(i, 0, &ctx, &mut rendered);
+            render(i, 0, &ctx, &mut rendered, blocker_lines);
         }
     }
 
@@ -1250,6 +1295,7 @@ fn print_tree(
                 color,
                 system_atoms,
                 world_atoms,
+                blocker_lines,
             );
         }
     }
@@ -4600,6 +4646,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // missing file is a valid empty world, same as everywhere else).
     let world_atoms = read_world_atoms(&root).unwrap_or_default();
     let system_atoms = &config.system_packages;
+    // Real `Display.blockers`: blocker lines are collected while walking
+    // the entries and printed as one group after every package line (see
+    // `format_blocker_lines`).
+    let mut blocker_lines: Vec<String> = Vec::new();
     if tree {
         print_tree(
             entries,
@@ -4612,6 +4662,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &color,
             system_atoms,
             &world_atoms,
+            &mut blocker_lines,
         );
     } else {
         for entry in entries {
@@ -4628,8 +4679,16 @@ pub fn run(args: &[String]) -> ExitCode {
                 &color,
                 system_atoms,
                 &world_atoms,
+                &mut blocker_lines,
             );
         }
+    }
+
+    // Real `Display.print_blockers()`: the collected `[blocks B ...]`
+    // lines, printed as one group after every package line and before
+    // the counters.
+    for line in &blocker_lines {
+        println!("{line}");
     }
 
     // Real `output.py::display`: `if self.conf.verbosity == 3:

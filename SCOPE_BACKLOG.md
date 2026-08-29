@@ -221,7 +221,9 @@ Ranked roughly by how self-contained each is.
    ANSI colour shipped across increments 2-4. The `g` (remote binary)
    bracket column **shipped 2026-08-29** with the `--pretend` half of
    `--getbinpkg` (item 6 / item 19). The `-pv` output arc is complete
-   bar `--autounmask`/blocker-line colour (their own future slices).
+   bar `--autounmask` message colour (its own future slice). The blocker
+   line's own real `output.py::_blockers` layout + colour **shipped
+   2026-08-29** (item 14).
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag
@@ -374,9 +376,19 @@ Ranked roughly by how self-contained each is.
       `-pc` advisory's `WARN " * "` + green backtick commands).
       `--columns`/`--tree` were already coloured via `print_entry_line`
       in increment 2. `show_parents` left plain (no colour in real).
+    - **Increment 5 — blocker line real `_blockers` layout + colour** —
+      **shipped 2026-08-29**: real `ResolverOutput._blockers`
+      (`output.py:75-123`) -- the `[blocks B     ]` fixed-width bracket
+      (+ mask-column space at `-v`), the `!`-stripped (`dep_expand`'d)
+      atom, `("<atom>" is {hard,soft} blocking <parent cpv>)`, all
+      `colorize("PKG_BLOCKER", …)` = red under `--color=y`. Blocker
+      lines are now collected and printed as one group *after* every
+      package line (real `Display.print_blockers`), not interleaved. New
+      fixture `dev-libs/blockerorderpkg`. The teal `b` /
+      `PKG_BLOCKER_SATISFIED` branch and real's `(is <desc> <parents>)`
+      alternative are both unreachable in this pilot (documented).
       **Still deferred:** `--autounmask` message colour (the pilot's text
-      is already pilot-invented, its own slice) and blocker-line colour
-      (rides with the deferred real blocker layout). Bar those two, the
+      is already pilot-invented, its own slice). Bar that one, the
       `-pv` layout + colour buildout is complete.
     The two increment-1 follow-ups -- a new-slot install's other-slot
     version list, and verbosity-3 `:slot`/`::repo` decoration on the cpv

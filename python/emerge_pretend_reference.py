@@ -9903,16 +9903,38 @@ def run(args):
             print(f"  {color.c('INFORM', atom)} pulled in by 'args'", file=sys.stderr)
         print(file=sys.stderr)
 
+    # Real Display.blockers: blocker lines are collected while walking the
+    # entries and printed as one group *after* every package line (real
+    # output.py::display calls print_messages() then print_blockers()),
+    # not inline. Mirrors pretend.rs's own deferred `blocker_lines`.
+    deferred_blocker_lines = []
+
     def print_blockers(category, package, owner_version, blockers):
-        # Purely informational (see resolve_pretend_graph's doc comment):
-        # v1 neither refuses nor changes the exit code for a blocker
-        # match, strong or weak.
+        # Real ResolverOutput._blockers (output.py:75-123). Purely
+        # informational (see resolve_pretend_graph's doc comment): v1
+        # neither refuses nor changes the exit code for a blocker match.
+        # This pilot only ever reports an *unsatisfied* blocker (it never
+        # resolves one away), so real `blocker.satisfied` is always False
+        # here: the bracket letter is always the red `B` / style
+        # PKG_BLOCKER, never the teal `b` / PKG_BLOCKER_SATISFIED branch.
+        # `resolved` is real `dep_expand(str(atom).lstrip("!"))` -- a
+        # category-qualification only, and every pilot blocker atom is
+        # already `cat/pkg[...]`, so it reduces to stripping the leading
+        # `!`/`!!`. Real's `(is <desc> <parents>)` alternative
+        # (`self.resolved == blocker.atom`) is unreachable: `resolved`
+        # drops the `!` while `blocker.atom` keeps it. `empty_space_in_
+        # brackets()` adds the mask column's own space only at verbosity
+        # > 1 (`-v`).
+        style = "PKG_BLOCKER"
+        pad = "     " + (" " if verbose else "")
         for b in blockers:
-            strength = "hard" if b["strong"] else "soft"
-            print(
-                f"[blocks] {category}/{package}-{owner_version} {strength} blocks "
-                f"{b['matched_category']}/{b['matched_package']}-{b['matched_version']} "
-                f'("{b["atom_str"]}")'
+            resolved = b["atom_str"].lstrip("!")
+            desc = "hard blocking" if b["strong"] else "soft blocking"
+            parents = f"{category}/{package}-{owner_version}"
+            deferred_blocker_lines.append(
+                f'[{color.c(style, "blocks")} {color.c(style, "B")}{pad}] '
+                + color.c(style, resolved)
+                + color.c(style, f' ("{resolved}" is {desc} {parents})')
             )
 
     def _installed_use_state(category, package, outcome):
@@ -10380,6 +10402,12 @@ def run(args):
     else:
         for entry in entries:
             print_entry_line(entry, "")
+
+    # Real Display.print_blockers(): the collected `[blocks B ...]` lines,
+    # printed as one group after every package line and before the
+    # counters. Mirrors pretend.rs.
+    for line in deferred_blocker_lines:
+        print(line)
 
     # Real output.py::display: `if self.conf.verbosity == 3:
     # self.print_verbose(...)` -- the `Total: ...` counters line, printed
