@@ -320,7 +320,14 @@ Ranked roughly by how self-contained each is.
       world-file / `@system`-atom), the per-letter `PkgAttrDisplay`
       colours, `blue("[old-ver]")`, `darkgreen("to <root>")`, and
       `nc_len`-aware `--columns` padding.
-    - **Increment 3 — USE-flag colours** in `build_use_expand_display`.
+    - **Increment 3 — USE-flag colours** — **shipped 2026-08-29**: real
+      `_create_use_string`'s per-flag colour (`red` plain-enabled, `blue`
+      plain-disabled `-flag`, `yellow` for `%`/`%*` newly-in-IUSE,
+      `green` for a lone `*` polarity flip) applied as a render-time
+      token-shape pass (`colorize_use_token` / `_colorize_use_token`) --
+      only the `flag`/`-flag` core, markers and `( )` wrap stay plain.
+      One documented, fixture-unreachable imperfection (forced disabled
+      flag newly in IUSE on an Upgrade -> `blue` here, `yellow` in real).
     - **Increment 4 — counters line, `-pc`/`-pC`/`-pP` cleanup output,
       autounmask messages, `--columns`/`--tree` colour.**
     Also still deferred (increment 1 follow-ups): a new-slot install's

@@ -3156,6 +3156,32 @@ PORTING/
   (`build_use_expand_display`), then counters/cleanup/autounmask colour;
   blocker-line colour rides along with the deferred real blocker layout.
 
+  **`emerge --pretend -v --color y`: the `USE="…"` flag colours
+  (increment 3 of the buildout).** Real `_create_use_string`
+  (`output_helpers.py:262-334`) colours each flag by its diff state:
+  `red(flag)` for a plain enabled flag, `blue("-"+flag)` for a plain
+  disabled one, `yellow` for a flag newly in IUSE (`flag%*` / `-flag%`),
+  `green` for one whose polarity flipped (`flag*` / `-flag*`), `yellow`
+  again for a `removed_iuse` `(-flag%)` -- and only the `flag`/`-flag`
+  *core* is wrapped, never the `*`/`%` markers or the `( )` forced/removed
+  wrap (real `yellow(flag) + "%*"` appends the markers *after* the
+  `colorize` call). Since the marker suffix and sign fully determine the
+  colour, this pilot applies it as a render-time pass over the
+  already-rendered tokens (`pretend.rs::colorize_use_token` /
+  `_colorize_use_token`) rather than threading colour back into
+  `build_use_expand_display` (which runs at resolve time, before
+  `--color` is known) -- the same "post-hoc token-shape parse" the
+  `--alphabetical` re-sort already uses, and colour is applied *after*
+  that sort so the sort key still sees plain tokens. One documented
+  imperfection, unreachable by any fixture: a forced *disabled* flag
+  newly in IUSE on an Upgrade renders `(-flag)` (the pilot's own
+  `render_flag` drops the `%` for forced flags) and is coloured `blue`
+  here where real portage would `yellow` it. A dedicated pinned contract
+  test (the New red/blue case + the Upgrade `added%*`/`keep`/`-change*`/
+  `(-drop%)` case) + 2 `CASES` entries. **Still open**: counters-line /
+  `-pc`/`-pC`/`-pP` / autounmask colour (increment 4); blocker-line
+  colour rides along with the deferred real blocker layout.
+
   **`emerge --pretend -v`: the `[ebuild N ~]` bracket-mask marker.** Real
   `output.py::gen_mask_str` (only with `-v` -- `include_mask_str` =
   `verbosity > 1`) gives the bracket a one-character column right after

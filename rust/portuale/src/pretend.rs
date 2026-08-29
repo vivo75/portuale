@@ -431,7 +431,41 @@ fn use_flag_sort_key(tok: &str) -> &str {
         .trim_end_matches([')', '*', '%'])
 }
 
-fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool) -> String {
+/// Real `_create_use_string`'s per-flag colour (`output_helpers.py:262-334`),
+/// re-derived from an already-rendered token's shape -- the marker suffix
+/// and sign fully determine it: a plain enabled `flag` is `red`, a plain
+/// disabled `-flag` is `blue`, a `%`/`%*` marker means `yellow` (newly in
+/// IUSE), a lone `*` means `green` (polarity flipped). Only the
+/// `flag`/`-flag` core is coloured -- the `*`/`%` markers and any `( )`
+/// forced/removed wrap stay plain, exactly as real (`yellow(flag) + "%*"`
+/// etc). Known imperfection (no fixture reaches it, and it matches the
+/// pilot's own `render_flag` `%`-collapse for forced flags): a forced
+/// *disabled* flag newly added to IUSE on an Upgrade renders `(-flag)`
+/// and is coloured `blue` here, where real portage would `yellow` it.
+fn colorize_use_token(tok: &str, color: &Colorizer) -> String {
+    let (open, inner, close) = match tok.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+        Some(i) => ("(", i, ")"),
+        None => ("", tok, ""),
+    };
+    let (core, markers) = if let Some(c) = inner.strip_suffix("%*") {
+        (c, "%*")
+    } else if let Some(c) = inner.strip_suffix('*') {
+        (c, "*")
+    } else if let Some(c) = inner.strip_suffix('%') {
+        (c, "%")
+    } else {
+        (inner, "")
+    };
+    let key = match markers {
+        "%*" | "%" => "yellow",
+        "*" => "green",
+        _ if core.starts_with('-') => "blue",
+        _ => "red",
+    };
+    format!("{open}{}{markers}{close}", color.c(key, core))
+}
+
+fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool, color: &Colorizer) -> String {
     if !verbose || entry.use_expand_display.is_empty() {
         return String::new();
     }
@@ -441,18 +475,22 @@ fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool) -> String {
     // `portage_repo::build_use_expand_display`. With `--alphabetical`,
     // real `_create_use_string` instead joins one combined list sorted
     // by bare flag name -- reproduced here by re-sorting each group's
-    // already-rendered tokens.
+    // already-rendered tokens. Colour (real `_create_use_string`'s own
+    // `red`/`green`/`blue`/`yellow`) is applied per token *after* the
+    // sort, so the `--alphabetical` sort key still sees plain tokens.
     let groups: Vec<String> = entry
         .use_expand_display
         .iter()
         .map(|(name, rendered)| {
-            let body = if alphabetical {
-                let mut toks: Vec<&str> = rendered.split(' ').collect();
+            let mut toks: Vec<&str> = rendered.split(' ').collect();
+            if alphabetical {
                 toks.sort_by(|a, b| use_flag_sort_key(a).cmp(use_flag_sort_key(b)));
-                toks.join(" ")
-            } else {
-                rendered.clone()
-            };
+            }
+            let body = toks
+                .iter()
+                .map(|t| colorize_use_token(t, color))
+                .collect::<Vec<_>>()
+                .join(" ");
             format!("{name}=\"{body}\"")
         })
         .collect();
@@ -760,7 +798,7 @@ fn print_entry_line(
             return;
         }
         let (system, world) = classify(version);
-        let use_str = use_suffix(entry, verbose, alphabetical);
+        let use_str = use_suffix(entry, verbose, alphabetical, color);
         // Real `output.py:856-861`: the running-root suffix is
         // `darkgreen("to " + pkg.root)`.
         let root_col = |r: &str| {

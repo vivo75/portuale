@@ -1038,6 +1038,16 @@ CASES = [
         0,
     ),
     (
+        "--color=y -pv: USE= tokens are coloured (red/blue/green/yellow + plain markers)",
+        ["--pretend", "-v", "--color=y", "--update", "dev-libs/upgradeusepkg"],
+        0,
+    ),
+    (
+        "--color=y -pv --alphabetical: colour applied after the re-sort",
+        ["--pretend", "-v", "--color=y", "--alphabetical", "dev-libs/iusedefaultpkg"],
+        0,
+    ),
+    (
         "--color=y --columns: nc_len keeps the coloured line aligned",
         ["--pretend", "--color=y", "--columns", "--update", "dev-libs/upgradepkg"],
         0,
@@ -3012,6 +3022,26 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     rn = _run([str(emerge_binary)], n_args, fixture_env)
     assert rn.stdout == "[ebuild  N    ] dev-libs/newpkg-1.0 \n"
     assert "\x1b" not in _run([str(emerge_binary)], ["--pretend", "dev-libs/newpkg"], fixture_env).stdout
+
+    # Increment 3: the USE="..." tokens are coloured per real
+    # _create_use_string -- a plain enabled flag red, a plain disabled
+    # -flag blue, and only the flag core, never the */% markers or a ()
+    # wrap. A New: enabled `foo` red, disabled `-missingflag` blue.
+    u_args = ["--pretend", "-v", "--color=y", "dev-libs/useflagpkg"]
+    ru = _run([str(emerge_binary)], u_args, fixture_env)
+    assert ru.stdout == _run(emerge_pretend_python, u_args, fixture_env).stdout
+    assert ru.stdout.splitlines()[0].endswith(
+        f'USE="\x1b[31;01mfoo{R} \x1b[34;01m-missingflag{R}"'
+    )
+    # An Upgrade: `added%*` -> yellow core + plain %*, `keep` red
+    # (unchanged-on), `-change*` -> green core + plain *, `(-drop%)` ->
+    # yellow core inside plain ( … ).
+    up2_args = ["--pretend", "-v", "--color=y", "--update", "dev-libs/upgradeusepkg"]
+    rup2 = _run([str(emerge_binary)], up2_args, fixture_env)
+    assert rup2.stdout == _run(emerge_pretend_python, up2_args, fixture_env).stdout
+    assert rup2.stdout.splitlines()[0].endswith(
+        f'USE="\x1b[33;01madded{R}%* \x1b[31;01mkeep{R} \x1b[32;01m-change{R}* (\x1b[33;01m-drop{R}%)"'
+    )
 
 
 def test_package_accept_keywords_profile_level_entry_extends_visibility(

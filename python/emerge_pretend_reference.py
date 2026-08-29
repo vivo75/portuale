@@ -7758,6 +7758,40 @@ class _Colorizer:
         return self.c(key, text)
 
 
+def _colorize_use_token(tok, color):
+    """Real _create_use_string's per-flag colour
+    (output_helpers.py:262-334), re-derived from an already-rendered
+    token's shape -- the marker suffix and sign fully determine it: a
+    plain enabled `flag` is red, a plain disabled `-flag` is blue, a
+    `%`/`%*` marker means yellow (newly in IUSE), a lone `*` means green
+    (polarity flipped). Only the flag/-flag core is coloured -- the
+    `*`/`%` markers and any `( )` wrap stay plain. Known imperfection (no
+    fixture reaches it): a forced disabled flag newly in IUSE on an
+    Upgrade renders `(-flag)` and is coloured blue here where real
+    portage would yellow it. Mirrors pretend.rs's colorize_use_token."""
+    if tok.startswith("(") and tok.endswith(")"):
+        open_, inner, close = "(", tok[1:-1], ")"
+    else:
+        open_, inner, close = "", tok, ""
+    if inner.endswith("%*"):
+        core, markers = inner[:-2], "%*"
+    elif inner.endswith("*"):
+        core, markers = inner[:-1], "*"
+    elif inner.endswith("%"):
+        core, markers = inner[:-1], "%"
+    else:
+        core, markers = inner, ""
+    if markers in ("%*", "%"):
+        key = "yellow"
+    elif markers == "*":
+        key = "green"
+    elif core.startswith("-"):
+        key = "blue"
+    else:
+        key = "red"
+    return f"{open_}{color.c(key, core)}{markers}{close}"
+
+
 def _columns_line(
     bracket_word,
     field,
@@ -8961,11 +8995,13 @@ def run(args):
             return ""
 
         def body(rendered):
-            if not alphabetical:
-                return rendered
             toks = rendered.split(" ")
-            toks.sort(key=_use_flag_sort_key)
-            return " ".join(toks)
+            if alphabetical:
+                toks.sort(key=_use_flag_sort_key)
+            # Colour (real _create_use_string's red/green/blue/yellow) is
+            # applied per token *after* the sort, so the --alphabetical
+            # sort key still sees plain tokens. Mirrors pretend.rs.
+            return " ".join(_colorize_use_token(t, color) for t in toks)
 
         # Real print_messages: `myprint += " " + self.verboseadd` -- a
         # single space joins the USE display to the line, which already
