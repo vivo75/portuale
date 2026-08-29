@@ -8131,3 +8131,67 @@ fixture `_unresolved_root` (`ukept` RDEPENDs a missing package); 4
 contract tests + a `portage-repo` unit test; mirrored in
 `emerge_pretend_reference.py`.
 
+### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
+
+Portuale's blocker report was portuale-shaped (`[blocks] cat/foo-1.0 hard
+blocks cat/bar-2.0 ("!!cat/bar")`, printed inline right after its
+owner's `[ebuild …]` line). Now it ports real `ResolverOutput._blockers`
+(`lib/_emerge/resolver/output.py:75-123`):
+
+```
+[blocks B     ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerpkg-1.0)
+```
+
+the fixed-width `[blocks B     ]` bracket (`B` + 5 spaces + a 6th mask-
+column space at `-v`, real `empty_space_in_brackets`); the `!`-stripped
+atom (real `dep_expand(str(atom).lstrip("!"))` — category-qualification
+only, and every portuale blocker atom is already `cat/pkg[…]`); then
+`("<atom>" is {hard,soft} blocking <parent cpv>)` — `hard` for a `!!`
+blocker (real `blocker.atom.blocker.overlap.forbid`), `soft` for `!`.
+Under `--color=y` the `blocks` word, the `B`, the atom, and the
+parenthetical are each `colorize("PKG_BLOCKER", …)` — style `red`
+(`\x1b[31;01m`); the teal `b` / `PKG_BLOCKER_SATISFIED` branch is
+unreachable here (portuale only ever *reports* a blocker, never
+resolves one away, so `blocker.satisfied` is always false), as is real's
+`(is <desc> <parents>)` alternative (`resolved` drops the `!` while
+`blocker.atom` keeps it).
+
+Blocker lines are now also **collected and printed as one group after
+every package line** (real `Display.display` → `print_messages()` then
+`print_blockers()`), not interleaved — before the `-v` counters line.
+New fixture `dev-libs/blockerorderpkg` (`RDEPEND="!!dev-libs/samepkg
+dev-libs/newpkg"` — its blocker's owner is the first graph entry, a
+plain dep follows) proves the deferral. 8 contract `CASES` + 4 dedicated
+pinned-output contract tests (including the exact `--color=y` ANSI
+codes); mirrored in `emerge_pretend_reference.py`. This closes the
+blocker half of the `-pv` layout gap; only `--autounmask` message colour
+is left (its own future slice — that text is portuale-invented, not a port).
+
+### `emerge -p`: an installed dependency's USE-dep checked against its *built* USE (bug 640318)
+
+When a dependency atom carries a USE-dep (`cat/pkg[flag]`) and
+`cat/pkg` is already installed, `dependency_avoid_update_candidate`
+checks that USE-dep against the installed version's own real vdb
+`USE`/`IUSE` (not the current tree's). The *valid-flag domain* for that
+check now follows real `dbapi._iuse_implicit_cnstr` for a built package
+on an EAPI 5+ (`iuse_effective`): the recorded `IUSE`, unioned with the
+profile's `IUSE_EFFECTIVE` (`valid_iuse` — `elibc_*` etc), **and every
+flag the package was actually built with** (real `_iuse_implicit_built`'s
+own `flag in use` clause, [bug 640318](https://bugs.gentoo.org/640318) —
+a built package's own `USE` is authoritative for what counts as a valid
+flag, independent of the profile's current `IUSE_IMPLICIT` or an ebuild
+that has since dropped a flag from its `IUSE`). Real `_match_use`
+recomputes the domain this way rather than reading a vdb `IUSE_EFFECTIVE`
+file, so portuale not persisting one is not a gap here.
+
+New fixture `dev-libs/builtusedivergedep` (installed 1.0 with vdb
+`USE="divergedflag"` but vdb `IUSE=""`, and the current ebuild has
+*dropped* `divergedflag` from its `IUSE`) + `dev-libs/needsbuiltusediverge`
+(`RDEPEND="dev-libs/builtusedivergedep[divergedflag]"`). Before: the
+dependency spuriously hit `!!! no visible ebuild` (nothing in the tree
+can satisfy `[divergedflag]`); now the installed version satisfies it and
+the dependency is kept as installed. The same atom as a *top-level*
+target still fails — the avoid-update-against-vdb path is dependency-only.
+2 contract `CASES` + 1 dedicated pinned test + 1 `portage-repo` unit test;
+mirrored in `emerge_pretend_reference.py`.
+
