@@ -8313,7 +8313,7 @@ target still fails — the avoid-update-against-vdb path is dependency-only.
 2 contract `CASES` + 1 dedicated pinned test + 1 `portage-repo` unit test;
 mirrored in `emerge_pretend_reference.py`.
 
-### `gpkg` binary-package metadata reader (`$PKGDIR` directory-scan fallback, increment 1)
+### `gpkg` + `xpak` binary-package metadata readers (`$PKGDIR` directory-scan fallback, increments 1–2)
 
 Every binary-package path in this pilot so far is `<pkgdir>/Packages`-
 index-driven and format-agnostic: `portage-repo` never opens a binpkg
@@ -8357,11 +8357,52 @@ New fixture `PORTING/fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar` —
 a real, hand-built container (`tar` + `zstd`, real member layout). 3
 `portuale` unit tests; also verified by hand against a real-world
 `/var/cache/binpkgs/*.gpkg.tar` (with `.sig` members, `environment.bz2`,
-a build-id basename). **Increment 1**: the reader exists and is tested
-but has no non-test caller yet (`#[allow(dead_code)] mod binpkg`) — the
-`$PKGDIR` scan that uses it, and the `xpak` reader alongside it, are
-later increments, the same "land the mechanism first, wire it after"
-shape the `needed_elf` preserve-libs buildout used.
+a build-id basename).
+
+**Increment 2** — the `xpak` (`.tbz2`) reader — adds
+`binpkg::read_xpak_metadata`, porting real `portage.xpak.tbz2`'s own
+`scan` + `getindex_mem`/`searchindex` (`lib/portage/xpak.py:395-460` /
+`234-266`). An `xpak` binpkg is `[image tarball]` immediately followed by
+a fully self-describing trailer — `"XPAKPACK" be32(indexsize)
+be32(datasize) <index> <data> "XPAKSTOP" be32(infosize) "STOP"` — so the
+reader parses it in **pure Rust** (no `tar`, no subprocess), reading only
+the bounded `infosize + 8` file tail; the image tarball itself is never
+touched. `<index>` is a flat run of `be32(namelen) name be32(datapos)
+be32(datalen)` records into `<data>`; every metadata key is one record.
+`CONTENTS` is never present in a *binary* package's own xpak (real
+`xpak()` skips it — it's a merge-time artifact). Codec-agnostic (the
+trailer is raw whatever compressed the tarball). New committed fixture
+`PORTING/fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2` — a genuine
+`.tbz2` built once by the pilot's own `ebuild <file> package` (real
+`xpak-helper.py recompose` → real `xpak.py`) rather than rebuilt
+per-test (the read side needs no reproducible bytes, and driving the
+full brush phase chain in a unit test adds parallel-load pressure to the
+suite's brush-heavy tests for no reader-coverage gain). 3 more `portuale`
+unit tests (a synthetic multi-key XPAK segment, the committed real
+`.tbz2`, a no-trailer rejection).
+
+**Discovered while writing the real-`.tbz2` test**: this pilot's own
+`build-info` generation is a *subset* of real portage's — it writes
+`EAPI`/`SLOT`/`CATEGORY`/`PF`/`KEYWORDS`/`USE`/`DEFINED_PHASES`/
+`BUILD_TIME` + the bundled `<pf>.ebuild` + `environment.bz2`, but **not**
+the dependency-string files (`DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/
+`IDEPEND`/`IUSE`/`LICENSE`/`PROPERTIES`/`RESTRICT`/`INHERITED`/
+`IUSE_EFFECTIVE`/`SIZE`/`PROVIDES`/`REQUIRES`/…). Those come through into
+the pilot's `Packages` index anyway (from `md5-cache`), so `--pretend`
+binary resolution is unaffected — but a `$PKGDIR` scan of a pilot-built
+`.tbz2` would see an incomplete candidate. Tracked as its own
+`ebuild_package.rs` / phase-execution follow-up, orthogonal to these
+readers.
+
+**Still to wire** (increment 3): the `$PKGDIR` directory scan itself —
+when `<pkgdir>/Packages` is absent, walk `$PKGDIR` for
+`*.tbz2`/`*.gpkg.tar`, read each with the matching reader, and build the
+candidate list (both sides). Both readers currently sit under
+`#[allow(dead_code)] mod binpkg` — the same "land the mechanism first,
+wire it after" shape the `needed_elf` preserve-libs buildout used. The
+architecture decision (`portage-repo` is deliberately subprocess-free,
+so the scan/reader placement needs settling — new crate vs callback vs
+scan-in-`portuale`) is deferred to that increment.
 
 ## Running it
 

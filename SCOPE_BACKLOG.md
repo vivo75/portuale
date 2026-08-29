@@ -293,17 +293,25 @@ Ranked roughly by how self-contained each is.
    fallback** buildout (real `bintree._populate_local` — open each binpkg
    file and rebuild `Packages` when there's no trusted index; a `gpkg`
    listed *in* an index already resolves for `--pretend` today, the index
-   being format-agnostic). Increment 1 **shipped 2026-08-29**:
+   being format-agnostic). Increments 1–2 **shipped 2026-08-29/30**:
    `portuale/src/binpkg.rs::read_gpkg_metadata` (real
    `gpkg.get_metadata()`/`unpack_metadata` — outer tar → classify
    `metadata.tar[.<comp>]` → decompress via the real `_compressors` argv
-   → inner tar → `metadata/<KEY>` map; shells out to `tar` + the seven
-   decompressors). Not wired to a caller yet (`#[allow(dead_code)]`).
-   **Still open:** the `xpak` (`.tbz2`) reader (increment 2), the
-   `$PKGDIR` scan + both-sides wiring (increment 3), `Manifest`/`.sig`
-   verification (deliberately cut in the reader — this pilot has no
+   → inner tar → `metadata/<KEY>` map; `tar` + the seven decompressors)
+   and `::read_xpak_metadata` (real `xpak.tbz2.scan` +
+   `getindex_mem`/`searchindex` — the self-describing
+   `XPAKPACK…XPAKSTOP…STOP` trailer, **pure Rust**, bounded file-tail
+   read, no subprocess). Neither wired to a caller yet
+   (`#[allow(dead_code)]`).
+   **Still open:** the `$PKGDIR` scan + both-sides wiring (increment 3),
+   `Manifest`/`.sig` verification (deliberately cut — this pilot has no
    crypto), and `ebuild … package` *emitting* gpkg (`BINPKG_FORMAT` is
-   hardcoded `xpak`, `ebuild_package.rs:327`). `FEATURES=verify-sig`
+   hardcoded `xpak`, `ebuild_package.rs:327`).
+   **Also found (increment 2):** the pilot's own `build-info` generation
+   omits every dependency-string metadata file
+   (`DEPEND`/`RDEPEND`/`IUSE`/`LICENSE`/…) — its own
+   `ebuild_package.rs`/phase-execution follow-up, harmless today (those
+   reach the `Packages` index via `md5-cache`). `FEATURES=verify-sig`
    (GPG) lives here too — it is a `gpkg`/repo-sync concept, **not**
    `SRC_URI` fetch (the earlier backlog mis-scoped it).
 

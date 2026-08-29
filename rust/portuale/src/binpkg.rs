@@ -207,6 +207,115 @@ pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, S
     Ok(out)
 }
 
+/// Real `portage.xpak`'s own `.tbz2` reader (`tbz2.scan` +
+/// `getindex_mem`/`searchindex`, `lib/portage/xpak.py:395-460` / `234-266`).
+/// An xpak binary package is `[image tarball]` immediately followed by a
+/// self-describing XPAK trailer:
+///
+/// ```text
+///   "XPAKPACK"  be32(indexsize)  be32(datasize)  <index>  <data>  "XPAKSTOP"  be32(infosize)  "STOP"
+/// ```
+///
+/// where `infosize` is the length of the `XPAKPACK`…`XPAKSTOP` segment
+/// and `<index>` is a flat run of `be32(namelen) name be32(datapos)
+/// be32(datalen)` records into `<data>`. Every metadata key (`DEPEND`,
+/// `SLOT`, …) is one record. Returns the key -> value map, each value
+/// UTF-8 (lossy-decoded, then trimmed -- values carry a trailing newline
+/// like a vdb aux file). `CONTENTS` is never present in a *binary*
+/// package's own xpak (real `xpak()` skips it -- it's generated at merge
+/// time).
+///
+/// Only the bounded `infosize + 8` tail of the file is read; the image
+/// tarball itself is never touched (this reader answers "what metadata
+/// does this binpkg carry", the same narrow question `read_gpkg_metadata`
+/// does for gpkg). Codec-agnostic: the trailer is raw, whatever
+/// compressor produced the tarball.
+pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut f =
+        fs::File::open(binpkg_path).map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+    let file_len = f
+        .seek(SeekFrom::End(0))
+        .map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+    if file_len < 16 {
+        return Err(format!(
+            "{}: too small to be an xpak binpkg",
+            binpkg_path.display()
+        ));
+    }
+
+    // Real `tbz2.scan`: the last 16 bytes are
+    // `"XPAKSTOP" be32(infosize) "STOP"`.
+    let mut trailer = [0u8; 16];
+    f.seek(SeekFrom::End(-16))
+        .and_then(|_| f.read_exact(&mut trailer))
+        .map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+    if &trailer[12..16] != b"STOP" || &trailer[0..8] != b"XPAKSTOP" {
+        return Err(format!(
+            "{}: not an xpak binary package (no XPAKSTOP trailer)",
+            binpkg_path.display()
+        ));
+    }
+    let infosize = be32(&trailer[8..12]) as u64;
+    let xpaksize = infosize + 8;
+    if xpaksize > file_len {
+        return Err(format!(
+            "{}: xpak trailer size exceeds the file",
+            binpkg_path.display()
+        ));
+    }
+
+    // The XPAK segment: `"XPAKPACK" be32(indexsize) be32(datasize)
+    // <index> <data> "XPAKSTOP"`.
+    let mut seg = vec![0u8; xpaksize as usize];
+    f.seek(SeekFrom::End(-(xpaksize as i64)))
+        .and_then(|_| f.read_exact(&mut seg))
+        .map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+    if seg.len() < 16 || &seg[0..8] != b"XPAKPACK" {
+        return Err(format!(
+            "{}: not an xpak binary package (no XPAKPACK header)",
+            binpkg_path.display()
+        ));
+    }
+    let indexsize = be32(&seg[8..12]) as usize;
+    let datasize = be32(&seg[12..16]) as usize;
+    let index_start = 16;
+    let data_start = index_start + indexsize;
+    if data_start + datasize > seg.len() {
+        return Err(format!(
+            "{}: xpak index/data segments overrun the file",
+            binpkg_path.display()
+        ));
+    }
+    let index = &seg[index_start..data_start];
+    let data = &seg[data_start..data_start + datasize];
+
+    // Walk the index (real `getindex_mem`/`searchindex`: `while startpos
+    // + 8 < len`, `startpos += namelen + 12`).
+    let mut out = HashMap::new();
+    let mut pos = 0usize;
+    while pos + 8 < index.len() {
+        let namelen = be32(&index[pos..pos + 4]) as usize;
+        if pos + 4 + namelen + 8 > index.len() {
+            break;
+        }
+        let name = &index[pos + 4..pos + 4 + namelen];
+        let datapos = be32(&index[pos + 4 + namelen..pos + 8 + namelen]) as usize;
+        let datalen = be32(&index[pos + 8 + namelen..pos + 12 + namelen]) as usize;
+        if let (Ok(key), true) = (std::str::from_utf8(name), datapos + datalen <= data.len()) {
+            let value = String::from_utf8_lossy(&data[datapos..datapos + datalen]);
+            out.insert(key.to_string(), value.trim().to_string());
+        }
+        pos += namelen + 12;
+    }
+    Ok(out)
+}
+
+fn be32(b: &[u8]) -> u32 {
+    u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+}
+
 fn run_tar(args: &[&str]) -> Result<(), String> {
     let status = Command::new("tar")
         .args(args)
@@ -299,5 +408,116 @@ mod tests {
         .unwrap();
         let err = read_gpkg_metadata(&not_gpkg).unwrap_err();
         assert!(err.contains("gpkg-1"), "{err}");
+    }
+
+    /// Build a real XPAK segment (real `xpak.xpak_mem` layout) and append
+    /// it to some prefix bytes, exactly the way a real `.tbz2` is
+    /// `[tarball][XPAK trailer]`.
+    fn make_xpak_binpkg(prefix: &[u8], entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut index = Vec::new();
+        let mut data = Vec::new();
+        for (name, value) in entries {
+            index.extend_from_slice(&(name.len() as u32).to_be_bytes());
+            index.extend_from_slice(name.as_bytes());
+            index.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            index.extend_from_slice(&(value.len() as u32).to_be_bytes());
+            data.extend_from_slice(value);
+        }
+        let mut segment = Vec::new();
+        segment.extend_from_slice(b"XPAKPACK");
+        segment.extend_from_slice(&(index.len() as u32).to_be_bytes());
+        segment.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        segment.extend_from_slice(&index);
+        segment.extend_from_slice(&data);
+        segment.extend_from_slice(b"XPAKSTOP");
+
+        let mut out = prefix.to_vec();
+        out.extend_from_slice(&segment);
+        out.extend_from_slice(&(segment.len() as u32).to_be_bytes());
+        out.extend_from_slice(b"STOP");
+        out
+    }
+
+    #[test]
+    fn read_xpak_metadata_walks_the_index_and_returns_every_key() {
+        let scratch = ScratchDir::new("xpak-test").unwrap();
+        let path = scratch.path().join("dev-libs:foo-1.0.tbz2");
+        let bytes = make_xpak_binpkg(
+            b"pretend this is a bzip2'd tarball, arbitrary length ......",
+            &[
+                ("EAPI", b"8\n"),
+                ("SLOT", b"0\n"),
+                ("KEYWORDS", b"amd64\n"),
+                ("IUSE", b"xfoo xbar\n"),
+                ("USE", b"\n"),
+                ("RDEPEND", b"dev-libs/samepkg dev-libs/newpkg\n"),
+                ("repository", b"gentoo\n"),
+            ],
+        );
+        fs::write(&path, &bytes).unwrap();
+
+        let m = read_xpak_metadata(&path).expect("reads");
+        assert_eq!(m.get("EAPI").map(String::as_str), Some("8"));
+        assert_eq!(m.get("SLOT").map(String::as_str), Some("0"));
+        assert_eq!(m.get("KEYWORDS").map(String::as_str), Some("amd64"));
+        assert_eq!(m.get("IUSE").map(String::as_str), Some("xfoo xbar"));
+        assert_eq!(m.get("USE").map(String::as_str), Some(""));
+        assert_eq!(
+            m.get("RDEPEND").map(String::as_str),
+            Some("dev-libs/samepkg dev-libs/newpkg")
+        );
+        assert_eq!(m.get("repository").map(String::as_str), Some("gentoo"));
+    }
+
+    #[test]
+    fn read_xpak_metadata_rejects_a_file_with_no_xpak_trailer() {
+        let scratch = ScratchDir::new("xpak-negtest").unwrap();
+        let path = scratch.path().join("not-a-binpkg");
+        fs::write(
+            &path,
+            b"just some bytes, definitely no XPAKSTOP here at all",
+        )
+        .unwrap();
+        let err = read_xpak_metadata(&path).unwrap_err();
+        assert!(err.contains("XPAKSTOP"), "{err}");
+    }
+
+    /// Reads a **genuine** `.tbz2` -- checked in at
+    /// `fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2`, built once by the
+    /// pilot's own `ebuild <file> package` on `dev-libs/packagepkg`
+    /// (real `bin/misc-functions.sh` -> unmodified `xpak-helper.py
+    /// recompose` -> real `xpak.py`). Kept as a committed fixture rather
+    /// than rebuilt per-test on purpose: the read side doesn't need
+    /// reproducible bytes, and driving `run_package` (the full brush
+    /// phase chain) here would add real parallel-load pressure to the
+    /// suite's brush-heavy tests for no reader-coverage gain.
+    ///
+    /// NOTE: this pilot's own `build-info` generation is a subset of real
+    /// portage's -- it does NOT write the dependency-string metadata
+    /// files (`DEPEND`/`RDEPEND`/`BDEPEND`/`IUSE`/`LICENSE`/…), so those
+    /// keys are genuinely absent from the pilot's `.tbz2` (a pre-existing
+    /// `ebuild_package.rs` gap, orthogonal to this reader -- see the
+    /// `RDEPEND`-carrying `read_xpak_metadata_walks_the_index_…` test
+    /// above for the reader's own multi-value-key coverage, and the
+    /// commit message for the finding).
+    #[test]
+    fn read_xpak_metadata_reads_a_real_ebuild_package_tbz2() {
+        let tbz2 = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
+        let m = read_xpak_metadata(&tbz2).expect("the real .tbz2 reads");
+        assert_eq!(m.get("SLOT").map(String::as_str), Some("0"));
+        assert_eq!(m.get("EAPI").map(String::as_str), Some("8"));
+        assert_eq!(m.get("CATEGORY").map(String::as_str), Some("dev-libs"));
+        assert_eq!(m.get("PF").map(String::as_str), Some("packagepkg-1.0"));
+        assert_eq!(m.get("KEYWORDS").map(String::as_str), Some("amd64"));
+        // The bundled `<pf>.ebuild` source is a real member too.
+        assert!(m
+            .get("packagepkg-1.0.ebuild")
+            .is_some_and(|e| e.contains("EAPI=8")));
+        // A binary package's own xpak never carries CONTENTS (real
+        // `xpak()` skips it -- generated at merge time).
+        assert!(!m.contains_key("CONTENTS"));
+        // `environment.bz2` is binary -> lossy-decoded but present as a
+        // key; a scan consumer only ever looks up scalar keys.
+        assert!(m.contains_key("environment.bz2"));
     }
 }
