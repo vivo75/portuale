@@ -221,3 +221,44 @@ pub(crate) struct TrailingBlockerLinesArgs<'a> {
     /// The settling pass's recorded cycle edges.
     pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
 }
+
+/// The `[blocks …]` lines for `entries[owner_index]`: `Trailing` rows only;
+/// satisfied ones are dropped under `--columns`.
+pub(crate) fn trailing_blocker_lines(args: TrailingBlockerLinesArgs<'_>) -> Vec<String> {
+    let TrailingBlockerLinesArgs {
+        entries,
+        root,
+        owner_index,
+        include_mask,
+        columns,
+        color,
+        circular,
+    } = args;
+    let entry = &entries[owner_index];
+    // One kept-branch derivation for this owner's rows, skipped entirely
+    // unless one is a `Replacement`.
+    let kept_alt = kept_alt_for_display(entries, root, [owner_index], circular);
+    entry
+        .blockers
+        .iter()
+        .filter(|b| {
+            blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
+                == BlockerRowDisposition::Trailing
+                && !(columns && !b.unsolvable)
+        })
+        .map(|b| {
+            format_blocker_row(
+                &format!(
+                    "{}/{}-{}",
+                    entry.category,
+                    entry.package,
+                    entry_display_version(entry)
+                ),
+                include_mask,
+                "",
+                color,
+                b,
+            )
+        })
+        .collect()
+}
