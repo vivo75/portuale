@@ -1,5 +1,6 @@
 //! Merge-list row attributes: columns, version decoration, USE suffix, sizes.
 
+use crate::color::PkgprintArgs;
 use crate::pretend::*;
 
 /// `COLUMNWIDTH` from the environment (default 130); an unparsable value
@@ -17,6 +18,22 @@ pub(crate) fn columnwidth_from_env() -> i64 {
         },
         Err(_) => 130,
     }
+}
+
+/// Arguments of [`columns_line`].
+pub(crate) struct ColumnsLineArgs<'a> {
+    pub(crate) bracket_word: &'a str,
+    pub(crate) field: &'a str,
+    pub(crate) indent: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) oldbest: &'a str,
+    pub(crate) columnwidth: i64,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) binary: bool,
+    pub(crate) system: bool,
+    pub(crate) world: bool,
 }
 
 /// The bare flag name inside a rendered `USE=` token, for the

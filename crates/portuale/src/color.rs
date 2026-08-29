@@ -310,6 +310,14 @@ pub struct Colorizer {
     pub enabled: bool,
 }
 
+/// Arguments of [`Colorizer::pkgprint`].
+pub struct PkgprintArgs<'a> {
+    pub text: &'a str,
+    pub binary: bool,
+    pub system: bool,
+    pub world: bool,
+}
+
 impl Colorizer {
     pub fn new(enabled: bool) -> Self {
         Self { enabled }
@@ -328,5 +336,26 @@ impl Colorizer {
             return text.to_string();
         }
         format!("{seq}{text}{}", resolved_code("reset"))
+    }
+
+    /// The merge-list palette: pick the entry from `built` (binary) +
+    /// `system` + `world`. `system` wins over `world`.
+    // Portage: output.py, Display.pkgprint
+    pub fn pkgprint(&self, args: PkgprintArgs<'_>) -> String {
+        let PkgprintArgs {
+            text,
+            binary,
+            system,
+            world,
+        } = args;
+        let key = match (binary, system, world) {
+            (true, true, _) => "PKG_BINARY_MERGE_SYSTEM",
+            (true, false, true) => "PKG_BINARY_MERGE_WORLD",
+            (true, false, false) => "PKG_BINARY_MERGE",
+            (false, true, _) => "PKG_MERGE_SYSTEM",
+            (false, false, true) => "PKG_MERGE_WORLD",
+            (false, false, false) => "PKG_MERGE",
+        };
+        self.c(key, text)
     }
 }
