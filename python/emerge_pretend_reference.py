@@ -7346,6 +7346,116 @@ def _apply_depclean_lib_check(root, result, lib_check, color, recompute):
     return recompute([prov for (prov, _c) in protections])
 
 
+def _unresolved_runtime_deps(root, kept, installed, libc_cps):
+    """Real _calc_depclean's unresolved_deps() check (actions.py:1137-1245):
+    a *kept* installed package's hard runtime dep (RDEPEND/PDEPEND --
+    real dep.priority > UnmergeDepPriority.SOFT; DEPEND/BDEPEND are
+    buildtime = SOFT and never trip the halt) that no installed package
+    satisfies. Mirrors portage-repo's unresolved_runtime_deps -- see its
+    docstring for the narrowings (|| groups skipped, libc-provider atoms
+    skipped, the unevaluated-atom readability case not reproduced)."""
+    cand = [(c, p, f"{c}/{p}-{v}:{s}") for (c, p, v, s) in installed]
+
+    def matches_any(atom_str, atom):
+        cat, pn = atom.cp.split("/", 1)
+        for (c, p, cs) in cand:
+            if c == cat and p == pn and match_from_list(atom_str, [cs]):
+                return True
+        return False
+
+    def hard_atoms(struct):
+        i = 0
+        while i < len(struct):
+            item = struct[i]
+            if item == "||":
+                i += 2  # skip '||' and its alternatives group
+                continue
+            if isinstance(item, list):
+                yield from hard_atoms(item)
+            else:
+                yield item
+            i += 1
+
+    out = []
+    for (c, p, v, s) in kept:
+        use_flags = _read_vdb_flag_set(root, c, p, v, "USE")
+        parent_cpv = f"{c}/{p}-{v}"
+        for dep_key in ("RDEPEND", "PDEPEND"):
+            depstr = _read_vdb_string(root, c, p, v, dep_key)
+            if not depstr.strip():
+                continue
+            try:
+                struct = use_reduce(depstr, uselist=list(use_flags))
+            except InvalidDependString:
+                continue
+            for atom_str in hard_atoms(struct):
+                if atom_str.startswith("!"):
+                    continue
+                atom = _parse_atom(atom_str)
+                if atom is None:
+                    continue
+                if atom.cp in libc_cps:
+                    continue
+                if not matches_any(atom_str, atom):
+                    edge = (atom_str, parent_cpv)
+                    if edge not in out:
+                        out.append(edge)
+    out.sort()
+    return out
+
+
+def _depclean_unresolved_halt(unresolved, is_prune, color):
+    """Real _calc_depclean's unresolved_deps() halt (actions.py:1177-1248):
+    the bad(" * ")-prefixed `Dependencies could not be completely
+    resolved ...` block (logging.ERROR -> stderr) + exit 1 without
+    removing anything. Mirrors pretend.rs's depclean_unresolved_halt.
+    Returns 1 when it halted, None to carry on."""
+    if not unresolved:
+        return None
+    star = color.c("BAD", " * ")
+    print(f"{star}Dependencies could not be completely resolved due to", file=sys.stderr)
+    print(
+        f"{star}the following required packages not being installed:", file=sys.stderr
+    )
+    for atom, parent in unresolved:
+        print(star, file=sys.stderr)
+        print(f"{star}  {atom} pulled in by:", file=sys.stderr)
+        print(f"{star}    {parent}", file=sys.stderr)
+    print(star, file=sys.stderr)
+    # Real textwrap.wrap(..., 65) -- pinned, it never changes.
+    for line in (
+        "Have you forgotten to do a complete update prior to depclean? The",
+        "most comprehensive command for this purpose is as follows:",
+        "",
+    ):
+        print(f"{star}{line}", file=sys.stderr)
+    print(
+        f"{star}  "
+        + color.c("GOOD", "emerge --update --newuse --deep --with-bdeps=y @world"),
+        file=sys.stderr,
+    )
+    for line in (
+        "",
+        "Note that the --with-bdeps=y option is not required in many",
+        "situations. Refer to the emerge manual page (run `man emerge`)",
+        "for more information about --with-bdeps.",
+        "",
+        "Also, note that it may be necessary to manually uninstall",
+        "packages that no longer exist in the repository, since it may not",
+        "be possible to satisfy their dependencies.",
+    ):
+        print(f"{star}{line}", file=sys.stderr)
+    if is_prune:
+        print(star, file=sys.stderr)
+        print(
+            f"{star}If you would like to ignore dependencies then use "
+            + color.c("GOOD", "--nodeps")
+            + ".",
+            file=sys.stderr,
+        )
+    return 1
+
+
 def _depclean_cleanlist(
     root, world_seeds, system_atoms, args, lib_protected_providers=()
 ):
@@ -7477,9 +7587,15 @@ def _depclean_cleanlist(
         if lines:
             kept_parents.append((k, lines))
 
+    # Real unresolved_deps() -- over every kept installed package.
+    all_kept = [(c, p, v, s) for (c, p, v, s) in installed if (c, p, v) in reachable]
+    unresolved = _unresolved_runtime_deps(
+        root, all_kept, installed, _libc_provider_cps(root)
+    )
+
     slot_of = {(c, p, v): s for (c, p, v, s) in installed}
     ordered, cleanlist = _topological_removal_order(root, cleanlist, slot_of)
-    return cleanlist, len(reachable), ordered, kept_parents
+    return cleanlist, len(reachable), ordered, kept_parents, unresolved
 
 
 def _topological_removal_order(root, cleanlist, slot_of):
@@ -7628,6 +7744,12 @@ def _run_prune_pretend(
         return e.code
 
     result = _prune_cleanlist(root, args)
+    # Real _calc_depclean's unresolved_deps() safety halt -- serves
+    # action in ("depclean", "prune"), so it applies here too (with the
+    # prune-only `use --nodeps` trailer).
+    halt = _depclean_unresolved_halt(result[4], True, color)
+    if halt is not None:
+        return halt
     # Real _calc_depclean serves action in ("depclean", "prune"), so
     # --depclean-lib-check applies to --prune too.
     result = _apply_depclean_lib_check(
@@ -7637,7 +7759,7 @@ def _run_prune_pretend(
         color,
         lambda providers: _prune_cleanlist(root, args, providers),
     )
-    cleanlist, _required_count, ordered, kept_parents = result
+    cleanlist, _required_count, ordered, kept_parents, _unresolved = result
 
     # Real create_cleanlist's prune branch prints show_parents(pkg) inline
     # while building the removal list -- before the removal-order line /
@@ -7910,9 +8032,14 @@ def _prune_cleanlist(root, args, lib_protected_providers=()):
         if lines:
             kept_parents.append((k, lines))
 
+    all_kept = [(c, p, v, s) for (c, p, v, s) in installed if (c, p, v) in reachable]
+    unresolved = _unresolved_runtime_deps(
+        root, all_kept, installed, _libc_provider_cps(root)
+    )
+
     slot_of = {(c, p, v): s for (c, p, v, s) in installed}
     ordered, cleanlist = _topological_removal_order(root, cleanlist, slot_of)
-    return cleanlist, len(reachable), ordered, kept_parents
+    return cleanlist, len(reachable), ordered, kept_parents, unresolved
 
 
 def _run_depclean_pretend(
@@ -7992,6 +8119,11 @@ def _run_depclean_pretend(
     world_atom_count = len({a for (a, _l) in world_seeds})
 
     result = _depclean_cleanlist(root, world_seeds, config["system_packages"], args)
+    # Real _calc_depclean's unresolved_deps() safety halt (actions.py:1247)
+    # -- checked before the lib scan.
+    halt = _depclean_unresolved_halt(result[4], False, color)
+    if halt is not None:
+        return halt
     # Real _calc_depclean's --depclean-lib-check phase: a cleanlist
     # package still needed at link level by a survivor is kept (and its
     # own deps with it, via a second _depclean_cleanlist pass).
@@ -8004,7 +8136,7 @@ def _run_depclean_pretend(
             root, world_seeds, config["system_packages"], args, providers
         ),
     )
-    cleanlist, required_count, ordered, kept_parents = result
+    cleanlist, required_count, ordered, kept_parents, _unresolved = result
     installed_total = len(_all_installed_packages(root))
 
     # Real create_cleanlist's `elif "--verbose": show_parents(pkg)` --

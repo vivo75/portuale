@@ -99,10 +99,16 @@ Ranked roughly by how self-contained each is.
   WARNING; wires up the previously-dead `needed_elf` module; `=n` skips
   it and shows the `Depclean may break link level dependencies`
   advisory) **shipped 2026-08-29** for both `--depclean` and `--prune`.
-  **Still open:** slot-operator rebuild edges, the "deps unresolved,
-  aborting" halt, `--deselect=n` in args mode, the exact
-  `@selected`-vs-`@world` set nesting (approximated), and real
-  (non-`--pretend`) removal.
+  The "dependencies could not be completely resolved" safety halt
+  (real `unresolved_deps()`, `actions.py:1137-1248` -- a kept package's
+  unsatisfiable hard runtime dep prints the `bad(" * ")` block and exits
+  1 without removing anything; `DepcleanResult::unresolved` via
+  `unresolved_runtime_deps`; `||`-group and libc-provider atoms narrowed
+  out) **shipped 2026-08-29** for both. **Still open:** slot-operator
+  rebuild edges, `--deselect=n` in args mode, the exact
+  `@selected`-vs-`@world` set nesting (approximated), the "Broken soname
+  dependencies found" *warning* half of `unresolved_deps()` (no soname
+  deps in this pilot's RDEPEND), and real (non-`--pretend`) removal.
 - **`emerge -p --prune` / `-pP`** **shipped 2026-08-27**
   (`prune_cleanlist`: seed the closure from every installed package
   except the non-highest-in-cp ones an `args_set` matches -- `args_set`

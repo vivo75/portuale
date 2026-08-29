@@ -5236,6 +5236,123 @@ def test_depclean_lib_check_matches_between_implementations(
         assert rust.stderr == python.stderr, args
 
 
+def _unresolved_root(tmp_path):
+    """A ROOT where a *kept* package has a hard runtime dependency no
+    installed package satisfies. Real _calc_depclean's unresolved_deps()
+    (actions.py:1137-1248) refuses to remove anything in that state.
+
+    uworld (world) -> ukept, whose RDEPEND names dev-libs/umissing (not
+    installed). uorphan would be the cleanlist, but the halt fires first.
+    ukept also DEPENDs dev-libs/ubuildmissing (a SOFT buildtime dep --
+    never trips the halt) and RDEPENDs `|| ( dev-libs/uany dev-libs/ualtmissing )`
+    (uany installed, so the || group is satisfied and never flagged)."""
+    portage_dir = tmp_path / "var" / "lib" / "portage"
+    portage_dir.mkdir(parents=True)
+    (portage_dir / "world").write_text("dev-libs/uworld\n")
+
+    def install(package, rdepend="", depend="", pdepend=""):
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / f"{package}-1.0"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text("0\n")
+        if rdepend:
+            (d / "RDEPEND").write_text(rdepend + "\n")
+        if depend:
+            (d / "DEPEND").write_text(depend + "\n")
+        if pdepend:
+            (d / "PDEPEND").write_text(pdepend + "\n")
+
+    install("uworld", rdepend="dev-libs/ukept")
+    install(
+        "ukept",
+        rdepend="dev-libs/umissing || ( dev-libs/uany dev-libs/ualtmissing )",
+        depend="dev-libs/ubuildmissing",
+    )
+    install("uany")
+    install("uorphan")
+    return tmp_path
+
+
+def _unresolved_env(fixture_env, tmp_path):
+    env = dict(fixture_env)
+    env["ROOT"] = str(_unresolved_root(tmp_path))
+    return env
+
+
+def test_depclean_halts_on_an_unresolvable_runtime_dep(
+    emerge_binary, fixture_env, tmp_path
+):
+    """emerge -pc: a kept package's unsatisfiable RDEPEND makes depclean
+    print the `* Dependencies could not be completely resolved ...`
+    block and exit 1 without removing anything (real actions.py:1247).
+    The SOFT buildtime dep and the satisfied `||` group are not flagged."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-c"], _unresolved_env(fixture_env, tmp_path)
+    )
+    assert result.returncode == 1
+    assert ">>> Calculating removal order..." not in result.stdout
+    assert " dev-libs/uorphan" not in result.stdout
+    err = result.stderr
+    assert " * Dependencies could not be completely resolved due to" in err
+    assert " *   dev-libs/umissing pulled in by:\n *     dev-libs/ukept-1.0\n" in err
+    assert (
+        " *   emerge --update --newuse --deep --with-bdeps=y @world" in err
+    )
+    # SOFT buildtime dep + the satisfied `||` alternative are not flagged.
+    assert "ubuildmissing" not in err
+    assert "ualtmissing" not in err
+
+
+def test_prune_halts_on_an_unresolvable_runtime_dep_with_the_nodeps_hint(
+    emerge_binary, fixture_env, tmp_path
+):
+    """emerge -pP hits the same halt (real _calc_depclean serves
+    action in ('depclean', 'prune')) and adds the prune-only
+    `If you would like to ignore dependencies then use --nodeps.` line."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--prune"],
+        _unresolved_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 1
+    assert " * Dependencies could not be completely resolved due to" in result.stderr
+    assert (
+        " * If you would like to ignore dependencies then use --nodeps." in result.stderr
+    )
+
+
+def test_prune_nodeps_ignores_the_unresolvable_dep(emerge_binary, fixture_env, tmp_path):
+    """--prune --nodeps routes around _calc_depclean entirely -- no dep
+    check, so the halt never fires (there just happens to be nothing
+    multi-version to prune here, so it exits 1 with the standard 'no
+    packages' message, not the resolution-failure block)."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--prune", "--nodeps"],
+        _unresolved_env(fixture_env, tmp_path),
+    )
+    assert "Dependencies could not be completely resolved" not in result.stderr
+
+
+def test_depclean_unresolved_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    env = _unresolved_env(fixture_env, tmp_path)
+    for args in (
+        ["--pretend", "-c"],
+        ["--pretend", "-c", "-v"],
+        ["--pretend", "-c", "--color=y"],
+        ["--pretend", "--prune"],
+        ["--pretend", "--prune", "--color=y"],
+        ["--pretend", "-c", "dev-libs/uorphan"],
+    ):
+        rust = _run([str(emerge_binary)], args, env)
+        python = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == python.returncode, args
+        assert rust.stdout == python.stdout, args
+        assert rust.stderr == python.stderr, args
+
+
 def _depclean_revdep_root(tmp_path):
     """A ROOT where the kept closure has a shared dependency (dcshared,
     pulled in by two parents) and a world member (dcworld). dcorphan +

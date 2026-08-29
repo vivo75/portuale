@@ -2601,6 +2601,12 @@ fn run_prune_pretend(
     };
 
     let result = portage_repo::prune_cleanlist(root, &args, &[]);
+    // Real `_calc_depclean`'s `unresolved_deps()` safety halt -- serves
+    // `action in ("depclean", "prune")`, so it applies here too (with the
+    // prune-only `use --nodeps` trailer).
+    if let Some(code) = depclean_unresolved_halt(&result.unresolved, true, color) {
+        return code;
+    }
     // Real `_calc_depclean` serves `action in ("depclean", "prune")`, so
     // `--depclean-lib-check` applies to `--prune` too.
     let result = apply_depclean_lib_check(root, result, lib_check, color, |providers| {
@@ -2931,6 +2937,59 @@ fn apply_depclean_lib_check(
     recompute(&providers)
 }
 
+/// Real `_calc_depclean`'s `unresolved_deps()` halt (`actions.py:1177-1248`):
+/// when a kept installed package has a hard runtime dependency no
+/// installed package satisfies, depclean/prune print the `bad(" * ")`-
+/// prefixed `Dependencies could not be completely resolved ...` block
+/// (`logging.ERROR` -> stderr) and exit 1 without removing anything.
+/// Returns `Some(exit 1)` when it halted, `None` to carry on. `is_prune`
+/// adds the real prune-only `use --nodeps` trailer.
+fn depclean_unresolved_halt(
+    unresolved: &[(String, String)],
+    is_prune: bool,
+    color: &Colorizer,
+) -> Option<ExitCode> {
+    if unresolved.is_empty() {
+        return None;
+    }
+    let star = color.c("BAD", " * ");
+    eprintln!("{star}Dependencies could not be completely resolved due to");
+    eprintln!("{star}the following required packages not being installed:");
+    for (atom, parent) in unresolved {
+        eprintln!("{star}");
+        eprintln!("{star}  {atom} pulled in by:");
+        eprintln!("{star}    {parent}");
+    }
+    eprintln!("{star}");
+    // Real `textwrap.wrap(..., 65)` -- pinned, it never changes.
+    eprintln!("{star}Have you forgotten to do a complete update prior to depclean? The");
+    eprintln!("{star}most comprehensive command for this purpose is as follows:");
+    eprintln!("{star}");
+    eprintln!(
+        "{star}  {}",
+        color.c(
+            "GOOD",
+            "emerge --update --newuse --deep --with-bdeps=y @world"
+        )
+    );
+    eprintln!("{star}");
+    eprintln!("{star}Note that the --with-bdeps=y option is not required in many");
+    eprintln!("{star}situations. Refer to the emerge manual page (run `man emerge`)");
+    eprintln!("{star}for more information about --with-bdeps.");
+    eprintln!("{star}");
+    eprintln!("{star}Also, note that it may be necessary to manually uninstall");
+    eprintln!("{star}packages that no longer exist in the repository, since it may not");
+    eprintln!("{star}be possible to satisfy their dependencies.");
+    if is_prune {
+        eprintln!("{star}");
+        eprintln!(
+            "{star}If you would like to ignore dependencies then use {}.",
+            color.c("GOOD", "--nodeps")
+        );
+    }
+    Some(ExitCode::from(1))
+}
+
 /// Real `emerge --pretend --depclean` / `-pc` (real `action_depclean` +
 /// `_calc_depclean`, no package arguments): the packages nothing in
 /// `@world` ∪ `@system` needs, at runtime, are the cleanlist -- reported
@@ -3069,6 +3128,11 @@ fn run_depclean_pretend(
 
     let result =
         portage_repo::depclean_cleanlist(root, &world_seeds, &config.system_packages, &args, &[]);
+    // Real `_calc_depclean`'s `unresolved_deps()` safety halt
+    // (`actions.py:1247`) -- checked before the lib scan.
+    if let Some(code) = depclean_unresolved_halt(&result.unresolved, false, color) {
+        return code;
+    }
     // Real `_calc_depclean`'s `--depclean-lib-check` phase: a cleanlist
     // package still needed at link level by a survivor is kept (and its
     // own deps with it, via a second `depclean_cleanlist` pass seeding

@@ -3092,9 +3092,8 @@ fn split_installed_dir(dirname: &str) -> Option<(String, String)> {
 ///
 /// **Documented narrowings** (real `_calc_depclean` via the full
 /// `depgraph` in "remove" mode does more):
-/// slot-operator rebuild edges, the "dependencies could not be resolved,
-/// aborting" safety halt, `package.provided`, `--deselect=n` (keeps the
-/// world atoms as roots in `args` mode), and `world_sets` `@`-refs as
+/// slot-operator rebuild edges, `package.provided`, `--deselect=n` (keeps
+/// the world atoms as roots in `args` mode), and `world_sets` `@`-refs as
 /// roots are all still out. A lib-protected provider is kept but, unlike
 /// real portage (which labels its reverse-dep entry with the link-level
 /// consumer), contributes no `--verbose` `kept_parents` line of its own
@@ -3124,6 +3123,15 @@ pub struct DepcleanResult {
     /// `protected_set_name` filter) contributes no entry. `package`s are
     /// in cpv order.
     pub kept_parents: Vec<(InstalledPackage, Vec<String>)>,
+    /// Real `_calc_depclean`'s `unresolved_deps()` (`actions.py:1137-1248`):
+    /// `(atom, parent_cpv)` for every *kept* installed package's hard
+    /// runtime dependency (`RDEPEND`/`PDEPEND`) that no installed package
+    /// satisfies. Non-empty means real depclean/prune prints the
+    /// `* Dependencies could not be completely resolved ...` block and
+    /// exits 1 without removing anything -- the caller
+    /// (`run_depclean_pretend` / `run_prune_pretend`) does exactly that.
+    /// Sorted, deduped. See `unresolved_runtime_deps` for the narrowings.
+    pub unresolved: Vec<(String, String)>,
 }
 
 /// Real `_calc_depclean`'s own unmerge-order pass (`actions.py:1591-1731`):
@@ -3271,6 +3279,108 @@ fn render_show_parents(edges: &[(String, String)]) -> Vec<String> {
         .collect();
     lines.sort();
     lines
+}
+
+/// Real `_calc_depclean`'s `unresolved_deps()` check (`actions.py:1137-1245`),
+/// narrowed: a *kept* installed package's hard runtime dependency
+/// (`RDEPEND`/`PDEPEND` -- real `dep.priority > UnmergeDepPriority.SOFT`,
+/// i.e. `runtime`/`runtime_post`; `DEPEND`/`BDEPEND` are `buildtime` =
+/// SOFT and never trip the halt) that no *installed* package satisfies.
+/// Non-empty -> real depclean/prune prints the `* Dependencies could not
+/// be completely resolved ...` block and exits 1 without removing
+/// anything.
+///
+/// **Documented narrowings**: an atom inside a `||` group is not checked
+/// -- the any-of resolution needed to decide whether the *whole* group is
+/// unsatisfiable is out of scope, and the reachability walk already keeps
+/// every `||` alternative so a partly-broken group never wrongly shrinks
+/// the cleanlist. A libc-provider atom (real `find_libc_deps` -- what an
+/// installed `virtual/libc` pulls in) is never flagged: real relies on
+/// libc genuinely being installed, and `strip_libc_deps`'s whole premise
+/// is that implicit libc deps are noise, so a config/fixture without an
+/// installed libc must not spuriously halt. The real "show the
+/// unevaluated atom when it differs and vardb matches it"
+/// readability case (`actions.py:1196`) is not reproduced.
+fn unresolved_runtime_deps(
+    root: &Path,
+    kept: &[&InstalledPackage],
+    installed: &[InstalledPackage],
+    libc_cps: &HashSet<(String, String)>,
+) -> Vec<(String, String)> {
+    let candidate_strs: Vec<String> = installed
+        .iter()
+        .map(|p| format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot))
+        .collect();
+    let matches_any = |atom_str: &str, atom: &portage_dep::Atom| -> bool {
+        for (p, cs) in installed.iter().zip(candidate_strs.iter()) {
+            if p.category == atom.category
+                && p.package == atom.package
+                && portage_dep::match_from_list(atom_str, &[cs.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+            {
+                return true;
+            }
+        }
+        false
+    };
+
+    let mut out: Vec<(String, String)> = Vec::new();
+    for pkg in kept {
+        let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+        let parent_cpv = pkg.cpv();
+        for dep_key in ["RDEPEND", "PDEPEND"] {
+            let depstr = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, dep_key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+            let Ok(stream) = portage_use_reduce::use_reduce_structured(
+                &tokens,
+                &use_flags,
+                portage_use_reduce::MatchMode::Normal,
+            ) else {
+                continue;
+            };
+            // Track `||`-group nesting: an atom under any `|| ( ... )` is
+            // skipped (see the doc comment).
+            let mut pending_anyof = false;
+            let mut group_stack: Vec<bool> = Vec::new();
+            for tok in stream {
+                match tok.as_str() {
+                    "||" => pending_anyof = true,
+                    "(" => {
+                        group_stack.push(pending_anyof);
+                        pending_anyof = false;
+                    }
+                    ")" => {
+                        group_stack.pop();
+                    }
+                    atom_str => {
+                        if group_stack.iter().any(|&x| x) {
+                            continue;
+                        }
+                        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+                            continue;
+                        };
+                        if atom.blocker != portage_dep::Blocker::None {
+                            continue;
+                        }
+                        if libc_cps.contains(&(atom.category.clone(), atom.package.clone())) {
+                            continue;
+                        }
+                        if !matches_any(atom_str, &atom) {
+                            let edge = (atom_str.to_string(), parent_cpv.clone());
+                            if !out.contains(&edge) {
+                                out.push(edge);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 pub fn depclean_cleanlist(
@@ -3437,6 +3547,15 @@ pub fn depclean_cleanlist(
         }
     }
 
+    // Real `unresolved_deps()` -- checked over *every* kept installed
+    // package (real `_complete_graph`'s full required set, not just the
+    // `args`-matched ones).
+    let all_kept: Vec<&InstalledPackage> = installed
+        .iter()
+        .filter(|p| reachable.contains(&key(p)))
+        .collect();
+    let unresolved = unresolved_runtime_deps(root, &all_kept, &installed, &libc_provider_cps(root));
+
     let required_count = reachable.len();
     let (ordered, cleanlist) = topological_removal_order(root, cleanlist);
     DepcleanResult {
@@ -3444,6 +3563,7 @@ pub fn depclean_cleanlist(
         required_count,
         ordered,
         kept_parents,
+        unresolved,
     }
 }
 
@@ -3639,6 +3759,12 @@ pub fn prune_cleanlist(
         }
     }
 
+    let all_kept: Vec<&InstalledPackage> = installed
+        .iter()
+        .filter(|p| reachable.contains(&key(p)))
+        .collect();
+    let unresolved = unresolved_runtime_deps(root, &all_kept, &installed, &libc_provider_cps(root));
+
     let required_count = reachable.len();
     let (ordered, cleanlist) = topological_removal_order(root, cleanlist);
     DepcleanResult {
@@ -3646,6 +3772,7 @@ pub fn prune_cleanlist(
         required_count,
         ordered,
         kept_parents,
+        unresolved,
     }
 }
 
@@ -9781,6 +9908,52 @@ mod tests {
         );
         assert!(lib_kept.cleanlist.is_empty(), "{:?}", lib_kept.cleanlist);
         assert_eq!(lib_kept.required_count, 9);
+
+        // No kept package has an unsatisfiable hard runtime dep here.
+        assert!(result.unresolved.is_empty(), "{:?}", result.unresolved);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn depclean_flags_a_kept_packages_unsatisfiable_runtime_dep() {
+        let root = masters_test_root("depclean-unresolved");
+        let install = |name: &str, rdepend: &str, depend: &str| {
+            let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+            if !rdepend.is_empty() {
+                std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+            if !depend.is_empty() {
+                std::fs::write(d.join("DEPEND"), format!("{depend}\n")).unwrap();
+            }
+        };
+        // uw (world) -> uk; uk RDEPENDs a missing package + a satisfied
+        // `||` group, and DEPENDs a missing build dep (SOFT, ignored).
+        install("uw", "dev-libs/uk", "");
+        install(
+            "uk",
+            "dev-libs/umissing || ( dev-libs/uany dev-libs/ualtmissing )",
+            "dev-libs/ubuildmissing",
+        );
+        install("uany", "", "");
+
+        let result = depclean_cleanlist(
+            &root,
+            &[("dev-libs/uw".to_string(), "@selected".to_string())],
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(
+            result.unresolved,
+            vec![(
+                "dev-libs/umissing".to_string(),
+                "dev-libs/uk-1.0".to_string()
+            )]
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }
