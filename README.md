@@ -833,9 +833,12 @@ PORTING/
   mode): build-time deps (`DEPEND`/`BDEPEND`, real `bdeps="auto"`) aren't
   followed **[since shipped -- see "`emerge -pc`: build-time deps are
   kept too" below]**;
-  `--depclean-lib-check` (a `NEEDED.ELF.2` soname-linkage check),
-  slot-operator rebuild edges, the "dependencies could not be resolved,
-  aborting" safety halt, and `package.provided` are all deferred. Tests
+  `--depclean-lib-check` (a `NEEDED.ELF.2` soname-linkage check) **[since
+  shipped -- see "`emerge -pc` / `-pP`: the `--depclean-lib-check`
+  soname-consumer scan" below]**, slot-operator rebuild edges, the
+  "dependencies could not be resolved, aborting" safety halt, and
+  `package.provided` **[since shipped -- see "`package.provided`" below]**
+  are all deferred. Tests
   use a self-contained `_depclean_root` (isolated vdb + world file, like
   the `--deselect` tests) so nothing touches the shared fixture tree.
 
@@ -876,9 +879,9 @@ PORTING/
   `emerge -pc dev-libs/dcbuilddep` reports nothing to remove. The
   `Packages installed:` / `Required packages:` counts in the pinned
   no-args test moved from 7/5 to 9/7 accordingly. **Still deferred**
-  (unchanged): `--depclean-lib-check`, slot-operator rebuild edges, the
-  "dependencies could not be resolved, aborting" safety halt,
-  `package.provided`.
+  (unchanged): slot-operator rebuild edges, the "dependencies could not
+  be resolved, aborting" safety halt. (`--depclean-lib-check` and
+  `package.provided` have since shipped -- see their own sections below.)
 
   **`emerge -pc`: `>>> Calculating removal order...` is real now.** The
   first two `--depclean` increments printed that line but the cleanlist
@@ -989,8 +992,8 @@ PORTING/
   (`aa`/`zz`/`mm` multi-version, a `keeper` pinning `mm-2.0`, and a
   `zz-1.0` -> `aa-1.0` ordering edge). **Deliberately out**: the
   `--deselect` world-file rewrite (`--pretend` never writes it), and --
-  as with `depclean` -- `--depclean-lib-check` and slot-operator rebuild
-  edges.
+  as with `depclean` -- slot-operator rebuild edges. (`--depclean-lib-check`
+  has since shipped for both -- see its own section below.)
 
   **`emerge --prune --nodeps`: the no-dependency-check branch.** Real
   `actions.py:2684-2697`: `--nodeps` routes prune to `unmerge()`'s own
@@ -8037,6 +8040,63 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
     PORTING/rust/target/release/portuale emerge -pv --update dev-libs/upgradepkg
 # [ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]
+```
+
+### `emerge -pc` / `-pP`: the `--depclean-lib-check` soname-consumer scan
+
+Real `_calc_depclean` (`actions.py:1356-1590`) does not just trust the
+dependency-graph cleanlist. After computing it, unless
+`--depclean-lib-check=n` (the default `_DEPCLEAN_LIB_CHECK_DEFAULT` is
+`True`), it scans every cleanlist package's `NEEDED.ELF.2`-recorded
+libraries: if one is still linked against (`DT_NEEDED`) by a *surviving*
+package that has no ebuild-level dependency on it, that provider is kept
+installed anyway -- "In order to avoid breakage of link level
+dependencies". This is what stops `emerge --depclean` from removing, say,
+an old `openssl` an un-rebuilt binary still needs.
+
+- The `#[allow(dead_code)]` `needed_elf` module (a from-scratch port of
+  real `NeededEntry` + `LinkageMap.rebuild()` + `findConsumers()`, built
+  in earlier preserve-libs slices but never wired to a caller) is now
+  live: `pretend.rs::lib_consumer_scan` builds the linkage map from every
+  installed `NEEDED.ELF.2`, and for each cleanlist package asks
+  `find_consumers` (non-greedy -- so a consumer already satisfied by
+  another provider of the same soname is excluded) which survivors still
+  link its libs.
+- A protected provider is fed back into a **second**
+  `depclean_cleanlist` / `prune_cleanlist` pass as an extra reachability
+  root (`lib_protected_providers`), so its own dependencies leave the
+  cleanlist too (real `resolver._add_pkg` + `_complete_graph`), and
+  `required_count` / `kept_parents` / the removal order all recompute
+  consistently.
+- Output matches real: `>>> Checking for lib consumers...` /
+  `>>> Assigning files to packages...` / `>>> Adding lib providers to
+  graph...` progress, and the `bad(" * ")`-prefixed WARNING with a
+  per-provider `  <cpv> pulled in by:` / `    <consumer> needs <soname>`
+  breakdown. `--depclean-lib-check=n` skips the scan and, with no
+  package args, adds the `Depclean may break link level dependencies`
+  advisory paragraph.
+- Applies to `--prune` too (real `_calc_depclean` serves
+  `action in ("depclean", "prune")`).
+
+**Documented narrowings**: `find_consumers` is not clean-set aware, so
+the pilot can under-report in the rare case where the only surviving
+provider of a soname is itself another cleanlist member; the intermediate
+`>>> Assigning files to packages...` line is printed only alongside the
+WARNING (real can print it with all consumers satisfied elsewhere); and a
+lib-protected provider contributes no `--verbose` reverse-dep line of its
+own unless an ordinary dependency also reaches it (real labels it with
+the link-level consumer). New fixture `_libcheck_root` (`dcconsumer`
+links `libdclib.so.1` with no package dep on its orphan provider
+`dclib`); 3 dedicated + 1 between-implementations contract test, a
+`portage-repo` unit test, mirrored in `emerge_pretend_reference.py`
+(which ports the same `needed_elf` subset rather than wrapping real
+`LinkageMapELF`).
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+# dcconsumer links libdclib.so.1 but nothing depends on dclib as a package
+PORTING/rust/target/release/portuale emerge -pc            # keeps dclib, warns
+PORTING/rust/target/release/portuale emerge -pc --depclean-lib-check=n  # removes it
 ```
 
 ## Running it

@@ -5117,6 +5117,125 @@ def test_depclean_matches_between_implementations(
         assert rust.stderr == python.stderr, args
 
 
+def _libcheck_root(tmp_path):
+    """A ROOT for --depclean-lib-check: dcconsumer (kept via @world ->
+    dcworld -> dcconsumer) links `libdclib.so.1` at the ELF level
+    (NEEDED.ELF.2) but has NO package dependency on its provider. That
+    provider, dev-libs/dclib, is otherwise an orphan -- nothing in the
+    dependency graph needs it -- so the plain cleanlist is
+    {dclib, dclibdep (dclib's own RDEPEND), dcplainorphan}. The
+    `--depclean-lib-check` soname scan keeps dclib (and, via the
+    re-closure, dclibdep); only dcplainorphan is actually removed."""
+    portage_dir = tmp_path / "var" / "lib" / "portage"
+    portage_dir.mkdir(parents=True)
+    (portage_dir / "world").write_text("dev-libs/dcworld\n")
+
+    def install(package, rdepend="", needed_elf=""):
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / f"{package}-1.0"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text("0\n")
+        if rdepend:
+            (d / "RDEPEND").write_text(rdepend + "\n")
+        if needed_elf:
+            (d / "NEEDED.ELF.2").write_text(needed_elf + "\n")
+
+    install("dcworld", rdepend="dev-libs/dcconsumer")
+    install(
+        "dcconsumer",
+        needed_elf="X86_64;/usr/bin/dcconsumer;;;libdclib.so.1",
+    )
+    install(
+        "dclib",
+        rdepend="dev-libs/dclibdep",
+        needed_elf="X86_64;/usr/lib/libdclib.so.1;libdclib.so.1;;libc.so.6",
+    )
+    install("dclibdep")
+    install("dcplainorphan")
+    return tmp_path
+
+
+def _libcheck_env(fixture_env, tmp_path):
+    env = dict(fixture_env)
+    env["ROOT"] = str(_libcheck_root(tmp_path))
+    return env
+
+
+def test_depclean_lib_check_keeps_a_link_level_only_provider(
+    emerge_binary, fixture_env, tmp_path
+):
+    """emerge -pc: the default --depclean-lib-check soname scan keeps
+    dev-libs/dclib (a surviving package links its lib with no package
+    dep), and -- via the graph re-closure -- its own RDEPEND dclibdep.
+    Only dcplainorphan is removed. The WARNING names the provider and
+    the link-level consumer."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-c"], _libcheck_env(fixture_env, tmp_path)
+    )
+    assert result.returncode == 0
+    cleaned = [ln for ln in result.stdout.splitlines() if ln.startswith(" dev-libs/")]
+    assert cleaned == [" dev-libs/dcplainorphan"]
+    assert result.stdout.splitlines()[-1] == "Number to remove:     1"
+
+    err = result.stderr.splitlines()
+    assert ">>> Checking for lib consumers..." in err
+    assert ">>> Adding lib providers to graph..." in err
+    assert (
+        " * In order to avoid breakage of link level dependencies, one or more"
+        in err
+    )
+    assert " *   dev-libs/dclib-1.0 pulled in by:" in err
+    assert " *     dev-libs/dcconsumer-1.0 needs libdclib.so.1" in err
+
+
+def test_depclean_lib_check_disabled_removes_the_provider_and_warns(
+    emerge_binary, fixture_env, tmp_path
+):
+    """emerge -pc --depclean-lib-check=n: the soname scan is skipped, so
+    dclib + dclibdep + dcplainorphan are all removed, and the no-args
+    advisory gains the `Depclean may break link level dependencies`
+    paragraph."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-c", "--depclean-lib-check=n"],
+        _libcheck_env(fixture_env, tmp_path),
+    )
+    assert result.returncode == 0
+    cleaned = [ln for ln in result.stdout.splitlines() if ln.startswith(" dev-libs/")]
+    # Topological removal order: roots (dcplainorphan, dclib) cpv-desc,
+    # then dclibdep (dclib's RDEPEND, unmerged after it).
+    assert cleaned == [
+        " dev-libs/dcplainorphan",
+        " dev-libs/dclib",
+        " dev-libs/dclibdep",
+    ]
+    assert " * Depclean may break link level dependencies. Thus, it is" in result.stdout
+    assert ">>> Checking for lib consumers..." not in result.stderr
+
+
+def test_depclean_lib_check_matches_between_implementations(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    env = _libcheck_env(fixture_env, tmp_path)
+    for args in (
+        ["--pretend", "-c"],
+        ["--pretend", "-c", "-v"],
+        ["--pretend", "-c", "--depclean-lib-check=n"],
+        ["--pretend", "-c", "--depclean-lib-check", "n"],
+        ["--pretend", "-c", "--depclean-lib-check=y"],
+        ["--pretend", "-c", "dev-libs/dclib"],
+        ["--pretend", "-c", "dev-libs/dcplainorphan"],
+        ["--pretend", "--prune"],
+        ["--pretend", "--prune", "--depclean-lib-check=n"],
+        ["--pretend", "-c", "--color=y"],
+    ):
+        rust = _run([str(emerge_binary)], args, env)
+        python = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == python.returncode, args
+        assert rust.stdout == python.stdout, args
+        assert rust.stderr == python.stderr, args
+
+
 def _depclean_revdep_root(tmp_path):
     """A ROOT where the kept closure has a shared dependency (dcshared,
     pulled in by two parents) and a world member (dcworld). dcorphan +

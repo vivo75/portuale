@@ -6970,7 +6970,385 @@ def _render_show_parents(edges):
     )
 
 
-def _depclean_cleanlist(root, world_seeds, system_atoms, args):
+# --------------------------------------------------------------------------
+# NEEDED.ELF.2 soname linkage -- the subset of pretend.rs's `needed_elf`
+# module `--depclean-lib-check` needs (real portage.util._dyn_libs). A
+# from-scratch port mirroring needed_elf.rs, NOT a wrapper around real
+# LinkageMapELF (which needs a full vardbapi). See that module's own doc
+# comments for the semantics and documented narrowings.
+# --------------------------------------------------------------------------
+
+_APPROX_MULTILIB_CATEGORY = {
+    "386": "x86_32",
+    "68K": "m68k_32",
+    "AARCH64": "arm_64",
+    "ALPHA": "alpha_64",
+    "ARM": "arm_32",
+    "IA_64": "ia64_64",
+    "MIPS": "mips_o32",
+    "PARISC": "hppa_64",
+    "PPC": "ppc_32",
+    "PPC64": "ppc_64",
+    "S390": "s390_64",
+    "SH": "sh_32",
+    "SPARC": "sparc_32",
+    "SPARC32PLUS": "sparc_32",
+    "SPARCV9": "sparc_64",
+    "X86_64": "x86_64",
+}
+
+
+def _needed_parse(line):
+    """Real NeededEntry.parse -- arch;filename;soname;rpaths;needed, an
+    optional 6th multilib_category, extra fields ignored. None for a
+    malformed line (<5 fields)."""
+    fields = line.split(";")
+    if len(fields) < 5:
+        return None
+    multilib_category = fields[5] if len(fields) > 5 and fields[5] else None
+    rpaths = "" if fields[3] == "  -  " else fields[3]
+    return {
+        "arch": fields[0],
+        "filename": fields[1],
+        "soname": fields[2],
+        "runpaths": [s for s in rpaths.split(":") if s],
+        "needed": [s for s in fields[4].split(",") if s],
+        "multilib_category": multilib_category,
+    }
+
+
+def _read_all_needed_entries(root):
+    """Real LinkageMap.rebuild()'s data-gathering loop: every installed
+    package's own vdb NEEDED.ELF.2, parsed, in sorted vdb-listing order."""
+    result = []
+    pkg_root = os.path.join(root, "var/db/pkg")
+    if not os.path.isdir(pkg_root):
+        return result
+    for category in sorted(os.listdir(pkg_root)):
+        cat_path = os.path.join(pkg_root, category)
+        if not os.path.isdir(cat_path):
+            continue
+        for pf in sorted(os.listdir(cat_path)):
+            pf_path = os.path.join(cat_path, pf)
+            if not os.path.isdir(pf_path):
+                continue
+            entries = []
+            try:
+                with open(os.path.join(pf_path, "NEEDED.ELF.2")) as fh:
+                    text = fh.read()
+            except OSError:
+                text = ""
+            for line in text.splitlines():
+                parsed = _needed_parse(line)
+                if parsed is not None:
+                    entries.append(parsed)
+            result.append((f"{category}/{pf}", entries))
+    return result
+
+
+def _normalize_path(path):
+    """Real portage.util.normalize_path -- lexical, no filesystem access."""
+    absolute = path.startswith("/")
+    out = []
+    for seg in path.split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if out and out[-1] != "..":
+                out.pop()
+            elif not absolute:
+                out.append("..")
+        else:
+            out.append(seg)
+    joined = "/".join(out)
+    if absolute:
+        return "/" + joined
+    return joined if joined else "."
+
+
+def _elf_dirname(path):
+    """Real os.path.dirname: everything before the last '/', '/' for a
+    top-level absolute path, '' if there is none."""
+    i = path.rfind("/")
+    if i < 0:
+        return ""
+    if i == 0:
+        return "/"
+    return path[:i]
+
+
+def _expand_origin(rpath, origin):
+    return rpath.replace("${ORIGIN}", origin).replace("$ORIGIN", origin)
+
+
+def _obj_key(root, obj):
+    """Real LinkageMap._ObjectKey: (dev, ino) when the object exists
+    (follows symlinks), else the literal path string."""
+    abs_path = os.path.join(root, obj.lstrip("/"))
+    try:
+        st = os.stat(abs_path)
+    except OSError:
+        return ("path", obj)
+    return ("inode", st.st_dev, st.st_ino)
+
+
+def _grab_lines(path):
+    """Real grabfile, narrowed: whitespace-normalize, drop an inline
+    '#'-token onward, skip empties; missing file -> []."""
+    try:
+        with open(path) as fh:
+            text = fh.read()
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        tokens = []
+        for tok in line.split():
+            if tok.startswith("#"):
+                break
+            tokens.append(tok)
+        if tokens:
+            out.append(" ".join(tokens))
+    return out
+
+
+def _getlibpaths(root, ld_library_path=None):
+    """Real getlibpaths: LD_LIBRARY_PATH, /etc/ld.so.conf lines, then the
+    /usr/lib + /lib defaults, each normalize_path'd. ld.so.conf.d include
+    expansion is deliberately out (same cut as env_update)."""
+    rval = list((ld_library_path or "").split(":"))
+    rval += _grab_lines(os.path.join(root, "etc/ld.so.conf"))
+    rval += ["/usr/lib", "/lib"]
+    return [_normalize_path(s) for s in rval if s]
+
+
+def _linkage_rebuild(root, owner_entries):
+    """Real LinkageMap.rebuild()'s indexing logic: build the soname
+    providers/consumers map. Returns (libs, obj_properties):
+      libs: category -> soname -> {"providers": set(key), "consumers": set(key)}
+      obj_properties: key -> {category, needed(set), runpaths, soname,
+                              alt_paths(list), owner}
+    """
+    resolved_by_owner = []
+    for owner, entries in owner_entries:
+        resolved = []
+        for entry in entries:
+            category = entry["multilib_category"] or _APPROX_MULTILIB_CATEGORY.get(
+                entry["arch"], entry["arch"]
+            )
+            filename = _normalize_path(entry["filename"])
+            origin = _elf_dirname(filename)
+            runpaths = [
+                _normalize_path(_expand_origin(r, origin)) for r in entry["runpaths"]
+            ]
+            resolved.append(
+                {
+                    "owner": owner,
+                    "category": category,
+                    "filename": filename,
+                    "soname": entry["soname"],
+                    "runpaths": runpaths,
+                    "needed": list(entry["needed"]),
+                }
+            )
+        resolved_by_owner.append(resolved)
+
+    # Real "implicit runpath" inference for same-owner bundled libs.
+    for resolved in resolved_by_owner:
+        providers = {
+            (e["category"], e["soname"]): e["filename"]
+            for e in resolved
+            if e["soname"]
+        }
+        for entry in resolved:
+            implicit = []
+            for soname in entry["needed"]:
+                provider_filename = providers.get((entry["category"], soname))
+                if provider_filename is None:
+                    continue
+                provider_dir = _elf_dirname(provider_filename)
+                if provider_dir not in entry["runpaths"]:
+                    implicit.append(provider_dir)
+            entry["runpaths"].extend(implicit)
+
+    libs = {}
+    obj_properties = {}
+    for resolved in resolved_by_owner:
+        for entry in resolved:
+            key = _obj_key(root, entry["filename"])
+            if key in obj_properties:
+                obj_properties[key]["alt_paths"].append(entry["filename"])
+                continue
+            obj_properties[key] = {
+                "category": entry["category"],
+                "needed": set(entry["needed"]),
+                "runpaths": entry["runpaths"],
+                "soname": entry["soname"],
+                "alt_paths": [entry["filename"]],
+                "owner": entry["owner"],
+            }
+            arch_map = libs.setdefault(entry["category"], {})
+            if entry["soname"]:
+                arch_map.setdefault(
+                    entry["soname"], {"providers": set(), "consumers": set()}
+                )["providers"].add(key)
+            for needed_soname in entry["needed"]:
+                arch_map.setdefault(
+                    needed_soname, {"providers": set(), "consumers": set()}
+                )["consumers"].add(key)
+    return libs, obj_properties
+
+
+def _find_consumers(root, libs, obj_properties, defpath, obj, greedy):
+    """Real LinkageMap.findConsumers, narrowed to the calling convention
+    _lib_consumer_scan uses (obj is a path, no exclude_providers). Returns
+    the set of consumer paths that would actually break if `obj` went
+    away. Empty set for an object not in the map."""
+    obj_key_val = _obj_key(root, obj)
+    obj_props = obj_properties.get(obj_key_val)
+    if obj_props is None:
+        return set()
+
+    # Real "shadowed by another version" check.
+    soname = obj_props["soname"]
+    if soname:
+        soname_link = os.path.join(
+            root, _elf_dirname(obj).lstrip("/"), soname
+        )
+        obj_path = os.path.join(root, obj.lstrip("/"))
+        try:
+            sl = os.stat(soname_link)
+            op = os.stat(obj_path)
+            if (op.st_dev, op.st_ino) != (sl.st_dev, sl.st_ino):
+                return set()
+        except OSError:
+            pass
+
+    category = obj_props["category"]
+    soname_node = libs.get(category, {}).get(soname)
+    defpath_keys = {_obj_key(root, p) for p in defpath}
+    satisfied = set()
+
+    if soname_node is not None and not greedy:
+        relevant_dir_keys = set()
+        for provider_key in soname_node["providers"]:
+            if not greedy and provider_key == obj_key_val:
+                continue
+            provider_props = obj_properties.get(provider_key)
+            if provider_props is None:
+                continue
+            for p in provider_props["alt_paths"]:
+                relevant_dir_keys.add(_obj_key(root, _elf_dirname(p)))
+        if relevant_dir_keys:
+            for consumer_key in soname_node["consumers"]:
+                consumer_props = obj_properties.get(consumer_key)
+                if consumer_props is None:
+                    continue
+                path_keys = set(defpath_keys)
+                path_keys |= {_obj_key(root, p) for p in consumer_props["runpaths"]}
+                if relevant_dir_keys & path_keys:
+                    satisfied.add(consumer_key)
+
+    result = set()
+    if soname_node is not None:
+        objs_dir_key = _obj_key(root, _elf_dirname(obj))
+        for consumer_key in soname_node["consumers"]:
+            if consumer_key in satisfied:
+                continue
+            consumer_props = obj_properties.get(consumer_key)
+            if consumer_props is None:
+                continue
+            path_keys = set(defpath_keys)
+            path_keys |= {_obj_key(root, p) for p in consumer_props["runpaths"]}
+            if objs_dir_key in path_keys:
+                result.update(consumer_props["alt_paths"])
+    return result
+
+
+def _lib_consumer_scan(root, cleanlist):
+    """Real _calc_depclean's --depclean-lib-check scan (actions.py:
+    1381-1546), narrowed to its pure computation. Mirrors pretend.rs's
+    lib_consumer_scan -- see its doc comment for the documented
+    narrowings. Returns [(provider (c,p,v), [(consumer_cpv, [sonames])])].
+    """
+    libs, obj_properties = _linkage_rebuild(root, _read_all_needed_entries(root))
+    defpath = _getlibpaths(root)
+    clean_cpvs = {f"{c}/{p}-{v}" for (c, p, v) in cleanlist}
+
+    out = []
+    for (c, p, v) in cleanlist:
+        pkg_cpv = f"{c}/{p}-{v}"
+        provided = sorted(
+            (props["alt_paths"][0], props["soname"])
+            for props in obj_properties.values()
+            if props["owner"] == pkg_cpv and props["soname"]
+        )
+        per_consumer = {}
+        for lib_path, soname in provided:
+            consumers = _find_consumers(
+                root, libs, obj_properties, defpath, lib_path, False
+            )
+            for consumer_path in consumers:
+                ckey = _obj_key(root, consumer_path)
+                cprops = obj_properties.get(ckey)
+                if cprops is None:
+                    continue
+                c_owner = cprops["owner"]
+                if not c_owner or c_owner == pkg_cpv:
+                    continue
+                if c_owner in clean_cpvs:
+                    continue
+                per_consumer.setdefault(c_owner, set()).add(soname)
+        if per_consumer:
+            out.append(
+                (
+                    (c, p, v),
+                    [
+                        (consumer, sorted(sonames))
+                        for consumer, sonames in sorted(per_consumer.items())
+                    ],
+                )
+            )
+    out.sort(key=lambda e: f"{e[0][0]}/{e[0][1]}-{e[0][2]}")
+    return out
+
+
+def _apply_depclean_lib_check(root, result, lib_check, color, recompute):
+    """Real _calc_depclean's --depclean-lib-check phase (actions.py:
+    1356-1590). Mirrors pretend.rs's apply_depclean_lib_check. `result`
+    and the return value are the (cleanlist, required_count, ordered,
+    kept_parents) tuple; `recompute(providers)` is a second cleanlist
+    pass seeding the protected providers as roots."""
+    cleanlist = result[0]
+    if not lib_check or not cleanlist:
+        return result
+    print(">>> Checking for lib consumers...", file=sys.stderr)
+    protections = _lib_consumer_scan(root, cleanlist)
+    if not protections:
+        return result
+    print(">>> Assigning files to packages...", file=sys.stderr)
+
+    star = color.c("BAD", " * ")
+    for line in (
+        "In order to avoid breakage of link level dependencies, one or more",
+        "packages will not be removed. This can be solved by rebuilding the",
+        "packages that pulled them in.",
+    ):
+        print(f"{star}{line}", file=sys.stderr)
+    for (c, p, v), consumers in protections:
+        print(star, file=sys.stderr)
+        print(f"{star}  {c}/{p}-{v} pulled in by:", file=sys.stderr)
+        for consumer, sonames in consumers:
+            print(f"{star}    {consumer} needs {', '.join(sonames)}", file=sys.stderr)
+    print(star, file=sys.stderr)
+
+    print(">>> Adding lib providers to graph...", file=sys.stderr)
+    return recompute([prov for (prov, _c) in protections])
+
+
+def _depclean_cleanlist(
+    root, world_seeds, system_atoms, args, lib_protected_providers=()
+):
     """Real emerge --depclean's removal list (_calc_depclean +
     create_cleanlist). No `args`: roots = installed pkgs @world ∪ @system
     match; cleanlist = every installed pkg none reach. With `args`: real
@@ -7044,6 +7422,14 @@ def _depclean_cleanlist(root, world_seeds, system_atoms, args):
         for pkg in installed:
             if not matched_by_args(pkg):
                 seed(pkg[0], pkg[1], pkg[2])
+
+    # --depclean-lib-check feedback: a provider the caller's NEEDED.ELF.2
+    # scan found is still needed at link level becomes a root, so it and
+    # its own dependency closure drop out of the cleanlist (real
+    # _calc_depclean's resolver._add_pkg + _complete_graph). No parent
+    # edge for the provider itself -- matches portage-repo.
+    for prov in lib_protected_providers:
+        seed(prov[0], prov[1], prov[2])
 
     while queue:
         c, p, v = queue.pop()
@@ -7226,7 +7612,9 @@ class _CleanupArgsExit(Exception):
         self.code = code
 
 
-def _run_prune_pretend(targets, root, config_root, config, color, verbose=False):
+def _run_prune_pretend(
+    targets, root, config_root, config, color, verbose=False, lib_check=True
+):
     """emerge --pretend --prune / -pP (real action_depclean with
     action="prune"). Unlike --depclean, real action_depclean returns
     right after the unmerge() preview (actions.py:888): no ' * ' advisory
@@ -7239,7 +7627,17 @@ def _run_prune_pretend(targets, root, config_root, config, color, verbose=False)
     except _CleanupArgsExit as e:
         return e.code
 
-    cleanlist, _required_count, ordered, kept_parents = _prune_cleanlist(root, args)
+    result = _prune_cleanlist(root, args)
+    # Real _calc_depclean serves action in ("depclean", "prune"), so
+    # --depclean-lib-check applies to --prune too.
+    result = _apply_depclean_lib_check(
+        root,
+        result,
+        lib_check,
+        color,
+        lambda providers: _prune_cleanlist(root, args, providers),
+    )
+    cleanlist, _required_count, ordered, kept_parents = result
 
     # Real create_cleanlist's prune branch prints show_parents(pkg) inline
     # while building the removal list -- before the removal-order line /
@@ -7390,7 +7788,7 @@ def _run_prune_nodeps_pretend(targets, root, config_root, color):
     return 0
 
 
-def _prune_cleanlist(root, args):
+def _prune_cleanlist(root, args, lib_protected_providers=()):
     """Real emerge --prune's removal list (_calc_depclean with
     action="prune" -- actions.py:1059-1110 + create_cleanlist's prune
     branch). Removes superseded installed versions: for every cp with >1
@@ -7462,6 +7860,12 @@ def _prune_cleanlist(root, args):
             if key not in reachable:
                 reachable.add(key)
                 queue.append(key)
+    # --depclean-lib-check feedback -- see _depclean_cleanlist.
+    for prov in lib_protected_providers:
+        key = (prov[0], prov[1], prov[2])
+        if key not in reachable:
+            reachable.add(key)
+            queue.append(key)
     while queue:
         c, p, v = queue.pop()
         parent_cpv = f"{c}/{p}-{v}"
@@ -7511,7 +7915,9 @@ def _prune_cleanlist(root, args):
     return cleanlist, len(reachable), ordered, kept_parents
 
 
-def _run_depclean_pretend(targets, root, config_root, config, color, verbose=False):
+def _run_depclean_pretend(
+    targets, root, config_root, config, color, verbose=False, lib_check=True
+):
     """emerge --pretend --depclean / -pc (real action_depclean +
     _calc_depclean). Mirrors pretend.rs's run_depclean_pretend."""
     try:
@@ -7540,8 +7946,20 @@ def _run_depclean_pretend(targets, root, config_root, config, color, verbose=Fal
                     rest = after
             return out + rest
 
+        libcheck_off_paragraph = (
+            (
+                "Depclean may break link level dependencies. Thus, it is",
+                "recommended to use a tool such as `revdep-rebuild` (from",
+                "app-portage/gentoolkit) in order to detect such breakage.",
+                "",
+            )
+            if not lib_check
+            else ()
+        )
         for text in (
-            None,
+            (None,)
+            + libcheck_off_paragraph
+            + (
             "Always study the list of packages to be cleaned for any obvious",
             "mistakes. Packages that are part of the world set will always",
             "be kept.  They can be manually added to this set with",
@@ -7553,6 +7971,7 @@ def _run_depclean_pretend(targets, root, config_root, config, color, verbose=Fal
             "unless *all* required dependencies have been resolved.  As a",
             "consequence of this, it often becomes necessary to run ",
             "`emerge --update --newuse --deep @world` prior to depclean.",
+            )
         ):
             if text is None:
                 print()
@@ -7572,9 +7991,20 @@ def _run_depclean_pretend(targets, root, config_root, config, color, verbose=Fal
         return 1
     world_atom_count = len({a for (a, _l) in world_seeds})
 
-    cleanlist, required_count, ordered, kept_parents = _depclean_cleanlist(
-        root, world_seeds, config["system_packages"], args
+    result = _depclean_cleanlist(root, world_seeds, config["system_packages"], args)
+    # Real _calc_depclean's --depclean-lib-check phase: a cleanlist
+    # package still needed at link level by a survivor is kept (and its
+    # own deps with it, via a second _depclean_cleanlist pass).
+    result = _apply_depclean_lib_check(
+        root,
+        result,
+        lib_check,
+        color,
+        lambda providers: _depclean_cleanlist(
+            root, world_seeds, config["system_packages"], args, providers
+        ),
     )
+    cleanlist, required_count, ordered, kept_parents = result
     installed_total = len(_all_installed_packages(root))
 
     # Real create_cleanlist's `elif "--verbose": show_parents(pkg)` --
@@ -8028,6 +8458,9 @@ def run(args):
     # --color y|n (real argument_options, choices ("y","n")): None = not
     # given (fall through to NO_COLOR/NOCOLOR/isatty). See pretend.rs.
     color_opt = None
+    # --depclean-lib-check y|n (real _DEPCLEAN_LIB_CHECK_DEFAULT = True).
+    # Only consulted by --depclean/--prune. See pretend.rs.
+    lib_check = True
     update = False
     deep = 0
     excluded = []
@@ -8142,6 +8575,20 @@ def run(args):
                     file=sys.stderr,
                 )
                 return 2
+        elif arg == "--depclean-lib-check" or arg.startswith("--depclean-lib-check="):
+            # Real main.py: "choices": true_y_or_n -- a value flag
+            # (y/n/True). Bare (no value) is lenient here -> y. Mirrors
+            # pretend.rs.
+            if arg.startswith("--depclean-lib-check="):
+                val = arg[len("--depclean-lib-check=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n", "True"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            lib_check = val not in ("n", "N")
         elif arg in ("--update", "-u"):
             update = True
             i += 1
@@ -8891,13 +9338,25 @@ def run(args):
         return _run_unmerge_pretend(atom_args, _root(), _config_root(), config, color=color)
     if depclean:
         return _run_depclean_pretend(
-            atom_args, _root(), _config_root(), config, color, verbose=verbose
+            atom_args,
+            _root(),
+            _config_root(),
+            config,
+            color,
+            verbose=verbose,
+            lib_check=lib_check,
         )
     if prune:
         if nodeps:
             return _run_prune_nodeps_pretend(atom_args, _root(), _config_root(), color)
         return _run_prune_pretend(
-            atom_args, _root(), _config_root(), config, color, verbose=verbose
+            atom_args,
+            _root(),
+            _config_root(),
+            config,
+            color,
+            verbose=verbose,
+            lib_check=lib_check,
         )
 
     # "@world"/"@system" each expand to their own real atom list, in

@@ -93,9 +93,15 @@ Ranked roughly by how self-contained each is.
   depclean-specific corner (a provided entry as a depclean root, and the
   advisory's "will be removed by depclean even if in world" claim) is a
   separate, minor residual.
-  **Still open:** `--depclean-lib-check`, slot-operator rebuild edges,
-  the "deps unresolved, aborting" halt, `--deselect=n` in args mode, the
-  exact `@selected`-vs-`@world` set nesting (approximated), and real
+  `--depclean-lib-check` (the `NEEDED.ELF.2` soname-consumer scan that
+  keeps a cleanlist package a surviving binary still links against, plus
+  the second-pass graph re-closure and the `* ...will not be removed`
+  WARNING; wires up the previously-dead `needed_elf` module; `=n` skips
+  it and shows the `Depclean may break link level dependencies`
+  advisory) **shipped 2026-08-29** for both `--depclean` and `--prune`.
+  **Still open:** slot-operator rebuild edges, the "deps unresolved,
+  aborting" halt, `--deselect=n` in args mode, the exact
+  `@selected`-vs-`@world` set nesting (approximated), and real
   (non-`--pretend`) removal.
 - **`emerge -p --prune` / `-pP`** **shipped 2026-08-27**
   (`prune_cleanlist`: seed the closure from every installed package
@@ -109,7 +115,8 @@ Ranked roughly by how self-contained each is.
   --nodeps` (routes to `_unmerge_display`'s own prune branch instead of
   `_calc_depclean` -- no dep check at all; `prune_nodeps_selection` +
   `run_prune_nodeps_pretend`; best-version `COUNTER` tiebreak narrowed
-  out) **shipped 2026-08-28**. **Still open:** `--depclean-lib-check`,
+  out) **shipped 2026-08-28**. `--depclean-lib-check` (shared with
+  `--depclean` -- see above) **shipped 2026-08-29**. **Still open:**
   slot-operator rebuild edges, real (non-`--pretend`) removal.
 - Minor `-pC` narrowings: the higher-slot refinement on the
   set-protection warning, and the Python-interpreter self-skip. The
@@ -308,7 +315,11 @@ Ranked roughly by how self-contained each is.
     `_find_libs_to_preserve()` is ported (`needed_elf.rs`). Deliberately
     excluded, **confirmed with the user each time it comes up**: it is the
     one real spot a raw ELF-header read (not `scanelf` output) would
-    matter.
+    matter. **Update 2026-08-29**: the `needed_elf` module is no longer
+    dead code -- `NeededEntry` + `rebuild()` + `findConsumers()` now have
+    a live caller via `--depclean-lib-check` (§0). `_find_libs_to_preserve`
+    and the merge/unmerge wiring are still unused pending a preserve-libs
+    control-flow slice.
 
 ### G. `emerge -pv` real `output.py` layout + ANSI colour
 

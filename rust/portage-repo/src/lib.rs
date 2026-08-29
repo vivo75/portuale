@@ -3076,13 +3076,29 @@ fn split_installed_dir(dirname: &str) -> Option<(String, String)> {
 /// `system_atoms` ∪ `{=cpv | installed, unmatched by args}`, and the
 /// cleanlist is just the `args`-matched packages none of those reach.
 ///
+/// **`lib_protected_providers`**: the `--depclean-lib-check` feedback
+/// path. Real `_calc_depclean` computes the tentative cleanlist, then
+/// (`actions.py:1356-1573`) runs a soname-linkage scan over `NEEDED.ELF.2`
+/// and, for any cleanlist package that solely provides a library still
+/// needed by a *surviving* consumer, re-adds that provider (and its own
+/// dependencies, via `_complete_graph`) to the graph so it is kept. The
+/// caller (which owns the `NEEDED.ELF.2` linkage map -- see
+/// `portuale`'s `needed_elf`) performs that scan on the result of a
+/// first `lib_protected_providers = &[]` call, then calls again passing
+/// the packages it found here. They are seeded as additional reachability
+/// roots, so the returned cleanlist, `required_count`, `kept_parents` and
+/// removal order are all recomputed consistently -- exactly as if an
+/// ordinary dependency had pulled each protected provider in.
+///
 /// **Documented narrowings** (real `_calc_depclean` via the full
 /// `depgraph` in "remove" mode does more):
-/// `--depclean-lib-check` (a soname-linkage check via `NEEDED.ELF.2`),
 /// slot-operator rebuild edges, the "dependencies could not be resolved,
 /// aborting" safety halt, `package.provided`, `--deselect=n` (keeps the
 /// world atoms as roots in `args` mode), and `world_sets` `@`-refs as
-/// roots are all still out.
+/// roots are all still out. A lib-protected provider is kept but, unlike
+/// real portage (which labels its reverse-dep entry with the link-level
+/// consumer), contributes no `--verbose` `kept_parents` line of its own
+/// unless an ordinary dependency also reaches it.
 /// `depclean_cleanlist`'s result: the packages to remove (already in
 /// real `_calc_depclean`'s own unmerge order -- see
 /// `topological_removal_order`), the size of the required-set closure
@@ -3266,6 +3282,11 @@ pub fn depclean_cleanlist(
     world_seeds: &[(String, String)],
     system_atoms: &[String],
     args: &[String],
+    // `--depclean-lib-check` feedback: installed packages the caller's
+    // `NEEDED.ELF.2` soname scan found are still needed at link level by
+    // a surviving consumer. Seeded as extra reachability roots. Empty on
+    // the caller's first pass (and always when `--depclean-lib-check=n`).
+    lib_protected_providers: &[InstalledPackage],
 ) -> DepcleanResult {
     let installed = all_installed_packages(root);
     // Candidate strings for `match_from_list`, one per installed package,
@@ -3341,6 +3362,17 @@ pub fn depclean_cleanlist(
             if !matched_by_args(p) && reachable.insert(key(p)) {
                 queue.push(p.clone());
             }
+        }
+    }
+    // `--depclean-lib-check` feedback: a provider the caller's soname
+    // scan found is still needed at link level becomes a root, so it and
+    // its own dependency closure drop out of the cleanlist (real
+    // `_calc_depclean` re-adds it via `resolver._add_pkg` then
+    // `_complete_graph`). No parent edge for the provider itself -- see
+    // this function's own doc comment.
+    for p in lib_protected_providers {
+        if reachable.insert(key(p)) {
+            queue.push(p.clone());
         }
     }
     while let Some(p) = queue.pop() {
@@ -3439,12 +3471,19 @@ pub fn depclean_cleanlist(
 /// `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND` closure and
 /// `topological_removal_order` as `depclean_cleanlist`.
 ///
+/// `--depclean-lib-check` is wired the same way as `depclean_cleanlist`
+/// (via `lib_protected_providers`).
+///
 /// **Deliberately out** (matching `depclean_cleanlist`'s own cuts):
 /// `--prune --nodeps` (the obscure `_unmerge_display` prune branch that
 /// skips the closure entirely), the `--deselect` world-file rewrite
-/// (`--pretend` never writes it), `--depclean-lib-check`, and
-/// slot-operator rebuild edges.
-pub fn prune_cleanlist(root: &Path, args: &[String]) -> DepcleanResult {
+/// (`--pretend` never writes it), and slot-operator rebuild edges.
+pub fn prune_cleanlist(
+    root: &Path,
+    args: &[String],
+    // `--depclean-lib-check` feedback -- see `depclean_cleanlist`.
+    lib_protected_providers: &[InstalledPackage],
+) -> DepcleanResult {
     let installed = all_installed_packages(root);
     let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
 
@@ -3529,6 +3568,12 @@ pub fn prune_cleanlist(root: &Path, args: &[String]) -> DepcleanResult {
     let mut parent_atoms: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
     for p in &installed {
         if !is_candidate(p) && reachable.insert(key(p)) {
+            queue.push(p.clone());
+        }
+    }
+    // `--depclean-lib-check` feedback -- see `depclean_cleanlist`.
+    for p in lib_protected_providers {
+        if reachable.insert(key(p)) {
             queue.push(p.clone());
         }
     }
@@ -9677,6 +9722,7 @@ mod tests {
             &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
             &["dev-libs/systempkg".to_string()],
             &[],
+            &[],
         );
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         assert_eq!(
@@ -9697,6 +9743,7 @@ mod tests {
             &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
             &["dev-libs/systempkg".to_string()],
             &["dev-libs/dcorphan".to_string()],
+            &[],
         );
         assert_eq!(
             narrowed
@@ -9712,8 +9759,28 @@ mod tests {
             &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
             &["dev-libs/systempkg".to_string()],
             &["dev-libs/dcsub".to_string()],
+            &[],
         );
         assert!(needed.cleanlist.is_empty());
+
+        // `--depclean-lib-check` feedback: forcing dcorphan as a
+        // protected provider keeps it *and* its own RDEPEND dcorphandep,
+        // recomputing an empty cleanlist and a required_count of 9.
+        let protected = InstalledPackage {
+            category: "dev-libs".to_string(),
+            package: "dcorphan".to_string(),
+            version: "1.0".to_string(),
+            slot: "0".to_string(),
+        };
+        let lib_kept = depclean_cleanlist(
+            &root,
+            &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
+            &["dev-libs/systempkg".to_string()],
+            &[],
+            std::slice::from_ref(&protected),
+        );
+        assert!(lib_kept.cleanlist.is_empty(), "{:?}", lib_kept.cleanlist);
+        assert_eq!(lib_kept.required_count, 9);
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -9738,6 +9805,7 @@ mod tests {
         let result = depclean_cleanlist(
             &root,
             &[("dev-libs/rw".to_string(), "@selected".to_string())],
+            &[],
             &[],
             &[],
         );
@@ -9797,6 +9865,7 @@ mod tests {
             &[("dev-libs/dcw".to_string(), "@selected".to_string())],
             &[],
             &[],
+            &[],
         );
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         assert_eq!(clean, vec!["dev-libs/dchidden-1.0".to_string()]);
@@ -9827,7 +9896,7 @@ mod tests {
         install("aabase", "");
         install("loner", "");
 
-        let result = depclean_cleanlist(&root, &[], &[], &[]);
+        let result = depclean_cleanlist(&root, &[], &[], &[], &[]);
         assert!(result.ordered);
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         // Level 0 ready = {mmid, loner} (nothing depends on them),
@@ -9850,7 +9919,7 @@ mod tests {
             std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
             std::fs::write(d.join("SLOT"), "0\n").unwrap();
         }
-        let flat = depclean_cleanlist(&root2, &[], &[], &[]);
+        let flat = depclean_cleanlist(&root2, &[], &[], &[], &[]);
         assert!(!flat.ordered);
         assert_eq!(
             flat.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
@@ -9892,7 +9961,7 @@ mod tests {
         install("keeper", "1.0", "=dev-libs/mm-2.0");
         install("single", "1.0", "");
 
-        let result = prune_cleanlist(&root, &[]);
+        let result = prune_cleanlist(&root, &[], &[]);
         assert!(result.ordered);
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         // mm-2.0 kept (keeper needs it), mm-3.0/aa-2.0/zz-2.0 highest,
@@ -9965,7 +10034,7 @@ mod tests {
         );
 
         // `--prune dev-libs/mm`: only mm's old versions are candidates.
-        let narrowed = prune_cleanlist(&root, &["dev-libs/mm".to_string()]);
+        let narrowed = prune_cleanlist(&root, &["dev-libs/mm".to_string()], &[]);
         assert_eq!(
             narrowed
                 .cleanlist
@@ -9983,7 +10052,7 @@ mod tests {
             std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
             std::fs::write(d.join("SLOT"), "0\n").unwrap();
         }
-        assert!(prune_cleanlist(&root2, &[]).cleanlist.is_empty());
+        assert!(prune_cleanlist(&root2, &[], &[]).cleanlist.is_empty());
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&root2).ok();
