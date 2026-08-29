@@ -30,3 +30,18 @@ pub(crate) fn installed_categories_of(root: &Path, pn: &str) -> Vec<String> {
         .filter(|c| !portage_repo::installed_candidates(root, c, pn).is_empty())
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::{Command, Output};
+    #[cfg(feature = "vdb-sqlite")]
+    use std::sync::OnceLock;
+
+    #[derive(Clone, Copy)]
+    enum Backend {
+        Files,
+        #[cfg(feature = "vdb-sqlite")]
+        Sqlite,
+    }
+}

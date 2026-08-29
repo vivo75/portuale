@@ -30,3 +30,9 @@ fn now() -> i64 {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
 }
+
+#[derive(Clone, Copy)]
+enum NameKind {
+    User,
+    Group,
+}

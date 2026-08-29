@@ -359,3 +359,105 @@ impl Colorizer {
         self.c(key, text)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn colorize_matches_portage_escape_codes() {
+        let c = Colorizer::new(true);
+        // `colorize("green", "N")` = codes["green"] + "N" + reset.
+        assert_eq!(c.c("green", "N"), "\x1b[32;01mN\x1b[39;49;00m");
+        // A `_styles` key resolves to its colour name first.
+        assert_eq!(c.c("PKG_MERGE", "x"), "\x1b[32mx\x1b[39;49;00m");
+        assert_eq!(c.c("PKG_MERGE_WORLD", "x"), "\x1b[32;01mx\x1b[39;49;00m");
+        assert_eq!(c.c("WARN", "~"), "\x1b[33;01m~\x1b[39;49;00m");
+        assert_eq!(c.c("BAD", "#"), "\x1b[31;01m#\x1b[39;49;00m");
+    }
+
+    #[test]
+    fn disabled_colorizer_is_identity() {
+        let c = Colorizer::new(false);
+        assert_eq!(c.c("green", "N"), "N");
+        assert_eq!(
+            c.pkgprint(PkgprintArgs {
+                text: "ebuild",
+                binary: false,
+                system: false,
+                world: true
+            }),
+            "ebuild"
+        );
+    }
+
+    #[test]
+    fn pkgprint_palette_system_wins_over_world() {
+        let c = Colorizer::new(true);
+        assert_eq!(
+            c.pkgprint(PkgprintArgs {
+                text: "p",
+                binary: false,
+                system: true,
+                world: true
+            }),
+            "\x1b[32mp\x1b[39;49;00m"
+        ); // SYSTEM
+        assert_eq!(
+            c.pkgprint(PkgprintArgs {
+                text: "p",
+                binary: false,
+                system: false,
+                world: true
+            }),
+            "\x1b[32;01mp\x1b[39;49;00m"
+        ); // WORLD
+        assert_eq!(
+            c.pkgprint(PkgprintArgs {
+                text: "p",
+                binary: false,
+                system: false,
+                world: false
+            }),
+            "\x1b[32mp\x1b[39;49;00m"
+        ); // plain
+        assert_eq!(
+            c.pkgprint(PkgprintArgs {
+                text: "p",
+                binary: true,
+                system: false,
+                world: false
+            }),
+            "\x1b[35mp\x1b[39;49;00m"
+        ); // BINARY
+        assert_eq!(
+            c.pkgprint(PkgprintArgs {
+                text: "p",
+                binary: true,
+                system: false,
+                world: true
+            }),
+            "\x1b[35;01mp\x1b[39;49;00m"
+        ); // BINARY_WORLD
+    }
+
+    #[test]
+    fn nc_len_strips_ansi() {
+        assert_eq!(nc_len("plain"), 5);
+        assert_eq!(nc_len("\x1b[32;01mN\x1b[39;49;00m"), 1);
+        assert_eq!(
+            nc_len("[\x1b[32mebuild\x1b[39;49;00m  \x1b[32;01mN\x1b[39;49;00m    ]"),
+            15
+        );
+    }
+
+    #[test]
+    fn resolve_havecolor_explicit_wins() {
+        // `--color y` / `--color n` override everything, including a
+        // non-tty stdout (the test process's own).
+        assert!(resolve_havecolor(Some(true)));
+        assert!(!resolve_havecolor(Some(false)));
+        // No flag + piped stdout (the test harness) -> off.
+        assert!(!resolve_havecolor(None));
+    }
+}

@@ -2,6 +2,19 @@
 
 use crate::*;
 
+/// The installed or newly selected package whose dependencies
+/// [`enqueue_dependencies`] queues.
+#[derive(Clone, Copy)]
+pub(crate) struct DepOwner<'a> {
+    /// The walk's target root, so an installed parent's own deps resolve per
+    /// group like every other owner. `root` stays the vdb root for metadata.
+    pub target_root: &'a Path,
+    pub category: &'a str,
+    pub package: &'a str,
+    pub version: &'a str,
+    pub child_depth: u32,
+}
+
 /// The emerge options [`enqueue_dependencies`] consults.
 #[derive(Clone, Copy)]
 pub(crate) struct EnqueueOptions<'a> {

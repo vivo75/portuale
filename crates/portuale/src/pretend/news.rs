@@ -264,6 +264,37 @@ pub(crate) fn display_news_notice_if_any(
     print_news_notifications(&per_repo, color)
 }
 
+/// On a `--pretend` run, still print the count notice at the end, even when
+/// resolution failed. `--json` stays machine-readable: no notice there.
+/// Portage: post_emerge.py, post_emerge
+pub(crate) fn pretend_end_news_notice(
+    pretend: bool,
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    color: &Colorizer,
+) {
+    if pretend {
+        display_news_notice_if_any(repos, root, config, color);
+    }
+}
+
+/// On a merge failure, print the notice only when the vdb actually changed
+/// (`changed`: at least one entry landed). A total failure with nothing
+/// merged stays silent.
+/// Portage: post_emerge.py, post_emerge
+pub(crate) fn merge_failure_news_notice(
+    changed: bool,
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    config: &portage_profile::Config,
+    color: &Colorizer,
+) {
+    if changed {
+        display_news_notice_if_any(repos, root, config, color);
+    }
+}
+
 /// Read one news state file: each line split on whitespace, cut at the
 /// first `#`-led token, re-joined; empty results dropped. A missing file
 /// reads as empty.

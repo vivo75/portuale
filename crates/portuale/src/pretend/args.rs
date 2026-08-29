@@ -537,6 +537,72 @@ fn parse_mode_opts<'a>(
     }
 }
 
+/// Display-only flags. Returns whether the token was consumed.
+fn parse_display_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--tree" || arg == "-t" {
+        opts.tree = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--unordered-display" {
+        opts.unordered_display = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--columns" {
+        opts.columns = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--alphabetical" {
+        opts.alphabetical = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--color" || arg.starts_with("--color=") {
+        // A REQUIRED `y`/`n` value, as `--color y` or `--color=y`.
+        let val = if let Some(v) = arg.strip_prefix("--color=") {
+            *idx += 1;
+            v.to_string()
+        } else if let Some(v) = args.get(*idx + 1) {
+            *idx += 2;
+            v.clone()
+        } else {
+            eprintln!("emerge: --color requires an argument (y or n)");
+            return Err(ExitCode::from(2));
+        };
+        opts.color_opt = match val.as_str() {
+            "y" => Some(true),
+            "n" => Some(false),
+            other => {
+                eprintln!("emerge: --color: invalid choice: {other:?} (choose from 'y', 'n')");
+                return Err(ExitCode::from(2));
+            }
+        };
+        Ok(true)
+    } else if arg == "--depclean-lib-check" || arg.starts_with("--depclean-lib-check=") {
+        // Bare (no value) means `y`.
+        let val = if let Some(v) = arg.strip_prefix("--depclean-lib-check=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(
+            args.get(*idx + 1).map(String::as_str),
+            Some("y" | "n" | "True")
+        ) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.lib_check = !matches!(val.as_str(), "n" | "N");
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Depth and backtrack limits. Returns whether the token was consumed.
 fn parse_depth_opts<'a>(
     opts: &mut EmergeOpts<'a>,
@@ -614,6 +680,166 @@ fn parse_depth_opts<'a>(
                 return Err(ExitCode::from(2));
             }
         }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Complete-graph and binary-eligibility flags. Returns whether the token was consumed.
+fn parse_graph_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--complete-graph" || arg.starts_with("--complete-graph=") {
+        // Bare / `=y` / `=True` -> on, `=n` -> off.
+        let val = if let Some(v) = arg.strip_prefix("--complete-graph=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(
+            args.get(*idx + 1).map(String::as_str),
+            Some("y" | "n" | "True")
+        ) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.complete_graph = matches!(val.as_str(), "y" | "True");
+        Ok(true)
+    } else if arg == "--ignore-world" || arg.starts_with("--ignore-world=") {
+        // Same shape as `--complete-graph`.
+        let val = if let Some(v) = arg.strip_prefix("--ignore-world=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(
+            args.get(*idx + 1).map(String::as_str),
+            Some("y" | "n" | "True")
+        ) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.ignore_world = matches!(val.as_str(), "y" | "True");
+        Ok(true)
+    } else if arg == "--complete-graph-if-new-use"
+        || arg.starts_with("--complete-graph-if-new-use=")
+        || arg == "--complete-graph-if-new-ver"
+        || arg.starts_with("--complete-graph-if-new-ver=")
+    {
+        // A bare flag means `y`; both default ON, only `=n` opts out.
+        let (name, inline) = match arg.split_once('=') {
+            Some((n, v)) => (n, Some(v.to_string())),
+            None => (arg, None),
+        };
+        let val = if let Some(v) = inline {
+            *idx += 1;
+            v
+        } else if matches!(args.get(*idx + 1).map(String::as_str), Some("y" | "n")) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        let on = !matches!(val.as_str(), "n" | "N");
+        if name == "--complete-graph-if-new-use" {
+            opts.complete_if_new_use = Some(on);
+        } else {
+            opts.complete_if_new_ver = Some(on);
+        }
+        Ok(true)
+    } else if arg == "--usepkg-exclude" {
+        // Same append shape as --exclude; no short alias.
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--usepkg-exclude\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        opts.usepkg_exclude
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--usepkg-exclude=") {
+        opts.usepkg_exclude
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--usepkg-include" {
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--usepkg-include\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        opts.usepkg_include
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--usepkg-include=") {
+        opts.usepkg_include
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--buildpkg-exclude" {
+        // Same append shape as --exclude.
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--buildpkg-exclude\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        opts.buildpkg_exclude
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--buildpkg-exclude=") {
+        opts.buildpkg_exclude
+            .extend(value.split_whitespace().map(String::from));
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--shell" || arg.starts_with("--shell=") {
+        // Portuale-only; same `=`/space handling `--json` gets.
+        let value = if let Some(v) = arg.strip_prefix("--shell=") {
+            *idx += 1;
+            v.to_string()
+        } else if let Some(v) = args.get(*idx + 1) {
+            *idx += 2;
+            v.clone()
+        } else {
+            eprintln!("emerge: option '--shell' requires a value (bash or brush)");
+            return Err(ExitCode::from(2));
+        };
+        opts.shell = match value.as_str() {
+            "bash" => ebuild_phases::ShellBackend::Bash,
+            "brush" => ebuild_phases::ShellBackend::Brush,
+            other => {
+                eprintln!("emerge: --shell: {other:?} is not \"bash\" or \"brush\"");
+                return Err(ExitCode::from(1));
+            }
+        };
+        Ok(true)
+    } else if arg == "--solver" || arg.starts_with("--solver=") {
+        // Portuale-only; same `=`/space handling as `--shell`.
+        let value = if let Some(v) = arg.strip_prefix("--solver=") {
+            *idx += 1;
+            v.to_string()
+        } else if let Some(v) = args.get(*idx + 1) {
+            *idx += 2;
+            v.clone()
+        } else {
+            eprintln!("emerge: option '--solver' requires a value (portage, pubgrub or resolvo)");
+            return Err(ExitCode::from(2));
+        };
+        opts.solver = match portage_repo::SolverKind::parse(&value) {
+            Some(kind) => kind,
+            None => {
+                eprintln!(
+                    "emerge: --solver: {value:?} is not \"portage\", \"pubgrub\" or \"resolvo\""
+                );
+                return Err(ExitCode::from(2));
+            }
+        };
         Ok(true)
     } else {
         Ok(false)
@@ -1103,6 +1329,136 @@ fn parse_build_opts<'a>(
     } else if arg == "--resume" || arg == "-r" {
         opts.resume = true;
         *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Autounmask driver flags. Returns whether the token was consumed.
+fn parse_autounmask_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--autounmask" {
+        // Bare flag means true; three accepted true spellings otherwise.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.autounmask = Some(true);
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.autounmask = Some(false);
+                *idx += 2;
+            }
+            _ => {
+                opts.autounmask = Some(true);
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--autounmask=y" {
+        opts.autounmask = Some(true);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--autounmask=n" {
+        opts.autounmask = Some(false);
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--autounmask-only" || arg.starts_with("--autounmask-only=") {
+        let val = if let Some(v) = arg.strip_prefix("--autounmask-only=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(
+            args.get(*idx + 1).map(String::as_str),
+            Some("y" | "n" | "True")
+        ) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.autounmask_only = matches!(val.as_str(), "y" | "True");
+        Ok(true)
+    } else if arg == "--autounmask-continue" || arg.starts_with("--autounmask-continue=") {
+        let val = if let Some(v) = arg.strip_prefix("--autounmask-continue=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(
+            args.get(*idx + 1).map(String::as_str),
+            Some("y" | "n" | "True")
+        ) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.autounmask_continue = Some(matches!(val.as_str(), "y" | "True"));
+        Ok(true)
+    } else if arg == "--autounmask-backtrack" {
+        // A REQUIRED `y`/`n` value; gates the backtrack loop's autounmask
+        // re-drive. Disabled by default.
+        let Some(value) = args.get(*idx + 1) else {
+            eprintln!("emerge: option \"--autounmask-backtrack\" requires an argument");
+            return Err(ExitCode::from(2));
+        };
+        if !matches!(value.as_str(), "y" | "n") {
+            eprintln!(
+                "emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+            );
+            return Err(ExitCode::from(2));
+        }
+        opts.autounmask_backtrack = Some(value == "y");
+        *idx += 2;
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--autounmask-backtrack=") {
+        if !matches!(value, "y" | "n") {
+            eprintln!(
+                "emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")"
+            );
+            return Err(ExitCode::from(2));
+        }
+        opts.autounmask_backtrack = Some(value == "y");
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--autounmask-keep-keywords" {
+        // Same shape as `--changed-deps`.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.autounmask_keep_keywords = Some(true);
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.autounmask_keep_keywords = Some(false);
+                *idx += 2;
+            }
+            _ => {
+                opts.autounmask_keep_keywords = Some(true);
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--autounmask-keep-keywords=") {
+        match value {
+            "y" | "True" => {
+                opts.autounmask_keep_keywords = Some(true);
+                *idx += 1;
+            }
+            "n" => {
+                opts.autounmask_keep_keywords = Some(false);
+                *idx += 1;
+            }
+            _ => {
+                eprintln!(
+                    "emerge: option \"--autounmask-keep-keywords\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
+                );
+                return Err(ExitCode::from(2));
+            }
+        }
         Ok(true)
     } else {
         Ok(false)
