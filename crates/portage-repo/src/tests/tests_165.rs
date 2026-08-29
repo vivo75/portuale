@@ -416,3 +416,54 @@ struct Enqueue165Args<'a> {
     queue: &'a mut std::collections::VecDeque<QueueItem>,
     pending: &'a mut Vec<PendingBlocker>,
 }
+
+fn enqueue_165(args: Enqueue165Args<'_>) -> SlotPullers {
+    let Enqueue165Args {
+        repos,
+        root,
+        config,
+        cat,
+        pkg,
+        ver,
+        with_bdeps,
+        entries,
+        queue,
+        pending,
+    } = args;
+    let mut seen = HashSet::new();
+    let mut memo = HashMap::new();
+    let mut pullers = HashMap::new();
+    enqueue_dependencies(
+        &SelectSource {
+            repos,
+            root,
+            config,
+            local_binpkg: &std::sync::Arc::new(BinaryIndex::default()),
+        },
+        &DepOwner {
+            // Same-root test walk: no cross-root routing here.
+            target_root: root,
+            category: cat,
+            package: pkg,
+            version: ver,
+            child_depth: 1,
+        },
+        &EnqueueOptions {
+            dynamic_deps: false,
+            ignore_built_slot_operator_deps: false,
+            with_bdeps,
+            root_deps_running_root: None,
+            update: false,
+        },
+        EnqueueSinks {
+            queue,
+            pending_blockers: pending,
+            entries,
+            root_deps_build_seen: &mut seen,
+            installed_meta_memo: &mut memo,
+            slot_pullers: &mut pullers,
+        },
+        &HashMap::new(),
+    );
+    pullers
+}
