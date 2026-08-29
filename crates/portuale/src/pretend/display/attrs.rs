@@ -36,6 +36,152 @@ pub(crate) struct ColumnsLineArgs<'a> {
     pub(crate) world: bool,
 }
 
+/// One `--columns` line: Portage's `_set_root_columns` merge-branch layout.
+/// `category/package` (no version) pads to `columnwidth - 60`, `[version]`
+/// to `columnwidth - 30`, then `oldbest`. Padding is skipped past the target
+/// width, never truncating.
+/// Portage: output.py, _set_root_columns
+pub(crate) fn columns_line(args: ColumnsLineArgs<'_>) -> String {
+    let ColumnsLineArgs {
+        bracket_word,
+        field,
+        indent,
+        category,
+        package,
+        version,
+        oldbest,
+        columnwidth,
+        color,
+        binary,
+        system,
+        world,
+    } = args;
+    let newlp = (columnwidth - 60).max(0) as usize;
+    let oldlp = (columnwidth - 30).max(0) as usize;
+    // Portage's `_set_root_columns` merge branch: the type word and `pkg.cp`
+    // both go through `pkgprint`; the version column is `green("[ver]")`;
+    // `oldbest` arrives already `blue("[from]")` from `convert_myoldbest`.
+    // Padding measures visible width (`color::nc_len`), never raw bytes.
+    let cp = color.pkgprint(PkgprintArgs {
+        text: &format!("{category}/{package}"),
+        binary,
+        system,
+        world,
+    });
+    let bword = color.pkgprint(PkgprintArgs {
+        text: bracket_word,
+        binary,
+        system,
+        world,
+    });
+    let mut line = format!("[{bword} {field}] {indent}{cp}");
+    let pad_to = |line: &mut String, target: usize| {
+        let w = color::nc_len(line);
+        if target > w {
+            line.push_str(&" ".repeat(target - w));
+        }
+    };
+    pad_to(&mut line, newlp);
+    line.push_str(&format!(" {} ", color.c("green", &format!("[{version}]"))));
+    pad_to(&mut line, oldlp);
+    if !oldbest.is_empty() {
+        line.push_str(&color.c("blue", oldbest));
+    }
+    line
+}
+
+/// Arguments of [`attr_display_field`].
+pub(crate) struct AttrDisplayFieldArgs<'a> {
+    pub(crate) interactive: bool,
+    pub(crate) new: bool,
+    pub(crate) force_reinstall: bool,
+    pub(crate) new_slot: bool,
+    pub(crate) replace: bool,
+    pub(crate) fetch_restrict: bool,
+    pub(crate) fetch_restrict_satisfied: bool,
+    pub(crate) remote_binary: bool,
+    pub(crate) new_version: bool,
+    pub(crate) downgrade: bool,
+    pub(crate) mask: Option<char>,
+    pub(crate) include_mask: bool,
+    pub(crate) color: &'a Colorizer,
+}
+
+/// Portage's `PkgAttrDisplay.__str__`: the fixed-width status field inside
+/// the `[ebuild …]` bracket. One column per attribute, a space where absent:
+/// `I`nteractive, `N`ew (`r` for force-reinstall), new `S`lot (`R` for
+/// replace), `f`etch-restrict/`F`/remote-binary `g`, `U`pdate, `D`owngrade,
+/// mask char (`#`/`~`/`*`). The mask column shows at `-p`/`-pv`, not under
+/// `--quiet` (`include_mask`). Present letters are coloured; the field is 7
+/// visible columns either way.
+/// Portage: resolver/output_helpers.py, PkgAttrDisplay.__str__
+pub(crate) fn attr_display_field(args: AttrDisplayFieldArgs<'_>) -> String {
+    let AttrDisplayFieldArgs {
+        interactive,
+        new,
+        force_reinstall,
+        new_slot,
+        replace,
+        fetch_restrict,
+        fetch_restrict_satisfied,
+        remote_binary,
+        new_version,
+        downgrade,
+        mask,
+        include_mask,
+        color,
+    } = args;
+    let col = |key: &str, ch: char| color.c(key, &ch.to_string());
+    let mut f = String::new();
+    f.push_str(&if interactive {
+        col("WARN", 'I')
+    } else {
+        " ".to_string()
+    });
+    f.push_str(&if force_reinstall {
+        col("red", 'r')
+    } else if new {
+        col("green", 'N')
+    } else {
+        " ".to_string()
+    });
+    f.push_str(&if replace {
+        col("yellow", 'R')
+    } else if new_slot {
+        col("green", 'S')
+    } else {
+        " ".to_string()
+    });
+    f.push_str(&if fetch_restrict_satisfied {
+        col("green", 'f')
+    } else if fetch_restrict {
+        col("red", 'F')
+    } else if remote_binary {
+        col("fuchsia", 'g')
+    } else {
+        " ".to_string()
+    });
+    f.push_str(&if new_version {
+        col("turquoise", 'U')
+    } else {
+        " ".to_string()
+    });
+    f.push_str(&if downgrade {
+        col("blue", 'D')
+    } else {
+        " ".to_string()
+    });
+    // The mask column shows only above verbosity 1 (`-p`/`-pv`, not `--quiet`).
+    if include_mask {
+        f.push_str(&match mask {
+            Some(c @ ('#' | '*')) => col("BAD", c),
+            Some('~') => col("WARN", '~'),
+            _ => " ".to_string(),
+        });
+    }
+    f
+}
+
 /// The bare flag name inside a rendered `USE=` token, for the
 /// `--alphabetical` re-sort: strip a leading `(` / `-` and any trailing
 /// `)` / `*` / `%` (`(-maskflag)` -> `maskflag`, `foo%*` -> `foo`).
