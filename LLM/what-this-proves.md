@@ -8094,3 +8094,40 @@ rust/target/release/portuale emerge -pc            # keeps dclib, warns
 rust/target/release/portuale emerge -pc --depclean-lib-check=n  # removes it
 ```
 
+### `emerge -pc` / `-pP`: the "dependencies could not be resolved" safety halt
+
+Real `_calc_depclean` (`actions.py:1137-1248`) runs `unresolved_deps()`
+after building the cleanlist: if any *kept* installed package has a hard
+runtime dependency (`dep.priority > UnmergeDepPriority.SOFT` -- i.e.
+`RDEPEND`/`PDEPEND`; `DEPEND`/`BDEPEND` are `buildtime` = SOFT and never
+count) that nothing installed satisfies, it prints the `bad(" * ")`
+`Dependencies could not be completely resolved due to the following
+required packages not being installed:` block + the `emerge --update
+--newuse --deep --with-bdeps=y @world` hint (`logging.ERROR` → stderr)
+and **exits 1 without removing anything** -- "As a safety measure,
+depclean will not remove any packages unless *all* required dependencies
+have been resolved." Applies to `--prune` too (with the extra `use
+--nodeps` trailer); `--prune --nodeps` skips `_calc_depclean` entirely so
+it never halts.
+
+`DepcleanResult` gains an `unresolved: Vec<(atom, parent_cpv)>` field,
+filled by `unresolved_runtime_deps` during the reachability walk:
+`use_reduce_structured` (USE-evaluated, `||`/`( )` structure kept) over
+every kept package's `RDEPEND`/`PDEPEND`, flagging a plain atom that
+matches no installed package. `run_depclean_pretend` /
+`run_prune_pretend` check it right after the first cleanlist pass (real's
+primary call site, before the lib scan) via `depclean_unresolved_halt`.
+
+**Documented narrowings**: an atom inside a `||` group is not checked
+(the any-of resolution needed to decide whether the *whole* group is
+unsatisfiable is out of scope, and the reachability walk already keeps
+every alternative so a partly-broken group never wrongly shrinks the
+cleanlist); a libc-provider atom (real `find_libc_deps`) is never flagged
+(real relies on libc genuinely being installed -- `strip_libc_deps`'s
+premise -- so a fixture without an installed libc must not spuriously
+halt); the real "show the unevaluated atom when it differs and vardb
+matches it" readability case (`actions.py:1196`) is not reproduced. New
+fixture `_unresolved_root` (`ukept` RDEPENDs a missing package); 4
+contract tests + a `portage-repo` unit test; mirrored in
+`emerge_pretend_reference.py`.
+

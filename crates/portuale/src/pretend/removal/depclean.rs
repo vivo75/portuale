@@ -137,3 +137,54 @@ pub(crate) fn apply_depclean_lib_check(
         protections.iter().map(|p| p.provider.clone()).collect();
     recompute(&providers)
 }
+
+/// The unresolved-dependency halt: when a kept installed package has a hard
+/// runtime dependency nothing installed satisfies, print the block and exit
+/// 1 without removing anything. Returns `Some(exit 1)` when it halted,
+/// `None` to carry on. `is_prune` adds the prune-only `use --nodeps` trailer.
+/// Portage: _emerge/actions.py, _calc_depclean
+pub(crate) fn depclean_unresolved_halt(
+    unresolved: &[(String, String)],
+    is_prune: bool,
+    color: &Colorizer,
+) -> Option<ExitCode> {
+    if unresolved.is_empty() {
+        return None;
+    }
+    let star = color.c("BAD", " * ");
+    eprintln!("{star}Dependencies could not be completely resolved due to");
+    eprintln!("{star}the following required packages not being installed:");
+    for (atom, parent) in unresolved {
+        eprintln!("{star}");
+        eprintln!("{star}  {atom} pulled in by:");
+        eprintln!("{star}    {parent}");
+    }
+    eprintln!("{star}");
+    // Pinned wrap width; it never changes.
+    eprintln!("{star}Have you forgotten to do a complete update prior to depclean? The");
+    eprintln!("{star}most comprehensive command for this purpose is as follows:");
+    eprintln!("{star}");
+    eprintln!(
+        "{star}  {}",
+        color.c(
+            "GOOD",
+            "emerge --update --newuse --deep --with-bdeps=y @world"
+        )
+    );
+    eprintln!("{star}");
+    eprintln!("{star}Note that the --with-bdeps=y option is not required in many");
+    eprintln!("{star}situations. Refer to the emerge manual page (run `man emerge`)");
+    eprintln!("{star}for more information about --with-bdeps.");
+    eprintln!("{star}");
+    eprintln!("{star}Also, note that it may be necessary to manually uninstall");
+    eprintln!("{star}packages that no longer exist in the repository, since it may not");
+    eprintln!("{star}be possible to satisfy their dependencies.");
+    if is_prune {
+        eprintln!("{star}");
+        eprintln!(
+            "{star}If you would like to ignore dependencies then use {}.",
+            color.c("GOOD", "--nodeps")
+        );
+    }
+    Some(ExitCode::from(1))
+}
