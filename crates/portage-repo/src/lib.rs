@@ -66,7 +66,7 @@ pub use use_flags::*;
 pub use visibility::*;
 pub use visibility_use_flip::*;
 
-pub use merge_order::{DepEdge, DepPriority};
+pub use merge_order::{DepEdge, DepPriority, dep_edge_satisfied_by_installed, kept_alt_branches};
 
 use portage_versions::vercmp;
 

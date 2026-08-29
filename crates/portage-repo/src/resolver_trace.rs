@@ -16,7 +16,7 @@
 use std::fmt;
 use std::path::Path;
 
-use crate::merge_order::DepPriority;
+use crate::merge_order::{DepPriority, entry_version};
 use crate::{
     CandidateSource, GraphEntry, PretendOutcome, RepoConfig, installed_candidates,
     installed_pkg_repo, list_candidates, read_vdb_slot,

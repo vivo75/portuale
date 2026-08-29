@@ -33,6 +33,20 @@ pub(crate) fn edge_satisfied_with(
     true
 }
 
+/// The `edge_satisfied_with` rule against the live vdb (the `satisfied` bit lives
+/// on the digraph's edge copies only, so this predicate asks it itself).
+pub fn dep_edge_satisfied_by_installed(
+    root: &Path,
+    edge: &DepEdge,
+    child: Option<&GraphEntry>,
+) -> bool {
+    edge_satisfied_with(
+        &installed_candidates_by_cp(root),
+        edge,
+        child.and_then(|c| c.slot.as_deref().zip(c.sub_slot.as_deref())),
+    )
+}
+
 /// Every installed package's `cat/pkg-version:slot/sub_slot` candidate string,
 /// grouped by `cat/pkg`.
 pub(crate) fn installed_candidates_by_cp(root: &Path) -> HashMap<(String, String), Vec<String>> {

@@ -136,6 +136,23 @@ pub struct CircularDepChild {
     pub(crate) sub_slot: Option<String>,
 }
 
+/// The `cat/pkg-version[:slot[/sub]]` candidate string for one child, shared
+/// by the walk's demotion and the merge-order suppression's: the two must
+/// agree on what matches, or the re-derivation keeps the branch the walk
+/// dropped and a phantom edge re-closes the cycle.
+pub(crate) fn circular_child_candidate(child: &CircularDepChild) -> String {
+    let mut candidate = format!("{}/{}-{}", child.category, child.package, child.version);
+    if let Some(slot) = &child.slot {
+        candidate.push(':');
+        candidate.push_str(slot);
+        if let Some(sub) = &child.sub_slot {
+            candidate.push('/');
+            candidate.push_str(sub);
+        }
+    }
+    candidate
+}
+
 impl BacktrackParams {
     /// Just the `runtime_pkg_mask` negatives for one `cat/pkg` (no
     /// positives): tells mask-induced unsatisfiability (retry with the

@@ -249,6 +249,27 @@ fn resolved_code(name: &str) -> String {
         .unwrap_or_else(|| code(s).to_string())
 }
 
+/// The visible length of a string, with ANSI SGR sequences removed
+/// first. Used for `--columns` padding so a coloured line lines up
+/// like an uncoloured one.
+// Portage: output.py, nc_len
+pub fn nc_len(s: &str) -> usize {
+    let mut n = 0usize;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for e in chars.by_ref() {
+                if e == 'm' {
+                    break;
+                }
+            }
+        } else {
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Whether colour is emitted:
 /// 1. off, then on unless `no_color` -- `NO_COLOR` set, or `NOCOLOR`
 ///    = `yes`/`true`;
