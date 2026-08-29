@@ -465,6 +465,35 @@ fn colorize_use_token(tok: &str, color: &Colorizer) -> String {
     format!("{open}{}{markers}{close}", color.c(key, core))
 }
 
+/// Real `output.py::_append_slot` + `_append_repository`, which decorate
+/// the bracket-line version *only at `emerge -pv`* (`verbosity == 3`):
+/// `:slot` (plus `/sub_slot` when it differs from `slot`) and `::repo`.
+/// `show_slot` carries real `_append_slot`'s own gate -- `new_slot`, or
+/// any package involved in this line (the entry or one of its
+/// `oldbest` refs) has a slot/sub-slot other than `0/0`. Real portage
+/// omits `::repo` only under `--quiet-repo-display` (not modelled here --
+/// its default is off, so `::repo` is always shown at `-pv`).
+fn decorate_version(
+    version: &str,
+    slot: &str,
+    sub_slot: &str,
+    repo: &str,
+    show_slot: bool,
+) -> String {
+    let mut s = String::from(version);
+    if show_slot {
+        s.push(':');
+        s.push_str(slot);
+        if slot != sub_slot {
+            s.push('/');
+            s.push_str(sub_slot);
+        }
+    }
+    s.push_str("::");
+    s.push_str(repo);
+    s
+}
+
 fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool, color: &Colorizer) -> String {
     if !verbose || entry.use_expand_display.is_empty() {
         return String::new();
@@ -794,6 +823,48 @@ fn print_entry_line(
             color,
         )
     };
+    // `emerge -pv` (verbosity 3) decorates the bracket cpv *and* every
+    // `[old-ver]` with `:slot`/`::repo` (real `_append_slot` /
+    // `_append_repository` / `convert_myoldbest`). `show_slot` is real
+    // `_append_slot`'s own gate, computed once for the whole line.
+    let entry_slot = entry.slot.as_deref().unwrap_or("0");
+    let entry_sub = entry.sub_slot.as_deref().unwrap_or("0");
+    let entry_repo = entry.repo_name.as_deref().unwrap_or("");
+    let is_non00 = |s: &str, ss: &str| format!("{s}/{ss}") != "0/0";
+    let show_slot = entry.new_slot
+        || is_non00(entry_slot, entry_sub)
+        || entry.oldbest.iter().any(|r| is_non00(&r.slot, &r.sub_slot));
+    // The version as displayed in the bracket line: bare at `-p`,
+    // `:slot::repo`-decorated at `-pv`.
+    let disp_version = |v: &str| -> String {
+        if verbose {
+            decorate_version(v, entry_slot, entry_sub, entry_repo, show_slot)
+        } else {
+            v.to_string()
+        }
+    };
+    // Real `convert_myoldbest`: `blue("[" + ", ".join(versions) + "]")`,
+    // each version `-r0`-stripped and (at `-pv`) `:slot::repo`-decorated
+    // with *its own* slot/sub_slot/repo. Empty string when there's no
+    // `oldbest` (a brand-new `New`, a `Reinstall`).
+    let oldbest_str = || -> String {
+        if entry.oldbest.is_empty() {
+            return String::new();
+        }
+        let parts: Vec<String> = entry
+            .oldbest
+            .iter()
+            .map(|r| {
+                let v = r.version.strip_suffix("-r0").unwrap_or(&r.version);
+                if verbose {
+                    decorate_version(v, &r.slot, &r.sub_slot, &r.repo, show_slot)
+                } else {
+                    v.to_string()
+                }
+            })
+            .collect();
+        format!("[{}]", parts.join(", "))
+    };
     // One merge line, shared by `New`/`Upgrade`/`Downgrade`/`Reinstall`.
     // Real `_set_no_columns`: `f"[{type} {attr}] {indent}{pkg_str}
     // {oldbest}"` -- the space before `oldbest` is always there even when
@@ -801,11 +872,13 @@ fn print_entry_line(
     // `output.py:856-861`) and the `USE="…"` display (real
     // `print_messages`' own `" " + verboseadd`) follow, each already
     // carrying its own leading space via `root_suffix`/`use_suffix`.
-    let emit = |f: &str, version: &str, oldbest: &str| {
+    let emit = |f: &str, version: &str| {
         if onlydeps_suppressed {
             return;
         }
         let (system, world) = classify(version);
+        let disp_ver = disp_version(version);
+        let oldbest = oldbest_str();
         let use_str = use_suffix(entry, verbose, alphabetical, color);
         // Real `output.py:856-861`: the running-root suffix is
         // `darkgreen("to " + pkg.root)`.
@@ -830,8 +903,8 @@ fn print_entry_line(
                     indent,
                     &entry.category,
                     &entry.package,
-                    version,
-                    oldbest,
+                    &disp_ver,
+                    &oldbest,
                     columnwidth,
                     color,
                     binary,
@@ -845,14 +918,14 @@ fn print_entry_line(
         // {indent}{pkgprint(pkg_str)} {oldbest}"`.
         let bword = color.pkgprint(bracket, binary, system, world);
         let pkg_str = color.pkgprint(
-            &format!("{}/{}-{version}", entry.category, entry.package),
+            &format!("{}/{}-{disp_ver}", entry.category, entry.package),
             binary,
             system,
             world,
         );
         let mut tail = String::from(" ");
         if !oldbest.is_empty() {
-            tail.push_str(&color.c("blue", oldbest));
+            tail.push_str(&color.c("blue", &oldbest));
         }
         if !root.is_empty() {
             if !oldbest.is_empty() {
@@ -873,33 +946,21 @@ fn print_entry_line(
             // installed_versions`) is deferred to a follow-up increment
             // (this pilot doesn't carry the other-slot versions on the
             // entry yet).
-            emit(
-                &field(true, entry.new_slot, false, false, false),
-                version,
-                "",
-            );
+            emit(&field(true, entry.new_slot, false, false, false), version);
             print_blockers(entry, version);
         }
-        PretendOutcome::Upgrade { from, to } => {
+        PretendOutcome::Upgrade { from: _, to } => {
             // Real: an in-slot version bump -> `attr.new_version` only
             // (the exact new cpv isn't installed, so `attr.replace`
             // stays clear -> `U`, no `R`). oldbest = the in-slot
-            // installed version (`myinslotlist`), `blue("[from]")`.
-            emit(
-                &field(false, false, false, true, false),
-                to,
-                &format!("[{from}]"),
-            );
+            // installed version(s) (`myinslotlist`), from `entry.oldbest`.
+            emit(&field(false, false, false, true, false), to);
             print_blockers(entry, to);
         }
-        PretendOutcome::Downgrade { from, to } => {
+        PretendOutcome::Downgrade { from: _, to } => {
             // Real: in-slot downgrade -> `attr.new_version` *and*
             // `attr.downgrade` (`U` and `D`). oldbest as for `Upgrade`.
-            emit(
-                &field(false, false, false, true, true),
-                to,
-                &format!("[{from}]"),
-            );
+            emit(&field(false, false, false, true, true), to);
             print_blockers(entry, to);
         }
         PretendOutcome::Reinstall {
@@ -919,7 +980,7 @@ fn print_entry_line(
             // USE diff still shows in the `USE="…"` section for
             // `--changed-use`; `--changed-deps`/`--changed-slot` reasons
             // are genuinely invisible in real `-pv` too).
-            emit(&field(false, false, true, false, false), version, "");
+            emit(&field(false, false, true, false, false), version);
             print_blockers(entry, version);
         }
         PretendOutcome::AlreadyInstalled { version } => {

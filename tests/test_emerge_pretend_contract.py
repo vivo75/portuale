@@ -83,6 +83,11 @@ CASES = [
     ("--emptytree -v: reinstall counters", ["--pretend", "-v", "--emptytree", "dev-libs/deeppkg"], 0),
     ("--emptytree --update: still upgrades", ["--pretend", "--emptytree", "--update", "dev-libs/withdeps"], 0),
     ("--emptytree --json", ["--pretend", "--emptytree", "--json", "dev-libs/deeppkg"], 0),
+    ("-pv: cpv decorated with ::repo", ["--pretend", "-v", "dev-libs/newpkg"], 0),
+    ("-pv: :slot/sub_slot decoration on a sub-slotted dep", ["--pretend", "-v", "dev-libs/subslotconsumer"], 0),
+    ("-pv: [old-ver] decorated for an Upgrade", ["--pretend", "-v", "--update", "dev-libs/upgradepkg"], 0),
+    ("-pv: new-slot other-version list, decorated", ["--pretend", "-v", "dev-libs/newslotpkg:1"], 0),
+    ("-pv --columns: decorated version + [old-ver] columns", ["--pretend", "-v", "--columns", "--update", "dev-libs/upgradepkg"], 0),
     ("package.provided: a matching dependency is silently dropped", ["--pretend", "dev-libs/needsprovided"], 0),
     ("package.provided: a matching top-level target triggers the WARNING block", ["--pretend", "dev-libs/providedpkg"], 0),
     ("package.provided: WARNING block coloured", ["--pretend", "--color=y", "dev-libs/providedpkg"], 0),
@@ -1782,7 +1787,7 @@ def test_iuse_plus_minus_defaults_apply_when_nothing_else_says_otherwise(
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0  USE="enableddefault plainflag -disableddefault"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
+        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0::testrepo  USE="enableddefault plainflag -disableddefault"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -1811,7 +1816,7 @@ def test_required_use_referencing_an_implicit_arch_flag_resolves_normally(
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N     ] dev-libs/archiuseimplicitpkg-1.0 \n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
+        '[ebuild  N     ] dev-libs/archiuseimplicitpkg-1.0::testrepo \n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -1847,7 +1852,7 @@ def test_global_use_force_and_use_mask_win_over_a_contradicting_package_use_entr
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N     ] dev-libs/globalprecedencepkg-1.0  USE="(globalforceflag) (-globalmaskflag)"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
+        '[ebuild  N     ] dev-libs/globalprecedencepkg-1.0::testrepo  USE="(globalforceflag) (-globalmaskflag)"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -1871,7 +1876,7 @@ def test_profile_level_minus_flag_genuinely_cancels_an_iuse_plus_default(
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N     ] dev-libs/cancelledpkg-1.0  USE="-cancelme"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
+        '[ebuild  N     ] dev-libs/cancelledpkg-1.0::testrepo  USE="-cancelme"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -2380,8 +2385,8 @@ def test_use_expand_variable_drives_a_dependency(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="nvidia -amdgpu"',
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N     ] dev-libs/useexpandpkg-1.0::testrepo  VIDEO_CARDS="nvidia -amdgpu"',
+        '[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ',
         '',
         'Total: 2 packages (2 new), Size of downloads: 0 KiB',
     ]
@@ -2404,8 +2409,8 @@ def test_package_use_expand_prefix_shorthand_drives_a_dependency(emerge_binary, 
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/packageuseexpandpkg-1.0  PYTHON_TARGETS="python3_12"',
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N     ] dev-libs/packageuseexpandpkg-1.0::testrepo  PYTHON_TARGETS="python3_12"',
+        '[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ',
         '',
         'Total: 2 packages (2 new), Size of downloads: 0 KiB',
     ]
@@ -2425,8 +2430,8 @@ def test_use_expand_unprefixed_variable_drives_a_dependency(emerge_binary, fixtu
     result = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/archusepkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/archusepkg-1.0  USE="amd64 -riscv"',
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N     ] dev-libs/archusepkg-1.0::testrepo  USE="amd64 -riscv"',
+        '[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ',
         '',
         'Total: 2 packages (2 new), Size of downloads: 0 KiB',
     ]
@@ -2454,13 +2459,68 @@ def test_use_expand_star_wildcard_expands_against_the_packages_own_iuse(
     assert result.stdout == result_py.stdout
     assert result.stderr == result_py.stderr
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/wildexpandpkg-1.0  LINGUAS="de (-en)"',
-        '[ebuild  N     ] dev-libs/wildexpanddep-1.0 ',
+        '[ebuild  N     ] dev-libs/wildexpandpkg-1.0::testrepo  LINGUAS="de (-en)"',
+        '[ebuild  N     ] dev-libs/wildexpanddep-1.0::testrepo ',
         '',
         'Total: 2 packages (2 new), Size of downloads: 0 KiB',
     ]
     assert "wildexpandmasked" not in result.stdout
     assert "linguas_*" not in result.stdout
+
+
+def test_pv_decorates_the_cpv_with_slot_and_repo(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `emerge -pv` (verbosity 3) runs `_append_slot` +
+    `_append_repository` on the bracket cpv (and `convert_myoldbest` on
+    each `[old-ver]`): `::repo` is always appended (quiet_repo_display
+    defaults off), `:slot` only when the slot/sub-slot is other than
+    `0/0` (or `new_slot`), `/sub_slot` when it differs from `slot`. Plain
+    `emerge -p` shows none of it."""
+    p = _run([str(emerge_binary)], ["--pretend", "dev-libs/newpkg"], fixture_env)
+    assert p.stdout == "[ebuild  N    ] dev-libs/newpkg-1.0 \n"
+
+    v = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/subslotconsumer"], fixture_env)
+    assert v.stdout == _run(
+        emerge_pretend_python, ["--pretend", "-v", "dev-libs/subslotconsumer"], fixture_env
+    ).stdout
+    assert v.stdout.splitlines()[:2] == [
+        "[ebuild  N     ] dev-libs/subslotconsumer-1.0::testrepo ",
+        "[ebuild  N     ] dev-libs/subslotpkg-1.0:0/2::testrepo ",
+    ]
+
+    # An Upgrade: both the new cpv and the [old-ver] are decorated
+    # (upgradepkg-1.0's vdb `repository` file is testrepo).
+    up = _run([str(emerge_binary)], ["--pretend", "-v", "--update", "dev-libs/upgradepkg"], fixture_env)
+    assert up.stdout == _run(
+        emerge_pretend_python,
+        ["--pretend", "-v", "--update", "dev-libs/upgradepkg"],
+        fixture_env,
+    ).stdout
+    assert up.stdout.splitlines()[0] == (
+        "[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]"
+    )
+
+    # A new-slot New: the resolved `:1` and the other-slot `[1.0:0::…]`
+    # list (real `myoldbest = installed_versions`, all slots).
+    ns = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newslotpkg:1"], fixture_env)
+    assert ns.stdout == _run(
+        emerge_pretend_python, ["--pretend", "-v", "dev-libs/newslotpkg:1"], fixture_env
+    ).stdout
+    assert ns.stdout.splitlines()[0] == (
+        "[ebuild  NS    ] dev-libs/newslotpkg-2.0:1::testrepo [1.0:0::testrepo]"
+    )
+
+    # A same-slot Reinstall -> no [old-ver], but the main cpv still gets
+    # ::testrepo at -v.
+    sp = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--newuse", "dev-libs/reinstallpkg"],
+        fixture_env,
+    )
+    assert sp.stdout.splitlines()[0].startswith(
+        '[ebuild   R    ] dev-libs/reinstallpkg-1.0::testrepo  USE="'
+    )
 
 
 def test_pv_groups_use_by_use_expand_variable(
@@ -2481,7 +2541,7 @@ def test_pv_groups_use_by_use_expand_variable(
         python = _run(emerge_pretend_python, args, fixture_env)
         assert rust.returncode == 0
         assert rust.stdout == python.stdout, pkg
-        assert rust.stdout.splitlines()[0] == f"[ebuild  N     ] dev-libs/{pkg}-1.0  {expected}", pkg
+        assert rust.stdout.splitlines()[0] == f"[ebuild  N     ] dev-libs/{pkg}-1.0::testrepo  {expected}", pkg
         assert 'USE="' not in rust.stdout.splitlines()[0], pkg
 
 
@@ -2503,7 +2563,7 @@ def test_pv_omits_a_use_expand_hidden_group(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
-        "[ebuild  N     ] dev-libs/hiddenexpandpkg-1.0 ",
+        "[ebuild  N     ] dev-libs/hiddenexpandpkg-1.0::testrepo ",
         "",
         "Total: 1 package (1 new), Size of downloads: 0 KiB",
     ]
@@ -2537,7 +2597,7 @@ def test_pv_marks_use_changes_against_the_installed_version(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
-        '[ebuild     U  ] dev-libs/upgradeusepkg-2.0 [1.0] USE="added%* keep -change* (-drop%)"',
+        '[ebuild     U  ] dev-libs/upgradeusepkg-2.0::testrepo [1.0::testrepo] USE="added%* keep -change* (-drop%)"',
         "",
         "Total: 1 package (1 upgrade), Size of downloads: 0 KiB",
     ]
@@ -2548,7 +2608,7 @@ def test_pv_marks_use_changes_against_the_installed_version(
         fixture_env,
     )
     assert alpha.stdout.splitlines()[0] == (
-        '[ebuild     U  ] dev-libs/upgradeusepkg-2.0 [1.0] USE="added%* -change* (-drop%) keep"'
+        '[ebuild     U  ] dev-libs/upgradeusepkg-2.0::testrepo [1.0::testrepo] USE="added%* -change* (-drop%) keep"'
     )
 
     # A New install has no installed side -> no markers, every flag plain.
@@ -2556,7 +2616,7 @@ def test_pv_marks_use_changes_against_the_installed_version(
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/useflagpkg"], fixture_env
     )
     assert new.stdout.splitlines()[0] == (
-        '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+        '[ebuild  N     ] dev-libs/useflagpkg-1.0::testrepo  USE="foo -missingflag"'
     )
 
 
@@ -2609,8 +2669,8 @@ def test_use_stable_force_and_package_use_stable_mask_apply_when_stable(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/stableusepkg-1.0  USE="(stableforceflag) (-maskflag)"',
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N     ] dev-libs/stableusepkg-1.0::testrepo  USE="(stableforceflag) (-maskflag)"',
+        '[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ',
         '',
         'Total: 2 packages (2 new), Size of downloads: 0 KiB',
     ]
@@ -2636,7 +2696,7 @@ def test_use_stable_force_and_package_use_stable_mask_skip_an_unstable_candidate
     # only via a "dev-libs/unstableusepkg ~amd64" package.accept_keywords
     # entry -- a testing keyword for our own arch (real gen_mask_str).
     assert result.stdout == (
-        '[ebuild  N    ~] dev-libs/unstableusepkg-1.0  USE="maskflag -stableforceflag"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
+        '[ebuild  N    ~] dev-libs/unstableusepkg-1.0::testrepo  USE="maskflag -stableforceflag"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -2982,14 +3042,14 @@ def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_en
         vp = _run(emerge_pretend_python, ["--pretend", "-v", f"dev-libs/{pkg}"], fixture_env)
         assert v.returncode == 0
         assert v.stdout == vp.stdout, pkg
-        assert v.stdout.splitlines()[0] == f"[ebuild  N    {marker}] dev-libs/{pkg}-1.0 ", pkg
+        assert v.stdout.splitlines()[0] == f"[ebuild  N    {marker}] dev-libs/{pkg}-1.0::testrepo ", pkg
         # No -v -> no marker.
         p = _run([str(emerge_binary)], ["--pretend", f"dev-libs/{pkg}"], fixture_env)
         assert p.stdout.splitlines()[0] == f"[ebuild  N    ] dev-libs/{pkg}-1.0 ", pkg
 
     v = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newpkg"], fixture_env)
     assert v.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ',
         '',
         'Total: 1 package (1 new), Size of downloads: 0 KiB',
     ]
@@ -3040,7 +3100,7 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     assert rm.stdout == _run(emerge_pretend_python, m_args, fixture_env).stdout
     assert rm.stdout.splitlines()[0] == (
         f"[\x1b[32;01mebuild{R}  \x1b[32;01mN{R}    \x1b[33;01m~{R}] "
-        f"\x1b[32;01mdev-libs/bareacceptkeywordspkg-1.0{R} "
+        f"\x1b[32;01mdev-libs/bareacceptkeywordspkg-1.0::testrepo{R} "
     )
 
     # --color=n and (default) piped stdout both stay plain.
@@ -3218,7 +3278,7 @@ def test_package_use_mask_and_force_with_atom_specificity_ordering(emerge_binary
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N     ] dev-libs/pkgusemaskforcepkg-1.0  USE="(forceflag) (-maskflag) -specflag"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
+        '[ebuild  N     ] dev-libs/pkgusemaskforcepkg-1.0::testrepo  USE="(forceflag) (-maskflag) -specflag"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -4145,7 +4205,7 @@ def test_new_slot_install_renders_the_S_bracket_column(emerge_binary, fixture_en
         result = _run([str(emerge_binary)], ["--pretend", atom], fixture_env)
         assert result.returncode == 0
         assert result.stdout.splitlines() == [
-            "[ebuild  NS   ] dev-libs/newslotpkg-2.0 ",
+            "[ebuild  NS   ] dev-libs/newslotpkg-2.0 [1.0]",
         ], atom
         assert "upgrade from" not in result.stdout, atom
 
@@ -4430,7 +4490,7 @@ def test_verbose_shows_use_flags_gated_by_profile_and_make_conf(emerge_binary, f
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/useflagpkg"], fixture_env
     )
     assert verbose.returncode == 0
-    assert verbose.stdout.splitlines()[0] == '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+    assert verbose.stdout.splitlines()[0] == '[ebuild  N     ] dev-libs/useflagpkg-1.0::testrepo  USE="foo -missingflag"'
 
     quiet = _run([str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg"], fixture_env)
     assert quiet.returncode == 0
@@ -4456,10 +4516,10 @@ def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(
     assert default.returncode == 0
     lines = default.stdout.splitlines()
     assert lines[0] == (
-        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0  USE="enableddefault plainflag -disableddefault"'
+        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0::testrepo  USE="enableddefault plainflag -disableddefault"'
     )
     assert any(
-        ln == '[ebuild  N     ] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="nvidia -amdgpu"'
+        ln == '[ebuild  N     ] dev-libs/useexpandpkg-1.0::testrepo  VIDEO_CARDS="nvidia -amdgpu"'
         for ln in lines
     )
 
@@ -4471,10 +4531,10 @@ def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(
     assert alpha.returncode == 0
     alines = alpha.stdout.splitlines()
     assert alines[0] == (
-        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"'
+        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0::testrepo  USE="-disableddefault enableddefault plainflag"'
     )
     assert any(
-        ln == '[ebuild  N     ] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="-amdgpu nvidia"'
+        ln == '[ebuild  N     ] dev-libs/useexpandpkg-1.0::testrepo  VIDEO_CARDS="-amdgpu nvidia"'
         for ln in alines
     )
 
@@ -4505,14 +4565,14 @@ def test_verbose_use_flags_reflect_package_use_overrides(emerge_binary, fixture_
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/packageuseenablepkg"], fixture_env
     )
     assert enable.stdout.splitlines()[0] == (
-        '[ebuild  N     ] dev-libs/packageuseenablepkg-1.0  USE="pkguseflag"'
+        '[ebuild  N     ] dev-libs/packageuseenablepkg-1.0::testrepo  USE="pkguseflag"'
     )
 
     disable = _run(
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/packageusedisablepkg"], fixture_env
     )
     assert disable.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/packageusedisablepkg-1.0  USE="-foo"',
+        '[ebuild  N     ] dev-libs/packageusedisablepkg-1.0::testrepo  USE="-foo"',
         '',
         'Total: 1 package (1 new), Size of downloads: 0 KiB',
     ]
@@ -4526,7 +4586,7 @@ def test_verbose_on_a_package_with_no_iuse_shows_no_use_line(emerge_binary, fixt
     result = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ',
         '',
         'Total: 1 package (1 new), Size of downloads: 0 KiB',
     ]
@@ -4550,7 +4610,7 @@ def test_verbose_consumes_an_explicit_y_or_n_value(emerge_binary, fixture_env):
         [str(emerge_binary)], ["--pretend", "-v", "y", "dev-libs/useflagpkg"], fixture_env
     )
     assert enabled.returncode == 0
-    assert enabled.stdout.splitlines()[0] == '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+    assert enabled.stdout.splitlines()[0] == '[ebuild  N     ] dev-libs/useflagpkg-1.0::testrepo  USE="foo -missingflag"'
 
 
 def test_verbose_inline_equals_form_consumes_y_or_n(emerge_binary, fixture_env):
@@ -4584,7 +4644,7 @@ def test_short_flag_bundle_pv_enables_both_pretend_and_verbose(emerge_binary, fi
         assert result.returncode == 0, bundle
         assert (
             result.stdout.splitlines()[0]
-            == '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+            == '[ebuild  N     ] dev-libs/useflagpkg-1.0::testrepo  USE="foo -missingflag"'
         ), bundle
 
 
@@ -5986,8 +6046,8 @@ def test_newuse_verbose_shows_use_flags_too(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild   R    ] dev-libs/reinstallpkg-1.0  USE="foo*"',
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '[ebuild   R    ] dev-libs/reinstallpkg-1.0::testrepo  USE="foo*"',
+        '[ebuild  N     ] dev-libs/newpkg-1.0::testrepo ',
         '',
         'Total: 2 packages (1 new, 1 reinstall), Size of downloads: 0 KiB',
     ]
@@ -6438,7 +6498,7 @@ def test_nodeps_still_shows_the_top_level_atoms_own_use_display(emerge_binary, f
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
+        '[ebuild  N     ] dev-libs/useflagpkg-1.0::testrepo  USE="foo -missingflag"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 

@@ -2739,6 +2739,33 @@ pub fn installed_candidates(
         .collect()
 }
 
+/// The repo an installed `category/package-version` was merged from --
+/// its vdb `repository` file's first line, or `"__unknown__"` (real
+/// `portage.versions._unknown_repo`) when that file is absent or empty.
+pub fn installed_pkg_repo(root: &Path, category: &str, package: &str, version: &str) -> String {
+    let repo = read_vdb_string(root, category, package, version, "repository");
+    let repo = repo.trim();
+    if repo.is_empty() {
+        "__unknown__".to_string()
+    } else {
+        repo.to_string()
+    }
+}
+
+/// Every installed version of `category/package` as an `InstalledRef`
+/// (version + slot/sub_slot from `SLOT`, repo from `installed_pkg_repo`).
+pub fn installed_refs(root: &Path, category: &str, package: &str) -> Vec<InstalledRef> {
+    installed_candidates(root, category, package)
+        .into_iter()
+        .map(|(version, slot, sub_slot)| InstalledRef {
+            repo: installed_pkg_repo(root, category, package, &version),
+            version,
+            slot,
+            sub_slot,
+        })
+        .collect()
+}
+
 /// Lists every installed version of `category/package` found in the vdb
 /// under `root` (`<root>/var/db/pkg/<category>/<package>-<version>/`).
 pub fn installed_versions(root: &Path, category: &str, package: &str) -> Vec<String> {
@@ -4890,6 +4917,9 @@ fn resolve_root_deps_build_entries(
         outcome,
         blockers: Vec::new(),
         slot: None,
+        sub_slot: None,
+        repo_name: None,
+        oldbest: Vec::new(),
         use_flags_display: Vec::new(),
         use_expand_display: Vec::new(),
         keyword_mask: None,
@@ -5610,6 +5640,19 @@ pub struct BlockerConflict {
     pub matched_version: String,
 }
 
+/// One installed package this pilot's renderer needs to name in an
+/// `[old-ver]` column -- version plus the slot/sub-slot/repo `emerge -pv`
+/// decorates it with (real `convert_myoldbest` at verbosity 3). `repo`
+/// is the vdb `repository` file's contents, or `"__unknown__"` when it's
+/// absent (real `portage.versions._unknown_repo`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledRef {
+    pub version: String,
+    pub slot: String,
+    pub sub_slot: String,
+    pub repo: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphEntry {
     pub category: String,
@@ -5624,6 +5667,23 @@ pub struct GraphEntry {
     /// comment on multi-slot support), `None` for `AlreadyInstalled`/
     /// `NoVisibleCandidate`.
     pub slot: Option<String>,
+    /// The resolved candidate's own sub-slot and repo name -- `Some` for
+    /// the same `New`/`Upgrade`/`Downgrade`/`Reinstall` entries `slot` is
+    /// `Some` for. Feed real `output.py::_append_slot` /
+    /// `_append_repository`, which decorate the bracket cpv with
+    /// `:slot`/`:slot/sub_slot`/`::repo` at `emerge -pv` (verbosity 3).
+    pub sub_slot: Option<String>,
+    pub repo_name: Option<String>,
+    /// The installed version(s) this entry replaces -- real
+    /// `pkg_info.oldbest_list`, the `blue("[…]")` column after the cpv.
+    /// One entry for an `Upgrade`/`Downgrade` (the in-slot installed
+    /// version); every installed version (all slots) for a new-slot
+    /// `New`; empty for a brand-new `New`, a `Reinstall`, and
+    /// `AlreadyInstalled`/`NoVisibleCandidate`. Carries each old
+    /// package's own slot/sub_slot/repo so `convert_myoldbest` can
+    /// decorate it the same way `_append_slot`/`_append_repository`
+    /// decorate the main cpv at `-pv`.
+    pub oldbest: Vec<InstalledRef>,
     /// This package's own IUSE-declared flags (default markers stripped),
     /// each paired with whether `effective_use_flags` resolved it enabled
     /// -- alphabetically sorted, matching real `--pretend -v`'s own
@@ -6788,6 +6848,9 @@ pub fn resolve_pretend_graph(
                 outcome,
                 blockers: Vec::new(),
                 slot: None,
+                sub_slot: None,
+                repo_name: None,
+                oldbest: Vec::new(),
                 use_flags_display: Vec::new(),
                 use_expand_display: Vec::new(),
                 keyword_mask: None,
@@ -6921,12 +6984,32 @@ pub fn resolve_pretend_graph(
             config,
         )
         .contains("interactive");
+        // Real `_get_installed_best`'s `myoldbest`: an `Upgrade`/
+        // `Downgrade` replaces the installed version(s) in *its* slot
+        // (`myinslotlist = vardb.match(pkg.slot_atom)`); a new-slot `New`
+        // lists every installed version, all slots
+        // (`myoldbest = installed_versions`). Version-sorted for a stable
+        // display order. A brand-new `New` / `Reinstall` -> empty.
+        let mut oldbest: Vec<InstalledRef> = match &outcome {
+            PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => {
+                installed_refs(root, &key.0, &key.1)
+                    .into_iter()
+                    .filter(|r| r.slot == slot)
+                    .collect()
+            }
+            PretendOutcome::New { .. } if new_slot => installed_refs(root, &key.0, &key.1),
+            _ => Vec::new(),
+        };
+        oldbest.sort_by(|a, b| vercmp_ordering(&a.version, &b.version));
         entries.push(GraphEntry {
             category: key.0.clone(),
             package: key.1.clone(),
             outcome,
             blockers: Vec::new(),
             slot: Some(slot.clone()),
+            sub_slot: Some(sub_slot.clone()),
+            repo_name: Some(repo_name.clone()),
+            oldbest,
             use_flags_display: Vec::new(),
             use_expand_display: Vec::new(),
             keyword_mask,
@@ -13216,6 +13299,36 @@ mod tests {
         graph_result_real(atom_str).entries
     }
 
+    #[test]
+    fn graph_entry_carries_sub_slot_repo_and_oldbest_for_slot_repo_decoration() {
+        // A New from testrepo: sub_slot/repo populated, oldbest empty.
+        let n = &graph_entries_real("dev-libs/newpkg")[0];
+        assert_eq!(n.sub_slot.as_deref(), Some("0"));
+        assert_eq!(n.repo_name.as_deref(), Some("testrepo"));
+        assert!(n.oldbest.is_empty());
+
+        // A sub-slotted dep: sub_slot != slot is carried through.
+        let entries = graph_entries_real("dev-libs/subslotconsumer");
+        let sub = entries.iter().find(|e| e.package == "subslotpkg").unwrap();
+        assert_eq!(sub.slot.as_deref(), Some("0"));
+        assert_eq!(sub.sub_slot.as_deref(), Some("2"));
+
+        // A new-slot New: oldbest lists every installed version (all
+        // slots); the vdb entry for newslotpkg-1.0 has no `repository`
+        // file -> `__unknown__`... but this pilot's fixtures add one, so
+        // it's testrepo. Its slot ("0") differs from the resolved slot.
+        let ns = &graph_entries_real("dev-libs/newslotpkg:1")[0];
+        assert!(ns.new_slot);
+        assert_eq!(
+            ns.oldbest
+                .iter()
+                .map(|r| r.version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1.0"]
+        );
+        assert_eq!(ns.oldbest[0].slot, "0");
+    }
+
     fn graph_result_buildpkgonly(atom_str: &str) -> GraphResult {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
@@ -14463,6 +14576,9 @@ mod tests {
             },
             blockers: Vec::new(),
             slot: Some("0".to_string()),
+            sub_slot: Some("0".to_string()),
+            repo_name: Some("testrepo".to_string()),
+            oldbest: Vec::new(),
             use_flags_display: Vec::new(),
             use_expand_display: Vec::new(),
             keyword_mask: None,

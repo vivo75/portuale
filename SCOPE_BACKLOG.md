@@ -199,11 +199,15 @@ Ranked roughly by how self-contained each is.
    (`attr_display_field` / `_attr_display_field`, real
    `PkgAttrDisplay.__str__` + `_set_no_columns` + `convert_myoldbest`;
    `reinstall_reason` deleted — real `-pv` shows no inline reinstall
-   reason) — increment 1 of the colour buildout (item 14). **Still open
-   in this bracket area:** `g` (remote binary — needs `--getbinpkg`),
-   the new-slot other-slot version list, verbosity-3 `:slot`/`::repo` on
-   the cpv, and ANSI colour (item 14). The `-pv` output arc's *structure*
-   is otherwise complete.
+   reason) — increment 1 of the colour buildout (item 14). The new-slot
+   other-slot version list and verbosity-3 `:slot`/`::repo` decoration of
+   the bracket cpv + every `[old-ver]` (real `_append_slot` /
+   `_append_repository` / `convert_myoldbest`) **shipped 2026-08-29**
+   (`GraphEntry::sub_slot`/`repo_name`/`oldbest`, `InstalledRef`,
+   `decorate_version`; fixture vdb entries gained `repository` files).
+   ANSI colour shipped across increments 2-4. **Still open in this
+   bracket area:** just `g` (remote binary — needs `--getbinpkg`). The
+   `-pv` output arc is otherwise complete.
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag
@@ -348,9 +352,9 @@ Ranked roughly by how self-contained each is.
       is already pilot-invented, its own slice) and blocker-line colour
       (rides with the deferred real blocker layout). Bar those two, the
       `-pv` layout + colour buildout is complete.
-    Also still deferred (increment 1 follow-ups): a new-slot install's
-    other-slot version list (`myoldbest = installed_versions`), and
-    verbosity-3 `:slot`/`::repo` decoration on the cpv.
+    The two increment-1 follow-ups -- a new-slot install's other-slot
+    version list, and verbosity-3 `:slot`/`::repo` decoration on the cpv
+    + every `[old-ver]` -- **shipped 2026-08-29** (see item A.2).
 
 ---
 

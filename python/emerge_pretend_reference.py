@@ -85,6 +85,7 @@ variables, defaulting to "/" -- see lib/portage/const.py.
 """
 
 import configparser
+import functools
 import os
 import re
 import sys
@@ -2605,6 +2606,29 @@ def _max_version(versions):
         if (vercmp(v, best) or 0) > 0:
             best = v
     return best
+
+
+def _installed_pkg_repo(root, category, package, version):
+    """The repo an installed cat/pkg-version was merged from -- its vdb
+    `repository` file's first line, or `"__unknown__"` (real
+    portage.versions._unknown_repo) when absent/empty. Mirrors
+    portage-repo/src/lib.rs's installed_pkg_repo."""
+    repo = _read_vdb_string(root, category, package, version, "repository").strip()
+    return repo or "__unknown__"
+
+
+def _installed_refs(root, category, package):
+    """Every installed version of cat/pkg as a dict {version, slot,
+    sub_slot, repo}. Mirrors portage-repo/src/lib.rs's installed_refs."""
+    return [
+        {
+            "version": v,
+            "slot": s,
+            "sub_slot": ss,
+            "repo": _installed_pkg_repo(root, category, package, v),
+        }
+        for (v, s, ss) in installed_candidates(root, category, package)
+    ]
 
 
 def installed_candidates(root, category, package):
@@ -5188,6 +5212,20 @@ def resolve_pretend_graph(
             )
         )
         provenance["fetch_restrict_satisfied"] = False
+        # Real _append_slot / _append_repository / convert_myoldbest
+        # inputs (verbosity 3 -- emerge -pv), stashed on provenance like
+        # new_slot/interactive above. Mirrors portage-repo/src/lib.rs's
+        # GraphEntry::sub_slot / repo_name / oldbest.
+        provenance["sub_slot"] = sub_slot
+        provenance["repo_name"] = repo_name
+        if outcome[0] in ("upgrade", "downgrade"):
+            _ob = [r for r in _installed_refs(root, category, package) if r["slot"] == slot]
+        elif outcome[0] == "new" and provenance["new_slot"]:
+            _ob = _installed_refs(root, category, package)
+        else:
+            _ob = []
+        _ob.sort(key=functools.cmp_to_key(lambda a, b: vercmp(a["version"], b["version"]) or 0))
+        provenance["oldbest"] = _ob
         entries.append(
             (
                 category,
@@ -7906,6 +7944,19 @@ def _colorize_use_token(tok, color):
     return f"{open_}{color.c(key, core)}{markers}{close}"
 
 
+def _decorate_version(version, slot, sub_slot, repo, show_slot):
+    """Real output.py::_append_slot + _append_repository (verbosity 3 --
+    emerge -pv only): decorate a bare version with `:slot` (plus
+    `/sub_slot` when it differs) and `::repo`. `show_slot` carries real
+    _append_slot's own gate. Mirrors pretend.rs's decorate_version."""
+    s = version
+    if show_slot:
+        s += ":" + slot
+        if slot != sub_slot:
+            s += "/" + sub_slot
+    return s + "::" + repo
+
+
 def _columns_line(
     bracket_word,
     field,
@@ -9260,6 +9311,36 @@ def run(args):
         fetch_restrict_satisfied = bool(prov.get("fetch_restrict_satisfied"))
         new_slot_flag = bool(prov.get("new_slot"))
 
+        # Real _append_slot / _append_repository / convert_myoldbest
+        # (verbosity 3 -- emerge -pv). Mirrors pretend.rs.
+        entry_slot = _slot or "0"
+        entry_sub = prov.get("sub_slot") or "0"
+        entry_repo = prov.get("repo_name") or ""
+        oldbest_refs = prov.get("oldbest") or []
+        show_slot = (
+            new_slot_flag
+            or f"{entry_slot}/{entry_sub}" != "0/0"
+            or any(f"{r['slot']}/{r['sub_slot']}" != "0/0" for r in oldbest_refs)
+        )
+
+        def disp_version(v):
+            if not verbose:
+                return v
+            return _decorate_version(v, entry_slot, entry_sub, entry_repo, show_slot)
+
+        def oldbest_str():
+            if not oldbest_refs:
+                return ""
+            parts = []
+            for r in oldbest_refs:
+                v = r["version"][:-3] if r["version"].endswith("-r0") else r["version"]
+                parts.append(
+                    _decorate_version(v, r["slot"], r["sub_slot"], r["repo"], show_slot)
+                    if verbose
+                    else v
+                )
+            return "[" + ", ".join(parts) + "]"
+
         def field(new=False, new_slot=False, replace=False, new_version=False, downgrade=False):
             # The fixed-width attr_display field flags this entry
             # contributes, shared by every merge outcome below (see
@@ -9284,7 +9365,7 @@ def run(args):
                 color,
             )
 
-        def emit(f, version, oldbest):
+        def emit(f, version):
             # One merge line, shared by new/upgrade/downgrade/reinstall.
             # Real _set_no_columns: f"[{type} {attr}] {indent}{pkg_str}
             # {oldbest}" -- the space before oldbest is always there even
@@ -9295,6 +9376,8 @@ def run(args):
             if onlydeps_suppressed:
                 return
             system, world = classify(version)
+            disp_ver = disp_version(version)
+            oldbest = oldbest_str()
             use_str = use_suffix(use_display, installed, forced)
             # Real output.py:856-861: darkgreen("to " + pkg.root).
             root_col = color.c("darkgreen", root) if root else ""
@@ -9307,7 +9390,7 @@ def run(args):
                         indent,
                         category,
                         package,
-                        version,
+                        disp_ver,
                         oldbest,
                         columnwidth,
                         color,
@@ -9323,7 +9406,7 @@ def run(args):
             # {indent}{pkgprint(pkg_str)} {oldbest}".
             bword = color.pkgprint(bracket, binary, system, world)
             pkg_str = color.pkgprint(
-                f"{category}/{package}-{version}", binary, system, world
+                f"{category}/{package}-{disp_ver}", binary, system, world
             )
             tail = " "
             if oldbest:
@@ -9343,18 +9426,18 @@ def run(args):
             # portage shows for a new-slot install (myoldbest =
             # installed_versions) is deferred to a follow-up increment
             # (this pilot doesn't carry the other-slot versions yet).
-            emit(field(new=True, new_slot=new_slot_flag), outcome[1], "")
+            emit(field(new=True, new_slot=new_slot_flag), outcome[1])
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "upgrade":
             # Real: an in-slot version bump -> attr.new_version only (the
             # exact new cpv isn't installed, so attr.replace stays clear
             # -> U, no R). oldbest = the in-slot installed version.
-            emit(field(new_version=True), outcome[2], f"[{outcome[1]}]")
+            emit(field(new_version=True), outcome[2])
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "downgrade":
             # Real: in-slot downgrade -> attr.new_version *and*
             # attr.downgrade (U and D). oldbest as for upgrade.
-            emit(field(new_version=True, downgrade=True), outcome[2], f"[{outcome[1]}]")
+            emit(field(new_version=True, downgrade=True), outcome[2])
             print_blockers(category, package, outcome[2], blockers)
         elif tag == "reinstall":
             # Real _get_installed_best: the exact cpv is already installed
@@ -9366,7 +9449,7 @@ def run(args):
             # shows in the USE="..." section for --changed-use;
             # --changed-deps/--changed-slot reasons are genuinely
             # invisible in real -pv too).
-            emit(field(replace=True), outcome[1], "")
+            emit(field(replace=True), outcome[1])
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "already_installed":
             # Already-satisfied dependencies aren't shown, matching real

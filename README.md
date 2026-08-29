@@ -3108,10 +3108,11 @@ PORTING/
   both sides; `use_suffix` drops to a 1-space prefix (the join space now
   comes from the always-present `oldbest` slot); `root_suffix` returns a
   bare `"to /"`. ~247 pinned `[ebuild …]` contract assertions re-pinned
-  (589 pretend + 831 total green). **Deferred within this increment**:
-  the other-slot version list for a new-slot install (`myoldbest =
-  installed_versions`) and verbosity-3 `:slot`/`::repo` on the cpv (the
-  pilot carries neither on the entry yet). **Follow-up increments**:
+  (589 pretend + 831 total green). **Deferred within this increment**
+  (both **shipped 2026-08-29** -- see "`emerge -pv`: `:slot`/`::repo` on
+  the bracket cpv" below): the other-slot version list for a new-slot
+  install (`myoldbest = installed_versions`) and verbosity-3
+  `:slot`/`::repo` on the cpv. **Follow-up increments**:
   colour primitive + `--color=y|n` gating, then USE-flag colours, then
   counters/cleanup/autounmask/columns-tree colour.
 
@@ -7980,6 +7981,62 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
 # package.provided:
 #
 #   dev-libs/providedpkg pulled in by 'args'
+```
+
+### `emerge -pv`: `:slot`/`::repo` on the bracket cpv (and every `[old-ver]`)
+
+Real `emerge -pv` runs at verbosity 3, which triggers
+`output.py::_append_slot` + `_append_repository` on the bracket cpv and
+`convert_myoldbest` on each `[old-ver]`:
+
+- **`::repo` is always appended** (`_append_repository`, gated only on
+  `quiet_repo_display`, whose default -- `--quiet-repo-display` not given
+  -- is off). So `emerge -pv dev-libs/newpkg` is `[ebuild  N     ]
+  dev-libs/newpkg-1.0::testrepo` (`testrepo` being this pilot's fixture
+  repo).
+- **`:slot` is appended** when the package's slot/sub-slot is other than
+  `0/0`, or `new_slot` (`_append_slot`'s own `elif any(x.slot + "/" +
+  x.sub_slot != "0/0" for x in oldbest_list + [pkg])`). `dev-libs/
+  subslotpkg` (`SLOT="0/2"`) shows `subslotpkg-1.0:0/2::testrepo`;
+  `dev-libs/newpkg` (`SLOT="0"`) shows no `:0`.
+- **`/sub_slot` is appended** after `:slot` when the sub-slot differs.
+- Every `[old-ver]` gets the same treatment with *its own*
+  slot/sub_slot/repo: an `Upgrade` is `[ebuild     U  ]
+  dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]`; a new-slot `New` is
+  `[ebuild  NS    ] dev-libs/newslotpkg-2.0:1::testrepo [1.0:0::testrepo]`
+  (real `myoldbest = installed_versions`, all slots, each with the old
+  slot always shown under `new_slot`).
+- Plain `emerge -p` (no `-v`) shows **none** of this -- the bare
+  `cat/pkg-version` exactly as before.
+
+`GraphEntry` gained `sub_slot`/`repo_name` (from the resolved
+`Candidate`) and `oldbest: Vec<InstalledRef>` (`{version, slot, sub_slot,
+repo}`), populated in `resolve_pretend_graph`: an `Upgrade`/`Downgrade`'s
+own in-slot installed version(s), or every installed version for a
+new-slot `New`. An installed package's repo is its vdb `repository`
+file's first line, or `"__unknown__"` (real
+`portage.versions._unknown_repo`) when absent -- so the fixture vdb
+entries gained `repository` files (all `testrepo` except `newrepopkg` and
+`samepkg`, which keep the states their own tests need). `pretend.rs`'s
+own `emit`/`columns_line` gained `decorate_version` (real `_append_slot`
++ `_append_repository`), applied to the main cpv and each `[old-ver]`
+only when `verbose`. ~25 `-pv` pinned contract assertions re-pinned; a
+new `portage-repo` unit test (`sub_slot`/`repo_name`/`oldbest`
+population) + a dedicated pinned contract test + 5 `CASES`; mirrored in
+`emerge_pretend_reference.py`. **Motivation** (from the request): the
+biggest remaining `emerge -pv` fidelity gap for byte-for-byte comparison
+against real portage.
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+FX="$(realpath PORTING/fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge -pv dev-libs/subslotconsumer
+# [ebuild  N     ] dev-libs/subslotconsumer-1.0::testrepo
+# [ebuild  N     ] dev-libs/subslotpkg-1.0:0/2::testrepo   <- :0/2 shown (SLOT="0/2")
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
+    PORTING/rust/target/release/portuale emerge -pv --update dev-libs/upgradepkg
+# [ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]
 ```
 
 ## Running it
