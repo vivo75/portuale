@@ -3462,6 +3462,43 @@ PORTING/
   real `create_depgraph_params.py`'s own `!= 0` check; a negative
   `--deep=N` is a real, immediate parse error (exit `2`), matching real
   `parser.error("Invalid --deep parameter: ...")`.
+
+  **`--emptytree`/`-e`: reinstall the whole deep dependency tree.**
+  Grounded against real `create_depgraph_params.py:176-179`: `--emptytree`
+  sets `myparams["empty"] = True`, `myparams["deep"] = True`, and
+  `myparams.pop("selective", None)`. Real portage then stops selecting
+  installed packages as merge-list candidates (`depgraph.py:7889`), so
+  every atom in the (now mandatory-deep) tree resolves to a merge. This
+  pilot's candidate pool is *already* tree-only -- it consults the vdb
+  only to *classify* an outcome -- so `empty` threads through
+  `resolve_pretend` as three small changes: it forces `deep` on
+  (`Deep::Unlimited`), clears `selective` locally, and turns every "the
+  resolved best candidate is already installed at that exact version"
+  result -- top-level *or* a dependency reached by the deep walk -- into a
+  bare `Reinstall` (real `output.py`: `attr_display.replace` is still set
+  from `vardb.cpv_exists`, so `[ebuild   R   ]`, no `[oldver]`, no
+  reason -- exactly the pilot's own reasonless `[ebuild R]`). The net
+  effect matches real `emerge -e`: `emerge -p --emptytree dev-libs/deeppkg`
+  shows `deeppkg` + `deeppkg2` as `[ebuild   R   ]` (both installed) and
+  `newpkg` as `[ebuild  N    ]` (not), where a plain `emerge -p
+  dev-libs/deeppkg` shows only `deeppkg`'s "nothing to do" line and never
+  walks the chain. `-e` alone reinstalls what's installed; `-e -u`
+  additionally upgrades a dependency where a newer version exists (same
+  `avoid_update` split real portage has). `--emptytree` is a plain
+  boolean (real `main.py`'s own `options` list, short alias `e`,
+  `main.py:58`), so a bundled `-pe`/`-pev` decomposes the same way every
+  other bundled boolean does. Deliberately does not reach `--root-deps`
+  running-root build entries (its own resolver path, an exotic
+  combination). Threading the new `empty` param touched ~50
+  `resolve_pretend`/`resolve_pretend_graph` call sites (all positional,
+  the same churn the function's own doc comment already laments for a
+  bundled-options refactor). New Rust unit tests
+  (`emptytree_forces_an_installed_atom_to_a_bare_reinstall`,
+  `emptytree_reinstalls_the_whole_deep_dependency_tree`, …), a dedicated
+  pinned contract test, and 7 `CASES`; mirrored in
+  `emerge_pretend_reference.py`. **Motivation** (from the request):
+  byte-for-byte comparison against real portage and debugging resolution.
+
   **`--exclude`/`-X`: leave a matching package alone.** Grounded against
   real `lib/_emerge/main.py`'s own `"--exclude": {"shortopt": "-X",
   "action": "append", ...}` declaration and depgraph.py's own scattered
@@ -8698,6 +8735,15 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep=1 d
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep=2 dev-libs/deeppkg
 # dev-libs/deeppkg-1.0 is already installed; nothing to do
 # [ebuild  N    ] dev-libs/newpkg-1.0
+
+# --emptytree/-e reinstalls the whole deep dependency tree as though
+# nothing is installed (real create_depgraph_params.py: empty + deep,
+# selective popped) -- useful for comparing against real portage and for
+# debugging resolution
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pe dev-libs/deeppkg
+# [ebuild   R   ] dev-libs/deeppkg-1.0        <- installed -> bare reinstall
+# [ebuild   R   ] dev-libs/deeppkg2-1.0       <- installed dep, no longer hidden
+# [ebuild  N    ] dev-libs/newpkg-1.0         <- not installed -> New
 
 # --exclude/-X is real and implemented: without it, --update offers the
 # visible upgrade normally

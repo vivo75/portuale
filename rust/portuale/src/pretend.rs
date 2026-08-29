@@ -2949,6 +2949,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // value at all (same shape as --changed-use/-U above) -- unlike
     // --changed-slot/--rebuilt-binaries, which are real "true_y_or_n".
     let mut newrepo = false;
+    // --emptytree/-e: real `main.py`'s own plain-boolean "options" list
+    // (short alias `e`, `main.py:58`). Reinstalls every atom in the deep
+    // dependency tree as though nothing is installed
+    // (`create_depgraph_params.py:176-179`) -- useful for byte-for-byte
+    // comparison against real portage and for debugging resolution.
+    let mut emptytree = false;
     // --buildpkgonly/-B: same plain-boolean shape as --newrepo above.
     let mut buildpkgonly = false;
     // --keep-going: real main.py's own `y_or_n` validator, but this
@@ -3438,6 +3444,9 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--newrepo" {
             newrepo = true;
             i += 1;
+        } else if arg == "--emptytree" || arg == "-e" {
+            emptytree = true;
+            i += 1;
         } else if arg == "--buildpkgonly" || arg == "-B" {
             buildpkgonly = true;
             i += 1;
@@ -3708,6 +3717,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'u' => update = true,
                     'n' => noreplace = true,
                     'D' => deep = portage_repo::Deep::Unlimited,
+                    'e' => emptytree = true,
                     'k' => usepkg = true,
                     'K' => usepkgonly = true,
                     'W' => deselect = true,
@@ -4095,6 +4105,7 @@ pub fn run(args: &[String]) -> ExitCode {
         buildpkgonly,
         root_deps_running_root.as_deref(),
         &distdir,
+        emptytree,
     ) {
         Ok(result) => result,
         Err(e) => {

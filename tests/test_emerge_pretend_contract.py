@@ -77,6 +77,12 @@ CASES = [
     ("--deep=N inline form", ["--pretend", "--deep=2", "dev-libs/deeppkg"], 0),
     ("--deep=0 matches not passing --deep at all", ["--pretend", "--deep=0", "dev-libs/deeppkg"], 0),
     ("--deep=-1 is a real, immediate parse error", ["--pretend", "--deep=-1", "dev-libs/deeppkg"], 2),
+    ("--emptytree: the whole deep tree reinstalls", ["--pretend", "--emptytree", "dev-libs/deeppkg"], 0),
+    ("-e short alias for --emptytree", ["--pretend", "-e", "dev-libs/deeppkg"], 0),
+    ("-pe bundled", ["-pe", "dev-libs/withdeps"], 0),
+    ("--emptytree -v: reinstall counters", ["--pretend", "-v", "--emptytree", "dev-libs/deeppkg"], 0),
+    ("--emptytree --update: still upgrades", ["--pretend", "--emptytree", "--update", "dev-libs/withdeps"], 0),
+    ("--emptytree --json", ["--pretend", "--emptytree", "--json", "dev-libs/deeppkg"], 0),
     ("--exclude: leaves an installed package alone despite --update", ["--pretend", "--update", "--exclude", "dev-libs/upgradepkg", "dev-libs/upgradepkg"], 0),
     ("-X short alias for --exclude", ["--pretend", "--update", "-X", "dev-libs/upgradepkg", "dev-libs/upgradepkg"], 0),
     ("--exclude=ATOM inline form", ["--pretend", "--update", "--exclude=dev-libs/upgradepkg", "dev-libs/upgradepkg"], 0),
@@ -6677,6 +6683,59 @@ def test_deep_bounded_depth_stops_short_of_the_full_chain(emerge_binary, fixture
         'dev-libs/deeppkg-1.0 is already installed; nothing to do',
         '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
+
+
+def test_emptytree_reinstalls_the_whole_deep_dependency_tree(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """--emptytree/-e (real create_depgraph_params.py:176-179 --
+    myparams["empty"] = True; myparams["deep"] = True;
+    myparams.pop("selective")): every atom in the deep dependency tree is
+    (re)merged as though nothing is installed. Unlike a plain `emerge -p
+    dev-libs/deeppkg` (which shows only deeppkg and never walks its
+    installed RDEPEND chain), `-e` forces `deep` on AND turns each
+    already-installed dependency into a bare `[ebuild   R   ]` reinstall
+    (no `[oldver]`, no reason -- real portage's `attr_display.replace`
+    from `vardb.cpv_exists`). deeppkg + deeppkg2 are installed ->
+    Reinstall; newpkg is not -> New. Useful for byte-for-byte comparison
+    against real portage and for debugging resolution."""
+    args = ["--pretend", "--emptytree", "dev-libs/deeppkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stdout.splitlines() == [
+        "[ebuild   R   ] dev-libs/deeppkg-1.0 ",
+        "[ebuild   R   ] dev-libs/deeppkg2-1.0 ",
+        "[ebuild  N    ] dev-libs/newpkg-1.0 ",
+    ]
+
+    # -e alone reinstalls; the counters line counts the reinstalls.
+    v = _run([str(emerge_binary)], ["--pretend", "-v", "--emptytree", "dev-libs/deeppkg"], fixture_env)
+    assert v.stdout == _run(
+        emerge_pretend_python, ["--pretend", "-v", "--emptytree", "dev-libs/deeppkg"], fixture_env
+    ).stdout
+    assert v.stdout.splitlines()[-1] == (
+        "Total: 3 packages (1 new, 2 reinstalls), Size of downloads: 0 KiB"
+    )
+
+    # `-e -u` still upgrades a dependency where a newer version exists
+    # (real `emerge -e` reinstalls what you have; `-e -u` upgrades).
+    eu = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--emptytree", "--update", "dev-libs/withdeps"],
+        fixture_env,
+    )
+    assert eu.stdout == _run(
+        emerge_pretend_python,
+        ["--pretend", "--emptytree", "--update", "dev-libs/withdeps"],
+        fixture_env,
+    ).stdout
+    assert "[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]" in eu.stdout
+
+    # -e without -p is still refused (this pilot never really merges).
+    assert _run([str(emerge_binary)], ["-e", "dev-libs/deeppkg"], fixture_env).returncode != 0
 
 
 def test_deep_equals_zero_matches_not_passing_deep_at_all(emerge_binary, fixture_env):

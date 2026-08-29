@@ -3953,12 +3953,14 @@ def _already_installed_or_reinstall(
     rebuilt_binaries,
     rebuilt_binaries_timestamp,
     newrepo,
+    empty=False,
 ):
     """Shared by both of resolve_pretend's own "not update" shortcut call
     sites: once an installed version has been chosen to keep, decides
     between already_installed and reinstall exactly the same way.
-    Mirrors portage-repo/src/lib.rs's already_installed_or_reinstall
-    exactly."""
+    `empty` (--emptytree) forces a bare "reinstall" instead of
+    "already_installed". Mirrors portage-repo/src/lib.rs's
+    already_installed_or_reinstall exactly."""
     changed_flags = (
         _reinstall_flags_for_use_change(root, category, package, installed_best, config, newuse)
         if newuse or changed_use
@@ -3976,7 +3978,14 @@ def _already_installed_or_reinstall(
     new_repo_flag = newrepo and _new_repo_changed(
         root, category, package, installed_best["version"], installed_best["repo_name"]
     )
-    if changed_flags or deps_changed_flag or slot_changed_flag or rebuilt_binary_flag or new_repo_flag:
+    if (
+        empty
+        or changed_flags
+        or deps_changed_flag
+        or slot_changed_flag
+        or rebuilt_binary_flag
+        or new_repo_flag
+    ):
         return (
             "reinstall",
             installed_best["version"],
@@ -4011,6 +4020,7 @@ def resolve_pretend(
     rebuilt_binaries=False,
     rebuilt_binaries_timestamp=None,
     newrepo=False,
+    empty=False,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -4146,7 +4156,15 @@ def resolve_pretend(
     deps_changed_flag/slot_changed_flag were independently computed, all
     three possibly still empty/false, exactly matching real portage's
     own bare, reasonless "[ebuild R]").
-    Mirrors portage-repo/src/lib.rs's resolve_pretend exactly."""
+    `empty` (--emptytree/-e, real create_depgraph_params.py:176-179):
+    clears `selective` locally and turns every "already installed at the
+    resolved version" result into a bare "reinstall" -- the caller
+    (_resolve_pretend_graph) also forces `deep` on, so the whole deep
+    tree is re-merged. Mirrors portage-repo/src/lib.rs's resolve_pretend
+    exactly."""
+    # Real create_depgraph_params.py:179: --emptytree does
+    # myparams.pop("selective", None).
+    selective = selective and not empty
     atom = _parse_atom(atom_str)
     if atom is None:
         raise ResolutionError(f'invalid atom "{atom_str}"')
@@ -4204,6 +4222,7 @@ def resolve_pretend(
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
                 newrepo,
+                empty,
             )
 
     visible = [c for c in candidates if is_visible(c, category, package, config)]
@@ -4358,6 +4377,7 @@ def resolve_pretend(
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
                 newrepo,
+                empty,
             )
 
     # --exclude/-X: an excluded candidate is never eligible to become
@@ -4410,7 +4430,8 @@ def resolve_pretend(
         # new_repo_flag may all still be empty/false here; that's the
         # whole point of this case.
         if (
-            changed_flags
+            empty
+            or changed_flags
             or deps_changed_flag
             or slot_changed_flag
             or rebuilt_binary_flag
@@ -4616,6 +4637,7 @@ def resolve_pretend_graph(
     buildpkgonly=False,
     root_deps_running_root=None,
     distdir="/var/cache/distfiles",
+    empty=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -4725,9 +4747,20 @@ def resolve_pretend_graph(
     not-update shortcut for a dependency atom, real avoid_update) still
     compares version-only across all slots -- a documented cut.
 
+    `empty` (--emptytree/-e): forces `deep` on (real
+    create_depgraph_params.py:178) and is threaded into every
+    resolve_pretend call so an already-installed atom -- top level or a
+    dependency reached by the now-mandatory deep walk -- resolves to a
+    bare "reinstall". Net effect matches real `emerge -e`: the whole
+    deep dependency tree is re-merged.
+
     Mirrors portage-repo/src/lib.rs's resolve_pretend_graph exactly."""
     repos = find_repos(config_root)
     top_level = set(atoms)
+    # Real create_depgraph_params.py:178: --emptytree sets
+    # myparams["deep"] = True.
+    if empty:
+        deep = True
 
     # Guards against infinite requeuing (e.g. a dependency cycle): the
     # exact same atom text is only ever resolved once -- deliberately
@@ -4841,6 +4874,7 @@ def resolve_pretend_graph(
             rebuilt_binaries,
             rebuilt_binaries_timestamp,
             newrepo,
+            empty,
         )
 
         # --changed-deps-report: real portage stays "completely silent"
@@ -7927,6 +7961,9 @@ def run(args):
     # value at all (same shape as --changed-use/-U) -- unlike
     # --changed-slot/--rebuilt-binaries, which are real "true_y_or_n".
     newrepo = False
+    # --emptytree/-e: real main.py plain-boolean "options" (short alias
+    # `e`). Reinstalls the whole deep dependency tree. Mirrors pretend.rs.
+    emptytree = False
     # --buildpkgonly/-B: same plain-boolean shape as --newrepo above.
     buildpkgonly = False
     # --root-deps: real main.py's own choices=("True", "rdeps"), plus a
@@ -8345,6 +8382,11 @@ def run(args):
         elif arg == "--newrepo":
             newrepo = True
             i += 1
+        elif arg == "--emptytree" or arg == "-e":
+            # Real main.py plain-boolean "options" (short alias `e`,
+            # main.py:58). Mirrors pretend.rs.
+            emptytree = True
+            i += 1
         elif arg == "--buildpkgonly" or arg == "-B":
             buildpkgonly = True
             i += 1
@@ -8595,6 +8637,8 @@ def run(args):
                     noreplace = True
                 elif c == "D":
                     deep = True
+                elif c == "e":
+                    emptytree = True
                 elif c == "k":
                     usepkg = True
                 elif c == "K":
@@ -8943,6 +8987,7 @@ def run(args):
             buildpkgonly,
             root_deps_running_root,
             os.environ.get("DISTDIR", "/var/cache/distfiles"),
+            emptytree,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

@@ -4858,6 +4858,11 @@ fn resolve_root_deps_build_entries(
         false,
         None,
         false,
+        // `--emptytree` deliberately does not reach `--root-deps`
+        // running-root build entries -- a narrow, documented
+        // non-interaction (this resolver is its own path, and
+        // `-e --root-deps` is an exotic combination).
+        false,
     ) else {
         return Vec::new();
     };
@@ -5020,6 +5025,16 @@ fn already_installed_or_reinstall(
     rebuilt_binaries: bool,
     rebuilt_binaries_timestamp: Option<u64>,
     newrepo: bool,
+    // `--emptytree`/`-e` (real `create_depgraph_params.py:176` --
+    // `myparams["empty"] = True`, `depgraph.py:7889` -- installed
+    // packages are not selected as candidates, so every atom in the
+    // deep tree resolves to a merge). This pilot's candidate pool is
+    // already tree-only, so `empty` just forces the "would be
+    // `AlreadyInstalled`" fallback to a bare `Reinstall` instead
+    // (real `output.py`: `attr_display.replace` still set from
+    // `vardb.cpv_exists`, no `[oldver]`, no reason -- exactly the
+    // pilot's own reasonless `[ebuild R]`).
+    empty: bool,
 ) -> Result<PretendOutcome, String> {
     let changed_flags = if newuse || changed_use {
         reinstall_flags_for_use_change(
@@ -5069,7 +5084,8 @@ fn already_installed_or_reinstall(
             &installed_best.version,
             &installed_best.repo_name,
         );
-    if !changed_flags.is_empty()
+    if empty
+        || !changed_flags.is_empty()
         || deps_changed_flag
         || slot_changed_flag
         || rebuilt_binary_flag
@@ -5117,7 +5133,21 @@ pub fn resolve_pretend(
     rebuilt_binaries: bool,
     rebuilt_binaries_timestamp: Option<u64>,
     newrepo: bool,
+    // `--emptytree`/`-e` (real `create_depgraph_params.py:176-179`:
+    // `myparams["empty"] = True; myparams["deep"] = True;
+    // myparams.pop("selective")`). Real portage stops selecting
+    // installed packages as candidates (`depgraph.py:7889`), so every
+    // atom in the (now forced-deep) tree resolves to a merge. This
+    // pilot's candidate pool is already tree-only; `empty` just (a)
+    // clears `selective` locally and (b) turns every "already
+    // installed at the resolved version" result into a bare
+    // `Reinstall` (real `output.py`: `attr_display.replace` from
+    // `vardb.cpv_exists` -> the `R` column, no `[oldver]`, no reason).
+    empty: bool,
 ) -> Result<PretendOutcome, String> {
+    // Real `create_depgraph_params.py:179`: `--emptytree` does
+    // `myparams.pop("selective", None)`.
+    let selective = selective && !empty;
     let atom =
         portage_dep::parse_atom(atom_str).ok_or_else(|| format!("invalid atom {atom_str:?}"))?;
 
@@ -5190,6 +5220,7 @@ pub fn resolve_pretend(
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
                 newrepo,
+                empty,
             );
         }
     }
@@ -5422,6 +5453,7 @@ pub fn resolve_pretend(
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
                 newrepo,
+                empty,
             );
         }
     }
@@ -5504,7 +5536,8 @@ pub fn resolve_pretend(
         // `deps_changed_flag`/`slot_changed_flag`/`rebuilt_binary_flag`/
         // `new_repo_flag` may all still be empty/false here; that's the
         // whole point of this case.
-        if !changed_flags.is_empty()
+        if empty
+            || !changed_flags.is_empty()
             || deps_changed_flag
             || slot_changed_flag
             || rebuilt_binary_flag
@@ -6370,8 +6403,20 @@ pub fn resolve_pretend_graph(
     buildpkgonly: bool,
     root_deps_running_root: Option<&Path>,
     distdir: &Path,
+    // `--emptytree`/`-e` (real `create_depgraph_params.py:176-179`).
+    // Forces `deep` on (`myparams["deep"] = True`) and is threaded into
+    // every `resolve_pretend` call so an already-installed atom -- top
+    // level *or* a dependency reached by the now-mandatory deep walk --
+    // resolves to a bare `Reinstall` instead of `AlreadyInstalled`. The
+    // net effect matches real `emerge -e`: the entire deep dependency
+    // tree is (re)merged. Useful for byte-for-byte comparison against
+    // real portage and for debugging resolution.
+    empty: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
+    // Real `create_depgraph_params.py:178`: `--emptytree` sets
+    // `myparams["deep"] = True`.
+    let deep = if empty { Deep::Unlimited } else { deep };
 
     // Only used to tell a top-level atom's own NoVisibleCandidate (fatal
     // to the whole call) apart from a dependency's (reported, not fatal)
@@ -6502,6 +6547,7 @@ pub fn resolve_pretend_graph(
             rebuilt_binaries,
             rebuilt_binaries_timestamp,
             newrepo,
+            empty,
         )?;
 
         // `--changed-deps-report`: real portage stays "completely
@@ -7783,8 +7829,91 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    /// Like `resolve`, but with `--emptytree`/`-e` enabled.
+    fn resolve_empty(category: &str, package: &str) -> PretendOutcome {
+        let root = fixtures_root();
+        let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+        let atom_str = format!("{category}/{package}");
+        resolve_pretend(
+            &repos,
+            &root,
+            &atom_str,
+            &test_config(),
+            false,
+            false,
+            false,
+            &[],
+            false,
+            true,
+            false,
+            true,
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            /* empty: */ true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn emptytree_forces_an_installed_atom_to_a_bare_reinstall() {
+        // dev-libs/samepkg is installed at 1.0 and is the highest visible
+        // version. Without --emptytree a *selective* resolve leaves it
+        // AlreadyInstalled; --emptytree (real create_depgraph_params.py:
+        // 176-179 pops "selective" and forces the merge) turns it into a
+        // bare Reinstall -- every field false, exactly real portage's own
+        // reasonless `[ebuild R]`.
+        assert_eq!(
+            resolve("dev-libs", "samepkg"),
+            PretendOutcome::AlreadyInstalled {
+                version: "1.0".to_string()
+            }
+        );
+        assert_eq!(
+            resolve_empty("dev-libs", "samepkg"),
+            PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: vec![],
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+            }
+        );
+    }
+
+    #[test]
+    fn emptytree_reinstalls_an_installed_dependency_that_would_otherwise_be_hidden() {
+        // dev-libs/deeppkg2 is installed and satisfies deeppkg's RDEPEND,
+        // so without --deep/--emptytree it's AlreadyInstalled (and not
+        // shown). Under --emptytree it becomes a bare Reinstall (the dep
+        // path runs `dependency_avoid_update_candidate` ->
+        // `already_installed_or_reinstall(empty=true)`).
+        assert_eq!(
+            graph_empty("dev-libs/deeppkg")
+                .into_iter()
+                .find(|(name, _)| name == "dev-libs/deeppkg2")
+                .map(|(_, o)| o),
+            Some(PretendOutcome::Reinstall {
+                version: "1.0".to_string(),
+                changed_flags: vec![],
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+            })
+        );
     }
 
     /// Like `resolve`, but with `--update` enabled -- for the `upgrade`
@@ -7816,6 +7945,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
@@ -7852,6 +7982,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -7886,6 +8017,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
@@ -7971,6 +8103,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8054,6 +8187,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
             )
             .expect("resolve_pretend must succeed"),
@@ -8227,6 +8361,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8267,6 +8402,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8305,6 +8441,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
@@ -8411,6 +8548,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
@@ -8586,6 +8724,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -8703,6 +8842,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8759,6 +8899,7 @@ mod tests {
             false,
             None,
             true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8863,6 +9004,7 @@ mod tests {
                 false,
                 None,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -8925,6 +9067,7 @@ mod tests {
             false,
             None,
             false,
+            false,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -8963,6 +9106,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
         )
         .expect("resolve_pretend must succeed");
@@ -9009,6 +9153,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
             )
             .expect("resolve_pretend must succeed"),
@@ -9153,6 +9298,7 @@ mod tests {
                 false,
                 None,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -9181,6 +9327,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
             )
             .expect("resolve_pretend must succeed"),
@@ -10035,6 +10182,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10076,6 +10224,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10119,6 +10268,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10166,6 +10316,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -10230,12 +10381,88 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
         .into_iter()
         .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
         .collect()
+    }
+
+    /// Like `graph_deep`, but driven by `--emptytree`/`-e` instead
+    /// (`deep` forced on, every installed atom -> a bare Reinstall).
+    fn graph_empty(atom_str: &str) -> Vec<(String, PretendOutcome)> {
+        let root = fixtures_root();
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &test_config(),
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            /* empty: */ true,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+        .entries
+        .into_iter()
+        .map(|e| (format!("{}/{}", e.category, e.package), e.outcome))
+        .collect()
+    }
+
+    #[test]
+    fn emptytree_reinstalls_the_whole_deep_dependency_tree() {
+        // Without --deep/--emptytree, `graph("dev-libs/deeppkg")` on an
+        // installed deeppkg shows only itself (AlreadyInstalled, or a
+        // top-level bare Reinstall) and never walks deeppkg2/newpkg.
+        // --emptytree forces `deep` on AND turns each installed dep into
+        // a Reinstall, so the whole chain shows: deeppkg + deeppkg2 as
+        // Reinstall (both installed), newpkg as New (not installed).
+        let entries = graph_empty("dev-libs/deeppkg");
+        let bare = PretendOutcome::Reinstall {
+            version: "1.0".to_string(),
+            changed_flags: vec![],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+        };
+        assert_eq!(
+            entries,
+            vec![
+                ("dev-libs/deeppkg".to_string(), bare.clone()),
+                ("dev-libs/deeppkg2".to_string(), bare),
+                (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -10342,6 +10569,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10481,6 +10709,7 @@ mod tests {
             false,
             root_deps_running_root,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10636,6 +10865,7 @@ mod tests {
             false,
             Some(&root),
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -10713,6 +10943,7 @@ mod tests {
             false,
             Some(&root),
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -10794,6 +11025,7 @@ mod tests {
             false,
             Some(&root),
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -10855,6 +11087,7 @@ mod tests {
                 false,
                 root_deps_running_root,
                 &fixtures_root().join("distfiles"),
+                false,
             )
             .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
             .entries
@@ -10920,6 +11153,7 @@ mod tests {
             false,
             Some(&root),
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -10974,6 +11208,7 @@ mod tests {
             false,
             Some(&root),
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -11024,6 +11259,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -11244,6 +11480,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -11475,6 +11712,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -11563,6 +11801,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -11743,6 +11982,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -11940,6 +12180,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -11989,6 +12230,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12097,6 +12339,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -12144,6 +12387,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12193,6 +12437,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12242,6 +12487,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12508,6 +12754,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -12569,6 +12816,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -12606,6 +12854,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -12676,6 +12925,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -12740,6 +12990,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -12777,6 +13028,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -12845,6 +13097,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -12922,6 +13175,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -12970,6 +13224,7 @@ mod tests {
             true,
             None,
             &fixtures_root().join("distfiles"),
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
