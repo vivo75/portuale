@@ -262,3 +262,61 @@ pub(crate) fn trailing_blocker_lines(args: TrailingBlockerLinesArgs<'_>) -> Vec<
         })
         .collect()
 }
+
+/// Arguments of [`collect_inline_blocker_lines`].
+pub(crate) struct CollectInlineBlockerLinesArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) root: &'a Path,
+    pub(crate) quiet: bool,
+    pub(crate) columns: bool,
+    pub(crate) color: &'a Colorizer,
+    /// The settling pass's recorded cycle edges.
+    pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
+}
+
+/// The compiled inline rows for a whole display list: `(after, line)` pairs
+/// keyed by the replacement entry's display index. Empty under `--columns`.
+/// Portage: output.py, get_display_list
+pub(crate) fn collect_inline_blocker_lines(
+    args: CollectInlineBlockerLinesArgs<'_>,
+) -> Vec<(usize, String)> {
+    let CollectInlineBlockerLinesArgs {
+        entries,
+        root,
+        quiet,
+        columns,
+        color,
+        circular,
+    } = args;
+    if columns {
+        return Vec::new();
+    }
+    // One kept-branch derivation for the whole display list.
+    let kept_alt = kept_alt_for_display(entries, root, 0..entries.len(), circular);
+    let mut out: Vec<(usize, String)> = Vec::new();
+    for (owner_index, entry) in entries.iter().enumerate() {
+        for b in &entry.blockers {
+            if let BlockerRowDisposition::Inline(after) =
+                blocker_row_disposition(entries, root, owner_index, b, &kept_alt)
+            {
+                out.push((
+                    after,
+                    format_blocker_row(
+                        &format!(
+                            "{}/{}-{}",
+                            entry.category,
+                            entry.package,
+                            entry_display_version(entry)
+                        ),
+                        !quiet,
+                        "",
+                        color,
+                        b,
+                    ),
+                ));
+            }
+        }
+    }
+    out.sort_by_key(|(after, _)| *after);
+    out
+}

@@ -30,8 +30,10 @@ mod help;
 mod info;
 mod json;
 mod news;
+mod problem_reports;
 mod prompt;
 mod removal;
+mod resolve_plan;
 mod world;
 
 #[cfg(test)]
@@ -48,8 +50,10 @@ pub(crate) use help::*;
 pub(crate) use info::*;
 pub(crate) use json::*;
 pub use news::*;
+pub(crate) use problem_reports::*;
 pub(crate) use prompt::*;
 pub(crate) use removal::*;
+pub(crate) use resolve_plan::*;
 pub(crate) use world::*;
 
 use crate::ebuild_merge;
