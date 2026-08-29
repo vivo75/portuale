@@ -91,6 +91,94 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
     assert!(result.is_ok());
 }
 
+#[test]
+fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let pkgdir = tempdir();
+
+    let entries = vec![GraphEntry {
+        discovery: 0,
+        category: "dev-libs".into(),
+        package: "packagepkg".into(),
+        outcome: PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        blockers: vec![],
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        repo_name: Some("testrepo".into()),
+        oldbest: vec![],
+        use_flags_display: vec![],
+        use_expand_display: vec![],
+        use_expand_display_p: vec![],
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: vec![],
+        source: CandidateSource::Ebuild,
+        provenance: Default::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps: Vec::new(),
+    }];
+
+    let result = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
+            debug: false,
+            pkgdir: pkgdir.clone(),
+            distdir: tempdir(),
+            shell: PackageOptions::default().shell,
+            // Pinned to "bzip2" rather than the default "zstd", so the test
+            // does not depend on the host having zstd installed.
+            binpkg_compress: "bzip2".to_string(),
+            // Pinned explicitly: this test asserts XPAK magic, not the
+            // (now gpkg) default.
+            binpkg_format: "xpak".to_string(),
+            ..PackageOptions::default()
+        },
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    });
+    assert!(result.is_ok(), "{result:?}");
+
+    let tbz2 = pkgdir.join("dev-libs/packagepkg-1.0.tbz2");
+    assert!(tbz2.is_file(), "{tbz2:?} should exist");
+    let bytes = fs::read(&tbz2).unwrap();
+    assert!(
+        bytes.windows(8).any(|w| w == b"XPAKPACK"),
+        "missing real XPAK magic bytes"
+    );
+
+    // `packagepkg` installs a file, so the size walk must record a
+    // positive `SIZE` in the archive's metadata.
+    let meta = crate::binpkg::read_xpak_metadata(&tbz2).expect("xpak metadata parses");
+    assert!(
+        meta.get("SIZE")
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .is_some_and(|n| n > 0),
+        "SIZE must be positive for a package with a real file, got {:?}",
+        meta.get("SIZE")
+    );
+
+    let packages = fs::read_to_string(pkgdir.join("Packages")).unwrap();
+    assert!(packages.contains("CPV: dev-libs/packagepkg-1.0"));
+}
+
 /// A matched `PORTAGE_TMPDIR` that does not exist fails the entry with
 /// Portage's exact `_check_temp_dir` message. Expected value from Portage source.
 #[test]

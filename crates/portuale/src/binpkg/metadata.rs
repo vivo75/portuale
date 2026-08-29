@@ -69,6 +69,25 @@ pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, B
     Ok(out)
 }
 
+/// Read the key -> value map from an xpak (`.tbz2`/`.xpak`) trailer:
+/// `[image tarball]` followed by a self-describing XPAK segment:
+///
+/// ```text
+///   "XPAKPACK"  be32(indexsize)  be32(datasize)  <index>  <data>  "XPAKSTOP"  be32(infosize)  "STOP"
+/// ```
+///
+/// Each value is UTF-8 (lossy-decoded) and trimmed. `CONTENTS` is never
+/// present (it is generated at merge time). Only the bounded tail of the
+/// file is read; the image tarball itself is never touched.
+// Portage: `portage.xpak.tbz2.scan`, `getindex_mem`, `searchindex`.
+pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>, BinpkgError> {
+    let seg = read_xpak_segment(binpkg_path)?;
+    Ok(parse_xpak_members(&seg)?
+        .into_iter()
+        .map(|(key, bytes)| (key, String::from_utf8_lossy(bytes).trim().to_string()))
+        .collect())
+}
+
 /// The `"XPAKPACK" … "XPAKSTOP"` segment bytes: read the last 16 bytes
 /// (`"XPAKSTOP" be32(infosize) "STOP"`), then the `infosize + 8` byte
 /// segment they point back to.
