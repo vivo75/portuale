@@ -269,24 +269,24 @@ fn columnwidth_from_env() -> i64 {
 /// (the `pkg_info.merge == True` branch only -- see this function's own
 /// call sites' doc comments for why the "not merging" branch never
 /// applies to any outcome this pilot prints in brackets at all), with
-/// color stripped (this pilot has no ANSI color output anywhere, so
-/// real's `nc_len`/plain `len()` distinction collapses to just `len()`).
-/// `bracket`/`code` reproduce the exact same `"[{bracket}  {code}]"`
-/// segment the non-columns format already prints unchanged -- only what
-/// comes after it differs: `category/package` (no version -- that's the
-/// whole point of `--columns`) padded out to `columnwidth - 60`
-/// (`newlp`), then `[version]` right-padded to `columnwidth - 30`
-/// (`oldlp`), then `oldbest` (`"[from]"` for an `Upgrade`/`Downgrade`,
-/// empty otherwise -- real `pkg_info.oldbest_list`, mirrored here via
-/// data this pilot already has rather than a new installed-candidate
-/// lookup). Padding is skipped once the line's already past the target
-/// width, exactly like real portage's own `if (newlp - nc_len(myprint))
-/// > 0` guard -- never truncates, just doesn't pad further.
+/// color stripped for increment 1 (real's `nc_len`/plain `len()`
+/// distinction collapses to just `len()` until increment 2 adds ANSI
+/// color). `bracket`/`field` reproduce the exact same `"[{bracket}
+/// {field}]"` segment the non-columns format prints -- `field` is the
+/// full fixed-width `attr_display_field` -- only what comes after it
+/// differs: `category/package` (no version -- that's the whole point of
+/// `--columns`) padded out to `columnwidth - 60` (`newlp`), then
+/// `[version]` right-padded to `columnwidth - 30` (`oldlp`), then
+/// `oldbest` (`"[from]"` for an `Upgrade`/`Downgrade`, empty otherwise --
+/// real `pkg_info.oldbest_list`, mirrored here via data this pilot
+/// already has rather than a new installed-candidate lookup). Padding is
+/// skipped once the line's already past the target width, exactly like
+/// real portage's own `if (newlp - nc_len(myprint)) > 0` guard -- never
+/// truncates, just doesn't pad further.
 #[allow(clippy::too_many_arguments)]
 fn columns_line(
     bracket: &str,
-    code: &str,
-    mask: &str,
+    field: &str,
     indent: &str,
     category: &str,
     package: &str,
@@ -296,7 +296,7 @@ fn columns_line(
 ) -> String {
     let newlp = (columnwidth - 60).max(0) as usize;
     let oldlp = (columnwidth - 30).max(0) as usize;
-    let mut line = format!("[{bracket}  {code}{mask}] {indent}{category}/{package}");
+    let mut line = format!("[{bracket} {field}] {indent}{category}/{package}");
     if newlp > line.len() {
         line.push_str(&" ".repeat(newlp - line.len()));
     }
@@ -308,19 +308,80 @@ fn columns_line(
     line
 }
 
-/// Real `output.py::gen_mask_str`'s own one-character mask column
-/// (`include_mask_str` = `verbosity > 1`, so `-v` only): inserted right
-/// after the `N`/`U`/`D`/`r` code letter, `" #"`/`" ~"`/`" *"` for a
-/// candidate that's hard-masked / testing-keyword / missing-keyword but
-/// pulled in anyway (see `GraphEntry::keyword_mask`), empty otherwise.
-/// Real portage gives this its own fixed column in the bracket; this
-/// pilot keeps its compact `[ebuild  N]` bracket and just appends the
-/// marker (` ~`), the same simplification the bracket already is.
-fn mask_suffix(entry: &GraphEntry, verbose: bool) -> String {
-    match (verbose, entry.keyword_mask) {
-        (true, Some(c)) => format!(" {c}"),
-        _ => String::new(),
+/// Real `PkgAttrDisplay.__str__` (`_emerge/resolver/output_helpers.py`):
+/// the fixed-width status field rendered inside the `[ebuild …]` bracket,
+/// exactly `[{pkg.type_name} {attr_display}]`. One column per attribute,
+/// a literal space where the attribute is absent, in this exact order:
+///
+/// 0. `I` -- `interactive` (`GraphEntry::interactive`).
+/// 1. `N` -- `new`; `r` instead when `force_reinstall`. This pilot has no
+///    `--emptytree`/`arg.force_reinstall` concept, so always `N` or space
+///    here -- a plain reinstall shows `R` at col 2, see real
+///    `_get_installed_best`: `replace=True` is set only when the exact cpv
+///    is already installed.
+/// 2. `S` -- `new_slot`; `R` instead when `replace` (the cpv is already
+///    installed -- every one of this pilot's `Reinstall` outcomes).
+/// 3. `f`/`F`/`g` -- fetch-restrict satisfied / unsatisfied / remote binary
+///    (`g` is out of scope, needs `--getbinpkg`).
+/// 4. `U` -- `new_version` (an in-slot version change -- `Upgrade`/`Downgrade`).
+/// 5. `D` -- `downgrade`.
+/// 6. the mask column -- present only at `-v` (`include_mask_str` =
+///    `verbosity > 1`), the `#`/`~`/`*` char from `gen_mask_str`
+///    (`GraphEntry::keyword_mask`) or a space.
+///
+/// Increment 1 of the `-pv` layout buildout renders this plain; the real
+/// per-column ANSI colors (`green("N")`, `yellow("R")`, `turquoise("U")`,
+/// …) come in increment 2.
+#[allow(clippy::too_many_arguments)]
+fn attr_display_field(
+    interactive: bool,
+    new: bool,
+    force_reinstall: bool,
+    new_slot: bool,
+    replace: bool,
+    fetch_restrict: bool,
+    fetch_restrict_satisfied: bool,
+    remote_binary: bool,
+    new_version: bool,
+    downgrade: bool,
+    mask: Option<char>,
+    verbose: bool,
+) -> String {
+    let mut f = String::with_capacity(7);
+    f.push(if interactive { 'I' } else { ' ' });
+    f.push(if force_reinstall {
+        'r'
+    } else if new {
+        'N'
+    } else {
+        ' '
+    });
+    f.push(if replace {
+        'R'
+    } else if new_slot {
+        'S'
+    } else {
+        ' '
+    });
+    f.push(if fetch_restrict_satisfied {
+        'f'
+    } else if fetch_restrict {
+        'F'
+    } else if remote_binary {
+        'g'
+    } else {
+        ' '
+    });
+    f.push(if new_version { 'U' } else { ' ' });
+    f.push(if downgrade { 'D' } else { ' ' });
+    // Real `__str__` appends `self.mask` only `if self.mask is not None`,
+    // and `set_pkg_info` sets it (to a space when there's no real mark)
+    // only `if self.include_mask_str()` -- so the column exists at `-v`
+    // and doesn't at plain `-p`.
+    if verbose {
+        f.push(mask.unwrap_or(' '));
     }
+    f
 }
 
 /// The bare flag name inside a rendered `USE=` token, for the
@@ -357,7 +418,10 @@ fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool) -> String {
             format!("{name}=\"{body}\"")
         })
         .collect();
-    format!("  {}", groups.join(" "))
+    // Real `print_messages`: `myprint += " " + self.verboseadd` -- a
+    // single space joins the USE display to the line, which already ends
+    // with the (possibly empty) `oldbest` slot's own trailing space.
+    format!(" {}", groups.join(" "))
 }
 
 /// Real `lib/_emerge/resolver/output.py:841-862`'s own `darkgreen("to " +
@@ -375,54 +439,16 @@ fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool) -> String {
 /// behavior as strictly opt-in machinery. Empty for every ordinary
 /// `ROOT`-targeted entry, and empty (defensively) if the caller somehow
 /// has a `targets_running_root` entry but no running-root path in hand.
+/// Returned bare (`"to /"`, no leading space) -- real `output.py:856-861`
+/// places it right after the always-present space that follows the
+/// package string, with `oldbest` (when non-empty) getting its own
+/// trailing space before it; `print_entry_line`'s own `emit` reproduces
+/// that spacing.
 fn root_suffix(entry: &GraphEntry, running_root: Option<&Path>) -> String {
     match (entry.targets_running_root, running_root) {
-        (true, Some(root)) => format!(" to {}", root.display()),
+        (true, Some(root)) => format!("to {}", root.display()),
         _ => String::new(),
     }
-}
-
-/// The `(reinstall for ...)` note's own reason text, real portage
-/// treating `--newuse`/`--changed-use`, `--changed-deps`,
-/// `--changed-slot`, `--rebuilt-binaries`, and `--newrepo` as
-/// independent, freely-combinable triggers (see
-/// `PretendOutcome::Reinstall`'s own doc comment, portage-repo).
-/// Pilot-invented wording, same as the pre-existing "changed USE: ..."
-/// text -- real portage's own default `--pretend` output shows no such
-/// itemized reason at all. Returns `None` when all five fields are
-/// empty/false -- real portage's own bare, reasonless `[ebuild R]` (see
-/// `resolve_pretend`'s own `selective`/`is_top_level` doc comment
-/// paragraph, portage-repo): unlike every other `Reinstall`, this one
-/// genuinely has no tracked reason to report at all, so the caller omits
-/// the whole `(reinstall for ...)` parenthetical rather than printing an
-/// empty one.
-fn reinstall_reason(
-    changed_flags: &[String],
-    deps_changed: bool,
-    slot_changed: bool,
-    rebuilt_binary: bool,
-    new_repo: bool,
-) -> Option<String> {
-    let mut reasons = Vec::new();
-    if !changed_flags.is_empty() {
-        reasons.push(format!("changed USE: {}", changed_flags.join(", ")));
-    }
-    if deps_changed {
-        reasons.push("changed dependencies".to_string());
-    }
-    if slot_changed {
-        reasons.push("changed slot".to_string());
-    }
-    if rebuilt_binary {
-        reasons.push("rebuilt binary".to_string());
-    }
-    if new_repo {
-        reasons.push("new repository".to_string());
-    }
-    if reasons.is_empty() {
-        return None;
-    }
-    Some(reasons.join("; "))
 }
 
 /// Real `math.ceil(num_bytes / 1024)` KiB (`portage.localization.
@@ -639,169 +665,131 @@ fn print_entry_line(
         portage_repo::CandidateSource::Binary => "binary",
         portage_repo::CandidateSource::Ebuild => "ebuild",
     };
-    let mask = mask_suffix(entry, verbose);
-    // Real `output.py:833`'s own `I` bracket column
-    // (`PkgAttrDisplay.__str__` renders it *before* the `N`/`r` code
-    // letter): a merge-bound package whose evaluated `PROPERTIES`
-    // contains `interactive` (`GraphEntry::interactive`). Unconditional,
-    // like the `S` column and unlike the `-v`-only `mask` column. Always
-    // paired with a code letter here -- every outcome this renders a
-    // bracket for already has one (`N`/`U`/`D`/`r`).
-    let ix = if entry.interactive { "I" } else { "" };
-    // Real `output.py:637-641`'s own `f`/`F` fetch-restrict bracket
-    // column (`PkgAttrDisplay.__str__` renders it right after the
-    // `S`/`R` one): `f` when every restricted distfile is already in
-    // `DISTDIR` (`GraphEntry::fetch_restrict_satisfied`), `F` when some
-    // must be fetched by hand. `g` (remote binary) is out of scope --
-    // needs `--getbinpkg`. Unconditional, like `S`/`I`.
-    let fx = match (entry.fetch_restrict, entry.fetch_restrict_satisfied) {
-        (true, true) => "f",
-        (true, false) => "F",
-        _ => "",
+    // The fixed-width `attr_display` field flags this entry contributes,
+    // shared by every merge outcome below (see `attr_display_field`).
+    // `force_reinstall`/`remote_binary` are always `false` here -- this
+    // pilot has no `--emptytree`/`arg.force_reinstall` concept and `g`
+    // (remote binpkg) needs `--getbinpkg`, which is out of scope.
+    let field = |new: bool, new_slot: bool, replace: bool, new_version: bool, downgrade: bool| {
+        attr_display_field(
+            entry.interactive,
+            new,
+            false,
+            new_slot,
+            replace,
+            entry.fetch_restrict && !entry.fetch_restrict_satisfied,
+            entry.fetch_restrict_satisfied,
+            false,
+            new_version,
+            downgrade,
+            entry.keyword_mask,
+            verbose,
+        )
+    };
+    // One merge line, shared by `New`/`Upgrade`/`Downgrade`/`Reinstall`.
+    // Real `_set_no_columns`: `f"[{type} {attr}] {indent}{pkg_str}
+    // {oldbest}"` -- the space before `oldbest` is always there even when
+    // `oldbest` is empty. The running-root `to <root>` suffix (real
+    // `output.py:856-861`) and the `USE="…"` display (real
+    // `print_messages`' own `" " + verboseadd`) follow, each already
+    // carrying its own leading space via `root_suffix`/`use_suffix`.
+    let emit = |f: &str, version: &str, oldbest: &str| {
+        if onlydeps_suppressed {
+            return;
+        }
+        let use_str = use_suffix(entry, verbose, alphabetical);
+        if columns {
+            let root_str = if root.is_empty() {
+                String::new()
+            } else {
+                format!(" {root}")
+            };
+            println!(
+                "{}{root_str}{use_str}",
+                columns_line(
+                    bracket,
+                    f,
+                    indent,
+                    &entry.category,
+                    &entry.package,
+                    version,
+                    oldbest,
+                    columnwidth,
+                )
+            );
+            return;
+        }
+        let mut tail = String::from(" ");
+        tail.push_str(oldbest);
+        if !root.is_empty() {
+            if !oldbest.is_empty() {
+                tail.push(' ');
+            }
+            tail.push_str(&root);
+        }
+        tail.push_str(&use_str);
+        println!(
+            "[{bracket} {f}] {indent}{}/{}-{version}{tail}",
+            entry.category, entry.package,
+        );
     };
     match &entry.outcome {
         PretendOutcome::New { version } => {
-            // Real `output.py`'s own `S` bracket column
-            // (`PkgAttrDisplay.new_slot`): a `New` into a slot the
-            // package isn't currently installed in, while another slot
-            // of it is (`GraphEntry::new_slot`). Rendered right after
-            // the `N` code letter, unconditionally -- unlike `mask`,
-            // this column is not `-v`-gated in real portage either.
-            let code = format!("{ix}{}{fx}", if entry.new_slot { "NS" } else { "N" });
-            if !onlydeps_suppressed {
-                if columns {
-                    println!(
-                        "{}{root}{}",
-                        columns_line(
-                            bracket,
-                            &code,
-                            &mask,
-                            indent,
-                            &entry.category,
-                            &entry.package,
-                            version,
-                            "",
-                            columnwidth
-                        ),
-                        use_suffix(entry, verbose, alphabetical)
-                    );
-                } else {
-                    println!(
-                        "[{bracket}  {code}{mask}] {indent}{}/{}-{version}{root}{}",
-                        entry.category,
-                        entry.package,
-                        use_suffix(entry, verbose, alphabetical)
-                    );
-                }
-            }
+            // Real `_get_installed_best`: brand-new -> `attr.new`; into a
+            // fresh slot while another slot is installed -> `attr.new`
+            // *and* `attr.new_slot` (`GraphEntry::new_slot`). No oldbest
+            // for a brand-new package; the other-slot version list real
+            // portage shows for a new-slot install (`myoldbest =
+            // installed_versions`) is deferred to a follow-up increment
+            // (this pilot doesn't carry the other-slot versions on the
+            // entry yet).
+            emit(
+                &field(true, entry.new_slot, false, false, false),
+                version,
+                "",
+            );
             print_blockers(entry, version);
         }
         PretendOutcome::Upgrade { from, to } => {
-            if !onlydeps_suppressed {
-                if columns {
-                    println!(
-                        "{}{root}{}",
-                        columns_line(
-                            bracket,
-                            &format!("{ix}U{fx}"),
-                            &mask,
-                            indent,
-                            &entry.category,
-                            &entry.package,
-                            to,
-                            &format!("[{from}]"),
-                            columnwidth
-                        ),
-                        use_suffix(entry, verbose, alphabetical)
-                    );
-                } else {
-                    println!(
-                        "[{bracket}  {ix}U{fx}{mask}] {indent}{}/{}-{to} (upgrade from {from}){root}{}",
-                        entry.category,
-                        entry.package,
-                        use_suffix(entry, verbose, alphabetical)
-                    );
-                }
-            }
+            // Real: an in-slot version bump -> `attr.new_version` only
+            // (the exact new cpv isn't installed, so `attr.replace`
+            // stays clear -> `U`, no `R`). oldbest = the in-slot
+            // installed version (`myinslotlist`), `blue("[from]")`.
+            emit(
+                &field(false, false, false, true, false),
+                to,
+                &format!("[{from}]"),
+            );
             print_blockers(entry, to);
         }
         PretendOutcome::Downgrade { from, to } => {
-            if !onlydeps_suppressed {
-                if columns {
-                    println!(
-                        "{}{root}{}",
-                        columns_line(
-                            bracket,
-                            &format!("{ix}D{fx}"),
-                            &mask,
-                            indent,
-                            &entry.category,
-                            &entry.package,
-                            to,
-                            &format!("[{from}]"),
-                            columnwidth
-                        ),
-                        use_suffix(entry, verbose, alphabetical)
-                    );
-                } else {
-                    println!(
-                        "[{bracket}  {ix}D{fx}{mask}] {indent}{}/{}-{to} (downgrade from {from}){root}{}",
-                        entry.category,
-                        entry.package,
-                        use_suffix(entry, verbose, alphabetical)
-                    );
-                }
-            }
+            // Real: in-slot downgrade -> `attr.new_version` *and*
+            // `attr.downgrade` (`U` and `D`). oldbest as for `Upgrade`.
+            emit(
+                &field(false, false, false, true, true),
+                to,
+                &format!("[{from}]"),
+            );
             print_blockers(entry, to);
         }
         PretendOutcome::Reinstall {
             version,
-            changed_flags,
-            deps_changed,
-            slot_changed,
-            rebuilt_binary,
-            new_repo,
+            changed_flags: _,
+            deps_changed: _,
+            slot_changed: _,
+            rebuilt_binary: _,
+            new_repo: _,
         } => {
-            if !onlydeps_suppressed {
-                if columns {
-                    println!(
-                        "{}{root}{}",
-                        columns_line(
-                            bracket,
-                            &format!("{ix}r{fx}"),
-                            &mask,
-                            indent,
-                            &entry.category,
-                            &entry.package,
-                            version,
-                            "",
-                            columnwidth
-                        ),
-                        use_suffix(entry, verbose, alphabetical)
-                    );
-                } else {
-                    match reinstall_reason(
-                        changed_flags,
-                        *deps_changed,
-                        *slot_changed,
-                        *rebuilt_binary,
-                        *new_repo,
-                    ) {
-                        Some(reason) => println!(
-                            "[{bracket}  {ix}r{fx}{mask}] {indent}{}/{}-{version} (reinstall for {reason}){root}{}",
-                            entry.category,
-                            entry.package,
-                            use_suffix(entry, verbose, alphabetical)
-                        ),
-                        None => println!(
-                            "[{bracket}  {ix}r{fx}{mask}] {indent}{}/{}-{version}{root}{}",
-                            entry.category,
-                            entry.package,
-                            use_suffix(entry, verbose, alphabetical)
-                        ),
-                    }
-                }
-            }
+            // Real `_get_installed_best`: the exact cpv is already
+            // installed -> `attr.replace` (the yellow `R` at column 2),
+            // and `myoldbest` stays empty for a same-slot/same-repo
+            // reinstall -> no `[from]`. Real portage's `-pv` shows no
+            // inline "why" for a reinstall at all -- the pilot's former
+            // `(reinstall for changed …)` prose is dropped here (the
+            // USE diff still shows in the `USE="…"` section for
+            // `--changed-use`; `--changed-deps`/`--changed-slot` reasons
+            // are genuinely invisible in real `-pv` too).
+            emit(&field(false, false, true, false, false), version, "");
             print_blockers(entry, version);
         }
         PretendOutcome::AlreadyInstalled { version } => {

@@ -44,7 +44,7 @@ def test_dispatch_via_symlink_emerge(portuale_binary, tmp_path):
         check=True,
         env=_fixture_env(),
     )
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/newpkg-1.0"
+    assert result.stdout.strip() == "[ebuild  N    ] dev-libs/newpkg-1.0"
 
 
 def test_dispatch_via_symlink_ebuild(portuale_binary, tmp_path):
@@ -75,7 +75,7 @@ def test_dispatch_via_path_lookup_by_bare_name(portuale_binary, tmp_path):
         check=True,
         env=env,
     )
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/newpkg-1.0"
+    assert result.stdout.strip() == "[ebuild  N    ] dev-libs/newpkg-1.0"
 
 
 def test_explicit_arg_fallback_dispatch(portuale_binary):
@@ -336,7 +336,7 @@ def test_emerge_buildpkgonly_without_pretend_really_builds_a_binary_package(
         check=True,
         env=env,
     )
-    assert "[ebuild  N] dev-libs/packagepkg-1.0" in result.stdout
+    assert "[ebuild  N    ] dev-libs/packagepkg-1.0" in result.stdout
     assert ">>> Building binary for dev-libs/packagepkg-1.0..." in result.stdout
 
     tbz2 = Path(env["PKGDIR"]) / "dev-libs/packagepkg-1.0.tbz2"
@@ -361,7 +361,7 @@ def test_emerge_buildpkgonly_with_pretend_stays_dry_run(emerge_binary, tmp_path)
         check=True,
         env=env,
     )
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/packagepkg-1.0"
+    assert result.stdout.strip() == "[ebuild  N    ] dev-libs/packagepkg-1.0"
     assert "Building binary" not in result.stdout
     assert not (Path(env["PKGDIR"]) / "dev-libs").exists()
 

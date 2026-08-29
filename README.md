@@ -335,7 +335,7 @@ PORTING/
   see `lib/portage/const.py`), which is what lets `PORTING/fixtures` be
   used hermetically in tests instead of the real system tree. Output is a
   documented, simplified subset of real `--pretend` formatting
-  (`[ebuild  N] cat/pkg-1.2.3`, `[ebuild  U] cat/pkg-2.0 (upgrade from 1.0)`,
+  (`[ebuild  N    ] cat/pkg-1.2.3`, `[ebuild     U ] cat/pkg-2.0 [1.0]`,
   or an already-installed/no-visible-candidate message), not
   byte-identical to real emerge. Building this surfaced a real bug before
   it ever shipped: an early version of the vdb directory scan let a
@@ -3076,6 +3076,44 @@ PORTING/
   extra per-flag reinstall force) is still not modelled; it only widens
   what `all_flags` already shows. ANSI color stays the sole remaining
   `_create_use_string` cut.
+
+  **`emerge --pretend`: real `PkgAttrDisplay` bracket layout + `[old-ver]`
+  column (increment 1 of the `-pv` real-`output.py` layout + ANSI-color
+  buildout, confirmed with the user before implementing).** Until this
+  slice the pilot kept a deliberately compact bracket (`[ebuild  N]`,
+  `[ebuild  U] cat/pkg-2.0 (upgrade from 1.0)`, `[ebuild  r] cat/pkg-1.0
+  (reinstall for changed dependencies)`) -- readable, but visibly not
+  real `emerge`. The user chose (via `AskUserQuestion`) to adopt real
+  portage's actual layout rather than just paint the compact one. This
+  increment lands the **structure**, no color yet: `attr_display_field`
+  (new, `pretend.rs` + `_attr_display_field`, `emerge_pretend_reference.py`)
+  ports real `PkgAttrDisplay.__str__` (`output_helpers.py:603-650`) --
+  the fixed-width status field `[I][N/r][S/R][f/F/g][U][D]` (+ a 7th mask
+  column only at `-v`, `include_mask_str` = `verbosity > 1`), one column
+  per attribute, a literal space where absent. `[ebuild  N]` becomes
+  `[ebuild  N    ]` (`-p`) / `[ebuild  N     ]` (`-pv`); an in-slot
+  upgrade is `[ebuild     U ] cat/pkg-2.0 [1.0]` (real `_set_no_columns`
+  `f"[{type} {attr}] {indent}{pkg_str} {oldbest}"` -- `oldbest =
+  blue("[from]")` from `convert_myoldbest`, replacing the `(upgrade from
+  X)` prose); a downgrade adds `D` (`[ebuild     UD]`); a plain reinstall
+  is `[ebuild   R   ]` with **no** inline reason (real `_get_installed_best`
+  sets `attr.replace` -- the `R` -- only when the exact cpv is already
+  installed, and `emerge -pv` genuinely shows no "why" for a reinstall;
+  the pilot's `(reinstall for …)` prose and `reinstall_reason` helper are
+  dropped -- a `--changed-use` reinstall still shows its USE diff in the
+  `USE="…"` section, `--changed-deps`/`--changed-slot` reasons are
+  invisible in real `-pv` too). `_set_no_columns`' trailing ` {oldbest}`
+  is faithful: a New/Reinstall line with no `oldbest` really does end in a
+  space. `columns_line` takes the same field. `_reinstall_reason` deleted
+  both sides; `use_suffix` drops to a 1-space prefix (the join space now
+  comes from the always-present `oldbest` slot); `root_suffix` returns a
+  bare `"to /"`. ~247 pinned `[ebuild …]` contract assertions re-pinned
+  (589 pretend + 831 total green). **Deferred within this increment**:
+  the other-slot version list for a new-slot install (`myoldbest =
+  installed_versions`) and verbosity-3 `:slot`/`::repo` on the cpv (the
+  pilot carries neither on the entry yet). **Follow-up increments**:
+  colour primitive + `--color=y|n` gating, then USE-flag colours, then
+  counters/cleanup/autounmask/columns-tree colour.
 
   **`emerge --pretend -v`: the `[ebuild N ~]` bracket-mask marker.** Real
   `output.py::gen_mask_str` (only with `-v` -- `include_mask_str` =
@@ -7736,7 +7774,7 @@ FX="$(realpath PORTING/fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
     PORTING/rust/target/release/portuale emerge --pretend \
     "dev-libs/repnamepkg::repnamefromfile"
-# [ebuild  N] dev-libs/repnamepkg-1.0
+# [ebuild  N    ] dev-libs/repnamepkg-1.0
 #   -- resolves by the profiles/repo_name name, not the [repnamesection]
 #      section name; the repo is kept only because it aliases the section
 ```
@@ -7831,47 +7869,58 @@ Try `emerge --pretend` against the fixture tree:
 ```sh
 ln -sf "$(realpath PORTING/rust/target/release/portuale)" /tmp/emerge
 FX="$(realpath PORTING/fixtures)"
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg              # -> [ebuild  N] ...
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg # -> [ebuild  U] ...
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg              # -> [ebuild  N    ] ...
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg # -> [ebuild     U ] ...
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg             # -> already installed
+
+# real PkgAttrDisplay bracket layout (increment 1 of the -pv real-output.py
+# layout + colour buildout): the fixed-width [I][N/r][S/R][f/F/g][U][D]
+# field, and [old-ver] in place of the "(upgrade from X)" prose
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg
+# [ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/downgradepkg
+# [ebuild     UD] dev-libs/downgradepkg-1.0 [2.0]
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-libs/changeddepspkg
+# [ebuild   R   ] dev-libs/changeddepspkg-1.0     <- a plain reinstall: R, no inline reason (real -pv)
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # dependency recursion: diamond dependency, deduped (see PORTING/fixtures)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/diamond
-# [ebuild  N] dev-libs/diamond-1.0
-# [ebuild  N] dev-libs/shared-a-1.0
-# [ebuild  N] dev-libs/shared-b-1.0
-# [ebuild  N] dev-libs/common-1.0
+# [ebuild  N    ] dev-libs/diamond-1.0
+# [ebuild  N    ] dev-libs/shared-a-1.0
+# [ebuild  N    ] dev-libs/shared-b-1.0
+# [ebuild  N    ] dev-libs/common-1.0
 
 # --tree: the same diamond, indented -- common nests under shared-a
 # only (first alphabetically), never repeated under shared-b
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --tree dev-libs/diamond
-# [ebuild  N] dev-libs/diamond-1.0
-# [ebuild  N]   dev-libs/shared-a-1.0
-# [ebuild  N]     dev-libs/common-1.0
-# [ebuild  N]   dev-libs/shared-b-1.0
+# [ebuild  N    ] dev-libs/diamond-1.0
+# [ebuild  N    ]   dev-libs/shared-a-1.0
+# [ebuild  N    ]     dev-libs/common-1.0
+# [ebuild  N    ]   dev-libs/shared-b-1.0
 
 # --unordered-display (only meaningful with --tree): preserves RDEPEND's
 # own literal order instead of sorting alphabetically -- treeorderpkg's
 # own RDEPEND deliberately lists its children reverse-alphabetically
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --tree dev-libs/treeorderpkg
-# [ebuild  N] dev-libs/treeorderpkg-1.0
-# [ebuild  N]   dev-libs/atreechild-1.0
-# [ebuild  N]   dev-libs/ztreechild-1.0
+# [ebuild  N    ] dev-libs/treeorderpkg-1.0
+# [ebuild  N    ]   dev-libs/atreechild-1.0
+# [ebuild  N    ]   dev-libs/ztreechild-1.0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --tree --unordered-display dev-libs/treeorderpkg
-# [ebuild  N] dev-libs/treeorderpkg-1.0
-# [ebuild  N]   dev-libs/ztreechild-1.0
-# [ebuild  N]   dev-libs/atreechild-1.0
+# [ebuild  N    ] dev-libs/treeorderpkg-1.0
+# [ebuild  N    ]   dev-libs/ztreechild-1.0
+# [ebuild  N    ]   dev-libs/atreechild-1.0
 
 # --columns: the version moves out of the inline "-1.0" suffix into its
 # own right-aligned column instead (COLUMNWIDTH here trimmed to 70 for a
 # readable example -- the real default is 130)
 COLUMNWIDTH=70 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --columns dev-libs/newpkg
-# [ebuild  N] dev-libs/newpkg [1.0]
+# [ebuild  N    ] dev-libs/newpkg [1.0]
 # an Upgrade's own old version appears in its own trailing column too --
 # the same information the default format's own "(upgrade from X)"
 # parenthetical carries, just repositioned
 COLUMNWIDTH=70 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --columns dev-libs/upgradepkg
-# [ebuild  U] dev-libs/upgradepkg [2.0]   [1.0]
+# [ebuild     U ] dev-libs/upgradepkg [2.0] [1.0]
 # --tree and --columns can't be combined, matching real portage
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --tree --columns dev-libs/newpkg
 # emerge: can't specify both of "--tree" and "--columns".  (exit 2)
@@ -7880,42 +7929,42 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --tree --columns dev-l
 # makes no distinction between any of the five real dependency-string
 # keys (no real merge ordering exists yet for the distinction to matter)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/bdependpkg
-# [ebuild  N] dev-libs/bdependpkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/bdependpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # real slot-operator dependency atoms (":=" and ":1=") are resolved, not
 # silently dropped -- ":1=" specifically resolves multislotpkg's SLOT=1
 # version (2.0), not its SLOT=0 version (1.0)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/slotoperatorpkg
-# [ebuild  N] dev-libs/slotoperatorpkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
-# [ebuild  N] dev-libs/multislotpkg-2.0
+# [ebuild  N    ] dev-libs/slotoperatorpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/multislotpkg-2.0
 
 # a real sub-slot restriction (":0/2", PMS 8.3.3, not a slot-operator) now
 # actually matches -- dev-libs/subslotpkg's own SLOT is "0/2"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/subslotconsumer
-# [ebuild  N] dev-libs/subslotconsumer-1.0
-# [ebuild  N] dev-libs/subslotpkg-1.0
+# [ebuild  N    ] dev-libs/subslotconsumer-1.0
+# [ebuild  N    ] dev-libs/subslotpkg-1.0
 
 # ...and a genuine sub-slot mismatch (":0/3" against the same "0/2"
 # candidate) is genuinely rejected, not just always accepted
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/subslotmismatchconsumer
-# [ebuild  N] dev-libs/subslotmismatchconsumer-1.0
+# [ebuild  N    ] dev-libs/subslotmismatchconsumer-1.0
 # !!! no visible ebuild for dependency "dev-libs/subslotpkg"
 
 # real USE-dep dependency atoms are resolved AND enforced now: both
 # "[bar(+)]"/"[baz(+)?]" are (+)-defaulted flags missing from their own
 # target's IUSE, so both are genuinely, trivially satisfied
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeppkg
-# [ebuild  N] dev-libs/usedeppkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
-# [ebuild  N] dev-libs/multislotpkg-2.0
+# [ebuild  N    ] dev-libs/usedeppkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/multislotpkg-2.0
 
 # USE-dep enforcement, top-level: useflagpkg's own IUSE="foo missingflag",
 # "foo" enabled globally -- "[foo]" (declared, enabled) is satisfied
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[foo]'
-# [ebuild  N] dev-libs/useflagpkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/useflagpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 # "[-foo]" (declared, but enabled, not disabled) is genuinely unsatisfied
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[-foo]'
 # emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".  (exit 1)
@@ -7926,8 +7975,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[n
 # ...but a "(+)" default rescues a flag missing from IUSE, standing in
 # for "as if enabled"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[nonexistentflag(+)]'
-# [ebuild  N] dev-libs/useflagpkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/useflagpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # USE-dep enforcement, dependency level: usedeprejectedpkg's own RDEPEND
 # is "dev-libs/useflagpkg[-foo]", genuinely unsatisfiable -- the parent
@@ -7935,27 +7984,27 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/useflagpkg[n
 # dropped or accepted (same "report, don't fail" spirit as an
 # unresolvable dependency)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeprejectedpkg
-# [ebuild  N] dev-libs/usedeprejectedpkg-1.0
+# [ebuild  N    ] dev-libs/usedeprejectedpkg-1.0
 # !!! no visible ebuild for dependency "dev-libs/useflagpkg"  (stderr)
 
 # opt= conditional USE-dep (PMS 8.3.4): useeqparentonpkg's own
 # IUSE="+eqflag" defaults it ON, so its RDEPEND's "[eqflag=]" evaluates
 # to "[eqflag]" -- matches useeqchildpkg's own default-on eqflag
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useeqparentonpkg
-# [ebuild  N] dev-libs/useeqparentonpkg-1.0
-# [ebuild  N] dev-libs/useeqchildpkg-1.0
+# [ebuild  N    ] dev-libs/useeqparentonpkg-1.0
+# [ebuild  N    ] dev-libs/useeqchildpkg-1.0
 # the identical use-dep string, but useeqparentoffpkg's own IUSE="eqflag"
 # (no "+") defaults it OFF -- "[eqflag=]" now evaluates to "[-eqflag]",
 # which mismatches the child, so the dependency is reported unresolvable
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useeqparentoffpkg
-# [ebuild  N] dev-libs/useeqparentoffpkg-1.0
+# [ebuild  N    ] dev-libs/useeqparentoffpkg-1.0
 # !!! no visible ebuild for dependency "dev-libs/useeqchildpkg"  (stderr)
 
 # REQUIRED_USE is real and implemented: requireduseokpkg's own
 # "foo? ( bar )" is genuinely satisfied (foo enabled globally, bar
 # forced on by this package's own package.use entry)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requireduseokpkg
-# [ebuild  N] dev-libs/requireduseokpkg-1.0
+# [ebuild  N    ] dev-libs/requireduseokpkg-1.0
 # requiredusebadpkg has the identical constraint but nothing forcing
 # "bar" on -- genuinely violated, which aborts the WHOLE run (exit 1),
 # a harsher severity than a merely unresolvable dependency
@@ -7993,12 +8042,12 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/
 # is never fatal, so the graph still resolves; quiet by default, same as
 # the top-level case
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/autounmaskdepconsumer
-# [ebuild  N] dev-libs/autounmaskdepconsumer-1.0
+# [ebuild  N    ] dev-libs/autounmaskdepconsumer-1.0
 # !!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"  (exit 0)
 # ...and once --autounmask is given, an extra note line, exactly like
 # the top-level case's own message
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/autounmaskdepconsumer
-# [ebuild  N] dev-libs/autounmaskdepconsumer-1.0
+# [ebuild  N    ] dev-libs/autounmaskdepconsumer-1.0
 # !!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"
 # !!! note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg ~amd64" to package.accept_keywords  (exit 0)
 # --json's own mirror: "keyword_suggestion" appears only on the
@@ -8020,7 +8069,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask-use=n "de
 # the same suggestion, for a *dependency's* own no-visible-candidate
 # (dev-libs/usedeprejectedpkg RDEPENDs on the exact atom above)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeprejectedpkg
-# [ebuild  N] dev-libs/usedeprejectedpkg-1.0
+# [ebuild  N    ] dev-libs/usedeprejectedpkg-1.0
 # !!! no visible ebuild for dependency "dev-libs/useflagpkg"
 # !!! note: dev-libs/useflagpkg-1.0 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=dev-libs/useflagpkg-1.0 -foo" to package.use  (exit 0)
 # --json's own mirror: "use_suggestion" ({"version", "flags"} or null)
@@ -8034,13 +8083,13 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/usedep
 # and a parent-flip (Part B) suggestion fire at once, two independent
 # real fixes for the same mismatch
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useeqparentoffpkg
-# [ebuild  N] dev-libs/useeqparentoffpkg-1.0
+# [ebuild  N    ] dev-libs/useeqparentoffpkg-1.0
 # !!! no visible ebuild for dependency "dev-libs/useeqchildpkg"
 # !!! note: dev-libs/useeqchildpkg-1.0 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=dev-libs/useeqchildpkg-1.0 -eqflag" to package.use
 # !!! note: dev-libs/useeqparentoffpkg-1.0's own USE flags need to change to satisfy this dependency; --autounmask-use suggests adding "=dev-libs/useeqparentoffpkg-1.0 eqflag" to package.use  (exit 0)
 # --autounmask-use=n suppresses both suggestions together (one shared gate)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask-use=n dev-libs/useeqparentoffpkg
-# [ebuild  N] dev-libs/useeqparentoffpkg-1.0
+# [ebuild  N    ] dev-libs/useeqparentoffpkg-1.0
 # !!! no visible ebuild for dependency "dev-libs/useeqchildpkg"  (exit 0)
 # --json's own mirror: "parent_use_suggestion" ({"category", "package", "version", "flags"} or null), alongside "use_suggestion"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/useeqparentoffpkg | python3 -c 'import json,sys; print(next(e["parent_use_suggestion"] for e in json.load(sys.stdin)["entries"] if e["package"] == "useeqchildpkg"))'
@@ -8052,14 +8101,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/useeqp
 # genuinely undecided by IUSE -- but forced on by this package's own
 # package.use entry, proving IUSE defaults and package.use coexist
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/iusedefaultpkg
-# [ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"
+# [ebuild  N     ] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"
 
 # "x86" is never in this package's own IUSE, but IS a real, valid
 # profiles/arch.list entry -- implicitly valid for REQUIRED_USE even
 # though it's not the active profile's own arch (stays disabled), the
 # same shape real media-libs/mesa's own REQUIRED_USE hits
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/archiuseimplicitpkg
-# [ebuild  N] dev-libs/archiuseimplicitpkg-1.0
+# [ebuild  N    ] dev-libs/archiuseimplicitpkg-1.0
 
 # Global use.force/use.mask win over a contradicting package.use entry:
 # this package's own package.use entry tries to invert both flags
@@ -8067,7 +8116,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/archiuseim
 # use.mask (applied strictly after package.use, matching real
 # regenerate()'s own literal-last-step ordering) win on both
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/globalprecedencepkg
-# [ebuild  N] dev-libs/globalprecedencepkg-1.0  USE="globalforceflag -globalmaskflag"
+# [ebuild  N     ] dev-libs/globalprecedencepkg-1.0  USE="globalforceflag -globalmaskflag"
 
 # A profile-level "-flag" genuinely cancels an IUSE "+default": this
 # package's own IUSE is "+cancelme" (defaults on), but
@@ -8075,21 +8124,21 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/globalprec
 # own single continuous incremental walk lets it reach back and cancel
 # the earlier IUSE default, not just fail to add on top of it
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/cancelledpkg
-# [ebuild  N] dev-libs/cancelledpkg-1.0  USE="-cancelme"
+# [ebuild  N     ] dev-libs/cancelledpkg-1.0  USE="-cancelme"
 
 # real profile/make.conf resolution: "foo" is enabled by the fixture's
 # profile chain, so this package's foo?-gated dependency is pulled in
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useflagpkg
-# [ebuild  N] dev-libs/useflagpkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/useflagpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # USE_EXPAND is real and implemented: profiles/base/make.defaults'
 # VIDEO_CARDS="nvidia" expands into the pseudo-USE flag
 # "video_cards_nvidia", which genuinely gates a dependency, not just -v
 # display
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/useexpandpkg
-# [ebuild  N] dev-libs/useexpandpkg-1.0  USE="-video_cards_amdgpu video_cards_nvidia"
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N     ] dev-libs/useexpandpkg-1.0  USE="-video_cards_amdgpu video_cards_nvidia"
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # USE_EXPAND_UNPREFIXED is real and implemented too: profiles/arch/amd64/
 # make.defaults' own ARCH="amd64" contributes the bare pseudo-USE flag
@@ -8097,29 +8146,29 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/useexpandp
 # variable) -- this is literally how "amd64" exists as a real USE flag
 # in actual Gentoo, and it genuinely gates a dependency here too
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/archusepkg
-# [ebuild  N] dev-libs/archusepkg-1.0  USE="amd64 -riscv"
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N     ] dev-libs/archusepkg-1.0  USE="amd64 -riscv"
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # package.use's own USE_EXPAND-prefix shorthand is real and implemented
 # too: "dev-libs/packageuseexpandpkg PYTHON_TARGETS: python3_12" in
 # fixtures/etc/portage/package.use expands to
 # "python_targets_python3_12", user-level package.use only
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/packageuseexpandpkg
-# [ebuild  N] dev-libs/packageuseexpandpkg-1.0  USE="python_targets_python3_12"
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N     ] dev-libs/packageuseexpandpkg-1.0  USE="python_targets_python3_12"
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # use.stable.force/package.use.stable.mask are real and implemented too:
 # stableusepkg's own KEYWORDS="amd64" (no "~") is genuinely stable, so
 # both apply -- stableforceflag forced on (pulling in a real dependency)
 # and maskflag masked back off despite package.use enabling it first
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/stableusepkg
-# [ebuild  N] dev-libs/stableusepkg-1.0  USE="-maskflag stableforceflag"
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N     ] dev-libs/stableusepkg-1.0  USE="-maskflag stableforceflag"
+# [ebuild  N    ] dev-libs/newpkg-1.0
 # unstableusepkg shares the identical IUSE/RDEPEND/package.use entry,
 # but its own KEYWORDS="~amd64" is genuinely NOT stable -- neither
 # applies: stableforceflag stays off, maskflag stays on
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/unstableusepkg
-# [ebuild  N] dev-libs/unstableusepkg-1.0  USE="maskflag -stableforceflag"
+# [ebuild  N     ] dev-libs/unstableusepkg-1.0  USE="maskflag -stableforceflag"
 
 # package.mask: hidden, no matching package.unmask entry
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/hardmaskedpkg
@@ -8127,7 +8176,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/hardmaskedpkg
 
 # package.mask + package.unmask: masked, then unmasked again -> visible
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/maskedandunmaskedpkg
-# [ebuild  N] dev-libs/maskedandunmaskedpkg-1.0
+# [ebuild  N    ] dev-libs/maskedandunmaskedpkg-1.0
 
 # repo-level profiles/package.mask (real portage's most common real-world
 # masking source, e.g. security/arch masks) hides a package the same way
@@ -8139,22 +8188,22 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/repomaskedpkg
 # proving the three sources (repo, profile chain, user) are genuinely
 # stacked together, not checked independently
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/repomaskedthenprofileunmaskedpkg
-# [ebuild  N] dev-libs/repomaskedthenprofileunmaskedpkg-1.0
+# [ebuild  N    ] dev-libs/repomaskedthenprofileunmaskedpkg-1.0
 
 # a repo-level mask, cancelled by a "-atom" line in the user-level
 # package.mask -- -atom removal now spans all three sources, not just
 # within the one file that contains the "-atom" line
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/repomaskedthenuserremovedpkg
-# [ebuild  N] dev-libs/repomaskedthenuserremovedpkg-1.0
+# [ebuild  N    ] dev-libs/repomaskedthenuserremovedpkg-1.0
 
 # package.accept_keywords wildcard ("*/wildcardkeywordpkg ~amd64") makes an
 # otherwise ~amd64-only, not-globally-accepted package visible
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/wildcardkeywordpkg
-# [ebuild  N] dev-libs/wildcardkeywordpkg-1.0
+# [ebuild  N    ] dev-libs/wildcardkeywordpkg-1.0
 
 # package.accept_keywords "**" accepts a package with no KEYWORDS at all
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/livekeywordpkg
-# [ebuild  N] dev-libs/livekeywordpkg-9999
+# [ebuild  N    ] dev-libs/livekeywordpkg-9999
 
 # package.accept_keywords negation ("-amd64") revokes a keyword the
 # global ACCEPT_KEYWORDS="amd64" already granted -- for this one
@@ -8166,61 +8215,61 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/keywordrevoke
 # keyword respectively, distinct from "**" -- "*" alone would NOT have
 # covered the second package below, since it's testing-only (~arm64)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/starkeywordpkg
-# [ebuild  N] dev-libs/starkeywordpkg-1.0
+# [ebuild  N    ] dev-libs/starkeywordpkg-1.0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/tildestarkeywordpkg
-# [ebuild  N] dev-libs/tildestarkeywordpkg-1.0
+# [ebuild  N    ] dev-libs/tildestarkeywordpkg-1.0
 
 # package.accept_keywords bare atom: no keyword tokens at all, real
 # accept_keywords_defaults still grants an implicit "~amd64" (global
 # ACCEPT_KEYWORDS="amd64", "~"-prefixed) -- not a no-op
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/bareacceptkeywordspkg
-# [ebuild  N] dev-libs/bareacceptkeywordspkg-1.0
+# [ebuild  N    ] dev-libs/bareacceptkeywordspkg-1.0
 
 # package.accept_keywords is now also stacked from the profile chain, not
 # just /etc/portage -- this package has no user-level entry at all, only
 # a profile-level one (see PORTING/fixtures/repo/profiles/arch/amd64)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/profileacceptkeywordspkg
-# [ebuild  N] dev-libs/profileacceptkeywordspkg-1.0
+# [ebuild  N    ] dev-libs/profileacceptkeywordspkg-1.0
 
 # package.use ("*/packageuseenablepkg pkguseflag") enables a flag that's
 # off everywhere else, pulling in its pkguseflag?-gated dependency
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packageuseenablepkg
-# [ebuild  N] dev-libs/packageuseenablepkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/packageuseenablepkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # package.use ("dev-libs/packageusedisablepkg -foo") disables a flag for
 # just this package, even though "foo" is on globally (contrast with
 # dev-libs/useflagpkg above, whose own foo?-gated dependency IS pulled in)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packageusedisablepkg
-# [ebuild  N] dev-libs/packageusedisablepkg-1.0
+# [ebuild  N    ] dev-libs/packageusedisablepkg-1.0
 
 # package.use is now stacked from repo+profile too, not just
 # /etc/portage -- neither of these packages has any user-level entry
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/repouseenablepkg
-# [ebuild  N] dev-libs/repouseenablepkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/repouseenablepkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/profileuseenablepkg
-# [ebuild  N] dev-libs/profileuseenablepkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/profileuseenablepkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # a strong (!!) blocker matching an already-installed package is reported
 # (not enforced -- exit code is still 0, same as real --pretend)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/blockerpkg
-# [ebuild  N] dev-libs/blockerpkg-1.0
+# [ebuild  N    ] dev-libs/blockerpkg-1.0
 # [blocks] dev-libs/blockerpkg-1.0 hard blocks dev-libs/samepkg-1.0 ("!!dev-libs/samepkg")
 
 # a weak (!) blocker matching another package this same run would also
 # newly merge (not just an installed one)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/graphblockerparent
-# [ebuild  N] dev-libs/graphblockerparent-1.0
-# [ebuild  N] dev-libs/blockerpartnerpkg-1.0
-# [ebuild  N] dev-libs/weakblockerpkg-1.0
+# [ebuild  N    ] dev-libs/graphblockerparent-1.0
+# [ebuild  N    ] dev-libs/blockerpartnerpkg-1.0
+# [ebuild  N    ] dev-libs/weakblockerpkg-1.0
 # [blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")
 
 # overlays: a package that exists only in the overlay repo (see
 # PORTING/fixtures/etc/portage/repos.conf) is found
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayonlypkg
-# [ebuild  N] dev-libs/overlayonlypkg-1.0
+# [ebuild  N    ] dev-libs/overlayonlypkg-1.0
 
 # "::reponame" repo constraint: the same package, constrained to the
 # repo it's NOT in, correctly finds nothing
@@ -8231,15 +8280,15 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayonlypk
 # the one actually used, proven by its RDEPEND (not the main repo copy's)
 # pulling in dev-libs/newpkg
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaytiepkg
-# [ebuild  N] dev-libs/overlaytiepkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/overlaytiepkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # overlay repos' own package.mask: overlaymaskedpkg is masked only in the
 # overlay's own profiles/package.mask (a bare atom, auto-scoped to
 # "::overlay" by real append_repo) -- an unconstrained atom still
 # resolves via the main repo's own, unaffected copy
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaymaskedpkg
-# [ebuild  N] dev-libs/overlaymaskedpkg-1.0
+# [ebuild  N    ] dev-libs/overlaymaskedpkg-1.0
 
 # an explicit "::overlay" atom does hit that same auto-scoped mask
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaymaskedpkg::overlay
@@ -8248,7 +8297,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaymasked
 # the overlay's own package.unmask cancels that same overlay's own
 # package.mask entry (both get the identical "::overlay" auto-scoping)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlaymaskedthenunmaskedpkg
-# [ebuild  N] dev-libs/overlaymaskedthenunmaskedpkg-1.0
+# [ebuild  N    ] dev-libs/overlaymaskedthenunmaskedpkg-1.0
 
 # repos.conf masters: the overlay has no explicit "masters =", so it
 # implicitly masters the main repo -- mastermaskedpkg exists only in the
@@ -8259,14 +8308,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/mastermaskedp
 # the overlay's own package.unmask still cancels a masters-inherited
 # mask, since both get the identical "::overlay" auto-scoping
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/mastermaskedthenoverlayunmaskedpkg
-# [ebuild  N] dev-libs/mastermaskedthenoverlayunmaskedpkg-1.0
+# [ebuild  N    ] dev-libs/mastermaskedthenoverlayunmaskedpkg-1.0
 
 # explicit repos.conf masters=: independentoverlay declares
 # "masters = overlay", NOT the main repo -- independentmastermainonlypkg
 # exists only there and is masked only by the MAIN repo's own
 # package.mask, which does NOT apply since main isn't a declared master
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/independentmastermainonlypkg
-# [ebuild  N] dev-libs/independentmastermainonlypkg-1.0
+# [ebuild  N    ] dev-libs/independentmastermainonlypkg-1.0
 
 # independentmasteroverlaypkg (also only in independentoverlay) is
 # masked only by the OVERLAY repo's own package.mask instead -- which
@@ -8278,43 +8327,43 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/independentma
 # not just main -- overlayuseenablepkg exists only in the overlay, whose
 # own profiles/package.use enables its own overlayuseflag
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayuseenablepkg
-# [ebuild  N] dev-libs/overlayuseenablepkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/overlayuseenablepkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 # package.use.force: the overlay's own profiles/package.use.force forces
 # a flag on that's off by IUSE default and every other source
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayuseforcepkg
-# [ebuild  N] dev-libs/overlayuseforcepkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/overlayuseforcepkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 # package.use.mask: the inverse -- IUSE="+overlaymaskflag" defaults the
 # flag on, but the overlay's own profiles/package.use.mask masks it off
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayusemaskpkg
-# [ebuild  N] dev-libs/overlayusemaskpkg-1.0
+# [ebuild  N    ] dev-libs/overlayusemaskpkg-1.0
 
 # slot conflict: slotconflictnewconsumer resolves slotconflicttarget to
 # 2.0 first; slotconflictoldconsumer's own "<...-2.0" constraint rejects
 # that -- reported, not enforced (exit code and the rest of the graph are
 # unaffected)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/slotconflictparent
-# [ebuild  N] dev-libs/slotconflictparent-1.0
-# [ebuild  N] dev-libs/slotconflictnewconsumer-1.0
-# [ebuild  N] dev-libs/slotconflictoldconsumer-1.0
-# [ebuild  N] dev-libs/slotconflicttarget-2.0
+# [ebuild  N    ] dev-libs/slotconflictparent-1.0
+# [ebuild  N    ] dev-libs/slotconflictnewconsumer-1.0
+# [ebuild  N    ] dev-libs/slotconflictoldconsumer-1.0
+# [ebuild  N    ] dev-libs/slotconflicttarget-2.0
 # [slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"
 
 # NOT a conflict: two different slots of the same package coexist as
 # independent entries, same as real portage allows
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/multislotparent
-# [ebuild  N] dev-libs/multislotparent-1.0
-# [ebuild  N] dev-libs/multislotpkg-1.0
-# [ebuild  N] dev-libs/multislotpkg-2.0
+# [ebuild  N    ] dev-libs/multislotparent-1.0
+# [ebuild  N    ] dev-libs/multislotpkg-1.0
+# [ebuild  N    ] dev-libs/multislotpkg-2.0
 
 # virtuals: virtual/texteditor is shaped like the real virtual/pager (an
 # ordinary ebuild, any-of RDEPEND) -- no dedicated resolution code exists
 # for it, or is needed
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/virtualconsumerpkg
-# [ebuild  N] dev-libs/virtualconsumerpkg-1.0
-# [ebuild  N] virtual/texteditor-0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/virtualconsumerpkg-1.0
+# [ebuild  N    ] virtual/texteditor-0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # real "||" semantics: neither alternative in this package's own RDEPEND
 # has a visible candidate anywhere, so BOTH still get reported (the
@@ -8322,7 +8371,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/virtualconsum
 # whether a dependency exists" invariant) instead of one being silently
 # dropped
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/anyofunresolvable
-# [ebuild  N] dev-libs/anyofunresolvable-1.0
+# [ebuild  N    ] dev-libs/anyofunresolvable-1.0
 # !!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"
 # !!! no visible ebuild for dependency "dev-libs/alsodoesnotexist-anywhere"
 
@@ -8330,9 +8379,9 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/anyofunresolv
 # packages (not just two deps of one package) dedupes the same way a
 # diamond dependency always did
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/shared-a dev-libs/shared-b
-# [ebuild  N] dev-libs/shared-a-1.0
-# [ebuild  N] dev-libs/shared-b-1.0
-# [ebuild  N] dev-libs/common-1.0
+# [ebuild  N    ] dev-libs/shared-a-1.0
+# [ebuild  N    ] dev-libs/shared-b-1.0
+# [ebuild  N    ] dev-libs/common-1.0
 
 # a bad top-level atom aborts the whole run immediately, in argv order --
 # real portage's own "there are no ebuilds to satisfy" wording (from
@@ -8344,9 +8393,9 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/does-not-exis
 # a top-level atom can now carry an operator/slot, same as a dependency
 # atom always could -- resolve_pretend's own matching needed no changes
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend '>=dev-libs/newpkg-1.0'
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg:0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # a blocker is still rejected as a target -- fixed to be an explicit,
 # reported rejection instead of the pre-existing silent no-op (accepted
@@ -8366,20 +8415,20 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend '!!dev-libs/newpkg'
 # upgrades (see the --update example further below) rather than staying
 # silently already-installed -- unrelated to @world itself
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update @world
-# [ebuild  N] dev-libs/newpkg-1.0
-# [ebuild  N] dev-libs/withdeps-1.0
-# [ebuild  N] dev-libs/nestedsetpkg-1.0
-# [ebuild  N] dev-libs/innernestedsetpkg-1.0
-# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/withdeps-1.0
+# [ebuild  N    ] dev-libs/nestedsetpkg-1.0
+# [ebuild  N    ] dev-libs/innernestedsetpkg-1.0
+# [ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]
 
 # @world combines with an explicit atom in the same invocation
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/samepkg @world
 # dev-libs/samepkg-1.0 is already installed; nothing to do
-# [ebuild  N] dev-libs/newpkg-1.0
-# [ebuild  N] dev-libs/withdeps-1.0
-# [ebuild  N] dev-libs/nestedsetpkg-1.0
-# [ebuild  N] dev-libs/innernestedsetpkg-1.0
-# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/withdeps-1.0
+# [ebuild  N    ] dev-libs/nestedsetpkg-1.0
+# [ebuild  N    ] dev-libs/innernestedsetpkg-1.0
+# [ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]
 
 # an unresolvable "@name" listed in world_sets is a real, immediate
 # error (real PackageSetNotFound) -- unlike a missing world/world_sets
@@ -8403,9 +8452,9 @@ PORTAGE_CONFIGROOT="$FX" ROOT="/tmp/empty-world-root" /tmp/emerge --pretend @wor
 # recursion machinery @world does (withdeps recurses into newpkg again,
 # deduped, and upgradepkg). --update again just so upgradepkg upgrades
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update @system
-# [ebuild  N] dev-libs/newpkg-1.0
-# [ebuild  N] dev-libs/withdeps-1.0
-# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/withdeps-1.0
+# [ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]
 
 # only the literal tokens "@world"/"@system" trigger expansion -- any
 # other "@"-prefixed target falls through to the ordinary atom-parsing
@@ -8418,17 +8467,17 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend @some-other-set
 # limited to this package's own IUSE (foo enabled, missingflag disabled,
 # per the fixture profile chain)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/useflagpkg
-# [ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
+# [ebuild  N    ] dev-libs/newpkg-1.0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useflagpkg
-# [ebuild  N] dev-libs/useflagpkg-1.0   (no -v: no USE= at all)
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/useflagpkg-1.0   (no -v: no USE= at all)
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # -v/--verbose isn't a plain boolean in real emerge -- an explicit
 # following "n" disables it again, same as real insert_optional_args
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v n dev-libs/useflagpkg
-# [ebuild  N] dev-libs/useflagpkg-1.0   (explicit "n": no USE= shown)
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/useflagpkg-1.0   (explicit "n": no USE= shown)
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --newuse/-N is real and implemented: reinstallpkg is installed with
 # IUSE="foo" declared but an empty vdb USE file (foo was off at merge
@@ -8436,8 +8485,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v n dev-libs/useflagp
 # --newuse reports a Reinstall for the changed flag -- and still recurses
 # into its own RDEPEND, exactly like a New/Upgrade entry would
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/reinstallpkg
-# [ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild   R   ] dev-libs/reinstallpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # without --newuse, the exact same package stays AlreadyInstalled -- the
 # USE mismatch is real, but nothing checks for it unless --newuse is given.
@@ -8463,7 +8512,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/usem
 # and unmasked (unlike usemaskreinstallpkg's own above), so --newuse
 # still reports a Reinstall for it (IUSE simply gained a flag)...
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --newuse dev-libs/changedusepkg
-# [ebuild  r] dev-libs/changedusepkg-1.0 (reinstall for changed USE: brandnewflag)
+# [ebuild   R   ] dev-libs/changedusepkg-1.0
 # ...but --changed-use never even looks at IUSE presence, only at
 # enablement -- and that flag's own enablement never changed
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs/changedusepkg
@@ -8471,8 +8520,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs
 # --changed-use still catches an ENABLEMENT change on a flag shared by
 # both IUSE sets, same as reinstallpkg's own --newuse example above
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-use dev-libs/reinstallpkg
-# [ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild   R   ] dev-libs/reinstallpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --update/-u is real and implemented: with `selective` restored via
 # --noreplace, real emerge does NOT offer to upgrade a package just
@@ -8484,27 +8533,27 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/u
 # dev-libs/upgradepkg-1.0 is already installed; nothing to do
 # --update (or its short alias -u) is what makes the newer version show up
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg
-# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+# [ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]
 # --update threads through the whole dependency graph, not just a
 # top-level atom: here upgradepkg is reached only as withdeps' own
 # dependency, and still upgrades
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/withdeps
-# [ebuild  N] dev-libs/withdeps-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
-# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+# [ebuild  N    ] dev-libs/withdeps-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]
 
 # without --update AND without --noreplace/--selective, a bare top-level
 # atom still finds the newer version on its own -- real portage's own
 # "selective" gap (see --noreplace/--selective further down)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/upgradepkg
-# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+# [ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]
 
 # --noreplace/-n and --selective are real and implemented: samepkg has no
 # newer version and nothing else about it changed, yet a bare top-level
 # atom still reports a plain reinstall, no reason given at all -- real
 # portage's own "selective" gap (see the paragraph above)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg
-# [ebuild  r] dev-libs/samepkg-1.0
+# [ebuild   R   ] dev-libs/samepkg-1.0
 # --noreplace (or its real synonym --selective) restores "nothing to do"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/samepkg
 # dev-libs/samepkg-1.0 is already installed; nothing to do
@@ -8517,7 +8566,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective dev-libs/s
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/samepkg
 # dev-libs/samepkg-1.0 is already installed; nothing to do
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --selective=n dev-libs/samepkg
-# [ebuild  r] dev-libs/samepkg-1.0
+# [ebuild   R   ] dev-libs/samepkg-1.0
 
 # --deep/-D is real and implemented: without it, real emerge never walks
 # an already-installed package's own further dependencies, no matter how
@@ -8534,19 +8583,19 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace dev-libs/d
 # top-level atom), but newpkg's own [ebuild N] line now appears
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep dev-libs/deeppkg
 # dev-libs/deeppkg-1.0 is already installed; nothing to do
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 # --deep=N bounds the depth: 1 level reaches deeppkg2 but not newpkg
 # (identical output to no --deep at all); 2 levels reaches all the way
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep=1 dev-libs/deeppkg
 # dev-libs/deeppkg-1.0 is already installed; nothing to do
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep=2 dev-libs/deeppkg
 # dev-libs/deeppkg-1.0 is already installed; nothing to do
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --exclude/-X is real and implemented: without it, --update offers the
 # visible upgrade normally
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg
-# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+# [ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]
 # --exclude matching the installed package overrides --update entirely --
 # it's checked first, unconditionally, before --update/--newuse/
 # --changed-use ever get a say
@@ -8599,12 +8648,12 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/eulapkg
 # a || any-of LICENSE group is visible via any one accepted alternative
 # -- GPL-2 is accepted by the real default's own "*" token
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/anyoflicensepkg
-# [ebuild  N] dev-libs/anyoflicensepkg-1.0
+# [ebuild  N    ] dev-libs/anyoflicensepkg-1.0
 # package.license unmasks an otherwise EULA-masked package for that one
 # package specifically (etc/portage/package.license accepts SomeEula
 # just for this atom)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/packagelicensepkg
-# [ebuild  N] dev-libs/packagelicensepkg-1.0
+# [ebuild  N    ] dev-libs/packagelicensepkg-1.0
 
 # cross-repo profile parents: the main repo's own profiles/default/parent
 # names "overlay:crossrepo-parent" -- that overlay directory's own
@@ -8617,7 +8666,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/crossrepolice
 # its sibling has package.use forcing the same flag on, activating the
 # conditional and masking it
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/uselicensepkg
-# [ebuild  N] dev-libs/uselicensepkg-1.0
+# [ebuild  N    ] dev-libs/uselicensepkg-1.0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/uselicensepkgforced
 # emerge: there are no ebuilds to satisfy "dev-libs/uselicensepkgforced".  (exit 1)
 
@@ -8626,7 +8675,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/uselicensepkg
 # implemented: real portage's own default (from cnf/make.globals) is
 # "*", accepting everything, so a plain declared PROPERTIES is visible
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/propertiespkg
-# [ebuild  N] dev-libs/propertiespkg-1.0
+# [ebuild  N    ] dev-libs/propertiespkg-1.0
 # package.properties/package.accept_restrict can still narrow
 # acceptance for one specific package via a "-token", even under the
 # otherwise-permissive global "*" default
@@ -8644,27 +8693,27 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/restrictedpkg
 # of chain order, so specflag stays off (un-masked but never enabled)
 # while maskflag stays masked (nothing un-masks it)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v dev-libs/pkgusemaskforcepkg
-# [ebuild  N] dev-libs/pkgusemaskforcepkg-1.0  USE="forceflag -maskflag -specflag"
+# [ebuild  N     ] dev-libs/pkgusemaskforcepkg-1.0  USE="forceflag -maskflag -specflag"
 
 # --nodeps/-O is real and implemented: withdeps' own RDEPEND (which
 # would otherwise pull in newpkg and upgradepkg -- see the plain
 # recursion example above) is never even read
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --nodeps dev-libs/withdeps
-# [ebuild  N] dev-libs/withdeps-1.0
+# [ebuild  N    ] dev-libs/withdeps-1.0
 
 # --nodeps still shows a resolved package's own USE display with -v --
 # it's -N's own foo?-gated dependency recursion that's suppressed, not
 # the package's own metadata
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -O -v dev-libs/useflagpkg
-# [ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
+# [ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
 
 # --onlydeps/-o is real and implemented: the exact inverse of --nodeps --
 # withdeps' own dependencies (newpkg, upgradepkg) print normally, but
 # withdeps' own [ebuild N] line is suppressed. --update is added again
 # just so upgradepkg's own dependency-level entry actually upgrades
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update --onlydeps dev-libs/withdeps
-# [ebuild  N] dev-libs/newpkg-1.0
-# [ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]
 
 # --onlydeps on an already-installed atom: no dependencies were ever
 # going to be walked (same as without --onlydeps), and its own "already
@@ -8676,8 +8725,8 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --onlydeps dev-libs/sa
 # implemented flags -- native argparse behavior for boolean short
 # options, not something requiring emerge-specific parsing
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
-# [ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # a bundled flag reports on the first out-of-scope character, left to
 # right, exactly like a standalone occurrence of it would
@@ -8777,35 +8826,35 @@ ROOT="/tmp/deselect-demo-root" /tmp/emerge --pretend --deselect dev-libs/foo @my
 # gating couldn't be demonstrated otherwise
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep dev-libs/withbdepspkg
 # dev-libs/withbdepspkg-1.0 is already installed; nothing to do
-# [ebuild  N] dev-libs/builddeponlypkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
-# [ebuild  N] dev-libs/hostdeponlypkg-1.0
+# [ebuild  N    ] dev-libs/builddeponlypkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/hostdeponlypkg-1.0
 
 # --with-bdeps=n: DEPEND/BDEPEND are skipped, but RDEPEND is unaffected
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep --with-bdeps n dev-libs/withbdepspkg
 # dev-libs/withbdepspkg-1.0 is already installed; nothing to do
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --with-bdeps-auto n: with no explicit --with-bdeps given, changes the
 # *default* from "auto" (walk all three) down to "n" -- same effect as
 # --with-bdeps n above, but via the default instead of an explicit value
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep --with-bdeps-auto n dev-libs/withbdepspkg
 # dev-libs/withbdepspkg-1.0 is already installed; nothing to do
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # an explicit --with-bdeps always wins over --with-bdeps-auto regardless
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --deep --with-bdeps y --with-bdeps-auto n dev-libs/withbdepspkg
 # dev-libs/withbdepspkg-1.0 is already installed; nothing to do
-# [ebuild  N] dev-libs/builddeponlypkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
-# [ebuild  N] dev-libs/hostdeponlypkg-1.0
+# [ebuild  N    ] dev-libs/builddeponlypkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/hostdeponlypkg-1.0
 
 # --changed-deps: changeddepspkg's own vdb-recorded RDEPEND (samepkg)
 # differs from its current ebuild's own RDEPEND (newpkg) -- reinstalls
 # and recurses into the CURRENT ebuild's own dependency, not the vdb's
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-libs/changeddepspkg
-# [ebuild  r] dev-libs/changeddepspkg-1.0 (reinstall for changed dependencies)
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild   R   ] dev-libs/changeddepspkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --changed-deps ignores a libc-only dependency change (strip_libc_deps):
 # libcnoisepkg's own vdb RDEPEND names sys-libs/glibc, its current
@@ -8848,61 +8897,61 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --noreplace --changed-
 # --changed-deps-report is silent once --changed-deps is also given --
 # --changed-deps reinstalls normally, exactly as its own example above
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps-report --changed-deps dev-libs/changeddepspkg
-# [ebuild  r] dev-libs/changeddepspkg-1.0 (reinstall for changed dependencies)
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild   R   ] dev-libs/changeddepspkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --changed-slot: changedslotpkg's own vdb-recorded SLOT ("0") differs
 # from its current ebuild's own SLOT ("0/2", an ABI-bump sub-slot change)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-slot dev-libs/changedslotpkg
-# [ebuild  r] dev-libs/changedslotpkg-1.0 (reinstall for changed slot)
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild   R   ] dev-libs/changedslotpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --changed-deps/--changed-slot are independent, freely-combinable
 # reinstall triggers -- changedslotpkg's own vdb RDEPEND is *also* stale,
 # so giving both prints both reasons on the same line
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps --changed-slot dev-libs/changedslotpkg
-# [ebuild  r] dev-libs/changedslotpkg-1.0 (reinstall for changed dependencies; changed slot)
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild   R   ] dev-libs/changedslotpkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --with-test-deps: withtestdeppkg's own RDEPEND is "dev-libs/newpkg
 # test? ( dev-libs/testonlydep )" -- without the flag, only the
 # unconditional dev-libs/newpkg is pulled in
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/withtestdeppkg
-# [ebuild  N] dev-libs/withtestdeppkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/withtestdeppkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --with-test-deps additionally pulls in the test?-gated dep too
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --with-test-deps dev-libs/withtestdeppkg
-# [ebuild  N] dev-libs/withtestdeppkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
-# [ebuild  N] dev-libs/testonlydep-1.0
+# [ebuild  N    ] dev-libs/withtestdeppkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/testonlydep-1.0
 
 # ...but only for a top-level (depth 0) atom -- withtestdepconsumer's own
 # RDEPEND reaches withtestdeppkg at depth 1, so testonlydep stays absent
 # even with --with-test-deps given
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --with-test-deps dev-libs/withtestdepconsumer
-# [ebuild  N] dev-libs/withtestdepconsumer-1.0
-# [ebuild  N] dev-libs/withtestdeppkg-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/withtestdepconsumer-1.0
+# [ebuild  N    ] dev-libs/withtestdeppkg-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 
 # --usepkg/--usepkgonly: binaryonlypkg exists only in fixtures/pkgdir's
 # own Packages index, no ebuild anywhere -- invisible without --usepkg
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/binaryonlypkg
 # emerge: there are no ebuilds to satisfy "dev-libs/binaryonlypkg".  (exit 1)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg dev-libs/binaryonlypkg
-# [binary  N] dev-libs/binaryonlypkg-1.0
+# [binary  N    ] dev-libs/binaryonlypkg-1.0
 
 # --binpkg-respect-use defaults on under --usepkg: binaryusemismatchpkg's
 # own binary entry has USE: (empty) but the fixture profile's own global
 # USE would select "foo" over its IUSE="foo" -- mismatch, so the binary
 # is rejected and the identical-version ebuild is used instead
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg dev-libs/binaryusemismatchpkg
-# [ebuild  N] dev-libs/binaryusemismatchpkg-1.0
+# [ebuild  N    ] dev-libs/binaryusemismatchpkg-1.0
 
 # ...but --binpkg-respect-use defaults OFF under --usepkgonly (no ebuild
 # fallback to reject *to*) -- the same mismatched binary is now accepted
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkgonly dev-libs/binaryusemismatchpkg
-# [binary  N] dev-libs/binaryusemismatchpkg-1.0
+# [binary  N    ] dev-libs/binaryusemismatchpkg-1.0
 
 # --usepkg-exclude: drops a binary candidate from the pool entirely --
 # binaryonlypkg has no ebuild to fall back to, so it disappears completely
@@ -8914,7 +8963,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --usepkg-excl
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --usepkg-include dev-libs/doesnotexist-anywhere dev-libs/binaryonlypkg
 # emerge: there are no ebuilds to satisfy "dev-libs/binaryonlypkg".  (exit 1)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --usepkg-include dev-libs/binaryonlypkg dev-libs/binaryonlypkg
-# [binary  N] dev-libs/binaryonlypkg-1.0
+# [binary  N    ] dev-libs/binaryonlypkg-1.0
 
 # --rebuilt-binaries: rebuiltbinarypkg is installed at 1.0 (BUILD_TIME
 # 1000), but the binary index's own copy at the same version has
@@ -8924,17 +8973,17 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective d
 # dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do
 # given explicitly, the differing BUILD_TIME triggers a reinstall
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective --rebuilt-binaries dev-libs/rebuiltbinarypkg
-# [binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)
+# [binary   R   ] dev-libs/rebuiltbinarypkg-1.0
 # --rebuilt-binaries-timestamp narrows it to "newer AND at/above this
 # cutoff" -- 2000 is below 3000, so no reinstall; 2000 clears 1500
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective --rebuilt-binaries --rebuilt-binaries-timestamp 3000 dev-libs/rebuiltbinarypkg
 # dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective --rebuilt-binaries --rebuilt-binaries-timestamp 1500 dev-libs/rebuiltbinarypkg
-# [binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)
+# [binary   R   ] dev-libs/rebuiltbinarypkg-1.0
 # the real, non-obvious default: --usepkgonly + bare --deep + --update
 # together auto-enable --rebuilt-binaries with no explicit flag at all
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkgonly --deep --update --selective dev-libs/rebuiltbinarypkg
-# [binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)
+# [binary   R   ] dev-libs/rebuiltbinarypkg-1.0
 
 # --newrepo: newrepopkg is installed with a vdb repository file
 # recording "oldrepo", but the current best candidate for this exact
@@ -8943,7 +8992,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective dev-libs/n
 # dev-libs/newrepopkg-1.0 is already installed; nothing to do
 # ...fires once given explicitly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo dev-libs/newrepopkg
-# [ebuild  r] dev-libs/newrepopkg-1.0 (reinstall for new repository)
+# [ebuild   R   ] dev-libs/newrepopkg-1.0
 # a vdb repository file that DOES match the current provider never
 # triggers a reinstall
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo dev-libs/samerepopkg
@@ -8952,14 +9001,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo 
 # "__unknown__" sentinel applies, which never matches a real repo name,
 # so --newrepo fires here too even though nothing really changed
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --selective --newrepo dev-libs/samepkg
-# [ebuild  r] dev-libs/samepkg-1.0 (reinstall for new repository)
+# [ebuild   R   ] dev-libs/samepkg-1.0
 
 # --buildpkgonly: dualdep is New, and both its DEPEND and RDEPEND on
 # newpkg are also New -- real portage refuses to resolve this at all,
 # since newpkg itself would also need building
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --buildpkgonly dev-libs/dualdep
-# [ebuild  N] dev-libs/dualdep-1.0
-# [ebuild  N] dev-libs/newpkg-1.0
+# [ebuild  N    ] dev-libs/dualdep-1.0
+# [ebuild  N    ] dev-libs/newpkg-1.0
 #
 # !!! --buildpkgonly requires all dependencies to be merged.
 # !!! Cannot merge requested packages. Merge deps and try again.
@@ -8967,14 +9016,14 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --buildpkgonly dev-lib
 # buildpkgonlysatisfied is also New, but its own RDEPEND (samepkg) is
 # already installed -- nothing else needs building, so it resolves fine
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --buildpkgonly dev-libs/buildpkgonlysatisfied
-# [ebuild  N] dev-libs/buildpkgonlysatisfied-1.0
+# [ebuild  N    ] dev-libs/buildpkgonlysatisfied-1.0
 
 # downgrade vs upgrade: downgradepkg is installed at 2.0, but only 1.0 is
 # visible in the tree -- a genuine downgrade, distinct from an upgrade,
 # and shown even without --update since the installed 2.0 has no visible
 # candidate of its own to satisfy real avoid_update's own shortcut
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/downgradepkg
-# [ebuild  D] dev-libs/downgradepkg-1.0 (downgrade from 2.0)
+# [ebuild     UD] dev-libs/downgradepkg-1.0 [2.0]
 
 # avoid_update bug fix (see "What this proves" above for the full
 # writeup): keywordmaskedpkg is installed at 2.0 (~amd64-only, no
@@ -8982,17 +9031,17 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/downgradepkg
 # atom, it's still a real downgrade (real portage's own later
 # avoid_update block DOES require visibility there)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/keywordmaskedpkg
-# [ebuild  D] dev-libs/keywordmaskedpkg-1.0 (downgrade from 2.0)
+# [ebuild     UD] dev-libs/keywordmaskedpkg-1.0 [2.0]
 # ...but reached only as a DEPENDENCY (needskeywordmasked's own
 # RDEPEND), real portage's own EARLIER avoid_update return requires no
 # visibility at all -- kept exactly as installed
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/needskeywordmasked
-# [ebuild  N] dev-libs/needskeywordmasked-1.0
+# [ebuild  N    ] dev-libs/needskeywordmasked-1.0
 # same again, but with a real USE-dep on the dependency atom too
 # (checked against the installed package's own real vdb USE, not the
 # current tree's -- the actual real-world sys-libs/liburing:=[...] case)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/needskeywordmaskeduse
-# [ebuild  N] dev-libs/needskeywordmaskeduse-1.0
+# [ebuild  N    ] dev-libs/needskeywordmaskeduse-1.0
 ```
 
 Try the `ebuild` stub (still a dry-run placeholder -- no real phase
@@ -9285,7 +9334,7 @@ export PORTAGE_TMPDIR="$(mktemp -d)"
 export PKGDIR="$(mktemp -d)"
 ln -sf "$(realpath PORTING/rust/target/release/portuale)" /tmp/emerge
 /tmp/emerge --buildpkgonly dev-libs/packagepkg
-# [ebuild  N] dev-libs/packagepkg-1.0
+# [ebuild  N    ] dev-libs/packagepkg-1.0
 # >>> Building binary for dev-libs/packagepkg-1.0...
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0)
@@ -9302,14 +9351,14 @@ cat "${PKGDIR}"/Packages
 
 # --pretend still suppresses the real build entirely, same atom:
 /tmp/emerge --pretend --buildpkgonly dev-libs/packagepkg
-# [ebuild  N] dev-libs/packagepkg-1.0
+# [ebuild  N    ] dev-libs/packagepkg-1.0
 # (no ">>> Building binary" line, no real files written)
 
 # a real, nonempty SRC_URI with no Manifest entry at all is refused
 # outright, rather than fetched unverified (dev-libs/fetchpkg has one
 # and nothing else -- see "What this proves" above for why):
 /tmp/emerge --buildpkgonly dev-libs/fetchpkg
-# [ebuild  N] dev-libs/fetchpkg-1.0
+# [ebuild  N    ] dev-libs/fetchpkg-1.0
 # >>> Building binary for dev-libs/fetchpkg-1.0...
 # emerge: dev-libs/fetchpkg-1.0: fetchpkg-1.0.tar.gz: no Manifest entry,
 # cannot verify -- refusing to fetch unverifiable content

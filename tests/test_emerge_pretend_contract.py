@@ -1093,7 +1093,7 @@ def test_root_deps_matches_between_implementations(
     assert rust_with.stdout == python_with.stdout
     assert rust_with.stderr == python_with.stderr
     assert rust_with.stderr == ""
-    assert rust_with.stdout.strip() == "[ebuild  N] dev-libs/rootdepspkg-1.0"
+    assert rust_with.stdout.strip() == "[ebuild  N    ] dev-libs/rootdepspkg-1.0"
 
 
 def test_root_deps_disjunctive_branch_selection_matches_between_implementations(
@@ -1130,7 +1130,7 @@ def test_root_deps_disjunctive_branch_selection_matches_between_implementations(
     assert rust_with.stdout == python_with.stdout
     assert rust_with.stderr == python_with.stderr
     assert rust_with.stderr == ""
-    assert rust_with.stdout.strip() == "[ebuild  N] dev-libs/rootdepsorpkg-1.0"
+    assert rust_with.stdout.strip() == "[ebuild  N    ] dev-libs/rootdepsorpkg-1.0"
 
 
 def test_root_deps_recursive_build_entry_matches_between_implementations(
@@ -1167,8 +1167,8 @@ def test_root_deps_recursive_build_entry_matches_between_implementations(
     assert rust_without.stdout == python_without.stdout
     assert rust_without.stderr == python_without.stderr
     assert rust_without.stdout.strip() == (
-        "[ebuild  N] dev-libs/rootdepsbuildpkg-1.0\n"
-        "[ebuild  N] dev-libs/rootdepsbuildtool-1.0"
+        "[ebuild  N    ] dev-libs/rootdepsbuildpkg-1.0 \n"
+        "[ebuild  N    ] dev-libs/rootdepsbuildtool-1.0"
     )
 
     rust_with = _run([str(emerge_binary)], args_with, env)
@@ -1181,8 +1181,8 @@ def test_root_deps_recursive_build_entry_matches_between_implementations(
     # pre-existing ROOT-targeted fallback (this slice): with --root-deps
     # the rootdepsbuildtool line carries a " to <running root>" marker.
     assert rust_with.stdout == (
-        "[ebuild  N] dev-libs/rootdepsbuildpkg-1.0\n"
-        f"[ebuild  N] dev-libs/rootdepsbuildtool-1.0 to {env['ROOT']}\n"
+        "[ebuild  N    ] dev-libs/rootdepsbuildpkg-1.0 \n"
+        f"[ebuild  N    ] dev-libs/rootdepsbuildtool-1.0 to {env['ROOT']}\n"
     )
     assert rust_with.stdout != rust_without.stdout
 
@@ -1212,8 +1212,8 @@ def test_root_deps_build_entry_output_marks_the_running_root(
     assert rust_plain.stdout == python_plain.stdout
     assert rust_plain.stderr == python_plain.stderr
     assert rust_plain.stdout == (
-        "[ebuild  N] dev-libs/rootdepsbuildpkg-1.0\n"
-        "[ebuild  N] dev-libs/rootdepsbuildtool-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rootdepsbuildpkg-1.0 \n"
+        "[ebuild  N    ] dev-libs/rootdepsbuildtool-1.0 to /\n"
     )
 
     rust_json = _run([str(emerge_binary)], [*base, "--json"], env)
@@ -1228,8 +1228,8 @@ def test_root_deps_build_entry_output_marks_the_running_root(
     python_tree = _run(emerge_pretend_python, [*base, "--tree"], env)
     assert rust_tree.stdout == python_tree.stdout
     assert rust_tree.stdout == (
-        "[ebuild  N] dev-libs/rootdepsbuildpkg-1.0\n"
-        "[ebuild  N]   dev-libs/rootdepsbuildtool-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rootdepsbuildpkg-1.0 \n"
+        "[ebuild  N    ]   dev-libs/rootdepsbuildtool-1.0 to /\n"
     )
 
 
@@ -1255,20 +1255,20 @@ def test_root_deps_recursion_walks_the_build_entrys_own_deps(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout == (
-        "[ebuild  N] dev-libs/rdrapp-1.0\n"
-        "[ebuild  N] dev-libs/rdrtool-1.0 to /\n"
-        "[ebuild  N] dev-libs/rdrtooldep-1.0 to /\n"
-        "[ebuild  N] dev-libs/rdrlib-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rdrapp-1.0 \n"
+        "[ebuild  N    ] dev-libs/rdrtool-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rdrtooldep-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rdrlib-1.0 to /\n"
     )
 
     rust_tree = _run([str(emerge_binary)], [*base, "--tree"], env)
     python_tree = _run(emerge_pretend_python, [*base, "--tree"], env)
     assert rust_tree.stdout == python_tree.stdout
     assert rust_tree.stdout == (
-        "[ebuild  N] dev-libs/rdrapp-1.0\n"
-        "[ebuild  N]   dev-libs/rdrtool-1.0 to /\n"
-        "[ebuild  N]     dev-libs/rdrlib-1.0 to /\n"
-        "[ebuild  N]     dev-libs/rdrtooldep-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rdrapp-1.0 \n"
+        "[ebuild  N    ]   dev-libs/rdrtool-1.0 to /\n"
+        "[ebuild  N    ]     dev-libs/rdrlib-1.0 to /\n"
+        "[ebuild  N    ]     dev-libs/rdrtooldep-1.0 to /\n"
     )
 
 
@@ -1291,9 +1291,9 @@ def test_root_deps_recursion_walks_a_build_entrys_own_idepend(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout == (
-        "[ebuild  N] dev-libs/rdriapp-1.0\n"
-        "[ebuild  N] dev-libs/rdritool-1.0 to /\n"
-        "[ebuild  N] dev-libs/rdrilib-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rdriapp-1.0 \n"
+        "[ebuild  N    ] dev-libs/rdritool-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rdrilib-1.0 to /\n"
     )
 
 
@@ -1320,8 +1320,8 @@ def test_root_deps_top_level_idepend_resolves_against_the_running_root(
     assert rust_without.stdout == python_without.stdout
     assert rust_without.stderr == python_without.stderr
     assert rust_without.stdout == (
-        "[ebuild  N] dev-libs/topidepapp-1.0\n"
-        "[ebuild  N] dev-libs/topideplib-1.0\n"
+        "[ebuild  N    ] dev-libs/topidepapp-1.0 \n"
+        "[ebuild  N    ] dev-libs/topideplib-1.0 \n"
     )
 
     rust_with = _run([str(emerge_binary)], with_, env)
@@ -1331,8 +1331,8 @@ def test_root_deps_top_level_idepend_resolves_against_the_running_root(
     assert rust_with.stdout == python_with.stdout
     assert rust_with.stderr == python_with.stderr
     assert rust_with.stdout == (
-        "[ebuild  N] dev-libs/topidepapp-1.0\n"
-        "[ebuild  N] dev-libs/topideplib-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/topidepapp-1.0 \n"
+        "[ebuild  N    ] dev-libs/topideplib-1.0 to /\n"
     )
     assert rust_with.stdout != rust_without.stdout
 
@@ -1355,9 +1355,9 @@ def test_root_deps_recursion_terminates_on_a_bdepend_cycle(
     assert python.returncode == 0
     assert rust.stdout == python.stdout
     assert rust.stdout == (
-        "[ebuild  N] dev-libs/rdrcyc-1.0\n"
-        "[ebuild  N] dev-libs/rdrcyca-1.0 to /\n"
-        "[ebuild  N] dev-libs/rdrcycb-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rdrcyc-1.0 \n"
+        "[ebuild  N    ] dev-libs/rdrcyca-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rdrcycb-1.0 to /\n"
     )
 
 
@@ -1381,8 +1381,8 @@ def test_root_deps_recursion_reports_an_unbuildable_build_dep(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout == (
-        "[ebuild  N] dev-libs/rdrmiss-1.0\n"
-        "[ebuild  N] dev-libs/rdrmisstool-1.0 to /\n"
+        "[ebuild  N    ] dev-libs/rdrmiss-1.0 \n"
+        "[ebuild  N    ] dev-libs/rdrmisstool-1.0 to /\n"
     )
     assert '!!! no visible ebuild for dependency "dev-libs/rdrnothere"' in rust.stderr
 
@@ -1395,10 +1395,10 @@ def test_diamond_dependency_is_deduped_and_ordered(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/diamond"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/diamond-1.0",
-        "[ebuild  N] dev-libs/shared-a-1.0",
-        "[ebuild  N] dev-libs/shared-b-1.0",
-        "[ebuild  N] dev-libs/common-1.0",
+        '[ebuild  N    ] dev-libs/diamond-1.0 ',
+        '[ebuild  N    ] dev-libs/shared-a-1.0 ',
+        '[ebuild  N    ] dev-libs/shared-b-1.0 ',
+        '[ebuild  N    ] dev-libs/common-1.0 ',
     ]
 
 
@@ -1417,8 +1417,8 @@ def test_any_of_group_resolves_only_the_first_satisfiable_alternative(
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/anyof"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/anyof-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/anyof-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -1438,8 +1438,8 @@ def test_bdepend_pdepend_idepend_are_walked_same_as_depend_rdepend(
         result = _run([str(emerge_binary)], ["--pretend", f"dev-libs/{pkg}"], fixture_env)
         assert result.returncode == 0, pkg
         assert result.stdout.splitlines() == [
-            f"[ebuild  N] dev-libs/{pkg}-1.0",
-            "[ebuild  N] dev-libs/newpkg-1.0",
+            f"[ebuild  N    ] dev-libs/{pkg}-1.0 ",
+            "[ebuild  N    ] dev-libs/newpkg-1.0 ",
         ], pkg
 
 
@@ -1463,9 +1463,9 @@ def test_slot_operator_dependency_atoms_resolve_both_forms(emerge_binary, fixtur
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/slotoperatorpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/slotoperatorpkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "[ebuild  N] dev-libs/multislotpkg-2.0",
+        '[ebuild  N    ] dev-libs/slotoperatorpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/multislotpkg-2.0 ',
     ]
 
 
@@ -1486,8 +1486,8 @@ def test_sub_slot_restricted_dependency_atom_matches_the_real_sub_slot(
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/subslotconsumer"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/subslotconsumer-1.0",
-        "[ebuild  N] dev-libs/subslotpkg-1.0",
+        '[ebuild  N    ] dev-libs/subslotconsumer-1.0 ',
+        '[ebuild  N    ] dev-libs/subslotpkg-1.0 ',
     ]
 
 
@@ -1505,7 +1505,9 @@ def test_sub_slot_restricted_dependency_atom_rejects_a_real_mismatch(
         [str(emerge_binary)], ["--pretend", "dev-libs/subslotmismatchconsumer"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/subslotmismatchconsumer-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/subslotmismatchconsumer-1.0 ',
+    ]
     assert (
         result.stderr.splitlines()
         == ['!!! no visible ebuild for dependency "dev-libs/subslotpkg"']
@@ -1528,9 +1530,9 @@ def test_use_dep_dependency_atoms_are_resolved_not_dropped(emerge_binary, fixtur
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/usedeppkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/usedeppkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "[ebuild  N] dev-libs/multislotpkg-2.0",
+        '[ebuild  N    ] dev-libs/usedeppkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/multislotpkg-2.0 ',
     ]
 
 
@@ -1552,7 +1554,9 @@ def test_use_dep_rejected_dependency_atom_reports_no_visible_ebuild(
         [str(emerge_binary)], ["--pretend", "dev-libs/usedeprejectedpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/usedeprejectedpkg-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/usedeprejectedpkg-1.0 ',
+    ]
     assert result.stderr.strip() == (
         '!!! no visible ebuild for dependency "dev-libs/useflagpkg"\n'
         '!!! note: dev-libs/useflagpkg-1.0 exists but its USE flags don\'t satisfy '
@@ -1574,8 +1578,8 @@ def test_use_dep_enforcement_plain_flag_declared_and_enabled_matches(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/useflagpkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/useflagpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -1625,8 +1629,8 @@ def test_use_dep_enforcement_negated_flag_declared_and_disabled_matches(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/useflagpkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/useflagpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -1662,8 +1666,8 @@ def test_use_dep_enforcement_plus_default_rescues_an_undeclared_flag(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/useflagpkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/useflagpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -1678,7 +1682,7 @@ def test_required_use_satisfied_resolves_normally(emerge_binary, fixture_env):
         [str(emerge_binary)], ["--pretend", "dev-libs/requireduseokpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  N] dev-libs/requireduseokpkg-1.0\n"
+    assert result.stdout == '[ebuild  N    ] dev-libs/requireduseokpkg-1.0 \n'
 
 
 def test_iuse_plus_minus_defaults_apply_when_nothing_else_says_otherwise(
@@ -1705,8 +1709,7 @@ def test_iuse_plus_minus_defaults_apply_when_nothing_else_says_otherwise(
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="enableddefault plainflag -disableddefault"\n'
-        "\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n"
+        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0  USE="enableddefault plainflag -disableddefault"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -1735,7 +1738,7 @@ def test_required_use_referencing_an_implicit_arch_flag_resolves_normally(
     )
     assert result.returncode == 0
     assert result.stdout == (
-        "[ebuild  N] dev-libs/archiuseimplicitpkg-1.0\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n"
+        '[ebuild  N     ] dev-libs/archiuseimplicitpkg-1.0 \n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -1771,8 +1774,7 @@ def test_global_use_force_and_use_mask_win_over_a_contradicting_package_use_entr
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N] dev-libs/globalprecedencepkg-1.0  USE="(globalforceflag) (-globalmaskflag)"\n'
-        "\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n"
+        '[ebuild  N     ] dev-libs/globalprecedencepkg-1.0  USE="(globalforceflag) (-globalmaskflag)"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -1796,7 +1798,7 @@ def test_profile_level_minus_flag_genuinely_cancels_an_iuse_plus_default(
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N] dev-libs/cancelledpkg-1.0  USE="-cancelme"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
+        '[ebuild  N     ] dev-libs/cancelledpkg-1.0  USE="-cancelme"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -1936,7 +1938,7 @@ def test_autounmask_dependency_gets_no_keyword_suggestion_by_default(emerge_bina
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  N] dev-libs/autounmaskdepconsumer-1.0\n"
+    assert result.stdout == '[ebuild  N    ] dev-libs/autounmaskdepconsumer-1.0 \n'
     assert result.stderr.strip() == (
         '!!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"'
     )
@@ -1958,7 +1960,7 @@ def test_autounmask_dependency_gets_a_keyword_suggestion_once_enabled(emerge_bin
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  N] dev-libs/autounmaskdepconsumer-1.0\n"
+    assert result.stdout == '[ebuild  N    ] dev-libs/autounmaskdepconsumer-1.0 \n'
     assert result.stderr.strip() == (
         '!!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"\n'
         '!!! note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; '
@@ -2006,7 +2008,9 @@ def test_autounmask_use_dependency_suggestion_is_suppressed_by_autounmask_use_n(
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/usedeprejectedpkg-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/usedeprejectedpkg-1.0 ',
+    ]
     assert (
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/useflagpkg"'
@@ -2086,7 +2090,7 @@ def test_autounmask_use_parent_flip_suggestion_is_suppressed_by_autounmask_use_n
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/useeqparentoffpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/useeqparentoffpkg-1.0'
     assert (
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
@@ -2101,7 +2105,9 @@ def test_unresolvable_dependency_is_reported_not_silently_dropped(
     omitted."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/missingdep"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/missingdep-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/missingdep-1.0 ',
+    ]
     assert (
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"'
@@ -2119,7 +2125,9 @@ def test_usepkg_makes_a_binary_only_package_eligible(emerge_binary, fixture_env)
         [str(emerge_binary)], ["--pretend", "--usepkg", "dev-libs/binaryonlypkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[binary  N] dev-libs/binaryonlypkg-1.0"]
+    assert result.stdout.splitlines() == [
+        '[binary  N    ] dev-libs/binaryonlypkg-1.0 ',
+    ]
     assert result.stderr == ""
 
 
@@ -2139,7 +2147,9 @@ def test_binpkg_respect_use_rejects_a_use_mismatched_binary_by_default(
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/binaryusemismatchpkg-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/binaryusemismatchpkg-1.0 ',
+    ]
     assert result.stderr == ""
 
 
@@ -2155,7 +2165,9 @@ def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[binary  N] dev-libs/binaryusemismatchpkg-1.0"]
+    assert result.stdout.splitlines() == [
+        '[binary  N    ] dev-libs/binaryusemismatchpkg-1.0 ',
+    ]
     assert result.stderr == ""
 
 
@@ -2173,7 +2185,7 @@ def test_downgrade_is_distinguished_from_upgrade(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/downgradepkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  D] dev-libs/downgradepkg-1.0 (downgrade from 2.0)"
+        '[ebuild     UD] dev-libs/downgradepkg-1.0 [2.0]',
     ]
     assert result.stderr == ""
 
@@ -2189,7 +2201,7 @@ def test_keyword_masked_but_installed_top_level_atom_still_downgrades(emerge_bin
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/keywordmaskedpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  D] dev-libs/keywordmaskedpkg-1.0 (downgrade from 2.0)"
+        '[ebuild     UD] dev-libs/keywordmaskedpkg-1.0 [2.0]',
     ]
     assert result.stderr == ""
 
@@ -2209,7 +2221,9 @@ def test_keyword_masked_but_installed_dependency_is_kept_not_downgraded(
         [str(emerge_binary)], ["--pretend", "dev-libs/needskeywordmasked"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/needskeywordmasked-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/needskeywordmasked-1.0 ',
+    ]
     assert result.stderr == ""
 
 
@@ -2230,7 +2244,9 @@ def test_keyword_masked_but_installed_dependency_with_a_use_dep_is_kept(
         [str(emerge_binary)], ["--pretend", "dev-libs/needskeywordmaskeduse"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/needskeywordmaskeduse-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/needskeywordmaskeduse-1.0 ',
+    ]
     assert result.stderr == ""
 
 
@@ -2250,7 +2266,9 @@ def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(
         [str(emerge_binary)], ["--pretend", "dev-libs/anyofunresolvable"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/anyofunresolvable-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/anyofunresolvable-1.0 ',
+    ]
     assert result.stderr.strip().splitlines() == [
         '!!! no visible ebuild for dependency "dev-libs/doesnotexist-anywhere"',
         '!!! no visible ebuild for dependency "dev-libs/alsodoesnotexist-anywhere"',
@@ -2268,8 +2286,8 @@ def test_real_use_flags_from_profile_gate_a_dependency(emerge_binary, fixture_en
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/useflagpkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/useflagpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
     assert "hiddendep" not in result.stdout
 
@@ -2289,10 +2307,10 @@ def test_use_expand_variable_drives_a_dependency(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="nvidia -amdgpu"',
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "",
-        "Total: 2 packages (2 new), Size of downloads: 0 KiB",
+        '[ebuild  N     ] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="nvidia -amdgpu"',
+        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '',
+        'Total: 2 packages (2 new), Size of downloads: 0 KiB',
     ]
     assert "hiddendep" not in result.stdout
 
@@ -2313,10 +2331,10 @@ def test_package_use_expand_prefix_shorthand_drives_a_dependency(emerge_binary, 
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/packageuseexpandpkg-1.0  PYTHON_TARGETS="python3_12"',
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "",
-        "Total: 2 packages (2 new), Size of downloads: 0 KiB",
+        '[ebuild  N     ] dev-libs/packageuseexpandpkg-1.0  PYTHON_TARGETS="python3_12"',
+        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '',
+        'Total: 2 packages (2 new), Size of downloads: 0 KiB',
     ]
 
 
@@ -2334,10 +2352,10 @@ def test_use_expand_unprefixed_variable_drives_a_dependency(emerge_binary, fixtu
     result = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/archusepkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/archusepkg-1.0  USE="amd64 -riscv"',
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "",
-        "Total: 2 packages (2 new), Size of downloads: 0 KiB",
+        '[ebuild  N     ] dev-libs/archusepkg-1.0  USE="amd64 -riscv"',
+        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '',
+        'Total: 2 packages (2 new), Size of downloads: 0 KiB',
     ]
     assert "hiddendep" not in result.stdout
 
@@ -2363,10 +2381,10 @@ def test_use_expand_star_wildcard_expands_against_the_packages_own_iuse(
     assert result.stdout == result_py.stdout
     assert result.stderr == result_py.stderr
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/wildexpandpkg-1.0  LINGUAS="de (-en)"',
-        "[ebuild  N] dev-libs/wildexpanddep-1.0",
-        "",
-        "Total: 2 packages (2 new), Size of downloads: 0 KiB",
+        '[ebuild  N     ] dev-libs/wildexpandpkg-1.0  LINGUAS="de (-en)"',
+        '[ebuild  N     ] dev-libs/wildexpanddep-1.0 ',
+        '',
+        'Total: 2 packages (2 new), Size of downloads: 0 KiB',
     ]
     assert "wildexpandmasked" not in result.stdout
     assert "linguas_*" not in result.stdout
@@ -2390,7 +2408,7 @@ def test_pv_groups_use_by_use_expand_variable(
         python = _run(emerge_pretend_python, args, fixture_env)
         assert rust.returncode == 0
         assert rust.stdout == python.stdout, pkg
-        assert rust.stdout.splitlines()[0] == f"[ebuild  N] dev-libs/{pkg}-1.0  {expected}", pkg
+        assert rust.stdout.splitlines()[0] == f"[ebuild  N     ] dev-libs/{pkg}-1.0  {expected}", pkg
         assert 'USE="' not in rust.stdout.splitlines()[0], pkg
 
 
@@ -2412,7 +2430,7 @@ def test_pv_omits_a_use_expand_hidden_group(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/hiddenexpandpkg-1.0",
+        "[ebuild  N     ] dev-libs/hiddenexpandpkg-1.0 ",
         "",
         "Total: 1 package (1 new), Size of downloads: 0 KiB",
     ]
@@ -2446,7 +2464,7 @@ def test_pv_marks_use_changes_against_the_installed_version(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
-        '[ebuild  U] dev-libs/upgradeusepkg-2.0 (upgrade from 1.0)  USE="added%* keep -change* (-drop%)"',
+        '[ebuild     U  ] dev-libs/upgradeusepkg-2.0 [1.0] USE="added%* keep -change* (-drop%)"',
         "",
         "Total: 1 package (1 upgrade), Size of downloads: 0 KiB",
     ]
@@ -2457,7 +2475,7 @@ def test_pv_marks_use_changes_against_the_installed_version(
         fixture_env,
     )
     assert alpha.stdout.splitlines()[0] == (
-        '[ebuild  U] dev-libs/upgradeusepkg-2.0 (upgrade from 1.0)  USE="added%* -change* (-drop%) keep"'
+        '[ebuild     U  ] dev-libs/upgradeusepkg-2.0 [1.0] USE="added%* -change* (-drop%) keep"'
     )
 
     # A New install has no installed side -> no markers, every flag plain.
@@ -2465,7 +2483,7 @@ def test_pv_marks_use_changes_against_the_installed_version(
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/useflagpkg"], fixture_env
     )
     assert new.stdout.splitlines()[0] == (
-        '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+        '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
     )
 
 
@@ -2488,8 +2506,7 @@ def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
     assert ok.stdout == ok_py.stdout
     assert ok.stderr == ok_py.stderr
     assert ok.stdout == (
-        "[ebuild  N] dev-libs/implicitiusepkg-1.0\n"
-        "[ebuild  N] dev-libs/implicitiuseprov-1.0\n"
+        '[ebuild  N    ] dev-libs/implicitiusepkg-1.0 \n[ebuild  N    ] dev-libs/implicitiuseprov-1.0 \n'
     )
 
     bad = _run([str(emerge_binary)], ["--pretend", "dev-libs/implicitiusepkgmusl"], fixture_env)
@@ -2497,7 +2514,7 @@ def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
     assert bad.returncode == 0
     assert bad.stdout == bad_py.stdout
     assert bad.stderr == bad_py.stderr
-    assert bad.stdout == "[ebuild  N] dev-libs/implicitiusepkgmusl-1.0\n"
+    assert bad.stdout == '[ebuild  N    ] dev-libs/implicitiusepkgmusl-1.0 \n'
     assert '!!! no visible ebuild for dependency "dev-libs/implicitiuseprov"' in bad.stderr
 
 
@@ -2519,10 +2536,10 @@ def test_use_stable_force_and_package_use_stable_mask_apply_when_stable(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/stableusepkg-1.0  USE="(stableforceflag) (-maskflag)"',
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "",
-        "Total: 2 packages (2 new), Size of downloads: 0 KiB",
+        '[ebuild  N     ] dev-libs/stableusepkg-1.0  USE="(stableforceflag) (-maskflag)"',
+        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '',
+        'Total: 2 packages (2 new), Size of downloads: 0 KiB',
     ]
 
 
@@ -2546,8 +2563,7 @@ def test_use_stable_force_and_package_use_stable_mask_skip_an_unstable_candidate
     # only via a "dev-libs/unstableusepkg ~amd64" package.accept_keywords
     # entry -- a testing keyword for our own arch (real gen_mask_str).
     assert result.stdout == (
-        '[ebuild  N ~] dev-libs/unstableusepkg-1.0  USE="maskflag -stableforceflag"\n'
-        "\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n"
+        '[ebuild  N    ~] dev-libs/unstableusepkg-1.0  USE="maskflag -stableforceflag"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -2566,7 +2582,7 @@ def test_package_unmask_cancels_a_matching_package_mask(emerge_binary, fixture_e
         [str(emerge_binary)], ["--pretend", "dev-libs/maskedandunmaskedpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/maskedandunmaskedpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/maskedandunmaskedpkg-1.0'
 
 
 def test_package_mask_minus_atom_removal_leaves_candidate_unaffected(
@@ -2581,7 +2597,7 @@ def test_package_mask_minus_atom_removal_leaves_candidate_unaffected(
     own doc comment, portage-repo), not "already installed"."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/samepkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  r] dev-libs/samepkg-1.0"
+    assert result.stdout.strip() == '[ebuild   R   ] dev-libs/samepkg-1.0'
 
 
 def test_license_eula_style_group_is_masked_by_the_real_default_accept_license(
@@ -2611,7 +2627,7 @@ def test_license_any_of_group_is_visible_via_the_accepted_alternative(
         [str(emerge_binary)], ["--pretend", "dev-libs/anyoflicensepkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/anyoflicensepkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/anyoflicensepkg-1.0'
 
 
 def test_license_package_license_unmasks_an_otherwise_eula_masked_package(
@@ -2624,7 +2640,7 @@ def test_license_package_license_unmasks_an_otherwise_eula_masked_package(
         [str(emerge_binary)], ["--pretend", "dev-libs/packagelicensepkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/packagelicensepkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/packagelicensepkg-1.0'
 
 
 def test_cross_repo_profile_parent_lets_an_overlay_license_groups_join_the_chain(
@@ -2664,13 +2680,13 @@ def test_license_use_conditional_visible_when_flag_off_masked_when_forced_on(
     same real default that masks dev-libs/eulapkg."""
     off = _run([str(emerge_binary)], ["--pretend", "dev-libs/uselicensepkg"], fixture_env)
     assert off.returncode == 0
-    assert off.stdout.strip() == "[ebuild  N] dev-libs/uselicensepkg-1.0"
+    assert off.stdout.strip() == '[ebuild  N    ] dev-libs/uselicensepkg-1.0'
 
     forced_on = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/uselicensepkgforced"], fixture_env
     )
     assert forced_on.returncode == 1
-    assert forced_on.stdout == ""
+    assert forced_on.stdout == ''
     assert (
         forced_on.stderr.strip()
         == 'emerge: there are no ebuilds to satisfy "dev-libs/uselicensepkgforced".'
@@ -2684,7 +2700,7 @@ def test_properties_default_star_accepts_a_declared_property(emerge_binary, fixt
     chain nor make.conf sets ACCEPT_PROPERTIES at all)."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/propertiespkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/propertiespkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/propertiespkg-1.0'
 
 
 def test_package_properties_narrows_acceptance_for_one_package(emerge_binary, fixture_env):
@@ -2760,7 +2776,7 @@ def test_profile_level_package_unmask_cancels_a_repo_level_mask(emerge_binary, f
     )
     assert result.returncode == 0
     assert (
-        result.stdout.strip() == "[ebuild  N] dev-libs/repomaskedthenprofileunmaskedpkg-1.0"
+        result.stdout.strip() == '[ebuild  N    ] dev-libs/repomaskedthenprofileunmaskedpkg-1.0'
     )
 
 
@@ -2779,7 +2795,7 @@ def test_user_level_minus_atom_removes_a_repo_level_mask_entry(emerge_binary, fi
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/repomaskedthenuserremovedpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/repomaskedthenuserremovedpkg-1.0'
 
 
 def test_package_accept_keywords_wildcard_extends_visibility(emerge_binary, fixture_env):
@@ -2790,7 +2806,7 @@ def test_package_accept_keywords_wildcard_extends_visibility(emerge_binary, fixt
         [str(emerge_binary)], ["--pretend", "dev-libs/wildcardkeywordpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/wildcardkeywordpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/wildcardkeywordpkg-1.0'
 
 
 def test_package_accept_keywords_double_star_accepts_no_keywords_package(
@@ -2801,7 +2817,7 @@ def test_package_accept_keywords_double_star_accepts_no_keywords_package(
     unconditionally."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/livekeywordpkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/livekeywordpkg-9999"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/livekeywordpkg-9999'
 
 
 def test_package_accept_keywords_negation_revokes_a_globally_accepted_keyword(
@@ -2832,7 +2848,7 @@ def test_package_accept_keywords_star_accepts_any_stable_keyword(emerge_binary, 
     accepts an empty KEYWORDS)."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/starkeywordpkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/starkeywordpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/starkeywordpkg-1.0'
 
 
 def test_package_accept_keywords_tilde_star_accepts_any_testing_keyword(
@@ -2848,7 +2864,7 @@ def test_package_accept_keywords_tilde_star_accepts_any_testing_keyword(
         [str(emerge_binary)], ["--pretend", "dev-libs/tildestarkeywordpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/tildestarkeywordpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/tildestarkeywordpkg-1.0'
 
 
 def test_package_accept_keywords_bare_atom_implicitly_grants_tilde_arch(
@@ -2866,7 +2882,7 @@ def test_package_accept_keywords_bare_atom_implicitly_grants_tilde_arch(
         [str(emerge_binary)], ["--pretend", "dev-libs/bareacceptkeywordspkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/bareacceptkeywordspkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/bareacceptkeywordspkg-1.0'
 
 
 def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_env):
@@ -2893,16 +2909,16 @@ def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_en
         vp = _run(emerge_pretend_python, ["--pretend", "-v", f"dev-libs/{pkg}"], fixture_env)
         assert v.returncode == 0
         assert v.stdout == vp.stdout, pkg
-        assert v.stdout.splitlines()[0] == f"[ebuild  N {marker}] dev-libs/{pkg}-1.0", pkg
+        assert v.stdout.splitlines()[0] == f"[ebuild  N    {marker}] dev-libs/{pkg}-1.0 ", pkg
         # No -v -> no marker.
         p = _run([str(emerge_binary)], ["--pretend", f"dev-libs/{pkg}"], fixture_env)
-        assert p.stdout.splitlines()[0] == f"[ebuild  N] dev-libs/{pkg}-1.0", pkg
+        assert p.stdout.splitlines()[0] == f"[ebuild  N    ] dev-libs/{pkg}-1.0 ", pkg
 
     v = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newpkg"], fixture_env)
     assert v.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "",
-        "Total: 1 package (1 new), Size of downloads: 0 KiB",
+        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '',
+        'Total: 1 package (1 new), Size of downloads: 0 KiB',
     ]
 
 
@@ -2922,7 +2938,7 @@ def test_package_accept_keywords_profile_level_entry_extends_visibility(
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/profileacceptkeywordspkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/profileacceptkeywordspkg-1.0'
 
 
 def test_unrelated_masked_by_keywords_package_is_still_hidden(emerge_binary, fixture_env):
@@ -2945,8 +2961,8 @@ def test_package_use_wildcard_entry_enables_a_flag_and_pulls_in_a_dependency(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/packageuseenablepkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/packageuseenablepkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -2964,7 +2980,9 @@ def test_package_use_entry_disables_a_globally_enabled_flag_for_one_package(
         [str(emerge_binary)], ["--pretend", "dev-libs/packageusedisablepkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/packageusedisablepkg-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/packageusedisablepkg-1.0 ',
+    ]
 
 
 def test_repo_level_package_use_enables_a_flag_and_pulls_in_a_dependency(
@@ -2981,8 +2999,8 @@ def test_repo_level_package_use_enables_a_flag_and_pulls_in_a_dependency(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/repouseenablepkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/repouseenablepkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -2998,8 +3016,8 @@ def test_profile_level_package_use_enables_a_flag_and_pulls_in_a_dependency(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/profileuseenablepkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/profileuseenablepkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -3026,8 +3044,7 @@ def test_package_use_mask_and_force_with_atom_specificity_ordering(emerge_binary
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N] dev-libs/pkgusemaskforcepkg-1.0  USE="(forceflag) (-maskflag) -specflag"\n'
-        "\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n"
+        '[ebuild  N     ] dev-libs/pkgusemaskforcepkg-1.0  USE="(forceflag) (-maskflag) -specflag"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -3038,7 +3055,7 @@ def test_strong_blocker_matches_an_installed_package(emerge_binary, fixture_env)
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/blockerpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/blockerpkg-1.0",
+        '[ebuild  N    ] dev-libs/blockerpkg-1.0 ',
         '[blocks] dev-libs/blockerpkg-1.0 hard blocks dev-libs/samepkg-1.0 ("!!dev-libs/samepkg")',
     ]
 
@@ -3055,9 +3072,9 @@ def test_weak_blocker_matches_another_new_package_in_the_same_graph(emerge_binar
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/graphblockerparent-1.0",
-        "[ebuild  N] dev-libs/blockerpartnerpkg-1.0",
-        "[ebuild  N] dev-libs/weakblockerpkg-1.0",
+        '[ebuild  N    ] dev-libs/graphblockerparent-1.0 ',
+        '[ebuild  N    ] dev-libs/blockerpartnerpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/weakblockerpkg-1.0 ',
         '[blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")',
     ]
 
@@ -3077,7 +3094,7 @@ def test_overlay_only_package_is_found(emerge_binary, fixture_env):
     repos.conf."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/overlayonlypkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/overlayonlypkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/overlayonlypkg-1.0'
 
 
 def test_best_version_wins_regardless_of_which_repo_has_it(emerge_binary, fixture_env):
@@ -3086,7 +3103,7 @@ def test_best_version_wins_regardless_of_which_repo_has_it(emerge_binary, fixtur
     (lower-priority) repo."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/overlaynewerpkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/overlaynewerpkg-2.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/overlaynewerpkg-2.0'
 
 
 def test_same_version_tie_across_repos_is_broken_toward_higher_priority(
@@ -3100,8 +3117,8 @@ def test_same_version_tie_across_repos_is_broken_toward_higher_priority(
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/overlaytiepkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/overlaytiepkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/overlaytiepkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -3113,7 +3130,7 @@ def test_overlay_own_package_mask_hides_only_the_overlay_copy(emerge_binary, fix
     also hiding the identically-named main-repo package."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/overlaymaskedpkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/overlaymaskedpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/overlaymaskedpkg-1.0'
 
 
 def test_overlay_own_package_mask_still_hides_the_explicit_overlay_atom(
@@ -3141,7 +3158,7 @@ def test_overlay_own_package_mask_does_not_affect_the_explicit_main_repo_atom(
         [str(emerge_binary)], ["--pretend", "dev-libs/overlaymaskedpkg::testrepo"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/overlaymaskedpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/overlaymaskedpkg-1.0'
 
 
 def test_overlay_own_package_unmask_cancels_the_same_overlay_own_package_mask(
@@ -3157,7 +3174,7 @@ def test_overlay_own_package_unmask_cancels_the_same_overlay_own_package_mask(
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/overlaymaskedthenunmaskedpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/overlaymaskedthenunmaskedpkg-1.0'
 
 
 def test_overlay_implicit_masters_inherits_the_main_repos_own_package_mask(
@@ -3192,7 +3209,7 @@ def test_overlay_package_unmask_cancels_a_masters_inherited_mask(emerge_binary, 
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/mastermaskedthenoverlayunmaskedpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/mastermaskedthenoverlayunmaskedpkg-1.0'
 
 
 def test_explicit_masters_does_not_inherit_the_main_repos_mask(emerge_binary, fixture_env):
@@ -3213,7 +3230,7 @@ def test_explicit_masters_does_not_inherit_the_main_repos_mask(emerge_binary, fi
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/independentmastermainonlypkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/independentmastermainonlypkg-1.0'
 
 
 def test_explicit_masters_inherits_a_non_main_declared_masters_mask(emerge_binary, fixture_env):
@@ -3268,7 +3285,7 @@ def test_profiles_repo_name_is_the_canonical_name_source(emerge_binary, fixture_
     documented cut)."""
     ok = _run([str(emerge_binary)], ["--pretend", "dev-libs/repnamepkg"], fixture_env)
     assert ok.returncode == 0
-    assert ok.stdout.strip() == "[ebuild  N] dev-libs/repnamepkg-1.0"
+    assert ok.stdout.strip() == '[ebuild  N    ] dev-libs/repnamepkg-1.0'
     assert ok.stderr == ""
 
     by_file = _run(
@@ -3277,7 +3294,7 @@ def test_profiles_repo_name_is_the_canonical_name_source(emerge_binary, fixture_
         fixture_env,
     )
     assert by_file.returncode == 0
-    assert by_file.stdout.strip() == "[ebuild  N] dev-libs/repnamepkg-1.0"
+    assert by_file.stdout.strip() == '[ebuild  N    ] dev-libs/repnamepkg-1.0'
 
     by_section = _run(
         [str(emerge_binary)],
@@ -3344,8 +3361,8 @@ def test_overlay_own_package_use_gates_a_dependency(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/overlayuseenablepkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/overlayuseenablepkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -3359,8 +3376,8 @@ def test_overlay_own_package_use_force_gates_a_dependency(emerge_binary, fixture
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/overlayuseforcepkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/overlayuseforcepkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -3373,7 +3390,9 @@ def test_overlay_own_package_use_mask_blocks_a_dependency(emerge_binary, fixture
         [str(emerge_binary)], ["--pretend", "dev-libs/overlayusemaskpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/overlayusemaskpkg-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/overlayusemaskpkg-1.0 ',
+    ]
 
 
 def test_usepkg_exclude_drops_the_only_binary_candidate(emerge_binary, fixture_env):
@@ -3416,7 +3435,7 @@ def test_usepkg_include_gates_binary_eligibility_both_ways(emerge_binary, fixtur
         fixture_env,
     )
     assert non_matching.returncode == 1
-    assert non_matching.stdout == ""
+    assert non_matching.stdout == ''
 
     matching = _run(
         [str(emerge_binary)],
@@ -3424,7 +3443,9 @@ def test_usepkg_include_gates_binary_eligibility_both_ways(emerge_binary, fixtur
         fixture_env,
     )
     assert matching.returncode == 0
-    assert matching.stdout.splitlines() == ["[binary  N] dev-libs/binaryonlypkg-1.0"]
+    assert matching.stdout.splitlines() == [
+        '[binary  N    ] dev-libs/binaryonlypkg-1.0 ',
+    ]
 
 
 def test_newrepo_off_by_default_stays_already_installed(emerge_binary, fixture_env):
@@ -3457,7 +3478,7 @@ def test_newrepo_triggers_a_reinstall_for_a_differing_recorded_repository(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  r] dev-libs/newrepopkg-1.0 (reinstall for new repository)"
+        '[ebuild   R   ] dev-libs/newrepopkg-1.0 ',
     ]
 
 
@@ -3494,7 +3515,7 @@ def test_newrepo_fires_via_the_unknown_repo_sentinel_when_unrecorded(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  r] dev-libs/samepkg-1.0 (reinstall for new repository)"
+        '[ebuild   R   ] dev-libs/samepkg-1.0 ',
     ]
 
 
@@ -3529,8 +3550,8 @@ def test_buildpkgonly_reports_the_merge_list_then_the_real_error(
     )
     assert result.returncode == 1
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/dualdep-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/dualdep-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
     assert result.stderr.strip().splitlines() == [
         "!!! --buildpkgonly requires all dependencies to be merged.",
@@ -3550,7 +3571,7 @@ def test_buildpkgonly_does_not_fire_when_the_dependency_is_already_installed(
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/buildpkgonlysatisfied-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/buildpkgonlysatisfied-1.0'
     assert result.stderr == ""
 
 
@@ -3587,7 +3608,7 @@ def test_rebuilt_binaries_triggers_a_reinstall_for_a_differing_build_time(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)"
+        '[binary   R   ] dev-libs/rebuiltbinarypkg-1.0 ',
     ]
 
 
@@ -3614,7 +3635,7 @@ def test_rebuilt_binaries_timestamp_gates_the_reinstall(emerge_binary, fixture_e
     )
     assert too_high.returncode == 0
     assert (
-        too_high.stdout.strip() == "dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do"
+        too_high.stdout.strip() == 'dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do'
     )
 
     low_enough = _run(
@@ -3632,7 +3653,7 @@ def test_rebuilt_binaries_timestamp_gates_the_reinstall(emerge_binary, fixture_e
     )
     assert low_enough.returncode == 0
     assert low_enough.stdout.splitlines() == [
-        "[binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)"
+        '[binary   R   ] dev-libs/rebuiltbinarypkg-1.0 ',
     ]
 
 
@@ -3657,7 +3678,7 @@ def test_rebuilt_binaries_auto_enables_under_usepkgonly_deep_update(emerge_binar
     )
     assert auto_on.returncode == 0
     assert auto_on.stdout.splitlines() == [
-        "[binary  r] dev-libs/rebuiltbinarypkg-1.0 (reinstall for rebuilt binary)"
+        '[binary   R   ] dev-libs/rebuiltbinarypkg-1.0 ',
     ]
 
     bounded_deep = _run(
@@ -3676,7 +3697,7 @@ def test_rebuilt_binaries_auto_enables_under_usepkgonly_deep_update(emerge_binar
     assert bounded_deep.returncode == 0
     assert (
         bounded_deep.stdout.strip()
-        == "dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do"
+        == 'dev-libs/rebuiltbinarypkg-1.0 is already installed; nothing to do'
     )
 
 
@@ -3696,8 +3717,8 @@ def test_use_dep_equal_parent_matches_when_parent_flag_is_enabled(emerge_binary,
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/useeqparentonpkg-1.0",
-        "[ebuild  N] dev-libs/useeqchildpkg-1.0",
+        '[ebuild  N    ] dev-libs/useeqparentonpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/useeqchildpkg-1.0 ',
     ]
     assert result.stderr == ""
 
@@ -3723,7 +3744,7 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
         [str(emerge_binary)], ["--pretend", "dev-libs/useeqparentoffpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == "[ebuild  N] dev-libs/useeqparentoffpkg-1.0"
+    assert result.stdout.strip() == '[ebuild  N    ] dev-libs/useeqparentoffpkg-1.0'
     assert result.stderr.strip() == (
         '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"\n'
         '!!! note: dev-libs/useeqchildpkg-1.0 exists but its USE flags don\'t satisfy '
@@ -3749,10 +3770,10 @@ def test_tree_indents_a_diamond_dependency_and_shows_it_once(emerge_binary, fixt
     result = _run([str(emerge_binary)], ["--pretend", "--tree", "dev-libs/diamond"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/diamond-1.0",
-        "[ebuild  N]   dev-libs/shared-a-1.0",
-        "[ebuild  N]     dev-libs/common-1.0",
-        "[ebuild  N]   dev-libs/shared-b-1.0",
+        '[ebuild  N    ] dev-libs/diamond-1.0 ',
+        '[ebuild  N    ]   dev-libs/shared-a-1.0 ',
+        '[ebuild  N    ]     dev-libs/common-1.0 ',
+        '[ebuild  N    ]   dev-libs/shared-b-1.0 ',
     ]
 
 
@@ -3772,9 +3793,9 @@ def test_tree_unordered_display_preserves_discovery_order(emerge_binary, fixture
     )
     assert ordered.returncode == 0
     assert ordered.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/treeorderpkg-1.0",
-        "[ebuild  N]   dev-libs/atreechild-1.0",
-        "[ebuild  N]   dev-libs/ztreechild-1.0",
+        '[ebuild  N    ] dev-libs/treeorderpkg-1.0 ',
+        '[ebuild  N    ]   dev-libs/atreechild-1.0 ',
+        '[ebuild  N    ]   dev-libs/ztreechild-1.0 ',
     ]
 
     unordered = _run(
@@ -3784,9 +3805,9 @@ def test_tree_unordered_display_preserves_discovery_order(emerge_binary, fixture
     )
     assert unordered.returncode == 0
     assert unordered.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/treeorderpkg-1.0",
-        "[ebuild  N]   dev-libs/ztreechild-1.0",
-        "[ebuild  N]   dev-libs/atreechild-1.0",
+        '[ebuild  N    ] dev-libs/treeorderpkg-1.0 ',
+        '[ebuild  N    ]   dev-libs/ztreechild-1.0 ',
+        '[ebuild  N    ]   dev-libs/atreechild-1.0 ',
     ]
 
 
@@ -3803,9 +3824,9 @@ def test_tree_onlydeps_suppresses_only_the_root_line(emerge_binary, fixture_env)
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N]   dev-libs/shared-a-1.0",
-        "[ebuild  N]     dev-libs/common-1.0",
-        "[ebuild  N]   dev-libs/shared-b-1.0",
+        '[ebuild  N    ]   dev-libs/shared-a-1.0 ',
+        '[ebuild  N    ]     dev-libs/common-1.0 ',
+        '[ebuild  N    ]   dev-libs/shared-b-1.0 ',
     ]
 
 
@@ -3822,7 +3843,7 @@ def test_columns_right_aligns_the_version_into_a_fixed_column(emerge_binary, fix
         [str(emerge_binary)], ["--pretend", "--columns", "dev-libs/newpkg"], env
     )
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  N] dev-libs/newpkg [1.0]       \n"
+    assert result.stdout == '[ebuild  N    ] dev-libs/newpkg [1.0]   \n'
 
 
 def test_columns_shows_both_new_and_old_version_for_an_upgrade(emerge_binary, fixture_env):
@@ -3838,7 +3859,7 @@ def test_columns_shows_both_new_and_old_version_for_an_upgrade(emerge_binary, fi
         env,
     )
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  U] dev-libs/upgradepkg [2.0]   [1.0]\n"
+    assert result.stdout == '[ebuild     U ] dev-libs/upgradepkg [2.0] [1.0]\n'
 
 
 def test_columns_and_tree_together_is_a_usage_error(emerge_binary, fixture_env):
@@ -3873,8 +3894,7 @@ def test_columns_columnwidth_falls_back_to_default_on_an_unparsable_value(
     assert result.returncode == 0
     assert result.stderr.strip() == '!!! Unable to parse COLUMNWIDTH="notanumber"'
     assert result.stdout == (
-        "[ebuild  N] dev-libs/newpkg                                            "
-        "[1.0]                        \n"
+        '[ebuild  N    ] dev-libs/newpkg                                        [1.0]                        \n'
     )
 
 
@@ -3891,10 +3911,10 @@ def test_slot_conflict_is_reported_between_two_incompatible_version_constraints(
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/slotconflictparent"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/slotconflictparent-1.0",
-        "[ebuild  N] dev-libs/slotconflictnewconsumer-1.0",
-        "[ebuild  N] dev-libs/slotconflictoldconsumer-1.0",
-        "[ebuild  N] dev-libs/slotconflicttarget-2.0",
+        '[ebuild  N    ] dev-libs/slotconflictparent-1.0 ',
+        '[ebuild  N    ] dev-libs/slotconflictnewconsumer-1.0 ',
+        '[ebuild  N    ] dev-libs/slotconflictoldconsumer-1.0 ',
+        '[ebuild  N    ] dev-libs/slotconflicttarget-2.0 ',
         '[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"',
     ]
 
@@ -3908,9 +3928,9 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/multislotparent"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/multislotparent-1.0",
-        "[ebuild  N] dev-libs/multislotpkg-1.0",
-        "[ebuild  N] dev-libs/multislotpkg-2.0",
+        '[ebuild  N    ] dev-libs/multislotparent-1.0 ',
+        '[ebuild  N    ] dev-libs/multislotpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/multislotpkg-2.0 ',
     ]
     assert "[slot conflict]" not in result.stdout
 
@@ -3923,9 +3943,9 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
     )
     assert tree.returncode == 0
     assert tree.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/multislotparent-1.0",
-        "[ebuild  N]   dev-libs/multislotpkg-1.0",
-        "[ebuild  N]   dev-libs/multislotpkg-2.0",
+        '[ebuild  N    ] dev-libs/multislotparent-1.0 ',
+        '[ebuild  N    ]   dev-libs/multislotpkg-1.0 ',
+        '[ebuild  N    ]   dev-libs/multislotpkg-2.0 ',
     ]
 
     # --json: every slot's entry names the same owner in required_by.
@@ -3951,7 +3971,7 @@ def test_new_slot_install_renders_the_S_bracket_column(emerge_binary, fixture_en
         result = _run([str(emerge_binary)], ["--pretend", atom], fixture_env)
         assert result.returncode == 0
         assert result.stdout.splitlines() == [
-            "[ebuild  NS] dev-libs/newslotpkg-2.0",
+            "[ebuild  NS   ] dev-libs/newslotpkg-2.0 ",
         ], atom
         assert "upgrade from" not in result.stdout, atom
 
@@ -3971,7 +3991,7 @@ def test_interactive_bracket_column(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  IN] dev-libs/interactivemergepkg-1.0",
+        '[ebuild IN    ] dev-libs/interactivemergepkg-1.0 ',
     ]
 
     # An installed interactive package reinstalls as [ebuild Ir].
@@ -3980,7 +4000,7 @@ def test_interactive_bracket_column(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  Ir] dev-libs/interactiveinstalledpkg-1.0",
+        '[ebuild I R   ] dev-libs/interactiveinstalledpkg-1.0 ',
     ]
 
     # `gtk? ( interactive )` with gtk disabled -> the conditional gates
@@ -3990,7 +4010,7 @@ def test_interactive_bracket_column(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/interactivecondpkg-1.0",
+        '[ebuild  N    ] dev-libs/interactivecondpkg-1.0 ',
     ]
 
 
@@ -4008,7 +4028,7 @@ def test_fetch_restrict_bracket_column(emerge_binary, fixture_env):
     )
     assert ok.returncode == 0
     assert ok.stdout.splitlines() == [
-        "[ebuild  Nf] dev-libs/fetchrestrictsatisfiedpkg-1.0",
+        '[ebuild  N f  ] dev-libs/fetchrestrictsatisfiedpkg-1.0 ',
     ]
 
     missing = _run(
@@ -4016,7 +4036,7 @@ def test_fetch_restrict_bracket_column(emerge_binary, fixture_env):
     )
     assert missing.returncode == 0
     assert missing.stdout.splitlines() == [
-        "[ebuild  NF] dev-libs/fetchrestrictmissingpkg-1.0",
+        '[ebuild  N F  ] dev-libs/fetchrestrictmissingpkg-1.0 ',
     ]
 
     # Point DISTDIR somewhere empty -> even the pre-seeded one is now F.
@@ -4025,12 +4045,14 @@ def test_fetch_restrict_bracket_column(emerge_binary, fixture_env):
         [str(emerge_binary)], ["--pretend", "dev-libs/fetchrestrictsatisfiedpkg"], empty_env
     )
     assert both_missing.stdout.splitlines() == [
-        "[ebuild  NF] dev-libs/fetchrestrictsatisfiedpkg-1.0",
+        '[ebuild  N F  ] dev-libs/fetchrestrictsatisfiedpkg-1.0 ',
     ]
 
     # A package with no RESTRICT=fetch has no f/F column at all.
     plain = _run([str(emerge_binary)], ["--pretend", "dev-libs/newpkg"], fixture_env)
-    assert plain.stdout.splitlines() == ["[ebuild  N] dev-libs/newpkg-1.0"]
+    assert plain.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+    ]
 
 
 def test_pv_totals_summary_line(emerge_binary, fixture_env):
@@ -4110,9 +4132,9 @@ def test_multiple_top_level_atoms_share_dedup_and_slot_conflict_machinery(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/shared-a-1.0",
-        "[ebuild  N] dev-libs/shared-b-1.0",
-        "[ebuild  N] dev-libs/common-1.0",
+        '[ebuild  N    ] dev-libs/shared-a-1.0 ',
+        '[ebuild  N    ] dev-libs/shared-b-1.0 ',
+        '[ebuild  N    ] dev-libs/common-1.0 ',
     ]
 
 
@@ -4133,9 +4155,9 @@ def test_multiple_top_level_atoms_detect_a_slot_conflict_between_targets(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/slotconflictnewconsumer-1.0",
-        "[ebuild  N] dev-libs/slotconflictoldconsumer-1.0",
-        "[ebuild  N] dev-libs/slotconflicttarget-2.0",
+        '[ebuild  N    ] dev-libs/slotconflictnewconsumer-1.0 ',
+        '[ebuild  N    ] dev-libs/slotconflictoldconsumer-1.0 ',
+        '[ebuild  N    ] dev-libs/slotconflicttarget-2.0 ',
         '[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"',
     ]
 
@@ -4148,7 +4170,9 @@ def test_multiple_top_level_atoms_dedupe_a_literal_duplicate(emerge_binary, fixt
         [str(emerge_binary)], ["--pretend", "dev-libs/newpkg", "dev-libs/newpkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/newpkg-1.0"]
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+    ]
 
 
 def test_multiple_top_level_atoms_all_already_installed(emerge_binary, fixture_env):
@@ -4203,7 +4227,7 @@ def test_versioned_and_slotted_top_level_atoms_resolve_like_bare_ones(
     for atom in (">=dev-libs/newpkg-1.0", "dev-libs/newpkg:0"):
         result = _run([str(emerge_binary)], ["--pretend", atom], fixture_env)
         assert result.returncode == 0, atom
-        assert result.stdout.splitlines() == ["[ebuild  N] dev-libs/newpkg-1.0"], atom
+        assert result.stdout.splitlines() == ["[ebuild  N    ] dev-libs/newpkg-1.0 "], atom
 
 
 def test_blocker_top_level_atom_is_rejected_not_silently_dropped(emerge_binary, fixture_env):
@@ -4232,11 +4256,11 @@ def test_verbose_shows_use_flags_gated_by_profile_and_make_conf(emerge_binary, f
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/useflagpkg"], fixture_env
     )
     assert verbose.returncode == 0
-    assert verbose.stdout.splitlines()[0] == '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+    assert verbose.stdout.splitlines()[0] == '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
 
     quiet = _run([str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg"], fixture_env)
     assert quiet.returncode == 0
-    assert quiet.stdout.splitlines()[0] == "[ebuild  N] dev-libs/useflagpkg-1.0"
+    assert quiet.stdout.splitlines()[0] == '[ebuild  N    ] dev-libs/useflagpkg-1.0 '
     assert "USE=" not in quiet.stdout
 
 
@@ -4258,10 +4282,10 @@ def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(
     assert default.returncode == 0
     lines = default.stdout.splitlines()
     assert lines[0] == (
-        '[ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="enableddefault plainflag -disableddefault"'
+        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0  USE="enableddefault plainflag -disableddefault"'
     )
     assert any(
-        ln == '[ebuild  N] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="nvidia -amdgpu"'
+        ln == '[ebuild  N     ] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="nvidia -amdgpu"'
         for ln in lines
     )
 
@@ -4273,10 +4297,10 @@ def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(
     assert alpha.returncode == 0
     alines = alpha.stdout.splitlines()
     assert alines[0] == (
-        '[ebuild  N] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"'
+        '[ebuild  N     ] dev-libs/iusedefaultpkg-1.0  USE="-disableddefault enableddefault plainflag"'
     )
     assert any(
-        ln == '[ebuild  N] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="-amdgpu nvidia"'
+        ln == '[ebuild  N     ] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="-amdgpu nvidia"'
         for ln in alines
     )
 
@@ -4307,16 +4331,16 @@ def test_verbose_use_flags_reflect_package_use_overrides(emerge_binary, fixture_
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/packageuseenablepkg"], fixture_env
     )
     assert enable.stdout.splitlines()[0] == (
-        '[ebuild  N] dev-libs/packageuseenablepkg-1.0  USE="pkguseflag"'
+        '[ebuild  N     ] dev-libs/packageuseenablepkg-1.0  USE="pkguseflag"'
     )
 
     disable = _run(
         [str(emerge_binary)], ["--pretend", "-v", "dev-libs/packageusedisablepkg"], fixture_env
     )
     assert disable.stdout.splitlines() == [
-        '[ebuild  N] dev-libs/packageusedisablepkg-1.0  USE="-foo"',
-        "",
-        "Total: 1 package (1 new), Size of downloads: 0 KiB",
+        '[ebuild  N     ] dev-libs/packageusedisablepkg-1.0  USE="-foo"',
+        '',
+        'Total: 1 package (1 new), Size of downloads: 0 KiB',
     ]
 
 
@@ -4328,9 +4352,9 @@ def test_verbose_on_a_package_with_no_iuse_shows_no_use_line(emerge_binary, fixt
     result = _run([str(emerge_binary)], ["--pretend", "-v", "dev-libs/newpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "",
-        "Total: 1 package (1 new), Size of downloads: 0 KiB",
+        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '',
+        'Total: 1 package (1 new), Size of downloads: 0 KiB',
     ]
 
 
@@ -4345,14 +4369,14 @@ def test_verbose_consumes_an_explicit_y_or_n_value(emerge_binary, fixture_env):
         [str(emerge_binary)], ["--pretend", "-v", "n", "dev-libs/useflagpkg"], fixture_env
     )
     assert disabled.returncode == 0
-    assert disabled.stdout.splitlines()[0] == "[ebuild  N] dev-libs/useflagpkg-1.0"
+    assert disabled.stdout.splitlines()[0] == '[ebuild  N    ] dev-libs/useflagpkg-1.0 '
     assert "USE=" not in disabled.stdout
 
     enabled = _run(
         [str(emerge_binary)], ["--pretend", "-v", "y", "dev-libs/useflagpkg"], fixture_env
     )
     assert enabled.returncode == 0
-    assert enabled.stdout.splitlines()[0] == '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+    assert enabled.stdout.splitlines()[0] == '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
 
 
 def test_verbose_inline_equals_form_consumes_y_or_n(emerge_binary, fixture_env):
@@ -4386,7 +4410,7 @@ def test_short_flag_bundle_pv_enables_both_pretend_and_verbose(emerge_binary, fi
         assert result.returncode == 0, bundle
         assert (
             result.stdout.splitlines()[0]
-            == '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
+            == '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"'
         ), bundle
 
 
@@ -4528,11 +4552,11 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
     result = _run([str(emerge_binary)], ["--pretend", "--update", "@world"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "[ebuild  N] dev-libs/withdeps-1.0",
-        "dev-libs/nestedsetpkg-1.0 is already installed; nothing to do",
-        "[ebuild  N] dev-libs/innernestedsetpkg-1.0",
-        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/withdeps-1.0 ',
+        'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
+        '[ebuild  N    ] dev-libs/innernestedsetpkg-1.0 ',
+        '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]',
     ]
 
 
@@ -4548,12 +4572,12 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "dev-libs/samepkg-1.0 is already installed; nothing to do",
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "[ebuild  N] dev-libs/withdeps-1.0",
-        "dev-libs/nestedsetpkg-1.0 is already installed; nothing to do",
-        "[ebuild  N] dev-libs/innernestedsetpkg-1.0",
-        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+        'dev-libs/samepkg-1.0 is already installed; nothing to do',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/withdeps-1.0 ',
+        'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
+        '[ebuild  N    ] dev-libs/innernestedsetpkg-1.0 ',
+        '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]',
     ]
 
 
@@ -5655,7 +5679,7 @@ def test_deselect_n_does_not_trigger_deselect_mode(emerge_binary, fixture_env, t
         _deselect_env(fixture_env, tmp_path),
     )
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  r] dev-libs/foo-1.0\n"
+    assert result.stdout == '[ebuild   R   ] dev-libs/foo-1.0 \n'
 
 
 def test_deselect_matches_between_implementations(
@@ -5707,12 +5731,10 @@ def test_system_expands_to_the_fixture_profile_chains_own_packages_files(
     result = _run([str(emerge_binary)], ["--pretend", "--update", "@system"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        # dev-libs/systempkg is a third *-prefixed @system atom (base/
-        # packages), installed since the -pC system-profile slice.
-        "dev-libs/systempkg-1.0 is already installed; nothing to do",
-        "[ebuild  N] dev-libs/withdeps-1.0",
-        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        'dev-libs/systempkg-1.0 is already installed; nothing to do',
+        '[ebuild  N    ] dev-libs/withdeps-1.0 ',
+        '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]',
     ]
 
 
@@ -5728,11 +5750,11 @@ def test_system_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "dev-libs/samepkg-1.0 is already installed; nothing to do",
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "dev-libs/systempkg-1.0 is already installed; nothing to do",
-        "[ebuild  N] dev-libs/withdeps-1.0",
-        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+        'dev-libs/samepkg-1.0 is already installed; nothing to do',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        'dev-libs/systempkg-1.0 is already installed; nothing to do',
+        '[ebuild  N    ] dev-libs/withdeps-1.0 ',
+        '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]',
     ]
 
 
@@ -5762,8 +5784,8 @@ def test_newuse_reinstalls_a_package_whose_use_changed(emerge_binary, fixture_en
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild   R   ] dev-libs/reinstallpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -5774,8 +5796,8 @@ def test_newuse_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["-pN", "dev-libs/reinstallpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild   R   ] dev-libs/reinstallpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -5790,10 +5812,10 @@ def test_newuse_verbose_shows_use_flags_too(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)  USE="foo*"',
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "",
-        "Total: 2 packages (1 new, 1 reinstall), Size of downloads: 0 KiB",
+        '[ebuild   R    ] dev-libs/reinstallpkg-1.0  USE="foo*"',
+        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+        '',
+        'Total: 2 packages (1 new, 1 reinstall), Size of downloads: 0 KiB',
     ]
 
 
@@ -5862,7 +5884,7 @@ def test_newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag(emerge_binary,
     )
     assert newuse_result.returncode == 0
     assert newuse_result.stdout == (
-        "[ebuild  r] dev-libs/changedusepkg-1.0 (reinstall for changed USE: brandnewflag)\n"
+        '[ebuild   R   ] dev-libs/changedusepkg-1.0 \n'
     )
 
     changed_use_result = _run(
@@ -5872,7 +5894,7 @@ def test_newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag(emerge_binary,
     )
     assert changed_use_result.returncode == 0
     assert changed_use_result.stdout == (
-        "dev-libs/changedusepkg-1.0 is already installed; nothing to do\n"
+        'dev-libs/changedusepkg-1.0 is already installed; nothing to do\n'
     )
 
 
@@ -5898,8 +5920,8 @@ def test_changed_use_still_catches_an_enablement_change_on_a_shared_flag(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  r] dev-libs/reinstallpkg-1.0 (reinstall for changed USE: foo)",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild   R   ] dev-libs/reinstallpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -5923,8 +5945,8 @@ def test_changed_deps_reinstalls_and_recurses_into_the_current_ebuilds_own_depen
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  r] dev-libs/changeddepspkg-1.0 (reinstall for changed dependencies)',
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild   R   ] dev-libs/changeddepspkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -5965,7 +5987,7 @@ def test_changed_deps_detects_an_atom_moved_between_two_dep_keys(
     assert rust.stdout == python.stdout
     assert rust.stderr == python.stderr
     assert rust.stdout.splitlines() == [
-        "[ebuild  r] dev-libs/movedkeydepspkg-1.0 (reinstall for changed dependencies)",
+        "[ebuild   R   ] dev-libs/movedkeydepspkg-1.0 ",
     ]
 
 
@@ -6019,7 +6041,7 @@ def test_changed_deps_structured_comparison(
         assert rust.stdout == python.stdout, pkg
         assert rust.stderr == python.stderr, pkg
         assert rust.stdout.splitlines() == [
-            f"[ebuild  r] dev-libs/{pkg}-1.0 (reinstall for changed dependencies)",
+            f"[ebuild   R   ] dev-libs/{pkg}-1.0 ",
         ], pkg
 
     args = ["--pretend", "--changed-deps", "dev-libs/redundantbracketdepspkg"]
@@ -6084,8 +6106,8 @@ def test_changed_slot_reinstalls_a_package_whose_vdb_slot_differs_from_the_curre
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  r] dev-libs/changedslotpkg-1.0 (reinstall for changed slot)",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild   R   ] dev-libs/changedslotpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -6104,8 +6126,8 @@ def test_changed_deps_and_changed_slot_combine_in_one_reinstall_line(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  r] dev-libs/changedslotpkg-1.0 (reinstall for changed dependencies; changed slot)",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild   R   ] dev-libs/changedslotpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -6151,8 +6173,8 @@ def test_without_with_test_deps_a_test_gated_dependency_is_never_pulled_in(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/withtestdeppkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/withtestdeppkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -6170,9 +6192,9 @@ def test_with_test_deps_pulls_in_a_top_level_atoms_own_test_gated_dependency(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/withtestdeppkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "[ebuild  N] dev-libs/testonlydep-1.0",
+        '[ebuild  N    ] dev-libs/withtestdeppkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        '[ebuild  N    ] dev-libs/testonlydep-1.0 ',
     ]
 
 
@@ -6184,8 +6206,8 @@ def test_with_test_deps_n_explicitly_disables_it(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/withtestdeppkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/withtestdeppkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -6202,9 +6224,9 @@ def test_with_test_deps_does_not_apply_beyond_a_top_level_atom(emerge_binary, fi
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/withtestdepconsumer-1.0",
-        "[ebuild  N] dev-libs/withtestdeppkg-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/withtestdepconsumer-1.0 ',
+        '[ebuild  N    ] dev-libs/withtestdeppkg-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -6219,7 +6241,7 @@ def test_nodeps_disables_recursion_entirely(emerge_binary, fixture_env):
         [str(emerge_binary)], ["--pretend", "--nodeps", "dev-libs/withdeps"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  N] dev-libs/withdeps-1.0\n"
+    assert result.stdout == '[ebuild  N    ] dev-libs/withdeps-1.0 \n'
 
 
 def test_nodeps_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
@@ -6228,7 +6250,7 @@ def test_nodeps_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
     the long-flag invocation above."""
     result = _run([str(emerge_binary)], ["-pO", "dev-libs/withdeps"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  N] dev-libs/withdeps-1.0\n"
+    assert result.stdout == '[ebuild  N    ] dev-libs/withdeps-1.0 \n'
 
 
 def test_nodeps_still_shows_the_top_level_atoms_own_use_display(emerge_binary, fixture_env):
@@ -6242,8 +6264,7 @@ def test_nodeps_still_shows_the_top_level_atoms_own_use_display(emerge_binary, f
     )
     assert result.returncode == 0
     assert result.stdout == (
-        '[ebuild  N] dev-libs/useflagpkg-1.0  USE="foo -missingflag"\n'
-        "\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n"
+        '[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"\n\nTotal: 1 package (1 new), Size of downloads: 0 KiB\n'
     )
 
 
@@ -6264,8 +6285,8 @@ def test_onlydeps_suppresses_the_top_level_atom_but_shows_its_dependencies(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]',
     ]
 
 
@@ -6277,8 +6298,8 @@ def test_onlydeps_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["-pou", "dev-libs/withdeps"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]',
     ]
 
 
@@ -6317,7 +6338,7 @@ def test_without_update_a_bare_top_level_atom_still_offers_a_newer_version(
     behavior was discovered."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/upgradepkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)\n"
+    assert result.stdout == '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]\n'
 
 
 def test_noreplace_restores_the_real_avoid_update_shortcut(emerge_binary, fixture_env):
@@ -6353,7 +6374,7 @@ def test_selective_n_cancels_selective_even_when_update_would_have_set_it(
         [str(emerge_binary)], ["--pretend", "--update", "dev-libs/samepkg"], fixture_env
     )
     assert with_update_alone.returncode == 0
-    assert with_update_alone.stdout == "dev-libs/samepkg-1.0 is already installed; nothing to do\n"
+    assert with_update_alone.stdout == 'dev-libs/samepkg-1.0 is already installed; nothing to do\n'
 
     with_selective_cancelled = _run(
         [str(emerge_binary)],
@@ -6361,7 +6382,7 @@ def test_selective_n_cancels_selective_even_when_update_would_have_set_it(
         fixture_env,
     )
     assert with_selective_cancelled.returncode == 0
-    assert with_selective_cancelled.stdout == "[ebuild  r] dev-libs/samepkg-1.0\n"
+    assert with_selective_cancelled.stdout == '[ebuild   R   ] dev-libs/samepkg-1.0 \n'
 
 
 def test_update_upgrades_to_the_newer_visible_version(emerge_binary, fixture_env):
@@ -6371,7 +6392,7 @@ def test_update_upgrades_to_the_newer_visible_version(emerge_binary, fixture_env
         [str(emerge_binary)], ["--pretend", "--update", "dev-libs/upgradepkg"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)\n"
+    assert result.stdout == '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]\n'
 
 
 def test_update_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
@@ -6380,7 +6401,7 @@ def test_update_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
     the long-flag invocation above."""
     result = _run([str(emerge_binary)], ["-pu", "dev-libs/upgradepkg"], fixture_env)
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)\n"
+    assert result.stdout == '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]\n'
 
 
 def test_update_threads_through_dependency_recursion_not_just_top_level(
@@ -6398,9 +6419,9 @@ def test_update_threads_through_dependency_recursion_not_just_top_level(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/withdeps-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
-        "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)",
+        '[ebuild  N    ] dev-libs/withdeps-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
+        '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]',
     ]
 
 
@@ -6443,8 +6464,8 @@ def test_deep_walks_the_whole_already_installed_chain(emerge_binary, fixture_env
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "dev-libs/deeppkg-1.0 is already installed; nothing to do",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        'dev-libs/deeppkg-1.0 is already installed; nothing to do',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -6459,8 +6480,8 @@ def test_deep_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["-pnD", "dev-libs/deeppkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "dev-libs/deeppkg-1.0 is already installed; nothing to do",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        'dev-libs/deeppkg-1.0 is already installed; nothing to do',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -6481,7 +6502,7 @@ def test_deep_bounded_depth_stops_short_of_the_full_chain(emerge_binary, fixture
         fixture_env,
     )
     assert bounded_one.returncode == 0
-    assert bounded_one.stdout == "dev-libs/deeppkg-1.0 is already installed; nothing to do\n"
+    assert bounded_one.stdout == 'dev-libs/deeppkg-1.0 is already installed; nothing to do\n'
 
     bounded_two = _run(
         [str(emerge_binary)],
@@ -6490,8 +6511,8 @@ def test_deep_bounded_depth_stops_short_of_the_full_chain(emerge_binary, fixture
     )
     assert bounded_two.returncode == 0
     assert bounded_two.stdout.splitlines() == [
-        "dev-libs/deeppkg-1.0 is already installed; nothing to do",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        'dev-libs/deeppkg-1.0 is already installed; nothing to do',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -6600,7 +6621,7 @@ def test_exclude_does_not_affect_a_non_matching_package(emerge_binary, fixture_e
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == "[ebuild  U] dev-libs/upgradepkg-2.0 (upgrade from 1.0)\n"
+    assert result.stdout == '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]\n'
 
 
 def test_exclude_prevents_a_not_yet_installed_package_from_being_offered(
@@ -6635,8 +6656,8 @@ def test_exclude_threads_through_dependency_recursion_not_just_top_level(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/withdeps-1.0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/withdeps-1.0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -6913,8 +6934,8 @@ def test_virtual_is_resolved_directly(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["--pretend", "virtual/texteditor"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] virtual/texteditor-0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] virtual/texteditor-0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 
@@ -6928,9 +6949,9 @@ def test_virtual_is_resolved_as_a_dependency(emerge_binary, fixture_env):
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        "[ebuild  N] dev-libs/virtualconsumerpkg-1.0",
-        "[ebuild  N] virtual/texteditor-0",
-        "[ebuild  N] dev-libs/newpkg-1.0",
+        '[ebuild  N    ] dev-libs/virtualconsumerpkg-1.0 ',
+        '[ebuild  N    ] virtual/texteditor-0 ',
+        '[ebuild  N    ] dev-libs/newpkg-1.0 ',
     ]
 
 

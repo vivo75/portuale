@@ -144,7 +144,10 @@ Ranked roughly by how self-contained each is.
    here); (b) `-pv` USE display still lacks real portage's ANSI color and
    real portage's *natural*
    within-group sort (`_alnum_sort_key`; the pilot's plain lexicographic
-   only differs on e.g. `python3_9` vs `python3_12`). The enabled-first
+   only differs on e.g. `python3_9` vs `python3_12`). ANSI colour across
+   *all* of `-pv` (bracket line, USE flags, counters, cleanup actions,
+   autounmask, columns/tree) is now a scoped multi-increment buildout —
+   see item 14 below. The enabled-first
    within-group order + `emerge --alphabetical` **shipped 2026-08-27**
    (`build_use_expand_display` enabled-first split, `pretend.rs::
    use_suffix` `alphabetical` param + `use_flag_sort_key`). `all_flags`
@@ -182,9 +185,18 @@ Ranked roughly by how self-contained each is.
    downloads: N KiB` + the `Fetch Restriction: N package[s]` line
    (`GraphEntry::download_files` + new `fetch_bytes_to_download` +
    `localized_size`, real `_calc_size`/`counters.totalsize`) **shipped
-   2026-08-27** too, completing `_PackageCounters.__str__`. **Still open
-   in this bracket area:** just `g` (remote binary — needs
-   `--getbinpkg`). The `-pv` output arc is otherwise complete.
+   2026-08-27** too, completing `_PackageCounters.__str__`. The real
+   `PkgAttrDisplay` fixed-width bracket field (`[I][N/r][S/R][f/F/g][U][D]`
+   + a 7th mask column at `-v`) and the `[old-ver]` column replacing the
+   `(upgrade from X)` / `(reinstall for …)` prose **shipped 2026-08-29**
+   (`attr_display_field` / `_attr_display_field`, real
+   `PkgAttrDisplay.__str__` + `_set_no_columns` + `convert_myoldbest`;
+   `reinstall_reason` deleted — real `-pv` shows no inline reinstall
+   reason) — increment 1 of the colour buildout (item 14). **Still open
+   in this bracket area:** `g` (remote binary — needs `--getbinpkg`),
+   the new-slot other-slot version list, verbosity-3 `:slot`/`::repo` on
+   the cpv, and ANSI colour (item 14). The `-pv` output arc's *structure*
+   is otherwise complete.
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag
@@ -286,6 +298,29 @@ Ranked roughly by how self-contained each is.
     excluded, **confirmed with the user each time it comes up**: it is the
     one real spot a raw ELF-header read (not `scanelf` output) would
     matter.
+
+### G. `emerge -pv` real `output.py` layout + ANSI colour
+
+14. **The full real `resolver/output.py` rendering.** Scoped 2026-08-29
+    (user chose maximum fidelity + scope via `AskUserQuestion`), landed as
+    a multi-increment buildout:
+    - **Increment 1 — real bracket layout, no colour** — **shipped
+      2026-08-29**: `attr_display_field` (real `PkgAttrDisplay.__str__`),
+      `[old-ver]` column replacing the `(upgrade from X)` / `(reinstall
+      for …)` prose, `reinstall_reason` deleted. See item 2 above.
+    - **Increment 2 — colour primitive + gating** (open): the real
+      `\x1b[`-based escape table + `_styles` + `havecolor`, `--color=y|n`
+      (real choices `("y","n")`), `NO_COLOR`/`NOCOLOR`/isatty/`TERM=dumb`
+      gating (real `actions.py:2816-2828`), no `color.map`/
+      `PORTAGE_COLORMAP` parsing; then colourise the bracket line
+      (`pkgprint` palette, attr letters, `blue("[old-ver]")`, blocker,
+      mask).
+    - **Increment 3 — USE-flag colours** in `build_use_expand_display`.
+    - **Increment 4 — counters line, `-pc`/`-pC`/`-pP` cleanup output,
+      autounmask messages, `--columns`/`--tree` colour.**
+    Also still deferred (increment 1 follow-ups): a new-slot install's
+    other-slot version list (`myoldbest = installed_versions`), and
+    verbosity-3 `:slot`/`::repo` decoration on the cpv.
 
 ---
 

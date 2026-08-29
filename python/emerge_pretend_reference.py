@@ -7452,33 +7452,64 @@ def _run_depclean_pretend(targets, root, config_root, config, verbose=False):
     return rc
 
 
-def _reinstall_reason(changed_flags, deps_changed, slot_changed, rebuilt_binary, new_repo):
-    """The "(reinstall for ...)" note's own reason text, real portage
-    treating --newuse/--changed-use, --changed-deps, --changed-slot,
-    --rebuilt-binaries, and --newrepo as independent, freely-combinable
-    triggers. Pilot-invented wording, same as the pre-existing "changed
-    USE: ..." text -- real portage's own default --pretend output shows
-    no such itemized reason at all. Returns None when all five are
-    empty/False -- real portage's own bare, reasonless "[ebuild R]" (see
-    resolve_pretend's own selective/is_top_level docstring paragraph):
-    unlike every other reinstall, this one genuinely has no tracked
-    reason to report at all, so the caller omits the whole "(reinstall
-    for ...)" parenthetical rather than printing an empty one. Mirrors
-    pretend.rs's own reinstall_reason exactly."""
-    reasons = []
-    if changed_flags:
-        reasons.append(f"changed USE: {', '.join(changed_flags)}")
-    if deps_changed:
-        reasons.append("changed dependencies")
-    if slot_changed:
-        reasons.append("changed slot")
-    if rebuilt_binary:
-        reasons.append("rebuilt binary")
-    if new_repo:
-        reasons.append("new repository")
-    if not reasons:
-        return None
-    return "; ".join(reasons)
+def _attr_display_field(
+    interactive,
+    new,
+    force_reinstall,
+    new_slot,
+    replace,
+    fetch_restrict,
+    fetch_restrict_satisfied,
+    remote_binary,
+    new_version,
+    downgrade,
+    mask,
+    verbose,
+):
+    """Real PkgAttrDisplay.__str__ (_emerge/resolver/output_helpers.py):
+    the fixed-width status field rendered inside the "[ebuild ...]"
+    bracket, exactly "[{pkg.type_name} {attr_display}]". One column per
+    attribute, a literal space where the attribute is absent, in this
+    exact order:
+
+      0. I  -- interactive
+      1. N  -- new; r instead when force_reinstall (this pilot has no
+               --emptytree/arg.force_reinstall concept, so always N or
+               space here -- a plain reinstall shows R at col 2)
+      2. S  -- new_slot; R instead when replace (the cpv is already
+               installed -- every Reinstall outcome)
+      3. f/F/g -- fetch-restrict satisfied / unsatisfied / remote binary
+               (g out of scope, needs --getbinpkg)
+      4. U  -- new_version (an in-slot version change -- Upgrade/Downgrade)
+      5. D  -- downgrade
+      6. the mask column -- present only at -v (include_mask_str =
+         verbosity > 1), the #/~/* char from gen_mask_str or a space
+
+    Increment 1 of the -pv layout buildout renders this plain; the real
+    per-column ANSI colors come in increment 2. Mirrors pretend.rs's
+    attr_display_field exactly."""
+    f = []
+    f.append("I" if interactive else " ")
+    f.append("r" if force_reinstall else "N" if new else " ")
+    f.append("R" if replace else "S" if new_slot else " ")
+    f.append(
+        "f"
+        if fetch_restrict_satisfied
+        else "F"
+        if fetch_restrict
+        else "g"
+        if remote_binary
+        else " "
+    )
+    f.append("U" if new_version else " ")
+    f.append("D" if downgrade else " ")
+    # Real __str__ appends self.mask only `if self.mask is not None`, and
+    # set_pkg_info sets it (to a space when there's no real mark) only
+    # `if self.include_mask_str()` -- so the column exists at -v and
+    # doesn't at plain -p.
+    if verbose:
+        f.append(mask or " ")
+    return "".join(f)
 
 
 def _package_counters_summary(entries, top_level_pkgs, onlydeps):
@@ -7600,25 +7631,26 @@ def _columnwidth_from_env():
         return 130
 
 
-def _columns_line(bracket, code, mask, indent, category, package, version, oldbest, columnwidth):
+def _columns_line(bracket, field, indent, category, package, version, oldbest, columnwidth):
     """One --columns line: real _set_root_columns's own layout algorithm
     (the pkg_info.merge == True branch only -- the "not merging" branch
     never applies to any outcome this pilot prints in brackets at all),
-    with color stripped (this pilot has no ANSI color output anywhere).
-    bracket/code reproduce the exact same "[{bracket}  {code}]" segment
-    the non-columns format already prints unchanged -- only what comes
-    after it differs: category/package (no version -- that's the whole
-    point of --columns) padded out to columnwidth - 60 (newlp), then
-    [version] right-padded to columnwidth - 30 (oldlp), then oldbest
-    ("[from]" for an Upgrade/Downgrade, empty otherwise -- real
-    pkg_info.oldbest_list, mirrored here via data this pilot already
-    has). Padding is skipped once the line's already past the target
-    width, exactly like real portage's own guard -- never truncates,
-    just doesn't pad further. Mirrors pretend.rs's own columns_line
-    exactly."""
+    color stripped for increment 1 (real's nc_len/plain len() distinction
+    collapses to just len() until increment 2 adds ANSI color).
+    bracket/field reproduce the exact same "[{bracket} {field}]" segment
+    the non-columns format prints -- field is the full fixed-width
+    attr_display_field -- only what comes after it differs:
+    category/package (no version -- that's the whole point of --columns)
+    padded out to columnwidth - 60 (newlp), then [version] right-padded
+    to columnwidth - 30 (oldlp), then oldbest ("[from]" for an
+    Upgrade/Downgrade, empty otherwise -- real pkg_info.oldbest_list,
+    mirrored here via data this pilot already has). Padding is skipped
+    once the line's already past the target width, exactly like real
+    portage's own guard -- never truncates, just doesn't pad further.
+    Mirrors pretend.rs's own columns_line exactly."""
     newlp = max(columnwidth - 60, 0)
     oldlp = max(columnwidth - 30, 0)
-    line = f"[{bracket}  {code}{mask}] {indent}{category}/{package}"
+    line = f"[{bracket} {field}] {indent}{category}/{package}"
     if newlp > len(line):
         line += " " * (newlp - len(line))
     line += f" [{version}] "
@@ -8757,7 +8789,11 @@ def run(args):
             toks.sort(key=_use_flag_sort_key)
             return " ".join(toks)
 
-        return "  " + " ".join(f'{name}="{body(rendered)}"' for name, rendered in groups)
+        # Real print_messages: `myprint += " " + self.verboseadd` -- a
+        # single space joins the USE display to the line, which already
+        # ends with the (possibly empty) oldbest slot's own trailing
+        # space. Mirrors pretend.rs's use_suffix.
+        return " " + " ".join(f'{name}="{body(rendered)}"' for name, rendered in groups)
 
     def root_suffix(targets_running_root):
         # Real lib/_emerge/resolver/output.py:841-862's own
@@ -8775,7 +8811,13 @@ def run(args):
         # is somehow None. Mirrors pretend.rs's own root_suffix exactly.
         if not targets_running_root or root_deps_running_root is None:
             return ""
-        return f" to {root_deps_running_root}"
+        # Returned bare ("to /", no leading space) -- real
+        # output.py:856-861 places it right after the always-present
+        # space that follows the package string, with oldbest (when
+        # non-empty) getting its own trailing space before it;
+        # print_entry_line's own emit reproduces that spacing. Mirrors
+        # pretend.rs's root_suffix.
+        return f"to {root_deps_running_root}"
 
     if json_output:
         _print_json(
@@ -8830,131 +8872,100 @@ def run(args):
         root = root_suffix(targets_running_root)
         installed = _installed_use_state(category, package, outcome)
         forced = _forced_flags_for_entry(category, package, outcome)
-        # Real output.py:gen_mask_str's -v one-character mask column,
-        # appended right after the N/U/D/r code letter. Mirrors
-        # pretend.rs's mask_suffix.
-        km = provenance.get("keyword_mask") if isinstance(provenance, dict) else None
-        mask = f" {km}" if (verbose and km) else ""
-        # Real output.py:833's own "I" bracket column (PkgAttrDisplay.
-        # __str__ renders it *before* the N/r code letter): a merge-bound
-        # package whose evaluated PROPERTIES contains "interactive"
-        # (provenance["interactive"]). Unconditional, like the S column.
-        # Mirrors pretend.rs's `ix`.
-        ix = "I" if (isinstance(provenance, dict) and provenance.get("interactive")) else ""
-        # Real output.py:637-641's own f/F fetch-restrict bracket column,
-        # right after the S/R one: f = all restricted distfiles already
-        # in DISTDIR, F = some must be fetched by hand. Mirrors
-        # pretend.rs's `fx`.
-        if isinstance(provenance, dict) and provenance.get("fetch_restrict"):
-            fx = "f" if provenance.get("fetch_restrict_satisfied") else "F"
-        else:
-            fx = ""
-        if tag == "new":
-            # Real output.py's own "S" bracket column
-            # (PkgAttrDisplay.new_slot): a "new" into a slot the package
-            # isn't currently installed in, while another slot of it is
-            # (provenance["new_slot"]). Rendered right after the N code
-            # letter, unconditionally -- unlike mask, this column is not
-            # -v-gated in real portage either. Mirrors pretend.rs.
-            code = (
-                ix
-                + ("NS" if (isinstance(provenance, dict) and provenance.get("new_slot")) else "N")
-                + fx
+        prov = provenance if isinstance(provenance, dict) else {}
+        # Real output.py:gen_mask_str's -v one-character mask column, now
+        # the 7th column of the fixed-width attr_display field (not an
+        # appended suffix). Mirrors pretend.rs.
+        km = prov.get("keyword_mask")
+        interactive = bool(prov.get("interactive"))
+        fetch_restrict = bool(prov.get("fetch_restrict"))
+        fetch_restrict_satisfied = bool(prov.get("fetch_restrict_satisfied"))
+        new_slot_flag = bool(prov.get("new_slot"))
+
+        def field(new=False, new_slot=False, replace=False, new_version=False, downgrade=False):
+            # The fixed-width attr_display field flags this entry
+            # contributes, shared by every merge outcome below (see
+            # _attr_display_field). force_reinstall/remote_binary are
+            # always False here -- this pilot has no
+            # --emptytree/arg.force_reinstall concept and g (remote
+            # binpkg) needs --getbinpkg, which is out of scope. Mirrors
+            # pretend.rs's own `field` closure.
+            return _attr_display_field(
+                interactive,
+                new,
+                False,
+                new_slot,
+                replace,
+                fetch_restrict and not fetch_restrict_satisfied,
+                fetch_restrict_satisfied,
+                False,
+                new_version,
+                downgrade,
+                km,
+                verbose,
             )
-            if not onlydeps_suppressed:
-                if columns:
-                    print(
-                        _columns_line(
-                            bracket, code, mask, indent, category, package, outcome[1], "", columnwidth
-                        )
-                        + root
-                        + use_suffix(use_display, installed, forced)
-                    )
-                else:
-                    print(
-                        f"[{bracket}  {code}{mask}] {indent}{category}/{package}-{outcome[1]}{root}{use_suffix(use_display, installed, forced)}"
-                    )
-            print_blockers(category, package, outcome[1], blockers)
-        elif tag == "upgrade":
-            if not onlydeps_suppressed:
-                if columns:
-                    print(
-                        _columns_line(
-                            bracket,
-                            ix + "U" + fx,
-                            mask,
-                            indent,
-                            category,
-                            package,
-                            outcome[2],
-                            f"[{outcome[1]}]",
-                            columnwidth,
-                        )
-                        + root
-                        + use_suffix(use_display, installed, forced)
-                    )
-                else:
-                    print(
-                        f"[{bracket}  {ix}U{fx}{mask}] {indent}{category}/{package}-{outcome[2]} "
-                        f"(upgrade from {outcome[1]}){root}{use_suffix(use_display, installed, forced)}"
-                    )
-            print_blockers(category, package, outcome[2], blockers)
-        elif tag == "downgrade":
-            if not onlydeps_suppressed:
-                if columns:
-                    print(
-                        _columns_line(
-                            bracket,
-                            ix + "D" + fx,
-                            mask,
-                            indent,
-                            category,
-                            package,
-                            outcome[2],
-                            f"[{outcome[1]}]",
-                            columnwidth,
-                        )
-                        + root
-                        + use_suffix(use_display, installed, forced)
-                    )
-                else:
-                    print(
-                        f"[{bracket}  {ix}D{fx}{mask}] {indent}{category}/{package}-{outcome[2]} "
-                        f"(downgrade from {outcome[1]}){root}{use_suffix(use_display, installed, forced)}"
-                    )
-            print_blockers(category, package, outcome[2], blockers)
-        elif tag == "reinstall":
-            changed_flags = outcome[2]
-            deps_changed_flag = outcome[3]
-            slot_changed_flag = outcome[4]
-            rebuilt_binary_flag = outcome[5]
-            new_repo_flag = outcome[6]
-            if not onlydeps_suppressed and columns:
+
+        def emit(f, version, oldbest):
+            # One merge line, shared by new/upgrade/downgrade/reinstall.
+            # Real _set_no_columns: f"[{type} {attr}] {indent}{pkg_str}
+            # {oldbest}" -- the space before oldbest is always there even
+            # when oldbest is empty. The running-root "to <root>" suffix
+            # (real output.py:856-861) and the USE="..." display (real
+            # print_messages' own " " + verboseadd) follow, each already
+            # carrying its own leading space. Mirrors pretend.rs's emit.
+            if onlydeps_suppressed:
+                return
+            use_str = use_suffix(use_display, installed, forced)
+            if columns:
+                root_str = f" {root}" if root else ""
                 print(
                     _columns_line(
-                        bracket, ix + "r" + fx, mask, indent, category, package, outcome[1], "", columnwidth
+                        bracket, f, indent, category, package, version, oldbest, columnwidth
                     )
-                    + root
-                    + use_suffix(use_display, installed, forced)
+                    + root_str
+                    + use_str
                 )
-            elif not onlydeps_suppressed:
-                reason = _reinstall_reason(
-                    changed_flags,
-                    deps_changed_flag,
-                    slot_changed_flag,
-                    rebuilt_binary_flag,
-                    new_repo_flag,
-                )
-                if reason is None:
-                    print(
-                        f"[{bracket}  {ix}r{fx}{mask}] {indent}{category}/{package}-{outcome[1]}"
-                        f"{root}{use_suffix(use_display, installed, forced)}"
-                    )
-                else:
-                    print(
-                        f"[{bracket}  {ix}r{fx}{mask}] {indent}{category}/{package}-{outcome[1]} "
-                        f"(reinstall for {reason}){root}{use_suffix(use_display, installed, forced)}"
-                    )
+                return
+            tail = " " + oldbest
+            if root:
+                if oldbest:
+                    tail += " "
+                tail += root
+            tail += use_str
+            print(f"[{bracket} {f}] {indent}{category}/{package}-{version}{tail}")
+
+        if tag == "new":
+            # Real _get_installed_best: brand-new -> attr.new; into a
+            # fresh slot while another slot is installed -> attr.new
+            # *and* attr.new_slot (provenance["new_slot"]). No oldbest for
+            # a brand-new package; the other-slot version list real
+            # portage shows for a new-slot install (myoldbest =
+            # installed_versions) is deferred to a follow-up increment
+            # (this pilot doesn't carry the other-slot versions yet).
+            emit(field(new=True, new_slot=new_slot_flag), outcome[1], "")
+            print_blockers(category, package, outcome[1], blockers)
+        elif tag == "upgrade":
+            # Real: an in-slot version bump -> attr.new_version only (the
+            # exact new cpv isn't installed, so attr.replace stays clear
+            # -> U, no R). oldbest = the in-slot installed version.
+            emit(field(new_version=True), outcome[2], f"[{outcome[1]}]")
+            print_blockers(category, package, outcome[2], blockers)
+        elif tag == "downgrade":
+            # Real: in-slot downgrade -> attr.new_version *and*
+            # attr.downgrade (U and D). oldbest as for upgrade.
+            emit(field(new_version=True, downgrade=True), outcome[2], f"[{outcome[1]}]")
+            print_blockers(category, package, outcome[2], blockers)
+        elif tag == "reinstall":
+            # Real _get_installed_best: the exact cpv is already installed
+            # -> attr.replace (the yellow R at column 2), and myoldbest
+            # stays empty for a same-slot/same-repo reinstall -> no
+            # [from]. Real portage's -pv shows no inline "why" for a
+            # reinstall at all -- the pilot's former "(reinstall for
+            # changed ...)" prose is dropped here (the USE diff still
+            # shows in the USE="..." section for --changed-use;
+            # --changed-deps/--changed-slot reasons are genuinely
+            # invisible in real -pv too).
+            emit(field(replace=True), outcome[1], "")
             print_blockers(category, package, outcome[1], blockers)
         elif tag == "already_installed":
             # Already-satisfied dependencies aren't shown, matching real
