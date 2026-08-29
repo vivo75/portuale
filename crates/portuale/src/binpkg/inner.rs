@@ -94,6 +94,18 @@ pub(crate) struct InnerEntry {
     pub(crate) mode: u32,
 }
 
+/// The resolved inner metadata. `entries` is first-appearance order with
+/// last-wins values; `duplicate_keys` names the keys seen more than once
+/// so the merge path can refuse them.
+#[derive(Debug)]
+pub(crate) struct InnerMetadata {
+    pub(crate) entries: Vec<InnerEntry>,
+    /// Refused on the merge path (the read path above is last-wins);
+    /// read only by the merge path and the unit tests until then.
+    #[allow(dead_code)]
+    pub(crate) duplicate_keys: Vec<String>,
+}
+
 /// Collect every inner member in archive order, validating its name and
 /// reading bytes only for regular/unknown types. A name outside
 /// `metadata/`, an absolute name, or any `..` component is an error; the
@@ -259,4 +271,83 @@ pub(crate) fn resolve_inner_member(
         )));
     };
     resolve_inner_member(gpkg, members, target_index, depth + 1)
+}
+
+/// Read the inner `metadata.tar` into resolved `(key, bytes)` members in
+/// first-appearance order with last-wins values. `member_bytes` is the
+/// outer container's `metadata.tar[.<comp>]` member, already read and
+/// capped; when compressed it is piped through the matching decompressor
+/// straight into the `tar` crate, with no scratch file and no second
+/// process.
+// Portage: `tarfile.extractfile`.
+pub(crate) fn read_inner_metadata(
+    gpkg: &Path,
+    member_label: &str,
+    member_bytes: &[u8],
+    comp: Option<&[&str]>,
+) -> Result<InnerMetadata, BinpkgError> {
+    let members = match comp {
+        None => collect_inner_members(gpkg, member_bytes)?,
+        Some(argv) => {
+            // A missing decompressor is the skip class.
+            let mut child = Command::new(argv[0])
+                .args(&argv[1..])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()
+                .map_err(|e| BinpkgError::Invalid(format!("failed to spawn {}: {e}", argv[0])))?;
+            let mut stdin = child.stdin.take().expect("stdin is piped");
+            let stdout = child.stdout.take().expect("stdout is piped");
+            // Feed the bytes on a scope thread: the child's stdout is read
+            // here, so writing its stdin inline could deadlock on a pipe.
+            let collected = std::thread::scope(|scope| {
+                let pump = scope.spawn(move || {
+                    let copied = std::io::copy(&mut { member_bytes }, &mut stdin);
+                    drop(stdin);
+                    copied
+                });
+                let collected = collect_inner_members(gpkg, stdout);
+                let _ = pump.join();
+                collected
+            });
+            let status = child
+                .wait()
+                .map_err(|e| BinpkgError::Fatal(format!("waiting for {}: {e}", argv[0])))?;
+            match (collected, status.success()) {
+                (Ok(members), true) => members,
+                // A failed decompressor with a member-level error behind it
+                // lets the member error speak for itself; otherwise the
+                // decompress failure (skip class).
+                (Ok(_), false) => {
+                    return Err(BinpkgError::Invalid(format!(
+                        "{} failed to decompress {member_label} ({status})",
+                        argv[0]
+                    )));
+                }
+                (Err(error), _) => return Err(error),
+            }
+        }
+    };
+
+    let mut entries: Vec<InnerEntry> = Vec::new();
+    let mut duplicate_keys: Vec<String> = Vec::new();
+    for index in 0..members.len() {
+        let bytes = resolve_inner_member(gpkg, &members, index, 0)?;
+        let key = members[index].key.clone();
+        let mode = members[index].mode;
+        match entries.iter_mut().find(|entry| entry.key == key) {
+            Some(entry) => {
+                entry.bytes = bytes;
+                entry.mode = mode;
+                if !duplicate_keys.contains(&key) {
+                    duplicate_keys.push(key);
+                }
+            }
+            None => entries.push(InnerEntry { key, bytes, mode }),
+        }
+    }
+    Ok(InnerMetadata {
+        entries,
+        duplicate_keys,
+    })
 }
