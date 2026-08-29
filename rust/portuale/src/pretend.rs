@@ -559,6 +559,7 @@ fn package_counters_summary(
     entries: &[GraphEntry],
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
+    color: &Colorizer,
 ) -> String {
     let plural = |n: u64| if n > 1 { "s" } else { "" };
     let (mut upgrades, mut downgrades, mut new, mut newslot, mut reinst) =
@@ -649,7 +650,9 @@ fn package_counters_summary(
         ));
     }
     if interactive > 0 {
-        details.push(format!("{interactive} interactive"));
+        // Real `_PackageCounters.__str__`: `colorize("WARN", "interactive")`
+        // -- only the word, not the count.
+        details.push(format!("{interactive} {}", color.c("WARN", "interactive")));
     }
     if total != 0 {
         out.push_str(&format!(" ({})", details.join(", ")));
@@ -666,9 +669,14 @@ fn package_counters_summary(
             plural(restrict_fetch)
         ));
         if restrict_fetch_satisfied < restrict_fetch {
-            out.push_str(&format!(
-                " ({} unsatisfied)",
-                restrict_fetch - restrict_fetch_satisfied
+            // Real `_PackageCounters.__str__`: `bad(f" (N unsatisfied)")`
+            // -- the whole parenthetical is red (`bad` = `BAD` = red).
+            out.push_str(&color.c(
+                "BAD",
+                &format!(
+                    " ({} unsatisfied)",
+                    restrict_fetch - restrict_fetch_satisfied
+                ),
             ));
         }
     }
@@ -2041,6 +2049,7 @@ fn run_unmerge_pretend(
     // topologically-sorted cleanlist sets this (`run_depclean_pretend`);
     // a plain `--unmerge`/`-C` from the CLI is always unordered.
     preserve_order: bool,
+    color: &Colorizer,
 ) -> ExitCode {
     if targets.is_empty() {
         eprintln!("emerge: no package atoms given to --unmerge");
@@ -2111,7 +2120,13 @@ fn run_unmerge_pretend(
     // Real `_unmerge_display` prints this header unconditionally for
     // `--pretend`, before the per-atom matching loop -- so it shows even
     // when nothing ends up selected.
-    println!(">>> These are the packages that would be unmerged:");
+    println!(
+        "{}",
+        color.c(
+            "darkgreen",
+            ">>> These are the packages that would be unmerged:"
+        )
+    );
 
     // Real `PORTAGE_PACKAGE_ATOM` -- the one package `unmerge` always
     // refuses to select, moving it to `protected` with an eerror note.
@@ -2262,8 +2277,17 @@ fn run_unmerge_pretend(
         }
         if !parents.is_empty() {
             parents.sort_unstable();
-            println!("Package {cat}/{pkg}-{version} is going to be unmerged,");
-            println!("but still listed in the following package sets:");
+            println!(
+                "{}",
+                color.c(
+                    "WARN",
+                    &format!("Package {cat}/{pkg}-{version} is going to be unmerged,")
+                )
+            );
+            println!(
+                "{}",
+                color.c("WARN", "but still listed in the following package sets:")
+            );
             println!("    {}\n", parents.join(", "));
         }
     }
@@ -2299,16 +2323,25 @@ fn run_unmerge_pretend(
         // level=logging.WARNING)`).
         if protected.is_empty() && omitted.is_empty() && syslist.contains(cp) {
             eprintln!(
-                "\n\n!!! '{}/{}' is part of your system profile.",
-                cp.0, cp.1
+                "{}",
+                color.c(
+                    "BAD",
+                    &format!(
+                        "\n\n!!! '{}/{}' is part of your system profile.",
+                        cp.0, cp.1
+                    )
+                )
             );
-            eprintln!("!!! Unmerging it may be damaging to your system.\n");
+            eprintln!(
+                "{}",
+                color.c("WARN", "!!! Unmerging it may be damaging to your system.\n")
+            );
         }
 
         println!("\n {}/{}", cp.0, cp.1);
-        print_unmerge_row("selected", selected);
-        print_unmerge_row("protected", protected);
-        print_unmerge_row("omitted", &omitted);
+        print_unmerge_row("selected", selected, color);
+        print_unmerge_row("protected", protected, color);
+        print_unmerge_row("omitted", &omitted, color);
 
         for v in selected.iter() {
             all_selected_display.push(format!("={}/{}-{v}", cp.0, cp.1));
@@ -2320,8 +2353,15 @@ fn run_unmerge_pretend(
         "\nAll selected packages: {}",
         all_selected_display.join(" ")
     );
-    println!("\n>>> 'Selected' packages are slated for removal.");
-    println!(">>> 'Protected' and 'omitted' packages will not be removed.");
+    println!(
+        "\n>>> {} packages are slated for removal.",
+        color.c("UNMERGE_WARN", "'Selected'")
+    );
+    println!(
+        ">>> {} and {} packages will not be removed.",
+        color.c("GOOD", "'Protected'"),
+        color.c("GOOD", "'omitted'")
+    );
     ExitCode::SUCCESS
 }
 
@@ -2330,16 +2370,24 @@ fn run_unmerge_pretend(
 /// right-justified into 14 columns (real `(mytype + ": ").rjust(14)`),
 /// then each version followed by a trailing space, or the literal
 /// `none ` when empty -- reproduced faithfully, trailing spaces and all.
-fn print_unmerge_row(label: &str, versions: &[String]) {
+/// Real `_unmerge_display`: each `selected` version is
+/// `colorize("UNMERGE_WARN", v + " ")` (red), each `protected`/`omitted`
+/// version `colorize("GOOD", v + " ")` (green) -- the label and `none`
+/// stay plain.
+fn print_unmerge_row(label: &str, versions: &[String], color: &Colorizer) {
     let head = format!("{label}: ");
     let padded = format!("{head:>14}");
     if versions.is_empty() {
         println!("{padded}none ");
     } else {
+        let key = if label == "selected" {
+            "UNMERGE_WARN"
+        } else {
+            "GOOD"
+        };
         let mut line = padded;
         for v in versions {
-            line.push_str(v);
-            line.push(' ');
+            line.push_str(&color.c(key, &format!("{v} ")));
         }
         println!("{line}");
     }
@@ -2482,6 +2530,7 @@ fn run_prune_pretend(
     config_root: &Path,
     config: &portage_profile::Config,
     verbose: bool,
+    color: &Colorizer,
 ) -> ExitCode {
     let args = match resolve_cleanup_args(targets, root, "prune") {
         Ok(a) => a,
@@ -2520,7 +2569,7 @@ fn run_prune_pretend(
         .map(|p| format!("={}", p.cpv()))
         .collect();
     let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
-    run_unmerge_pretend(&cpv_refs, root, config_root, config, result.ordered)
+    run_unmerge_pretend(&cpv_refs, root, config_root, config, result.ordered, color)
 }
 
 /// Real `emerge --pretend --prune --nodeps` (`actions.py:2684-2697`):
@@ -2540,7 +2589,12 @@ fn run_prune_pretend(
 /// else `>>> No packages selected for removal by prune` -- both exit 1
 /// (real `_unmerge_display` returns `(1, {})`, unlike plain `--prune`'s
 /// exit 0).
-fn run_prune_nodeps_pretend(targets: &[&str], root: &Path, config_root: &Path) -> ExitCode {
+fn run_prune_nodeps_pretend(
+    targets: &[&str],
+    root: &Path,
+    config_root: &Path,
+    color: &Colorizer,
+) -> ExitCode {
     let args = match resolve_cleanup_args(targets, root, "prune") {
         Ok(a) => a,
         Err(code) => return code,
@@ -2548,7 +2602,13 @@ fn run_prune_nodeps_pretend(targets: &[&str], root: &Path, config_root: &Path) -
 
     let mut selection = portage_repo::prune_nodeps_selection(root, &args);
 
-    println!(">>> These are the packages that would be unmerged:");
+    println!(
+        "{}",
+        color.c(
+            "darkgreen",
+            ">>> These are the packages that would be unmerged:"
+        )
+    );
 
     // Real `sys-apps/portage` self-skip (`unmerge.py:368-391`): move any
     // selected `sys-apps/portage` version into `protected` with the
@@ -2607,8 +2667,17 @@ fn run_prune_nodeps_pretend(targets: &[&str], root: &Path, config_root: &Path) -
         }
         if !parents.is_empty() {
             parents.sort_unstable();
-            println!("Package {cat}/{pkg}-{version} is going to be unmerged,");
-            println!("but still listed in the following package sets:");
+            println!(
+                "{}",
+                color.c(
+                    "WARN",
+                    &format!("Package {cat}/{pkg}-{version} is going to be unmerged,")
+                )
+            );
+            println!(
+                "{}",
+                color.c("WARN", "but still listed in the following package sets:")
+            );
             println!("    {}\n", parents.join(", "));
         }
     }
@@ -2620,9 +2689,9 @@ fn run_prune_nodeps_pretend(targets: &[&str], root: &Path, config_root: &Path) -
             continue;
         }
         println!("\n {}/{}", cp.category, cp.package);
-        print_unmerge_row("selected", &cp.other_versions);
-        print_unmerge_row("protected", std::slice::from_ref(&cp.best_version));
-        print_unmerge_row("omitted", &[]);
+        print_unmerge_row("selected", &cp.other_versions, color);
+        print_unmerge_row("protected", std::slice::from_ref(&cp.best_version), color);
+        print_unmerge_row("omitted", &[], color);
         for v in &cp.other_versions {
             all_selected_display.push(format!("={}/{}-{v}", cp.category, cp.package));
         }
@@ -2633,8 +2702,15 @@ fn run_prune_nodeps_pretend(targets: &[&str], root: &Path, config_root: &Path) -
         "\nAll selected packages: {}",
         all_selected_display.join(" ")
     );
-    println!("\n>>> 'Selected' packages are slated for removal.");
-    println!(">>> 'Protected' and 'omitted' packages will not be removed.");
+    println!(
+        "\n>>> {} packages are slated for removal.",
+        color.c("UNMERGE_WARN", "'Selected'")
+    );
+    println!(
+        ">>> {} and {} packages will not be removed.",
+        color.c("GOOD", "'Protected'"),
+        color.c("GOOD", "'omitted'")
+    );
     ExitCode::SUCCESS
 }
 
@@ -2661,6 +2737,7 @@ fn run_depclean_pretend(
     config_root: &Path,
     config: &portage_profile::Config,
     verbose: bool,
+    color: &Colorizer,
 ) -> ExitCode {
     // Bare-name targets get their category from the vdb, then each atom
     // is checked against the vdb (real `action_depclean`, `:848-863`) --
@@ -2675,21 +2752,48 @@ fn run_depclean_pretend(
     // break link level dependencies" first paragraph is skipped: real
     // portage gates it on `--depclean-lib-check=n`, not the default.
     if args.is_empty() {
+        // Real `action_depclean`: each line is `colorize("WARN", " * ")`
+        // (yellow) + text, and each backtick-wrapped command inside the
+        // text is `good("`…`")` (green).
+        let star = color.c("WARN", " * ");
+        let green_ticks = |text: &str| -> String {
+            let mut out = String::new();
+            let mut rest = text;
+            while let Some(open) = rest.find('`') {
+                out.push_str(&rest[..open]);
+                let after = &rest[open + 1..];
+                if let Some(close) = after.find('`') {
+                    out.push_str(&color.c("GOOD", &format!("`{}`", &after[..close])));
+                    rest = &after[close + 1..];
+                } else {
+                    out.push('`');
+                    rest = after;
+                }
+            }
+            out.push_str(rest);
+            out
+        };
+        // `None` = real's leading bare `writemsg_stdout("\n")`; `Some("")`
+        // = real's `msg.append("\n")` (still `WARN(" * ")`-prefixed);
+        // `Some(text)` = a ` * `-prefixed advisory line.
         for line in [
-            "",
-            " * Always study the list of packages to be cleaned for any obvious",
-            " * mistakes. Packages that are part of the world set will always",
-            " * be kept.  They can be manually added to this set with",
-            " * `emerge --noreplace <atom>`.  Packages that are listed in",
-            " * package.provided (see portage(5)) will be removed by",
-            " * depclean, even if they are part of the world set.",
-            " * ",
-            " * As a safety measure, depclean will not remove any packages",
-            " * unless *all* required dependencies have been resolved.  As a",
-            " * consequence of this, it often becomes necessary to run ",
-            " * `emerge --update --newuse --deep @world` prior to depclean.",
+            None,
+            Some("Always study the list of packages to be cleaned for any obvious"),
+            Some("mistakes. Packages that are part of the world set will always"),
+            Some("be kept.  They can be manually added to this set with"),
+            Some("`emerge --noreplace <atom>`.  Packages that are listed in"),
+            Some("package.provided (see portage(5)) will be removed by"),
+            Some("depclean, even if they are part of the world set."),
+            Some(""),
+            Some("As a safety measure, depclean will not remove any packages"),
+            Some("unless *all* required dependencies have been resolved.  As a"),
+            Some("consequence of this, it often becomes necessary to run "),
+            Some("`emerge --update --newuse --deep @world` prior to depclean."),
         ] {
-            println!("{line}");
+            match line {
+                None => println!(),
+                Some(text) => println!("{star}{}", green_ticks(text)),
+            }
         }
     }
 
@@ -2778,7 +2882,8 @@ fn run_depclean_pretend(
         .map(|p| format!("={}", p.cpv()))
         .collect();
     let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
-    let unmerge_rc = run_unmerge_pretend(&cpv_refs, root, config_root, config, result.ordered);
+    let unmerge_rc =
+        run_unmerge_pretend(&cpv_refs, root, config_root, config, result.ordered, color);
     stats();
     unmerge_rc
 }
@@ -3769,20 +3874,25 @@ pub fn run(args: &[String]) -> ExitCode {
         }
     };
 
+    // Real `actions.py::adjust_configs` colour gate -- resolved once here
+    // so every action path (the standalone cleanup actions below and the
+    // ordinary resolve-graph path) shares one `Colorizer`.
+    let color = Colorizer::new(color::resolve_havecolor(color_opt));
+
     // `--unmerge`/`-C`: a standalone action -- resolved config in hand
     // (its `@system` target support and system-profile check both need
     // it), dispatch before the ordinary resolve-graph path below.
     if unmerge {
-        return run_unmerge_pretend(&atom_args, &root, &config_root, &config, false);
+        return run_unmerge_pretend(&atom_args, &root, &config_root, &config, false, &color);
     }
     if depclean {
-        return run_depclean_pretend(&atom_args, &root, &config_root, &config, verbose);
+        return run_depclean_pretend(&atom_args, &root, &config_root, &config, verbose, &color);
     }
     if prune {
         if nodeps {
-            return run_prune_nodeps_pretend(&atom_args, &root, &config_root);
+            return run_prune_nodeps_pretend(&atom_args, &root, &config_root, &color);
         }
-        return run_prune_pretend(&atom_args, &root, &config_root, &config, verbose);
+        return run_prune_pretend(&atom_args, &root, &config_root, &config, verbose, &color);
     }
 
     // "@world"/"@system" each expand to their own real atom list, in
@@ -4024,11 +4134,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // here the same way, even though the value only ever affects
     // anything below when `columns` is true.
     let columnwidth = columnwidth_from_env();
-    // Real `actions.py::adjust_configs` colour gate + `Display.pkgprint`'s
-    // `@system`/world inputs. `@system` = the profile's own package set
+    // `Display.pkgprint`'s `@system`/world inputs (`color` already
+    // resolved above): `@system` = the profile's own package set
     // (`config.system_packages`); world = `var/lib/portage/world` (a
     // missing file is a valid empty world, same as everywhere else).
-    let color = Colorizer::new(color::resolve_havecolor(color_opt));
     let world_atoms = read_world_atoms(&root).unwrap_or_default();
     let system_atoms = &config.system_packages;
     if tree {
@@ -4072,7 +4181,7 @@ pub fn run(args: &[String]) -> ExitCode {
         println!();
         println!(
             "{}",
-            package_counters_summary(entries, &top_level_pkgs, onlydeps)
+            package_counters_summary(entries, &top_level_pkgs, onlydeps, &color)
         );
     }
 

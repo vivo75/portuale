@@ -328,8 +328,19 @@ Ranked roughly by how self-contained each is.
       only the `flag`/`-flag` core, markers and `( )` wrap stay plain.
       One documented, fixture-unreachable imperfection (forced disabled
       flag newly in IUSE on an Upgrade -> `blue` here, `yellow` in real).
-    - **Increment 4 — counters line, `-pc`/`-pC`/`-pP` cleanup output,
-      autounmask messages, `--columns`/`--tree` colour.**
+    - **Increment 4 — counters line + `-pc`/`-pC`/`-pP` cleanup output +
+      `--columns`/`--tree`** — **shipped 2026-08-29**: `_PackageCounters`'s
+      `interactive` (WARN) + fetch `bad(...)`; real `_unmerge_display` /
+      `action_depclean` colour for the standalone cleanup actions
+      (selected red / protected-omitted green / `darkgreen` header /
+      `BAD`+`WARN` system-profile warning / `WARN`+`GOOD` legend / the
+      `-pc` advisory's `WARN " * "` + green backtick commands).
+      `--columns`/`--tree` were already coloured via `print_entry_line`
+      in increment 2. `show_parents` left plain (no colour in real).
+      **Still deferred:** `--autounmask` message colour (the pilot's text
+      is already pilot-invented, its own slice) and blocker-line colour
+      (rides with the deferred real blocker layout). Bar those two, the
+      `-pv` layout + colour buildout is complete.
     Also still deferred (increment 1 follow-ups): a new-slot install's
     other-slot version list (`myoldbest = installed_versions`), and
     verbosity-3 `:slot`/`::repo` decoration on the cpv.

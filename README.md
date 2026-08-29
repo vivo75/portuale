@@ -3182,6 +3182,36 @@ PORTING/
   `-pc`/`-pC`/`-pP` / autounmask colour (increment 4); blocker-line
   colour rides along with the deferred real blocker layout.
 
+  **`emerge --pretend --color y`: the counters line + cleanup-action
+  colour (increment 4 of the buildout).** Real `_PackageCounters.__str__`
+  colours only two spots on the `Total:` line: `colorize("WARN",
+  "interactive")` (just the word) and `bad(f" (N unsatisfied)")` after
+  `Fetch Restriction:` -- both ported. The standalone cleanup actions
+  (`-pC`/`-pc`/`-pP`) get real `_emerge/unmerge.py::_unmerge_display` +
+  `action_depclean` colour: `darkgreen(">>> These are the packages that
+  would be unmerged:")`, each `selected:` version `colorize("UNMERGE_WARN",
+  …)` (red) and each `protected:`/`omitted:` version `colorize("GOOD",
+  …)` (green), the `!!! … is part of your system profile.` `colorize("BAD",
+  …)` and its `!!! Unmerging it may be damaging…` follow-up
+  `colorize("WARN", …)`, the `Package … is going to be unmerged,` /
+  `but still listed in the following package sets:` pair
+  `colorize("WARN", …)`, and the `>>> 'Selected'` / `>>> 'Protected'` /
+  `'omitted'` legend words `UNMERGE_WARN` / `GOOD`. The `-pc` advisory
+  block matches real `action_depclean`: every line is `colorize("WARN",
+  " * ")` (yellow) + text, and each backtick-wrapped command inside the
+  text is `good("`…`")` (green). `--color` is now resolved once, early in
+  `run`, so the standalone-action dispatch and the resolve-graph path
+  share one `Colorizer`. Real `show_parents` (`-pc`/`-pP --verbose`) has
+  **no** colour -- left plain, faithfully. New `_styles`: `UNMERGE_WARN`,
+  `INFORM`, `MERGE_LIST_PROGRESS`; new `bold` code. A dedicated pinned
+  contract test (`-pC` selected-red / legend / system-warning + the
+  counters `interactive` word) + 3 `CASES`. **Still open**: `--autounmask`
+  message colour (the pilot's suggestion-mode text is already
+  pilot-invented, not a port of real portage's autounmask block -- a
+  separate slice), and blocker-line colour (rides with the deferred real
+  blocker layout). This completes the `-pv` layout + colour buildout bar
+  those two.
+
   **`emerge --pretend -v`: the `[ebuild N ~]` bracket-mask marker.** Real
   `output.py::gen_mask_str` (only with `-v` -- `include_mask_str` =
   `verbosity > 1`) gives the bracket a one-character column right after

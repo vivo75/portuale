@@ -6537,17 +6537,20 @@ def _installed_cp_versions(root):
     return out
 
 
-def _print_unmerge_row(label, versions):
+def _print_unmerge_row(label, versions, color):
     """One '    selected: 1.0 ' / '   protected: none ' row of
     _unmerge_display's per-package block -- label right-justified into 14
     columns (real (mytype + ": ").rjust(14)), each version + trailing
-    space, or the literal 'none ' when empty. Mirrors pretend.rs's
-    print_unmerge_row."""
+    space, or the literal 'none ' when empty. Real: each `selected`
+    version is colorize("UNMERGE_WARN", v+" ") (red), each
+    `protected`/`omitted` version colorize("GOOD", v+" ") (green).
+    Mirrors pretend.rs's print_unmerge_row."""
     padded = f"{label}: ".rjust(14)
     if not versions:
         print(f"{padded}none ")
     else:
-        print(padded + "".join(f"{v} " for v in versions))
+        key = "UNMERGE_WARN" if label == "selected" else "GOOD"
+        print(padded + "".join(color.c(key, f"{v} ") for v in versions))
 
 
 def _resolve_vdb_path_arg(arg, root):
@@ -6583,7 +6586,7 @@ def _resolve_vdb_path_arg(arg, root):
     return atom
 
 
-def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=False):
+def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=False, color=None):
     """emerge --pretend --unmerge / -pC <atoms>: real
     _emerge/unmerge.py::_unmerge_display for unmerge_action == "unmerge",
     narrowed to a preview. Mirrors pretend.rs's run_unmerge_pretend --
@@ -6629,7 +6632,7 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
                 return e.code
             expanded.append(atom if atom is not None else target)
 
-    print(">>> These are the packages that would be unmerged:")
+    print(color.c("darkgreen", ">>> These are the packages that would be unmerged:"))
 
     portage_self = ("sys-apps", "portage")
     per_cp = {}  # (cat, pkg) -> [selected, protected]
@@ -6741,8 +6744,8 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
                     break
         if parents:
             parents.sort()
-            print(f"Package {cat}/{pkg}-{version} is going to be unmerged,")
-            print("but still listed in the following package sets:")
+            print(color.c("WARN", f"Package {cat}/{pkg}-{version} is going to be unmerged,"))
+            print(color.c("WARN", "but still listed in the following package sets:"))
             print(f"    {', '.join(parents)}\n")
 
     import functools
@@ -6767,20 +6770,29 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
         # syslist` -- a cp fully removed and a @system member. To stderr.
         if not protected and not omitted and cp in syslist:
             print(
-                f"\n\n!!! '{cp[0]}/{cp[1]}' is part of your system profile.",
+                color.c(
+                    "BAD",
+                    f"\n\n!!! '{cp[0]}/{cp[1]}' is part of your system profile.",
+                ),
                 file=sys.stderr,
             )
-            print("!!! Unmerging it may be damaging to your system.\n", file=sys.stderr)
+            print(
+                color.c("WARN", "!!! Unmerging it may be damaging to your system.\n"),
+                file=sys.stderr,
+            )
         print(f"\n {cp[0]}/{cp[1]}")
-        _print_unmerge_row("selected", selected)
-        _print_unmerge_row("protected", protected)
-        _print_unmerge_row("omitted", omitted)
+        _print_unmerge_row("selected", selected, color)
+        _print_unmerge_row("protected", protected, color)
+        _print_unmerge_row("omitted", omitted, color)
         all_selected_display.extend(f"={cp[0]}/{cp[1]}-{v}" for v in selected)
 
     all_selected_display.sort()
     print(f"\nAll selected packages: {' '.join(all_selected_display)}")
-    print("\n>>> 'Selected' packages are slated for removal.")
-    print(">>> 'Protected' and 'omitted' packages will not be removed.")
+    sel = color.c("UNMERGE_WARN", "'Selected'")
+    prot = color.c("GOOD", "'Protected'")
+    omit = color.c("GOOD", "'omitted'")
+    print(f"\n>>> {sel} packages are slated for removal.")
+    print(f">>> {prot} and {omit} packages will not be removed.")
     return 0
 
 
@@ -7107,7 +7119,7 @@ class _CleanupArgsExit(Exception):
         self.code = code
 
 
-def _run_prune_pretend(targets, root, config_root, config, verbose=False):
+def _run_prune_pretend(targets, root, config_root, config, color, verbose=False):
     """emerge --pretend --prune / -pP (real action_depclean with
     action="prune"). Unlike --depclean, real action_depclean returns
     right after the unmerge() preview (actions.py:888): no ' * ' advisory
@@ -7142,7 +7154,7 @@ def _run_prune_pretend(targets, root, config_root, config, verbose=False):
     print(">>> Calculating removal order...")
     cpv_atoms = [f"={c}/{p}-{v}" for (c, p, v) in cleanlist]
     return _run_unmerge_pretend(
-        cpv_atoms, root, config_root, config, preserve_order=ordered
+        cpv_atoms, root, config_root, config, preserve_order=ordered, color=color
     )
 
 
@@ -7187,7 +7199,7 @@ def _prune_nodeps_selection(root, args):
     return out
 
 
-def _run_prune_nodeps_pretend(targets, root, config_root):
+def _run_prune_nodeps_pretend(targets, root, config_root, color):
     """emerge --pretend --prune --nodeps (actions.py:2684-2697): --nodeps
     routes prune to unmerge()'s _unmerge_display prune branch instead of
     _calc_depclean -- no dependency check, no '>>> Calculating removal
@@ -7200,7 +7212,7 @@ def _run_prune_nodeps_pretend(targets, root, config_root):
 
     selection = _prune_nodeps_selection(root, args)
 
-    print(">>> These are the packages that would be unmerged:")
+    print(color.c("darkgreen", ">>> These are the packages that would be unmerged:"))
 
     # sys-apps/portage self-skip (realistically dead code).
     fixed = []
@@ -7247,8 +7259,8 @@ def _run_prune_nodeps_pretend(targets, root, config_root):
                 parents.append(set_name)
         if parents:
             parents.sort()
-            print(f"Package {c}/{p}-{v} is going to be unmerged,")
-            print("but still listed in the following package sets:")
+            print(color.c("WARN", f"Package {c}/{p}-{v} is going to be unmerged,"))
+            print(color.c("WARN", "but still listed in the following package sets:"))
             print(f"    {', '.join(parents)}\n")
 
     all_selected_display = []
@@ -7256,15 +7268,18 @@ def _run_prune_nodeps_pretend(targets, root, config_root):
         if not others:
             continue
         print(f"\n {c}/{p}")
-        _print_unmerge_row("selected", others)
-        _print_unmerge_row("protected", [best])
-        _print_unmerge_row("omitted", [])
+        _print_unmerge_row("selected", others, color)
+        _print_unmerge_row("protected", [best], color)
+        _print_unmerge_row("omitted", [], color)
         all_selected_display.extend(f"={c}/{p}-{v}" for v in others)
 
     all_selected_display.sort()
     print(f"\nAll selected packages: {' '.join(all_selected_display)}")
-    print("\n>>> 'Selected' packages are slated for removal.")
-    print(">>> 'Protected' and 'omitted' packages will not be removed.")
+    sel = color.c("UNMERGE_WARN", "'Selected'")
+    prot = color.c("GOOD", "'Protected'")
+    omit = color.c("GOOD", "'omitted'")
+    print(f"\n>>> {sel} packages are slated for removal.")
+    print(f">>> {prot} and {omit} packages will not be removed.")
     return 0
 
 
@@ -7389,7 +7404,7 @@ def _prune_cleanlist(root, args):
     return cleanlist, len(reachable), ordered, kept_parents
 
 
-def _run_depclean_pretend(targets, root, config_root, config, verbose=False):
+def _run_depclean_pretend(targets, root, config_root, config, color, verbose=False):
     """emerge --pretend --depclean / -pc (real action_depclean +
     _calc_depclean). Mirrors pretend.rs's run_depclean_pretend."""
     try:
@@ -7398,21 +7413,44 @@ def _run_depclean_pretend(targets, root, config_root, config, verbose=False):
         return e.code
 
     if not args:
-        for line in (
+        # Real action_depclean: each line is colorize("WARN", " * ")
+        # (yellow) + text, each backtick-wrapped command good("`…`")
+        # (green). None = real's leading bare writemsg_stdout("\n").
+        star = color.c("WARN", " * ")
+
+        def _green_ticks(text):
+            out, rest = "", text
+            while "`" in rest:
+                open_ = rest.index("`")
+                out += rest[:open_]
+                after = rest[open_ + 1 :]
+                if "`" in after:
+                    close = after.index("`")
+                    out += color.c("GOOD", "`" + after[:close] + "`")
+                    rest = after[close + 1 :]
+                else:
+                    out += "`"
+                    rest = after
+            return out + rest
+
+        for text in (
+            None,
+            "Always study the list of packages to be cleaned for any obvious",
+            "mistakes. Packages that are part of the world set will always",
+            "be kept.  They can be manually added to this set with",
+            "`emerge --noreplace <atom>`.  Packages that are listed in",
+            "package.provided (see portage(5)) will be removed by",
+            "depclean, even if they are part of the world set.",
             "",
-            " * Always study the list of packages to be cleaned for any obvious",
-            " * mistakes. Packages that are part of the world set will always",
-            " * be kept.  They can be manually added to this set with",
-            " * `emerge --noreplace <atom>`.  Packages that are listed in",
-            " * package.provided (see portage(5)) will be removed by",
-            " * depclean, even if they are part of the world set.",
-            " * ",
-            " * As a safety measure, depclean will not remove any packages",
-            " * unless *all* required dependencies have been resolved.  As a",
-            " * consequence of this, it often becomes necessary to run ",
-            " * `emerge --update --newuse --deep @world` prior to depclean.",
+            "As a safety measure, depclean will not remove any packages",
+            "unless *all* required dependencies have been resolved.  As a",
+            "consequence of this, it often becomes necessary to run ",
+            "`emerge --update --newuse --deep @world` prior to depclean.",
         ):
-            print(line)
+            if text is None:
+                print()
+            else:
+                print(f"{star}{_green_ticks(text)}")
 
     world_seeds = []
     try:
@@ -7458,7 +7496,7 @@ def _run_depclean_pretend(targets, root, config_root, config, verbose=False):
     print(">>> Calculating removal order...")
     cpv_atoms = [f"={c}/{p}-{v}" for (c, p, v) in cleanlist]
     rc = _run_unmerge_pretend(
-        cpv_atoms, root, config_root, config, preserve_order=ordered
+        cpv_atoms, root, config_root, config, preserve_order=ordered, color=color
     )
     stats()
     return rc
@@ -7538,7 +7576,7 @@ def _attr_display_field(
     return "".join(f)
 
 
-def _package_counters_summary(entries, top_level_pkgs, onlydeps):
+def _package_counters_summary(entries, top_level_pkgs, onlydeps, color):
     """Real _PackageCounters.__str__ (output_helpers.py), the trailing
     "Total: ..." summary line real output.py::print_verbose emits via
     writemsg_stdout(f"\\n{self.counters}\\n") -- gated, in real portage
@@ -7611,7 +7649,7 @@ def _package_counters_summary(entries, top_level_pkgs, onlydeps):
     if binary > 0:
         details.append(f"{binary} " + ("binaries" if binary > 1 else "binary"))
     if interactive > 0:
-        details.append(f"{interactive} interactive")
+        details.append(f"{interactive} " + color.c("WARN", "interactive"))
     if total != 0:
         out += f" ({', '.join(details)})"
     # Real __str__: `f", Size of downloads: {localized_size(...)}"` --
@@ -7622,7 +7660,10 @@ def _package_counters_summary(entries, top_level_pkgs, onlydeps):
             "s" if restrict_fetch > 1 else ""
         )
         if restrict_fetch_satisfied < restrict_fetch:
-            out += f" ({restrict_fetch - restrict_fetch_satisfied} unsatisfied)"
+            out += color.c(
+                "BAD",
+                f" ({restrict_fetch - restrict_fetch_satisfied} unsatisfied)",
+            )
     if blocks > 0:
         out += f"\nConflict: {blocks} block" + ("s" if blocks > 1 else "")
     return out
@@ -7667,6 +7708,7 @@ def _columnwidth_from_env():
 # portuale/src/color.rs exactly.
 _COLOR_CODES = {
     "reset": "\x1b[39;49;00m",
+    "bold": "\x1b[01m",
     "darkgreen": "\x1b[32m",
     "green": "\x1b[32;01m",
     "brown": "\x1b[33m",
@@ -7690,6 +7732,9 @@ _COLOR_STYLES = {
     "PKG_BINARY_MERGE_SYSTEM": "purple",
     "PKG_BINARY_MERGE_WORLD": "fuchsia",
     "PKG_UNINSTALL": "red",
+    "UNMERGE_WARN": "red",
+    "INFORM": "darkgreen",
+    "MERGE_LIST_PROGRESS": "yellow",
     "PKG_NOMERGE": "teal",
     "PKG_NOMERGE_SYSTEM": "teal",
     "PKG_NOMERGE_WORLD": "blue",
@@ -8705,19 +8750,24 @@ def run(args):
         print(f"emerge: {e}", file=sys.stderr)
         return 1
 
+    # Real actions.py::adjust_configs colour gate -- resolved once here so
+    # every action path (the standalone cleanup actions below and the
+    # ordinary resolve-graph path) shares one _Colorizer.
+    color = _Colorizer(_resolve_havecolor(color_opt))
+
     # --unmerge/-C: a standalone action; resolved config in hand,
     # dispatch before the ordinary resolve-graph path.
     if unmerge:
-        return _run_unmerge_pretend(atom_args, _root(), _config_root(), config)
+        return _run_unmerge_pretend(atom_args, _root(), _config_root(), config, color=color)
     if depclean:
         return _run_depclean_pretend(
-            atom_args, _root(), _config_root(), config, verbose=verbose
+            atom_args, _root(), _config_root(), config, color, verbose=verbose
         )
     if prune:
         if nodeps:
-            return _run_prune_nodeps_pretend(atom_args, _root(), _config_root())
+            return _run_prune_nodeps_pretend(atom_args, _root(), _config_root(), color)
         return _run_prune_pretend(
-            atom_args, _root(), _config_root(), config, verbose=verbose
+            atom_args, _root(), _config_root(), config, color, verbose=verbose
         )
 
     # "@world"/"@system" each expand to their own real atom list, in
@@ -8768,10 +8818,8 @@ def run(args):
 
     top_level_pkgs = {tuple(_parse_atom(a).cp.split("/", 1)) for a in atom_args}
 
-    # ANSI colour: real actions.py::adjust_configs gate + Display.pkgprint
-    # inputs. @system = the profile's own package set; world =
-    # var/lib/portage/world. Mirrors pretend.rs.
-    color = _Colorizer(_resolve_havecolor(color_opt))
+    # Display.pkgprint's @system/world inputs (`color` already resolved
+    # above). Mirrors pretend.rs.
     color_system_atoms = config["system_packages"]
     color_world_atoms = _read_world_atoms(_root())
 
@@ -9341,7 +9389,7 @@ def run(args):
     # (a leading blank line). Mirrors pretend.rs.
     if verbose:
         print()
-        print(_package_counters_summary(entries, top_level_pkgs, onlydeps))
+        print(_package_counters_summary(entries, top_level_pkgs, onlydeps, color))
 
     # Purely informational, same as blockers -- see resolve_pretend_graph's
     # doc comment: v1 neither refuses nor changes the exit code for a slot

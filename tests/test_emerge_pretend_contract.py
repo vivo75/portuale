@@ -1048,6 +1048,21 @@ CASES = [
         0,
     ),
     (
+        "--color=y -pC: coloured _unmerge_display (selected red, legend, system warning)",
+        ["--pretend", "-C", "--color=y", "dev-libs/systempkg"],
+        0,
+    ),
+    (
+        "--color=y -pc: coloured advisory block (WARN ` * `, green backtick commands)",
+        ["--pretend", "-c", "--color=y"],
+        0,
+    ),
+    (
+        "--color=y -pv: the counters line's `interactive` word is WARN",
+        ["--pretend", "-v", "--color=y", "dev-libs/interactivemergepkg"],
+        0,
+    ),
+    (
         "--color=y --columns: nc_len keeps the coloured line aligned",
         ["--pretend", "--color=y", "--columns", "--update", "dev-libs/upgradepkg"],
         0,
@@ -3041,6 +3056,32 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     assert rup2.stdout == _run(emerge_pretend_python, up2_args, fixture_env).stdout
     assert rup2.stdout.splitlines()[0].endswith(
         f'USE="\x1b[33;01madded{R}%* \x1b[31;01mkeep{R} \x1b[32;01m-change{R}* (\x1b[33;01m-drop{R}%)"'
+    )
+
+    # Increment 4: the counters line's `interactive` word is WARN
+    # (yellow); the `-pC`/`-pc` cleanup output is coloured too.
+    c_args = ["--pretend", "-v", "--color=y", "dev-libs/interactivemergepkg"]
+    rc = _run([str(emerge_binary)], c_args, fixture_env)
+    assert rc.stdout == _run(emerge_pretend_python, c_args, fixture_env).stdout
+    assert rc.stdout.splitlines()[-1] == (
+        f"Total: 1 package (1 new, 1 \x1b[33;01minteractive{R}), Size of downloads: 0 KiB"
+    )
+
+    pc_args = ["--pretend", "-C", "--color=y", "dev-libs/systempkg"]
+    pc = _run([str(emerge_binary)], pc_args, fixture_env)
+    pcp = _run(emerge_pretend_python, pc_args, fixture_env)
+    assert pc.stdout == pcp.stdout
+    assert pc.stderr == pcp.stderr
+    assert pc.stdout.startswith(
+        f"\x1b[32m>>> These are the packages that would be unmerged:{R}\n"
+    )
+    # selected version -> UNMERGE_WARN (red), the legend words coloured.
+    assert f"    selected: \x1b[31;01m1.0 {R}\n" in pc.stdout
+    assert f">>> \x1b[31;01m'Selected'{R} packages are slated for removal.\n" in pc.stdout
+    assert f">>> \x1b[32;01m'Protected'{R} and \x1b[32;01m'omitted'{R} packages" in pc.stdout
+    # the system-profile warning -> BAD / WARN, on stderr.
+    assert pc.stderr.startswith(
+        f"\x1b[31;01m\n\n!!! 'dev-libs/systempkg' is part of your system profile.{R}\n"
     )
 
 

@@ -18,6 +18,7 @@
 fn code(name: &str) -> &'static str {
     match name {
         "reset" => "\x1b[39;49;00m",
+        "bold" => "\x1b[01m",
         // rgb_ansi_colors / ansi_codes pairs
         "darkgreen" => "\x1b[32m",    // 0x00AA00
         "green" => "\x1b[32;01m",     // 0x55FF55
@@ -49,6 +50,9 @@ fn style(key: &str) -> &'static str {
         "PKG_BINARY_MERGE_SYSTEM" => "purple",
         "PKG_BINARY_MERGE_WORLD" => "fuchsia",
         "PKG_UNINSTALL" => "red",
+        "UNMERGE_WARN" => "red",
+        "INFORM" => "darkgreen",
+        "MERGE_LIST_PROGRESS" => "yellow",
         "PKG_NOMERGE" => "teal",
         "PKG_NOMERGE_SYSTEM" => "teal",
         "PKG_NOMERGE_WORLD" => "blue",
