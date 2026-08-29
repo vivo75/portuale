@@ -209,3 +209,15 @@ pub(crate) fn format_blocker_row(
         color.c(style, &format!(" (\"{resolved}\" is {desc} {parents})")),
     )
 }
+
+/// Arguments of [`trailing_blocker_lines`].
+pub(crate) struct TrailingBlockerLinesArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) root: &'a Path,
+    pub(crate) owner_index: usize,
+    pub(crate) include_mask: bool,
+    pub(crate) columns: bool,
+    pub(crate) color: &'a Colorizer,
+    /// The settling pass's recorded cycle edges.
+    pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
+}

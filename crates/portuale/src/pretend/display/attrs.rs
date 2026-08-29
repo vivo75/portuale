@@ -219,6 +219,43 @@ pub(crate) fn colorize_use_token(tok: &str, color: &Colorizer) -> String {
     format!("{open}{}{markers}{close}", color.c(key, core))
 }
 
+/// Arguments of [`decorate_version`].
+pub(crate) struct DecorateVersionArgs<'a> {
+    pub(crate) version: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) sub_slot: &'a str,
+    pub(crate) repo: &'a str,
+    pub(crate) show_slot: bool,
+    pub(crate) force_sub_slot: bool,
+}
+
+/// Portage's `_append_slot` + `_append_repository`: the bracket-line version
+/// decorated with `:slot` (`/sub_slot` when it differs) and `::repo`,
+/// at `-pv` only. `::repo` always shows at `-pv`.
+/// Portage: output.py
+pub(crate) fn decorate_version(args: DecorateVersionArgs<'_>) -> String {
+    let DecorateVersionArgs {
+        version,
+        slot,
+        sub_slot,
+        repo,
+        show_slot,
+        force_sub_slot,
+    } = args;
+    let mut s = String::from(version);
+    if show_slot {
+        s.push(':');
+        s.push_str(slot);
+        if slot != sub_slot || force_sub_slot {
+            s.push('/');
+            s.push_str(sub_slot);
+        }
+    }
+    s.push_str("::");
+    s.push_str(repo);
+    s
+}
+
 /// Arguments of [`use_suffix`].
 pub(crate) struct UseSuffixArgs<'a> {
     pub(crate) entry: &'a GraphEntry,
