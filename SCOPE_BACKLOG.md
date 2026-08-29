@@ -289,10 +289,23 @@ Ranked roughly by how self-contained each is.
    for reference.
 
 7. **`gpkg` binary package format** (`bin/gpkg-helper.py`,
-   `lib/portage/gpkg.py`). `BINPKG_FORMAT` is hardcoded `xpak`
-   (`ebuild_package.rs:327`). `FEATURES=verify-sig` (GPG) lives here too —
-   it is a `gpkg`/repo-sync concept, **not** `SRC_URI` fetch (the earlier
-   backlog mis-scoped it).
+   `lib/portage/gpkg.py`). Part of the **`$PKGDIR` directory-scan
+   fallback** buildout (real `bintree._populate_local` — open each binpkg
+   file and rebuild `Packages` when there's no trusted index; a `gpkg`
+   listed *in* an index already resolves for `--pretend` today, the index
+   being format-agnostic). Increment 1 **shipped 2026-08-29**:
+   `portuale/src/binpkg.rs::read_gpkg_metadata` (real
+   `gpkg.get_metadata()`/`unpack_metadata` — outer tar → classify
+   `metadata.tar[.<comp>]` → decompress via the real `_compressors` argv
+   → inner tar → `metadata/<KEY>` map; shells out to `tar` + the seven
+   decompressors). Not wired to a caller yet (`#[allow(dead_code)]`).
+   **Still open:** the `xpak` (`.tbz2`) reader (increment 2), the
+   `$PKGDIR` scan + both-sides wiring (increment 3), `Manifest`/`.sig`
+   verification (deliberately cut in the reader — this pilot has no
+   crypto), and `ebuild … package` *emitting* gpkg (`BINPKG_FORMAT` is
+   hardcoded `xpak`, `ebuild_package.rs:327`). `FEATURES=verify-sig`
+   (GPG) lives here too — it is a `gpkg`/repo-sync concept, **not**
+   `SRC_URI` fetch (the earlier backlog mis-scoped it).
 
 8. **`BUILD_ID` / `splitdebug` / `packdebug` / RPM**, and PKGDIR-index
    locking. All named as cuts in `ebuild_package.rs`.

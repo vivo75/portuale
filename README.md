@@ -8313,6 +8313,56 @@ target still fails — the avoid-update-against-vdb path is dependency-only.
 2 contract `CASES` + 1 dedicated pinned test + 1 `portage-repo` unit test;
 mirrored in `emerge_pretend_reference.py`.
 
+### `gpkg` binary-package metadata reader (`$PKGDIR` directory-scan fallback, increment 1)
+
+Every binary-package path in this pilot so far is `<pkgdir>/Packages`-
+index-driven and format-agnostic: `portage-repo` never opens a binpkg
+file, so a `gpkg` (`.gpkg.tar`) listed in the index already resolves for
+`--pretend` exactly like an `xpak` `.tbz2` (verified: `PATH:
+…gpkg.tar` → `[binary … g]`, `::repo`, `SIZE`, recursive dep walk, all
+unchanged). What the pilot **can't** do is the real
+`bintree._populate_local` fallback: scan `$PKGDIR` for binpkg *files*
+when there is no `Packages` index and rebuild it from each file's own
+embedded metadata. That needs a real per-format metadata reader.
+
+This is the `gpkg` half. New `portuale/src/binpkg.rs` ::
+`read_gpkg_metadata` ports real `portage.gpkg.gpkg.get_metadata()` /
+`unpack_metadata(want=None)` (`lib/portage/gpkg.py:838-870`): a
+`.gpkg.tar` is a plain tar container with `<basename>/{gpkg-1,
+metadata.tar[.<comp>], image.tar[.<comp>], Manifest}` members; the reader
+unpacks the outer container, classifies the `metadata.tar[.<comp>]`
+member exactly as real `_extract_filename_compression`
+(`gpkg.py:2176` + `ext_list`) does, decompresses it via the same
+`_compressors` decompress argv real portage uses (all seven —
+`gzip`/`bzip2`/`lz4`/`lzip`/`lzop`/`xz`/`zstd`), unpacks the inner
+`metadata.tar`, and returns the `metadata/<KEY>` → value map (real
+`_strip_metadata_prefix`). It shells out to `tar` + the decompressor
+rather than parsing the archive natively or adding a Rust
+tar/compression crate — consistent with every other real-execution path
+here (`wget`, `ldconfig`, `scanelf`, `bash`/`brush`, the compressors
+`ebuild_package.rs` already invokes), and `tar` + these compressors are
+hard Gentoo requirements anyway (real `gpkg.py` is `tarfile` + the exact
+same compressor subprocesses).
+
+**v1 cuts** (matching this pilot's own `Packages`-index reader, which
+"trusts the index outright" — real `pkgdir-index-trusted`): NO `Manifest`
+digest verification and NO GPG `.sig` signature check (real
+`gpkg._verify_binpkg`). Those are `gpkg`'s whole point, but this pilot
+has no crypto anywhere and its `--pretend` binary path has never verified
+a binpkg's integrity — a separately-scoped follow-up. The `gpkg-1`
+version-marker presence check is still enforced (real
+`_get_inner_tarinfo`'s `InvalidBinaryPackageFormat` guard).
+
+New fixture `PORTING/fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar` —
+a real, hand-built container (`tar` + `zstd`, real member layout). 3
+`portuale` unit tests; also verified by hand against a real-world
+`/var/cache/binpkgs/*.gpkg.tar` (with `.sig` members, `environment.bz2`,
+a build-id basename). **Increment 1**: the reader exists and is tested
+but has no non-test caller yet (`#[allow(dead_code)] mod binpkg`) — the
+`$PKGDIR` scan that uses it, and the `xpak` reader alongside it, are
+later increments, the same "land the mechanism first, wire it after"
+shape the `needed_elf` preserve-libs buildout used.
+
 ## Running it
 
 Build both Rust binaries:
