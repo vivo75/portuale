@@ -100,6 +100,66 @@ pub(crate) fn preserved_rebuild_atoms(root: &Path) -> Vec<String> {
     atoms
 }
 
+/// Whether file sets are world candidates: true unless `sets.conf` says
+/// otherwise. Unparsable values are ignored (a leniency: Portage aborts).
+/// Portage: _sets/__init__.py.
+pub(crate) fn usersets_world_candidate(config_root: &Path) -> bool {
+    fn files_in(dir: &Path) -> Vec<std::path::PathBuf> {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<std::path::PathBuf> =
+            entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        out.sort();
+        out
+    }
+    let base = config_root.join("etc/portage/sets.conf");
+    let paths: Vec<std::path::PathBuf> = if base.is_dir() {
+        files_in(&base)
+    } else if base.is_file() {
+        vec![base]
+    } else {
+        return true;
+    };
+    // Unknown spellings leave the running value alone.
+    fn as_bool(value: &str) -> Option<bool> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "yes" | "true" | "on" => Some(true),
+            "0" | "no" | "false" | "off" => Some(false),
+            _ => None,
+        }
+    }
+    let mut candidate = true;
+    // Section state carries across files (a leniency: Portage resets it per file).
+    let mut in_usersets = false;
+    for path in &paths {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+            if line.starts_with('[') && line.ends_with(']') {
+                in_usersets = line[1..line.len() - 1].trim() == "usersets";
+                continue;
+            }
+            if !in_usersets {
+                continue;
+            }
+            let split = line.find('=').or_else(|| line.find(':'));
+            let Some(i) = split else { continue };
+            if line[..i].trim().eq_ignore_ascii_case("world-candidate")
+                && let Some(v) = as_bool(&line[i + 1..])
+            {
+                candidate = v;
+            }
+        }
+    }
+    candidate
+}
+
 /// The `@name` set references in `world_sets`, with the `@` stripped. A missing
 /// file is empty, not an error.
 /// Portage: files.py, WorldSelectedSetsSet.

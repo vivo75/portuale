@@ -19,6 +19,17 @@ pub enum SolverKind {
 }
 
 impl SolverKind {
+    /// Parse a `--solver=<value>` token. `None` for anything else (the caller
+    /// reports the usage error).
+    pub fn parse(value: &str) -> Option<SolverKind> {
+        match value {
+            "portage" => Some(SolverKind::Portage),
+            "pubgrub" => Some(SolverKind::PubGrub),
+            "resolvo" => Some(SolverKind::Resolvo),
+            _ => None,
+        }
+    }
+
     /// The canonical `--solver=<value>` spelling, for help text and argv
     /// forwarding.
     pub fn as_str(self) -> &'static str {
