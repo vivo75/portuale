@@ -380,3 +380,139 @@ pub(crate) fn candidate_version(
     let rest = candidate_str.strip_prefix(&format!("{category}/{package}-"))?;
     rest.split(':').next().map(str::to_string)
 }
+
+/// Arguments of [`promote_tied_alternative`].
+pub(crate) struct PromoteTiedAlternativeArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) alts: &'a [Vec<String>],
+    pub(crate) queued: &'a [QueueItem],
+}
+
+/// Portage's in-bin upgrade-preference pass as `use_reduce_flat_disjunctive`'s
+/// `tie_break` (2+ tied alternatives only). A literal remove+insert over an `id`-tagged
+/// `Vec`, not a stable sort -- the promotion isn't transitive. Returns the WINNING
+/// alternative's original index. Portage: dep_check.py, dep_zapdeps.
+///
+/// `minimize_slots` and `want_update` are pinned to Portage's default (`False`), which
+/// only ever WIDENS the installed-slots promotion; and a same-`cp` repeat inside one
+/// alternative always just keeps the higher version (see notes).
+pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> usize {
+    let PromoteTiedAlternativeArgs {
+        repos,
+        config,
+        root,
+        entries,
+        constraints,
+        alts,
+        queued,
+    } = args;
+    struct Choice {
+        id: usize,
+        all_installed_slots: bool,
+        all_in_graph: bool,
+        cp_map: HashMap<String, String>,
+    }
+    let constraints_for = |a: &str| -> &[String] {
+        portage_dep::parse_atom(a)
+            .and_then(|at| constraints.get(&(at.category, at.package)))
+            .map_or(&[][..], Vec::as_slice)
+    };
+    let mut choices: Vec<Choice> = alts
+        .iter()
+        .enumerate()
+        .map(|(id, atoms)| {
+            let mut cp_map: HashMap<String, String> = HashMap::new();
+            for a in atoms {
+                let Some(atom) = portage_dep::parse_atom(a) else {
+                    continue;
+                };
+                if atom.blocker != portage_dep::Blocker::None {
+                    continue;
+                }
+                let cp = format!("{}/{}", atom.category, atom.package);
+                if let Some((candidate_str, .., _slot)) = highest_available_candidate_ignoring_use(
+                    HighestAvailableCandidateIgnoringUseArgs {
+                        repos,
+                        atom_str: a,
+                        category: &atom.category,
+                        package: &atom.package,
+                        config,
+                        extra_constraints: constraints_for(a),
+                    },
+                ) && let Some(version) =
+                    candidate_version(&candidate_str, &atom.category, &atom.package)
+                {
+                    let better = cp_map
+                        .get(&cp)
+                        .is_none_or(|existing| vercmp_ordering(&version, existing).is_gt());
+                    if better {
+                        cp_map.insert(cp, version);
+                    }
+                }
+            }
+            Choice {
+                id,
+                all_installed_slots: atoms.iter().all(|a| atom_cp_installed(root, a))
+                    && atoms.iter().all(|a| {
+                        atom_installed_in_slot_of(root, repos, config, a, constraints_for(a))
+                    }),
+                all_in_graph: atoms_all_in_graph(atoms, entries, config, queued),
+                cp_map,
+            }
+        })
+        .collect();
+
+    if choices.len() < 2 {
+        return 0;
+    }
+    // Snapshot of every choice BUT the first, by identity, before mutation.
+    let snapshot_ids: Vec<usize> = choices[1..].iter().map(|c| c.id).collect();
+    for id1 in snapshot_ids {
+        let Some(pos1) = choices.iter().position(|c| c.id == id1) else {
+            continue;
+        };
+        let choice1_all_installed_slots = choices[pos1].all_installed_slots;
+        let choice1_all_in_graph = choices[pos1].all_in_graph;
+        let choice1_cp_map = choices[pos1].cp_map.clone();
+        let mut promote_before: Option<usize> = None;
+        for (pos2, choice2) in choices.iter().enumerate() {
+            if choice2.id == id1 {
+                // Own position reached with no promotion: stop.
+                break;
+            }
+            if choice1_all_installed_slots && !choice2.all_installed_slots {
+                promote_before = Some(pos2);
+                break;
+            }
+            let mut has_upgrade = false;
+            let mut has_downgrade = false;
+            for (cp, v1) in &choice1_cp_map {
+                if let Some(v2) = choice2.cp_map.get(cp) {
+                    if vercmp_ordering(v1, v2).is_gt() {
+                        has_upgrade = true;
+                    } else if vercmp_ordering(v1, v2).is_lt() {
+                        has_downgrade = true;
+                    }
+                }
+            }
+            if (has_upgrade && !has_downgrade)
+                || (choice1_all_in_graph
+                    && !choice2.all_in_graph
+                    && !(has_downgrade && !has_upgrade))
+            {
+                promote_before = Some(pos2);
+                break;
+            }
+        }
+        if let Some(pos2) = promote_before {
+            // `pos2 < pos1` always, so removing `pos1` first never shifts `pos2`.
+            let choice1 = choices.remove(pos1);
+            choices.insert(pos2, choice1);
+        }
+    }
+    choices[0].id
+}
