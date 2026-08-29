@@ -565,6 +565,62 @@ pub struct Config {
     /// `list_binary_candidates` reads `<pkgdir>/Packages` when
     /// `--usepkg`/`--usepkgonly` is given.
     pub pkgdir: String,
+    /// Binary-package repositories (`--getbinpkg`/`--getbinpkgonly`), real
+    /// `lib/portage/binrepo/config.py`'s own `BinRepoConfigLoader`: every
+    /// `[section]` in `<config_root>/etc/portage/binrepos.conf`
+    /// (`sync-uri = ...`, optional `priority = ...`), plus one implicit
+    /// entry per whitespace-separated `PORTAGE_BINHOST` URI (real
+    /// "Convert PORTAGE_BINHOST entries into implicit binrepos.conf ones",
+    /// `name_fallback = md5(uri)`, incrementing priority). Sorted by
+    /// `(priority or 0, name)`. Empty when neither is configured.
+    /// `portage-repo`'s `list_remote_binary_candidates` reads each one's
+    /// on-disk `Packages` index (see `BinRepo::packages_dir`).
+    pub binrepos: Vec<BinRepo>,
+}
+
+/// One `--getbinpkg` binary-package repository (real
+/// `portage.binrepo.config.BinRepoConfig`, narrowed to what a
+/// `--pretend` resolution needs: no fetch/resume commands, no
+/// signature-verification config, no `getbinpkg-exclude`/`-include` --
+/// those gate an actual download, which `--pretend` never does).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinRepo {
+    /// The `[section]` name, or -- for an implicit `PORTAGE_BINHOST`
+    /// entry -- the real `md5(uri)` hex-digest fallback.
+    pub name: String,
+    /// `sync-uri`, real `_normalize_uri` (trailing `/` stripped).
+    pub sync_uri: String,
+    /// `priority` (real `int(priority)`, or `0` on parse failure /
+    /// absence -- real sorts a `None` priority as `0`).
+    pub priority: i32,
+}
+
+impl BinRepo {
+    /// The directory holding this binrepo's own `Packages` index on disk
+    /// under `root` (real `bintree._populate_remote`'s own
+    /// `pkgindex_file`, `bintree.py:1496-1504`):
+    /// `<EROOT>/var/cache/edb/binhost/<host>/<url-path>/` for an
+    /// `http(s)://`/`ssh://` `sync-uri`; the URI's own path for a
+    /// `file://` URI or a bare filesystem path. `--pretend` never
+    /// fetches, so a missing index just means "this binrepo contributes
+    /// no candidates".
+    pub fn packages_dir(&self, root: &std::path::Path) -> std::path::PathBuf {
+        let uri = &self.sync_uri;
+        if let Some(rest) = uri.strip_prefix("file://") {
+            return std::path::PathBuf::from(rest);
+        }
+        for scheme in ["https://", "http://", "ssh://"] {
+            if let Some(rest) = uri.strip_prefix(scheme) {
+                let (hostport, path) = rest.split_once('/').unwrap_or((rest, ""));
+                let host = hostport.split(':').next().unwrap_or(hostport);
+                return root
+                    .join("var/cache/edb/binhost")
+                    .join(host)
+                    .join(path.trim_matches('/'));
+            }
+        }
+        std::path::PathBuf::from(uri)
+    }
 }
 
 fn var_ref_re() -> &'static Regex {
@@ -1935,12 +1991,174 @@ pub fn resolve_config(
         .cloned()
         .unwrap_or_else(|| "/var/cache/binpkgs".to_string());
 
+    // binrepos.conf + PORTAGE_BINHOST (see `binrepos`'s own doc comment).
+    config.binrepos = parse_binrepos(
+        &read_to_string_opt(&config_root.join("etc/portage/binrepos.conf")),
+        scalars
+            .get("PORTAGE_BINHOST")
+            .map(String::as_str)
+            .unwrap_or(""),
+    );
+
     Ok(config)
+}
+
+/// A missing file reads as an empty string (the same "absence is a valid
+/// state" tolerance the rest of this crate uses).
+fn read_to_string_opt(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// Real `BinRepoConfigLoader` (`lib/portage/binrepo/config.py:97-172`),
+/// narrowed. Parses `binrepos.conf`'s own `[section]` / `key = value`
+/// INI (only `sync-uri` and `priority` are read), then appends one
+/// implicit `BinRepo` per whitespace-separated `PORTAGE_BINHOST` URI
+/// that isn't already a section's `sync-uri` (real "Convert
+/// PORTAGE_BINHOST entries into implicit binrepos.conf ones", iterated in
+/// reverse with an incrementing `priority`). Each URI is
+/// `_normalize_uri`'d (trailing `/` stripped). Returns the repos sorted
+/// by `(priority, name)` -- real `sorted(repos, key=lambda repo:
+/// (repo.priority or 0, repo.name or repo.name_fallback))`.
+///
+/// **Documented narrowings**: the implicit-entry name is `md5(uri)` in
+/// real portage; this pilot has no md5, so it uses the URI's own
+/// `host/path` (still stable and unique per URI, only ever surfaced as a
+/// sort key here). `[DEFAULT]` interpolation, `getbinpkg-exclude`/
+/// `-include`, `fetchcommand`/`resumecommand`, signature-verification
+/// settings, and the `location =` fallback for a section without
+/// `PORTAGE_BINHOST` are all out (none affect a `--pretend` resolution).
+fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
+    let normalize = |u: &str| u.trim_end_matches('/').to_string();
+    let mut repos: Vec<BinRepo> = Vec::new();
+    let mut seen_uris: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // INI sections.
+    let mut section: Option<String> = None;
+    let mut sync_uri: Option<String> = None;
+    let mut priority: i32 = 0;
+    let flush = |section: &mut Option<String>,
+                 sync_uri: &mut Option<String>,
+                 priority: &mut i32,
+                 repos: &mut Vec<BinRepo>,
+                 seen: &mut std::collections::HashSet<String>| {
+        if let (Some(name), Some(uri)) = (section.take(), sync_uri.take()) {
+            let uri = uri.trim_end_matches('/').to_string();
+            seen.insert(uri.clone());
+            repos.push(BinRepo {
+                name,
+                sync_uri: uri,
+                priority: *priority,
+            });
+        }
+        *priority = 0;
+    };
+    for line in binrepos_conf.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(inner) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            flush(
+                &mut section,
+                &mut sync_uri,
+                &mut priority,
+                &mut repos,
+                &mut seen_uris,
+            );
+            section = Some(inner.trim().to_string());
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            match k.trim() {
+                "sync-uri" => sync_uri = Some(v.trim().to_string()),
+                "priority" => priority = v.trim().parse().unwrap_or(0),
+                _ => {}
+            }
+        }
+    }
+    flush(
+        &mut section,
+        &mut sync_uri,
+        &mut priority,
+        &mut repos,
+        &mut seen_uris,
+    );
+    repos.retain(|r| r.name != "DEFAULT");
+
+    // Implicit PORTAGE_BINHOST entries (real: reversed, incrementing priority).
+    let mut current_priority = 0;
+    for uri in portage_binhost.split_whitespace().rev() {
+        let uri = normalize(uri);
+        if seen_uris.insert(uri.clone()) {
+            current_priority += 1;
+            let name = uri
+                .split_once("://")
+                .map(|(_, rest)| rest.to_string())
+                .unwrap_or_else(|| uri.clone());
+            repos.push(BinRepo {
+                name,
+                sync_uri: uri,
+                priority: current_priority,
+            });
+        }
+    }
+
+    repos.sort_by(|a, b| {
+        a.priority
+            .cmp(&b.priority)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    repos
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_binrepos_reads_sections_and_implicit_portage_binhost_entries() {
+        let conf = "\
+[gentoobinhost]
+sync-uri = https://binhost.example.org/amd64/
+priority = 5
+
+[low]
+sync-uri = file:///srv/pkgs
+";
+        let repos = parse_binrepos(
+            conf,
+            "https://binhost.example.org/amd64/  https://other.example/b/",
+        );
+        // `low` (prio 0), then the implicit `other.example/b` (prio 1),
+        // then `gentoobinhost` (prio 5). The already-listed
+        // binhost.example.org URI is not re-added as implicit.
+        assert_eq!(
+            repos.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            vec!["low", "other.example/b", "gentoobinhost"]
+        );
+        assert_eq!(repos[0].sync_uri, "file:///srv/pkgs");
+        assert_eq!(repos[2].sync_uri, "https://binhost.example.org/amd64");
+    }
+
+    #[test]
+    fn binrepo_packages_dir_maps_scheme_to_the_real_edb_cache_layout() {
+        let root = Path::new("/eroot");
+        let http = BinRepo {
+            name: "h".into(),
+            sync_uri: "https://gpkg.example.org/seed-desk".into(),
+            priority: 0,
+        };
+        assert_eq!(
+            http.packages_dir(root),
+            Path::new("/eroot/var/cache/edb/binhost/gpkg.example.org/seed-desk")
+        );
+        let file = BinRepo {
+            name: "f".into(),
+            sync_uri: "file:///srv/pkgs".into(),
+            priority: 0,
+        };
+        assert_eq!(file.packages_dir(root), Path::new("/srv/pkgs"));
+    }
 
     fn fixtures_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

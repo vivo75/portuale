@@ -535,6 +535,14 @@ pub struct Candidate {
     /// this against what would currently be selected, over this
     /// candidate's own `iuse` flags.
     pub binary_use: Option<HashSet<String>>,
+    /// A `--getbinpkg` binary candidate from a *remote* binhost's own
+    /// `Packages` index (`list_remote_binary_candidates`), not yet
+    /// present in the local `$PKGDIR` -- real `bintree.isremote`. Flows
+    /// to `GraphEntry::remote_binary` -> the real `g` bracket column
+    /// (`PkgAttrDisplay.remote_binary`, `output_helpers.py:627-633`).
+    /// Always `false` for an ebuild candidate or a local `$PKGDIR`
+    /// binary.
+    pub remote: bool,
 }
 
 /// A directory entry's name is only accepted as `<package>-<version>` if
@@ -610,6 +618,7 @@ pub fn list_candidates(
                 restrict: metadata.get("RESTRICT").cloned().unwrap_or_default(),
                 source: CandidateSource::Ebuild,
                 binary_use: None,
+                remote: false,
             });
         }
     }
@@ -685,6 +694,23 @@ fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
 /// is never called for it anywhere), so those fields go unused for this
 /// source, not silently wrong.
 pub fn list_binary_candidates(pkgdir: &Path, category: &str, package: &str) -> Vec<Candidate> {
+    binary_candidates_from_index(pkgdir, category, package, false)
+}
+
+/// Shared body of `list_binary_candidates` (local `$PKGDIR/Packages`,
+/// `remote = false`) and `list_remote_binary_candidates`'s per-binrepo
+/// scan (`remote = true`). `repo_name` comes from the index entry's own
+/// `REPO` field (real `Packages` records the source repo per package, so
+/// a `--getbinpkg` binary of `sys-fs/fuse` shows `::gentoo` at `-pv`),
+/// falling back to `portage.versions._unknown_repo` (`"__unknown__"`) --
+/// the same sentinel an installed package with no vdb `repository` file
+/// already uses.
+fn binary_candidates_from_index(
+    pkgdir: &Path,
+    category: &str,
+    package: &str,
+    remote: bool,
+) -> Vec<Candidate> {
     let mut candidates = Vec::new();
     for entry in read_packages_index(pkgdir) {
         let Some(cpv) = entry.get("CPV") else {
@@ -720,16 +746,67 @@ pub fn list_binary_candidates(pkgdir: &Path, category: &str, package: &str) -> V
             // list order (`"ebuild"` always checked before `"binary"`)
             // with no special-casing needed anywhere else.
             repo_priority: i32::MIN,
-            repo_name: "__binary__".to_string(),
+            repo_name: entry
+                .get("REPO")
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .unwrap_or_else(|| "__unknown__".to_string()),
             license: entry.get("LICENSE").cloned().unwrap_or_default(),
             iuse: entry.get("IUSE").cloned().unwrap_or_default(),
             properties: entry.get("PROPERTIES").cloned().unwrap_or_default(),
             restrict: entry.get("RESTRICT").cloned().unwrap_or_default(),
             source: CandidateSource::Binary,
             binary_use: Some(binary_use),
+            remote,
         });
     }
     candidates
+}
+
+/// `--getbinpkg`/`-g`: binary candidates for `category/package` from
+/// every `config.binrepos` binrepo's own on-disk `Packages` index (real
+/// `bintree._populate_remote`, narrowed -- `--pretend` never fetches, so
+/// a binrepo whose cached index is absent simply contributes nothing).
+/// `root` is the `EROOT` under which the `http(s)://`/`ssh://` cache
+/// lives (`BinRepo::packages_dir`). A remote build of a cpv+version the
+/// local `$PKGDIR` (`local_pkgdir`) also carries is dropped -- real
+/// `bintree.isremote` returns `False` once a package is in
+/// `_additional_pkgs` (downloaded), and this pilot treats "present in
+/// `$PKGDIR/Packages`" as exactly that. Binrepos are consulted in
+/// `config.binrepos` order (already `(priority, name)`-sorted); a later
+/// binrepo does not shadow an earlier one for the same version (both
+/// stay in the pool, resolved by the same `vercmp` -> `repo_priority`
+/// tie-break every other candidate goes through -- and every binary
+/// candidate shares `repo_priority = i32::MIN`, so ties fall to
+/// first-seen, matching real's binrepo-priority order).
+pub fn list_remote_binary_candidates(
+    binrepos: &[portage_profile::BinRepo],
+    root: &Path,
+    local_pkgdir: &Path,
+    category: &str,
+    package: &str,
+) -> Vec<Candidate> {
+    if binrepos.is_empty() {
+        return Vec::new();
+    }
+    let local_versions: HashSet<String> =
+        binary_candidates_from_index(local_pkgdir, category, package, false)
+            .into_iter()
+            .map(|c| c.version)
+            .collect();
+
+    let mut out: Vec<Candidate> = Vec::new();
+    let mut seen: HashSet<String> = local_versions.clone();
+    for binrepo in binrepos {
+        for cand in
+            binary_candidates_from_index(&binrepo.packages_dir(root), category, package, true)
+        {
+            if seen.insert(cand.version.clone()) {
+                out.push(cand);
+            }
+        }
+    }
+    out
 }
 
 /// `--usepkg-exclude`/`--usepkg-include` (real `main.py`: "a space
@@ -795,6 +872,31 @@ pub fn read_binary_metadata(
     read_packages_index(pkgdir)
         .into_iter()
         .find(|entry| entry.get("CPV").map(String::as_str) == Some(want.as_str()))
+}
+
+/// `read_binary_metadata` extended to a `--getbinpkg` resolution: the
+/// local `$PKGDIR/Packages` first, then each `config.binrepos` binrepo's
+/// own cached `Packages` index (`BinRepo::packages_dir`). Used once a
+/// binary candidate -- local *or* remote -- has been chosen and its own
+/// dependency strings / `SIZE` are needed.
+pub fn read_binary_metadata_any(
+    config: &portage_profile::Config,
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<HashMap<String, String>> {
+    if let Some(m) = read_binary_metadata(Path::new(&config.pkgdir), category, package, version) {
+        return Some(m);
+    }
+    for binrepo in &config.binrepos {
+        if let Some(m) =
+            read_binary_metadata(&binrepo.packages_dir(root), category, package, version)
+        {
+            return Some(m);
+        }
+    }
+    None
 }
 
 /// Whether `entry` (a `package.mask`/`.unmask`/`.accept_keywords` line)
@@ -5062,6 +5164,9 @@ fn resolve_root_deps_build_entries(
         // non-interaction (this resolver is its own path, and
         // `-e --root-deps` is an exotic combination).
         false,
+        // Likewise `--getbinpkg`: a `--root-deps` build entry is always
+        // an ebuild built against the running root.
+        false,
     ) else {
         return Vec::new();
     };
@@ -5107,6 +5212,7 @@ fn resolve_root_deps_build_entries(
         use_suggestion: None,
         parent_use_suggestion: None,
         targets_running_root: true,
+        remote_binary: false,
     }];
 
     if let Some(version) = recurse_version {
@@ -5346,6 +5452,9 @@ pub fn resolve_pretend(
     // `Reinstall` (real `output.py`: `attr_display.replace` from
     // `vardb.cpv_exists` -> the `R` column, no `[oldver]`, no reason).
     empty: bool,
+    // `--getbinpkg`/`-g` -- also pull *remote* binary candidates from
+    // `config.binrepos` (see `resolve_pretend_graph`'s own doc comment).
+    getbinpkg: bool,
 ) -> Result<PretendOutcome, String> {
     // Real `create_depgraph_params.py:179`: `--emptytree` does
     // `myparams.pop("selective", None)`.
@@ -5374,8 +5483,23 @@ pub fn resolve_pretend(
         list_candidates(repos, &atom.category, &atom.package)?
     };
     if usepkg || usepkgonly {
-        let binary_candidates =
+        let mut binary_candidates =
             list_binary_candidates(Path::new(&config.pkgdir), &atom.category, &atom.package);
+        // `--getbinpkg`/`-g`: remote binary candidates from each
+        // `config.binrepos` binrepo's own on-disk `Packages` index. A
+        // remote build of a cpv the local `$PKGDIR` also has is treated
+        // as already-downloaded (real `bintree.isremote` -> not remote
+        // once in `_additional_pkgs`), so `list_remote_binary_candidates`
+        // drops it -- see its own doc comment.
+        if getbinpkg {
+            binary_candidates.extend(list_remote_binary_candidates(
+                &config.binrepos,
+                root,
+                Path::new(&config.pkgdir),
+                &atom.category,
+                &atom.package,
+            ));
+        }
         candidates.extend(filter_usepkg_exclude_include(
             binary_candidates,
             &atom.category,
@@ -6019,6 +6143,15 @@ pub struct GraphEntry {
     /// the running root for it too), and the full multi-root graph
     /// architecture, both still approximated edge by edge.
     pub targets_running_root: bool,
+    /// Real `output.py:648`'s own `attr_display.remote_binary = pkg.remote`
+    /// (the `g` bracket column, in the `f`/`F` slot): `true` for a
+    /// merge-bound entry whose resolved candidate is a `--getbinpkg`
+    /// *remote* binary not yet in `$PKGDIR` (`Candidate::remote`).
+    /// Mutually exclusive with `fetch_restrict`/`_satisfied` in real
+    /// `PkgAttrDisplay.__str__` (a binary is never `not pkg.built`), so
+    /// this alone drives the column. Always `false` for an ebuild entry,
+    /// a local `$PKGDIR` binary, and `AlreadyInstalled`/`NoVisibleCandidate`.
+    pub remote_binary: bool,
 }
 
 /// A blocker atom found while flattening one package's own dependency strings,
@@ -6654,6 +6787,15 @@ pub fn resolve_pretend_graph(
     // tree is (re)merged. Useful for byte-for-byte comparison against
     // real portage and for debugging resolution.
     empty: bool,
+    // `--getbinpkg`/`-g` (real `main.py` -- distinct from `--usepkg`/
+    // `-k`). The caller folds `--getbinpkgonly`/`-G` into `usepkgonly`
+    // (real: `--getbinpkgonly` implies binary-only) and into this flag,
+    // so `getbinpkg` here means "also consider *remote* binary-package
+    // candidates from `config.binrepos`" (`list_remote_binary_candidates`
+    // -- each binrepo's own on-disk `Packages` index). A remote-only
+    // candidate that wins resolution renders the real `g` bracket column
+    // and contributes its download `SIZE` to `Size of downloads:`.
+    getbinpkg: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
     // Real `create_depgraph_params.py:178`: `--emptytree` sets
@@ -6811,6 +6953,7 @@ pub fn resolve_pretend_graph(
             rebuilt_binaries_timestamp,
             newrepo,
             empty,
+            getbinpkg,
         )?;
 
         // `--changed-deps-report`: real portage stays "completely
@@ -7038,6 +7181,7 @@ pub fn resolve_pretend_graph(
                 use_suggestion,
                 parent_use_suggestion,
                 targets_running_root: false,
+                remote_binary: false,
             });
             continue;
         };
@@ -7071,8 +7215,17 @@ pub fn resolve_pretend_graph(
             c
         };
         if usepkg || usepkgonly {
-            let binary_candidates =
+            let mut binary_candidates =
                 list_binary_candidates(Path::new(&config.pkgdir), &key.0, &key.1);
+            if getbinpkg {
+                binary_candidates.extend(list_remote_binary_candidates(
+                    &config.binrepos,
+                    root,
+                    Path::new(&config.pkgdir),
+                    &key.0,
+                    &key.1,
+                ));
+            }
             repo_candidates.extend(filter_usepkg_exclude_include(
                 binary_candidates,
                 &key.0,
@@ -7127,6 +7280,8 @@ pub fn resolve_pretend_graph(
         let entry_idx = entries.len();
         resolved_slots.insert(slot_key, entry_idx);
         let candidate_source = resolved.source;
+        // Real `output.py:648`: `attr_display.remote_binary = pkg.remote`.
+        let candidate_remote = resolved.remote;
         let provenance = visibility_provenance(resolved, &key.0, &key.1, config);
         let keyword_mask =
             keyword_mask_marker(resolved, &key.0, &key.1, config, &provenance.mask_entry);
@@ -7202,11 +7357,11 @@ pub fn resolve_pretend_graph(
             use_suggestion: None,
             parent_use_suggestion: None,
             targets_running_root: false,
+            remote_binary: candidate_remote,
         });
 
         let metadata = if candidate_source == CandidateSource::Binary {
-            let Some(metadata) =
-                read_binary_metadata(Path::new(&config.pkgdir), &key.0, &key.1, &version)
+            let Some(metadata) = read_binary_metadata_any(config, root, &key.0, &key.1, &version)
             else {
                 continue;
             };
@@ -7287,6 +7442,18 @@ pub fn resolve_pretend_graph(
                 &key.1,
                 distdir,
             );
+        } else if candidate_remote {
+            // A `--getbinpkg` remote binary: real `_calc_size` -> real
+            // `bindbapi.getfetchsizes` returns `{<cpv>: SIZE}` from the
+            // binhost `Packages` index for a package not yet downloaded
+            // (`bintree.isremote`). Feeds both the `-v` per-line ` N KiB`
+            // suffix and the `Size of downloads:` counter. A local
+            // `$PKGDIR` binary is already present -> nothing to fetch.
+            let cpv = format!("{}/{}-{version}", key.0, key.1);
+            let size = metadata.get("SIZE").and_then(|s| s.parse::<u64>().ok());
+            if let Some(size) = size {
+                entries[entry_idx].download_files = vec![(cpv, size)];
+            }
         }
 
         // IUSE's own "+flag"/"-flag" default markers only matter for
@@ -7918,6 +8085,76 @@ mod tests {
         dir
     }
 
+    fn fixture_binhost() -> portage_profile::BinRepo {
+        portage_profile::BinRepo {
+            name: "testbinhost".to_string(),
+            sync_uri: fixtures_root()
+                .join("binhost")
+                .to_string_lossy()
+                .into_owned(),
+            priority: 1,
+        }
+    }
+
+    #[test]
+    fn list_remote_binary_candidates_reads_each_binrepos_own_packages_index() {
+        // dev-libs/remotebinpkg exists only in the binhost's Packages
+        // index -- no ebuild, no local $PKGDIR entry.
+        let binrepos = vec![fixture_binhost()];
+        let pkgdir = fixtures_root().join("pkgdir");
+        let cands = list_remote_binary_candidates(
+            &binrepos,
+            Path::new("/"),
+            &pkgdir,
+            "dev-libs",
+            "remotebinpkg",
+        );
+        assert_eq!(cands.len(), 1);
+        let c = &cands[0];
+        assert_eq!(c.version, "1.0");
+        assert!(c.remote, "a binhost candidate is marked remote");
+        assert_eq!(c.repo_name, "gentoo", "from the index's own REPO field");
+        assert_eq!(c.source, CandidateSource::Binary);
+
+        // A cpv+version the local $PKGDIR already carries is dropped as
+        // "already downloaded" (real bintree.isremote) -- passing the
+        // binhost dir as its own local_pkgdir makes every entry look
+        // already-local, so nothing is returned.
+        let none = list_remote_binary_candidates(
+            &binrepos,
+            Path::new("/"),
+            &fixtures_root().join("binhost"),
+            "dev-libs",
+            "remotebinpkg",
+        );
+        assert!(none.is_empty());
+
+        // No binrepos configured -> no remote candidates at all.
+        assert!(list_remote_binary_candidates(
+            &[],
+            Path::new("/"),
+            &pkgdir,
+            "dev-libs",
+            "remotebinpkg",
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn read_binary_metadata_any_falls_back_to_a_binrepo_index() {
+        let config = portage_profile::Config {
+            binrepos: vec![fixture_binhost()],
+            ..test_config()
+        };
+        // Not in the (empty-by-default) local $PKGDIR; found in the
+        // binrepo's cached index, SIZE and REPO carried through.
+        let m =
+            read_binary_metadata_any(&config, Path::new("/"), "dev-libs", "remotebinpkg", "1.0")
+                .expect("the binrepo index has dev-libs/remotebinpkg-1.0");
+        assert_eq!(m.get("SIZE").map(String::as_str), Some("573440"));
+        assert_eq!(m.get("REPO").map(String::as_str), Some("gentoo"));
+    }
+
     #[test]
     fn find_repos_defaults_masters_to_the_main_repo_alone_when_unset() {
         // Real config.py's own default (RepoConfigLoader.__init__,
@@ -8117,6 +8354,7 @@ mod tests {
             None,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8149,6 +8387,7 @@ mod tests {
             None,
             false,
             /* empty: */ true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8234,6 +8473,7 @@ mod tests {
             None,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8270,6 +8510,7 @@ mod tests {
             None,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8304,6 +8545,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
         )
@@ -8391,6 +8633,7 @@ mod tests {
             None,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8474,6 +8717,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
             )
@@ -8649,6 +8893,7 @@ mod tests {
             None,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8690,6 +8935,7 @@ mod tests {
             None,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8728,6 +8974,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
         )
@@ -8835,6 +9082,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
         )
@@ -9012,6 +9260,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -9130,6 +9379,7 @@ mod tests {
             None,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9186,6 +9436,7 @@ mod tests {
             false,
             None,
             true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
@@ -9292,6 +9543,7 @@ mod tests {
                 None,
                 false,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -9355,6 +9607,7 @@ mod tests {
             None,
             false,
             false,
+            false,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -9393,6 +9646,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
         )
@@ -9440,6 +9694,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
             )
@@ -9586,6 +9841,7 @@ mod tests {
                 None,
                 false,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -9614,6 +9870,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
             )
@@ -10540,6 +10797,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10581,6 +10839,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -10625,6 +10884,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -10673,6 +10933,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
@@ -10739,6 +11000,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10782,6 +11044,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             /* empty: */ true,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -10927,6 +11190,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -11066,6 +11330,7 @@ mod tests {
             false,
             root_deps_running_root,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -11223,6 +11488,7 @@ mod tests {
             Some(&root),
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -11300,6 +11566,7 @@ mod tests {
             false,
             Some(&root),
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
@@ -11383,6 +11650,7 @@ mod tests {
             Some(&root),
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -11444,6 +11712,7 @@ mod tests {
                 false,
                 root_deps_running_root,
                 &fixtures_root().join("distfiles"),
+                false,
                 false,
             )
             .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
@@ -11511,6 +11780,7 @@ mod tests {
             Some(&root),
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -11566,6 +11836,7 @@ mod tests {
             Some(&root),
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -11616,6 +11887,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .expect("resolve_pretend_graph must succeed")
@@ -11837,6 +12109,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .expect("resolve_pretend_graph must succeed")
@@ -12070,6 +12343,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -12158,6 +12432,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -12339,6 +12614,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .expect("resolve_pretend_graph must succeed")
@@ -12538,6 +12814,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12587,6 +12864,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -12697,6 +12975,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -12744,6 +13023,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -12795,6 +13075,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12844,6 +13125,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -13112,6 +13394,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -13174,6 +13457,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -13211,6 +13495,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .expect_err("no visible candidate at all");
@@ -13283,6 +13568,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -13348,6 +13634,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -13385,6 +13672,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .expect_err("no visible candidate at all");
@@ -13454,6 +13742,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
@@ -13533,6 +13822,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -13611,6 +13901,7 @@ mod tests {
             true,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -13746,6 +14037,7 @@ mod tests {
             restrict: String::new(),
             source: CandidateSource::Ebuild,
             binary_use: None,
+            remote: false,
         }
     }
 
@@ -14836,6 +15128,7 @@ mod tests {
             use_suggestion: None,
             parent_use_suggestion: None,
             targets_running_root: false,
+            remote_binary: false,
         }
     }
 

@@ -386,6 +386,66 @@ CASES = [
         0,
     ),
     (
+        "--getbinpkg: a remote-only binhost binary becomes eligible",
+        ["--pretend", "--getbinpkg", "dev-libs/remotebinpkg"],
+        0,
+    ),
+    (
+        "-g short alias for --getbinpkg",
+        ["--pretend", "-g", "dev-libs/remotebinpkg"],
+        0,
+    ),
+    (
+        "--getbinpkg=y inline form",
+        ["--pretend", "--getbinpkg=y", "dev-libs/remotebinpkg"],
+        0,
+    ),
+    (
+        "--getbinpkgonly: binary-only, still resolves the remote binhost binary",
+        ["--pretend", "--getbinpkgonly", "dev-libs/remotebinpkg"],
+        0,
+    ),
+    (
+        "-G short alias for --getbinpkgonly",
+        ["--pretend", "-G", "dev-libs/remotebinpkg"],
+        0,
+    ),
+    (
+        "-pG bundled",
+        ["-pG", "dev-libs/remotebinpkg"],
+        0,
+    ),
+    (
+        "--getbinpkg -v: the `g` bracket column + Size of downloads + ::repo",
+        ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinpkg"],
+        0,
+    ),
+    (
+        "--getbinpkg -v: :slot/::repo decoration on a [binary ... g] line",
+        ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinslotpkg"],
+        0,
+    ),
+    (
+        "--getbinpkg -v --columns: g column with the decorated version column",
+        ["--pretend", "-v", "--columns", "--getbinpkg", "dev-libs/remotebinpkg"],
+        0,
+    ),
+    (
+        "--getbinpkg --json: source stays \"binary\" for a remote binhost pick",
+        ["--pretend", "--json", "--getbinpkg", "dev-libs/remotebinpkg"],
+        0,
+    ),
+    (
+        "--getbinpkg=n leaves a remote-only binhost binary invisible",
+        ["--pretend", "--getbinpkg=n", "dev-libs/remotebinpkg"],
+        1,
+    ),
+    (
+        "--usepkg alone does not pull remote binhost candidates",
+        ["--pretend", "--usepkg", "dev-libs/remotebinpkg"],
+        1,
+    ),
+    (
         "--newrepo: off by default, stays already-installed",
         ["--pretend", "--selective", "dev-libs/newrepopkg"],
         0,
@@ -2247,6 +2307,91 @@ def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
         '[binary  N    ] dev-libs/binaryusemismatchpkg-1.0 ',
     ]
     assert result.stderr == ""
+
+
+def test_getbinpkg_makes_a_remote_binhost_binary_eligible(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """dev-libs/remotebinpkg exists ONLY as a binary in the binhost's own
+    Packages index (fixtures/binhost/Packages, reached via
+    fixtures/etc/portage/binrepos.conf's `[testbinhost] sync-uri =
+    file://...`), with no ebuild and no local $PKGDIR entry. Real
+    main.py's `--getbinpkg`/`-g` is what adds a binrepo's packages to the
+    candidate pool (real bintree._populate_remote); `--usepkg` alone
+    (local $PKGDIR only) leaves it invisible, exactly like an
+    ebuild-only-package "no ebuilds to satisfy" failure. `-v` renders the
+    real `g` bracket column (output.py:648 `attr_display.remote_binary =
+    pkg.remote`) and the binary's own SIZE feeds `Size of downloads:`
+    (real bindbapi.getfetchsizes); the REPO field in the index is
+    surfaced as `::gentoo`."""
+    # --usepkg alone: not eligible (local $PKGDIR only).
+    up = _run(
+        [str(emerge_binary)], ["--pretend", "--usepkg", "dev-libs/remotebinpkg"], fixture_env
+    )
+    assert up.returncode == 1
+    assert 'no ebuilds to satisfy "dev-libs/remotebinpkg"' in up.stderr
+
+    # --getbinpkg: eligible, plain -p.
+    g = _run(
+        [str(emerge_binary)], ["--pretend", "--getbinpkg", "dev-libs/remotebinpkg"], fixture_env
+    )
+    gp = _run(emerge_pretend_python, ["--pretend", "--getbinpkg", "dev-libs/remotebinpkg"], fixture_env)
+    assert g.returncode == 0
+    assert g.stdout == gp.stdout
+    assert g.stdout.splitlines() == ['[binary  N g  ] dev-libs/remotebinpkg-1.0 ']
+
+    # --getbinpkg -v: the `g` column, the ::repo decoration, the ` N KiB`
+    # per-line size suffix, and the Size of downloads: counter.
+    v = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinpkg"],
+        fixture_env,
+    )
+    vp = _run(
+        emerge_pretend_python,
+        ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinpkg"],
+        fixture_env,
+    )
+    assert v.returncode == 0
+    assert v.stdout == vp.stdout
+    assert v.stdout.splitlines() == [
+        '[binary  N g   ] dev-libs/remotebinpkg-1.0::gentoo  USE="-rbfoo" 560 KiB',
+        '',
+        'Total: 1 package (1 new, 1 binary), Size of downloads: 560 KiB',
+    ]
+
+    # -G / --getbinpkgonly resolves it the same way (binary-only).
+    only = _run(
+        [str(emerge_binary)], ["--pretend", "-G", "dev-libs/remotebinpkg"], fixture_env
+    )
+    assert only.returncode == 0
+    assert only.stdout.splitlines() == ['[binary  N g  ] dev-libs/remotebinpkg-1.0 ']
+
+
+def test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """dev-libs/remotebinslotpkg is a binhost-only binary with SLOT=2/1 --
+    verbosity-3 `:slot/sub_slot` + `::repo` decoration (real _append_slot
+    / _append_repository) applies to a `[binary ... g]` line just like any
+    other bracket cpv."""
+    v = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinslotpkg"],
+        fixture_env,
+    )
+    vp = _run(
+        emerge_pretend_python,
+        ["--pretend", "-v", "--getbinpkg", "dev-libs/remotebinslotpkg"],
+        fixture_env,
+    )
+    assert v.returncode == 0
+    assert v.stdout == vp.stdout
+    assert v.stdout.splitlines() == [
+        '[binary  N g   ] dev-libs/remotebinslotpkg-1.0:2/1::gentoo  1024 KiB',
+        '',
+        'Total: 1 package (1 new, 1 binary), Size of downloads: 1024 KiB',
+    ]
 
 
 def test_downgrade_is_distinguished_from_upgrade(emerge_binary, fixture_env):

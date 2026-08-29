@@ -662,17 +662,18 @@ def _read_packages_index(pkgdir):
 
 
 def list_binary_candidates(pkgdir, category, package):
-    """Lists every binary-package build of category/package recorded in
-    <pkgdir>/Packages -- real bindbapi, the "binary" half of depgraph's
-    own candidate dbs list. A binary candidate's own CPV field
-    (category/package-version) is matched the same way an ebuild
-    filename already is: filtered to this category/package, then
-    _strip_version_prefix peels the version off. Mirrors
-    portage-repo/src/lib.rs's list_binary_candidates exactly, including
-    its own deliberately-lower-than-any-real-repo repo_priority
-    (float("-inf") here, i32::MIN there) so an identical-version ebuild
-    naturally wins any tie via the existing repo_priority comparison,
-    with no special-casing needed anywhere else."""
+    """Local $PKGDIR/Packages binary candidates (`remote` False). Mirrors
+    portage-repo/src/lib.rs's list_binary_candidates."""
+    return _binary_candidates_from_index(pkgdir, category, package, False)
+
+
+def _binary_candidates_from_index(pkgdir, category, package, remote):
+    """Shared body of list_binary_candidates (local, remote=False) and
+    _list_remote_binary_candidates (remote=True). repo_name comes from
+    the index entry's own REPO field (real Packages records it per
+    package -- so a --getbinpkg binary shows ::gentoo at -pv), falling
+    back to portage.versions._unknown_repo ("__unknown__"). Mirrors
+    portage-repo/src/lib.rs's binary_candidates_from_index."""
     candidates = []
     for entry in _read_packages_index(pkgdir):
         cpv = entry.get("CPV")
@@ -692,16 +693,77 @@ def list_binary_candidates(pkgdir, category, package):
                 "sub_slot": sub_slot,
                 "repo_location": "",
                 "repo_priority": float("-inf"),
-                "repo_name": "__binary__",
+                "repo_name": entry.get("REPO") or "__unknown__",
                 "license": entry.get("LICENSE", ""),
                 "iuse": entry.get("IUSE", ""),
                 "properties": entry.get("PROPERTIES", ""),
                 "restrict": entry.get("RESTRICT", ""),
                 "source": "binary",
                 "binary_use": set(entry.get("USE", "").split()),
+                "remote": remote,
+                "size": _int_or_none(entry.get("SIZE")),
             }
         )
     return candidates
+
+
+def _int_or_none(s):
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _binrepo_packages_dir(sync_uri, root):
+    """The on-disk directory holding a binrepo's Packages index (real
+    bintree._populate_remote's pkgindex_file, bintree.py:1496-1504).
+    Mirrors portage-profile/src/lib.rs's BinRepo::packages_dir."""
+    if sync_uri.startswith("file://"):
+        return sync_uri[len("file://") :]
+    for scheme in ("https://", "http://", "ssh://"):
+        if sync_uri.startswith(scheme):
+            rest = sync_uri[len(scheme) :]
+            hostport, _, path = rest.partition("/")
+            host = hostport.split(":", 1)[0]
+            return os.path.join(root, "var/cache/edb/binhost", host, path.strip("/"))
+    return sync_uri
+
+
+def _list_remote_binary_candidates(binrepos, root, local_pkgdir, category, package):
+    """--getbinpkg/-g: binary candidates from every binrepo's own on-disk
+    Packages index. A remote build of a cpv+version the local $PKGDIR
+    also carries is dropped (real bintree.isremote). Mirrors
+    portage-repo/src/lib.rs's list_remote_binary_candidates."""
+    if not binrepos:
+        return []
+    seen = {
+        c["version"]
+        for c in _binary_candidates_from_index(local_pkgdir, category, package, False)
+    }
+    out = []
+    for binrepo in binrepos:
+        pkgdir = _binrepo_packages_dir(binrepo["sync_uri"], root)
+        for cand in _binary_candidates_from_index(pkgdir, category, package, True):
+            if cand["version"] not in seen:
+                seen.add(cand["version"])
+                out.append(cand)
+    return out
+
+
+def _read_binary_metadata_any(config, root, category, package, version):
+    """_read_binary_metadata extended to --getbinpkg: local $PKGDIR
+    first, then each binrepo's cached Packages. Mirrors
+    portage-repo/src/lib.rs's read_binary_metadata_any."""
+    m = read_binary_metadata(config["pkgdir"], category, package, version)
+    if m is not None:
+        return m
+    for binrepo in config.get("binrepos", []):
+        m = read_binary_metadata(
+            _binrepo_packages_dir(binrepo["sync_uri"], root), category, package, version
+        )
+        if m is not None:
+            return m
+    return None
 
 
 def _filter_usepkg_exclude_include(binary_candidates, category, package, usepkg_exclude, usepkg_include):
@@ -3574,7 +3636,82 @@ def resolve_config(
         # real default /var/cache/binpkgs (cnf/make.globals). Mirrors
         # portage-profile/src/lib.rs's Config::pkgdir exactly.
         "pkgdir": scalars.get("PKGDIR", "/var/cache/binpkgs"),
+        # binrepos.conf + PORTAGE_BINHOST (--getbinpkg/--getbinpkgonly),
+        # real lib/portage/binrepo/config.py. Mirrors
+        # portage-profile/src/lib.rs's Config::binrepos.
+        "binrepos": _parse_binrepos(
+            _read_text_opt(os.path.join(config_root, "etc/portage/binrepos.conf")),
+            scalars.get("PORTAGE_BINHOST", ""),
+        ),
     }
+
+
+def _read_text_opt(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _parse_binrepos(binrepos_conf, portage_binhost):
+    """Real BinRepoConfigLoader (binrepo/config.py:97-172), narrowed:
+    [section] / key=value INI (only sync-uri, priority), then one
+    implicit BinRepo per whitespace-separated PORTAGE_BINHOST URI not
+    already a section's sync-uri (real "Convert PORTAGE_BINHOST entries
+    into implicit binrepos.conf ones", reversed, incrementing priority).
+    Each URI _normalize_uri'd. Sorted by (priority, name). Mirrors
+    portage-profile/src/lib.rs's parse_binrepos -- see its docstring for
+    the narrowings (implicit-name uses host/path not md5, no [DEFAULT]
+    interpolation / exclude-include / fetchcommand / location fallback)."""
+    repos = []
+    seen_uris = set()
+    section = None
+    sync_uri = None
+    priority = 0
+
+    def flush():
+        nonlocal section, sync_uri, priority
+        if section is not None and sync_uri is not None:
+            uri = sync_uri.rstrip("/")
+            seen_uris.add(uri)
+            repos.append({"name": section, "sync_uri": uri, "priority": priority})
+        section, sync_uri, priority = None, None, 0
+
+    for line in binrepos_conf.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            flush()
+            section = line[1:-1].strip()
+            continue
+        if "=" in line:
+            k, _, v = line.partition("=")
+            k, v = k.strip(), v.strip()
+            if k == "sync-uri":
+                sync_uri = v
+            elif k == "priority":
+                try:
+                    priority = int(v)
+                except ValueError:
+                    priority = 0
+    flush()
+    repos = [r for r in repos if r["name"] != "DEFAULT"]
+
+    current_priority = 0
+    for uri in reversed(portage_binhost.split()):
+        uri = uri.rstrip("/")
+        if uri not in seen_uris:
+            seen_uris.add(uri)
+            current_priority += 1
+            name = uri.split("://", 1)[1] if "://" in uri else uri
+            repos.append(
+                {"name": name, "sync_uri": uri, "priority": current_priority}
+            )
+
+    repos.sort(key=lambda r: (r["priority"], r["name"]))
+    return repos
 
 
 def _best_candidate(candidates):
@@ -4063,6 +4200,7 @@ def resolve_pretend(
     rebuilt_binaries_timestamp=None,
     newrepo=False,
     empty=False,
+    getbinpkg=False,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -4220,6 +4358,10 @@ def resolve_pretend(
     candidates = [] if usepkgonly else list_candidates(repos, category, package)
     if usepkg or usepkgonly:
         binary_candidates = list_binary_candidates(config["pkgdir"], category, package)
+        if getbinpkg:
+            binary_candidates = binary_candidates + _list_remote_binary_candidates(
+                config.get("binrepos", []), root, config["pkgdir"], category, package
+            )
         candidates = candidates + _filter_usepkg_exclude_include(
             binary_candidates, category, package, usepkg_exclude, usepkg_include
         )
@@ -4680,6 +4822,7 @@ def resolve_pretend_graph(
     root_deps_running_root=None,
     distdir="/var/cache/distfiles",
     empty=False,
+    getbinpkg=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -4933,6 +5076,7 @@ def resolve_pretend_graph(
             rebuilt_binaries_timestamp,
             newrepo,
             empty,
+            getbinpkg,
         )
 
         # --changed-deps-report: real portage stays "completely silent"
@@ -5128,6 +5272,10 @@ def resolve_pretend_graph(
         repo_candidates = [] if usepkgonly else list_candidates(repos, category, package)
         if usepkg or usepkgonly:
             binary_candidates = list_binary_candidates(config["pkgdir"], category, package)
+            if getbinpkg:
+                binary_candidates = binary_candidates + _list_remote_binary_candidates(
+                    config.get("binrepos", []), root, config["pkgdir"], category, package
+                )
             repo_candidates = repo_candidates + _filter_usepkg_exclude_include(
                 binary_candidates, category, package, usepkg_exclude, usepkg_include
             )
@@ -5212,6 +5360,10 @@ def resolve_pretend_graph(
             )
         )
         provenance["fetch_restrict_satisfied"] = False
+        # Real output.py:648: attr_display.remote_binary = pkg.remote (the
+        # `g` bracket column). Mirrors portage-repo/src/lib.rs's
+        # GraphEntry::remote_binary.
+        provenance["remote_binary"] = bool(resolved.get("remote"))
         # Real _append_slot / _append_repository / convert_myoldbest
         # inputs (verbosity 3 -- emerge -pv), stashed on provenance like
         # new_slot/interactive above. Mirrors portage-repo/src/lib.rs's
@@ -5246,7 +5398,7 @@ def resolve_pretend_graph(
 
         pf = f"{package}-{version}"
         if candidate_source == "binary":
-            metadata = read_binary_metadata(config["pkgdir"], category, package, version)
+            metadata = _read_binary_metadata_any(config, root, category, package, version)
             if metadata is None:
                 continue
         else:
@@ -5298,6 +5450,15 @@ def resolve_pretend_graph(
                 package,
                 distdir,
             )
+        elif provenance["remote_binary"]:
+            # A --getbinpkg remote binary: real bindbapi.getfetchsizes ->
+            # {<cpv>: SIZE} from the binhost Packages index. Feeds both
+            # the -v per-line " N KiB" suffix and Size of downloads:.
+            _size = _int_or_none(metadata.get("SIZE"))
+            if _size is not None:
+                provenance["download_files"] = [
+                    (f"{category}/{package}-{version}", _size)
+                ]
 
         # REQUIRED_USE (PMS 7.3.4/8.2): checked once, here, right after a
         # candidate is newly resolved -- real depgraph.py's own "NOTE:
@@ -8637,6 +8798,8 @@ def run(args):
     autounmask_use = None
     usepkg = False
     usepkgonly = False
+    getbinpkg = False
+    getbinpkgonly = False
     binpkg_respect_use = None
     rebuilt_binaries = None
     rebuilt_binaries_timestamp = None
@@ -9212,6 +9375,40 @@ def run(args):
         elif arg == "--usepkgonly=n":
             usepkgonly = False
             i += 1
+        elif arg == "--getbinpkg" or arg == "-g":
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                getbinpkg = True
+                i += 2
+            elif nxt == "n":
+                getbinpkg = False
+                i += 2
+            else:
+                getbinpkg = True
+                i += 1
+        elif arg == "--getbinpkg=y":
+            getbinpkg = True
+            i += 1
+        elif arg == "--getbinpkg=n":
+            getbinpkg = False
+            i += 1
+        elif arg == "--getbinpkgonly" or arg == "-G":
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "y":
+                getbinpkgonly = True
+                i += 2
+            elif nxt == "n":
+                getbinpkgonly = False
+                i += 2
+            else:
+                getbinpkgonly = True
+                i += 1
+        elif arg == "--getbinpkgonly=y":
+            getbinpkgonly = True
+            i += 1
+        elif arg == "--getbinpkgonly=n":
+            getbinpkgonly = False
+            i += 1
         elif arg == "--binpkg-respect-use":
             nxt = args[i + 1] if i + 1 < len(args) else None
             if nxt == "y":
@@ -9308,6 +9505,10 @@ def run(args):
                     usepkg = True
                 elif c == "K":
                     usepkgonly = True
+                elif c == "g":
+                    getbinpkg = True
+                elif c == "G":
+                    getbinpkgonly = True
                 elif c == "W":
                     deselect = True
                 elif c == "C":
@@ -9605,6 +9806,14 @@ def run(args):
         autounmask_suggest_keywords = autounmask_enabled and autounmask is not None
     autounmask_suggest_use = autounmask_enabled and autounmask_use is not False
 
+    # Fold the --getbinpkg family into the --usepkg family (see their
+    # parsing): --getbinpkgonly implies binary-only; either getbinpkg
+    # flag makes binary candidates eligible; getbinpkg additionally
+    # turns on remote binrepo candidate loading. Mirrors pretend.rs.
+    usepkgonly = usepkgonly or getbinpkgonly
+    usepkg = usepkg or getbinpkg or getbinpkgonly
+    getbinpkg = getbinpkg or getbinpkgonly
+
     # --binpkg-respect-use: real default is "auto" (effectively on)
     # whenever --usepkgonly is NOT given, left off (unset/falsy) when it
     # IS -- create_depgraph_params.py:47-55. An explicit
@@ -9665,6 +9874,7 @@ def run(args):
             root_deps_running_root,
             os.environ.get("DISTDIR", "/var/cache/distfiles"),
             emptytree,
+            getbinpkg,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)
@@ -9900,6 +10110,7 @@ def run(args):
         interactive = bool(prov.get("interactive"))
         fetch_restrict = bool(prov.get("fetch_restrict"))
         fetch_restrict_satisfied = bool(prov.get("fetch_restrict_satisfied"))
+        remote_binary = bool(prov.get("remote_binary"))
         new_slot_flag = bool(prov.get("new_slot"))
 
         # Real _append_slot / _append_repository / convert_myoldbest
@@ -9935,11 +10146,11 @@ def run(args):
         def field(new=False, new_slot=False, replace=False, new_version=False, downgrade=False):
             # The fixed-width attr_display field flags this entry
             # contributes, shared by every merge outcome below (see
-            # _attr_display_field). force_reinstall/remote_binary are
-            # always False here -- this pilot has no
-            # --emptytree/arg.force_reinstall concept and g (remote
-            # binpkg) needs --getbinpkg, which is out of scope. Mirrors
-            # pretend.rs's own `field` closure.
+            # _attr_display_field). force_reinstall is always False here;
+            # remote_binary (the `g` column) is prov["remote_binary"] --
+            # real attr_display.remote_binary = pkg.remote for a
+            # --getbinpkg binary not yet in $PKGDIR. Mirrors pretend.rs's
+            # own `field` closure.
             return _attr_display_field(
                 interactive,
                 new,
@@ -9948,7 +10159,7 @@ def run(args):
                 replace,
                 fetch_restrict and not fetch_restrict_satisfied,
                 fetch_restrict_satisfied,
-                False,
+                remote_binary,
                 new_version,
                 downgrade,
                 km,
@@ -9970,6 +10181,16 @@ def run(args):
             disp_ver = disp_version(version)
             oldbest = oldbest_str()
             use_str = use_suffix(use_display, installed, forced)
+            # Real output.py::verbose_size (verbosity 3 only): verboseadd
+            # += localized_size(mysize) after the USE string. Rendered
+            # only for a --getbinpkg remote binary (see pretend.rs's
+            # emit -- the one non-zero case; the wider bare " 0 KiB" that
+            # real shows on every -pv line is a pre-existing omission).
+            if verbose and remote_binary:
+                _bytes = sum(s for _n, s in (prov.get("download_files") or []))
+                size_suffix = " " + _localized_size(_bytes)
+            else:
+                size_suffix = ""
             # Real output.py:856-861: darkgreen("to " + pkg.root).
             root_col = color.c("darkgreen", root) if root else ""
             if columns:
@@ -9991,6 +10212,7 @@ def run(args):
                     )
                     + root_str
                     + use_str
+                    + size_suffix
                 )
                 return
             # Real _set_no_columns: f"[{pkgprint(type)} {attr}]
@@ -10007,6 +10229,7 @@ def run(args):
                     tail += " "
                 tail += root_col
             tail += use_str
+            tail += size_suffix
             print(f"[{bword} {f}] {indent}{pkg_str}{tail}")
 
         if tag == "new":

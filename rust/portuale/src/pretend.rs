@@ -804,9 +804,10 @@ fn print_entry_line(
     };
     // The fixed-width `attr_display` field flags this entry contributes,
     // shared by every merge outcome below (see `attr_display_field`).
-    // `force_reinstall`/`remote_binary` are always `false` here -- this
-    // pilot has no `--emptytree`/`arg.force_reinstall` concept and `g`
-    // (remote binpkg) needs `--getbinpkg`, which is out of scope.
+    // `force_reinstall` is always `false` here -- this pilot has no
+    // `arg.force_reinstall` concept. `remote_binary` (the `g` column) is
+    // `entry.remote_binary` -- real `attr_display.remote_binary =
+    // pkg.remote` for a `--getbinpkg` binary not yet in `$PKGDIR`.
     let field = |new: bool, new_slot: bool, replace: bool, new_version: bool, downgrade: bool| {
         attr_display_field(
             entry.interactive,
@@ -816,7 +817,7 @@ fn print_entry_line(
             replace,
             entry.fetch_restrict && !entry.fetch_restrict_satisfied,
             entry.fetch_restrict_satisfied,
-            false,
+            entry.remote_binary,
             new_version,
             downgrade,
             entry.keyword_mask,
@@ -881,6 +882,20 @@ fn print_entry_line(
         let disp_ver = disp_version(version);
         let oldbest = oldbest_str();
         let use_str = use_suffix(entry, verbose, alphabetical, color);
+        // Real `output.py::verbose_size` (`conf.verbosity == 3` only):
+        // `verboseadd += localized_size(mysize)` -- the bytes still to
+        // fetch, appended after the USE string. This pilot renders it
+        // only for a `--getbinpkg` remote binary (the one case that's
+        // ever non-zero here -- an ebuild's distfiles / a local `$PKGDIR`
+        // binary are already present, so real would show a bare ` 0 KiB`
+        // that this pilot's `-pv` lines have always omitted; closing that
+        // wider gap would re-pin every `-pv` assertion and is left out).
+        let size_suffix = if verbose && entry.remote_binary {
+            let bytes: u64 = entry.download_files.iter().map(|(_, s)| s).sum();
+            format!(" {}", localized_size(bytes))
+        } else {
+            String::new()
+        };
         // Real `output.py:856-861`: the running-root suffix is
         // `darkgreen("to " + pkg.root)`.
         let root_col = |r: &str| {
@@ -897,7 +912,7 @@ fn print_entry_line(
                 format!(" {}", root_col(&root))
             };
             println!(
-                "{}{root_str}{use_str}",
+                "{}{root_str}{use_str}{size_suffix}",
                 columns_line(
                     bracket,
                     f,
@@ -935,6 +950,7 @@ fn print_entry_line(
             tail.push_str(&root_col(&root));
         }
         tail.push_str(&use_str);
+        tail.push_str(&size_suffix);
         println!("[{bword} {f}] {indent}{pkg_str}{tail}");
     };
     match &entry.outcome {
@@ -3310,6 +3326,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // itself is known.
     let mut usepkg = false;
     let mut usepkgonly = false;
+    // --getbinpkg/-g, --getbinpkgonly/-G (real `main.py`, `y_or_n`).
+    // Folded into `usepkg`/`usepkgonly` below (real depgraph treats a
+    // binrepo package the same as a $PKGDIR one for pool eligibility);
+    // `getbinpkg` additionally turns on *remote* candidate loading.
+    let mut getbinpkg = false;
+    let mut getbinpkgonly = false;
     let mut binpkg_respect_use: Option<bool> = None;
     // --rebuilt-binaries's own real default ("auto-on" whenever
     // --usepkgonly/--deep/--update are ALL given together, even with no
@@ -3956,6 +3978,54 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--usepkgonly=n" {
             usepkgonly = false;
             i += 1;
+        } else if arg == "--getbinpkg" || arg == "-g" {
+            // Real `main.py`: `--getbinpkg`/`-g` (`y_or_n`) -- distinct
+            // from `--usepkg`, but real depgraph makes a `--getbinpkg`
+            // binrepo's packages eligible the same way `--usepkg` does
+            // for `$PKGDIR`, so this pilot folds it into `usepkg` and
+            // additionally passes `getbinpkg` (-> remote candidates).
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    getbinpkg = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    getbinpkg = false;
+                    i += 2;
+                }
+                _ => {
+                    getbinpkg = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--getbinpkg=y" {
+            getbinpkg = true;
+            i += 1;
+        } else if arg == "--getbinpkg=n" {
+            getbinpkg = false;
+            i += 1;
+        } else if arg == "--getbinpkgonly" || arg == "-G" {
+            // Real `--getbinpkgonly` implies binary-only (`usepkgonly`).
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    getbinpkgonly = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    getbinpkgonly = false;
+                    i += 2;
+                }
+                _ => {
+                    getbinpkgonly = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--getbinpkgonly=y" {
+            getbinpkgonly = true;
+            i += 1;
+        } else if arg == "--getbinpkgonly=n" {
+            getbinpkgonly = false;
+            i += 1;
         } else if arg == "--binpkg-respect-use" {
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
@@ -4051,6 +4121,8 @@ pub fn run(args: &[String]) -> ExitCode {
                     'e' => emptytree = true,
                     'k' => usepkg = true,
                     'K' => usepkgonly = true,
+                    'g' => getbinpkg = true,
+                    'G' => getbinpkgonly = true,
                     'W' => deselect = true,
                     'C' => unmerge = true,
                     'c' => depclean = true,
@@ -4388,6 +4460,14 @@ pub fn run(args: &[String]) -> ExitCode {
         };
     let autounmask_suggest_use = autounmask_enabled && autounmask_use != Some(false);
 
+    // Fold the --getbinpkg family into the --usepkg family (see their
+    // parsing above): `--getbinpkgonly` implies binary-only; either
+    // getbinpkg flag makes binary candidates eligible; `getbinpkg`
+    // additionally turns on *remote* binrepo candidate loading.
+    let usepkgonly = usepkgonly || getbinpkgonly;
+    let usepkg = usepkg || getbinpkg || getbinpkgonly;
+    let getbinpkg = getbinpkg || getbinpkgonly;
+
     // --binpkg-respect-use: real default is "auto" (effectively on)
     // whenever --usepkgonly is NOT given, left off (unset/falsy) when it
     // IS -- create_depgraph_params.py:47-55, confirmed by reading it. An
@@ -4453,6 +4533,7 @@ pub fn run(args: &[String]) -> ExitCode {
         root_deps_running_root.as_deref(),
         &distdir,
         emptytree,
+        getbinpkg,
     ) {
         Ok(result) => result,
         Err(e) => {

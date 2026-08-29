@@ -46,7 +46,7 @@ to **either** side yet — deliberate, documented scope cuts or explicit
 | 16 | Real atom-grammar wildcards/build-ids | **descoped** (not a gap) | Decision recorded: the bounded `*/*`/`category/*`/`*/package` matcher is sufficient for `package.mask`-style matching; full wildcard/glob/build-id atoms never reach `DEPEND`/`RDEPEND` parsing. Not on the backlog anymore. |
 | 17 | `--autounmask*` family | **read-only suggestion mode shipped** | `2003e020d` (`--autounmask` keyword suggestion) + `927402f3f` (extended to a dependency's own `NoVisibleCandidate`) + `--autounmask-use`/`--autounmask-keep-keywords`/`--autounmask-write` recognition. *Residual:* `--autounmask-write` itself (writes files) — a `PROMPT.md` "never writes" boundary, see Part 3. |
 | 18 | `--root-deps`/cross-`ROOT` dependency resolution | **substantially shipped** | Real `ESYSROOT`-vs-`ROOT` distinction, `running_root_satisfies_atom`, `||` branch selection fed by running-root satisfiability, `93327d274`, `356088e6c` (recursive build-entry, first increment), `678a8875d` (output marking), top-level `IDEPEND` vs running root. *Residual:* see Part 2. |
-| 19 | Binary package support | **local `PKGDIR` shipped** | `3099d9adf` (`--usepkg`/`--usepkgonly`/`--binpkg-respect-use`) + `96d8fbccb` (`--usepkg-exclude`/`-include`) + `0ae1f8be6` (`--rebuilt-binaries`) + `0b18b2140` (downgrade detection) + `7e5a380d7` (real `ebuild … package` builds an xpak binpkg) + real `PORTAGE_COMPRESSION_COMMAND`. *Residual:* `--getbinpkg`/`--getbinpkgonly` (remote), `gpkg` format, `BUILD_ID`/splitdebug/packdebug/RPM, PKGDIR-index locking — see Part 2. |
+| 19 | Binary package support | **local `PKGDIR` shipped** | `3099d9adf` (`--usepkg`/`--usepkgonly`/`--binpkg-respect-use`) + `96d8fbccb` (`--usepkg-exclude`/`-include`) + `0ae1f8be6` (`--rebuilt-binaries`) + `0b18b2140` (downgrade detection) + `7e5a380d7` (real `ebuild … package` builds an xpak binpkg) + real `PORTAGE_COMPRESSION_COMMAND` + `--pretend` half of `--getbinpkg`/`--getbinpkgonly` (`binrepos.conf` + `PORTAGE_BINHOST` parsing, remote binhost `Packages`-index candidates, the `g` bracket column, `Size of downloads:` from the index `SIZE`). *Residual:* an actual remote download / `layout.conf` negotiation, `--getbinpkg` for a real merge, `gpkg` format, `BUILD_ID`/splitdebug/packdebug/RPM, PKGDIR-index locking — see Part 2. |
 | 20 | Real ebuild phase execution | **shipped** | `eeecd96cd` (the `actionmap_deps` phase chain via embedded `brush`) + `2f5a3ddad`/`39907fee6` |
 | 21 | Real merge/install/filesystem mutation | **shipped** | `2f5a3ddad` (`merge`) + `2a52f7d88` (`unmerge`) + `qmerge`/`config`/`info`/`prerm`/`postrm` + real `CONFIG_PROTECT`/`collision-protect`/`preserve-libs`/`env_update` |
 
@@ -218,9 +218,10 @@ Ranked roughly by how self-contained each is.
    `_append_repository` / `convert_myoldbest`) **shipped 2026-08-29**
    (`GraphEntry::sub_slot`/`repo_name`/`oldbest`, `InstalledRef`,
    `decorate_version`; fixture vdb entries gained `repository` files).
-   ANSI colour shipped across increments 2-4. **Still open in this
-   bracket area:** just `g` (remote binary — needs `--getbinpkg`). The
-   `-pv` output arc is otherwise complete.
+   ANSI colour shipped across increments 2-4. The `g` (remote binary)
+   bracket column **shipped 2026-08-29** with the `--pretend` half of
+   `--getbinpkg` (item 6 / item 19). The `-pv` output arc is complete
+   bar `--autounmask`/blocker-line colour (their own future slices).
 
 3. ~~**IUSE-aware `_*` wildcard expansion**~~ **shipped 2026-08-27**
    (`portage_repo::effective_use_flags`'s own `_*` block): a `k_*` flag
@@ -265,9 +266,17 @@ Ranked roughly by how self-contained each is.
 
 ### C. Binary packages / fetch
 
-6. **Remote binpkg fetching** — `--getbinpkg`/`--getbinpkgonly` and the
-   remote `PKGDIR`-index/`Packages` negotiation they need. Recognized but
-   unimplemented; a real debug trace is vendored at
+6. **Remote binpkg fetching** — the `--pretend` half of `--getbinpkg`/
+   `--getbinpkgonly` **shipped 2026-08-29**: `binrepos.conf` +
+   `PORTAGE_BINHOST` parsing (`portage-profile` `parse_binrepos`,
+   `BinRepo`), remote binhost candidates read from each binhost's cached
+   `Packages` index (`portage-repo` `list_remote_binary_candidates`),
+   the `g` bracket column (`GraphEntry::remote_binary`), and the download
+   `SIZE` feeding `Size of downloads:` / the `-pv` line suffix.
+   **Still open:** the actual remote download itself (live `layout.conf`
+   negotiation, the `<EROOT>/var/cache/edb/binhost/` fetch/populate step,
+   resume support) and `--getbinpkg` for a real (non-`--pretend`) merge.
+   A real debug trace is vendored at
    `PORTING/helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`
    for reference.
 

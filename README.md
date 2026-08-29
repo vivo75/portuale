@@ -3356,8 +3356,9 @@ PORTING/
   `PkgAttrDisplay.__str__` renders it right after the `S`/`R` column:
   green `f` (satisfied -- every distfile already in `DISTDIR`), red `F`
   (some missing -- `emerge` won't auto-download a `RESTRICT=fetch`
-  package, you fetch them by hand). Completes `PkgAttrDisplay`'s bracket
-  (`g`, remote binary, stays out -- needs `--getbinpkg`). The `RESTRICT`
+  package, you fetch them by hand). At the time this slice shipped it
+  completed `PkgAttrDisplay`'s bracket bar `g` (remote binary); `g` has
+  since shipped too (see "`emerge -pv --getbinpkg`" below). The `RESTRICT`
   check reuses `evaluated_metadata_tokens` (built for the `interactive`
   slice); `fetch_restrict_files_all_present` (new, `portage-repo`, which
   gained a `portage-fetch` dependency) flattens the candidate's own
@@ -4099,9 +4100,11 @@ its default asymmetry: `--usepkg` alone falls back to the identical-
 version ebuild, `--usepkgonly` accepts the mismatched binary since
 there's nowhere else to fall back to. The `[ebuild N]`/`[binary N]`
 bracket word itself mirrors real `RootConfig.py`'s own
-`pkg_tree_map`-driven `type_name` display. Real `--getbinpkg`/
-`--getbinpkgonly` (remote fetching) are out of scope -- local `PKGDIR`
-only.
+`pkg_tree_map`-driven `type_name` display. At the time this slice
+shipped, `--getbinpkg`/`--getbinpkgonly` (remote binhosts) were out of
+scope -- local `PKGDIR` only; the `--pretend` half of `--getbinpkg` has
+since shipped (see "`emerge -pv --getbinpkg`" below), still stopping
+short of an actual remote download.
 
 `--usepkg-exclude`/`--usepkg-include`: a direct follow-on, grounded
 against real `main.py` ("a space separated list of package names or
@@ -8137,6 +8140,60 @@ fixture `_unresolved_root` (`ukept` RDEPENDs a missing package); 4
 contract tests + a `portage-repo` unit test; mirrored in
 `emerge_pretend_reference.py`.
 
+### `emerge -pv --getbinpkg`: remote binhost binary candidates + the `g` bracket column
+
+The `--pretend` half of `--getbinpkg`/`-g` and `--getbinpkgonly`/`-G`
+(real `main.py`, `y_or_n`). Real `emerge` adds every configured binhost's
+own `Packages` index to the candidate pool alongside `$PKGDIR`
+(`bintree._populate_remote`); this pilot reads each binhost's *cached*
+index off disk (`<EROOT>/var/cache/edb/binhost/<host>/<path>/Packages`
+for an `http(s)`/`ssh` `sync-uri`, the URI path itself for `file://`) and
+resolves against it -- `--pretend` never downloads, so a binhost whose
+cache is absent simply contributes nothing.
+
+`portage-profile` gained `binrepos: Vec<BinRepo>` on `Config`, parsed by
+`parse_binrepos` -- real `BinRepoConfigLoader`
+(`lib/portage/binrepo/config.py:97-172`): every `[section]` in
+`<config_root>/etc/portage/binrepos.conf` (`sync-uri`, optional
+`priority`), then one implicit entry per whitespace-separated
+`PORTAGE_BINHOST` URI not already a section's `sync-uri` (real "Convert
+PORTAGE_BINHOST entries into implicit binrepos.conf ones", reversed with
+an incrementing priority), sorted `(priority, name)`. Documented
+narrowings: the implicit-entry name is `md5(uri)` in real portage (no md5
+here -- the URI's own `host/path`, only ever a sort key); `[DEFAULT]`
+interpolation, `getbinpkg-exclude`/`-include`, `fetchcommand`/
+`resumecommand`, signature config, and the `location =` fallback are all
+out (none affect a `--pretend` resolution).
+
+`portage-repo`: `list_remote_binary_candidates` scans each `BinRepo`'s
+`packages_dir()`, marking every candidate `remote: true` and dropping any
+cpv+version the local `$PKGDIR` already carries (real `bintree.isremote`
+-- once downloaded a package is no longer "remote"). `Candidate` gained
+`remote`; `GraphEntry` gained `remote_binary`, flowing to real
+`output.py:648`'s own `attr_display.remote_binary = pkg.remote` -- the
+`g` character in the `f`/`F` bracket slot (`[binary  N g  ]`). A
+remote-binary entry also gets its download `SIZE` from the index
+(`read_binary_metadata_any` -- local `$PKGDIR` first, then each binrepo),
+feeding both the verbosity-3 per-line ` N KiB` suffix (real
+`output.py::verbose_size`) and the `Size of downloads:` counter (real
+`bindbapi.getfetchsizes`). `REPO` from the index entry becomes the
+`::gentoo` decoration at `-pv` (falling back to `__unknown__`); `:slot`/
+`sub_slot` decoration applies to a `[binary ... g]` line like any other.
+The `--getbinpkg` family folds into `--usepkg`/`--usepkgonly` for pool
+eligibility (real depgraph treats a binhost package like a `$PKGDIR`
+one), with `getbinpkg` additionally switching on remote-index loading, so
+`--usepkg` alone still never reaches a binhost.
+
+New fixtures: `PORTING/fixtures/etc/portage/binrepos.conf` (one
+`file://` `[testbinhost]`) + `PORTING/fixtures/binhost/Packages`
+(`dev-libs/remotebinpkg-1.0`, and `dev-libs/remotebinslotpkg-1.0` with
+`SLOT=2/1`) -- both binhost-only, no ebuild, no `$PKGDIR` entry. 12
+contract `CASES` + 2 dedicated pinned-output contract tests + 3
+`portage-{profile,repo}` unit tests; mirrored in
+`emerge_pretend_reference.py`. Still out of scope: an actual remote
+download / `layout.conf` negotiation / `gpkg`, and `--getbinpkg` for a
+real (non-`--pretend`) merge.
+
 ## Running it
 
 Build both Rust binaries:
@@ -9361,6 +9418,30 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg --selective -
 # together auto-enable --rebuilt-binaries with no explicit flag at all
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkgonly --deep --update --selective dev-libs/rebuiltbinarypkg
 # [binary   R   ] dev-libs/rebuiltbinarypkg-1.0
+
+# --getbinpkg: dev-libs/remotebinpkg exists ONLY in the binhost's own
+# Packages index (fixtures/binhost/Packages, reached via
+# fixtures/etc/portage/binrepos.conf) -- no ebuild, no local $PKGDIR
+# entry, so --usepkg alone leaves it invisible
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --usepkg dev-libs/remotebinpkg
+# emerge: there are no ebuilds to satisfy "dev-libs/remotebinpkg".  (exit 1)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --getbinpkg dev-libs/remotebinpkg
+# [binary  N g  ] dev-libs/remotebinpkg-1.0
+# -v renders the real `g` bracket column, the ::repo from the index's own
+# REPO field, and the binary's SIZE as both the ` N KiB` line suffix and
+# the Size of downloads: counter
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v --getbinpkg dev-libs/remotebinpkg
+# [binary  N g   ] dev-libs/remotebinpkg-1.0::gentoo  USE="-rbfoo" 560 KiB
+#
+# Total: 1 package (1 new, 1 binary), Size of downloads: 560 KiB
+# :slot/sub_slot decoration applies to a [binary ... g] line too
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -v --getbinpkg dev-libs/remotebinslotpkg
+# [binary  N g   ] dev-libs/remotebinslotpkg-1.0:2/1::gentoo  1024 KiB
+#
+# Total: 1 package (1 new, 1 binary), Size of downloads: 1024 KiB
+# -G/--getbinpkgonly resolves it the same way (binary-only)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend -G dev-libs/remotebinpkg
+# [binary  N g  ] dev-libs/remotebinpkg-1.0
 
 # --newrepo: newrepopkg is installed with a vdb repository file
 # recording "oldrepo", but the current best candidate for this exact

@@ -1,0 +1,26 @@
+TIMESTAMP: 0
+PACKAGES: 2
+
+BUILD_ID: 1
+CPV: dev-libs/remotebinpkg-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture package: exists ONLY as a remote binhost binary -- --getbinpkg/--getbinpkgonly, the `g` bracket column
+EAPI: 8
+IUSE: rbfoo
+KEYWORDS: amd64
+REPO: gentoo
+SIZE: 573440
+SLOT: 0
+USE:
+
+BUILD_ID: 1
+CPV: dev-libs/remotebinslotpkg-1.0
+DEFINED_PHASES: -
+DESCRIPTION: fixture package: remote binhost binary with SLOT=2/1 -- proves :slot/::repo decoration on a `[binary ... g]` line at -pv
+EAPI: 8
+IUSE:
+KEYWORDS: amd64
+REPO: gentoo
+SIZE: 1048576
+SLOT: 2/1
+USE:
