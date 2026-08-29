@@ -308,13 +308,18 @@ Ranked roughly by how self-contained each is.
       2026-08-29**: `attr_display_field` (real `PkgAttrDisplay.__str__`),
       `[old-ver]` column replacing the `(upgrade from X)` / `(reinstall
       for …)` prose, `reinstall_reason` deleted. See item 2 above.
-    - **Increment 2 — colour primitive + gating** (open): the real
-      `\x1b[`-based escape table + `_styles` + `havecolor`, `--color=y|n`
-      (real choices `("y","n")`), `NO_COLOR`/`NOCOLOR`/isatty/`TERM=dumb`
-      gating (real `actions.py:2816-2828`), no `color.map`/
-      `PORTAGE_COLORMAP` parsing; then colourise the bracket line
-      (`pkgprint` palette, attr letters, `blue("[old-ver]")`, blocker,
-      mask).
+    - **Increment 2 — colour primitive + gating + bracket-line colours**
+      — **shipped 2026-08-29**: new `portuale/src/color.rs` (+ the Python
+      mirror) -- the real `\x1b[` escape table, `colorize()`, the
+      `_styles` entries reached, `nc_len()`, and `resolve_havecolor`
+      (real `actions.py:2816-2828` + `util.no_color`: `--color y|n`
+      wins, else on unless `NO_COLOR`/`NOCOLOR` or non-tty/`TERM=dumb`).
+      No `color.map`/`PORTAGE_COLORMAP`. The bracket line is coloured:
+      `Display.pkgprint` palette (`PKG_MERGE_WORLD`/`_SYSTEM`/plain +
+      binary variants; `check_system_world` narrowed to favorite-or-
+      world-file / `@system`-atom), the per-letter `PkgAttrDisplay`
+      colours, `blue("[old-ver]")`, `darkgreen("to <root>")`, and
+      `nc_len`-aware `--columns` padding.
     - **Increment 3 — USE-flag colours** in `build_use_expand_display`.
     - **Increment 4 — counters line, `-pc`/`-pC`/`-pP` cleanup output,
       autounmask messages, `--columns`/`--tree` colour.**

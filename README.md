@@ -3115,6 +3115,47 @@ PORTING/
   colour primitive + `--color=y|n` gating, then USE-flag colours, then
   counters/cleanup/autounmask/columns-tree colour.
 
+  **`emerge --pretend --color y|n`: the ANSI colour primitive + gating +
+  bracket-line colours (increment 2 of the same buildout).** New
+  `portuale/src/color.rs` ports the slice of `lib/portage/output.py` the
+  pretend renderer needs: the `rgb_ansi_colors[i]` -> `ansi_codes[i]`
+  table (`output.py:68-92` -- `ansi_codes` is `[30m, 30;01m, 31m,
+  31;01m, …]`; `green` is `\x1b[32;01m`, `darkgreen` `\x1b[32m`, and so
+  on), `colorize()` (a `codes` key wraps directly, a `_styles` key
+  resolves to its colour-name first, always `+ codes["reset"]`
+  (`\x1b[39;49;00m`)), the `_styles` entries the renderer reaches
+  (`PKG_MERGE*`, `BAD`, `WARN`), and `nc_len()` (visible width with ANSI
+  stripped). `resolve_havecolor` ports real `actions.py:2816-2828` +
+  `util.no_color`: off, then on unless `NO_COLOR` is set or `NOCOLOR` is
+  `yes`/`true`; an explicit `--color y|n` (real `main.py:421`'s
+  `choices=("y","n")`, a required value) overrides everything; otherwise
+  also off when `TERM=dumb` or stdout isn't a tty. The contract suite
+  captures stdout through a pipe, so `havecolor` is false there and every
+  existing pinned assertion stays plain; new `--color=y` cases (which win
+  over the gate) pin the exact escape sequences.
+
+  The bracket line is coloured per real `output.py`: the type word and
+  `pkg.cp` both via `Display.pkgprint` -- `PKG_MERGE_WORLD` (green) for a
+  directly-requested / world-file package, `PKG_MERGE_SYSTEM` /
+  `PKG_MERGE` (darkgreen) otherwise, `PKG_BINARY_MERGE_WORLD` (fuchsia) /
+  `PKG_BINARY_MERGE` (purple) for a binary; `system` wins over `world`,
+  exactly as real. `check_system_world` is narrowed to what this pilot
+  has: `world` = a favorite (a directly-requested target -- no
+  `--oneshot` here, so a favorite is always world-bound) or a
+  `var/lib/portage/world` atom match; `system` = a `@system`
+  (`config.system_packages`) atom match (slot-qualified `@system` atoms
+  match version-only -- a colour-only miss). `PkgAttrDisplay.__str__`'s
+  own per-letter colours land too (`green("N")`, `yellow("R")`,
+  `turquoise("U")`, `blue("D")`, `colorize("WARN", "I")`, the `#`/`*`
+  mask `BAD` and `~` `WARN`), plus `blue("[old-ver]")` and
+  `darkgreen("to <root>")`. `columns_line` measures padding with
+  `nc_len` so a coloured `--columns` line aligns identically to a plain
+  one. New `color.rs` unit tests (escape codes, `nc_len`, the palette,
+  the gate); a dedicated `--color=y` pinned-output contract test + 7
+  `CASES` entries. **Follow-up increments**: USE-flag colours
+  (`build_use_expand_display`), then counters/cleanup/autounmask colour;
+  blocker-line colour rides along with the deferred real blocker layout.
+
   **`emerge --pretend -v`: the `[ebuild N ~]` bracket-mask marker.** Real
   `output.py::gen_mask_str` (only with `-v` -- `include_mask_str` =
   `verbosity > 1`) gives the bracket a one-character column right after
@@ -7883,6 +7924,16 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/downgradepkg
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --changed-deps dev-libs/changeddepspkg
 # [ebuild   R   ] dev-libs/changeddepspkg-1.0     <- a plain reinstall: R, no inline reason (real -pv)
 # [ebuild  N    ] dev-libs/newpkg-1.0
+
+# ANSI colour (increment 2): --color y|n overrides the NO_COLOR/isatty
+# gate. diamond is a favorite (PKG_MERGE_WORLD, green); its deps are
+# plain PKG_MERGE (darkgreen); N is green, [old-ver] blue, ~ mask yellow.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --color y dev-libs/diamond | cat -v
+# [^[[32;01mebuild^[[39;49;00m  ^[[32;01mN^[[39;49;00m    ] ^[[32;01mdev-libs/diamond-1.0^[[39;49;00m
+# [^[[32mebuild^[[39;49;00m  ^[[32;01mN^[[39;49;00m    ] ^[[32mdev-libs/shared-a-1.0^[[39;49;00m
+#   ... (deps darkgreen)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" NO_COLOR=1 /tmp/emerge --pretend --color y dev-libs/diamond | cat -v
+#   -- still coloured: an explicit --color y wins over NO_COLOR
 
 # dependency recursion: diamond dependency, deduped (see PORTING/fixtures)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/diamond

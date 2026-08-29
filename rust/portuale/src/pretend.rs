@@ -206,6 +206,7 @@
 // this pilot actually supports, ending with a pointer to
 // PORTING/README.md and PORTING/PROMPT.md for the rest.
 
+use crate::color::{self, Colorizer};
 use crate::ebuild_package;
 use crate::emerge_build;
 use crate::emerge_options;
@@ -285,7 +286,7 @@ fn columnwidth_from_env() -> i64 {
 /// truncates, just doesn't pad further.
 #[allow(clippy::too_many_arguments)]
 fn columns_line(
-    bracket: &str,
+    bracket_word: &str,
     field: &str,
     indent: &str,
     category: &str,
@@ -293,18 +294,32 @@ fn columns_line(
     version: &str,
     oldbest: &str,
     columnwidth: i64,
+    color: &Colorizer,
+    binary: bool,
+    system: bool,
+    world: bool,
 ) -> String {
     let newlp = (columnwidth - 60).max(0) as usize;
     let oldlp = (columnwidth - 30).max(0) as usize;
-    let mut line = format!("[{bracket} {field}] {indent}{category}/{package}");
-    if newlp > line.len() {
-        line.push_str(&" ".repeat(newlp - line.len()));
+    // Real `_set_root_columns` merge branch: the type word and `pkg.cp`
+    // both go through `pkgprint`; the version column is `green("[ver]")`;
+    // `oldbest` arrives already `blue("[from]")` from `convert_myoldbest`.
+    // Padding measures visible width (`color::nc_len`), never raw bytes.
+    let cp = color.pkgprint(&format!("{category}/{package}"), binary, system, world);
+    let bword = color.pkgprint(bracket_word, binary, system, world);
+    let mut line = format!("[{bword} {field}] {indent}{cp}");
+    let pad_to = |line: &mut String, target: usize| {
+        let w = color::nc_len(line);
+        if target > w {
+            line.push_str(&" ".repeat(target - w));
+        }
+    };
+    pad_to(&mut line, newlp);
+    line.push_str(&format!(" {} ", color.c("green", &format!("[{version}]"))));
+    pad_to(&mut line, oldlp);
+    if !oldbest.is_empty() {
+        line.push_str(&color.c("blue", oldbest));
     }
-    line.push_str(&format!(" [{version}] "));
-    if oldlp > line.len() {
-        line.push_str(&" ".repeat(oldlp - line.len()));
-    }
-    line.push_str(oldbest);
     line
 }
 
@@ -329,9 +344,13 @@ fn columns_line(
 ///    `verbosity > 1`), the `#`/`~`/`*` char from `gen_mask_str`
 ///    (`GraphEntry::keyword_mask`) or a space.
 ///
-/// Increment 1 of the `-pv` layout buildout renders this plain; the real
-/// per-column ANSI colors (`green("N")`, `yellow("R")`, `turquoise("U")`,
-/// …) come in increment 2.
+/// Each present letter is ANSI-coloured per real `PkgAttrDisplay.__str__`
+/// (`green("N")`, `yellow("R")`, `turquoise("U")`, `blue("D")`,
+/// `colorize("WARN", "I")`, the `#`/`*`/`~` mask via `BAD`/`WARN`, …)
+/// when `color.enabled`; a space is never coloured. When colour is off
+/// every call returns the bare char, so the field is exactly 6/7 visible
+/// columns either way (`color::nc_len` recovers that width for
+/// `--columns` padding).
 #[allow(clippy::too_many_arguments)]
 fn attr_display_field(
     interactive: bool,
@@ -346,40 +365,59 @@ fn attr_display_field(
     downgrade: bool,
     mask: Option<char>,
     verbose: bool,
+    color: &Colorizer,
 ) -> String {
-    let mut f = String::with_capacity(7);
-    f.push(if interactive { 'I' } else { ' ' });
-    f.push(if force_reinstall {
-        'r'
+    let col = |key: &str, ch: char| color.c(key, &ch.to_string());
+    let mut f = String::new();
+    f.push_str(&if interactive {
+        col("WARN", 'I')
+    } else {
+        " ".to_string()
+    });
+    f.push_str(&if force_reinstall {
+        col("red", 'r')
     } else if new {
-        'N'
+        col("green", 'N')
     } else {
-        ' '
+        " ".to_string()
     });
-    f.push(if replace {
-        'R'
+    f.push_str(&if replace {
+        col("yellow", 'R')
     } else if new_slot {
-        'S'
+        col("green", 'S')
     } else {
-        ' '
+        " ".to_string()
     });
-    f.push(if fetch_restrict_satisfied {
-        'f'
+    f.push_str(&if fetch_restrict_satisfied {
+        col("green", 'f')
     } else if fetch_restrict {
-        'F'
+        col("red", 'F')
     } else if remote_binary {
-        'g'
+        col("fuchsia", 'g')
     } else {
-        ' '
+        " ".to_string()
     });
-    f.push(if new_version { 'U' } else { ' ' });
-    f.push(if downgrade { 'D' } else { ' ' });
+    f.push_str(&if new_version {
+        col("turquoise", 'U')
+    } else {
+        " ".to_string()
+    });
+    f.push_str(&if downgrade {
+        col("blue", 'D')
+    } else {
+        " ".to_string()
+    });
     // Real `__str__` appends `self.mask` only `if self.mask is not None`,
     // and `set_pkg_info` sets it (to a space when there's no real mark)
     // only `if self.include_mask_str()` -- so the column exists at `-v`
-    // and doesn't at plain `-p`.
+    // and doesn't at plain `-p`. Real `gen_mask_str`: `#`/`*` -> `BAD`
+    // (red), `~` -> `WARN` (yellow).
     if verbose {
-        f.push(mask.unwrap_or(' '));
+        f.push_str(&match mask {
+            Some(c @ ('#' | '*')) => col("BAD", c),
+            Some('~') => col("WARN", '~'),
+            _ => " ".to_string(),
+        });
     }
     f
 }
@@ -644,9 +682,32 @@ fn print_entry_line(
     columns: bool,
     columnwidth: i64,
     running_root: Option<&Path>,
+    color: &Colorizer,
+    system_atoms: &[String],
+    world_atoms: &[String],
 ) {
     let onlydeps_suppressed =
         onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
+    // Real `Display.check_system_world` (`output.py`), narrowed: `world`
+    // when this package is a directly-requested target (a "favorite" --
+    // this pilot has no `--oneshot`, so a favorite always becomes a world
+    // member) or matches an atom in `var/lib/portage/world`; `system`
+    // when it matches a `@system` atom. Slot-qualified `@system` atoms
+    // are matched version-only (the entry's slot isn't threaded here) --
+    // a cosmetic-only miss, colour only.
+    let binary = entry.source == portage_repo::CandidateSource::Binary;
+    let is_favorite = top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
+    let classify = |version: &str| -> (bool, bool) {
+        let cpv = format!("{}/{}-{version}", entry.category, entry.package);
+        let matches_any = |atoms: &[String]| {
+            atoms
+                .iter()
+                .any(|a| match_from_list(a, &[cpv.as_str()]).is_some_and(|m| !m.is_empty()))
+        };
+        let system = matches_any(system_atoms);
+        let world = is_favorite || matches_any(world_atoms);
+        (system, world)
+    };
     // Real `output.py:841-862`'s own `to <root>` annotation for a
     // running-root build entry -- empty for every ordinary entry (see
     // `root_suffix`'s own doc comment). Placed right before `use_suffix`
@@ -684,6 +745,7 @@ fn print_entry_line(
             downgrade,
             entry.keyword_mask,
             verbose,
+            color,
         )
     };
     // One merge line, shared by `New`/`Upgrade`/`Downgrade`/`Reinstall`.
@@ -697,12 +759,22 @@ fn print_entry_line(
         if onlydeps_suppressed {
             return;
         }
+        let (system, world) = classify(version);
         let use_str = use_suffix(entry, verbose, alphabetical);
+        // Real `output.py:856-861`: the running-root suffix is
+        // `darkgreen("to " + pkg.root)`.
+        let root_col = |r: &str| {
+            if r.is_empty() {
+                String::new()
+            } else {
+                color.c("darkgreen", r)
+            }
+        };
         if columns {
             let root_str = if root.is_empty() {
                 String::new()
             } else {
-                format!(" {root}")
+                format!(" {}", root_col(&root))
             };
             println!(
                 "{}{root_str}{use_str}",
@@ -715,23 +787,35 @@ fn print_entry_line(
                     version,
                     oldbest,
                     columnwidth,
+                    color,
+                    binary,
+                    system,
+                    world,
                 )
             );
             return;
         }
+        // Real `_set_no_columns`: `f"[{pkgprint(type)} {attr}]
+        // {indent}{pkgprint(pkg_str)} {oldbest}"`.
+        let bword = color.pkgprint(bracket, binary, system, world);
+        let pkg_str = color.pkgprint(
+            &format!("{}/{}-{version}", entry.category, entry.package),
+            binary,
+            system,
+            world,
+        );
         let mut tail = String::from(" ");
-        tail.push_str(oldbest);
+        if !oldbest.is_empty() {
+            tail.push_str(&color.c("blue", oldbest));
+        }
         if !root.is_empty() {
             if !oldbest.is_empty() {
                 tail.push(' ');
             }
-            tail.push_str(&root);
+            tail.push_str(&root_col(&root));
         }
         tail.push_str(&use_str);
-        println!(
-            "[{bracket} {f}] {indent}{}/{}-{version}{tail}",
-            entry.category, entry.package,
-        );
+        println!("[{bword} {f}] {indent}{pkg_str}{tail}");
     };
     match &entry.outcome {
         PretendOutcome::New { version } => {
@@ -934,6 +1018,9 @@ fn print_tree(
     verbose: bool,
     alphabetical: bool,
     running_root: Option<&Path>,
+    color: &Colorizer,
+    system_atoms: &[String],
+    world_atoms: &[String],
 ) {
     let mut children: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -963,6 +1050,9 @@ fn print_tree(
         verbose: bool,
         alphabetical: bool,
         running_root: Option<&'a Path>,
+        color: &'a Colorizer,
+        system_atoms: &'a [String],
+        world_atoms: &'a [String],
     }
 
     fn render(i: usize, depth: u32, ctx: &TreeCtx, rendered: &mut HashSet<usize>) {
@@ -984,6 +1074,9 @@ fn print_tree(
             false,
             130,
             ctx.running_root,
+            ctx.color,
+            ctx.system_atoms,
+            ctx.world_atoms,
         );
         let key = (
             ctx.entries[i].category.clone(),
@@ -1004,6 +1097,9 @@ fn print_tree(
         verbose,
         alphabetical,
         running_root,
+        color,
+        system_atoms,
+        world_atoms,
     };
     let mut rendered: HashSet<usize> = HashSet::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -1027,6 +1123,9 @@ fn print_tree(
                 false,
                 130,
                 running_root,
+                color,
+                system_atoms,
+                world_atoms,
             );
         }
     }
@@ -2675,6 +2774,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // --alphabetical: display-only, real `output_helpers.py`'s
     // `conf.alphabetical` -- see use_suffix.
     let mut alphabetical = false;
+    // --color y|n: real `main.py`'s own `argument_options` entry
+    // (`"choices": ("y", "n")`), a REQUIRED value -- not one of the
+    // optional-value flags. `None` = not given (fall through to the
+    // NO_COLOR/NOCOLOR/isatty gate, see `color::resolve_havecolor`).
+    let mut color_opt: Option<bool> = None;
     let mut update = false;
     let mut deep = portage_repo::Deep::NotRequested;
     let mut excluded: Vec<String> = Vec::new();
@@ -2793,6 +2897,28 @@ pub fn run(args: &[String]) -> ExitCode {
             // combined bare-name-sorted list instead of enabled-first).
             alphabetical = true;
             i += 1;
+        } else if arg == "--color" || arg.starts_with("--color=") {
+            // Real `emerge --color y|n` (`main.py:421`): the explicit
+            // override that wins over `NO_COLOR`/`NOCOLOR`/isatty. A
+            // required value -- `y` or `n`, as `--color y` or `--color=y`.
+            let val = if let Some(v) = arg.strip_prefix("--color=") {
+                i += 1;
+                v.to_string()
+            } else if let Some(v) = args.get(i + 1) {
+                i += 2;
+                v.clone()
+            } else {
+                eprintln!("emerge: --color requires an argument (y or n)");
+                return ExitCode::from(2);
+            };
+            color_opt = match val.as_str() {
+                "y" => Some(true),
+                "n" => Some(false),
+                other => {
+                    eprintln!("emerge: --color: invalid choice: {other:?} (choose from 'y', 'n')");
+                    return ExitCode::from(2);
+                }
+            };
         } else if arg == "--update" || arg == "-u" {
             update = true;
             i += 1;
@@ -3860,6 +3986,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // here the same way, even though the value only ever affects
     // anything below when `columns` is true.
     let columnwidth = columnwidth_from_env();
+    // Real `actions.py::adjust_configs` colour gate + `Display.pkgprint`'s
+    // `@system`/world inputs. `@system` = the profile's own package set
+    // (`config.system_packages`); world = `var/lib/portage/world` (a
+    // missing file is a valid empty world, same as everywhere else).
+    let color = Colorizer::new(color::resolve_havecolor(color_opt));
+    let world_atoms = read_world_atoms(&root).unwrap_or_default();
+    let system_atoms = &config.system_packages;
     if tree {
         print_tree(
             entries,
@@ -3869,6 +4002,9 @@ pub fn run(args: &[String]) -> ExitCode {
             verbose,
             alphabetical,
             root_deps_running_root.as_deref(),
+            &color,
+            system_atoms,
+            &world_atoms,
         );
     } else {
         for entry in entries {
@@ -3882,6 +4018,9 @@ pub fn run(args: &[String]) -> ExitCode {
                 columns,
                 columnwidth,
                 root_deps_running_root.as_deref(),
+                &color,
+                system_atoms,
+                &world_atoms,
             );
         }
     }

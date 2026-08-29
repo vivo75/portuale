@@ -747,6 +747,18 @@ def read_binary_metadata(pkgdir, category, package, version):
     return None
 
 
+def _match_atom_str(atom_str, cpv):
+    """Whether `atom_str` (a plain dependency/set atom -- `*` prefix
+    stripped for `@system` lines) matches the cpv `cat/pkg-ver`. Real
+    Atom + match_from_list, same as everywhere else. Used only for the
+    colour renderer's world/system classification."""
+    try:
+        atom = Atom(atom_str.lstrip("*"), allow_wildcard=True)
+    except InvalidAtom:
+        return False
+    return bool(match_from_list(atom, [cpv]))
+
+
 def _matches_config_entry(entry, candidate_str, category, package):
     """Whether `entry` (a package.mask/.unmask/.accept_keywords line)
     matches this candidate. See the module doc comment: unlike the Rust
@@ -7465,6 +7477,7 @@ def _attr_display_field(
     downgrade,
     mask,
     verbose,
+    color,
 ):
     """Real PkgAttrDisplay.__str__ (_emerge/resolver/output_helpers.py):
     the fixed-width status field rendered inside the "[ebuild ...]"
@@ -7485,30 +7498,43 @@ def _attr_display_field(
       6. the mask column -- present only at -v (include_mask_str =
          verbosity > 1), the #/~/* char from gen_mask_str or a space
 
-    Increment 1 of the -pv layout buildout renders this plain; the real
-    per-column ANSI colors come in increment 2. Mirrors pretend.rs's
-    attr_display_field exactly."""
+    Each present letter is ANSI-coloured per real PkgAttrDisplay.__str__
+    (green("N"), yellow("R"), turquoise("U"), blue("D"),
+    colorize("WARN", "I"), the #/*/~ mask via BAD/WARN) when colour is on;
+    a space is never coloured, so the field stays 6/7 visible columns
+    either way. Mirrors pretend.rs's attr_display_field exactly."""
+
+    def col(key, ch):
+        return color.c(key, ch)
+
     f = []
-    f.append("I" if interactive else " ")
-    f.append("r" if force_reinstall else "N" if new else " ")
-    f.append("R" if replace else "S" if new_slot else " ")
+    f.append(col("WARN", "I") if interactive else " ")
     f.append(
-        "f"
+        col("red", "r") if force_reinstall else col("green", "N") if new else " "
+    )
+    f.append(col("yellow", "R") if replace else col("green", "S") if new_slot else " ")
+    f.append(
+        col("green", "f")
         if fetch_restrict_satisfied
-        else "F"
+        else col("red", "F")
         if fetch_restrict
-        else "g"
+        else col("fuchsia", "g")
         if remote_binary
         else " "
     )
-    f.append("U" if new_version else " ")
-    f.append("D" if downgrade else " ")
+    f.append(col("turquoise", "U") if new_version else " ")
+    f.append(col("blue", "D") if downgrade else " ")
     # Real __str__ appends self.mask only `if self.mask is not None`, and
     # set_pkg_info sets it (to a space when there's no real mark) only
     # `if self.include_mask_str()` -- so the column exists at -v and
-    # doesn't at plain -p.
+    # doesn't at plain -p. Real gen_mask_str: #/* -> BAD (red), ~ -> WARN.
     if verbose:
-        f.append(mask or " ")
+        if mask in ("#", "*"):
+            f.append(col("BAD", mask))
+        elif mask == "~":
+            f.append(col("WARN", "~"))
+        else:
+            f.append(" ")
     return "".join(f)
 
 
@@ -7631,7 +7657,121 @@ def _columnwidth_from_env():
         return 130
 
 
-def _columns_line(bracket, field, indent, category, package, version, oldbest, columnwidth):
+# --- ANSI colour (increment 2 of the -pv layout + colour buildout) ---
+# Ports the slice of lib/portage/output.py the pretend renderer needs: the
+# RGB-name -> ANSI-code table (output.py:30-92), colorize() (383-392), the
+# _styles entries it reaches (126-154), nc_len() (249-251), and the
+# actions.py:2816-2828 + util.no_color colour gate. No color.map /
+# PORTAGE_COLORMAP parsing -- the real default map is hardcoded, same
+# "optional config not modelled" cut as elsewhere. Mirrors
+# portuale/src/color.rs exactly.
+_COLOR_CODES = {
+    "reset": "\x1b[39;49;00m",
+    "darkgreen": "\x1b[32m",
+    "green": "\x1b[32;01m",
+    "brown": "\x1b[33m",
+    "yellow": "\x1b[33;01m",
+    "darkblue": "\x1b[34m",
+    "blue": "\x1b[34;01m",
+    "purple": "\x1b[35m",
+    "fuchsia": "\x1b[35;01m",
+    "teal": "\x1b[36m",
+    "turquoise": "\x1b[36;01m",
+    "red": "\x1b[31;01m",
+}
+_COLOR_STYLES = {
+    "BAD": "red",
+    "WARN": "yellow",
+    "GOOD": "green",
+    "PKG_MERGE": "darkgreen",
+    "PKG_MERGE_SYSTEM": "darkgreen",
+    "PKG_MERGE_WORLD": "green",
+    "PKG_BINARY_MERGE": "purple",
+    "PKG_BINARY_MERGE_SYSTEM": "purple",
+    "PKG_BINARY_MERGE_WORLD": "fuchsia",
+    "PKG_UNINSTALL": "red",
+    "PKG_NOMERGE": "teal",
+    "PKG_NOMERGE_SYSTEM": "teal",
+    "PKG_NOMERGE_WORLD": "blue",
+    "PKG_BLOCKER": "red",
+    "PKG_BLOCKER_SATISFIED": "teal",
+}
+_ANSI_SGR = re.compile("\x1b[^m]+m")
+
+
+def _nc_len(s):
+    """Real output.py:249-251's nc_len -- visible length, ANSI SGR
+    sequences removed first."""
+    return len(_ANSI_SGR.sub("", s))
+
+
+def _resolve_havecolor(color_opt):
+    """Real actions.py:2816-2828 + util.no_color. color_opt: True/False for
+    --color y|n, None when not given (fall through to
+    NO_COLOR/NOCOLOR/isatty/TERM=dumb)."""
+    no_color = bool(os.environ.get("NO_COLOR")) or os.environ.get(
+        "NOCOLOR", "false"
+    ).lower() in ("yes", "true")
+    havecolor = not no_color
+    if color_opt is not None:
+        havecolor = color_opt
+    elif os.environ.get("TERM") == "dumb" or not sys.stdout.isatty():
+        havecolor = False
+    return havecolor
+
+
+class _Colorizer:
+    """Real portage's module-global `havecolor` + `colorize()`, together.
+    When disabled, every method returns its input unchanged."""
+
+    def __init__(self, enabled):
+        self.enabled = enabled
+
+    def c(self, key, text):
+        if not self.enabled:
+            return text
+        name = key if key in _COLOR_CODES else _COLOR_STYLES.get(key, "")
+        seq = _COLOR_CODES.get(name, "")
+        if not seq:
+            return text
+        return seq + text + _COLOR_CODES["reset"]
+
+    def pkgprint(self, text, binary, system, world):
+        """Real Display.pkgprint (output.py:265-292), merge-list case
+        (always true for a bracket entry): system wins over world."""
+        if binary:
+            key = (
+                "PKG_BINARY_MERGE_SYSTEM"
+                if system
+                else "PKG_BINARY_MERGE_WORLD"
+                if world
+                else "PKG_BINARY_MERGE"
+            )
+        else:
+            key = (
+                "PKG_MERGE_SYSTEM"
+                if system
+                else "PKG_MERGE_WORLD"
+                if world
+                else "PKG_MERGE"
+            )
+        return self.c(key, text)
+
+
+def _columns_line(
+    bracket_word,
+    field,
+    indent,
+    category,
+    package,
+    version,
+    oldbest,
+    columnwidth,
+    color,
+    binary,
+    system,
+    world,
+):
     """One --columns line: real _set_root_columns's own layout algorithm
     (the pkg_info.merge == True branch only -- the "not merging" branch
     never applies to any outcome this pilot prints in brackets at all),
@@ -7650,13 +7790,16 @@ def _columns_line(bracket, field, indent, category, package, version, oldbest, c
     Mirrors pretend.rs's own columns_line exactly."""
     newlp = max(columnwidth - 60, 0)
     oldlp = max(columnwidth - 30, 0)
-    line = f"[{bracket} {field}] {indent}{category}/{package}"
-    if newlp > len(line):
-        line += " " * (newlp - len(line))
-    line += f" [{version}] "
-    if oldlp > len(line):
-        line += " " * (oldlp - len(line))
-    line += oldbest
+    cp = color.pkgprint(f"{category}/{package}", binary, system, world)
+    bword = color.pkgprint(bracket_word, binary, system, world)
+    line = f"[{bword} {field}] {indent}{cp}"
+    if newlp > _nc_len(line):
+        line += " " * (newlp - _nc_len(line))
+    line += " " + color.c("green", f"[{version}]") + " "
+    if oldlp > _nc_len(line):
+        line += " " * (oldlp - _nc_len(line))
+    if oldbest:
+        line += color.c("blue", oldbest)
     return line
 
 
@@ -7683,6 +7826,9 @@ def run(args):
     columns = False
     # --alphabetical: display-only, real output_helpers.py conf.alphabetical.
     alphabetical = False
+    # --color y|n (real argument_options, choices ("y","n")): None = not
+    # given (fall through to NO_COLOR/NOCOLOR/isatty). See pretend.rs.
+    color_opt = None
     update = False
     deep = 0
     excluded = []
@@ -7769,6 +7915,31 @@ def run(args):
             # USE="..." ordering (see use_suffix). Mirrors pretend.rs.
             alphabetical = True
             i += 1
+        elif arg == "--color" or arg.startswith("--color="):
+            # Real `emerge --color y|n` (main.py:421): the explicit
+            # override that wins over NO_COLOR/NOCOLOR/isatty. A required
+            # value. Mirrors pretend.rs.
+            if arg.startswith("--color="):
+                val = arg[len("--color=") :]
+                i += 1
+            elif i + 1 < len(args):
+                val = args[i + 1]
+                i += 2
+            else:
+                print(
+                    "emerge: --color requires an argument (y or n)", file=sys.stderr
+                )
+                return 2
+            if val == "y":
+                color_opt = True
+            elif val == "n":
+                color_opt = False
+            else:
+                print(
+                    f"emerge: --color: invalid choice: {val!r} (choose from 'y', 'n')",
+                    file=sys.stderr,
+                )
+                return 2
         elif arg in ("--update", "-u"):
             update = True
             i += 1
@@ -8563,6 +8734,13 @@ def run(args):
 
     top_level_pkgs = {tuple(_parse_atom(a).cp.split("/", 1)) for a in atom_args}
 
+    # ANSI colour: real actions.py::adjust_configs gate + Display.pkgprint
+    # inputs. @system = the profile's own package set; world =
+    # var/lib/portage/world. Mirrors pretend.rs.
+    color = _Colorizer(_resolve_havecolor(color_opt))
+    color_system_atoms = config["system_packages"]
+    color_world_atoms = _read_world_atoms(_root())
+
     # Real create_depgraph_params.py's own precedence: an explicit
     # --with-bdeps always wins; only when it's absent does
     # --with-bdeps-auto=n override the real default ("auto", this
@@ -8865,6 +9043,20 @@ def run(args):
         # ("ebuild"/"binary") -- a binary merge prints "[binary", never
         # "[ebuild", regardless of outcome. Mirrors pretend.rs exactly.
         bracket = "binary" if source == "binary" else "ebuild"
+        # Real Display.check_system_world, narrowed (see pretend.rs's own
+        # print_entry_line): world = a directly-requested target (a
+        # favorite -- this pilot has no --oneshot) or a var/lib/portage/
+        # world match; system = a @system atom match. Slot-qualified
+        # @system atoms match version-only (cosmetic-only miss, colour
+        # only).
+        binary = source == "binary"
+        is_favorite = (category, package) in top_level_pkgs
+
+        def classify(version):
+            cpv = f"{category}/{package}-{version}"
+            system = any(_match_atom_str(a, cpv) for a in color_system_atoms)
+            world = is_favorite or any(_match_atom_str(a, cpv) for a in color_world_atoms)
+            return system, world
         # Real output.py:841-862's own "to <root>" annotation for a
         # running-root build entry -- "" for every ordinary entry (see
         # root_suffix). Placed right before use_suffix in each arm below,
@@ -8903,6 +9095,7 @@ def run(args):
                 downgrade,
                 km,
                 verbose,
+                color,
             )
 
         def emit(f, version, oldbest):
@@ -8915,24 +9108,46 @@ def run(args):
             # carrying its own leading space. Mirrors pretend.rs's emit.
             if onlydeps_suppressed:
                 return
+            system, world = classify(version)
             use_str = use_suffix(use_display, installed, forced)
+            # Real output.py:856-861: darkgreen("to " + pkg.root).
+            root_col = color.c("darkgreen", root) if root else ""
             if columns:
-                root_str = f" {root}" if root else ""
+                root_str = f" {root_col}" if root else ""
                 print(
                     _columns_line(
-                        bracket, f, indent, category, package, version, oldbest, columnwidth
+                        bracket,
+                        f,
+                        indent,
+                        category,
+                        package,
+                        version,
+                        oldbest,
+                        columnwidth,
+                        color,
+                        binary,
+                        system,
+                        world,
                     )
                     + root_str
                     + use_str
                 )
                 return
-            tail = " " + oldbest
+            # Real _set_no_columns: f"[{pkgprint(type)} {attr}]
+            # {indent}{pkgprint(pkg_str)} {oldbest}".
+            bword = color.pkgprint(bracket, binary, system, world)
+            pkg_str = color.pkgprint(
+                f"{category}/{package}-{version}", binary, system, world
+            )
+            tail = " "
+            if oldbest:
+                tail += color.c("blue", oldbest)
             if root:
                 if oldbest:
                     tail += " "
-                tail += root
+                tail += root_col
             tail += use_str
-            print(f"[{bracket} {f}] {indent}{category}/{package}-{version}{tail}")
+            print(f"[{bword} {f}] {indent}{pkg_str}{tail}")
 
         if tag == "new":
             # Real _get_installed_best: brand-new -> attr.new; into a

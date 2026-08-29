@@ -1015,6 +1015,43 @@ CASES = [
         ["--pretend", "-C", "dev-libs/systempkg", "dev-libs/nestedsetpkg", "dev-libs/unmergepkg"],
         0,
     ),
+    # --color=y: the explicit override that wins over NO_COLOR/isatty, so
+    # these stay deterministic under a captured (piped) stdout.
+    (
+        "--color=y: a New (system member -> PKG_MERGE_SYSTEM) + its dep",
+        ["--pretend", "--color=y", "dev-libs/diamond"],
+        0,
+    ),
+    (
+        "--color=y: an Upgrade (turquoise U, blue [old-ver], PKG_MERGE_WORLD)",
+        ["--pretend", "--color=y", "--update", "dev-libs/upgradepkg"],
+        0,
+    ),
+    (
+        "--color=y -pv: coloured USE_EXPAND line + green N",
+        ["--pretend", "-v", "--color=y", "dev-libs/useexpandpkg"],
+        0,
+    ),
+    (
+        "--color=y -pv: the mask column is coloured (WARN ~)",
+        ["--pretend", "-v", "--color=y", "dev-libs/bareacceptkeywordspkg"],
+        0,
+    ),
+    (
+        "--color=y --columns: nc_len keeps the coloured line aligned",
+        ["--pretend", "--color=y", "--columns", "--update", "dev-libs/upgradepkg"],
+        0,
+    ),
+    (
+        "--color=y --tree: the marker survives the indent",
+        ["--pretend", "--color=y", "--tree", "dev-libs/diamond"],
+        0,
+    ),
+    (
+        "--color=n: explicitly disabled",
+        ["--pretend", "--color=n", "dev-libs/newpkg"],
+        0,
+    ),
 ]
 
 
@@ -2920,6 +2957,61 @@ def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_en
         '',
         'Total: 1 package (1 new), Size of downloads: 0 KiB',
     ]
+
+
+def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_python, fixture_env):
+    """Increment 2 of the -pv layout + colour buildout: `emerge --color y`
+    (the explicit override that wins over NO_COLOR/NOCOLOR/isatty, so the
+    output is deterministic even under a captured stdout) colours the
+    bracket line per real lib/portage/output.py -- the exact `\\x1b[` codes
+    from the real rgb_ansi_colors/ansi_codes table:
+
+      - the type word + `pkg.cp` via `pkgprint`: PKG_MERGE_WORLD
+        (green, `\\x1b[32;01m`) for a directly-requested / world-file
+        package, PKG_MERGE (darkgreen, `\\x1b[32m`) for a plain dependency,
+        PKG_MERGE_SYSTEM (also darkgreen) for a `@system` member;
+      - the attr-display letters: `N` green, `U` turquoise
+        (`\\x1b[36;01m`), the `~` mask WARN (yellow, `\\x1b[33;01m`);
+      - the `[old-ver]` column blue (`\\x1b[34;01m`).
+
+    dev-libs/diamond is a favorite (world) but NOT `@system`; its deps
+    (shared-a/-b, common) are plain PKG_MERGE."""
+    R = "\x1b[39;49;00m"
+    args = ["--pretend", "--color=y", "dev-libs/diamond"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    python = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stdout.splitlines() == [
+        f"[\x1b[32;01mebuild{R}  \x1b[32;01mN{R}    ] \x1b[32;01mdev-libs/diamond-1.0{R} ",
+        f"[\x1b[32mebuild{R}  \x1b[32;01mN{R}    ] \x1b[32mdev-libs/shared-a-1.0{R} ",
+        f"[\x1b[32mebuild{R}  \x1b[32;01mN{R}    ] \x1b[32mdev-libs/shared-b-1.0{R} ",
+        f"[\x1b[32mebuild{R}  \x1b[32;01mN{R}    ] \x1b[32mdev-libs/common-1.0{R} ",
+    ]
+
+    # An Upgrade: turquoise U, blue [old-ver].
+    up_args = ["--pretend", "--color=y", "--update", "dev-libs/upgradepkg"]
+    rup = _run([str(emerge_binary)], up_args, fixture_env)
+    assert rup.stdout == _run(emerge_pretend_python, up_args, fixture_env).stdout
+    assert rup.stdout == (
+        f"[\x1b[32;01mebuild{R}     \x1b[36;01mU{R} ] "
+        f"\x1b[32;01mdev-libs/upgradepkg-2.0{R} \x1b[34;01m[1.0]{R}\n"
+    )
+
+    # The -v mask column is coloured (WARN ~).
+    m_args = ["--pretend", "-v", "--color=y", "dev-libs/bareacceptkeywordspkg"]
+    rm = _run([str(emerge_binary)], m_args, fixture_env)
+    assert rm.stdout == _run(emerge_pretend_python, m_args, fixture_env).stdout
+    assert rm.stdout.splitlines()[0] == (
+        f"[\x1b[32;01mebuild{R}  \x1b[32;01mN{R}    \x1b[33;01m~{R}] "
+        f"\x1b[32;01mdev-libs/bareacceptkeywordspkg-1.0{R} "
+    )
+
+    # --color=n and (default) piped stdout both stay plain.
+    n_args = ["--pretend", "--color=n", "dev-libs/newpkg"]
+    rn = _run([str(emerge_binary)], n_args, fixture_env)
+    assert rn.stdout == "[ebuild  N    ] dev-libs/newpkg-1.0 \n"
+    assert "\x1b" not in _run([str(emerge_binary)], ["--pretend", "dev-libs/newpkg"], fixture_env).stdout
 
 
 def test_package_accept_keywords_profile_level_entry_extends_visibility(

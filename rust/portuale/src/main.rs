@@ -13,6 +13,7 @@
 // emerge_options.rs/ebuild_options.rs) even where the underlying
 // behavior isn't implemented.
 
+mod color;
 mod ebuild;
 mod ebuild_merge;
 mod ebuild_options;
