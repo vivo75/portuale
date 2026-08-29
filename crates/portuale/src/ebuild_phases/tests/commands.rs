@@ -474,6 +474,90 @@ fn brush_phase_env_is_filtered_of_bash_special_variables() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// Declaration builtins assignment-expand an expanded name in both
+/// backends; the fixture dies unless the expanded export arrived.
+#[test]
+fn expanded_name_export_assigns_in_both_backends() {
+    fn image_file_set(image: &Path) -> Vec<String> {
+        fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir)
+                .unwrap_or_else(|e| panic!("{} should be readable: {e}", dir.display()))
+            {
+                let path = entry
+                    .unwrap_or_else(|e| panic!("dir entry should read: {e}"))
+                    .path();
+                if path.is_dir() {
+                    walk(&path, base, out);
+                } else {
+                    out.push(
+                        path.strip_prefix(base)
+                            .unwrap_or_else(|e| panic!("path should be under image: {e}"))
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(image, image, &mut out);
+        out.sort();
+        out
+    }
+
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/exportexpandpkg/exportexpandpkg-1.0.ebuild");
+    let tmp = TempDir::new(&format!(
+        "ebuild-phases-test-{}-{}",
+        std::process::id(),
+        "expanded_name_export_assigns_in_both_backends"
+    ));
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    let mut file_sets = Vec::new();
+    for (shell, name) in [(ShellBackend::Bash, "bash"), (ShellBackend::Brush, "brush")] {
+        let portage_tmpdir = tmp.join(name);
+        let status = run_commands(RunCommandsArgs {
+            ebuild_path: &ebuild_path,
+            commands: &["install"],
+            root: Path::new("/"),
+            portage_tmpdir: &portage_tmpdir,
+            distdir: &portage_tmpdir.join("distfiles"),
+            debug: false,
+            config_root: Path::new("/dev/null/no-config-root"),
+            shell,
+            build_env: &[],
+        })
+        .expect("run_commands should not itself error");
+        assert_eq!(status, 0, "{name}: install should exit successfully");
+
+        let marker = portage_tmpdir.join(
+            "portage/dev-libs/exportexpandpkg-1.0/image/usr/share/exportexpandpkg/decl-assign-check.txt",
+        );
+        let observed = std::fs::read_to_string(&marker)
+            .unwrap_or_else(|e| panic!("{} should have been written: {e}", marker.display()));
+        assert_eq!(
+            observed, "decl-assign-ok\n",
+            "{name}: the expanded export must arrive"
+        );
+
+        file_sets.push((
+            name,
+            image_file_set(&portage_tmpdir.join("portage/dev-libs/exportexpandpkg-1.0/image")),
+        ));
+    }
+
+    assert!(
+        !file_sets[1].1.is_empty(),
+        "the brush run produced an empty image"
+    );
+    assert_eq!(
+        file_sets[1].1, file_sets[0].1,
+        "brush and bash image file sets differ"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// End-to-end proof that the masters chain unblocks an `inherit()` of
 /// an eclass existing only in the overlay's master repo.
 #[test]

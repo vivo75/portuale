@@ -63,6 +63,8 @@ fn check_overlay_package_use_scoping(
         ]
     );
 }
+
+mod binrepo;
 mod graph;
 mod incrementals;
 mod package_files;

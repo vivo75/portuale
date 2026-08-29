@@ -173,4 +173,15 @@ mod tests {
             gpg_home: home.display().to_string(),
         }
     }
+
+    /// Remote versions of `package` the resolver would see for
+    /// `binrepos` under `root` -- i.e. the live-refresh override when a
+    /// refresh ran, else the on-disk index.
+    fn remote_versions(binrepos: &[BinRepo], root: &Path, package: &str) -> Vec<String> {
+        let local = portage_repo::BinaryIndex::from_entries(Vec::new());
+        portage_repo::list_remote_binary_candidates(binrepos, root, &local, "dev-libs", package)
+            .into_iter()
+            .map(|c| c.version)
+            .collect()
+    }
 }

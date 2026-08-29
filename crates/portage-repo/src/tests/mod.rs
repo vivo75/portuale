@@ -24,6 +24,20 @@ fn masters_test_root(name: &str) -> std::path::PathBuf {
     TempDir::new(&format!("portage-repo-masters-test-{name}")).keep()
 }
 
+fn fixture_binhost() -> portage_profile::BinRepo {
+    portage_profile::BinRepo {
+        name: "testbinhost".to_string(),
+        sync_uri: fixtures_root()
+            .join("binhost")
+            .to_string_lossy()
+            .into_owned(),
+        priority: 1,
+        location: None,
+        verify_signature: true,
+        frozen: false,
+    }
+}
+
 /// Like `resolve_update`, but with `excluded` too (`--exclude` beats `--update`).
 fn resolve_update_excluded(category: &str, package: &str, excluded: &[String]) -> PretendOutcome {
     let root = fixtures_root();
@@ -991,6 +1005,8 @@ mod tests_165;
 
 mod tests_166;
 
+mod binary_index;
+mod binpkg_use;
 mod blockers;
 mod candidates;
 mod conflict_use_display;

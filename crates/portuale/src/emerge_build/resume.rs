@@ -9,6 +9,47 @@ pub(crate) fn entry_repo(entry: &GraphEntry) -> &str {
     entry.repo_name.as_deref().unwrap_or("")
 }
 
+/// Arguments of [`resume_binary_repo`].
+pub(crate) struct ResumeBinaryRepoArgs<'a> {
+    pub(crate) local: &'a portage_repo::BinaryIndex,
+    pub(crate) binrepos: &'a [portage_profile::BinRepo],
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+}
+
+/// A resumed *binary* entry's `::repo` for the merge progress lines: the
+/// *binary's* repository, never the ebuild repo. Mirrors the resolver's
+/// pool order (local `$PKGDIR` index first, then remote binhosts); a record
+/// without `REPO` yields `"__unknown__"`. `None` when no binary pool lists
+/// the version: the caller keeps the ebuild-repo fallback.
+// Portage: depgraph.py, _loadResumeCommand
+pub(crate) fn resume_binary_repo(args: ResumeBinaryRepoArgs<'_>) -> Option<String> {
+    let ResumeBinaryRepoArgs {
+        local,
+        binrepos,
+        root,
+        category,
+        package,
+        version,
+    } = args;
+    if let Some(cand) = portage_repo::list_binary_candidates(local, category, package)
+        .into_iter()
+        .find(|c| c.version == version)
+    {
+        return Some(cand.repo_name);
+    }
+    let (_, record) = portage_repo::find_remote_binpkg(binrepos, root, category, package, version)?;
+    Some(
+        record
+            .get("REPO")
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "__unknown__".to_string()),
+    )
+}
+
 /// Arguments of [`resume_entry`].
 pub(crate) struct ResumeEntryArgs<'a> {
     pub(crate) category: &'a str,
