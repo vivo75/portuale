@@ -71,6 +71,103 @@ pub(crate) struct QueueItem {
 /// recorded with empty parent fields.
 pub(crate) type SlotPullers = HashMap<(String, String), Vec<(String, String, String, String)>>;
 
+/// Tokens of a pre-reduce dependency list inside an `|| ( ... )` group (any
+/// depth). Portage drains the plain `dep_stack` fully before popping one entry
+/// off `_dep_disjunctive_stack`, so an `||`-chosen atom enters the graph strictly
+/// after every plain dep, including ones declared *after* the group. `flag? ( ... )`
+/// bodies are NOT `||` groups (their members stay plain); a token occurring both
+/// inside and outside classifies as group-chosen.
+// Portage: depgraph.py
+pub(crate) fn or_group_universe(tokens: &[String]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut stack: Vec<bool> = Vec::new();
+    let mut pending_or = false;
+    for tok in tokens {
+        match tok.as_str() {
+            "||" => pending_or = true,
+            "(" => {
+                stack.push(pending_or);
+                pending_or = false;
+            }
+            ")" => {
+                stack.pop();
+            }
+            _ => {
+                if tok.ends_with('?') {
+                    pending_or = false;
+                } else {
+                    if stack.iter().any(|b| *b) {
+                        out.insert(tok.clone());
+                    }
+                    pending_or = false;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Which atoms of one owner's flattened dependencies resolve against the running
+/// root rather than the target root, as a per-token predicate over a walk that
+/// flattens every key into one string (key provenance is recovered from per-key
+/// flattens here).
+///
+/// For a target-rooted owner `RDEPEND`/`PDEPEND` stay target-rooted and
+/// `DEPEND`/`BDEPEND`/`IDEPEND` go to the running root; for a running-rooted
+/// owner only a `PDEPEND`-only atom stays target-rooted. Overlaps resolve by
+/// group order (`RDEPEND` first, so runtime wins over build; `IDEPEND` precedes
+/// `PDEPEND`). Tokens are keyed exactly like `enqueue_flat_deps`' `buildtime_atoms`
+/// / `runtime_atoms` sets. Only invoked when the roots differ; otherwise the empty
+/// set is the whole answer.
+// Portage: depgraph.py, _add_pkg_deps five-group deps queue
+pub(crate) fn dep_running_tags(
+    metadata: &HashMap<String, String>,
+    use_flags: &HashSet<String>,
+    owner_targets_running_root: bool,
+) -> HashSet<String> {
+    let flatten_key = |key: &str| -> HashSet<String> {
+        let joined: String = metadata
+            .get(key)
+            .map(String::as_str)
+            .unwrap_or_default()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
+        portage_use_reduce::use_reduce_flat(&toks, use_flags, portage_use_reduce::MatchMode::Normal)
+            .map(|v| v.into_iter().filter(|t| t != "||").collect())
+            .unwrap_or_default()
+    };
+    let (in_r, in_p, in_d, in_b, in_i) = (
+        flatten_key("RDEPEND"),
+        flatten_key("PDEPEND"),
+        flatten_key("DEPEND"),
+        flatten_key("BDEPEND"),
+        flatten_key("IDEPEND"),
+    );
+    let all: HashSet<String> = in_r
+        .union(&in_p)
+        .chain(in_d.union(&in_b))
+        .chain(in_i.iter())
+        .cloned()
+        .collect();
+    all.into_iter()
+        .filter(|tok| {
+            if !owner_targets_running_root {
+                (in_d.contains(tok) || in_b.contains(tok) || in_i.contains(tok))
+                    && !in_r.contains(tok)
+                    && (!in_p.contains(tok) || in_i.contains(tok))
+            } else {
+                !(in_p.contains(tok)
+                    && !in_r.contains(tok)
+                    && !in_i.contains(tok)
+                    && !in_d.contains(tok)
+                    && !in_b.contains(tok))
+            }
+        })
+        .collect()
+}
+
 /// Arguments of [`enqueue_flat_deps`].
 pub(crate) struct EnqueueFlatDepsArgs<'a> {
     pub(crate) flat_deps: Vec<String>,
