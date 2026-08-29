@@ -266,3 +266,16 @@ pub fn repo_masters_for_location(repo_location: &Path) -> Vec<PathBuf> {
     }
     masters
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    struct Layout {
+        dir: PathBuf,
+    }
+}

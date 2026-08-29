@@ -12,6 +12,9 @@ use portage_util::TempDir;
 mod digest;
 mod extract;
 mod gpg;
+mod inner;
+mod manifest;
+mod outer;
 
 #[cfg(test)]
 mod tests;
@@ -19,6 +22,9 @@ mod tests;
 pub use digest::*;
 pub use extract::*;
 pub use gpg::*;
+pub(crate) use inner::*;
+pub(crate) use manifest::*;
+pub(crate) use outer::*;
 
 use std::collections::HashMap;
 
@@ -43,6 +49,11 @@ pub enum BinpkgError {
 }
 
 impl BinpkgError {
+    /// `true` for the skip class.
+    pub fn is_invalid(&self) -> bool {
+        matches!(self, BinpkgError::Invalid(_))
+    }
+
     /// The message, without the class.
     pub fn message(&self) -> &str {
         match self {

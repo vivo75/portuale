@@ -33,3 +33,18 @@ fn db_err(path: &Path, e: rusqlite::Error) -> Error {
         e => Error::Backend(format!("{}: {e}", path.display())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    struct Tmp(PathBuf);
+
+    // ------------------------------------------------------------------
+    // The read side against `FilesDb`: the database is seeded with raw SQL
+    // from what a `FilesDb` (written through its own `WriteTxn`) shows,
+    // and every read is compared.
+
+    use crate::{FilesDb, METADATA_FILE_FIELDS};
+}

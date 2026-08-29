@@ -120,3 +120,24 @@ struct FileRec {
     mode: u32,
     mtime_ns: i64,
 }
+
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use crate::FilesDb;
+
+    struct Tmp(PathBuf);
+
+    // --- every read against FilesDb ---------------------------------
+
+    use crate::METADATA_FILE_FIELDS as FIELDS;
+
+    // --- the write side, mirroring sqlite's tests ---------
+
+    use redb::{ReadableMultimapTable, ReadableTableMetadata};
+}
