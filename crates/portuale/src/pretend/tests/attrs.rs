@@ -1,6 +1,65 @@
 use super::*;
 
 #[test]
+fn attr_display_field_carries_the_seventh_mask_column_unless_quiet() {
+    // Portage: output.py, set_pkg_info. The mask column shows unless `--quiet`.
+    let nc = Colorizer::new(false);
+    let plain = attr_display_field(AttrDisplayFieldArgs {
+        interactive: false,
+        new: false,
+        force_reinstall: false,
+        new_slot: false,
+        replace: true,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        remote_binary: false,
+        new_version: false,
+        downgrade: false,
+        mask: None,
+        include_mask: true,
+        color: &nc,
+    });
+    assert_eq!(plain, "  R    ");
+    assert_eq!(plain.chars().count(), 7);
+
+    let quiet = attr_display_field(AttrDisplayFieldArgs {
+        interactive: false,
+        new: false,
+        force_reinstall: false,
+        new_slot: false,
+        replace: true,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        remote_binary: false,
+        new_version: false,
+        downgrade: false,
+        mask: None,
+        include_mask: false,
+        color: &nc,
+    });
+    assert_eq!(quiet, "  R   ");
+    assert_eq!(quiet.chars().count(), 6);
+
+    let masked = attr_display_field(AttrDisplayFieldArgs {
+        interactive: false,
+        new: true,
+        force_reinstall: false,
+        new_slot: false,
+        replace: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        remote_binary: false,
+        new_version: false,
+        downgrade: false,
+        mask: Some('~'),
+        include_mask: true,
+        color: &nc,
+    });
+    assert_eq!(masked, " N    ~");
+    assert_eq!(masked.chars().count(), 7);
+}
+
+#[test]
 fn use_suffix_picks_the_p_or_pv_use_rendering_by_verbosity() {
     let nc = Colorizer::new(false);
     // New entries render the same list at `-p` and `-pv`.
