@@ -4071,7 +4071,7 @@ def _resolve_root_deps_build_entries(repos, running_root, atom_str, config, owne
     return result
 
 
-def _dependency_avoid_update_candidate(root, atom, atom_str, category, package, candidates, installed):
+def _dependency_avoid_update_candidate(root, atom, atom_str, category, package, candidates, installed, config):
     """Real `_select_pkg_highest_available_imp`'s own early avoid_update
     return for a DEPENDENCY atom (`lib/_emerge/depgraph.py` ~8440: "if
     inst_pkg is not None and parent is not None and not self.
@@ -4082,7 +4082,11 @@ def _dependency_avoid_update_candidate(root, atom, atom_str, category, package, 
     (pkg[flag]), satisfies it against that version's own real, installed
     vdb USE/IUSE -- NOT the current tree's, matching real
     _iter_match_pkgs's own vardb-sourced USE-dep check for an already-
-    installed package. None when no installed version qualifies. Called
+    installed package. The valid-flag domain for that check follows real
+    dbapi._iuse_implicit_cnstr for a built package (recorded IUSE |
+    profile IUSE_EFFECTIVE | the package's own recorded USE, bug 640318 --
+    see the inline comment). None when no installed version qualifies.
+    Called
     from two places in resolve_pretend below: once before visibility/
     USE-dep filtering against the tree even begins (so a dependency
     reached only via a keyword-masked-but-installed version never
@@ -4101,15 +4105,23 @@ def _dependency_avoid_update_candidate(root, atom, atom_str, category, package, 
     ]
     installed_matched = [c for c in all_matched if c["version"] in installed]
     if atom.use:
-        installed_matched = [
-            c
-            for c in installed_matched
-            if _use_deps_satisfied(
-                atom,
-                _read_vdb_flag_set(root, category, package, c["version"], "IUSE"),
-                _read_vdb_flag_set(root, category, package, c["version"], "USE"),
-            )
-        ]
+
+        def _built_use_dep_ok(c):
+            vdb_iuse = _read_vdb_flag_set(root, category, package, c["version"], "IUSE")
+            vdb_use = _read_vdb_flag_set(root, category, package, c["version"], "USE")
+            # Real dbapi._iuse_implicit_cnstr for a *built* package on an
+            # EAPI 5+ (iuse_effective): valid-flag domain = recorded IUSE
+            # | profile IUSE_EFFECTIVE (_valid_iuse) | the package's own
+            # recorded USE (_iuse_implicit_built's `flag in use` clause,
+            # bug 640318 -- a built package's USE is authoritative,
+            # independent of the profile's current IUSE_IMPLICIT / an
+            # ebuild that has since dropped a flag from IUSE). Real
+            # _match_use recomputes this rather than reading a vdb
+            # IUSE_EFFECTIVE file. Mirrors pretend.rs.
+            valid = _valid_iuse(vdb_iuse, config) | vdb_use
+            return _use_deps_satisfied(atom, valid, vdb_use)
+
+        installed_matched = [c for c in installed_matched if _built_use_dep_ok(c)]
     if not installed_matched:
         return None
     return _best_candidate(installed_matched)
@@ -4386,7 +4398,7 @@ def resolve_pretend(
     if not update and not is_top_level and not excluded:
         installed = installed_versions(root, category, package)
         installed_best = _dependency_avoid_update_candidate(
-            root, atom, atom_str, category, package, candidates, installed
+            root, atom, atom_str, category, package, candidates, installed, config
         )
         if installed_best is not None:
             return _already_installed_or_reinstall(
@@ -4538,7 +4550,7 @@ def resolve_pretend(
     if not update and (not is_top_level or selective):
         if not is_top_level:
             installed_best = _dependency_avoid_update_candidate(
-                root, atom, atom_str, category, package, candidates, installed
+                root, atom, atom_str, category, package, candidates, installed, config
             )
         else:
             installed_matched = [c for c in matched if _candidate_is_installed(c)]

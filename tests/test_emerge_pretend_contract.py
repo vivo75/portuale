@@ -333,6 +333,16 @@ CASES = [
         0,
     ),
     (
+        "avoid_update: a DEPENDENCY whose USE-dep flag is only in its built USE (bug 640318) is kept",
+        ["--pretend", "dev-libs/needsbuiltusediverge"],
+        0,
+    ),
+    (
+        "the same [divergedflag] atom as a TOP-LEVEL target still needs a visible ebuild",
+        ["--pretend", "dev-libs/builtusedivergedep[divergedflag]"],
+        1,
+    ),
+    (
         "overlay package.use: an overlay-only package.use entry gates a dependency",
         ["--pretend", "dev-libs/overlayuseenablepkg"],
         0,
@@ -2477,6 +2487,43 @@ def test_keyword_masked_but_installed_dependency_with_a_use_dep_is_kept(
         '[ebuild  N    ] dev-libs/needskeywordmaskeduse-1.0 ',
     ]
     assert result.stderr == ""
+
+
+def test_installed_dependency_use_dep_flag_only_in_built_use_is_kept(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """dev-libs/needsbuiltusediverge (New) RDEPENDs on
+    dev-libs/builtusedivergedep[divergedflag]. The installed 1.0 has vdb
+    USE="divergedflag" but vdb IUSE="", and the *current* ebuild has
+    dropped divergedflag from its IUSE -- so nothing in the tree can
+    satisfy [divergedflag] (proven by the sibling top-level case).
+
+    Real dbapi._iuse_implicit_cnstr / _iuse_implicit_built (bug 640318):
+    for a built package, every flag in its recorded USE counts as a valid
+    IUSE flag, independent of the profile's / ebuild's current IUSE. So
+    the installed version satisfies the atom and the dependency is kept
+    exactly as installed -- no spurious "no visible ebuild"."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/needsbuiltusediverge"], fixture_env
+    )
+    rp = _run(emerge_pretend_python, ["--pretend", "dev-libs/needsbuiltusediverge"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout == rp.stdout
+    assert result.stderr == rp.stderr
+    assert result.stdout.splitlines() == [
+        '[ebuild  N    ] dev-libs/needsbuiltusediverge-1.0 ',
+    ]
+    assert result.stderr == ""
+
+    # As a top-level target the same atom still needs a *visible* ebuild
+    # (the avoid-update-against-vdb path is dependency-only), so it fails.
+    top = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/builtusedivergedep[divergedflag]"],
+        fixture_env,
+    )
+    assert top.returncode == 1
+    assert 'no ebuilds to satisfy "dev-libs/builtusedivergedep[divergedflag]"' in top.stderr
 
 
 def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(

@@ -158,11 +158,17 @@ Ranked roughly by how self-contained each is.
    was **not** display-only — it drives `is_valid_flag`.
    `USE_EXPAND_HIDDEN` **shipped 2026-08-27** too, once `emerge -pv` grew
    real `USE_EXPAND` grouping to hide from (`Config::use_expand_hidden` +
-   `portage_repo::build_use_expand_display`). **Residual:** (a) an
-   installed package's USE-dep check uses raw vdb `IUSE` (real portage
-   uses that package's vdb-recorded `IUSE_EFFECTIVE`, not persisted
-   here); (b) `-pv` USE display still lacks real portage's ANSI color and
-   real portage's *natural*
+   `portage_repo::build_use_expand_display`). ~~**Residual:** (a) an
+   installed package's USE-dep check uses raw vdb `IUSE`~~ **shipped
+   2026-08-29**: `dependency_avoid_update_candidate`'s installed-vdb
+   USE-dep check now uses the real `dbapi._iuse_implicit_cnstr` built-
+   package domain (recorded `IUSE` ∪ profile `IUSE_EFFECTIVE` ∪ the
+   package's own recorded `USE` — real `_iuse_implicit_built`'s `flag in
+   use` clause, bug 640318), not raw vdb `IUSE`. New
+   `dev-libs/builtusedivergedep`/`needsbuiltusediverge` fixtures. Real
+   `_match_use` recomputes this domain rather than reading a vdb
+   `IUSE_EFFECTIVE` file, so not persisting one is not a gap.
+   **Residual:** (b) `-pv` USE display still lacks real portage's *natural*
    within-group sort (`_alnum_sort_key`; the pilot's plain lexicographic
    only differs on e.g. `python3_9` vs `python3_12`). ANSI colour across
    *all* of `-pv` (bracket line, USE flags, counters, cleanup actions,

@@ -5252,7 +5252,11 @@ fn resolve_root_deps_build_entries(
 /// (`pkg[flag]`), satisfies it against that version's own real,
 /// installed vdb `USE`/`IUSE` -- NOT the current tree's, matching real
 /// `_iter_match_pkgs`'s own vardb-sourced USE-dep check for an already-
-/// installed package. `None` when no installed version qualifies.
+/// installed package. The valid-flag domain for that check follows real
+/// `dbapi._iuse_implicit_cnstr` for a built package (recorded `IUSE` ∪
+/// profile `IUSE_EFFECTIVE` ∪ the package's own recorded `USE`, bug
+/// #640318 -- see the inline comment). `None` when no installed version
+/// qualifies.
 /// Called from two places in `resolve_pretend` below: once *before*
 /// visibility/USE-dep filtering against the tree even begins (so a
 /// dependency reached only via a keyword-masked-but-installed version
@@ -5266,6 +5270,7 @@ fn dependency_avoid_update_candidate<'a>(
     atom_str: &str,
     candidates: &'a [Candidate],
     installed: &[String],
+    config: &portage_profile::Config,
 ) -> Option<&'a Candidate> {
     let all_candidates_by_str: HashMap<String, &Candidate> = candidates
         .iter()
@@ -5290,15 +5295,23 @@ fn dependency_avoid_update_candidate<'a>(
                     read_vdb_flag_set(root, &atom.category, &atom.package, &c.version, "IUSE");
                 let vdb_use =
                     read_vdb_flag_set(root, &atom.category, &atom.package, &c.version, "USE");
-                // Deliberately NOT `valid_iuse`-broadened: real portage's
-                // own installed-`Package.iuse.is_valid_flag` uses that
-                // package's *vdb-recorded* `IUSE_EFFECTIVE`, which this
-                // pilot doesn't persist -- approximating it with the
-                // current profile's `iuse_effective` here would need
-                // `config` threaded into this function; a narrow
-                // avoid-update edge case (`[elibc_*]` on an
-                // already-installed match), left as a documented cut.
-                portage_dep::use_deps_satisfied(use_deps, &vdb_iuse, &vdb_use)
+                // Real `dbapi._iuse_implicit_cnstr` for a *built* package
+                // on an EAPI 5+ (all EAPIs here have `iuse_effective`):
+                // the `is_valid_flag` domain is the recorded `IUSE`,
+                // unioned with the profile's `IUSE_EFFECTIVE`
+                // (`_iuse_effective_match` -- `elibc_*`/`kernel_*`/…, via
+                // `valid_iuse`) AND every flag the package was actually
+                // built with (`_iuse_implicit_built`'s own `flag in use`
+                // clause, bug #640318: a built package's own `USE` is
+                // authoritative for what counts as a valid flag,
+                // independent of the profile's current `IUSE_IMPLICIT` --
+                // e.g. an ebuild that has since dropped a flag from its
+                // `IUSE`). This pilot doesn't persist a vdb
+                // `IUSE_EFFECTIVE` file, but real `_match_use` recomputes
+                // the domain this same way rather than reading it.
+                let mut valid = valid_iuse(&vdb_iuse, config);
+                valid.extend(vdb_use.iter().cloned());
+                portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
             }
             _ => true,
         })
@@ -5527,9 +5540,14 @@ pub fn resolve_pretend(
     // skipped here so that block still gets a chance to run.
     if !update && !is_top_level && excluded.is_empty() {
         let installed = installed_versions(root, &atom.category, &atom.package);
-        if let Some(installed_best) =
-            dependency_avoid_update_candidate(root, &atom, atom_str, &candidates, &installed)
-        {
+        if let Some(installed_best) = dependency_avoid_update_candidate(
+            root,
+            &atom,
+            atom_str,
+            &candidates,
+            &installed,
+            config,
+        ) {
             return already_installed_or_reinstall(
                 root,
                 repos,
@@ -5751,7 +5769,14 @@ pub fn resolve_pretend(
     // remaining combination.
     if !update && (!is_top_level || selective) {
         let installed_best = if !is_top_level {
-            dependency_avoid_update_candidate(root, &atom, atom_str, &candidates, &installed)
+            dependency_avoid_update_candidate(
+                root,
+                &atom,
+                atom_str,
+                &candidates,
+                &installed,
+                config,
+            )
         } else {
             matched
                 .iter()
@@ -12003,6 +12028,39 @@ mod tests {
                     "dev-libs/keywordmaskedusepkg".to_string(),
                     PretendOutcome::AlreadyInstalled {
                         version: "2.0".to_string()
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn recursion_keeps_an_installed_dependency_whose_use_dep_flag_is_only_in_its_built_use() {
+        // dev-libs/needsbuiltusediverge (New) RDEPENDs on
+        // dev-libs/builtusedivergedep[divergedflag]. The installed 1.0
+        // has vdb USE="divergedflag" but vdb IUSE="" -- and the *current*
+        // ebuild has dropped `divergedflag` from its IUSE entirely, so
+        // the tree candidate can't satisfy the `[divergedflag]` USE-dep
+        // at all (top-level `dev-libs/builtusedivergedep[divergedflag]`
+        // resolves to NoVisibleCandidate). Real
+        // `dbapi._iuse_implicit_built` (bug #640318): a built package's
+        // own USE is authoritative for what counts as a valid IUSE flag,
+        // so the installed version satisfies the atom and the dependency
+        // is kept exactly as installed -- no spurious NoVisibleCandidate.
+        let entries = graph("dev-libs/needsbuiltusediverge");
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/needsbuiltusediverge".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/builtusedivergedep".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
                     }
                 ),
             ]

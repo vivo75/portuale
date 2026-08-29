@@ -1,0 +1,6 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: installed with vdb USE=divergedflag, but the current ebuild has since DROPPED divergedflag from IUSE (bug 640318)
+EAPI=8
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

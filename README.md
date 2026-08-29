@@ -8230,6 +8230,34 @@ codes); mirrored in `emerge_pretend_reference.py`. This closes the
 blocker half of the `-pv` layout gap; only `--autounmask` message colour
 is left (its own future slice — that text is pilot-invented, not a port).
 
+### `emerge -p`: an installed dependency's USE-dep checked against its *built* USE (bug 640318)
+
+When a dependency atom carries a USE-dep (`cat/pkg[flag]`) and
+`cat/pkg` is already installed, `dependency_avoid_update_candidate`
+checks that USE-dep against the installed version's own real vdb
+`USE`/`IUSE` (not the current tree's). The *valid-flag domain* for that
+check now follows real `dbapi._iuse_implicit_cnstr` for a built package
+on an EAPI 5+ (`iuse_effective`): the recorded `IUSE`, unioned with the
+profile's `IUSE_EFFECTIVE` (`valid_iuse` — `elibc_*` etc), **and every
+flag the package was actually built with** (real `_iuse_implicit_built`'s
+own `flag in use` clause, [bug 640318](https://bugs.gentoo.org/640318) —
+a built package's own `USE` is authoritative for what counts as a valid
+flag, independent of the profile's current `IUSE_IMPLICIT` or an ebuild
+that has since dropped a flag from its `IUSE`). Real `_match_use`
+recomputes the domain this way rather than reading a vdb `IUSE_EFFECTIVE`
+file, so the pilot not persisting one is not a gap here.
+
+New fixture `dev-libs/builtusedivergedep` (installed 1.0 with vdb
+`USE="divergedflag"` but vdb `IUSE=""`, and the current ebuild has
+*dropped* `divergedflag` from its `IUSE`) + `dev-libs/needsbuiltusediverge`
+(`RDEPEND="dev-libs/builtusedivergedep[divergedflag]"`). Before: the
+dependency spuriously hit `!!! no visible ebuild` (nothing in the tree
+can satisfy `[divergedflag]`); now the installed version satisfies it and
+the dependency is kept as installed. The same atom as a *top-level*
+target still fails — the avoid-update-against-vdb path is dependency-only.
+2 contract `CASES` + 1 dedicated pinned test + 1 `portage-repo` unit test;
+mirrored in `emerge_pretend_reference.py`.
+
 ## Running it
 
 Build both Rust binaries:
@@ -9545,6 +9573,16 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/needskeywordm
 # current tree's -- the actual real-world sys-libs/liburing:=[...] case)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/needskeywordmaskeduse
 # [ebuild  N    ] dev-libs/needskeywordmaskeduse-1.0
+
+# bug 640318: an installed dependency's USE-dep flag can be valid purely
+# because the package was BUILT with it -- builtusedivergedep-1.0 has vdb
+# USE="divergedflag" but its current ebuild dropped divergedflag from
+# IUSE, so nothing in the tree satisfies [divergedflag]...
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend 'dev-libs/builtusedivergedep[divergedflag]'
+# emerge: there are no ebuilds to satisfy "dev-libs/builtusedivergedep[divergedflag]".  (exit 1)
+# ...but as a DEPENDENCY it's kept as installed (real _iuse_implicit_built)
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/needsbuiltusediverge
+# [ebuild  N    ] dev-libs/needsbuiltusediverge-1.0
 ```
 
 Try the `ebuild` stub (still a dry-run placeholder -- no real phase
