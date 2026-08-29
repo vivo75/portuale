@@ -686,6 +686,149 @@ fn parse_depth_opts<'a>(
     }
 }
 
+/// Rebuild-trigger flags. Returns whether the token was consumed.
+fn parse_rebuild_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--dynamic-deps" || arg.starts_with("--dynamic-deps=") {
+        // A bare flag means `y` (Portage requires a value).
+        let val = if let Some(v) = arg.strip_prefix("--dynamic-deps=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(args.get(*idx + 1).map(String::as_str), Some("y" | "n")) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.dynamic_deps = !matches!(val.as_str(), "n" | "N");
+        Ok(true)
+    } else if arg == "--misspell-suggestions" || arg.starts_with("--misspell-suggestions=") {
+        let val = if let Some(v) = arg.strip_prefix("--misspell-suggestions=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(args.get(*idx + 1).map(String::as_str), Some("y" | "n")) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.misspell_suggestions = !matches!(val.as_str(), "n" | "N");
+        Ok(true)
+    } else if arg == "--package-moves" || arg.starts_with("--package-moves=") {
+        let val = if let Some(v) = arg.strip_prefix("--package-moves=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(args.get(*idx + 1).map(String::as_str), Some("y" | "n")) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.package_moves = !matches!(val.as_str(), "n" | "N");
+        Ok(true)
+    } else if arg == "--implicit-system-deps" || arg.starts_with("--implicit-system-deps=") {
+        // A bare flag means `y`.
+        let val = if let Some(v) = arg.strip_prefix("--implicit-system-deps=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(args.get(*idx + 1).map(String::as_str), Some("y" | "n")) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.implicit_system_deps = !matches!(val.as_str(), "n" | "N");
+        Ok(true)
+    } else if arg == "--rebuild-if-new-slot" || arg.starts_with("--rebuild-if-new-slot=") {
+        // Default "y"; only `=n` disables.
+        let val = if let Some(v) = arg.strip_prefix("--rebuild-if-new-slot=") {
+            *idx += 1;
+            v.to_string()
+        } else if matches!(args.get(*idx + 1).map(String::as_str), Some("y" | "n")) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        opts.rebuild_if_new_slot = !matches!(val.as_str(), "n" | "N");
+        Ok(true)
+    } else if arg == "--rebuild-if-unbuilt"
+        || arg.starts_with("--rebuild-if-unbuilt=")
+        || arg == "--rebuild-if-new-rev"
+        || arg.starts_with("--rebuild-if-new-rev=")
+        || arg == "--rebuild-if-new-ver"
+        || arg.starts_with("--rebuild-if-new-ver=")
+    {
+        // Bare / `=y` / `=True` -> on, `=n` -> off.
+        let (name, inline) = match arg.split_once('=') {
+            Some((n, v)) => (n, Some(v.to_string())),
+            None => (arg, None),
+        };
+        let val = if let Some(v) = inline {
+            *idx += 1;
+            v
+        } else if matches!(
+            args.get(*idx + 1).map(String::as_str),
+            Some("y" | "n" | "True")
+        ) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        let on = matches!(val.as_str(), "y" | "True");
+        match name {
+            "--rebuild-if-unbuilt" => opts.rebuild_if_unbuilt = Some(on),
+            "--rebuild-if-new-rev" => opts.rebuild_if_new_rev = Some(on),
+            _ => opts.rebuild_if_new_ver = Some(on),
+        }
+        Ok(true)
+    } else if arg == "--binpkg-changed-deps"
+        || arg.starts_with("--binpkg-changed-deps=")
+        || arg == "--use-ebuild-visibility"
+        || arg.starts_with("--use-ebuild-visibility=")
+    {
+        // Same shape as the `--rebuild-if-*` block above; both are
+        // resolver-time overrides of an automatic default.
+        let (name, inline) = match arg.split_once('=') {
+            Some((n, v)) => (n, Some(v.to_string())),
+            None => (arg, None),
+        };
+        let val = if let Some(v) = inline {
+            *idx += 1;
+            v
+        } else if matches!(
+            args.get(*idx + 1).map(String::as_str),
+            Some("y" | "n" | "True")
+        ) {
+            *idx += 2;
+            args[*idx - 1].clone()
+        } else {
+            *idx += 1;
+            "y".to_string()
+        };
+        let on = matches!(val.as_str(), "y" | "True");
+        if name == "--binpkg-changed-deps" {
+            opts.binpkg_changed_deps_override = Some(on);
+        } else {
+            opts.use_ebuild_visibility = on;
+        }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Complete-graph and binary-eligibility flags. Returns whether the token was consumed.
 fn parse_graph_opts<'a>(
     opts: &mut EmergeOpts<'a>,

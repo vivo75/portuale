@@ -8037,3 +8037,60 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
 # [ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]
 ```
 
+### `emerge -pc` / `-pP`: the `--depclean-lib-check` soname-consumer scan
+
+Real `_calc_depclean` (`actions.py:1356-1590`) does not just trust the
+dependency-graph cleanlist. After computing it, unless
+`--depclean-lib-check=n` (the default `_DEPCLEAN_LIB_CHECK_DEFAULT` is
+`True`), it scans every cleanlist package's `NEEDED.ELF.2`-recorded
+libraries: if one is still linked against (`DT_NEEDED`) by a *surviving*
+package that has no ebuild-level dependency on it, that provider is kept
+installed anyway -- "In order to avoid breakage of link level
+dependencies". This is what stops `emerge --depclean` from removing, say,
+an old `openssl` an un-rebuilt binary still needs.
+
+- The `#[allow(dead_code)]` `needed_elf` module (a from-scratch port of
+  real `NeededEntry` + `LinkageMap.rebuild()` + `findConsumers()`, built
+  in earlier preserve-libs slices but never wired to a caller) is now
+  live: `pretend.rs::lib_consumer_scan` builds the linkage map from every
+  installed `NEEDED.ELF.2`, and for each cleanlist package asks
+  `find_consumers` (non-greedy -- so a consumer already satisfied by
+  another provider of the same soname is excluded) which survivors still
+  link its libs.
+- A protected provider is fed back into a **second**
+  `depclean_cleanlist` / `prune_cleanlist` pass as an extra reachability
+  root (`lib_protected_providers`), so its own dependencies leave the
+  cleanlist too (real `resolver._add_pkg` + `_complete_graph`), and
+  `required_count` / `kept_parents` / the removal order all recompute
+  consistently.
+- Output matches real: `>>> Checking for lib consumers...` /
+  `>>> Assigning files to packages...` / `>>> Adding lib providers to
+  graph...` progress, and the `bad(" * ")`-prefixed WARNING with a
+  per-provider `  <cpv> pulled in by:` / `    <consumer> needs <soname>`
+  breakdown. `--depclean-lib-check=n` skips the scan and, with no
+  package args, adds the `Depclean may break link level dependencies`
+  advisory paragraph.
+- Applies to `--prune` too (real `_calc_depclean` serves
+  `action in ("depclean", "prune")`).
+
+**Documented narrowings**: `find_consumers` is not clean-set aware, so
+portuale can under-report in the rare case where the only surviving
+provider of a soname is itself another cleanlist member; the intermediate
+`>>> Assigning files to packages...` line is printed only alongside the
+WARNING (real can print it with all consumers satisfied elsewhere); and a
+lib-protected provider contributes no `--verbose` reverse-dep line of its
+own unless an ordinary dependency also reaches it (real labels it with
+the link-level consumer). New fixture `_libcheck_root` (`dcconsumer`
+links `libdclib.so.1` with no package dep on its orphan provider
+`dclib`); 3 dedicated + 1 between-implementations contract test, a
+`portage-repo` unit test, mirrored in `emerge_pretend_reference.py`
+(which ports the same `needed_elf` subset rather than wrapping real
+`LinkageMapELF`).
+
+```sh
+cd rust && cargo build --release && cd ../..
+# dcconsumer links libdclib.so.1 but nothing depends on dclib as a package
+rust/target/release/portuale emerge -pc            # keeps dclib, warns
+rust/target/release/portuale emerge -pc --depclean-lib-check=n  # removes it
+```
+
