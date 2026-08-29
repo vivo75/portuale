@@ -132,6 +132,11 @@ mod tests {
     use crate::FilesDb;
 
     struct Tmp(PathBuf);
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     // --- every read against FilesDb ---------------------------------
 

@@ -102,4 +102,9 @@ mod tests {
     use std::path::PathBuf;
 
     struct Tmp(PathBuf);
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 }

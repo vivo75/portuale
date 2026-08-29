@@ -278,4 +278,28 @@ mod tests {
     struct Layout {
         dir: PathBuf,
     }
+
+    impl Layout {
+        fn new() -> Self {
+            let n = SEQ.fetch_add(1, Ordering::SeqCst);
+            let dir = std::env::temp_dir().join(format!(
+                "portage-repo-md5-dict-{}-{}",
+                std::process::id(),
+                n
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self { dir }
+        }
+
+        fn path(&self) -> &Path {
+            &self.dir
+        }
+    }
+
+    impl Drop for Layout {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
 }

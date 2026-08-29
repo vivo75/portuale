@@ -2,6 +2,15 @@
 
 use crate::binpkg::*;
 
+/// Bound on the total inner-member bytes: Portage reads the whole tar into
+/// memory too, and 64 MiB is far above any real `metadata.tar` while still
+/// bounding a decompression bomb.
+pub(crate) const MAX_INNER_METADATA_BYTES: u64 = 64 * 1024 * 1024;
+
+/// A tar of millions of empty members is the same allocation attack with
+/// no bytes to count.
+pub(crate) const MAX_INNER_METADATA_ENTRIES: usize = 100_000;
+
 /// The `tar` entry types `tarfile` lists in `SUPPORTED_TYPES`; any other
 /// byte is treated as a regular file, and must be here too.
 pub(crate) fn known_inner_entry_type(entry_type: tar::EntryType) -> bool {

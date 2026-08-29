@@ -40,6 +40,11 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     struct Tmp(PathBuf);
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     // ------------------------------------------------------------------
     // The read side against `FilesDb`: the database is seeded with raw SQL
