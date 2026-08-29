@@ -76,6 +76,41 @@ impl From<BinpkgError> for String {
     }
 }
 
+/// The `.tar<ext>` suffixes map to a compression method, paired with
+/// that method's decompress argv (`{JOBS}` -> `0` means all cores).
+// Portage: `gpkg.gpkg.ext_list`, `util/compression_probe._compressors`.
+fn gpkg_compressions() -> &'static [(&'static str, &'static [&'static str])] {
+    &[
+        (".gz", &["gzip", "-dc"]),
+        (".bz2", &["bzip2", "-dc"]),
+        (".lz4", &["lz4", "-dc"]),
+        (".lz", &["lzip", "-dc"]),
+        (".lzo", &["lzop", "-dc"]),
+        (".xz", &["xz", "-T0", "-dc"]),
+        (".zst", &["zstd", "-dc", "--long=31"]),
+    ]
+}
+
+/// Given an inner member's basename, return `Some(None)` for exactly
+/// `<want>.tar`, `Some(Some(decompress_argv))` for `<want>.tar<ext>`
+/// with a known `ext`, or `None` if it names something else.
+// Portage: `gpkg._extract_filename_compression`.
+fn classify_inner_member(
+    want: &str,
+    member_basename: &str,
+) -> Option<Option<&'static [&'static str]>> {
+    let plain = format!("{want}.tar");
+    if member_basename == plain {
+        return Some(None);
+    }
+    for (ext, argv) in gpkg_compressions() {
+        if member_basename == format!("{plain}{ext}") {
+            return Some(Some(*argv));
+        }
+    }
+    None
+}
+
 /// A best-effort temp directory, removed when the guard drops. The
 /// `nanos` suffix keeps concurrent reads from colliding.
 struct ScratchDir(PathBuf);

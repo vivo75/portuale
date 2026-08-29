@@ -273,6 +273,47 @@ pub(crate) fn resolve_inner_member(
     resolve_inner_member(gpkg, members, target_index, depth + 1)
 }
 
+/// Stream one outer member into `dest`, decompressing when `comp` names a
+/// codec: either copied straight through or fed to the decompressor's
+/// stdin with `dest` as its stdout. No scratch copy, no second pass.
+/// `member_label` names the member in errors.
+pub(crate) fn decompress_member_to_file<R: Read>(
+    member_label: &str,
+    mut source: R,
+    comp: Option<&[&str]>,
+    dest: &Path,
+) -> Result<(), String> {
+    let mut out = fs::File::create(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    match comp {
+        None => {
+            std::io::copy(&mut source, &mut out).map_err(|e| format!("{}: {e}", dest.display()))?;
+        }
+        Some(argv) => {
+            // `dest` is a file, not a pipe, so the copy below cannot deadlock.
+            let mut child = Command::new(argv[0])
+                .args(&argv[1..])
+                .stdin(Stdio::piped())
+                .stdout(out)
+                .spawn()
+                .map_err(|e| format!("failed to spawn {}: {e}", argv[0]))?;
+            let mut stdin = child.stdin.take().expect("stdin is piped");
+            let copied = std::io::copy(&mut source, &mut stdin);
+            drop(stdin);
+            let status = child
+                .wait()
+                .map_err(|e| format!("waiting for {}: {e}", argv[0]))?;
+            if !status.success() {
+                return Err(format!(
+                    "{} failed to decompress {member_label} ({status})",
+                    argv[0]
+                ));
+            }
+            copied.map_err(|e| format!("{member_label}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 /// Read the inner `metadata.tar` into resolved `(key, bytes)` members in
 /// first-appearance order with last-wins values. `member_bytes` is the
 /// outer container's `metadata.tar[.<comp>]` member, already read and
