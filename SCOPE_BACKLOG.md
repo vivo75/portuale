@@ -298,9 +298,16 @@ Ranked roughly by how self-contained each is.
    locking. All named as cuts in `ebuild_package.rs`.
 
 9. **Fetch: resume support** (`RESUMECOMMAND`'s retry-with-`-c`), **live
-   per-mirror `layout.conf` negotiation**, **`RESTRICT=mirror` /
-   `RESTRICT=primaryuri`**, real candidate ordering/shuffling. All named
-   as cuts in `fetch.rs:28-40`.
+   per-mirror `layout.conf` negotiation**, real candidate ordering/
+   shuffling, `RESTRICT=primaryuri` (the SRC_URI-vs-mirror interleave --
+   doesn't port cleanly because this pilot's candidate ordering already
+   deliberately deviates from real). ~~`RESTRICT=mirror`~~ **shipped
+   2026-08-29**: `FetchOptions::restrict_mirror` (from the md5-cache
+   `RESTRICT` field via `restrict_mirror_from_restrict`,
+   USE-conditional-evaluated) gates the `gentoo_mirror_fallback` step --
+   real `file_restrict_mirror`, `fetch.py:1117-1127`. `mirror+`/`fetch+`
+   SRC_URI prefixes (`override_mirror`) still not parsed. Remaining
+   items named as cuts in `fetch.rs:28-48`.
 
 ### D. Config-resolution `USE_ORDER` depth
 

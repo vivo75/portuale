@@ -7631,6 +7631,61 @@ ls -a "${DISTDIR}"
 # .  ..  .verifiedfetchpkg-1.0.tar.gz.portage_lockfile  verifiedfetchpkg-1.0.tar.gz
 ```
 
+### `RESTRICT=mirror`: no `GENTOO_MIRRORS` flat-layout fallback
+
+Real `fetch.py`'s own `restrict_mirror = "mirror" in restrict or
+"nomirror" in restrict` (`:880`) and `file_restrict_mirror`
+(`:1117-1127`): when a package restricts mirroring, real portage does
+**not** append the public `GENTOO_MIRRORS` list to that file's candidate
+locations. This pilot's `gentoo_mirror_fallback` step (the flat
+`<mirror>/distfiles/<filename>` expansion) is now gated on
+`!options.restrict_mirror` -- a `mirror://` URI's own
+`custommirrors`/`thirdpartymirrors` expansion and any explicit `SRC_URI`
+URI are still tried (real portage keeps `local_mirrors` in
+`location_lists` regardless).
+
+`FetchOptions` gained a `restrict_mirror` field;
+`ebuild_phases::fetch_sources` sets it from the ebuild's own md5-cache
+`RESTRICT` field via `restrict_mirror_from_restrict`, which
+USE-conditional-evaluates the raw value (real `_PackageMetadataWrapper`'s
+own `use_reduce` pass, same as `PROPERTIES`/`LICENSE`) against this
+pilot's always-empty fetch-side USE set -- so a `foo? ( mirror )` group
+drops and only an unconditional `mirror`/`nomirror` counts.
+
+v1 scope: real portage's own `mirror+`/`fetch+` `SRC_URI` prefix
+(`override_mirror`, which re-permits the public mirrors for that one URI
+even under `RESTRICT=mirror`) is not handled -- this pilot parses no such
+prefix anywhere (a separate, pre-existing `SRC_URI`-grammar gap). Three
+new tests: the public fallback is skipped (a near-clone of the existing
+`…falls_back_to_gentoo_mirrors…` test asserting failure instead of
+success), a `mirror://` custommirror still resolves under
+`restrict_mirror`, and `restrict_mirror_from_restrict`'s own
+conditional-evaluation cases. Rust-only (real fetch, no `--pretend`
+mirror).
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+export PORTAGE_TMPDIR="$(mktemp -d)"; export DISTDIR="$(mktemp -d)"
+
+# dev-libs/restrictmirrorpkg has RESTRICT="mirror" and its distfile
+# pre-verified in DISTDIR -> the skip-fetch path, install succeeds
+printf 'hello from restrictmirrorpkg\n' > "${DISTDIR}/restrictmirrorpkg-1.0.tar.gz"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/restrictmirrorpkg/restrictmirrorpkg-1.0.ebuild install
+# ... exits 0
+
+# remove it: the fetch is attempted, and ONLY the (unreachable) primary
+# SRC_URI is tried -- no GENTOO_MIRRORS fallback line, because
+# RESTRICT=mirror bars it
+rm "${DISTDIR}/restrictmirrorpkg-1.0.tar.gz"
+GENTOO_MIRRORS="https://distfiles.gentoo.org" PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/restrictmirrorpkg/restrictmirrorpkg-1.0.ebuild install
+# ebuild: restrictmirrorpkg-1.0.tar.gz: every candidate failed:
+# wget failed to fetch "https://example.invalid/payload.bin" (exit status: 4)
+# ... exits 1  (a non-restricted package would also have tried
+#     https://distfiles.gentoo.org/distfiles/restrictmirrorpkg-1.0.tar.gz)
+```
+
 ### `emerge --buildpkgonly --keep-going`
 
 Real `--keep-going` (real `main.py`'s own `y_or_n` option, narrowed by

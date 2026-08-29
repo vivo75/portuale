@@ -1,0 +1,8 @@
+DEFINED_PHASES=install
+DESCRIPTION=fixture package: RESTRICT=mirror -- verified-in-place so no live network is needed
+EAPI=8
+KEYWORDS=amd64
+RESTRICT=mirror
+SLOT=0
+SRC_URI=https://example.invalid/payload.bin -> restrictmirrorpkg-1.0.tar.gz
+_md5_=0000000000000000000000000000000

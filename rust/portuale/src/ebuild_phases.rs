@@ -494,17 +494,46 @@ pub(crate) fn repo_root_for(pkg_dir: &Path) -> Option<PathBuf> {
 /// `crate::fetch::fetch_src_uri`'s own doc comment); `AA` is every
 /// filename `SRC_URI` could ever reference regardless of USE (real
 /// PMS's own definition), computed but never itself fetched.
+/// Real `RESTRICT=mirror` (real `PORTAGE_RESTRICT`, and `fetch.py:880` --
+/// the deprecated negative `nomirror` counts too). The md5-cache
+/// `RESTRICT` field is the raw ebuild value, so it's USE-conditional-
+/// evaluated first (real `_PackageMetadataWrapper`'s own `use_reduce`
+/// pass, same as `PROPERTIES`/`LICENSE`) against this pilot's own
+/// always-empty fetch-side USE set (see `fetch::fetch_src_uri`'s own doc
+/// comment) -- so every `foo? ( … )` group drops and only an
+/// unconditional `mirror`/`nomirror` counts. An unparsable value yields
+/// `false` (the "can't tell, so don't claim it" precedent).
+pub(crate) fn restrict_mirror_from_restrict(restrict: &str) -> bool {
+    if restrict.trim().is_empty() {
+        return false;
+    }
+    let tokens: Vec<String> = restrict.split_whitespace().map(String::from).collect();
+    portage_use_reduce::use_reduce_flat(
+        &tokens,
+        &std::collections::HashSet::new(),
+        portage_use_reduce::MatchMode::Normal,
+    )
+    .map(|flat| flat.iter().any(|t| t == "mirror" || t == "nomirror"))
+    .unwrap_or(false)
+}
+
 fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<String>), String> {
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok((Vec::new(), Vec::new()));
     };
-    let src_uri = portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf)
-        .ok()
-        .and_then(|metadata| metadata.get("SRC_URI").cloned())
+    let metadata = portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok();
+    let src_uri = metadata
+        .as_ref()
+        .and_then(|m| m.get("SRC_URI").cloned())
         .unwrap_or_default();
     if src_uri.trim().is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
+    let restrict_mirror = metadata
+        .as_ref()
+        .and_then(|m| m.get("RESTRICT"))
+        .map(|r| restrict_mirror_from_restrict(r))
+        .unwrap_or(false);
     let aa = portage_fetch::flatten_src_uri(&src_uri, |_, _| true)
         .map_err(|e| format!("{}: {e}", env.pkg_dir.display()))?
         .into_iter()
@@ -528,6 +557,7 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
             distlocks: std::env::var("FEATURES")
                 .map(|features| features.split_whitespace().any(|tok| tok == "distlocks"))
                 .unwrap_or(FetchOptions::default().distlocks),
+            restrict_mirror,
         },
     )?;
     Ok((a, aa))
@@ -1269,6 +1299,21 @@ pub(crate) fn run_single_phase(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restrict_mirror_from_restrict_evaluates_conditionals_against_the_empty_use_set() {
+        assert!(restrict_mirror_from_restrict("mirror"));
+        assert!(restrict_mirror_from_restrict("fetch mirror"));
+        // deprecated negative spelling still counts (real fetch.py:880)
+        assert!(restrict_mirror_from_restrict("nomirror"));
+        // no mirror restriction
+        assert!(!restrict_mirror_from_restrict(""));
+        assert!(!restrict_mirror_from_restrict("fetch strip"));
+        // USE-conditional: the fetch-side USE set is always empty here,
+        // so `foo? ( mirror )` drops entirely -- not a literal token match
+        assert!(!restrict_mirror_from_restrict("foo? ( mirror )"));
+        assert!(restrict_mirror_from_restrict("mirror foo? ( strip )"));
+    }
 
     #[test]
     fn parse_eapi_reads_the_first_real_lines_own_assignment() {

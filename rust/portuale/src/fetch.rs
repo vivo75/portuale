@@ -34,10 +34,14 @@
 //     resolve_mirror_candidates`/`gentoo_mirror_fallback`, see that
 //     crate's own module doc comment for the exact real mechanics
 //     covered -- including real `custommirrors`, an admin-configured
-//     `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file -- and the real
+//     `${PORTAGE_CONFIGROOT}/etc/portage/mirrors` file, and real
+//     `RESTRICT=mirror` (`FetchOptions::restrict_mirror` -- the public
+//     `GENTOO_MIRRORS` flat-layout fallback is skipped) -- and the real
 //     ones deliberately not attempted: live per-mirror `layout.conf`
 //     negotiation, real candidate-ordering/shuffling, `RESTRICT=
-//     mirror`/`primaryuri`).
+//     primaryuri` (doesn't port cleanly -- this pilot's candidate
+//     ordering already deviates from real), and the `mirror+`/`fetch+`
+//     SRC_URI prefixes (`override_mirror`).
 //   - No `FEATURES=verify-sig` GPG check -- this backlog item was
 //     mis-scoped when first written: real `verify-sig`/signature
 //     verification is a `gpkg` (the newer GPG-signed binary package
@@ -144,6 +148,24 @@ pub struct FetchOptions {
     pub gentoo_mirrors: Vec<String>,
     pub config_root: PathBuf,
     pub distlocks: bool,
+    /// Real `RESTRICT=mirror` (real `fetch.py:880` --
+    /// `restrict_mirror = "mirror" in restrict or "nomirror" in
+    /// restrict`): when set, the public `GENTOO_MIRRORS` flat-layout
+    /// fallback (`gentoo_mirror_fallback`) is NOT tried for this package
+    /// -- real `file_restrict_mirror` gates `location_lists.append(
+    /// public_mirrors)` at `fetch.py:1126`. A `mirror://` URI's own
+    /// `thirdpartymirrors`/`custommirrors` expansion and any explicit
+    /// `SRC_URI` URI are still tried (real portage only drops the
+    /// *public* flat-layout mirror list). Sourced from the ebuild's own
+    /// `RESTRICT` md5-cache field by `ebuild_phases::fetch_sources`.
+    ///
+    /// v1 scope: real portage's own `mirror+`/`fetch+` `SRC_URI` prefix
+    /// (`override_mirror`, which re-permits the public mirrors for that
+    /// one URI even under `RESTRICT=mirror`) is not handled -- this
+    /// pilot doesn't parse those prefixes anywhere (a separate,
+    /// pre-existing `SRC_URI`-grammar gap), so `restrict_mirror` is an
+    /// unconditional skip here.
+    pub restrict_mirror: bool,
 }
 
 impl Default for FetchOptions {
@@ -153,6 +175,7 @@ impl Default for FetchOptions {
             gentoo_mirrors: vec!["http://distfiles.gentoo.org".to_string()],
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
             distlocks: true,
+            restrict_mirror: false,
         }
     }
 }
@@ -292,14 +315,24 @@ pub fn fetch_src_uri(
             // not just the last one.
             let mut candidates =
                 resolve_mirror_candidates(&entry.uri, &custommirrors, &thirdpartymirrors);
-            candidates.extend(gentoo_mirror_fallback(
-                &entry.filename,
-                &options.gentoo_mirrors,
-            ));
+            // Real `RESTRICT=mirror` (`file_restrict_mirror`,
+            // `fetch.py:1117-1127`): the public `GENTOO_MIRRORS`
+            // flat-layout list is not appended -- see
+            // `FetchOptions::restrict_mirror`.
+            if !options.restrict_mirror {
+                candidates.extend(gentoo_mirror_fallback(
+                    &entry.filename,
+                    &options.gentoo_mirrors,
+                ));
+            }
             if candidates.is_empty() {
+                let why = if options.restrict_mirror {
+                    "unknown mirror name, and RESTRICT=mirror bars the GENTOO_MIRRORS fallback"
+                } else {
+                    "unknown mirror name, and GENTOO_MIRRORS is empty"
+                };
                 return Err(format!(
-                    "{}: no working candidate mirror for {:?} (unknown mirror name, \
-                     and GENTOO_MIRRORS is empty)",
+                    "{}: no working candidate mirror for {:?} ({why})",
                     entry.filename, entry.uri
                 ));
             }
@@ -734,6 +767,91 @@ mod tests {
         assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
         assert_eq!(
             fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    /// Real `RESTRICT=mirror` (`file_restrict_mirror`,
+    /// `fetch.py:1117-1127`): the public `GENTOO_MIRRORS` flat-layout
+    /// fallback is NOT tried. Identical setup to
+    /// `fetch_src_uri_falls_back_to_gentoo_mirrors_when_the_primary_uri_is_unreachable`
+    /// (its "without restrict" counterpart -- there the mirror server
+    /// rescues the fetch), but with `restrict_mirror: true`: the primary
+    /// URI is unreachable (`127.0.0.1:1` -> immediate "Connection
+    /// refused") and the mirror is barred, so the whole fetch fails and
+    /// the mirror server is never contacted.
+    #[test]
+    fn fetch_src_uri_restrict_mirror_skips_the_gentoo_mirrors_fallback() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let mirror_addr = uri_base
+            .trim_start_matches("http://")
+            .trim_end_matches("/file")
+            .to_string();
+        let mirror_root = format!("http://{mirror_addr}");
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let err = fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root],
+                restrict_mirror: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap_err();
+        // Only the unreachable primary URI was tried.
+        assert!(err.contains("127.0.0.1:1"), "{err}");
+        assert!(!distdir.join("hello-1.0.tar.gz").exists());
+
+        // Unblock the still-parked server thread so it can exit cleanly.
+        let _ = std::net::TcpStream::connect(&mirror_addr);
+        handle.join().unwrap();
+    }
+
+    /// `RESTRICT=mirror` bars only the *public* `GENTOO_MIRRORS`
+    /// flat-layout list -- a `mirror://` URI's own `custommirrors`
+    /// expansion is still tried (real portage keeps `local_mirrors` in
+    /// `location_lists` regardless, `fetch.py:1125`). Same fixture as
+    /// `fetch_src_uri_resolves_a_real_mirror_uri_via_custommirrors`,
+    /// plus `restrict_mirror: true`.
+    #[test]
+    fn fetch_src_uri_restrict_mirror_still_allows_a_custommirror() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let mirror_root = uri_base.trim_end_matches("/file");
+
+        let config_root = tempdir();
+        fs::create_dir_all(config_root.join("etc/portage")).unwrap();
+        fs::write(
+            config_root.join("etc/portage/mirrors"),
+            format!("testmirror {mirror_root}\n"),
+        )
+        .unwrap();
+
+        let pkg_dir = tempdir();
+        write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
+
+        let distdir = tempdir();
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "mirror://testmirror/foo-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                config_root: config_root.clone(),
+                restrict_mirror: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["foo-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("foo-1.0.tar.gz")).unwrap(),
             "hello world"
         );
         handle.join().unwrap();
