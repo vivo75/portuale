@@ -39,6 +39,17 @@ fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -
     }
 }
 
+// -----------------------------------------------------------------
+// Dep-key / priority mapping
+// -----------------------------------------------------------------
+
+fn dep_metadata(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
 fn tokens(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
@@ -54,4 +65,8 @@ fn plain_edge(atom: &str, category: &str, package: &str, priority: DepPriority) 
         alt: None,
         key: 3,
     }
+}
+
+fn fixtures_vdb_root() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }

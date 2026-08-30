@@ -2,6 +2,63 @@
 
 use crate::binpkg::*;
 
+/// Unpack a binpkg's *image* (the built filesystem tree) into `image_dest`,
+/// and its scalar metadata (one `<KEY>` file each) into `build_info_dest`.
+/// xpak (`.tbz2`): `[image tarball][XPAK trailer]`, the image a compressed
+/// tar `tar` auto-detects. gpkg (`.gpkg.tar`): the outer tar's
+/// `<basename>/image.tar[.<comp>]` member.
+///
+/// The two non-scalar members (`environment.bz2`, `<pf>.ebuild`) are written
+/// back **verbatim** as raw bytes, not through the lossy scalar path: the
+/// merge runs `pkg_preinst`/`pkg_postinst` from the saved `environment.bz2`.
+///
+/// The Manifest digest + signature checks run before anything is unpacked.
+// Portage: `xpak.tbz2.decompose`, `gpkg.gpkg.decompress`,
+// `BinpkgEnvExtractor`, `gpkg._verify_binpkg`.
+pub fn extract_binpkg(
+    binpkg_path: &Path,
+    image_dest: &Path,
+    build_info_dest: &Path,
+    gpg: &GpgVerify,
+    xattrs: &crate::ebuild_merge::XattrPolicy,
+) -> Result<(), String> {
+    fs::create_dir_all(image_dest).map_err(|e| format!("{}: {e}", image_dest.display()))?;
+    fs::create_dir_all(build_info_dest)
+        .map_err(|e| format!("{}: {e}", build_info_dest.display()))?;
+
+    let name = binpkg_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if name.ends_with(".gpkg.tar") {
+        // The Manifest checks run before anything is unpacked.
+        verify_gpkg_manifest(binpkg_path, gpg)?;
+        extract_gpkg_member(binpkg_path, "image", image_dest)?;
+        // Every `metadata/` member extracted **verbatim**: a scalar parse +
+        // reserialize lost `environment.bz2` and turned empty fields into
+        // stray newlines.
+        extract_gpkg_member(binpkg_path, "metadata", build_info_dest)?;
+        return Ok(());
+    }
+
+    // xpak: every XPAK member written VERBATIM, not parsed + reserialized
+    // (which turned an empty `DEBUGBUILD` into `"\n"` and trimmed the
+    // trailing space kept on the last `NEEDED` line).
+    // Portage: `bintree.dbapi.unpack_metadata`, `tbz2.unpackinfo`.
+    extract_xpak_image(binpkg_path, image_dest, xattrs)?;
+    let seg = read_xpak_segment(binpkg_path)?;
+    for (name, bytes) in parse_xpak_members(&seg)? {
+        let Some(dest) = xpak_member_dest(build_info_dest, &name) else {
+            continue;
+        };
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        fs::write(&dest, bytes).map_err(|e| format!("{}: {e}", dest.display()))?;
+    }
+    Ok(())
+}
+
 /// `unpackinfo`'s target path for one member: the name with leading `/`
 /// stripped, joined under `dest` and normalized. A name whose `..`
 /// components climb out of `dest` is skipped (`None`).
@@ -243,4 +300,66 @@ pub(crate) fn tar_supports_xattrs() -> bool {
             .map(|o| o.stdout.windows(8).any(|w| w == b"--xattrs"))
             .unwrap_or(false)
     })
+}
+
+/// Locate `<basename>/<want>.tar[.<comp>]` in a gpkg's outer tar,
+/// decompress it if needed, and extract it into `dest`. Shares the outer
+/// unpack, the trusted-name regular-file walk and the `gpkg-1` validity
+/// guard with `read_gpkg_metadata`.
+///
+/// The `image` half keeps GNU `tar` (`-xpf --strip-components=1`) for its
+/// ownership/permission/xattr/sparse semantics, with the member rules
+/// applied by a pre-scan first ([`scan_image_tar`]). The `metadata` half
+/// is resolved in process ([`extract_gpkg_metadata`]).
+pub(crate) fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), String> {
+    if !gpkg_path.is_file() {
+        return Err(format!("{}: not a file", gpkg_path.display()));
+    }
+
+    // The outer container is read from its tar headers: regular-member
+    // check, one-level structure and marker, before any bytes stream.
+    let (members, gpkg_marker) = read_outer_members(gpkg_path)?;
+    if !gpkg_marker {
+        return Err(format!(
+            "{}: no `gpkg-1` version marker",
+            gpkg_path.display()
+        ));
+    }
+    let (member, comp) = members
+        .iter()
+        .find_map(|member| classify_inner_member(want, &member.name).map(|comp| (member, comp)))
+        .ok_or_else(|| format!("{}: no `{want}.tar` member", gpkg_path.display()))?;
+
+    if want == "metadata" {
+        // The inner metadata tar is resolved in process and written as
+        // regular files only (no scratch copy, no `tar -xpf`).
+        let metadata = outer_member_read(gpkg_path, &member.raw_name, |entry| {
+            let member_bytes =
+                read_member_bytes_capped(entry, MAX_INNER_METADATA_BYTES, &member.name)?;
+            read_inner_metadata(gpkg_path, &member.name, &member_bytes, comp)
+        })?;
+        return extract_gpkg_metadata(gpkg_path, dest, metadata);
+    }
+
+    // Image: stream the member into a scratch `image.tar` (through the
+    // decompressor where needed) for the GNU `tar` unpack below.
+    let scratch = ScratchDir::new("gpkg-member")?;
+    let inner_tar = scratch.path().join(format!("{want}.tar"));
+    outer_member_read(gpkg_path, &member.raw_name, |source| {
+        decompress_member_to_file(&member.name, source, comp, &inner_tar)
+    })?;
+    // Portage validates the image stream as it extracts; validate the whole
+    // scratch `image.tar` first ([`scan_image_tar`]) so a rejected member
+    // never reaches the filesystem, then let GNU `tar` unpack it.
+    scan_image_tar(&inner_tar, gpkg_path)?;
+    // The inner tarball's members all live under a single `<want>/`
+    // top-level directory, stripped here; without the strip every merged
+    // path would be recorded as `/image/...`, which breaks unmerge.
+    run_tar(&[
+        "-xpf",
+        &lossy(&inner_tar),
+        "-C",
+        &lossy(dest),
+        "--strip-components=1",
+    ])
 }

@@ -132,6 +132,21 @@ mod tests {
     use crate::FilesDb;
 
     struct Tmp(PathBuf);
+    impl Tmp {
+        fn new() -> Self {
+            static N: AtomicU32 = AtomicU32::new(0);
+            let d = std::env::temp_dir().join(format!(
+                "portage-vdb-redb-{}-{}",
+                std::process::id(),
+                N.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&d).unwrap();
+            Tmp(d)
+        }
+        fn db(&self) -> PathBuf {
+            self.0.join("vdb.redb")
+        }
+    }
     impl Drop for Tmp {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);

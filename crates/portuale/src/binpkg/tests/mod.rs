@@ -60,5 +60,6 @@ fn inner_entry<'a>(name: &'a str, data: &'a [u8]) -> InnerTestEntry<'a> {
         data,
     }
 }
+mod extract;
 mod inner;
 mod metadata;
