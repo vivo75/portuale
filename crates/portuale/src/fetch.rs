@@ -1608,6 +1608,15 @@ mod tests {
         handle.join().unwrap();
     }
 
+    fn test_entry(uri: &str, filename: &str) -> SrcUriEntry {
+        SrcUriEntry {
+            uri: uri.to_string(),
+            filename: filename.to_string(),
+            override_mirror: false,
+            override_fetch: false,
+        }
+    }
+
     #[test]
     fn checksum_failures_rename_bad_files_with_deterministic_suffix() {
         let bad = || serve_mirror(vec![("/distfiles/bad-1.0.tar.gz", b"BAD DATA".to_vec())], 2);

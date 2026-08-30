@@ -5299,6 +5299,58 @@ still match byte-for-byte, but it has no real ebuild-execution
 machinery to mirror the actual building with, consistent with every
 other real-execution slice in portuale staying Rust-only.
 
+### Real `ebuild <file> package`: the `gpkg` binary-package format
+
+`ebuild <file> package` (and `emerge --buildpkgonly`) built an `xpak`
+`.tbz2` unconditionally -- `BINPKG_FORMAT` was hardcoded. The `$PKGDIR`
+directory-scan buildout added a *reader* for the newer `gpkg`
+(`.gpkg.tar`) format (`binpkg::read_gpkg_metadata`, see that section);
+this slice closes the loop with the *writer*, so a package portuale
+builds can round-trip through its own reader.
+
+The mechanism is the same "drive real, unmodified bash + a real,
+unmodified helper" one the `xpak` path already uses. Real
+`bin/misc-functions.sh __dyn_package` (already invoked, unmodified) has
+an `elif [[ "${BINPKG_FORMAT}" == "gpkg" ]]` branch that shells out to
+real, unmodified `bin/gpkg-helper.py compress "${PF}"
+"${PORTAGE_BINPKG_TMPFILE}" "${PORTAGE_BUILDDIR}/build-info" "${D}"` --
+real `portage.gpkg.gpkg()._generate_metadata_from_dir()` +
+`.compress()`, no reimplementation. All `ebuild_package.rs` does is:
+take a `BINPKG_FORMAT` (`PackageOptions::binpkg_format`, env-var-sourced
+at the `ebuild.rs`/`pretend.rs` CLI boundary exactly like
+`BINPKG_COMPRESS` already is; `"xpak"` or `"gpkg"`, anything else is
+`Err("Unknown BINPKG_FORMAT …")` -- real `__dyn_package`'s own `die`);
+name the output `<cat>/<pf>.gpkg.tar` instead of `.tbz2`; export
+`BINPKG_FORMAT=gpkg` (plus `BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_
+<NAME>]`/`PORTAGE_BZIP2_COMMAND`, because real `gpkg-helper.py` builds
+its own `portage.settings` inside the subprocess and reads the
+compressor from it -- real `gpkg._get_binary_cmd` -- rather than from
+the `PORTAGE_COMPRESSION_COMMAND` the `xpak` tar-pipe uses, so the build
+would otherwise depend on the host's own `make.conf`); and write a
+`PATH: <cat>/<pf>.gpkg.tar` field into the `Packages` entry (real
+portage records `PATH` for every `gpkg` -- unlike a plain `.tbz2`, a
+`.gpkg.tar` isn't derivable from the `CPV`).
+
+The produced `.gpkg.tar` is a genuine real-portage `gpkg` container: an
+outer tar of `<basename>/gpkg-1` (the format marker), the compressed
+`<basename>/metadata.tar.<comp>`, the compressed
+`<basename>/image.tar.<comp>`, and a `<basename>/Manifest`. **v1 cuts**
+(see `ebuild_package.rs`'s own doc comment): no `gpkg` *signing*
+(`FEATURES=binpkg-signing`/`binpkg-request-signature` -- the same "this
+portuale has no crypto" cut the reader's `Manifest`/`.sig` verification
+already documents), no `BUILD_ID` in the basename.
+
+Proven end-to-end both ways:
+`ebuild_package::tests::real_package_with_gpkg_format_builds_a_real_gpkg_tar_this_pilots_reader_round_trips`
+builds the `.gpkg.tar` (bzip2), then reads it back with portuale's
+*own* `binpkg::read_gpkg_metadata` and asserts `SLOT`/`CATEGORY`/`PF`/
+`RDEPEND` survived the round trip, plus `BinaryIndex::from_pkgdir` and
+`binpkg::scan_pkgdir` both see it; the black-box
+`test_emerge_buildpkgonly_with_binpkg_format_gpkg_builds_a_real_gpkg_tar`
+runs `emerge --buildpkgonly` with `BINPKG_FORMAT=gpkg BINPKG_COMPRESS=
+gzip` and asserts the real container members + the `Packages` `PATH`
+field. Rust-only, like every real-execution slice.
+
 ### Real `SRC_URI` fetch: `emerge --buildpkgonly`/`ebuild <file> install` now really download real distfiles
 
 The previous slice's own "known, documented gap" -- no fetch/unpack
@@ -7674,6 +7726,40 @@ GENTOO_MIRRORS="https://distfiles.gentoo.org" rust/target/release/portuale ebuil
 # ... exits 1  (a non-restricted package would also have tried
 #     https://distfiles.gentoo.org/distfiles/restrictmirrorpkg-1.0.tar.gz)
 ```
+
+### `mirror+`/`fetch+` `SRC_URI` prefixes (`override_mirror`/`override_fetch`)
+
+Real `fetch.py:1103-1106` (a portage extension, not PMS): a `SRC_URI`
+URI token may carry a `mirror+` or `fetch+` prefix. Real portage strips
+it (`myuri = myuri.partition("+")[2]`) and sets `override_mirror =
+myuri.startswith("mirror+")` / `override_fetch = override_mirror or
+myuri.startswith("fetch+")`. Those feed `file_restrict_mirror =
+(restrict_fetch or restrict_mirror) and not override_mirror`
+(`:1117-1119`) and `if (restrict_fetch and not override_fetch)`
+(`:1167`): `mirror+` re-permits the public flat-layout mirror list for
+that file even under `RESTRICT=mirror`, and either prefix exempts the URI
+from `RESTRICT=fetch`.
+
+`portage_fetch::flatten_src_uri` now strips the prefix in the parser (so
+the recorded `uri` and its derived `filename` are both clean) and
+records `SrcUriEntry::override_mirror`/`override_fetch` (`mirror+` sets
+both, matching real `override_fetch = override_mirror or ...`).
+`portuale/src/fetch.rs` checks `entry.override_mirror` per entry:
+`public_mirrors_barred = options.restrict_mirror && !entry.override_mirror`
+now gates the `gentoo_mirror_fallback` append (and the "no working
+candidate" error wording). `override_fetch` became live 2026-08-30 with
+`RESTRICT=fetch` modelling -- see "`RESTRICT=fetch`" below; the prefix
+is stripped so the URL stays valid regardless.
+
+Rust-only (real fetch, no `--pretend` mirror). Tests:
+`portage_fetch` gains three parser tests (`mirror+` sets both overrides
+and strips the prefix; `fetch+` sets only `override_fetch`; a plain URI
+has neither), and `portuale/src/fetch.rs` gains
+`fetch_src_uri_mirror_prefix_re_permits_the_gentoo_mirrors_fallback_under_restrict_mirror`
+-- the exact `RESTRICT=mirror` + unreachable-primary-URI setup that fails
+in `…restrict_mirror_skips_the_gentoo_mirrors_fallback`, but with a
+`mirror+` prefix on the SRC_URI so the mirror server is tried and rescues
+the fetch.
 
 ### `emerge --buildpkgonly --keep-going`
 

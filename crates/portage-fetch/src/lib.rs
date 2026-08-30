@@ -799,6 +799,26 @@ mod tests {
     }
 
     #[test]
+    fn flatten_src_uri_strips_a_fetch_prefix_and_records_only_override_fetch() {
+        let entries = flatten_src_uri(
+            "fetch+https://example.com/dl?v=1 -> a-1.0.tar.gz",
+            |_, _| true,
+        )
+        .unwrap();
+        assert_eq!(entries[0].uri, "https://example.com/dl?v=1");
+        assert_eq!(entries[0].filename, "a-1.0.tar.gz");
+        assert!(!entries[0].override_mirror);
+        assert!(entries[0].override_fetch);
+    }
+
+    #[test]
+    fn flatten_src_uri_a_plain_uri_has_neither_override() {
+        let entries = flatten_src_uri("https://example.com/a-1.0.tar.gz", |_, _| true).unwrap();
+        assert!(!entries[0].override_mirror);
+        assert!(!entries[0].override_fetch);
+    }
+
+    #[test]
     fn flatten_src_uri_includes_a_positive_conditional_only_when_active() {
         let src = "unconditional-1.0.tar.gz test? ( test-only-1.0.tar.gz )";
         let with_test = flatten_src_uri(src, |negated, flag| !negated && flag == "test").unwrap();
