@@ -244,6 +244,46 @@ pub(crate) fn entry_to_json(
     format!("{{{}}}", fields.join(","))
 }
 
+pub(crate) fn slot_conflict_to_json(c: &SlotConflict) -> String {
+    let instances: Vec<String> = c
+        .instances
+        .iter()
+        .map(|inst| {
+            let parents: Vec<String> = inst
+                .parents
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{{\"parent\":{},\"atom\":{},\"use\":{},\"installed\":{}}}",
+                        json_string(&p.parent_cpv),
+                        json_string(&p.atom),
+                        json_string(&render_pkg_use_display(&p.use_display)),
+                        p.installed
+                    )
+                })
+                .collect();
+            format!(
+                "{{\"version\":{},\"sub_slot\":{},\"repo_name\":{},\"use\":{},\"installed\":{},\"parents\":[{}]}}",
+                json_string(&inst.version),
+                json_string(&inst.sub_slot),
+                json_string(&inst.repo_name),
+                json_string(&render_pkg_use_display(&inst.use_display)),
+                inst.installed,
+                parents.join(",")
+            )
+        })
+        .collect();
+    format!(
+        "{{\"category\":{},\"package\":{},\"slot\":{},\"resolved_version\":{},\"conflicting_atom\":{},\"instances\":[{}]}}",
+        json_string(&c.category),
+        json_string(&c.package),
+        json_string(&c.slot),
+        json_string(&c.resolved_version),
+        json_string(&c.conflicting_atom),
+        instances.join(",")
+    )
+}
+
 pub(crate) fn changed_deps_report_entry_to_json(c: &ChangedDepsReportEntry) -> String {
     format!(
         "{{\"category\":{},\"package\":{},\"version\":{},\"repo_name\":{}}}",
@@ -252,4 +292,38 @@ pub(crate) fn changed_deps_report_entry_to_json(c: &ChangedDepsReportEntry) -> S
         json_string(&c.version),
         json_string(&c.repo_name)
     )
+}
+
+/// The `--json` `aborted` field: `null` on the complete path,
+/// `{"reason":…}` on an abort (reason spellings pinned by the abort fixtures).
+pub(crate) fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
+    match outcome {
+        portage_repo::ResolveOutcome::Complete => "null".to_string(),
+        portage_repo::ResolveOutcome::Aborted { reason, .. } => match reason {
+            portage_repo::AbortReason::MaskedDep { atom, parent_cpv } => format!(
+                "{{\"reason\":\"masked-dep\",\"atom\":{},\"parent\":{}}}",
+                json_string(atom),
+                json_string(parent_cpv)
+            ),
+            portage_repo::AbortReason::UnsatisfiedAtom { atom, parent_cpv } => format!(
+                "{{\"reason\":\"unsatisfied-atom\",\"atom\":{},\"parent\":{}}}",
+                json_string(atom),
+                json_string(parent_cpv)
+            ),
+            portage_repo::AbortReason::UnserializableCycle { members } => {
+                let members: Vec<String> = members.iter().map(|m| json_string(m)).collect();
+                format!(
+                    "{{\"reason\":\"unserializable-cycle\",\"members\":[{}]}}",
+                    members.join(",")
+                )
+            }
+            portage_repo::AbortReason::VirtualCycle { members } => {
+                let members: Vec<String> = members.iter().map(|m| json_string(m)).collect();
+                format!(
+                    "{{\"reason\":\"virtual-cycle\",\"members\":[{}]}}",
+                    members.join(",")
+                )
+            }
+        },
+    }
 }
