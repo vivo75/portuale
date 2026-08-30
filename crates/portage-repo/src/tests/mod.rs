@@ -430,6 +430,22 @@ fn slotundo_rebuild_entry(
     }
 }
 
+/// The `souprov` upgrade entry every undo test walks the consumer
+/// against: 1.0 (0/1) -> 2.0 (0/2), the shape
+/// `fixtures/repo/dev-libs/souprov` + its md5-cache provide.
+fn slotundo_provider_entry() -> GraphEntry {
+    GraphEntry {
+        discovery: 0,
+        outcome: PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "2.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("2".into()),
+        ..graph_entry("dev-libs", "souprov", "2.0")
+    }
+}
+
 /// Arguments of [`euf_flat`].
 struct EufFlatArgs<'a> {
     iuse: &'a str,

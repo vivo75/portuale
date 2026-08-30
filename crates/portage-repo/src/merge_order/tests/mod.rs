@@ -70,3 +70,4 @@ fn plain_edge(atom: &str, category: &str, package: &str, priority: DepPriority) 
 fn fixtures_vdb_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
+mod debug;

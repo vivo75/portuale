@@ -188,6 +188,25 @@ pub(crate) fn env_d_reloaded(config: &portage_profile::Config) -> Option<portage
     Some(reloaded)
 }
 
+/// The reloaded `(CONFIG_PROTECT, CONFIG_PROTECT_MASK)` pair when
+/// `profile.env` changed since the run config was resolved, `None`
+/// otherwise (the run-wide values stand).
+pub(crate) fn reloaded_config_protect(
+    options: &ebuild_merge::MergeOptions,
+) -> Option<(String, String)> {
+    let reloaded = options
+        .resolved_config
+        .as_deref()
+        .and_then(env_d_reloaded)?;
+    let mut probe = ebuild_merge::MergeOptions {
+        config_protect: options.config_protect.clone(),
+        config_protect_mask: options.config_protect_mask.clone(),
+        ..ebuild_merge::MergeOptions::default()
+    };
+    probe.apply_config_protect(&reloaded);
+    Some((probe.config_protect, probe.config_protect_mask))
+}
+
 /// Arguments of [`buildpkgonly_entry_build_env`].
 pub(crate) struct BuildpkgonlyEntryBuildEnvArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,

@@ -2,6 +2,25 @@
 
 use crate::emerge_build::*;
 
+/// `(cat/pkg, version)` for an entry the scheduler will build.
+pub(crate) fn scheduler_cp_version(entry: &GraphEntry) -> Result<(String, String), String> {
+    let cp = format!("{}/{}", entry.category, entry.package);
+    let version = match &entry.outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            version.clone()
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+        // A removal is never scheduled; kept explicit so no wildcard hides
+        // it.
+        PretendOutcome::AlreadyInstalled { .. }
+        | PretendOutcome::NoVisibleCandidate
+        | PretendOutcome::Uninstall { .. } => {
+            return Err(format!("{cp}: not a buildable entry"));
+        }
+    };
+    Ok((cp, version))
+}
+
 /// Whether the scheduler must actually run a build for this entry (a
 /// `New`/`Upgrade`/`Downgrade`/`Reinstall` from source). `AlreadyInstalled`
 /// and `Binary` entries are treated as already satisfied.
