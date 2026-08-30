@@ -10497,9 +10497,9 @@ def run(args):
             config,
         )
 
-    def use_suffix(use_display, installed=None, forced=None):
+    def use_suffix(use_display, is_new, installed=None, forced=None):
         # "  USE=\"a -b\" VIDEO_CARDS=\"-amdgpu nvidia\"", matching real
-        # --pretend -v's own line format. Real output.py:_display_use
+        # --pretend's own line format. Real output.py:_display_use
         # groups the flags by USE_EXPAND (plain USE group, then one
         # VAR="..." per non-hidden USE_EXPAND var, empty groups omitted),
         # for an entry that replaces an installed one appends */% markers
@@ -10512,7 +10512,15 @@ def run(args):
         # removed-from-IUSE line (documented cuts). Mirrors
         # portage-repo/src/lib.rs's build_use_expand_display +
         # pretend.rs's use_suffix.
-        if not verbose or not use_display:
+        #
+        # Real _DisplayConfig: print_use_string = verbosity != 1, and
+        # real default `emerge -p` verbosity is 2 -- so the USE line is
+        # NOT -v-gated. But all_flags = verbosity == 3, so at plain -p a
+        # New package (is_new -> every IUSE flag renders, same list -pv
+        # shows) gets its USE line, while a Reinstall/Upgrade shows only
+        # the changed flags -- the pilot doesn't render that reduced diff
+        # yet, so those still only show USE at -pv (SCOPE_BACKLOG item 14).
+        if (not verbose and not is_new) or not use_display:
             return ""
         groups = _build_use_expand_display(
             use_display,
@@ -10709,7 +10717,7 @@ def run(args):
             system, world = classify(version)
             disp_ver = disp_version(version)
             oldbest = oldbest_str()
-            use_str = use_suffix(use_display, installed, forced)
+            use_str = use_suffix(use_display, tag == "new", installed, forced)
             # Real output.py::verbose_size (verbosity 3 only): verboseadd
             # += localized_size(mysize) after the USE string. Rendered
             # only for a --getbinpkg remote binary (see pretend.rs's

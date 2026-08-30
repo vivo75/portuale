@@ -497,8 +497,24 @@ fn decorate_version(
     s
 }
 
+/// Renders the ` USE="…"` (and `VAR="…"` per USE_EXPAND group) suffix.
+///
+/// Real `_DisplayConfig`: `print_use_string = verbosity != 1`, and real
+/// default `emerge -p` verbosity is 2 -- so the USE line is *not*
+/// `-v`-gated. But `all_flags = verbosity == 3`, so at plain `-p`
+/// (verbosity 2) real `_create_use_string` renders only the flags a
+/// package's own `is_new` / diff-against-installed logic makes visible:
+/// for a **`New`** package `is_new` is true and *every* IUSE flag
+/// renders (`red(flag)` / `blue(-flag)`), exactly the same list `-pv`
+/// shows -- so a New entry's USE line is identical at `-p` and `-pv`
+/// (bar the `-pv`-only `::repo` cpv decoration and counters line). For a
+/// `Reinstall`/`Upgrade`/`Downgrade` at plain `-p`, real portage shows
+/// only the *changed* flags (`all_flags` off); the pilot doesn't render
+/// that reduced diff yet, so those still only show USE at `-pv` -- a
+/// documented follow-up (SCOPE_BACKLOG item 14).
 fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool, color: &Colorizer) -> String {
-    if !verbose || entry.use_expand_display.is_empty() {
+    let is_new = matches!(entry.outcome, PretendOutcome::New { .. });
+    if (!verbose && !is_new) || entry.use_expand_display.is_empty() {
         return String::new();
     }
     // Real `output.py:_display_use`: `USE="…"` first, then one `VAR="…"`
@@ -5073,5 +5089,63 @@ mod tests {
         );
         assert_eq!(masked, " N    ~");
         assert_eq!(masked.chars().count(), 7);
+    }
+
+    fn entry_with_use(outcome: PretendOutcome) -> GraphEntry {
+        GraphEntry {
+            category: "dev-libs".into(),
+            package: "foo".into(),
+            outcome,
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("testrepo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![("bar".into(), true), ("baz".into(), false)],
+            use_expand_display: vec![("USE".into(), "bar -baz".into())],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: vec![],
+            required_by: vec![],
+            source: portage_repo::CandidateSource::Ebuild,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+        }
+    }
+
+    #[test]
+    fn use_suffix_shows_for_a_new_entry_at_plain_p_but_not_a_reinstall() {
+        let nc = Colorizer::new(false);
+        let new = entry_with_use(PretendOutcome::New {
+            version: "1.0".into(),
+        });
+        // A New entry renders its USE list even without `-v` (real
+        // `print_use_string = verbosity != 1`; `is_new` renders every
+        // flag regardless of `all_flags`).
+        assert_eq!(use_suffix(&new, false, false, &nc), " USE=\"bar -baz\"");
+        assert_eq!(use_suffix(&new, true, false, &nc), " USE=\"bar -baz\"");
+
+        // A Reinstall still only renders at `-v` -- the pilot doesn't
+        // produce the reduced changed-flags-only diff yet.
+        let reinstall = entry_with_use(PretendOutcome::Reinstall {
+            version: "1.0".into(),
+            changed_flags: vec![],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+        });
+        assert_eq!(use_suffix(&reinstall, false, false, &nc), "");
+        assert_eq!(
+            use_suffix(&reinstall, true, false, &nc),
+            " USE=\"bar -baz\""
+        );
     }
 }

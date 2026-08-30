@@ -8894,11 +8894,12 @@ dev-libs/livekeywordpkg-9999` — matching real `emerge -p`. Both sides;
 assert the marker at plain `-p` too. After the fix, portuale's non-`-v`
 bracket width matches real `emerge -p` on a real tree.
 
-Not addressed here (a separate newly-noticed gap, backlog): at verbosity
-2 real portage *also* prints the `USE="…"` line for a **changed** flag
-set or a new package (`_create_use_string` only returns "" when nothing
-changed *and* `all_flags` is off), where the pilot still gates the whole
-`USE=` display on `-v`.
+Not addressed here (a separate gap, its own slice below — "the `USE="…"`
+line shows at plain `-p`"): at verbosity 2 real portage *also* prints
+the `USE="…"` line for a **changed** flag set or a new package
+(`_create_use_string` only returns "" when nothing changed *and*
+`all_flags` is off), where the pilot still gates the whole `USE=`
+display on `-v`.
 
 ```sh
 FX="$(realpath PORTING/fixtures)"
@@ -8962,6 +8963,44 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/diamond
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p --json dev-libs/diamond \
   | python3 -c 'import json,sys; print([(e["package"], e["merge_order"]) for e in json.load(sys.stdin)["entries"]])'
 # [('common', 0), ('shared-a', 1), ('shared-b', 2), ('diamond', 3)]
+```
+
+### `emerge -p`: a New package's `USE="…"` line shows at plain `-p`, not only `-v` (real-tree finding, increment 1)
+
+Third gap from the same container run: real `emerge` printed
+`[ebuild  N     ] dev-libs/libevent-2.1.13  USE="clock-gettime ssl
+-debug …"` at plain `-p`, where portuale printed only the bracket line.
+Real `_DisplayConfig` sets `print_use_string = verbosity != 1` and real
+default `emerge -p` verbosity is 2 — so the `USE="…"` line is **not**
+`-v`-gated. It's `all_flags = verbosity == 3` that's `-v`-only, and it
+controls *which* flags render: for a **`New`** package
+`_create_use_string`'s `is_new` branch renders *every* IUSE flag
+regardless (`red(flag)` / `blue(-flag)`), so a New entry's USE list is
+identical at `-p` and `-pv`; for a `Reinstall`/`Upgrade` at plain `-p`,
+only the *changed* flags render.
+
+Increment 1 lands the New case: `use_suffix` / `_use_suffix` no longer
+gate a `New` entry's USE display on `verbose`. The content is exactly
+what `-pv` already produced (grouped `USE=` + `VAR="…"` per USE_EXPAND,
+enabled-first, `--alphabetical`-aware) minus the `-pv`-only `::repo` cpv
+decoration and the trailing counters line. `emerge -pv` is unchanged.
+~25 pinned `-p` assertions gained a `USE=` suffix; a handful of
+`-v`-detection tests switched their "is this verbose" probe from
+"`USE=` present" to "`::repo` present". New `pretend.rs` unit test, new
+dedicated contract test + 2 `CASES`; both sides byte-identical.
+
+**Increment 2 (still pending)**: the `Reinstall`/`Upgrade` changed-flags-only
+diff at plain `-p` — needs `build_use_expand_display` to grow an
+`all_flags: bool` param (right now it hard-assumes the `-pv` `all_flags =
+true` shape).
+
+```sh
+FX="$(realpath PORTING/fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/useflagpkg
+# [ebuild  N     ] dev-libs/newpkg-1.0            <- empty IUSE, no USE line
+# [ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/useexpandpkg
+# [ebuild  N     ] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="nvidia -amdgpu"
 ```
 
 ## Running it
