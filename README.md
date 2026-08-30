@@ -5233,8 +5233,9 @@ merges anything).
 
 **v1 scope cuts as of this section's own original slice** (see
 `ebuild_package.rs`'s own module doc comment for the current, full
-list): `BINPKG_FORMAT` is always `"xpak"` (the newer `"gpkg"` format is
-a separately-scoped alternative, still true). Real
+list): `BINPKG_FORMAT` was always `"xpak"` here -- the newer `"gpkg"`
+format has since shipped, see this file's own "Real `ebuild <file>
+package`: the `gpkg` binary-package format" section below. Real
 `PORTAGE_COMPRESSION_COMMAND` resolution has since shipped -- see this
 file's own "Real `PORTAGE_COMPRESSION_COMMAND` resolution" section
 below; that paragraph's original claim (hardcoded `"bzip2 -c"`) is now
@@ -5335,6 +5336,58 @@ CLI-gate/message-text changes so the shared dry-run contract tests
 still match byte-for-byte, but it has no real ebuild-execution
 machinery to mirror the actual building with, consistent with every
 other real-execution slice in this pilot staying Rust-only.
+
+### Real `ebuild <file> package`: the `gpkg` binary-package format
+
+`ebuild <file> package` (and `emerge --buildpkgonly`) built an `xpak`
+`.tbz2` unconditionally -- `BINPKG_FORMAT` was hardcoded. The `$PKGDIR`
+directory-scan buildout added a *reader* for the newer `gpkg`
+(`.gpkg.tar`) format (`binpkg::read_gpkg_metadata`, see that section);
+this slice closes the loop with the *writer*, so a package this pilot
+builds can round-trip through its own reader.
+
+The mechanism is the same "drive real, unmodified bash + a real,
+unmodified helper" one the `xpak` path already uses. Real
+`bin/misc-functions.sh __dyn_package` (already invoked, unmodified) has
+an `elif [[ "${BINPKG_FORMAT}" == "gpkg" ]]` branch that shells out to
+real, unmodified `bin/gpkg-helper.py compress "${PF}"
+"${PORTAGE_BINPKG_TMPFILE}" "${PORTAGE_BUILDDIR}/build-info" "${D}"` --
+real `portage.gpkg.gpkg()._generate_metadata_from_dir()` +
+`.compress()`, no reimplementation. All `ebuild_package.rs` does is:
+take a `BINPKG_FORMAT` (`PackageOptions::binpkg_format`, env-var-sourced
+at the `ebuild.rs`/`pretend.rs` CLI boundary exactly like
+`BINPKG_COMPRESS` already is; `"xpak"` or `"gpkg"`, anything else is
+`Err("Unknown BINPKG_FORMAT …")` -- real `__dyn_package`'s own `die`);
+name the output `<cat>/<pf>.gpkg.tar` instead of `.tbz2`; export
+`BINPKG_FORMAT=gpkg` (plus `BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_
+<NAME>]`/`PORTAGE_BZIP2_COMMAND`, because real `gpkg-helper.py` builds
+its own `portage.settings` inside the subprocess and reads the
+compressor from it -- real `gpkg._get_binary_cmd` -- rather than from
+the `PORTAGE_COMPRESSION_COMMAND` the `xpak` tar-pipe uses, so the build
+would otherwise depend on the host's own `make.conf`); and write a
+`PATH: <cat>/<pf>.gpkg.tar` field into the `Packages` entry (real
+portage records `PATH` for every `gpkg` -- unlike a plain `.tbz2`, a
+`.gpkg.tar` isn't derivable from the `CPV`).
+
+The produced `.gpkg.tar` is a genuine real-portage `gpkg` container: an
+outer tar of `<basename>/gpkg-1` (the format marker), the compressed
+`<basename>/metadata.tar.<comp>`, the compressed
+`<basename>/image.tar.<comp>`, and a `<basename>/Manifest`. **v1 cuts**
+(see `ebuild_package.rs`'s own doc comment): no `gpkg` *signing*
+(`FEATURES=binpkg-signing`/`binpkg-request-signature` -- the same "this
+pilot has no crypto" cut the reader's `Manifest`/`.sig` verification
+already documents), no `BUILD_ID` in the basename.
+
+Proven end-to-end both ways:
+`ebuild_package::tests::real_package_with_gpkg_format_builds_a_real_gpkg_tar_this_pilots_reader_round_trips`
+builds the `.gpkg.tar` (bzip2), then reads it back with this pilot's
+*own* `binpkg::read_gpkg_metadata` and asserts `SLOT`/`CATEGORY`/`PF`/
+`RDEPEND` survived the round trip, plus `BinaryIndex::from_pkgdir` and
+`binpkg::scan_pkgdir` both see it; the black-box
+`test_emerge_buildpkgonly_with_binpkg_format_gpkg_builds_a_real_gpkg_tar`
+runs `emerge --buildpkgonly` with `BINPKG_FORMAT=gpkg BINPKG_COMPRESS=
+gzip` and asserts the real container members + the `Packages` `PATH`
+field. Rust-only, like every real-execution slice.
 
 ### Real `SRC_URI` fetch: `emerge --buildpkgonly`/`ebuild <file> install` now really download real distfiles
 
@@ -10160,6 +10213,20 @@ cat "${PKGDIR}"/Packages
 /tmp/emerge --pretend --buildpkgonly dev-libs/packagepkg
 # [ebuild  N    ] dev-libs/packagepkg-1.0
 # (no ">>> Building binary" line, no real files written)
+
+# BINPKG_FORMAT=gpkg builds the newer GLEP 78 format instead, via real,
+# unmodified bin/gpkg-helper.py (BINPKG_COMPRESS=gzip keeps it off zstd):
+export PKGDIR="$(mktemp -d)"
+BINPKG_FORMAT=gpkg BINPKG_COMPRESS=gzip /tmp/emerge --buildpkgonly dev-libs/packagepkg
+file "${PKGDIR}"/dev-libs/packagepkg-1.0.gpkg.tar
+# ...: Gentoo GLEP 78 (GPKG) binary package for "packagepkg-1.0" using gzip compression
+tar -tf "${PKGDIR}"/dev-libs/packagepkg-1.0.gpkg.tar
+# packagepkg-1.0/gpkg-1
+# packagepkg-1.0/metadata.tar.gz
+# packagepkg-1.0/image.tar.gz
+# packagepkg-1.0/Manifest
+grep PATH "${PKGDIR}"/Packages
+# PATH: dev-libs/packagepkg-1.0.gpkg.tar
 
 # a real, nonempty SRC_URI with no Manifest entry at all is refused
 # outright, rather than fetched unverified (dev-libs/fetchpkg has one

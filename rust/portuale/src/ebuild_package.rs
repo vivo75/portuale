@@ -17,10 +17,21 @@
 //
 // KNOWN, DOCUMENTED GAPS (v1 scope, matching this whole pilot's own
 // "narrow v1, document the cut" pattern):
-//   - `BINPKG_FORMAT` is always `"xpak"` (real portage's own first-listed
-//     `SUPPORTED_GENTOO_BINPKG_FORMATS` default) -- the newer `"gpkg"`
-//     format (`bin/gpkg-helper.py`) is a real, separately-scoped
-//     alternative this slice doesn't attempt.
+//   - `BINPKG_FORMAT` (`"xpak"` -- real portage's own first-listed
+//     `SUPPORTED_GENTOO_BINPKG_FORMATS` default -- or `"gpkg"`) is real
+//     now: for `"gpkg"`, real, unmodified `bin/misc-functions.sh
+//     __dyn_package` shells out to real, unmodified `bin/gpkg-helper.py
+//     compress` (real `portage.gpkg.gpkg().compress()`, no
+//     reimplementation) exactly the way the `"xpak"` branch already
+//     shells out to `bin/xpak-helper.py recompose`, producing a genuine
+//     `${PKGDIR}/${CATEGORY}/${PF}.gpkg.tar` this pilot's own
+//     `binpkg::read_gpkg_metadata` reader round-trips. Anything other
+//     than those two values is `Err("Unknown BINPKG_FORMAT ...")`, real
+//     `__dyn_package`'s own `die`. Cuts: no gpkg signing
+//     (`FEATURES=binpkg-signing`/`binpkg-request-signature` -- the same
+//     "this pilot has no crypto" cut the reader's `Manifest`/`.sig`
+//     verification already documents), no `BUILD_ID` in the gpkg
+//     basename.
 //   - Real `PORTAGE_COMPRESSION_COMMAND` resolution (real
 //     `_compressors`/`BINPKG_COMPRESS_FLAGS_*`, `doebuild.py:697-750`) is
 //     real now -- see `resolve_compression_command`'s own doc comment
@@ -107,6 +118,12 @@ pub struct PackageOptions {
     /// `"bzip2"`) -- only actually substituted when `binpkg_compress ==
     /// "bzip2"`.
     pub portage_bzip2_command: String,
+    /// Real `BINPKG_FORMAT` (real `make.globals`'s own default: `"xpak"`,
+    /// the first entry of `SUPPORTED_GENTOO_BINPKG_FORMATS`). `"gpkg"` is
+    /// the only other accepted value; `run_package` rejects anything else
+    /// with `Err("Unknown BINPKG_FORMAT ...")`, real `bin/misc-functions.
+    /// sh __dyn_package`'s own `die`.
+    pub binpkg_format: String,
     /// Real `PORTAGE_CONFIGROOT` -- see `ebuild_merge::MergeOptions::
     /// config_root`'s own doc comment for the exact real default/`Default`
     /// split this mirrors (only consulted by `ebuild_phases::
@@ -124,6 +141,7 @@ impl Default for PackageOptions {
             binpkg_compress: "zstd".to_string(),
             binpkg_compress_flags: String::new(),
             portage_bzip2_command: "bzip2".to_string(),
+            binpkg_format: "xpak".to_string(),
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
         }
     }
@@ -307,6 +325,17 @@ pub fn run_package(
         return Ok(status);
     }
 
+    // Real `bin/misc-functions.sh __dyn_package`'s own
+    // `die "Unknown BINPKG_FORMAT ${BINPKG_FORMAT}"` -- rejected here
+    // rather than letting the real bash hit it, so the caller gets a
+    // clean `Err` instead of a phase-script failure exit code.
+    let binpkg_format = options.binpkg_format.as_str();
+    let binpkg_extension = match binpkg_format {
+        "xpak" => "tbz2",
+        "gpkg" => "gpkg.tar",
+        other => return Err(format!("Unknown BINPKG_FORMAT {other}")),
+    };
+
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
 
     let build_time = now_unix_time()?;
@@ -319,7 +348,7 @@ pub fn run_package(
     let binpkg_path = options
         .pkgdir
         .join(&env.category)
-        .join(format!("{}.tbz2", env.split.pf));
+        .join(format!("{}.{binpkg_extension}", env.split.pf));
     if let Some(parent) = binpkg_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
@@ -331,12 +360,12 @@ pub fn run_package(
             "PORTAGE_BINPKG_TMPFILE".to_string(),
             binpkg_path.display().to_string(),
         ),
-        ("BINPKG_FORMAT".to_string(), "xpak".to_string()),
-        // Real `bin/misc-functions.sh`'s own `xpak-helper.py` invocation
-        // prefers `PORTAGE_PYTHONPATH` over `PORTAGE_PYM_PATH` (which
-        // this pilot deliberately leaves unset -- see
-        // `ebuild_phases`'s own module doc comment) -- set directly so
-        // the real, unmodified `xpak-helper.py` subprocess imports
+        ("BINPKG_FORMAT".to_string(), binpkg_format.to_string()),
+        // Real `bin/misc-functions.sh`'s own `xpak-helper.py`/
+        // `gpkg-helper.py` invocation prefers `PORTAGE_PYTHONPATH` over
+        // `PORTAGE_PYM_PATH` (which this pilot deliberately leaves unset
+        // -- see `ebuild_phases`'s own module doc comment) -- set
+        // directly so the real, unmodified helper subprocess imports
         // `portage` from *this* checkout, not whatever else might be
         // system-installed.
         (
@@ -344,7 +373,36 @@ pub fn run_package(
             repo_lib_path.display().to_string(),
         ),
     ];
-    if let Some(compression_command) = resolve_compression_command(
+    if binpkg_format == "gpkg" {
+        // Real `gpkg-helper.py` builds its own `portage.settings` inside
+        // the subprocess and reads the compressor from it
+        // (`BINPKG_COMPRESS`, `BINPKG_COMPRESS_FLAGS[_<NAME>]`, and
+        // `${PORTAGE_BZIP2_COMMAND}` via `varexpand` -- real
+        // `gpkg._get_binary_cmd`), NOT from `PORTAGE_COMPRESSION_COMMAND`
+        // (that is xpak's `bin/misc-functions.sh` tar-pipe only). Export
+        // the same values this pilot already resolves at the `ebuild.rs`
+        // CLI boundary so the gpkg build is deterministic rather than
+        // inheriting the host's own `make.conf`.
+        extra_env.push((
+            "BINPKG_COMPRESS".to_string(),
+            options.binpkg_compress.clone(),
+        ));
+        extra_env.push((
+            format!(
+                "BINPKG_COMPRESS_FLAGS_{}",
+                options.binpkg_compress.to_uppercase()
+            ),
+            options.binpkg_compress_flags.clone(),
+        ));
+        extra_env.push((
+            "BINPKG_COMPRESS_FLAGS".to_string(),
+            options.binpkg_compress_flags.clone(),
+        ));
+        extra_env.push((
+            "PORTAGE_BZIP2_COMMAND".to_string(),
+            options.portage_bzip2_command.clone(),
+        ));
+    } else if let Some(compression_command) = resolve_compression_command(
         &options.binpkg_compress,
         &options.binpkg_compress_flags,
         &options.portage_bzip2_command,
@@ -378,6 +436,17 @@ pub fn run_package(
         .unwrap_or_default();
     let get = |key: &str| metadata.get(key).map(String::as_str).unwrap_or("");
     let build_time_str = build_time.to_string();
+    // Real portage records a `PATH` field for every gpkg entry (real
+    // `bintree.gpkg_only`/`_pkgindex_write` -- a gpkg file is
+    // `<cat>/<pf>.gpkg.tar`, not derivable from the CPV the way a plain
+    // `<cat>/<pf>.tbz2` is). A plain xpak entry has no `PATH`; the reader
+    // reconstructs `<cat>/<pf>.tbz2` from `CPV`. `format_packages_entry`
+    // drops empty values, so the xpak entry is unchanged.
+    let path_field = if binpkg_format == "gpkg" {
+        format!("{}/{}.{binpkg_extension}", env.category, env.split.pf)
+    } else {
+        String::new()
+    };
     write_packages_index_entry(
         &options.pkgdir,
         &cpv,
@@ -395,6 +464,7 @@ pub fn run_package(
             ("BDEPEND", get("BDEPEND")),
             ("PDEPEND", get("PDEPEND")),
             ("IDEPEND", get("IDEPEND")),
+            ("PATH", &path_field),
             ("BUILD_TIME", &build_time_str),
         ],
     )?;
@@ -645,6 +715,84 @@ mod tests {
         assert_eq!(
             metadata.get("RDEPEND").map(String::as_str),
             Some("dev-libs/samepkg")
+        );
+    }
+
+    #[test]
+    fn real_package_with_gpkg_format_builds_a_real_gpkg_tar_this_pilots_reader_round_trips() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_format: "gpkg".to_string(),
+            // Pinned to "bzip2" (not the real `Default`, "zstd") so this
+            // test doesn't depend on `zstd` being installed -- real
+            // `gpkg-helper.py` reads this from the environment we export.
+            binpkg_compress: "bzip2".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        let status =
+            run_package(&ebuild, &root, &portage_tmpdir, &options).expect("run_package succeeds");
+        assert_eq!(status, 0);
+
+        // A real `.gpkg.tar` -- real, unmodified `bin/gpkg-helper.py
+        // compress` (real `portage.gpkg.gpkg().compress()`) built it: an
+        // outer tar whose members are the `gpkg-1` version marker, the
+        // compressed `metadata.tar.<comp>`, the compressed
+        // `image.tar.<comp>`, and a `Manifest`.
+        let binpkg_path = options.pkgdir.join("dev-libs/packagepkg-1.0.gpkg.tar");
+        assert!(
+            binpkg_path.is_file(),
+            "{} should exist",
+            binpkg_path.display()
+        );
+
+        // The round trip: this pilot's OWN gpkg reader (the `$PKGDIR`
+        // directory-scan buildout's `binpkg::read_gpkg_metadata`) reads
+        // back exactly what the real writer put in.
+        let scalar = crate::binpkg::read_gpkg_metadata(&binpkg_path)
+            .expect("this pilot's gpkg reader parses the real writer's output");
+        assert_eq!(scalar.get("SLOT").map(String::as_str), Some("0"));
+        assert_eq!(scalar.get("CATEGORY").map(String::as_str), Some("dev-libs"));
+        assert_eq!(scalar.get("PF").map(String::as_str), Some("packagepkg-1.0"));
+        // `write_post_install_metadata` (real
+        // `_post_src_install_write_metadata`) put the dep strings into
+        // `build-info`, and real `gpkg._generate_metadata_from_dir`
+        // carried them into `metadata.tar`.
+        assert_eq!(
+            scalar.get("RDEPEND").map(|s| s.trim()),
+            Some("dev-libs/samepkg")
+        );
+
+        // A `Packages` entry was written with the gpkg `PATH` field, so
+        // `--pretend --usepkg` resolves it the same as an xpak binpkg.
+        let packages = std::fs::read_to_string(options.pkgdir.join("Packages")).unwrap();
+        assert!(
+            packages.contains("PATH: dev-libs/packagepkg-1.0.gpkg.tar"),
+            "gpkg entry needs a PATH field: {packages:?}"
+        );
+        let index = portage_repo::BinaryIndex::from_pkgdir(&options.pkgdir);
+        let candidates = portage_repo::list_binary_candidates(&index, "dev-libs", "packagepkg");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].version, "1.0");
+
+        // And the directory scan (real `bintree._populate_local`, used
+        // when there is no `Packages` at all) reads the file directly.
+        let scanned = crate::binpkg::scan_pkgdir(&options.pkgdir).expect("scan succeeds");
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(
+            scanned[0].get("CPV").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0")
         );
     }
 }

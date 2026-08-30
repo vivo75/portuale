@@ -18,6 +18,7 @@ is the only test surface for it.
 
 import os
 import subprocess
+import tarfile
 from pathlib import Path
 
 FIXTURES_ROOT = str(Path(__file__).resolve().parents[1] / "fixtures")
@@ -346,6 +347,44 @@ def test_emerge_buildpkgonly_without_pretend_really_builds_a_binary_package(
     packages = (Path(env["PKGDIR"]) / "Packages").read_text()
     assert "CPV: dev-libs/packagepkg-1.0" in packages
     assert "RDEPEND: dev-libs/samepkg" in packages
+
+
+def test_emerge_buildpkgonly_with_binpkg_format_gpkg_builds_a_real_gpkg_tar(
+    emerge_binary, tmp_path
+):
+    """`BINPKG_FORMAT=gpkg` routes real, unmodified `bin/misc-functions.sh
+    __dyn_package` to real, unmodified `bin/gpkg-helper.py compress`
+    (real `portage.gpkg.gpkg().compress()`) instead of the xpak
+    `xpak-helper.py` path -- producing a genuine `<cat>/<pf>.gpkg.tar`
+    (an outer tar of `gpkg-1` / `metadata.tar.<comp>` / `image.tar.<comp>`
+    / `Manifest`). `BINPKG_COMPRESS=gzip` keeps this off `zstd` (the real
+    default) so the test doesn't need it installed."""
+    env = _real_build_env(tmp_path)
+    env["BINPKG_FORMAT"] = "gpkg"
+    env["BINPKG_COMPRESS"] = "gzip"
+    result = subprocess.run(
+        [str(emerge_binary), "--buildpkgonly", "dev-libs/packagepkg"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert ">>> Building binary for dev-libs/packagepkg-1.0..." in result.stdout
+
+    gpkg = Path(env["PKGDIR"]) / "dev-libs/packagepkg-1.0.gpkg.tar"
+    assert gpkg.is_file()
+    assert not (Path(env["PKGDIR"]) / "dev-libs/packagepkg-1.0.tbz2").exists()
+
+    with tarfile.open(gpkg, "r") as container:
+        names = {Path(n).name for n in container.getnames()}
+    assert "gpkg-1" in names
+    assert "metadata.tar.gz" in names
+    assert "image.tar.gz" in names
+    assert "Manifest" in names
+
+    packages = (Path(env["PKGDIR"]) / "Packages").read_text()
+    assert "CPV: dev-libs/packagepkg-1.0" in packages
+    assert "PATH: dev-libs/packagepkg-1.0.gpkg.tar" in packages
 
 
 def test_emerge_buildpkgonly_with_pretend_stays_dry_run(emerge_binary, tmp_path):

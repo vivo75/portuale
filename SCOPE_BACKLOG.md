@@ -315,11 +315,18 @@ Ranked roughly by how self-contained each is.
    only when `Packages` is absent, never written back). Landed a
    `portage_repo::BinaryIndex` refactor (`from_pkgdir`/`from_entries`
    through every binary-candidate fn). Both sides; contract-tested.
-   **Still open:** `Manifest`/`.sig` verification (deliberately cut —
-   this pilot has no crypto), bare `.xpak` multi-instance files, real
-   portage's mtime-staleness index revalidation, and `ebuild … package`
-   *emitting* gpkg (`BINPKG_FORMAT` is hardcoded `xpak`,
-   `ebuild_package.rs:327`).
+   ~~`ebuild … package` *emitting* gpkg~~ **shipped 2026-08-30**:
+   `PackageOptions::binpkg_format` (`BINPKG_FORMAT`, env-var-sourced at
+   the CLI boundary; `"xpak"` or `"gpkg"`) routes real, unmodified
+   `bin/misc-functions.sh __dyn_package` to its own real, unmodified
+   `bin/gpkg-helper.py compress` branch — a genuine `<cat>/<pf>.gpkg.tar`
+   this pilot's own `read_gpkg_metadata` round-trips (`emerge
+   --buildpkgonly` picks it up too). `Packages` gets a `PATH` field for
+   the gpkg entry. **Still open:** `Manifest`/`.sig` *verification* and
+   gpkg *signing* (`FEATURES=binpkg-signing` — deliberately cut, this
+   pilot has no crypto), bare `.xpak` multi-instance files, real
+   portage's mtime-staleness index revalidation, `BUILD_ID` in the
+   basename.
    ~~**Also found (increment 2):** the pilot's own `build-info`
    generation omits every dependency-string metadata file~~ **shipped
    2026-08-30**: `ebuild_phases::write_post_install_metadata` (real
@@ -334,7 +341,8 @@ Ranked roughly by how self-contained each is.
    `SRC_URI` fetch (the earlier backlog mis-scoped it).
 
 8. **`BUILD_ID` / `splitdebug` / `packdebug` / RPM**, and PKGDIR-index
-   locking. All named as cuts in `ebuild_package.rs`.
+   locking. All named as cuts in `ebuild_package.rs`. (`gpkg` on the
+   write side shipped 2026-08-30 — see item 7.)
 
 9. **Fetch: resume support** (`RESUMECOMMAND`'s retry-with-`-c`), **live
    per-mirror `layout.conf` negotiation**, real candidate ordering/
