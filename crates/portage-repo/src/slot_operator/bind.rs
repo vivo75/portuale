@@ -43,6 +43,37 @@ pub(crate) struct BuiltEqualsShiftUnrebuildableArgs<'a> {
     pub(crate) excluded: &'a [String],
 }
 
+/// A `:=` shift is only a conflict when the bound consumer cannot be
+/// rebuilt (masked or `--exclude`d); a rebuildable consumer rebuilds in
+/// place with no conflict.
+pub(crate) fn built_equals_shift_unrebuildable(
+    args: BuiltEqualsShiftUnrebuildableArgs<'_>,
+) -> bool {
+    let BuiltEqualsShiftUnrebuildableArgs {
+        root,
+        repos,
+        category,
+        package,
+        existing_sub,
+        pullers,
+        excluded,
+    } = args;
+    if !built_equals_shifted_slot(root, repos, category, package, existing_sub) {
+        return false;
+    }
+    pullers
+        .get(&(category.to_string(), package.to_string()))
+        .is_some_and(|ps| {
+            ps.iter().any(|(pcat, ppkg, pver, _)| {
+                let cpv = format!("{pcat}/{ppkg}-{pver}");
+                excluded
+                    .iter()
+                    .any(|ex| matches_config_entry(ex, &cpv, pcat, ppkg))
+                    || useoldpkg_atom_matches(pcat, ppkg, pver)
+            })
+        })
+}
+
 /// Removes every atom on an installed libc provider from a flattened set.
 // Portage: dep/libc.py, strip_libc_deps
 pub(crate) fn strip_libc_atoms(
