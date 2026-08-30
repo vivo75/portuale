@@ -371,9 +371,17 @@ Ranked roughly by how self-contained each is.
    sets both, real `fetch.py:1103-1106`); `fetch.rs` checks
    `entry.override_mirror` per-entry so a `mirror+` URI re-permits the
    public `GENTOO_MIRRORS` fallback even under `RESTRICT=mirror`.
-   `override_fetch` is parsed but inert (relaxes `RESTRICT=fetch`, which
-   this pilot's fetch path doesn't model -- `pkg_nofetch`/manual
-   placement is its own unstarted slice). Remaining
+   ~~`RESTRICT=fetch`~~ **shipped 2026-08-30**:
+   `FetchOptions::restrict_fetch` (from `RESTRICT` via
+   `restrict_fetch_from_restrict`) bars a plain (non-`mirror://`)
+   `SRC_URI` URI from the candidate list (real `fetch.py:1167`) and the
+   public `GENTOO_MIRRORS` fallback -- so a fetch-restricted package
+   fetches only from an already-verified `DISTDIR` copy /
+   `custommirrors` / a `mirror://`-named mirror; `override_fetch`
+   (`fetch+`/`mirror+`) re-permits the URI. **v1 cut:** running the
+   ebuild's own `pkg_nofetch` phase for a missing file (real
+   `spawn_nofetch`) -- fails with a generic pointer instead. New
+   `dev-libs/fetchrestrictpkg` fixture. Remaining
    items named as cuts in `fetch.rs:28-48`.
 
 ### D. Config-resolution `USE_ORDER` depth

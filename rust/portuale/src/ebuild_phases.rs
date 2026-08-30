@@ -504,6 +504,19 @@ pub(crate) fn repo_root_for(pkg_dir: &Path) -> Option<PathBuf> {
 /// unconditional `mirror`/`nomirror` counts. An unparsable value yields
 /// `false` (the "can't tell, so don't claim it" precedent).
 pub(crate) fn restrict_mirror_from_restrict(restrict: &str) -> bool {
+    restrict_has_token(restrict, &["mirror", "nomirror"])
+}
+
+/// Real `RESTRICT=fetch` (`fetch.py:1061`, `restrict_fetch = "fetch" in
+/// restrict`), USE-conditional-evaluated the same way
+/// `restrict_mirror_from_restrict` does. Gates the plain-`SRC_URI`-URI
+/// and public-`GENTOO_MIRRORS` candidates in
+/// `crate::fetch::fetch_src_uri` (see `FetchOptions::restrict_fetch`).
+pub(crate) fn restrict_fetch_from_restrict(restrict: &str) -> bool {
+    restrict_has_token(restrict, &["fetch"])
+}
+
+fn restrict_has_token(restrict: &str, wanted: &[&str]) -> bool {
     if restrict.trim().is_empty() {
         return false;
     }
@@ -513,7 +526,7 @@ pub(crate) fn restrict_mirror_from_restrict(restrict: &str) -> bool {
         &std::collections::HashSet::new(),
         portage_use_reduce::MatchMode::Normal,
     )
-    .map(|flat| flat.iter().any(|t| t == "mirror" || t == "nomirror"))
+    .map(|flat| flat.iter().any(|t| wanted.contains(&t.as_str())))
     .unwrap_or(false)
 }
 
@@ -529,10 +542,12 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
     if src_uri.trim().is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
-    let restrict_mirror = metadata
-        .as_ref()
-        .and_then(|m| m.get("RESTRICT"))
+    let restrict = metadata.as_ref().and_then(|m| m.get("RESTRICT"));
+    let restrict_mirror = restrict
         .map(|r| restrict_mirror_from_restrict(r))
+        .unwrap_or(false);
+    let restrict_fetch = restrict
+        .map(|r| restrict_fetch_from_restrict(r))
         .unwrap_or(false);
     let aa = portage_fetch::flatten_src_uri(&src_uri, |_, _| true)
         .map_err(|e| format!("{}: {e}", env.pkg_dir.display()))?
@@ -558,6 +573,7 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
                 .map(|features| features.split_whitespace().any(|tok| tok == "distlocks"))
                 .unwrap_or(FetchOptions::default().distlocks),
             restrict_mirror,
+            restrict_fetch,
         },
     )?;
     Ok((a, aa))
@@ -1421,6 +1437,16 @@ mod tests {
         // so `foo? ( mirror )` drops entirely -- not a literal token match
         assert!(!restrict_mirror_from_restrict("foo? ( mirror )"));
         assert!(restrict_mirror_from_restrict("mirror foo? ( strip )"));
+    }
+
+    #[test]
+    fn restrict_fetch_from_restrict_matches_the_fetch_token_only() {
+        assert!(restrict_fetch_from_restrict("fetch"));
+        assert!(restrict_fetch_from_restrict("mirror fetch"));
+        assert!(!restrict_fetch_from_restrict(""));
+        assert!(!restrict_fetch_from_restrict("mirror strip"));
+        // USE-conditional drops against the always-empty fetch-side USE
+        assert!(!restrict_fetch_from_restrict("foo? ( fetch )"));
     }
 
     #[test]

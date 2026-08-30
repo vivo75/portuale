@@ -485,6 +485,61 @@ def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(
     )
 
 
+def test_ebuild_install_restrict_fetch_never_downloads_the_plain_uri(
+    ebuild_binary, tmp_path
+):
+    """`dev-libs/fetchrestrictpkg` has `RESTRICT="fetch"` and a plain
+    `https://example.invalid/...` SRC_URI. Real `fetch.py:1167`: a plain
+    URI is barred from the fetchable-candidate list under RESTRICT=fetch,
+    and the public mirrors too -- so with the distfile ABSENT from
+    DISTDIR the install fails (this pilot doesn't run the ebuild's own
+    pkg_nofetch phase, a documented cut -- it fails with a "place it in
+    DISTDIR by hand" pointer), and crucially never tries to reach
+    example.invalid. With the distfile PRESENT (user-placed) and
+    Manifest-verified, the install succeeds via the already-verified
+    skip path."""
+    ebuild_path = str(
+        Path(FIXTURES_ROOT)
+        / "repo/dev-libs/fetchrestrictpkg/fetchrestrictpkg-1.0.ebuild"
+    )
+    env = dict(os.environ)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+    distdir = tmp_path / "distdir"
+    env["DISTDIR"] = str(distdir)
+    distdir.mkdir()
+
+    # ABSENT -> fails fast (no network), with the RESTRICT=fetch message.
+    absent = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=30,
+    )
+    assert absent.returncode == 1
+    assert "RESTRICT=fetch" in absent.stderr
+    assert "example.invalid" not in absent.stderr or "bars downloading" in absent.stderr
+
+    # PRESENT + verified -> installs.
+    (distdir / "fetchrestrictpkg-1.0.tar.gz").write_bytes(
+        b"fetchrestrictpkg fixture distfile\n"
+    )
+    present = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert present.returncode == 0, present.stderr
+    marker = (
+        tmp_path
+        / "portage-tmpdir/portage/dev-libs/fetchrestrictpkg-1.0/temp/fetch-vars.txt"
+    )
+    assert marker.read_text() == "A=fetchrestrictpkg-1.0.tar.gz\n"
+
+
 def test_ebuild_install_really_inherits_a_real_eclass(ebuild_binary, tmp_path):
     """`dev-libs/eclasspkg` really `inherit`s a real (if fixture-only)
     eclass, `pilotcheck.eclass`, via real, unmodified `bin/ebuild.sh`'s

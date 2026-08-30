@@ -41,14 +41,18 @@
 //     negotiation, real candidate-ordering/shuffling, and `RESTRICT=
 //     primaryuri` (doesn't port cleanly -- this pilot's candidate
 //     ordering already deviates from real). The `mirror+`/`fetch+`
-//     SRC_URI prefixes ARE parsed now (`portage_fetch::SrcUriEntry::
-//     override_mirror`/`override_fetch`): a `mirror+` URI re-permits the
-//     public `GENTOO_MIRRORS` fallback for its file even under
-//     `RESTRICT=mirror`. `override_fetch` (set by either prefix) has no
-//     observable effect yet -- it relaxes `RESTRICT=fetch`, which this
-//     pilot's fetch path doesn't model at all (a `RESTRICT=fetch`
-//     package's real `pkg_nofetch`/manual-placement flow is its own
-//     unstarted slice).
+//     SRC_URI prefixes ARE parsed (`portage_fetch::SrcUriEntry::
+//     override_mirror`/`override_fetch`): `mirror+` re-permits the
+//     public `GENTOO_MIRRORS` fallback even under `RESTRICT=mirror`, and
+//     `override_fetch` (from either prefix) re-permits a plain URI under
+//     `RESTRICT=fetch` -- which IS modelled now
+//     (`FetchOptions::restrict_fetch`): a plain (non-`mirror://`) URI is
+//     barred from the candidate list, and the public mirrors too, so a
+//     `RESTRICT=fetch` package fetches OK only from an already-verified
+//     `DISTDIR` copy (or `custommirrors`/a `mirror://`-named mirror).
+//     The one real thing still cut here: running the ebuild's own
+//     `pkg_nofetch` phase for a missing file -- `fetch_src_uri` fails
+//     with a generic "place it in DISTDIR by hand" pointer instead.
 //   - No `FEATURES=verify-sig` GPG check -- this backlog item was
 //     mis-scoped when first written: real `verify-sig`/signature
 //     verification is a `gpkg` (the newer GPG-signed binary package
@@ -173,6 +177,22 @@ pub struct FetchOptions {
     /// per-entry, matching real `file_restrict_mirror = ... and not
     /// override_mirror` (`fetch.py:1117-1119`).
     pub restrict_mirror: bool,
+    /// Real `RESTRICT=fetch` (real `fetch.py:1061` -- `restrict_fetch =
+    /// "fetch" in restrict`): a *plain* (non-`mirror://`) `SRC_URI` URI
+    /// is barred from the fetchable-candidate list (real
+    /// `fetch.py:1167`, `if (restrict_fetch and not override_fetch) …:
+    /// continue`), and the public `GENTOO_MIRRORS` fallback is barred
+    /// too (real `(restrict_fetch or restrict_mirror)`). A
+    /// `fetch+`/`mirror+` `SRC_URI` prefix
+    /// (`portage_fetch::SrcUriEntry::override_fetch`) re-permits the URI.
+    /// So a `RESTRICT=fetch` package only fetches OK when its distfile
+    /// is already verified in `DISTDIR` (or comes from `custommirrors` /
+    /// a `mirror://`-named mirror). Sourced from the ebuild's own
+    /// `RESTRICT` md5-cache field by `ebuild_phases::fetch_sources`.
+    /// This pilot does NOT run the ebuild's own `pkg_nofetch` phase for
+    /// a missing file (a documented cut) -- `fetch_src_uri` fails with a
+    /// generic "place it in DISTDIR by hand" pointer instead.
+    pub restrict_fetch: bool,
 }
 
 impl Default for FetchOptions {
@@ -183,6 +203,7 @@ impl Default for FetchOptions {
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
             distlocks: true,
             restrict_mirror: false,
+            restrict_fetch: false,
         }
     }
 }
@@ -322,16 +343,31 @@ pub fn fetch_src_uri(
             // not just the last one.
             let mut candidates =
                 resolve_mirror_candidates(&entry.uri, &custommirrors, &thirdpartymirrors);
+            // Real `fetch.py:1166-1174`: `if (restrict_fetch and not
+            // override_fetch) or force_mirror: continue` -- a *plain*
+            // (non-`mirror://`) `SRC_URI` URI is NOT a fetchable
+            // candidate under `RESTRICT=fetch` (only `mirror://`-named
+            // mirrors + `custommirrors` are). A `fetch+`/`mirror+` prefix
+            // (`entry.override_fetch`) re-permits it. A `mirror://` URI's
+            // own candidates already come only from
+            // `resolve_mirror_candidates`'s expansions, never the raw
+            // token, so nothing to strip there.
+            let plain_uri_barred_by_restrict_fetch = options.restrict_fetch
+                && !entry.override_fetch
+                && !entry.uri.starts_with("mirror://");
+            if plain_uri_barred_by_restrict_fetch {
+                candidates.retain(|c| c != &entry.uri);
+            }
             // Real `file_restrict_mirror = (restrict_fetch or
             // restrict_mirror) and not override_mirror`
             // (`fetch.py:1117-1119`): the public `GENTOO_MIRRORS`
             // flat-layout list is appended unless mirroring is
             // restricted -- but a `mirror+` SRC_URI prefix on this URI
             // (`entry.override_mirror`) re-permits it for this file even
-            // then. This pilot models only `RESTRICT=mirror` (not
-            // `RESTRICT=fetch`) in the fetch path -- see the module doc
-            // comment.
-            let public_mirrors_barred = options.restrict_mirror && !entry.override_mirror;
+            // then. `RESTRICT=fetch` implies mirror restriction too
+            // (real: `(restrict_fetch or restrict_mirror)`).
+            let public_mirrors_barred =
+                (options.restrict_mirror || options.restrict_fetch) && !entry.override_mirror;
             if !public_mirrors_barred {
                 candidates.extend(gentoo_mirror_fallback(
                     &entry.filename,
@@ -339,10 +375,24 @@ pub fn fetch_src_uri(
                 ));
             }
             if candidates.is_empty() {
-                let why = if public_mirrors_barred {
+                // Real `fetch.py`: a `RESTRICT=fetch` file that isn't
+                // already in `DISTDIR` runs the ebuild's own
+                // `pkg_nofetch` phase (custom "download it from … and
+                // place it in DISTDIR" instructions) and fails. This
+                // pilot doesn't run `pkg_nofetch` (a documented cut) --
+                // it fails with a generic pointer instead.
+                let why = if plain_uri_barred_by_restrict_fetch {
+                    format!(
+                        "RESTRICT=fetch bars downloading it -- place a verified copy in {} \
+                         by hand (the ebuild's own pkg_nofetch phase would print specific \
+                         instructions)",
+                        options.distdir.display()
+                    )
+                } else if public_mirrors_barred {
                     "unknown mirror name, and RESTRICT=mirror bars the GENTOO_MIRRORS fallback"
+                        .to_string()
                 } else {
-                    "unknown mirror name, and GENTOO_MIRRORS is empty"
+                    "unknown mirror name, and GENTOO_MIRRORS is empty".to_string()
                 };
                 return Err(format!(
                     "{}: no working candidate mirror for {:?} ({why})",
@@ -900,6 +950,100 @@ mod tests {
         assert_eq!(filenames, vec!["foo-1.0.tar.gz".to_string()]);
         assert_eq!(
             fs::read_to_string(distdir.join("foo-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+        handle.join().unwrap();
+    }
+
+    /// Real `RESTRICT=fetch` (`fetch.py:1061`/`:1167`): a plain `SRC_URI`
+    /// URI is not a fetchable candidate, and the public mirrors are
+    /// barred -- so a fetch-restricted package whose distfile isn't
+    /// already in `DISTDIR` fails, without ever contacting the URI or
+    /// the mirror server.
+    #[test]
+    fn fetch_src_uri_restrict_fetch_bars_the_plain_uri_and_public_mirrors() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let mirror_addr = uri_base
+            .trim_start_matches("http://")
+            .trim_end_matches("/file")
+            .to_string();
+        let mirror_root = format!("http://{mirror_addr}");
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let err = fetch_src_uri(
+            &pkg_dir,
+            // A *reachable* server -- proving it's the RESTRICT=fetch
+            // gate, not a connection failure, that stops the fetch.
+            &format!("{uri_base} -> hello-1.0.tar.gz"),
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root],
+                restrict_fetch: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("RESTRICT=fetch"), "{err}");
+        assert!(!distdir.join("hello-1.0.tar.gz").exists());
+
+        // The server was never contacted -- unblock it so it exits.
+        let _ = std::net::TcpStream::connect(&mirror_addr);
+        handle.join().unwrap();
+    }
+
+    /// `RESTRICT=fetch` still accepts an already-verified `DISTDIR` copy
+    /// (the normal way a fetch-restricted package is satisfied -- the
+    /// user placed the file by hand).
+    #[test]
+    fn fetch_src_uri_restrict_fetch_uses_an_already_verified_distdir_copy() {
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+        fs::write(distdir.join("hello-1.0.tar.gz"), b"hello world").unwrap();
+
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "https://192.0.2.1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                restrict_fetch: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+    }
+
+    /// A `fetch+` `SRC_URI` prefix (`override_fetch`) re-permits the
+    /// plain URI even under `RESTRICT=fetch` (real `fetch.py:1167`, `if
+    /// (restrict_fetch and not override_fetch)`).
+    #[test]
+    fn fetch_src_uri_fetch_prefix_re_permits_the_uri_under_restrict_fetch() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let uri = format!("fetch+{uri_base} -> hello-1.0.tar.gz");
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            &uri,
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![],
+                restrict_fetch: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
             "hello world"
         );
         handle.join().unwrap();

@@ -7782,11 +7782,9 @@ both, matching real `override_fetch = override_mirror or ...`).
 `portuale/src/fetch.rs` checks `entry.override_mirror` per entry:
 `public_mirrors_barred = options.restrict_mirror && !entry.override_mirror`
 now gates the `gentoo_mirror_fallback` append (and the "no working
-candidate" error wording). `override_fetch` has **no observable effect
-yet** -- it only relaxes `RESTRICT=fetch`, which this pilot's fetch path
-doesn't model at all (a `RESTRICT=fetch` package's real
-`pkg_nofetch`/manual-placement flow is its own unstarted slice); the
-prefix is still correctly stripped so the URL stays valid.
+candidate" error wording). `override_fetch` became live 2026-08-30 with
+`RESTRICT=fetch` modelling -- see "`RESTRICT=fetch`" below; the prefix
+is stripped so the URL stays valid regardless.
 
 Rust-only (real fetch, no `--pretend` mirror). Tests:
 `portage_fetch` gains three parser tests (`mirror+` sets both overrides
@@ -7797,6 +7795,40 @@ has neither), and `portuale/src/fetch.rs` gains
 in `…restrict_mirror_skips_the_gentoo_mirrors_fallback`, but with a
 `mirror+` prefix on the SRC_URI so the mirror server is tried and rescues
 the fetch.
+
+### `RESTRICT=fetch`: the plain `SRC_URI` URI is never downloaded
+
+Real `fetch.py:1061` (`restrict_fetch = "fetch" in restrict`) +
+`:1166-1174` (`if (restrict_fetch and not override_fetch) …: continue`):
+a *plain* (non-`mirror://`) `SRC_URI` URI is not a fetchable candidate
+under `RESTRICT=fetch`, and `file_restrict_mirror = (restrict_fetch or
+restrict_mirror) …` bars the public `GENTOO_MIRRORS` fallback too. So a
+fetch-restricted package fetches OK only from an already-verified
+`DISTDIR` copy (the user placed it by hand — the normal case), a
+`custommirrors` entry, or a `mirror://`-named mirror. A `fetch+`/`mirror+`
+`SRC_URI` prefix (`override_fetch`) re-permits the URI.
+
+`FetchOptions` gained a `restrict_fetch` field, set by
+`ebuild_phases::fetch_sources` from the ebuild's own `RESTRICT`
+md5-cache field via the new `restrict_fetch_from_restrict`
+(USE-conditional-evaluated against the empty fetch-side USE set, same as
+`restrict_mirror_from_restrict` — the two now share a `restrict_has_
+token` helper). `fetch_src_uri` `retain`s the plain URI out of the
+candidate list when `restrict_fetch && !override_fetch && !uri.starts_
+with("mirror://")`, and folds `restrict_fetch` into `public_mirrors_
+barred`. **v1 cut:** this pilot does **not** run the ebuild's own
+`pkg_nofetch` phase for a missing file (real `spawn_nofetch` — custom
+"download it from … and place it in `DISTDIR`" instructions);
+`fetch_src_uri` fails with a generic pointer instead.
+
+New `dev-libs/fetchrestrictpkg` fixture (`RESTRICT="fetch"`,
+`https://example.invalid/…` SRC_URI, real Manifest digests, a
+`src_install`). `ebuild <file> install` with the distfile **absent**
+exits 1 with the `RESTRICT=fetch bars downloading it …` message and
+never contacts `example.invalid`; with the distfile **present +
+verified**, it installs via the already-verified skip path. Rust-only
+(real fetch). 4 unit tests (`fetch.rs` ×3, `ebuild_phases.rs` ×1) + 1
+black-box test.
 
 ### `emerge --buildpkgonly --keep-going`
 
@@ -10471,6 +10503,22 @@ PORTING/rust/target/release/portuale ebuild \
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/verifiedfetchpkg-1.0/temp/fetch-vars.txt
 # A=verifiedfetchpkg-1.0.tar.gz
 # AA=verifiedfetchpkg-1.0.tar.gz verifiedfetchpkg-tests-1.0.tar.gz
+
+# RESTRICT=fetch: the plain SRC_URI is never downloaded. With the
+# distfile absent, install fails fast (no network) with a
+# "place it in DISTDIR by hand" pointer:
+export PORTAGE_TMPDIR="$(mktemp -d)"; export DISTDIR="$(mktemp -d)"
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/fetchrestrictpkg/fetchrestrictpkg-1.0.ebuild install
+# ebuild: fetchrestrictpkg-1.0.tar.gz: no working candidate mirror for
+#   "https://example.invalid/frp-payload.bin" (RESTRICT=fetch bars
+#   downloading it -- place a verified copy in <DISTDIR> by hand ...)
+# ... exit 1
+# With the file placed by hand (and Manifest-verified), it installs:
+printf 'fetchrestrictpkg fixture distfile\n' > "${DISTDIR}"/fetchrestrictpkg-1.0.tar.gz
+PORTING/rust/target/release/portuale ebuild \
+    PORTING/fixtures/repo/dev-libs/fetchrestrictpkg/fetchrestrictpkg-1.0.ebuild install
+# ... exit 0
 ```
 
 Real eclass `inherit()` support (see "What this proves" above for the
