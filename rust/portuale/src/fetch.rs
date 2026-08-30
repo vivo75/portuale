@@ -216,7 +216,7 @@ impl Default for FetchOptions {
 /// fetch removes whatever partial file `wget` may have left behind,
 /// same "don't leave broken state around" reasoning `emerge_build.rs`'s
 /// own build-failure handling already applies elsewhere.
-fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
+pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
     let status = Command::new("wget")
         .args(["-t", "3", "-T", "60", "--passive-ftp"])
         .args([

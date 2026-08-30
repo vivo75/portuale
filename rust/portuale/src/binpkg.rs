@@ -322,6 +322,167 @@ fn be32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
 
+/// Real binary-package unpack (`portage.xpak.tbz2.decompose` /
+/// `portage.gpkg.gpkg.decompress` + `_generate_metadata_from_dir` in
+/// reverse): write a binpkg's *image* -- the built filesystem tree --
+/// into `image_dest`, and its scalar metadata (one `<KEY>` file each,
+/// real `build-info` shape) into `build_info_dest`.
+///
+/// xpak (`.tbz2`): `[image tarball][XPAK trailer]`; the image is the
+/// leading `file_len - (infosize + 8)` bytes -- a compressed tar whose
+/// codec `tar` auto-detects. gpkg (`.gpkg.tar`): the outer tar's
+/// `<basename>/image.tar[.<comp>]` member.
+///
+/// Metadata is `read_{xpak,gpkg}_metadata`'s own map minus the
+/// non-scalar `environment.bz2` / `*.ebuild` members (real portage keeps
+/// a decompressed `environment` + the ebuild in the vdb; the pilot's
+/// binpkg merge runs no phases and needs neither -- a documented
+/// `emerge_binmerge` cut).
+pub fn extract_binpkg(
+    binpkg_path: &Path,
+    image_dest: &Path,
+    build_info_dest: &Path,
+) -> Result<(), String> {
+    fs::create_dir_all(image_dest).map_err(|e| format!("{}: {e}", image_dest.display()))?;
+    fs::create_dir_all(build_info_dest)
+        .map_err(|e| format!("{}: {e}", build_info_dest.display()))?;
+
+    let name = binpkg_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let metadata = if name.ends_with(".gpkg.tar") {
+        extract_gpkg_member(binpkg_path, "image", image_dest)?;
+        read_gpkg_metadata(binpkg_path)?
+    } else {
+        extract_xpak_image(binpkg_path, image_dest)?;
+        read_xpak_metadata(binpkg_path)?
+    };
+
+    for (key, value) in metadata {
+        if key == "environment.bz2" || key.ends_with(".ebuild") {
+            continue;
+        }
+        let dest = build_info_dest.join(&key);
+        fs::write(&dest, format!("{}\n", value.trim()))
+            .map_err(|e| format!("{}: {e}", dest.display()))?;
+    }
+    Ok(())
+}
+
+/// The xpak `[image tarball]` prefix -> `dest`. Real
+/// `xpak.tbz2.decompose`: the image is everything before the
+/// `XPAKPACK…STOP` trailer.
+fn extract_xpak_image(binpkg_path: &Path, dest: &Path) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut f =
+        fs::File::open(binpkg_path).map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+    let file_len = f
+        .seek(SeekFrom::End(0))
+        .map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+    if file_len < 16 {
+        return Err(format!(
+            "{}: too small for an xpak binpkg",
+            binpkg_path.display()
+        ));
+    }
+    let mut trailer = [0u8; 16];
+    f.seek(SeekFrom::End(-16))
+        .and_then(|_| f.read_exact(&mut trailer))
+        .map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+    if &trailer[0..8] != b"XPAKSTOP" || &trailer[12..16] != b"STOP" {
+        return Err(format!("{}: no XPAKSTOP trailer", binpkg_path.display()));
+    }
+    let infosize = be32(&trailer[8..12]) as u64;
+    let image_len = file_len.checked_sub(infosize + 8).ok_or_else(|| {
+        format!(
+            "{}: xpak trailer larger than the file",
+            binpkg_path.display()
+        )
+    })?;
+
+    let scratch = ScratchDir::new("xpak-image")?;
+    let image_tar = scratch.path().join("image.tar");
+    f.seek(SeekFrom::Start(0))
+        .map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+    let mut out =
+        fs::File::create(&image_tar).map_err(|e| format!("{}: {e}", image_tar.display()))?;
+    std::io::copy(&mut f.take(image_len), &mut out)
+        .map_err(|e| format!("{}: {e}", image_tar.display()))?;
+    drop(out);
+    // `tar -x` auto-detects gzip/bzip2/xz/zstd/... on read.
+    run_tar(&["-xpf", &lossy(&image_tar), "-C", &lossy(dest)])
+}
+
+/// Locate `<basename>/<want>.tar[.<comp>]` in a gpkg's outer tar,
+/// decompress it if needed, and extract it into `dest`. Shares the outer
+/// unpack + `gpkg-1` validity guard with `read_gpkg_metadata`.
+fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), String> {
+    if !gpkg_path.is_file() {
+        return Err(format!("{}: not a file", gpkg_path.display()));
+    }
+    let scratch = ScratchDir::new("gpkg-member")?;
+    let outer = scratch.path().join("outer");
+    fs::create_dir_all(&outer).map_err(|e| format!("{}: {e}", outer.display()))?;
+    run_tar(&["-xf", &lossy(gpkg_path), "-C", &lossy(&outer)])?;
+
+    let mut gpkg_marker = false;
+    let mut member: Option<(PathBuf, Option<&'static [&'static str]>)> = None;
+    for basename_dir in read_dir_sorted(&outer)? {
+        if !basename_dir.is_dir() {
+            if basename_dir.file_name().and_then(|n| n.to_str()) == Some("gpkg-1") {
+                gpkg_marker = true;
+            }
+            continue;
+        }
+        for m in read_dir_sorted(&basename_dir)? {
+            let Some(n) = m.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if n == "gpkg-1" {
+                gpkg_marker = true;
+            }
+            if let Some(comp) = classify_inner_member(want, n) {
+                member.get_or_insert((m.clone(), comp));
+            }
+        }
+    }
+    if !gpkg_marker {
+        return Err(format!(
+            "{}: no `gpkg-1` version marker",
+            gpkg_path.display()
+        ));
+    }
+    let (member, comp) =
+        member.ok_or_else(|| format!("{}: no `{want}.tar` member", gpkg_path.display()))?;
+
+    let inner_tar = scratch.path().join(format!("{want}.tar"));
+    match comp {
+        None => {
+            fs::copy(&member, &inner_tar).map_err(|e| format!("{}: {e}", member.display()))?;
+        }
+        Some(argv) => {
+            let out = fs::File::create(&inner_tar)
+                .map_err(|e| format!("{}: {e}", inner_tar.display()))?;
+            let status = Command::new(argv[0])
+                .args(&argv[1..])
+                .arg(&member)
+                .stdout(out)
+                .status()
+                .map_err(|e| format!("failed to spawn {}: {e}", argv[0]))?;
+            if !status.success() {
+                return Err(format!(
+                    "{} failed to decompress {} ({status})",
+                    argv[0],
+                    member.display()
+                ));
+            }
+        }
+    }
+    run_tar(&["-xpf", &lossy(&inner_tar), "-C", &lossy(dest)])
+}
+
 /// Real `bintree._populate_local`, narrowed: walk `pkgdir` for binpkg
 /// *files* and synthesize one `Packages`-style entry per file from its
 /// own embedded metadata (`read_xpak_metadata` / `read_gpkg_metadata`).
@@ -591,6 +752,47 @@ mod tests {
         // `environment.bz2` is binary -> lossy-decoded but present as a
         // key; a scan consumer only ever looks up scalar keys.
         assert!(m.contains_key("environment.bz2"));
+    }
+
+    #[test]
+    fn extract_binpkg_unpacks_an_xpak_image_and_build_info() {
+        let tmp = std::env::temp_dir().join(format!("binpkg-xpak-{}", std::process::id()));
+        let image = tmp.join("image");
+        let bi = tmp.join("build-info");
+        extract_binpkg(&fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"), &image, &bi)
+            .expect("extract succeeds");
+
+        let hello = image.join("usr/share/packagepkg/hello.txt");
+        assert!(hello.is_file(), "the image tarball was unpacked");
+        assert!(fs::read_to_string(&hello).unwrap().contains("hello"));
+
+        assert_eq!(fs::read_to_string(bi.join("SLOT")).unwrap().trim(), "0");
+        assert_eq!(
+            fs::read_to_string(bi.join("RDEPEND")).unwrap().trim(),
+            "dev-libs/samepkg"
+        );
+        // The non-scalar members are dropped.
+        assert!(!bi.join("environment.bz2").exists());
+        assert!(!bi.join("packagepkg-1.0.ebuild").exists());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn extract_binpkg_unpacks_a_real_gpkg_image_and_build_info() {
+        let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-{}", std::process::id()));
+        let image = tmp.join("image");
+        let bi = tmp.join("build-info");
+        extract_binpkg(
+            &fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"),
+            &image,
+            &bi,
+        )
+        .expect("gpkg extract succeeds");
+        // The gpkg fixture's image is non-empty and its metadata carries
+        // the same scalar keys as any binpkg.
+        assert!(image.is_dir());
+        assert!(bi.join("SLOT").is_file());
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]

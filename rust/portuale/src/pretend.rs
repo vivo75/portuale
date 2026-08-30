@@ -207,8 +207,10 @@
 // PORTING/README.md and PORTING/PROMPT.md for the rest.
 
 use crate::color::{self, Colorizer};
+use crate::ebuild_merge;
 use crate::ebuild_package;
 use crate::emerge_build;
+use crate::emerge_getbinpkg;
 use crate::emerge_options;
 use crate::needed_elf;
 use portage_dep::{match_from_list, parse_atom, Atom, Blocker};
@@ -4356,17 +4358,17 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // `--buildpkgonly` without `--pretend` is the one real, non-dry-run
-    // execution path this pilot implements for `emerge` itself (see
-    // `emerge_build.rs`'s own module doc comment): it only ever builds a
-    // binary package, never merges anything, so it's safe to let through
-    // here even though every other real action still isn't implemented.
-    if !pretend && !buildpkgonly {
+    // The two real, non-dry-run execution paths this pilot implements for
+    // `emerge` itself: `--buildpkgonly` (builds a binary package, never
+    // merges -- see `emerge_build.rs`) and `--getbinpkgonly` (downloads
+    // remote binpkgs and merges them -- see `emerge_getbinpkg.rs`).
+    // Every other real action still isn't implemented.
+    if !pretend && !buildpkgonly && !getbinpkgonly {
         eprintln!(
-            "emerge (pilot v1): no real merges implemented yet -- only \
-             --pretend (dry-run) or --buildpkgonly without --pretend (real \
-             binary-package building only, still never merges) are \
-             supported (see PROMPT.md)"
+            "emerge (pilot v1): no real source merges implemented yet -- only \
+             --pretend (dry-run), --buildpkgonly (real binary-package building, \
+             never merges), or --getbinpkgonly (real remote-binpkg download + \
+             merge) without --pretend are supported (see PROMPT.md)"
         );
         return ExitCode::from(2);
     }
@@ -4697,6 +4699,19 @@ pub fn run(args: &[String]) -> ExitCode {
     let distdir = std::env::var_os("DISTDIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
+
+    // Real `bintree._populate_remote`: a non-`--pretend` `--getbinpkg`
+    // run refreshes each `http(s)` binhost's `Packages` index into the
+    // local edb cache *before* resolution, so the resolver picks up the
+    // live pool. (`--pretend` deliberately never touches the network --
+    // it resolves against whatever is already cached.)
+    if !pretend && getbinpkg {
+        if let Err(e) = emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, &root) {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    }
+
     let result = match resolve_pretend_graph(
         &config_root,
         &root,
@@ -5006,7 +5021,25 @@ pub fn run(args: &[String]) -> ExitCode {
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
-        if let Err(e) = emerge_build::run_buildpkgonly(
+        if getbinpkgonly {
+            // Real `--getbinpkgonly` merge: download every resolved
+            // remote binpkg and merge it (see `emerge_getbinpkg.rs`).
+            let merge_options = ebuild_merge::MergeOptions {
+                config_root: portage_repo::config_root_from_env(),
+                ..ebuild_merge::MergeOptions::default()
+            };
+            if let Err(e) = emerge_getbinpkg::run_getbinpkgonly(
+                entries,
+                &config,
+                &root,
+                &package_options.pkgdir,
+                &portage_tmpdir,
+                &merge_options,
+            ) {
+                eprintln!("emerge: {e}");
+                return ExitCode::from(1);
+            }
+        } else if let Err(e) = emerge_build::run_buildpkgonly(
             entries,
             &repos,
             &root,

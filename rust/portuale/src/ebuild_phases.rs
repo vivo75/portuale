@@ -1976,9 +1976,13 @@ mod tests {
             );
             let _ = tx.send(result);
         });
+        // A generous deadline: this drives a full brush phase chain (many
+        // subprocesses), so under a heavily parallel `cargo test` it can
+        // legitimately take tens of seconds -- a real pipe-buffer
+        // *deadlock* would still hang indefinitely and be caught.
         let status = rx
-            .recv_timeout(std::time::Duration::from_secs(30))
-            .expect("run_commands should complete well within the deadline, not deadlock")
+            .recv_timeout(std::time::Duration::from_secs(120))
+            .expect("run_commands should complete within the deadline, not deadlock")
             .expect("run_commands should not itself error");
         assert_eq!(status, 0, "install should exit successfully");
 

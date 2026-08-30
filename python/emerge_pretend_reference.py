@@ -10189,15 +10189,25 @@ def run(args):
     # builds anything itself -- it has no real ebuild-execution machinery
     # at all, only the dry-run resolution logic every other CASES entry
     # in the contract suite already exercises.
-    if not pretend and not buildpkgonly:
+    if not pretend and not buildpkgonly and not getbinpkgonly:
         print(
-            "emerge (pilot v1): no real merges implemented yet -- only "
-            "--pretend (dry-run) or --buildpkgonly without --pretend (real "
-            "binary-package building only, still never merges) are "
-            "supported (see PROMPT.md)",
+            "emerge (pilot v1): no real source merges implemented yet -- only "
+            "--pretend (dry-run), --buildpkgonly (real binary-package building, "
+            "never merges), or --getbinpkgonly (real remote-binpkg download + "
+            "merge) without --pretend are supported (see PROMPT.md)",
             file=sys.stderr,
         )
         return 2
+
+    # `--getbinpkgonly` without `--pretend` really downloads + merges on
+    # the Rust side (portuale's emerge_getbinpkg.rs); this reference
+    # implementation has no real execution machinery at all, so there is
+    # nothing for it to do -- it is not part of the dry-run contract the
+    # rest of this file mirrors. Return success without output; no
+    # contract-suite CASES entry exercises this path (it is Rust-unit-
+    # tested).
+    if not pretend and getbinpkgonly:
+        return 0
 
     # Real main.py: --deselect is a standalone action only when
     # `myaction is None` -- --depclean/--prune/--unmerge set their own

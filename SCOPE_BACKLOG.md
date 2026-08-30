@@ -336,12 +336,21 @@ Ranked roughly by how self-contained each is.
    `Packages` index (`portage-repo` `list_remote_binary_candidates`),
    the `g` bracket column (`GraphEntry::remote_binary`), and the download
    `SIZE` feeding `Size of downloads:` / the `-pv` line suffix.
-   **Still open:** the actual remote download itself (live `layout.conf`
-   negotiation, the `<EROOT>/var/cache/edb/binhost/` fetch/populate step,
-   resume support) and `--getbinpkg` for a real (non-`--pretend`) merge.
-   A real debug trace is vendored at
-   `PORTING/helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`
-   for reference.
+   The **actual remote download + merge shipped 2026-08-31**: `emerge
+   --getbinpkgonly <atom>` (non-`--pretend`) refreshes each `http(s)`
+   binhost's live `Packages` into the edb cache (real
+   `bintree._populate_remote`, via `wget`), resolves binary-only,
+   downloads each remote binpkg into `$PKGDIR`, size-checks it against
+   the index, and merges it — new `binpkg::extract_binpkg` (image +
+   build-info from xpak/gpkg), new `ebuild_merge::merge_binpkg` (reuses
+   `merge_tree` + a refactored `write_vdb_entry_from_dir` + `env_update`),
+   new `emerge_getbinpkg.rs`. Rust-unit-tested end to end over loopback
+   HTTP. **Still open:** live `layout.conf` negotiation, `Packages.gz`,
+   resume support, `pkg_preinst`/`pkg_postinst` from the saved
+   `environment.bz2`, replacing an installed version (v1 refuses it),
+   `--getbinpkg` (mixing ebuilds + binaries) for a real merge, and real
+   digest (`SHA*`) verification. A real debug trace is vendored at
+   `PORTING/helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`.
 
 7. **`gpkg` binary package format** (`bin/gpkg-helper.py`,
    `lib/portage/gpkg.py`). The **`$PKGDIR` directory-scan fallback**

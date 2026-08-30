@@ -1507,9 +1507,32 @@ fn write_vdb_entry(
     repository: &str,
     contents: &str,
 ) -> Result<(), String> {
-    let cat_dir = root.join("var/db/pkg").join(&env.category);
-    let tmp_dir = cat_dir.join(format!("{MERGING_IDENTIFIER}{}", env.split.pf));
-    let final_dir = cat_dir.join(&env.split.pf);
+    write_vdb_entry_from_dir(
+        root,
+        &env.category,
+        &env.split.pf,
+        &env.build_info(),
+        slot,
+        repository,
+        contents,
+    )
+}
+
+/// The `env`-free core of `write_vdb_entry`: `category`/`pf` name the
+/// entry, `build_info_dir` holds the files to copy wholesale. Shared with
+/// `emerge_binmerge` (a binpkg merge has no `Environment`).
+pub(crate) fn write_vdb_entry_from_dir(
+    root: &Path,
+    category: &str,
+    pf: &str,
+    build_info_dir: &Path,
+    slot: &str,
+    repository: &str,
+    contents: &str,
+) -> Result<(), String> {
+    let cat_dir = root.join("var/db/pkg").join(category);
+    let tmp_dir = cat_dir.join(format!("{MERGING_IDENTIFIER}{pf}"));
+    let final_dir = cat_dir.join(pf);
 
     if tmp_dir.exists() {
         std::fs::remove_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
@@ -1518,8 +1541,7 @@ fn write_vdb_entry(
 
     // Real `treewalk()`: copy every regular file from `build-info` into
     // the vdb entry (`vartree.py:4911-4913`).
-    let build_info = env.build_info();
-    if let Ok(entries) = std::fs::read_dir(&build_info) {
+    if let Ok(entries) = std::fs::read_dir(build_info_dir) {
         for entry in entries.flatten() {
             let src = entry.path();
             if src.is_file() {
@@ -1536,7 +1558,7 @@ fn write_vdb_entry(
     // comment).
     let counter = next_counter(root)?;
     for (name, value) in [
-        ("CATEGORY", env.category.as_str()),
+        ("CATEGORY", category),
         ("SLOT", slot),
         ("repository", repository),
     ] {
@@ -2306,6 +2328,127 @@ fn merge_after_install(
     }
 
     Ok(postinst_status)
+}
+
+/// Merge an already-downloaded binary package (`.tbz2` xpak or
+/// `.gpkg.tar`) into `root`'s vdb -- real portage's `_emerge/Binpkg`
+/// task, narrowed. Extracts the binpkg image, copies it into `${ROOT}`
+/// exactly as `merge_tree` does for a source build (CONFIG_PROTECT
+/// included), writes the vdb entry from the binpkg's own metadata plus
+/// the freshly-generated `CONTENTS`, and runs `env_update()`/`ldconfig`.
+///
+/// **v1 cuts, all deliberate** (same "narrow the first slice, document
+/// it" pattern as every other real-execution feature here):
+///   - no `pkg_preinst`/`pkg_postinst` -- real portage sources the
+///     binpkg's saved `environment.bz2` and runs them; the pilot's phase
+///     runner is ebuild-file-driven, so running a phase from a saved env
+///     is its own slice. Many binpkgs define neither (`DEFINED_PHASES`).
+///   - no collision-protect / `protect-owned` abort, no blocker
+///     exclusion, no preserve-libs registration.
+///   - **replace is refused**: if any version of `category/package` is
+///     already in the vdb, this errors rather than merging a second
+///     entry and orphaning the old one's files (real portage unmerges
+///     the replaced version afterwards -- a follow-up).
+///   - `environment.bz2` and the `<pf>.ebuild` are not copied into the
+///     vdb (`extract_binpkg` drops them) -- the pilot needs neither.
+pub fn merge_binpkg(
+    binpkg_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &MergeOptions,
+) -> Result<i32, String> {
+    let scratch_root = portage_tmpdir.join("portage").join("binpkg-merge").join(
+        binpkg_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("pkg"),
+    );
+    if scratch_root.exists() {
+        std::fs::remove_dir_all(&scratch_root)
+            .map_err(|e| format!("{}: {e}", scratch_root.display()))?;
+    }
+    let image = scratch_root.join("image");
+    let build_info = scratch_root.join("build-info");
+    crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info)?;
+
+    let read_bi = |key: &str| -> Option<String> {
+        std::fs::read_to_string(build_info.join(key))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let category = read_bi("CATEGORY")
+        .ok_or_else(|| format!("{}: binpkg has no CATEGORY", binpkg_path.display()))?;
+    let pf = read_bi("PF").ok_or_else(|| format!("{}: binpkg has no PF", binpkg_path.display()))?;
+    let package = pf
+        .rsplit_once('-')
+        .and_then(|(rest, last)| {
+            // strip `-<version>` (and an optional `-r<rev>`)
+            if last.starts_with(|c: char| c.is_ascii_digit()) {
+                if let Some((pn, v)) = rest.rsplit_once('-') {
+                    if v.starts_with('r') && v[1..].chars().all(|c| c.is_ascii_digit()) {
+                        return Some(pn.to_string());
+                    }
+                }
+                Some(rest.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| pf.clone());
+    // Real vdb `SLOT` keeps the full `slot/sub_slot`; `merge_tree` only
+    // wants the main slot for the installed-instance lookup.
+    let full_slot = read_bi("SLOT").unwrap_or_else(|| "0".to_string());
+    let main_slot = full_slot.split('/').next().unwrap_or("0").to_string();
+    let repository = read_bi("repository")
+        .or_else(|| read_bi("REPO"))
+        .unwrap_or_else(|| "__unknown__".to_string());
+
+    // Refuse a replace (see the doc comment).
+    let vdb_cat = root.join("var/db/pkg").join(&category);
+    if let Ok(entries) = std::fs::read_dir(&vdb_cat) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with(&format!("{package}-"))
+                && name[package.len() + 1..].starts_with(|c: char| c.is_ascii_digit())
+            {
+                return Err(format!(
+                    "{category}/{package} is already installed as {name}; the pilot's binpkg \
+                     merge does not replace an installed version yet"
+                ));
+            }
+        }
+    }
+
+    let installed_instance = installed_instance_pf(root, &category, &package, &main_slot);
+    let mut cfgfiledict = read_cfgfiledict(root);
+    let contents = merge_tree(
+        &image,
+        root,
+        &category,
+        installed_instance.as_deref(),
+        options.protect_if_modified,
+        &options.config_protect,
+        &options.config_protect_mask,
+        options.noconfmem,
+        &mut cfgfiledict,
+    )?;
+    write_cfgfiledict(root, &cfgfiledict)?;
+    write_vdb_entry_from_dir(
+        root,
+        &category,
+        &pf,
+        &build_info,
+        &full_slot,
+        &repository,
+        &contents,
+    )?;
+
+    if !contents.is_empty() {
+        env_update::run_env_update(root)?;
+    }
+    let _ = std::fs::remove_dir_all(&scratch_root);
+    Ok(0)
 }
 
 #[cfg(test)]

@@ -9066,6 +9066,64 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv --update dev-libs/upgradeuse
 # [ebuild     U  ] dev-libs/upgradeusepkg-2.0::testrepo [1.0::testrepo] USE="added%* keep -change* (-drop%)"
 ```
 
+### `emerge --getbinpkgonly <atom>` (no `--pretend`): the real remote-binpkg download + merge
+
+The `--pretend` half of `--getbinpkg`/`--getbinpkgonly` shipped earlier
+(`binrepos.conf`/`PORTAGE_BINHOST` parsing, remote binhost candidates
+from each binhost's *cached* `Packages` index, the `g` bracket column,
+`Size of downloads:`). This is the other half — the first non-dry-run
+`emerge <atom>` action the pilot implements (alongside `--buildpkgonly`,
+which builds but never merges).
+
+`emerge --getbinpkgonly <atom>` now:
+
+1. **Refreshes each `http(s)` binhost's live index** (real
+   `bintree._populate_remote`): `wget <sync-uri>/Packages` into the same
+   `<EROOT>/var/cache/edb/binhost/<host>/<path>/Packages` cache the
+   resolver reads — done *before* resolution so the fresh pool is seen. A
+   `file://` binhost needs no refresh. (`--pretend` still never touches
+   the network.)
+2. **Resolves** binary-only (`--usepkgonly`), in real topological merge
+   order.
+3. For each remote-binary `New` entry: **downloads** the binpkg
+   (`<sync-uri>/<PATH>`) into `$PKGDIR`, **verifies its byte size**
+   against the index `SIZE`, and **merges** it —
+   `ebuild_merge::merge_binpkg` extracts the image (new
+   `binpkg::extract_binpkg` — xpak `[image][XPAK trailer]` split, or the
+   gpkg's `image.tar.<comp>` member; `tar` auto-detects the codec),
+   copies it into `${ROOT}` via the same `merge_tree` a source build
+   uses (CONFIG_PROTECT included), writes the vdb entry from the
+   binpkg's own metadata + a freshly-generated `CONTENTS`, and runs
+   `env_update()`/`ldconfig`.
+
+`write_vdb_entry` was refactored to an `Environment`-free
+`write_vdb_entry_from_dir` (a binpkg has no ebuild); `wget_fetch` is
+`pub(crate)` now.
+
+**Deliberate v1 cuts** (same "narrow the first slice, document it"
+pattern as every other real-execution feature):
+- **no `pkg_preinst`/`pkg_postinst`** — real portage sources the
+  binpkg's saved `environment.bz2` and runs them; the pilot's phase
+  runner is ebuild-file-driven. `environment.bz2` and the `<pf>.ebuild`
+  aren't copied into the vdb either.
+- **replace is refused** — if any version of the cp is already
+  installed, the merge errors rather than orphaning the old version's
+  files (real portage unmerges the replaced version afterwards).
+- no collision-protect/`protect-owned` abort, no blocker exclusion, no
+  preserve-libs registration.
+- digest check is `SIZE`-only (no crypto — the `SHA*`/`MD5` fields are
+  read but not verified, the same `Manifest`/`.sig` cut the gpkg
+  metadata reader already documents); no `Packages.gz` (compressed
+  remote index); no live `layout.conf` negotiation (the index `PATH` is
+  trusted).
+
+Rust-unit-tested end to end against a real fixture `.tbz2` served over
+loopback HTTP: `refresh_binhost_indexes` lands the live `Packages` in
+the edb cache, `download_and_verify` fetches + size-checks (and rejects a
+mismatch), and `run_getbinpkgonly` produces a real vdb entry +
+`${ROOT}/usr/share/packagepkg/hello.txt`. Plus `merge_binpkg` /
+`extract_binpkg` unit tests for both the xpak and gpkg image paths.
+
 ## Running it
 
 Build both Rust binaries:

@@ -864,6 +864,30 @@ pub fn list_remote_binary_candidates(
     out
 }
 
+/// The raw `Packages` index record for `category/package-version` from
+/// the first binrepo (in `binrepos` order) whose cached index carries
+/// it, paired with that binrepo's own `sync_uri` -- everything a real
+/// `--getbinpkg` download needs (`PATH`, `SIZE`, the `SHA*`/`MD5`
+/// digests). `None` if no configured binrepo lists that exact CPV.
+pub fn find_remote_binpkg(
+    binrepos: &[portage_profile::BinRepo],
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> Option<(String, HashMap<String, String>)> {
+    let want_cpv = format!("{category}/{package}-{version}");
+    for binrepo in binrepos {
+        let index = BinaryIndex::from_pkgdir(&binrepo.packages_dir(root));
+        for entry in index.entries() {
+            if entry.get("CPV").map(String::as_str) == Some(want_cpv.as_str()) {
+                return Some((binrepo.sync_uri.clone(), entry.clone()));
+            }
+        }
+    }
+    None
+}
+
 /// `--usepkg-exclude`/`--usepkg-include` (real `main.py`: "a space
 /// separated list of package names or slot atoms", real `WildcardSet`
 /// grammar, same "plain atom or `*`-wildcard" two-tier matcher
