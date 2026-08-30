@@ -5049,6 +5049,63 @@ def _autounmask_use_atom_form(resolved, all_candidates, category, package, confi
     return f"={cpv}"
 
 
+def _topological_merge_order(entries):
+    """Put `entries` in real portage's dependency-first *merge* order.
+
+    Real portage's `mylist` is a genuine topological merge schedule (its
+    Scheduler runs every install after the installs it depends on). This
+    reference has no scheduler, but each entry carries required_by (the
+    (category, package) of every entry that pulled it in) -- the reverse
+    of a dependency edge -- which is enough to order the list.
+
+    A stable topological sort: an entry is emitted only once every other
+    entry it requires (within this set) has already been emitted; among
+    the entries that are all currently emittable, the one with the
+    earliest original (BFS-discovery, i.e. argv) position goes first. Two
+    packages with no dependency relationship keep their discovery order;
+    a dependency always precedes the packages that pull it in.
+
+    A genuine dependency cycle (real portage's Scheduler breaks these
+    with priority heuristics this reference doesn't reproduce) is left in
+    discovery order: when no unplaced entry has all its in-set
+    dependencies placed, the earliest still-unplaced one is emitted
+    anyway. Mirrors portage-repo/src/lib.rs's topological_merge_order
+    exactly.
+    """
+    n = len(entries)
+    if n < 2:
+        return entries
+    # (category, package) -> every entry index with that cp (a multi-slot
+    # package has one entry per resolved slot).
+    cp_indices = {}
+    for i, e in enumerate(entries):
+        cp_indices.setdefault((e[0], e[1]), []).append(i)
+    # requires[i] = the entries i depends on, i.e. every j whose
+    # required_by (tuple index 6) names i's own cp. j precedes i.
+    requires = [set() for _ in range(n)]
+    for j, e in enumerate(entries):
+        for owner in e[6]:
+            for i in cp_indices.get(tuple(owner), ()):
+                if i != j:
+                    requires[i].add(j)
+    placed = [False] * n
+    order = []
+    while len(order) < n:
+        nxt = next(
+            (
+                i
+                for i in range(n)
+                if not placed[i] and all(placed[d] for d in requires[i])
+            ),
+            None,
+        )
+        if nxt is None:
+            nxt = next(i for i in range(n) if not placed[i])
+        placed[nxt] = True
+        order.append(nxt)
+    return [entries[i] for i in order]
+
+
 def resolve_pretend_graph(
     config_root,
     root,
@@ -6058,6 +6115,14 @@ def resolve_pretend_graph(
     if required_use_violations:
         raise ResolutionError("\n".join(required_use_violations))
 
+    # Real portage's `mylist` is dependency-first (its Scheduler installs
+    # a package only after everything it depends on); this BFS builds
+    # `entries` the other way (a package's entry is appended before its
+    # dependencies are ever queued). Re-sort into merge order now that
+    # every required_by edge is known. Mirrors portage-repo/src/lib.rs's
+    # topological_merge_order exactly.
+    entries = _topological_merge_order(entries)
+
     # Real depgraph.py:5706-5717 -- see the Rust side's own
     # GraphResult::buildpkgonly_deps_unsatisfied doc comment.
     buildpkgonly_deps_unsatisfied = False
@@ -6545,7 +6610,7 @@ def _json_bool(b):
     return "true" if b else "false"
 
 
-def _entry_to_json(category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root, top_level_pkgs, verbose, running_root):
+def _entry_to_json(category, package, merge_order, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root, top_level_pkgs, verbose, running_root):
     """One JSON object per entry -- a structured mirror of the plain-text
     "[ebuild ...]"/"[binary ...]"/"already installed"/blocker lines in
     run(), plus two fields no plain-text line carries at all: "requested"
@@ -6577,6 +6642,11 @@ def _entry_to_json(category, package, outcome, blockers, slot, use_display, requ
     fields = [
         f'"category":{_json_string(category)}',
         f'"package":{_json_string(package)}',
+        # 0-based position in real portage's dependency-first merge order
+        # (_topological_merge_order). The entries array is already in this
+        # order -- the field is here so a consumer that re-sorts or
+        # filters the array keeps the schedule.
+        f'"merge_order":{merge_order}',
     ]
     tag = outcome[0]
     fields.append(f'"outcome":{_json_string(tag)}')
@@ -6727,9 +6797,9 @@ def _print_json(
     pretend.rs's own print_json exactly."""
     entries_json = ",".join(
         _entry_to_json(
-            category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root, top_level_pkgs, verbose, running_root
+            category, package, merge_order, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root, top_level_pkgs, verbose, running_root
         )
-        for category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root in entries
+        for merge_order, (category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root) in enumerate(entries)
     )
     conflicts_json = ",".join(_slot_conflict_to_json(c) for c in slot_conflicts)
     changed_deps_report_json = ",".join(
@@ -10790,16 +10860,16 @@ def run(args):
         # design this pilot uses instead: invert each entry's own
         # required_by (already "every distinct owner, sorted") into a
         # children map, walk it from the top-level/requested entries as
-        # roots in their own entries order (already argv order), never
-        # rendering (or recursing into) a node more than once anywhere in
-        # the tree -- real _unordered_tree_display's own seen_nodes
-        # behavior, ported exactly, and what keeps this from looping
-        # forever on a genuine dependency cycle too. unordered_display
-        # chooses child order at each level: entries' own natural (BFS
-        # discovery) order when true, versus alphabetical-by-
-        # (category, package) when false (this pilot's own deterministic
-        # stand-in for real portage's genuine merge-order sort, which
-        # would need the scheduler this pilot doesn't have). Any entry
+        # roots in their own entries order (now real portage's
+        # dependency-first merge order, per _topological_merge_order),
+        # never rendering (or recursing into) a node more than once
+        # anywhere in the tree -- real _unordered_tree_display's own
+        # seen_nodes behavior, ported exactly, and what keeps this from
+        # looping forever on a genuine dependency cycle too.
+        # unordered_display chooses child order at each level: entries'
+        # own order when true (merge order now, not raw BFS discovery),
+        # versus alphabetical-by-(category, package) when false (this
+        # pilot's own deterministic default). Any entry
         # never reached from a root at all (shouldn't normally happen) is
         # still printed, unindented, after the tree itself, rather than
         # silently dropped. Mirrors pretend.rs's own print_tree exactly.

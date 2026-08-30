@@ -8910,6 +8910,60 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p --autounmask dev-libs/autounm
 # [ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0
 ```
 
+### `emerge -p`: the merge list is in real dependency-first order (real-tree finding)
+
+The same container run that turned up the mask-column gap showed portuale
+listing packages in the wrong order: `emerge --pretend app-misc/tmux`
+printed `tmux` *before* its dependency `libevent`, where real `emerge`
+prints `libevent` first. Real portage's `mylist` (the list
+`resolver/output.py::Display` renders) is a genuine topological **merge
+schedule** — its `Scheduler` installs every package only after the
+packages it depends on. The pilot's BFS builds `entries` the opposite
+way: a package's entry is appended *before* its dependencies are ever
+queued.
+
+`resolve_pretend_graph` (mirrored `resolve_pretend_graph` in the Python
+reference) now re-sorts `entries` into dependency-first order as its last
+step, via new `topological_merge_order` / `_topological_merge_order`: a
+**stable** topological sort keyed off the `required_by` edges every entry
+already carries — a dependency always precedes the packages that pull it
+in, and two packages with no dependency relationship keep their
+BFS-discovery (RDEPEND-string / argv) order. A genuine dependency cycle
+(real portage's `Scheduler` breaks these with slot-operator/priority
+heuristics the pilot doesn't reproduce) is left in discovery order.
+
+The chosen model (confirmed with the user via `AskUserQuestion`, "Model
+A"): `entries` is *canonically* merge-ordered — one order for the flat
+`--pretend` list, `emerge --buildpkgonly`'s build loop, and the `--json`
+`entries` array alike. `--json` additionally stamps each entry with an
+explicit `"merge_order"` integer (its 0-based position) so a consumer
+that re-sorts or filters the array keeps the schedule. `--tree` is
+unaffected in structure — it re-derives its nesting from `required_by`
+top-down from the roots (real portage feeds `_tree_display`
+`reversed(mylist)`, an implementation detail this different algorithm
+doesn't need), though a `--tree` root that depends on another root now
+appears dep-first among the roots.
+
+~240 pinned multi-entry test assertions reordered (Rust unit +
+contract-suite, mechanically, both implementations verified byte-identical
+throughout); new `portage-repo` unit test, new dedicated contract test +
+3 `CASES`. After the fix, portuale's `--pretend` order matches real
+`emerge --pretend` on a real tree.
+
+```sh
+FX="$(realpath PORTING/fixtures)"
+# dev-libs/diamond -> shared-a, shared-b -> common: the shared leaf first,
+# its two consumers next, the requested root last.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/diamond
+# [ebuild  N     ] dev-libs/common-1.0
+# [ebuild  N     ] dev-libs/shared-a-1.0
+# [ebuild  N     ] dev-libs/shared-b-1.0
+# [ebuild  N     ] dev-libs/diamond-1.0
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p --json dev-libs/diamond \
+  | python3 -c 'import json,sys; print([(e["package"], e["merge_order"]) for e in json.load(sys.stdin)["entries"]])'
+# [('common', 0), ('shared-a', 1), ('shared-b', 2), ('diamond', 3)]
+```
+
 ## Running it
 
 Build both Rust binaries:

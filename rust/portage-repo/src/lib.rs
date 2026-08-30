@@ -6360,6 +6360,76 @@ pub struct GraphEntry {
     pub remote_binary: bool,
 }
 
+/// Put `entries` in real portage's dependency-first *merge* order.
+///
+/// Real portage's `mylist` (`Display.__call__`'s input) is a genuine
+/// topological merge schedule -- its `Scheduler` runs every install
+/// after the installs it depends on. This pilot has no scheduler, but
+/// every entry already carries `required_by` (the `(category, package)`
+/// of each entry that pulled it in), which is exactly the reverse of a
+/// dependency edge -- enough to order the list.
+///
+/// A **stable** topological sort: an entry is emitted only once every
+/// other entry it requires (within this set) has already been emitted;
+/// among the entries that are all currently emittable, the one with the
+/// earliest original (BFS-discovery, i.e. argv) position goes first. So
+/// two packages with no dependency relationship keep their discovery
+/// order, and a dependency always precedes the packages that pull it in.
+///
+/// A genuine dependency **cycle** (real portage's `Scheduler` breaks
+/// these with slot-operator/priority heuristics this pilot doesn't
+/// reproduce) is left in discovery order: when no unplaced entry has all
+/// its in-set dependencies placed, the earliest still-unplaced entry is
+/// emitted anyway and the walk continues.
+///
+/// `--json`'s `merge_order` field and `emerge --buildpkgonly`'s build
+/// loop both read this order directly; `--tree` re-derives its own
+/// nesting from `required_by` and is unaffected by the Vec order (see
+/// `pretend.rs::print_tree`).
+fn topological_merge_order(entries: Vec<GraphEntry>) -> Vec<GraphEntry> {
+    let n = entries.len();
+    if n < 2 {
+        return entries;
+    }
+    // (category, package) -> every entry index with that cp (a
+    // multi-slot package has one entry per resolved slot).
+    let mut cp_indices: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        cp_indices
+            .entry((e.category.as_str(), e.package.as_str()))
+            .or_default()
+            .push(i);
+    }
+    // `requires[i]` = the entries `i` depends on, i.e. every `j` whose
+    // `required_by` names `i`'s own cp. `j` must be emitted before `i`.
+    let mut requires: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (j, e) in entries.iter().enumerate() {
+        for owner in &e.required_by {
+            if let Some(owner_indices) = cp_indices.get(&(owner.0.as_str(), owner.1.as_str())) {
+                for &i in owner_indices {
+                    if i != j {
+                        requires[i].push(j);
+                    }
+                }
+            }
+        }
+    }
+    let mut placed = vec![false; n];
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    while order.len() < n {
+        let next = (0..n)
+            .find(|&i| !placed[i] && requires[i].iter().all(|&d| placed[d]))
+            .unwrap_or_else(|| (0..n).find(|&i| !placed[i]).expect("n entries unplaced"));
+        placed[next] = true;
+        order.push(next);
+    }
+    let mut slots: Vec<Option<GraphEntry>> = entries.into_iter().map(Some).collect();
+    order
+        .into_iter()
+        .map(|i| slots[i].take().expect("each index emitted once"))
+        .collect()
+}
+
 /// A blocker atom found while flattening one package's own dependency strings,
 /// not yet matched against anything -- collected during the BFS in
 /// `resolve_pretend_graph` and resolved in a single post-pass (see
@@ -8197,6 +8267,14 @@ pub fn resolve_pretend_graph(
         return Err(required_use_violations.join("\n"));
     }
 
+    // Real portage's `mylist` is dependency-first (its Scheduler installs
+    // a package only after everything it depends on); the pilot's BFS
+    // builds `entries` the other way (a package's entry is pushed before
+    // its dependencies are ever queued). Re-sort into merge order now
+    // that every `required_by` edge is known -- see
+    // `topological_merge_order`.
+    entries = topological_merge_order(entries);
+
     // Real depgraph.py:5706-5717 -- see GraphResult::
     // buildpkgonly_deps_unsatisfied's own doc comment.
     let buildpkgonly_deps_unsatisfied = buildpkgonly && {
@@ -9769,8 +9847,13 @@ mod tests {
         // actually reinstalls it, proven by the second assertion).
         let result = graph_changed_deps_report("dev-libs/changeddepspkg", true, true);
         assert!(result.changed_deps_report.is_empty());
+        let changeddepspkg = result
+            .entries
+            .iter()
+            .find(|e| e.package == "changeddepspkg")
+            .expect("changeddepspkg entry");
         assert_eq!(
-            result.entries[0].outcome,
+            changeddepspkg.outcome,
             PretendOutcome::Reinstall {
                 version: "1.0".to_string(),
                 changed_flags: Vec::new(),
@@ -10256,6 +10339,12 @@ mod tests {
             graph_real_changed_use("dev-libs/reinstallpkg"),
             vec![
                 (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
                     "dev-libs/reinstallpkg".to_string(),
                     PretendOutcome::Reinstall {
                         version: "1.0".to_string(),
@@ -10265,13 +10354,7 @@ mod tests {
                         rebuilt_binary: false,
                         new_repo: false,
                     }
-                ),
-                (
-                    "dev-libs/newpkg".to_string(),
-                    PretendOutcome::New {
-                        version: "1.0".to_string()
-                    }
-                ),
+                )
             ]
         );
     }
@@ -10401,7 +10484,7 @@ mod tests {
             .collect();
         assert_eq!(
             full_names,
-            vec!["dev-libs/overlaytiepkg", "dev-libs/newpkg"]
+            vec!["dev-libs/newpkg", "dev-libs/overlaytiepkg"]
         );
     }
 
@@ -10423,10 +10506,10 @@ mod tests {
         assert_eq!(
             full_names,
             vec![
-                "dev-libs/slotconflictparent",
+                "dev-libs/slotconflicttarget",
                 "dev-libs/slotconflictnewconsumer",
                 "dev-libs/slotconflictoldconsumer",
-                "dev-libs/slotconflicttarget",
+                "dev-libs/slotconflictparent"
             ]
         );
         assert_eq!(
@@ -10459,13 +10542,18 @@ mod tests {
         assert_eq!(
             full_names,
             vec![
+                "dev-libs/multislotpkg",
+                "dev-libs/multislotpkg",
                 "dev-libs/multislotparent",
-                "dev-libs/multislotpkg",
-                "dev-libs/multislotpkg",
             ]
         );
-        let slots: Vec<Option<String>> =
-            result.entries[1..].iter().map(|e| e.slot.clone()).collect();
+        let mut slots: Vec<Option<String>> = result
+            .entries
+            .iter()
+            .filter(|e| e.package == "multislotpkg")
+            .map(|e| e.slot.clone())
+            .collect();
+        slots.sort();
         assert_eq!(slots, vec![Some("0".to_string()), Some("1".to_string())]);
         assert!(result.slot_conflicts.is_empty());
     }
@@ -11042,9 +11130,13 @@ mod tests {
             .iter()
             .map(|e| format!("{}/{}", e.category, e.package))
             .collect();
-        assert_eq!(full_names, vec!["virtual/texteditor", "dev-libs/newpkg"]);
+        assert_eq!(full_names, vec!["dev-libs/newpkg", "virtual/texteditor"]);
         assert_eq!(
-            entries[1].outcome,
+            entries
+                .iter()
+                .find(|e| e.package == "newpkg")
+                .expect("newpkg entry")
+                .outcome,
             PretendOutcome::New {
                 version: "1.0".to_string()
             }
@@ -11479,12 +11571,6 @@ mod tests {
             entries,
             vec![
                 (
-                    "dev-libs/withdeps".to_string(),
-                    PretendOutcome::New {
-                        version: "1.0".to_string()
-                    }
-                ),
-                (
                     "dev-libs/newpkg".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
@@ -11496,6 +11582,12 @@ mod tests {
                         version: "1.0".to_string()
                     }
                 ),
+                (
+                    "dev-libs/withdeps".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                )
             ]
         );
     }
@@ -11607,14 +11699,14 @@ mod tests {
         assert_eq!(
             entries,
             vec![
-                ("dev-libs/deeppkg".to_string(), bare.clone()),
-                ("dev-libs/deeppkg2".to_string(), bare),
                 (
                     "dev-libs/newpkg".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
                     }
                 ),
+                ("dev-libs/deeppkg2".to_string(), bare.clone()),
+                ("dev-libs/deeppkg".to_string(), bare)
             ]
         );
     }
@@ -11646,8 +11738,8 @@ mod tests {
             graph_deep("dev-libs/deeppkg", Deep::Unlimited),
             vec![
                 (
-                    "dev-libs/deeppkg".to_string(),
-                    PretendOutcome::AlreadyInstalled {
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
                         version: "1.0".to_string()
                     }
                 ),
@@ -11658,11 +11750,11 @@ mod tests {
                     }
                 ),
                 (
-                    "dev-libs/newpkg".to_string(),
-                    PretendOutcome::New {
+                    "dev-libs/deeppkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
                         version: "1.0".to_string()
                     }
-                ),
+                )
             ]
         );
     }
@@ -11676,17 +11768,17 @@ mod tests {
             graph_deep("dev-libs/deeppkg", Deep::Bounded(1)),
             vec![
                 (
-                    "dev-libs/deeppkg".to_string(),
-                    PretendOutcome::AlreadyInstalled {
-                        version: "1.0".to_string()
-                    }
-                ),
-                (
                     "dev-libs/deeppkg2".to_string(),
                     PretendOutcome::AlreadyInstalled {
                         version: "1.0".to_string()
                     }
                 ),
+                (
+                    "dev-libs/deeppkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                )
             ]
         );
     }
@@ -11750,12 +11842,6 @@ mod tests {
             graph_deep_with_bdeps("dev-libs/withbdepspkg", true),
             vec![
                 (
-                    "dev-libs/withbdepspkg".to_string(),
-                    PretendOutcome::AlreadyInstalled {
-                        version: "1.0".to_string()
-                    }
-                ),
-                (
                     "dev-libs/builddeponlypkg".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
@@ -11773,6 +11859,12 @@ mod tests {
                         version: "1.0".to_string()
                     }
                 ),
+                (
+                    "dev-libs/withbdepspkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                )
             ]
         );
     }
@@ -11788,17 +11880,17 @@ mod tests {
             graph_deep_with_bdeps("dev-libs/withbdepspkg", false),
             vec![
                 (
-                    "dev-libs/withbdepspkg".to_string(),
-                    PretendOutcome::AlreadyInstalled {
-                        version: "1.0".to_string()
-                    }
-                ),
-                (
                     "dev-libs/newpkg".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
                     }
                 ),
+                (
+                    "dev-libs/withbdepspkg".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1.0".to_string()
+                    }
+                )
             ]
         );
     }
@@ -11886,15 +11978,15 @@ mod tests {
             graph_root_deps("dev-libs/rootdepspkg", None),
             vec![
                 (
+                    "dev-libs/rootdepsprovider".to_string(),
+                    PretendOutcome::NoVisibleCandidate
+                ),
+                (
                     "dev-libs/rootdepspkg".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
                     }
-                ),
-                (
-                    "dev-libs/rootdepsprovider".to_string(),
-                    PretendOutcome::NoVisibleCandidate
-                ),
+                )
             ]
         );
     }
@@ -11938,12 +12030,6 @@ mod tests {
             graph_root_deps("dev-libs/rootdepsorpkg", None),
             vec![
                 (
-                    "dev-libs/rootdepsorpkg".to_string(),
-                    PretendOutcome::New {
-                        version: "1.0".to_string()
-                    }
-                ),
-                (
                     "dev-libs/rootdepsnonexistent".to_string(),
                     PretendOutcome::NoVisibleCandidate
                 ),
@@ -11951,6 +12037,12 @@ mod tests {
                     "dev-libs/rootdepsprovider".to_string(),
                     PretendOutcome::NoVisibleCandidate
                 ),
+                (
+                    "dev-libs/rootdepsorpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                )
             ],
             "without --root-deps, neither branch resolves, so both are reported"
         );
@@ -12039,8 +12131,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                ("dev-libs/rootdepsbuildpkg".to_string(), false),
                 ("dev-libs/rootdepsbuildtool".to_string(), true),
+                ("dev-libs/rootdepsbuildpkg".to_string(), false)
             ]
         );
 
@@ -12125,12 +12217,6 @@ mod tests {
         assert_eq!(
             seen,
             vec![
-                ("dev-libs/rdrapp".to_string(), false, String::new()),
-                (
-                    "dev-libs/rdrtool".to_string(),
-                    true,
-                    "dev-libs/rdrapp".to_string(),
-                ),
                 (
                     "dev-libs/rdrtooldep".to_string(),
                     true,
@@ -12141,6 +12227,12 @@ mod tests {
                     true,
                     "dev-libs/rdrtool".to_string(),
                 ),
+                (
+                    "dev-libs/rdrtool".to_string(),
+                    true,
+                    "dev-libs/rdrapp".to_string(),
+                ),
+                ("dev-libs/rdrapp".to_string(), false, String::new())
             ]
         );
     }
@@ -12199,9 +12291,9 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                ("dev-libs/rdriapp".to_string(), false),
-                ("dev-libs/rdritool".to_string(), true),
                 ("dev-libs/rdrilib".to_string(), true),
+                ("dev-libs/rdritool".to_string(), true),
+                ("dev-libs/rdriapp".to_string(), false)
             ]
         );
     }
@@ -12263,15 +12355,15 @@ mod tests {
         assert_eq!(
             run(None),
             vec![
-                ("dev-libs/topidepapp".to_string(), false),
                 ("dev-libs/topideplib".to_string(), false),
+                ("dev-libs/topidepapp".to_string(), false)
             ]
         );
         assert_eq!(
             run(Some(&root)),
             vec![
-                ("dev-libs/topidepapp".to_string(), false),
                 ("dev-libs/topideplib".to_string(), true),
+                ("dev-libs/topidepapp".to_string(), false),
             ]
         );
     }
@@ -12324,9 +12416,9 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "dev-libs/rdrcyc".to_string(),
-                "dev-libs/rdrcyca".to_string(),
                 "dev-libs/rdrcycb".to_string(),
+                "dev-libs/rdrcyca".to_string(),
+                "dev-libs/rdrcyc".to_string()
             ]
         );
     }
@@ -12453,12 +12545,6 @@ mod tests {
             entries,
             vec![
                 (
-                    "dev-libs/withdeps".to_string(),
-                    PretendOutcome::New {
-                        version: "1.0".to_string()
-                    }
-                ),
-                (
                     "dev-libs/newpkg".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
@@ -12470,6 +12556,12 @@ mod tests {
                         version: "1.0".to_string()
                     }
                 ),
+                (
+                    "dev-libs/withdeps".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                )
             ]
         );
     }
@@ -12537,17 +12629,17 @@ mod tests {
             entries,
             vec![
                 (
-                    "dev-libs/needskeywordmasked".to_string(),
-                    PretendOutcome::New {
-                        version: "1.0".to_string()
-                    }
-                ),
-                (
                     "dev-libs/keywordmaskedpkg".to_string(),
                     PretendOutcome::AlreadyInstalled {
                         version: "2.0".to_string()
                     }
                 ),
+                (
+                    "dev-libs/needskeywordmasked".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                )
             ]
         );
     }
@@ -12573,17 +12665,17 @@ mod tests {
             entries,
             vec![
                 (
-                    "dev-libs/needskeywordmaskeduse".to_string(),
-                    PretendOutcome::New {
-                        version: "1.0".to_string()
-                    }
-                ),
-                (
                     "dev-libs/keywordmaskedusepkg".to_string(),
                     PretendOutcome::AlreadyInstalled {
                         version: "2.0".to_string()
                     }
                 ),
+                (
+                    "dev-libs/needskeywordmaskeduse".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                )
             ]
         );
     }
@@ -12606,17 +12698,17 @@ mod tests {
             entries,
             vec![
                 (
-                    "dev-libs/needsbuiltusediverge".to_string(),
-                    PretendOutcome::New {
-                        version: "1.0".to_string()
-                    }
-                ),
-                (
                     "dev-libs/builtusedivergedep".to_string(),
                     PretendOutcome::AlreadyInstalled {
                         version: "1.0".to_string()
                     }
                 ),
+                (
+                    "dev-libs/needsbuiltusediverge".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                )
             ]
         );
     }
@@ -12634,12 +12726,6 @@ mod tests {
             entries,
             vec![
                 (
-                    "dev-libs/withdeps".to_string(),
-                    PretendOutcome::New {
-                        version: "1.0".to_string()
-                    }
-                ),
-                (
                     "dev-libs/newpkg".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
@@ -12652,6 +12738,12 @@ mod tests {
                         to: "2.0".to_string(),
                     }
                 ),
+                (
+                    "dev-libs/withdeps".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                )
             ]
         );
     }
@@ -12979,13 +13071,13 @@ mod tests {
                 entries,
                 vec![
                     (
-                        format!("dev-libs/{pkg}"),
+                        "dev-libs/newpkg".to_string(),
                         PretendOutcome::New {
                             version: "1.0".to_string()
                         }
                     ),
                     (
-                        "dev-libs/newpkg".to_string(),
+                        format!("dev-libs/{pkg}"),
                         PretendOutcome::New {
                             version: "1.0".to_string()
                         }
@@ -13003,15 +13095,50 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "dev-libs/diamond",
+                "dev-libs/common",
                 "dev-libs/shared-a",
                 "dev-libs/shared-b",
-                "dev-libs/common",
+                "dev-libs/diamond"
             ]
         );
         // "common" must appear exactly once despite being reachable via
         // both shared-a and shared-b.
         assert_eq!(names.iter().filter(|n| **n == "dev-libs/common").count(), 1);
+    }
+
+    #[test]
+    fn entries_are_returned_in_dependency_first_merge_order() {
+        // `topological_merge_order`: real portage's `mylist` is a genuine
+        // topological merge schedule; the pilot's BFS builds entries
+        // parent-first, so `resolve_pretend_graph` re-sorts them into
+        // dependency-first order before returning. `dev-libs/withdeps`
+        // RDEPENDs `dev-libs/newpkg` + `dev-libs/upgradepkg`; both deps
+        // must precede `withdeps`, and among the two unconstrained deps
+        // their BFS-discovery (RDEPEND string) order is preserved.
+        let names: Vec<String> = graph("dev-libs/withdeps")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        let withdeps = names.iter().position(|n| n == "dev-libs/withdeps").unwrap();
+        let newpkg = names.iter().position(|n| n == "dev-libs/newpkg").unwrap();
+        let upgradepkg = names
+            .iter()
+            .position(|n| n == "dev-libs/upgradepkg")
+            .unwrap();
+        assert!(newpkg < withdeps, "{names:?}");
+        assert!(upgradepkg < withdeps, "{names:?}");
+
+        // Diamond: the shared leaf precedes both of its consumers, which
+        // both precede the root -- a strict topological order.
+        let d: Vec<String> = graph("dev-libs/diamond")
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        let pos = |p: &str| d.iter().position(|n| n == p).unwrap();
+        assert!(pos("dev-libs/common") < pos("dev-libs/shared-a"));
+        assert!(pos("dev-libs/common") < pos("dev-libs/shared-b"));
+        assert!(pos("dev-libs/shared-a") < pos("dev-libs/diamond"));
+        assert!(pos("dev-libs/shared-b") < pos("dev-libs/diamond"));
     }
 
     fn full_graph(atom_str: &str) -> Vec<GraphEntry> {
@@ -13145,7 +13272,7 @@ mod tests {
         // earlier "resolve every alternative" v1 with.
         let entries = graph("dev-libs/anyof");
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, vec!["dev-libs/anyof", "dev-libs/newpkg"]);
+        assert_eq!(names, vec!["dev-libs/newpkg", "dev-libs/anyof"]);
     }
 
     #[test]
@@ -13158,15 +13285,15 @@ mod tests {
             entries,
             vec![
                 (
+                    "dev-libs/doesnotexist-anywhere".to_string(),
+                    PretendOutcome::NoVisibleCandidate
+                ),
+                (
                     "dev-libs/missingdep".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
                     }
-                ),
-                (
-                    "dev-libs/doesnotexist-anywhere".to_string(),
-                    PretendOutcome::NoVisibleCandidate
-                ),
+                )
             ]
         );
     }
@@ -13175,7 +13302,7 @@ mod tests {
     fn recursion_dedupes_across_depend_and_rdepend() {
         let entries = graph("dev-libs/dualdep");
         let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, vec!["dev-libs/dualdep", "dev-libs/newpkg"]);
+        assert_eq!(names, vec!["dev-libs/newpkg", "dev-libs/dualdep"]);
     }
 
     /// End-to-end wiring check: uses the *real* profile-resolved config
@@ -13238,7 +13365,7 @@ mod tests {
             .iter()
             .map(|e| format!("{}/{}", e.category, e.package))
             .collect();
-        assert_eq!(full_names, vec!["dev-libs/useflagpkg", "dev-libs/newpkg"]);
+        assert_eq!(full_names, vec!["dev-libs/newpkg", "dev-libs/useflagpkg"]);
     }
 
     #[test]
@@ -13250,7 +13377,7 @@ mod tests {
             .into_iter()
             .map(|(name, _)| name)
             .collect();
-        assert_eq!(full_names, vec!["dev-libs/useexpandpkg", "dev-libs/newpkg"]);
+        assert_eq!(full_names, vec!["dev-libs/newpkg", "dev-libs/useexpandpkg"]);
     }
 
     #[test]
@@ -13265,7 +13392,7 @@ mod tests {
             .collect();
         assert_eq!(
             full_names,
-            vec!["dev-libs/packageuseexpandpkg", "dev-libs/newpkg"]
+            vec!["dev-libs/newpkg", "dev-libs/packageuseexpandpkg"]
         );
     }
 
@@ -13284,7 +13411,7 @@ mod tests {
             .collect();
         assert_eq!(
             full_names,
-            vec!["dev-libs/wildexpandpkg", "dev-libs/wildexpanddep"]
+            vec!["dev-libs/wildexpanddep", "dev-libs/wildexpandpkg"]
         );
     }
 
@@ -13373,7 +13500,7 @@ mod tests {
             .into_iter()
             .map(|(name, _)| name)
             .collect();
-        assert_eq!(full_names, vec!["dev-libs/stableusepkg", "dev-libs/newpkg"]);
+        assert_eq!(full_names, vec!["dev-libs/newpkg", "dev-libs/stableusepkg"]);
     }
 
     #[test]
@@ -13500,9 +13627,9 @@ mod tests {
         assert_eq!(
             full_names,
             vec![
-                "dev-libs/withtestdeppkg",
                 "dev-libs/newpkg",
                 "dev-libs/testonlydep",
+                "dev-libs/withtestdeppkg"
             ]
         );
     }
@@ -13515,7 +13642,7 @@ mod tests {
             .collect();
         assert_eq!(
             full_names,
-            vec!["dev-libs/withtestdeppkg", "dev-libs/newpkg"]
+            vec!["dev-libs/newpkg", "dev-libs/withtestdeppkg"]
         );
     }
 
@@ -13531,9 +13658,9 @@ mod tests {
         assert_eq!(
             full_names,
             vec![
-                "dev-libs/withtestdepconsumer",
-                "dev-libs/withtestdeppkg",
                 "dev-libs/newpkg",
+                "dev-libs/withtestdeppkg",
+                "dev-libs/withtestdepconsumer"
             ]
         );
     }
@@ -13766,6 +13893,12 @@ mod tests {
             graph_real_newuse("dev-libs/reinstallpkg"),
             vec![
                 (
+                    "dev-libs/newpkg".to_string(),
+                    PretendOutcome::New {
+                        version: "1.0".to_string()
+                    }
+                ),
+                (
                     "dev-libs/reinstallpkg".to_string(),
                     PretendOutcome::Reinstall {
                         version: "1.0".to_string(),
@@ -13775,13 +13908,7 @@ mod tests {
                         rebuilt_binary: false,
                         new_repo: false,
                     }
-                ),
-                (
-                    "dev-libs/newpkg".to_string(),
-                    PretendOutcome::New {
-                        version: "1.0".to_string()
-                    }
-                ),
+                )
             ]
         );
     }
@@ -13798,7 +13925,7 @@ mod tests {
             .collect();
         assert_eq!(
             full_names,
-            vec!["dev-libs/packageuseenablepkg", "dev-libs/newpkg"]
+            vec!["dev-libs/newpkg", "dev-libs/packageuseenablepkg"]
         );
     }
 
@@ -13903,15 +14030,15 @@ mod tests {
             entries,
             vec![
                 (
+                    "dev-libs/useflagpkg".to_string(),
+                    PretendOutcome::NoVisibleCandidate
+                ),
+                (
                     "dev-libs/usedeprejectedpkg".to_string(),
                     PretendOutcome::New {
                         version: "1.0".to_string()
                     }
-                ),
-                (
-                    "dev-libs/useflagpkg".to_string(),
-                    PretendOutcome::NoVisibleCandidate
-                ),
+                )
             ]
         );
     }
@@ -14603,7 +14730,7 @@ mod tests {
         // dependency, not a top-level target).
         let result = graph_result_real("dev-libs/needsprovided");
         let names: Vec<&str> = result.entries.iter().map(|e| e.package.as_str()).collect();
-        assert_eq!(names, vec!["needsprovided", "newpkg"]);
+        assert_eq!(names, vec!["newpkg", "needsprovided"]);
         assert!(result.pprovided_atoms.is_empty());
     }
 
@@ -14682,15 +14809,18 @@ mod tests {
         assert_eq!(
             full_names,
             vec![
-                "dev-libs/graphblockerparent",
                 "dev-libs/blockerpartnerpkg",
                 "dev-libs/weakblockerpkg",
+                "dev-libs/graphblockerparent"
             ]
         );
-        assert!(entries[0].blockers.is_empty());
-        assert!(entries[1].blockers.is_empty());
+        let by_pkg = |p: &str| entries.iter().find(|e| e.package == p).unwrap();
+        assert!(by_pkg("blockerpartnerpkg").blockers.is_empty());
+        assert!(by_pkg("graphblockerparent").blockers.is_empty());
+        // weakblockerpkg's own RDEPEND carries the `!dev-libs/blockerpartnerpkg`
+        // weak blocker.
         assert_eq!(
-            entries[2].blockers,
+            by_pkg("weakblockerpkg").blockers,
             vec![BlockerConflict {
                 atom_str: "!dev-libs/blockerpartnerpkg".to_string(),
                 strong: false,

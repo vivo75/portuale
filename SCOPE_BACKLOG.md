@@ -254,7 +254,19 @@ Ranked roughly by how self-contained each is.
    verbosity is **2** — so both are present at plain `-p`, absent only
    under `--quiet` (verbosity 1, not modelled). `attr_display_field` /
    `_attr_display_field` / `format_blocker_lines` now render the column
-   unconditionally; ~240 pinned assertions widened. **New residual:** at
+   unconditionally; ~240 pinned assertions widened. **Merge order fixed
+   2026-08-30** (same real-tree finding, "Model A" confirmed with the
+   user): the pilot's BFS built `entries` parent-first, but real
+   portage's `mylist` is a topological merge schedule (deps first).
+   `resolve_pretend_graph` now re-sorts `entries` into dependency-first
+   order as its last step (`topological_merge_order` /
+   `_topological_merge_order`, a stable topological sort off the
+   `required_by` edges; cycles kept in discovery order). `entries` is
+   canonically merge-ordered for the flat list, `--json` (which also
+   stamps an explicit `"merge_order"` int per entry), and `emerge
+   --buildpkgonly`; `--tree` re-derives structure from `required_by`
+   unaffected. ~240 more pinned multi-entry assertions reordered.
+   **New residual:** at
    verbosity 2 real portage also prints the `USE="…"` line for a
    *changed* flag set / new package (`_create_use_string` returns "" only
    when nothing changed *and* `all_flags` off), where the pilot still

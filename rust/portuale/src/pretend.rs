@@ -1146,8 +1146,11 @@ fn print_entry_line(
 /// portage-repo); this function inverts that into a `children` map
 /// (owner key -> the entries it pulled in) and walks it from the
 /// top-level/requested entries as roots, in their own `entries` order
-/// (already argv order, per `resolve_pretend_graph`'s "level-order
-/// guarantee"). A node already rendered once (anywhere in the tree,
+/// (now real portage's dependency-first merge order, per
+/// `topological_merge_order` -- so top-level roots that depend on each
+/// other appear dep-first here too; real portage feeds `_tree_display`
+/// `reversed(mylist)`, an implementation detail this top-down walk from
+/// roots doesn't need). A node already rendered once (anywhere in the tree,
 /// diamond dependencies included) is never rendered or recursed into
 /// again -- real `_unordered_tree_display`'s own `seen_nodes` behavior,
 /// ported exactly (and, as a side effect, what keeps this recursion
@@ -1161,12 +1164,11 @@ fn print_entry_line(
 /// together with `--tree` -- real portage's own `_tree_display` is
 /// never even called otherwise, and this pilot mirrors that: given
 /// alone it's accepted but does nothing) chooses the child order at
-/// each level: `entries`' own natural (BFS discovery) order when true
-/// -- genuinely "not sorted", using real already-existing data, no
-/// invented bookkeeping -- versus alphabetical-by-`(category, package)`
-/// when false, this pilot's own deterministic stand-in for real
-/// portage's genuine merge-order sort (which would need the scheduler
-/// this pilot doesn't have). Any entry never reached from a root at all
+/// each level: `entries`' own order when true (now merge order rather
+/// than raw BFS discovery -- still "not sorted" per se, just whatever
+/// `topological_merge_order` produced) versus
+/// alphabetical-by-`(category, package)` when false, this pilot's own
+/// deterministic default. Any entry never reached from a root at all
 /// (shouldn't normally happen -- every non-root entry's own
 /// `required_by` should trace back to one) is still printed, unindented,
 /// after the tree itself, rather than silently dropped -- this pilot's
@@ -1364,6 +1366,7 @@ fn json_string(s: &str) -> String {
 /// `entry.keyword_suggestion` (portage-repo) -- see its own doc comment.
 fn entry_to_json(
     entry: &GraphEntry,
+    merge_order: usize,
     top_level_pkgs: &HashSet<(String, String)>,
     verbose: bool,
     running_root: Option<&Path>,
@@ -1372,6 +1375,12 @@ fn entry_to_json(
     let mut fields: Vec<String> = vec![
         format!("\"category\":{}", json_string(&entry.category)),
         format!("\"package\":{}", json_string(&entry.package)),
+        // The entry's 0-based position in real portage's dependency-first
+        // merge order (`portage_repo::topological_merge_order`). The
+        // `entries` array is already emitted in this order -- the field
+        // is here so a consumer that re-sorts or filters the array keeps
+        // the schedule.
+        format!("\"merge_order\":{merge_order}"),
     ];
     let outcome_tag = match &entry.outcome {
         PretendOutcome::New { .. } => "new",
@@ -1617,7 +1626,8 @@ fn print_json(
 ) {
     let entries_json: Vec<String> = entries
         .iter()
-        .map(|e| entry_to_json(e, top_level_pkgs, verbose, running_root))
+        .enumerate()
+        .map(|(i, e)| entry_to_json(e, i, top_level_pkgs, verbose, running_root))
         .collect();
     let conflicts_json: Vec<String> = slot_conflicts.iter().map(slot_conflict_to_json).collect();
     let changed_deps_report_json: Vec<String> = changed_deps_report

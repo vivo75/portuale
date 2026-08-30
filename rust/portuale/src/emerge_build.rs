@@ -34,9 +34,10 @@
 //   - A `CandidateSource::Binary` entry (would only appear via
 //     `--usepkg`) is skipped outright -- it's already a binary, there is
 //     nothing to build.
-//   - Builds run strictly in `entries` order (no explicit reordering) --
-//     safe only because the gate above already guarantees no ordering
-//     constraint exists between any two needs-building entries.
+//   - Builds run strictly in `entries` order, which `resolve_pretend_graph`
+//     now returns in real portage's dependency-first *merge* order
+//     (`topological_merge_order`) -- so even if the `--buildpkgonly` gate
+//     above were relaxed, a dep would still build before its dependent.
 //   - A build failure aborts immediately, unless real `--keep-going` is
 //     given (now real, see `run_buildpkgonly`'s own doc comment) -- no
 //     cleanup of any already-built packages either way, this pilot's
