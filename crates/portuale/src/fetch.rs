@@ -1316,6 +1316,117 @@ mod tests {
         assert!(err.contains("no working candidate mirror"), "{err}");
     }
 
+    /// End-to-end `GENTOO_MIRRORS` fallback: the literal URI is unreachable, so
+    /// only the mirror can serve the file (flat path, nothing cached).
+    #[test]
+    fn fetch_src_uri_falls_back_to_gentoo_mirrors_when_the_primary_uri_is_unreachable() {
+        let (mirror_root, requested, handle) = serve_mirror(
+            vec![("/distfiles/hello-1.0.tar.gz", b"hello world".to_vec())],
+            2,
+        );
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root],
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
+        handle.join().unwrap();
+        assert_eq!(
+            *requested.lock().unwrap(),
+            vec!["/distfiles/layout.conf", "/distfiles/hello-1.0.tar.gz"]
+        );
+        assert!(
+            !distdir.join(".mirror-cache.json").exists(),
+            "an unreadable layout.conf is not cached"
+        );
+    }
+
+    /// A mirror's filename-hash layout: the file is fetched from the hashed
+    /// path Portage computes, the downloaded
+    /// `layout.conf` is left as `.layout.conf.<host>`, and the structure
+    /// is cached in Portage's `.mirror-cache.json` shape.
+    #[test]
+    fn fetch_src_uri_follows_a_mirrors_filename_hash_layout_and_caches_it() {
+        let (mirror_root, requested, handle) = serve_mirror(
+            vec![
+                (
+                    "/distfiles/layout.conf",
+                    b"[structure]\n0=filename-hash BLAKE2B 8\n".to_vec(),
+                ),
+                ("/distfiles/ce/hello-1.0.tar.gz", b"hello world".to_vec()),
+            ],
+            2,
+        );
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        fetch_src_uri(
+            &pkg_dir,
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root.clone()],
+                mirror_cache_now: Some(1800000000.5),
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        handle.join().unwrap();
+        assert_eq!(
+            *requested.lock().unwrap(),
+            vec!["/distfiles/layout.conf", "/distfiles/ce/hello-1.0.tar.gz"]
+        );
+        assert!(distdir.join(".layout.conf.127.0.0.1").is_file());
+        assert_eq!(
+            fs::read_to_string(distdir.join(".mirror-cache.json")).unwrap(),
+            format!(r#"{{"{mirror_root}": [1800000000.5, [["filename-hash", "BLAKE2B", "8"]]]}}"#)
+        );
+    }
+
+    /// A file fetched from an earlier candidate never asks a later mirror for
+    /// its `layout.conf`.
+    #[test]
+    fn fetch_src_uri_never_contacts_a_mirror_it_does_not_reach() {
+        let (literal_root, _, literal_handle) =
+            serve_mirror(vec![("/hello-1.0.tar.gz", b"hello world".to_vec())], 1);
+        let (mirror_root, mirror_requests, mirror_handle) = serve_mirror(vec![], 1);
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        fetch_src_uri(
+            &pkg_dir,
+            &format!("{literal_root}/hello-1.0.tar.gz"),
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root.clone()],
+                restrict_primaryuri: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        literal_handle.join().unwrap();
+        unblock_server(&mirror_root);
+        mirror_handle.join().unwrap();
+        assert!(mirror_requests.lock().unwrap().is_empty());
+        assert!(!distdir.join(".mirror-cache.json").exists());
+    }
+
     /// `RESTRICT=mirror`: the public fallback is not tried, so an unreachable
     /// primary URI fails the fetch and the mirror is never contacted.
     #[test]
@@ -1348,6 +1459,39 @@ mod tests {
 
         // Unblock the still-parked server thread so it can exit cleanly.
         let _ = std::net::TcpStream::connect(&mirror_addr);
+        handle.join().unwrap();
+    }
+
+    /// A `mirror+` prefix re-permits the public fallback under
+    /// `RESTRICT=mirror`, so the mirror rescues the fetch.
+    #[test]
+    fn fetch_src_uri_mirror_prefix_re_permits_the_gentoo_mirrors_fallback_under_restrict_mirror() {
+        // No `layout.conf` on this mirror (404): flat path.
+        let (mirror_root, _, handle) = serve_mirror(
+            vec![("/distfiles/hello-1.0.tar.gz", b"hello world".to_vec())],
+            2,
+        );
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "mirror+http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root],
+                restrict_mirror: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
         handle.join().unwrap();
     }
 

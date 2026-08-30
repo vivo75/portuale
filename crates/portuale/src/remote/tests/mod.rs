@@ -47,3 +47,8 @@ fn fixture(name: &str) -> std::path::PathBuf {
         .join("../../fixtures")
         .join(name)
 }
+
+fn s8_fixtures() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+}
+mod ssh;

@@ -21,6 +21,7 @@ use clap::ArgMatches;
 mod binpkg_flow;
 mod ledger;
 mod preflight;
+mod ssh;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -28,6 +29,7 @@ pub(crate) mod tests;
 pub(crate) use binpkg_flow::*;
 pub(crate) use ledger::*;
 pub(crate) use preflight::*;
+pub use ssh::*;
 
 use portage_util::TempDir;
 

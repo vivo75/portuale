@@ -37,6 +37,7 @@ mod problem_reports;
 mod prompt;
 mod removal;
 mod resolve_plan;
+mod resume;
 mod search;
 mod world;
 
@@ -61,6 +62,7 @@ pub(crate) use problem_reports::*;
 pub(crate) use prompt::*;
 pub(crate) use removal::*;
 pub(crate) use resolve_plan::*;
+pub(crate) use resume::*;
 pub(crate) use search::*;
 pub(crate) use world::*;
 
