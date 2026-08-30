@@ -32,6 +32,17 @@ pub(crate) fn built_equals_shifted_slot(
         .is_some_and(|(_, bound_sub)| bound_sub != existing_sub)
 }
 
+/// Arguments of [`built_equals_shift_unrebuildable`].
+pub(crate) struct BuiltEqualsShiftUnrebuildableArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) existing_sub: &'a str,
+    pub(crate) pullers: &'a SlotPullers,
+    pub(crate) excluded: &'a [String],
+}
+
 /// Removes every atom on an installed libc provider from a flattened set.
 // Portage: dep/libc.py, strip_libc_deps
 pub(crate) fn strip_libc_atoms(

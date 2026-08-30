@@ -164,3 +164,21 @@ pub(crate) fn check_if_latest_atom_form(args: CheckIfLatestAtomFormArgs<'_>) -> 
         format!("={cpv}")
     }
 }
+
+/// The `check_visibility=True` form (USE changes).
+pub(crate) fn autounmask_use_atom_form(
+    resolved: &Candidate,
+    all_candidates: &[Candidate],
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> String {
+    check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
+        resolved,
+        all_candidates,
+        category,
+        package,
+        config,
+        check_visibility: true,
+    })
+}

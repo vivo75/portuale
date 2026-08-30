@@ -322,6 +322,37 @@ impl Default for SelectOptions<'_> {
     }
 }
 
+impl ResolveCtx<'_> {
+    pub(crate) fn select_options(&self, bp: &BacktrackParams) -> SelectOptions<'_> {
+        SelectOptions {
+            newuse: self.newuse,
+            changed_use: self.changed_use,
+            update: self.update,
+            excluded: self.excluded,
+            changed_deps: self.changed_deps,
+            with_bdeps: self.with_bdeps,
+            changed_slot: self.changed_slot,
+            selective: self.selective,
+            usepkg: self.usepkg,
+            usepkgonly: self.usepkgonly,
+            binpkg_respect_use: self.binpkg_respect_use,
+            usepkg_exclude: self.usepkg_exclude,
+            usepkg_include: self.usepkg_include,
+            rebuilt_binaries: self.rebuilt_binaries,
+            rebuilt_binaries_timestamp: self.rebuilt_binaries_timestamp,
+            newrepo: self.newrepo,
+            empty: self.empty,
+            getbinpkg: self.getbinpkg,
+            autounmask_keywords: bp.autounmask_suggest_keywords,
+            autounmask_use: bp.autounmask_suggest_use,
+            autounmask_license: bp.autounmask_suggest_license,
+            autounmask_masks: bp.autounmask_suggest_masks,
+            is_top_level: false,
+            extra_constraints: &[],
+        }
+    }
+}
+
 pub fn resolve_pretend(
     source: &SelectSource,
     atom_str: &str,

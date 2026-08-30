@@ -8608,3 +8608,39 @@ existing fixtures `dev-libs/autounmaskkeywordpkg` / `autounmaskdepconsumer`.
 6 contract tests updated (fail-and-hint → resolve-and-block), 3
 `portage-repo` unit tests. scope-backlog.md Part 2.G item 14 / Part 1 #17.
 
+### `emerge --pretend`: real `--autounmask-use` USE *resolution* + the `-pv` USE line (increment 2)
+
+The USE half. Unlike keywords, `--autounmask-use` is **on by default**
+(real `create_depgraph_params` — no `--autounmask-keep-keywords`-style
+asymmetry), so `emerge -p 'dev-libs/foo[-bar]'` where `bar` is
+default-enabled now *resolves* with an implicit `package.use` flip
+rather than failing — exactly real portage's default.
+
+`resolve_pretend` grew an `autounmask_use` param: the USE-dep post-filter
+keeps a candidate whose atom use-deps its default USE state doesn't
+satisfy *if* a `package.use` flip would fix it (`suggested_use_flip` is
+`Some` — flag must be in IUSE and not mask/force-blocked). The graph
+layer then applies the flip to that entry's effective `use_flags`
+**once**, before the `-pv` USE display, the REQUIRED_USE check and the
+dependency walk — matching real `_pkg_use_enabled`. So `-pv` shows the
+adjusted `USE="-bar …"` (for a `New` entry real `_create_use_string`
+renders an autounmask-flipped flag exactly like any normally-set flag —
+`is_new=True`, no `*`/`%` marker), and a `foo? ( … )` group keyed off
+the flipped flag fires the new way.
+
+The change is recorded on `GraphResult::autounmask_use_changes` and
+printed as the `The following USE changes are necessary to proceed:`
+block (`(see "package.use" …)`), after the keyword block. The left-hand
+atom is `>=<cpv>` / `>=<cpv>:<slot>` / `=<cpv>` per real
+`check_if_latest(check_visibility=True)` (`autounmask_use_atom_form`) —
+real portage uses `>=` for USE, unlike keywords' bare `=` (bug #536392).
+`AutounmaskChange` now carries the op prefix in its `atom` field (`--json`
+field renamed `cpv` → `atom`); `--json` gains `autounmask_use_changes`.
+
+`--autounmask-use=n` restores the strict "USE-dep mismatch → no visible
+candidate" behavior (the `test_use_dep_enforcement_*` contract tests now
+pass it to keep testing raw matching). Both sides; existing
+`dev-libs/useflagpkg` / `usedeprejectedpkg` / `useeqparentoffpkg`
+fixtures. ~10 contract tests updated, 3 `portage-repo` unit tests.
+
+# # required by dev-libs/useflagpkg[-foo] (argument)
