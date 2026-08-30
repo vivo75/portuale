@@ -8711,6 +8711,59 @@ pass it to keep testing raw matching). Both sides; existing
 `dev-libs/useflagpkg` / `usedeprejectedpkg` / `useeqparentoffpkg`
 fixtures. ~10 contract tests updated, 3 `portage-repo` unit tests.
 
+### `emerge --pretend`: real `--autounmask-use` `opt=` *parent* flip (increment 3)
+
+Closes the `--autounmask-use` buildout. Real `_apply_parent_use_changes`
+→ `_show_unsatisfied_dep(collect_use_changes=True)` (`depgraph.py:5820`/
+`6768`): a dependency atom's use-dep was originally conditional on the
+*requesting parent's* own USE (`opt?`/`opt=` forms — `cat/pkg[flag=]`
+means "child's `flag` must match the parent's `flag`"), the parent's
+current USE evaluates it to a concrete constraint no candidate can
+satisfy, **and** a child-side `package.use` flip is impossible because
+the child's own flag is `use.mask`'d/forced. Real portage then flips the
+*parent's* conditional flag instead (dropping the constraint) and
+re-resolves.
+
+Portuale already *computed* `suggested_parent_use_candidate` (flip the
+parent flag, re-evaluate the atom, verify it now resolves, check the
+parent's REQUIRED_USE) — this increment *acts* on it. In the BFS loop,
+when a dependency comes back `NoVisibleCandidate` and the parent flip
+would fix it, `resolve_pretend_graph` re-evaluates the unevaluated atom
+with the parent's flipped USE, re-resolves the freed dependency, records
+`>=<parent-cpv> -flag` on `GraphResult::autounmask_use_changes` (printed
+in the same "necessary to proceed" USE block, with the *parent's* own
+one-level dep chain), and re-renders the parent entry's own `USE=` line
+to match. `--autounmask-use=n` suppresses it via the shared
+`autounmask_suggest_use` gate.
+
+New fixtures: `dev-libs/parentflipchildpkg` (IUSE `feat`, `feat`
+`use.mask`'d via `profiles/base/package.use.mask`) and
+`dev-libs/parentflipeqpkg` (IUSE `+feat`, RDEPEND
+`parentflipchildpkg[feat=]`). `emerge -p dev-libs/parentflipeqpkg` now:
+
+```
+[ebuild  N     ] dev-libs/parentflipchildpkg-1.0  USE="(-feat)"
+[ebuild  N     ] dev-libs/parentflipeqpkg-1.0  USE="-feat"
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/parentflipeqpkg-1.0::testrepo
+# required by dev-libs/parentflipeqpkg (argument)
+>=dev-libs/parentflipeqpkg-1.0 -feat
+```
+
+Deliberate cuts, confirmed against the "one change per blocked atom, no
+real backtracking" boundary the earlier increments set: portuale
+re-resolves only the *freed dependency*, not the whole graph (a parent
+`feat? ( other-dep )` sibling dep that the flip would also drop stays in
+the list); the parent's own dep chain is its one-level chain (a parent
+that is itself a deep dependency would need real `_get_dep_chain`'s full
+walk); and a non-`New` parent (Upgrade/Reinstall) re-renders its USE
+line as if `New` (no installed-diff markers). `--autounmask-license`
+follows below (increment 4).
+
+Both sides; 2 contract tests + 2 `CASES`, 2 `portage-repo` unit tests.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`

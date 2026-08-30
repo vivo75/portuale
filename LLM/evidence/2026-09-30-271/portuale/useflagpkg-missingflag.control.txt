@@ -1,0 +1,8 @@
+[ebuild  N     ] dev-libs/newpkg-1.0 
+[ebuild  N     ] dev-libs/hiddendep-1.0 
+[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo missingflag"
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/useflagpkg[missingflag] (argument)
+>=dev-libs/useflagpkg-1.0 missingflag

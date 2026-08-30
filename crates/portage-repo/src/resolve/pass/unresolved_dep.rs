@@ -5,6 +5,84 @@ use portage_dep::Atom;
 use portage_profile::Config;
 use std::ops::ControlFlow;
 
+/// The values [`maybe_missing_dep_backtrack`] reads from its caller.
+pub(crate) struct MaybeMissingDepBacktrackArgs<'a> {
+    pub(crate) current_atom: &'a str,
+    pub(crate) outcome: &'a PretendOutcome,
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) key: &'a (String, String),
+    pub(crate) state: &'a mut PassState,
+    pub(crate) config: &'a Config,
+    pub(crate) owner: &'a Option<(String, String)>,
+}
+
+/// Remember a missing-dep backtrack trigger for a dependency that matches
+/// nothing: with backtracking live and a merge-bound parent not yet tried,
+/// mask `!=parent-cpv` and retry. The entry still builds so an unfixable dep
+/// reports unchanged.
+pub(crate) fn maybe_missing_dep_backtrack(args: MaybeMissingDepBacktrackArgs<'_>) {
+    let MaybeMissingDepBacktrackArgs {
+        current_atom,
+        outcome,
+        ctx,
+        bp,
+        key,
+        state,
+        config,
+        owner,
+    } = args;
+    // The dep matches nothing. With backtracking live and a merge-bound parent
+    // not yet tried, mask `!=parent-cpv` and retry (one trigger per pass); the
+    // entry still builds below so an unfixable dep reports unchanged.
+    // Portage: depgraph.py (_feedback_missing_dep), backtracking.py
+    let bare_atom = current_atom
+        .split_once('[')
+        .map_or(current_atom, |(b, _)| b);
+    let masked_probe = bp.masked_negatives_for(key);
+    if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+        && ctx.backtrack_max > 0
+        && state.missing_dep_trigger.is_none()
+        && !atom_currently_satisfiable(&ctx.repos, bare_atom, config, &masked_probe)
+        && let Some((pc, pp)) = owner.clone()
+    {
+        let parent_cpv = state
+            .entries
+            .iter()
+            .find(|e| e.category == pc && e.package == pp)
+            .and_then(|e| match &e.outcome {
+                PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                    Some(version.clone())
+                }
+                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                    Some(to.clone())
+                }
+                _ => None,
+            });
+        if let Some(pv) = parent_cpv {
+            let neg = format!("!={pc}/{pp}-{pv}");
+            if !bp.missing_dep_masked.contains(&neg) {
+                state.missing_dep_trigger = Some(((pc, pp), neg, current_atom.to_string()));
+            }
+        } else {
+            // An installed parent whose dep can't be satisfied masks its highest
+            // instance instead (Portage masks by package object; `[installed]`
+            // hides only that instance, so the same-version ebuild stays visible
+            // for the next pass).
+            if let Some(iv) = installed_candidates(ctx.root, &pc, &pp)
+                .into_iter()
+                .map(|(v, _, _)| v)
+                .max_by(|a, b| vercmp_ordering(a, b))
+            {
+                let neg = format!("!={pc}/{pp}-{iv}[installed]");
+                if !bp.missing_dep_masked.contains(&neg) {
+                    state.missing_dep_trigger = Some(((pc, pp), neg, current_atom.to_string()));
+                }
+            }
+        }
+    }
+}
+
 /// What [`compute_nvc_suggestions`] hands back to its caller.
 pub(crate) struct NvcSuggestionsOut {
     pub(crate) keyword_suggestion: Option<(String, String)>,

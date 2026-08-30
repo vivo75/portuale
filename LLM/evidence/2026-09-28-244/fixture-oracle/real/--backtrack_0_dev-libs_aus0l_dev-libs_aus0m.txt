@@ -1,0 +1,16 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.12 s (backtrack: 0/0).
+
+[ebuild  N     ] dev-libs/aus0k-1  USE="-foo" 
+[ebuild  N     ] dev-libs/aus0l-1 to /tmp/l0-fixture-oracle/fixtures/
+[ebuild  N     ] dev-libs/aus0m-1 to /tmp/l0-fixture-oracle/fixtures/ USE="foo" 
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/aus0l-1::testrepo
+# required by dev-libs/aus0l (argument)
+>=dev-libs/aus0k-1 -foo

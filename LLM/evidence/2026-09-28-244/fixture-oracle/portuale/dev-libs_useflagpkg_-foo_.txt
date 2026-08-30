@@ -1,0 +1,7 @@
+[ebuild  N     ] dev-libs/useflagpkg-1.0  USE="-foo -missingflag"
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/useflagpkg-1.0::testrepo
+# required by dev-libs/useflagpkg[-foo] (argument)
+>=dev-libs/useflagpkg-1.0 -foo
