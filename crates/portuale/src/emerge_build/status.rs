@@ -261,3 +261,76 @@ pub(crate) fn emerging_line(
     }
     line
 }
+
+/// `Installing ({cur} of {max}) {cpv}::{repo}`, plus ` to {root}` when
+/// `ROOT != "/"` (note: `to`, not the `for` the Emerging line uses).
+/// Same colours as [`emerging_line`].
+// Portage: PackageMerge.py, _start
+pub(crate) fn installing_line(
+    entry: &GraphEntry,
+    version: &str,
+    progress: mrg_director::MergeProgress,
+    root: &Path,
+    color: &crate::color::Colorizer,
+) -> String {
+    let binary = entry.source == CandidateSource::Binary;
+    let pkg_color = if binary {
+        "PKG_BINARY_MERGE"
+    } else {
+        "PKG_MERGE"
+    };
+    let mut line = format!(
+        ">>> Installing ({} of {}) {}",
+        color.c("MERGE_LIST_PROGRESS", &progress.cur.to_string()),
+        color.c("MERGE_LIST_PROGRESS", &progress.max.to_string()),
+        color.c(
+            pkg_color,
+            &format!(
+                "{}/{}-{version}::{}",
+                entry.category,
+                entry.package,
+                entry_repo(entry)
+            )
+        ),
+    );
+    if root.as_os_str() != "/" {
+        line.push_str(&format!(" to {}", root.display()));
+    }
+    line
+}
+
+/// `Completed ({cur} of {max}) {cpv}::{repo}`, plus ` to {root}` when
+/// `ROOT != "/"`. Same colours and suppression as [`installing_line`].
+// Portage: PackageMerge.py, _install_exit
+pub(crate) fn completed_line(
+    entry: &GraphEntry,
+    version: &str,
+    progress: mrg_director::MergeProgress,
+    root: &Path,
+    color: &crate::color::Colorizer,
+) -> String {
+    let binary = entry.source == CandidateSource::Binary;
+    let pkg_color = if binary {
+        "PKG_BINARY_MERGE"
+    } else {
+        "PKG_MERGE"
+    };
+    let mut line = format!(
+        ">>> Completed ({} of {}) {}",
+        color.c("MERGE_LIST_PROGRESS", &progress.cur.to_string()),
+        color.c("MERGE_LIST_PROGRESS", &progress.max.to_string()),
+        color.c(
+            pkg_color,
+            &format!(
+                "{}/{}-{version}::{}",
+                entry.category,
+                entry.package,
+                entry_repo(entry)
+            )
+        ),
+    );
+    if root.as_os_str() != "/" {
+        line.push_str(&format!(" to {}", root.display()));
+    }
+    line
+}

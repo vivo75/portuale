@@ -47,6 +47,23 @@ pub(crate) fn resolved_features_for(
     ))
 }
 
+/// [`resolved_features_for`] for one scheduler entry. `None` when the
+/// entry is not buildable either.
+pub(crate) fn entry_resolved_features(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+    calling_features: &str,
+) -> Option<String> {
+    let version = entry_version(&entry.outcome)?;
+    let cpv_slot = entry_cpv_slot(entry, version);
+    resolved_features_for(
+        &options.package_env_vars,
+        &cpv_slot,
+        &options.features,
+        calling_features,
+    )
+}
+
 /// `[("USE", "<space-joined enabled IUSE flags>")]` for `entry`, or empty
 /// when the entry declares no enabled flags.
 pub(crate) fn build_use_env(entry: &GraphEntry) -> Vec<(String, String)> {
@@ -236,5 +253,45 @@ pub(crate) fn entry_phase_env_tail(
         ));
     }
     env.extend(entry_identity_env(entry, candidate));
+    env
+}
+
+/// The full per-entry build-phase env: the run-wide resolved env, then any
+/// per-package `package.env` build vars, then [`entry_phase_env_tail`].
+pub(crate) fn entry_build_env(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+    repos: &[RepoConfig],
+) -> Vec<(String, String)> {
+    let candidate = entry_version(&entry.outcome)
+        .and_then(|version| locate_candidate(repos, &entry.category, &entry.package, version));
+    // A package task re-reads env.d; unchanged `profile.env` keeps the
+    // old path.
+    let reloaded = options.resolved_config.as_deref().and_then(env_d_reloaded);
+    let mut env = match &reloaded {
+        Some(r) => run_wide_phase_env(r),
+        None => options.build_env.clone(),
+    };
+    env.extend(entry_package_env_vars(options, entry));
+    // Last-wins: the folded per-entry list overrides the run-wide
+    // `FEATURES`/`PORTAGE_FEATURES` pair downstream. `None` appends
+    // nothing, so unmatched entries keep byte-identical output.
+    let calling_features = std::env::var("FEATURES").unwrap_or_default();
+    if let Some(features) = entry_resolved_features(options, entry, &calling_features) {
+        env.push(("FEATURES".to_string(), features.clone()));
+        env.push(("PORTAGE_FEATURES".to_string(), features));
+    }
+    env.extend(entry_phase_env_tail(
+        reloaded.as_ref().or(options.resolved_config.as_deref()),
+        repos,
+        entry,
+        candidate.as_ref(),
+    ));
+    // Re-derive the compression command as in
+    // `buildpkgonly_entry_build_env`; `None` means pairs-then-env only.
+    crate::ebuild_package::refresh_entry_compression_command(
+        &mut env,
+        reloaded.as_ref().or(options.resolved_config.as_deref()),
+    );
     env
 }

@@ -145,6 +145,18 @@ impl MergeOptions {
         self.gpg_verify = crate::binpkg::GpgVerify::from_features(features);
         self.features = features.to_string();
     }
+
+    /// Replace the protect lists from the resolved incremental fold,
+    /// when some layer assigns the key; an empty fold protects nothing.
+    /// Portage: lib/portage/dbapi/vartree.py, dblink._get_protect_obj
+    pub fn apply_config_protect(&mut self, config: &portage_profile::Config) {
+        if let Some(v) = config.resolved_incremental("CONFIG_PROTECT") {
+            self.config_protect = v.join(" ");
+        }
+        if let Some(v) = config.resolved_incremental("CONFIG_PROTECT_MASK") {
+            self.config_protect_mask = v.join(" ");
+        }
+    }
 }
 
 /// A merged file's extended attributes: same-device rename keeps every
