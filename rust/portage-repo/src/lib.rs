@@ -2646,8 +2646,9 @@ fn keyword_provenance(
 }
 
 /// Real `output.py::gen_mask_str` + `Package.get_keyword_mask` /
-/// `isHardMasked`, for the `-v` one-character bracket-mask column
-/// (`GraphEntry::keyword_mask`). Only ever called on a candidate already
+/// `isHardMasked`, for the one-character bracket-mask column
+/// (`GraphEntry::keyword_mask`, present at plain `-p` and `-pv` alike --
+/// see that field's own doc comment). Only ever called on a candidate already
 /// resolved into a `GraphEntry`, i.e. one that *is* visible -- so this
 /// only classifies *why* it needed help, never re-checks visibility.
 ///
@@ -6204,14 +6205,18 @@ pub struct GraphEntry {
     /// USE display of its own to match.
     pub use_expand_display: Vec<(String, String)>,
     /// Real `output.py::gen_mask_str`'s own one-character mask column
-    /// (`PkgAttrDisplay.mask`), shown only with `-v`
-    /// (`include_mask_str` = `verbosity > 1`): `'#'` for a candidate
-    /// hard-masked in some profile/`package.mask` but pulled in anyway
-    /// (`isHardMasked`, wins first), `'~'` for one visible only via a
-    /// `~<our-arch>` testing keyword (`get_keyword_mask` "unstable"),
-    /// `'*'` for one visible only via `**` or a different arch's keyword
-    /// ("missing"). `None` for an ordinary, globally-keyword-visible,
-    /// unmasked candidate. See `keyword_mask_marker`.
+    /// (`PkgAttrDisplay.mask`). Real `set_pkg_info` fills it in `if
+    /// self.include_mask_str()` (`verbosity > 1`), and real default
+    /// `emerge -p` verbosity is 2 -- so the column shows at plain `-p`
+    /// *and* `-pv`, absent only under `--quiet` (verbosity 1), which
+    /// this pilot doesn't model (`pretend.rs::attr_display_field` always
+    /// renders it). `'#'` for a candidate hard-masked in some
+    /// profile/`package.mask` but pulled in anyway (`isHardMasked`, wins
+    /// first), `'~'` for one visible only via a `~<our-arch>` testing
+    /// keyword (`get_keyword_mask` "unstable"), `'*'` for one visible
+    /// only via `**` or a different arch's keyword ("missing"). `None`
+    /// for an ordinary, globally-keyword-visible, unmasked candidate
+    /// (rendered as a bare space). See `keyword_mask_marker`.
     pub keyword_mask: Option<char>,
     /// Real `output.py::_get_installed_best`'s own `new_slot` flag -- the
     /// `S` bracket column (`PkgAttrDisplay.new_slot`, rendered

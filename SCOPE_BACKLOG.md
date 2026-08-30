@@ -247,7 +247,18 @@ Ranked roughly by how self-contained each is.
    `_append_repository` / `convert_myoldbest`) **shipped 2026-08-29**
    (`GraphEntry::sub_slot`/`repo_name`/`oldbest`, `InstalledRef`,
    `decorate_version`; fixture vdb entries gained `repository` files).
-   ANSI colour shipped across increments 2-4. The `g` (remote binary)
+   ANSI colour shipped across increments 2-4. **Correction 2026-08-30**
+   (real-tree finding): the 7th mask column and the blocker line's
+   `empty_space_in_brackets()` were shipped `-v`-gated, but real
+   `include_mask_str()` = `verbosity > 1` and real default `emerge -p`
+   verbosity is **2** — so both are present at plain `-p`, absent only
+   under `--quiet` (verbosity 1, not modelled). `attr_display_field` /
+   `_attr_display_field` / `format_blocker_lines` now render the column
+   unconditionally; ~240 pinned assertions widened. **New residual:** at
+   verbosity 2 real portage also prints the `USE="…"` line for a
+   *changed* flag set / new package (`_create_use_string` returns "" only
+   when nothing changed *and* `all_flags` off), where the pilot still
+   gates the whole `USE=` display on `-v` — its own future slice. The `g` (remote binary)
    bracket column **shipped 2026-08-29** with the `--pretend` half of
    `--getbinpkg` (item 6 / item 19). The `-pv` output arc is complete
    bar `--autounmask` message colour (its own future slice). The blocker

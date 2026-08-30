@@ -341,15 +341,19 @@ fn columns_line(
 ///    (`g` is out of scope, needs `--getbinpkg`).
 /// 4. `U` -- `new_version` (an in-slot version change -- `Upgrade`/`Downgrade`).
 /// 5. `D` -- `downgrade`.
-/// 6. the mask column -- present only at `-v` (`include_mask_str` =
-///    `verbosity > 1`), the `#`/`~`/`*` char from `gen_mask_str`
-///    (`GraphEntry::keyword_mask`) or a space.
+/// 6. the mask column -- the `#`/`~`/`*` char from `gen_mask_str`
+///    (`GraphEntry::keyword_mask`) or a space. Real `set_pkg_info` fills
+///    it in only `if self.include_mask_str()` (`verbosity > 1`), and real
+///    default `emerge -p` verbosity is *2* (`_DisplayConfig.__init__`:
+///    `--quiet and 1 or --verbose and 3 or 2`) -- so the column is
+///    present at plain `-p` *and* `-pv`, and absent only under `--quiet`
+///    (verbosity 1), which this pilot doesn't model. Always rendered.
 ///
 /// Each present letter is ANSI-coloured per real `PkgAttrDisplay.__str__`
 /// (`green("N")`, `yellow("R")`, `turquoise("U")`, `blue("D")`,
 /// `colorize("WARN", "I")`, the `#`/`*`/`~` mask via `BAD`/`WARN`, …)
 /// when `color.enabled`; a space is never coloured. When colour is off
-/// every call returns the bare char, so the field is exactly 6/7 visible
+/// every call returns the bare char, so the field is exactly 7 visible
 /// columns either way (`color::nc_len` recovers that width for
 /// `--columns` padding).
 #[allow(clippy::too_many_arguments)]
@@ -365,7 +369,6 @@ fn attr_display_field(
     new_version: bool,
     downgrade: bool,
     mask: Option<char>,
-    verbose: bool,
     color: &Colorizer,
 ) -> String {
     let col = |key: &str, ch: char| color.c(key, &ch.to_string());
@@ -409,17 +412,16 @@ fn attr_display_field(
         " ".to_string()
     });
     // Real `__str__` appends `self.mask` only `if self.mask is not None`,
-    // and `set_pkg_info` sets it (to a space when there's no real mark)
-    // only `if self.include_mask_str()` -- so the column exists at `-v`
-    // and doesn't at plain `-p`. Real `gen_mask_str`: `#`/`*` -> `BAD`
-    // (red), `~` -> `WARN` (yellow).
-    if verbose {
-        f.push_str(&match mask {
-            Some(c @ ('#' | '*')) => col("BAD", c),
-            Some('~') => col("WARN", '~'),
-            _ => " ".to_string(),
-        });
-    }
+    // and `set_pkg_info` sets it only `if self.include_mask_str()`
+    // (`verbosity > 1`) -- true at real portage's default `emerge -p`
+    // verbosity of 2, so the column is always present here (this pilot
+    // has no `--quiet`/verbosity-1 mode). Real `gen_mask_str`: `#`/`*` ->
+    // `BAD` (red), `~` -> `WARN` (yellow), no mark -> a space.
+    f.push_str(&match mask {
+        Some(c @ ('#' | '*')) => col("BAD", c),
+        Some('~') => col("WARN", '~'),
+        _ => " ".to_string(),
+    });
     f
 }
 
@@ -738,16 +740,14 @@ fn package_counters_summary(
 /// reduces to stripping the leading `!`/`!!`. Real's `(is <desc>
 /// <parents>)` alternative (`self.resolved == blocker.atom`) is
 /// unreachable -- `resolved` drops the `!` while `blocker.atom` keeps
-/// it. `empty_space_in_brackets()` adds the mask column's own space only
-/// at verbosity > 1 (`-v`).
-fn format_blocker_lines(
-    entry: &GraphEntry,
-    owner_version: &str,
-    verbose: bool,
-    color: &Colorizer,
-) -> Vec<String> {
+/// it. Real `_blockers` appends `empty_space_in_brackets()` after the
+/// five-space `B     ` pad, and that adds the mask column's own space
+/// whenever `verbosity > 1` -- true at real portage's default `emerge
+/// -p` verbosity of 2, so it's always present here (this pilot has no
+/// `--quiet`).
+fn format_blocker_lines(entry: &GraphEntry, owner_version: &str, color: &Colorizer) -> Vec<String> {
     let style = "PKG_BLOCKER";
-    let pad = if verbose { "      " } else { "     " };
+    let pad = "      ";
     entry
         .blockers
         .iter()
@@ -861,7 +861,6 @@ fn print_entry_line(
             new_version,
             downgrade,
             entry.keyword_mask,
-            verbose,
             color,
         )
     };
@@ -1004,7 +1003,7 @@ fn print_entry_line(
             // (this pilot doesn't carry the other-slot versions on the
             // entry yet).
             emit(&field(true, entry.new_slot, false, false, false), version);
-            blocker_lines.extend(format_blocker_lines(entry, version, verbose, color));
+            blocker_lines.extend(format_blocker_lines(entry, version, color));
         }
         PretendOutcome::Upgrade { from: _, to } => {
             // Real: an in-slot version bump -> `attr.new_version` only
@@ -1012,13 +1011,13 @@ fn print_entry_line(
             // stays clear -> `U`, no `R`). oldbest = the in-slot
             // installed version(s) (`myinslotlist`), from `entry.oldbest`.
             emit(&field(false, false, false, true, false), to);
-            blocker_lines.extend(format_blocker_lines(entry, to, verbose, color));
+            blocker_lines.extend(format_blocker_lines(entry, to, color));
         }
         PretendOutcome::Downgrade { from: _, to } => {
             // Real: in-slot downgrade -> `attr.new_version` *and*
             // `attr.downgrade` (`U` and `D`). oldbest as for `Upgrade`.
             emit(&field(false, false, false, true, true), to);
-            blocker_lines.extend(format_blocker_lines(entry, to, verbose, color));
+            blocker_lines.extend(format_blocker_lines(entry, to, color));
         }
         PretendOutcome::Reinstall {
             version,
@@ -1038,7 +1037,7 @@ fn print_entry_line(
             // `--changed-use`; `--changed-deps`/`--changed-slot` reasons
             // are genuinely invisible in real `-pv` too).
             emit(&field(false, false, true, false, false), version);
-            blocker_lines.extend(format_blocker_lines(entry, version, verbose, color));
+            blocker_lines.extend(format_blocker_lines(entry, version, color));
         }
         PretendOutcome::AlreadyInstalled { version } => {
             // Already-satisfied dependencies aren't shown, matching
@@ -5029,5 +5028,40 @@ mod tests {
         let root = fixtures_root();
         let sets = vec![("someset".to_string(), vec!["dev-libs/other".to_string()])];
         assert!(still_listed_parents(&root, &sets, "dev-libs", "dualslotpkg", "1.0").is_empty());
+    }
+
+    #[test]
+    fn attr_display_field_always_carries_the_seventh_mask_column() {
+        // Real `set_pkg_info` fills the mask column `if
+        // self.include_mask_str()` (`verbosity > 1`), and real default
+        // `emerge -p` verbosity is 2 -- so the field is 7 columns even
+        // without `-v`; this pilot has no `--quiet`/verbosity-1 mode
+        // that would drop it. A plain reinstall with no keyword/hard
+        // mask -> `I N S f U D` = `  R   ` then a bare space.
+        let nc = Colorizer::new(false);
+        let plain = attr_display_field(
+            false, false, false, false, true, false, false, false, false, false, None, &nc,
+        );
+        assert_eq!(plain, "  R    ");
+        assert_eq!(plain.chars().count(), 7);
+
+        // A `~arch`-only-visible New -> the 7th column is `~`
+        // (`gen_mask_str` "unstable"), not a space.
+        let masked = attr_display_field(
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            Some('~'),
+            &nc,
+        );
+        assert_eq!(masked, " N    ~");
+        assert_eq!(masked.chars().count(), 7);
     }
 }

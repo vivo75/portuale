@@ -3101,14 +3101,17 @@ PORTING/
   (new, `pretend.rs` + `_attr_display_field`, `emerge_pretend_reference.py`)
   ports real `PkgAttrDisplay.__str__` (`output_helpers.py:603-650`) --
   the fixed-width status field `[I][N/r][S/R][f/F/g][U][D]` (+ a 7th mask
-  column only at `-v`, `include_mask_str` = `verbosity > 1`), one column
+  column that this slice gated on `-v`; **corrected 2026-08-30**, see
+  "the bracket mask column is present at plain `-p` too" below -- real
+  `include_mask_str` = `verbosity > 1` and default `emerge -p` verbosity
+  is 2, so the column is always there bar `--quiet`), one column
   per attribute, a literal space where absent. `[ebuild  N]` becomes
-  `[ebuild  N    ]` (`-p`) / `[ebuild  N     ]` (`-pv`); an in-slot
-  upgrade is `[ebuild     U ] cat/pkg-2.0 [1.0]` (real `_set_no_columns`
+  `[ebuild  N     ]` (both `-p` and `-pv`, post-correction);  an in-slot
+  upgrade is `[ebuild     U  ] cat/pkg-2.0 [1.0]` (real `_set_no_columns`
   `f"[{type} {attr}] {indent}{pkg_str} {oldbest}"` -- `oldbest =
   blue("[from]")` from `convert_myoldbest`, replacing the `(upgrade from
-  X)` prose); a downgrade adds `D` (`[ebuild     UD]`); a plain reinstall
-  is `[ebuild   R   ]` with **no** inline reason (real `_get_installed_best`
+  X)` prose); a downgrade adds `D` (`[ebuild     UD ]` post-correction); a plain reinstall
+  is `[ebuild   R    ]` with **no** inline reason (real `_get_installed_best`
   sets `attr.replace` -- the `R` -- only when the exact cpv is already
   installed, and `emerge -pv` genuinely shows no "why" for a reinstall;
   the pilot's `(reinstall for …)` prose and `reinstall_reason` helper are
@@ -3228,8 +3231,10 @@ PORTING/
   block (increment 2).
 
   **`emerge --pretend -v`: the `[ebuild N ~]` bracket-mask marker.** Real
-  `output.py::gen_mask_str` (only with `-v` -- `include_mask_str` =
-  `verbosity > 1`) gives the bracket a one-character column right after
+  `output.py::gen_mask_str` (this slice gated it on `-v`; **corrected
+  2026-08-30**, see "the bracket mask column is present at plain `-p`
+  too" below -- `include_mask_str` = `verbosity > 1` and default `emerge
+  -p` verbosity is 2) gives the bracket a one-character column right after
   the `N`/`U`/`D`/`r` code letter, for a package that's being installed
   *despite* not being visible via the global `ACCEPT_KEYWORDS` alone:
   `#` if it's hard-masked somewhere but was `package.unmask`'d anyway
@@ -3245,7 +3250,9 @@ PORTING/
   to split `~` from `*` (a deliberate narrowing of real
   `getRawMissingKeywords`, sufficient for single-arch). Carried on a new
   `GraphEntry::keyword_mask: Option<char>`; `pretend.rs`'s new
-  `mask_suffix` appends it (` ~`) inside the compact bracket, `-v` only.
+  `mask_suffix` appends it (` ~`) inside the compact bracket (`-v` only
+  as this slice shipped it; the later `attr_display_field` rework folded
+  it into the 7th fixed-width column, present at plain `-p` too).
   Existing fixtures: `dev-libs/bareacceptkeywordspkg` (`~amd64`) ->
   `[ebuild  N ~]`, `dev-libs/tildestarkeywordpkg` (`~arm64` via `~*`) ->
   `[ebuild  N *]`, `dev-libs/maskedandunmaskedpkg` -> `[ebuild  N #]`.
@@ -8858,6 +8865,49 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pC 'dev-libs/dualslotpkg:2'
 # Package dev-libs/dualslotpkg-2.0 is going to be unmerged,
 # but still listed in the following package sets:
 #     dualslotset
+```
+
+### `emerge -p`: the bracket mask column is present at plain `-p` too, not only `-v` (real-tree finding)
+
+Running `portuale` against a real Gentoo tree in the container turned up
+a one-column width difference from real `emerge`: portuale printed
+`[ebuild   R   ]` (13 inside the brackets) where real portage printed
+`[ebuild   R    ]` (14). The pilot had gated the 7th `PkgAttrDisplay`
+column — the `#`/`~`/`*`/space mask marker from `output.py::gen_mask_str`
+— on `-v`, per `include_mask_str()` = `verbosity > 1`. But real portage's
+**default** `emerge -p` verbosity is **2**, not 1
+(`_DisplayConfig.__init__`: `"--quiet" and 1 or "--verbose" and 3 or 2`)
+— so `include_mask_str()` is already true at plain `-p`, and the column
+is absent only under `--quiet` (verbosity 1), which this pilot doesn't
+model at all.
+
+`attr_display_field` (`pretend.rs`, mirrored `_attr_display_field`) now
+always renders the 7th column; `format_blocker_lines`' own
+`empty_space_in_brackets()` pad (real `output.py:90`) is likewise always
+6 spaces after `B`, not 5. A side effect worth noting: keyword/hard-mask
+markers that were previously invisible without `-v` now show at plain
+`-p` — `[ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0`, `[ebuild  N
+   #] dev-libs/overlaymaskedpkg-1.0`, `[ebuild  N    *]
+dev-libs/livekeywordpkg-9999` — matching real `emerge -p`. Both sides;
+~240 pinned-output test assertions widened by one column, 1 new
+`pretend.rs` unit test, and `test_pv_bracket_mask_marker` rewritten to
+assert the marker at plain `-p` too. After the fix, portuale's non-`-v`
+bracket width matches real `emerge -p` on a real tree.
+
+Not addressed here (a separate newly-noticed gap, backlog): at verbosity
+2 real portage *also* prints the `USE="…"` line for a **changed** flag
+set or a new package (`_create_use_string` only returns "" when nothing
+changed *and* `all_flags` is off), where the pilot still gates the whole
+`USE=` display on `-v`.
+
+```sh
+FX="$(realpath PORTING/fixtures)"
+# plain -p: the 7th (mask) column is a bare space for an ordinary pkg...
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/newpkg
+# [ebuild  N     ] dev-libs/newpkg-1.0
+# ...and a real marker for a keyword-/hard-masked one, no -v needed:
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p --autounmask dev-libs/autounmaskkeywordpkg
+# [ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0
 ```
 
 ## Running it

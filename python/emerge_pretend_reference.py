@@ -8735,7 +8735,6 @@ def _attr_display_field(
     new_version,
     downgrade,
     mask,
-    verbose,
     color,
 ):
     """Real PkgAttrDisplay.__str__ (_emerge/resolver/output_helpers.py):
@@ -8754,13 +8753,18 @@ def _attr_display_field(
                (g out of scope, needs --getbinpkg)
       4. U  -- new_version (an in-slot version change -- Upgrade/Downgrade)
       5. D  -- downgrade
-      6. the mask column -- present only at -v (include_mask_str =
-         verbosity > 1), the #/~/* char from gen_mask_str or a space
+      6. the mask column -- the #/~/* char from gen_mask_str or a space.
+         Real set_pkg_info fills it in only `if self.include_mask_str()`
+         (verbosity > 1), and real default `emerge -p` verbosity is 2
+         (_DisplayConfig.__init__: `--quiet and 1 or --verbose and 3 or
+         2`) -- so the column is present at plain -p and -pv, absent only
+         under --quiet (verbosity 1), which this pilot doesn't model.
+         Always rendered.
 
     Each present letter is ANSI-coloured per real PkgAttrDisplay.__str__
     (green("N"), yellow("R"), turquoise("U"), blue("D"),
     colorize("WARN", "I"), the #/*/~ mask via BAD/WARN) when colour is on;
-    a space is never coloured, so the field stays 6/7 visible columns
+    a space is never coloured, so the field stays 7 visible columns
     either way. Mirrors pretend.rs's attr_display_field exactly."""
 
     def col(key, ch):
@@ -8784,16 +8788,17 @@ def _attr_display_field(
     f.append(col("turquoise", "U") if new_version else " ")
     f.append(col("blue", "D") if downgrade else " ")
     # Real __str__ appends self.mask only `if self.mask is not None`, and
-    # set_pkg_info sets it (to a space when there's no real mark) only
-    # `if self.include_mask_str()` -- so the column exists at -v and
-    # doesn't at plain -p. Real gen_mask_str: #/* -> BAD (red), ~ -> WARN.
-    if verbose:
-        if mask in ("#", "*"):
-            f.append(col("BAD", mask))
-        elif mask == "~":
-            f.append(col("WARN", "~"))
-        else:
-            f.append(" ")
+    # set_pkg_info sets it only `if self.include_mask_str()` (verbosity >
+    # 1) -- true at real portage's default `emerge -p` verbosity of 2, so
+    # the column is always present here (this pilot has no --quiet).
+    # Real gen_mask_str: #/* -> BAD (red), ~ -> WARN (yellow), no mark ->
+    # a space.
+    if mask in ("#", "*"):
+        f.append(col("BAD", mask))
+    elif mask == "~":
+        f.append(col("WARN", "~"))
+    else:
+        f.append(" ")
     return "".join(f)
 
 
@@ -10350,11 +10355,14 @@ def run(args):
         # already `cat/pkg[...]`, so it reduces to stripping the leading
         # `!`/`!!`. Real's `(is <desc> <parents>)` alternative
         # (`self.resolved == blocker.atom`) is unreachable: `resolved`
-        # drops the `!` while `blocker.atom` keeps it. `empty_space_in_
-        # brackets()` adds the mask column's own space only at verbosity
-        # > 1 (`-v`).
+        # drops the `!` while `blocker.atom` keeps it. Real `_blockers`
+        # appends `empty_space_in_brackets()` after the five-space `B    `
+        # pad, and that adds the mask column's own space whenever
+        # `verbosity > 1` -- true at real portage's default `emerge -p`
+        # verbosity of 2, so it's always present here (this pilot has no
+        # --quiet).
         style = "PKG_BLOCKER"
-        pad = "     " + (" " if verbose else "")
+        pad = "      "
         for b in blockers:
             resolved = b["atom_str"].lstrip("!")
             desc = "hard blocking" if b["strong"] else "soft blocking"
@@ -10615,7 +10623,6 @@ def run(args):
                 new_version,
                 downgrade,
                 km,
-                verbose,
                 color,
             )
 
