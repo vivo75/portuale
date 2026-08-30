@@ -7003,6 +7003,43 @@ def _collect_installed_sets(config_root, root):
     return out
 
 
+def _still_listed_parents(root, installed_sets, cat, pkg, version):
+    """Real unmerge.py:355-447's "still listed in the following package
+    sets" check for one selected category/package-version: the names of
+    the user-editable sets (installed_sets) that still directly list a
+    matching atom, MINUS any set whose matching atom is also satisfied by
+    an installed newer version of the same cp in a different slot (real
+    unmerge.py:421-441's higher_slot: pkg.slot_atom != inst_pkg.slot_atom
+    after the descending-order `pkg >= inst_pkg` break). Shared by the
+    -pC and -pP paths, matching real portage's single _unmerge_display.
+    Mirrors pretend.rs's still_listed_parents."""
+    installed = installed_candidates(root, cat, pkg)
+    selected_slot = next(
+        (s for (v, s, _ss) in installed if v == version), None
+    )
+
+    def covered_by_higher_slot(atom_str):
+        return any(
+            (vercmp(v, version) or 0) > 0
+            and s != selected_slot
+            and match_from_list(atom_str, [f"{cat}/{pkg}-{v}:{s}/{ss}"])
+            for (v, s, ss) in installed
+        )
+
+    candidate = f"{cat}/{pkg}-{version}"
+    parents = []
+    for set_name, atoms in installed_sets:
+        if any(
+            (parsed := _parse_atom(a)) is not None
+            and parsed.cp.split("/", 1) == [cat, pkg]
+            and match_from_list(a, [candidate])
+            and not covered_by_higher_slot(a)
+            for a in atoms
+        ):
+            parents.append(set_name)
+    return parents
+
+
 def _run_deselect(targets, root):
     """Ports real action_deselect (lib/_emerge/actions.py, lines
     1740-1835) exactly: needs no repo/config resolution at all, only the
@@ -7348,10 +7385,9 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
     # Real _unmerge_display's "still listed in the following package
     # sets" warning: a selected package a user-editable set (reached via
     # world_sets) still lists would be re-pulled on the next @world
-    # update. Real portage additionally suppresses the flag when a higher
-    # slot of the same cp satisfies the set atom -- a refinement this
-    # pilot's single-slot fixtures never exercise (cp-and-atom-match only
-    # here). Mirrors pretend.rs.
+    # update -- unless an installed newer version of the same cp in a
+    # different slot also matches the set atom (real unmerge.py:421-441's
+    # higher_slot). Mirrors pretend.rs's still_listed_parents.
     try:
         installed_sets = [
             (name, atoms)
@@ -7362,18 +7398,7 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
         print(f"emerge: {e}", file=sys.stderr)
         return 1
     for (cat, pkg, version) in sorted(all_selected):
-        candidate = f"{cat}/{pkg}-{version}"
-        parents = []
-        for set_name, atoms in installed_sets:
-            for atom_str in atoms:
-                parsed = _parse_atom(atom_str)
-                if (
-                    parsed is not None
-                    and tuple(parsed.cp.split("/", 1)) == (cat, pkg)
-                    and match_from_list(atom_str, [candidate])
-                ):
-                    parents.append(set_name)
-                    break
+        parents = _still_listed_parents(root, installed_sets, cat, pkg, version)
         if parents:
             parents.sort()
             print(color.c("WARN", f"Package {cat}/{pkg}-{version} is going to be unmerged,"))
@@ -8399,16 +8424,7 @@ def _run_prune_nodeps_pretend(targets, root, config_root, color):
         for v in others
     )
     for (c, p, v) in selected_flat:
-        candidate = f"{c}/{p}-{v}"
-        parents = []
-        for set_name, atoms in installed_sets:
-            if any(
-                (parsed := _parse_atom(a)) is not None
-                and parsed.cp.split("/", 1) == [c, p]
-                and match_from_list(a, [candidate])
-                for a in atoms
-            ):
-                parents.append(set_name)
+        parents = _still_listed_parents(root, installed_sets, c, p, v)
         if parents:
             parents.sort()
             print(color.c("WARN", f"Package {c}/{p}-{v} is going to be unmerged,"))

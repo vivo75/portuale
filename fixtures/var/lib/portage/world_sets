@@ -3,3 +3,4 @@
 # contents include a further nested "@innernestedset" reference to prove
 # recursive expansion.
 @nestedtestset
+@dualslotset

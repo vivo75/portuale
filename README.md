@@ -777,10 +777,13 @@ PORTING/
   reached via `world_sets` -- new `collect_installed_sets` (real
   `_unmerge_display`'s own `installed_sets`, a BFS over the `@`-refs
   keeping each set's *direct* atoms), minus the sets the user is
-  `-C`-targeting (real `setconfig.active`). **Narrowed:** real portage
-  also suppresses (2) when a *higher slot* of the same cp satisfies the
-  set atom -- a refinement the single-slot fixtures never exercise; and
-  a referenced-but-missing set is dropped silently here (real `eerror`s
+  `-C`-targeting (real `setconfig.active`). The higher-slot refinement
+  (real `unmerge.py:421-441`'s `higher_slot`: (2) is suppressed for a
+  set when an installed *newer* version of the same cp *in a different
+  slot* also matches the set atom -- removing this version leaves the
+  set satisfied) **shipped 2026-08-30** -- see "`emerge -pC`/`-pP`: the
+  higher-slot set-protection refinement" below. Still narrowed: a
+  referenced-but-missing set is dropped silently here (real `eerror`s
   "Unknown set"). New fixtures: `dev-libs/systempkg` (a `*`-prefixed
   `@system` atom in `profiles/base/packages`, installed);
   `dev-libs/nestedsetpkg` installed (it's in `@nestedtestset`, which
@@ -8713,6 +8716,52 @@ candidate" behavior (the `test_use_dep_enforcement_*` contract tests now
 pass it to keep testing raw matching). Both sides; existing
 `dev-libs/useflagpkg` / `usedeprejectedpkg` / `useeqparentoffpkg`
 fixtures. ~10 contract tests updated, 3 `portage-repo` unit tests.
+
+### `emerge -pC` / `-pP`: the higher-slot set-protection refinement
+
+Real `unmerge.py:421-441`: the "still listed in the following package
+sets" warning is suppressed for a set when an installed *newer* version
+of the same cp *in a different slot* also matches that set's atom —
+removing the version being unmerged still leaves the set satisfied by
+the other one. (Real portage's `higher_slot`: it walks the atom's
+installed matches in descending order, stops at `pkg`, and takes the
+first `> pkg` version whose `slot_atom` differs.)
+
+New shared `still_listed_parents(root, installed_sets, cat, pkg,
+version)` (`pretend.rs`, mirrored `_still_listed_parents`) — used by
+**both** `run_unmerge_pretend` and `run_prune_pretend`, matching real
+portage's single `_unmerge_display` handling every `unmerge_action`.
+For each set atom that matches the selected `cat/pkg-version`, it now
+also checks `installed_candidates` for a `vercmp`-newer instance in a
+different slot that matches the atom (built with a `:slot/sub_slot`
+suffix so a slotted set atom resolves correctly); a covered atom
+doesn't make its set a "parent".
+
+New fixture `dev-libs/dualslotpkg` installed in slot 1 (`1.0`) and slot
+2 (`2.0`), with `etc/portage/sets/dualslotset` (bare
+`dev-libs/dualslotpkg`, selected via `world_sets`): `emerge -pC
+'dev-libs/dualslotpkg:1'` prints **no** warning (slot 2 covers the set
+atom), `-pC 'dev-libs/dualslotpkg:2'` prints the warning (nothing
+higher). This slice also recorded the one remaining `_unmerge_display`
+cut — the "currently used Python interpreter" self-skip (real
+`_dblink(cpv).isowner(portage._python_interpreter)`) — as a **non-gap**
+for this pilot: its `emerge` is a Rust binary with no Python interpreter
+of its own to protect. 2 contract `CASES` + 1 pinned test + 2
+`pretend.rs` unit tests; both sides.
+
+```sh
+FX="$(realpath PORTING/fixtures)"
+# slot 1 (1.0): slot 2 (2.0, higher) still matches the bare
+# dev-libs/dualslotpkg atom in @dualslotset -> no warning
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pC 'dev-libs/dualslotpkg:1' | grep -c 'still listed'
+# 0
+# slot 2 (2.0): nothing installed higher -> the warning fires
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pC 'dev-libs/dualslotpkg:2'
+# ...
+# Package dev-libs/dualslotpkg-2.0 is going to be unmerged,
+# but still listed in the following package sets:
+#     dualslotset
+```
 
 ## Running it
 

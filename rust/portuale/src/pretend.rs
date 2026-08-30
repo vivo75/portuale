@@ -2126,13 +2126,21 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
 /// `@world`/`@system`/`@customset` target expands to its own atom list
 /// first (the same machinery `run()` and `run_deselect` already use).
 ///
-/// **Documented cuts** (real `_unmerge_display` does these; a follow-up
-/// slice can add them): the "still listed in the following package
-/// sets" set-protection warning, the "is part of your system profile"
-/// warning (real `cp in syslist`), the `--prune`/`--depclean` variants
-/// (best-version pruning / reverse-reachability), the "currently used
-/// Python interpreter" self-skip (needs a `CONTENTS` owner scan this
-/// pilot doesn't do here), and any real removal.
+/// The "still listed in the following package sets" set-protection
+/// warning (real `unmerge.py:355-447`, `EditablePackageSet` members
+/// reached via `world_sets`) and the "is part of your system profile"
+/// warning (real `cp in syslist`) are both real -- including the
+/// higher-slot refinement (`unmerge.py:421-441`: an installed
+/// higher-versioned instance of the same cp *in a different slot* that
+/// also matches the set atom suppresses the warning for that set).
+///
+/// **Documented cuts** (real `_unmerge_display` still does these): the
+/// "currently used Python interpreter" self-skip (real
+/// `_dblink(cpv).isowner(portage._python_interpreter)`) -- a non-gap
+/// for this pilot, whose `emerge` is a Rust binary with no Python
+/// interpreter of its own to protect -- and any real removal (the
+/// `--prune`/`--depclean` variants have their own dedicated
+/// `run_prune_pretend`/`run_depclean_pretend`).
 /// Real `unmerge.py:137-182`'s own installed-ebuild-path handling: an
 /// `--unmerge`/`-C` argument that starts with `.` or `/`, or ends with
 /// `.ebuild`, is a path into the vdb, not an atom. Returns `Ok(None)` if
@@ -2186,6 +2194,53 @@ fn resolve_vdb_path_arg(arg: &str, root: &Path) -> Result<Option<String>, ExitCo
     let atom = format!("={rel}");
     println!("{atom}");
     Ok(Some(atom))
+}
+
+/// Real `unmerge.py:355-447`'s "still listed in the following package
+/// sets" check for one selected `category/package-version`: the names of
+/// the user-editable sets (`installed_sets` -- `EditablePackageSet`s
+/// reached via `world_sets`) that still directly list a matching atom,
+/// *minus* any set whose matching atom is also satisfied by an installed
+/// newer version of the same cp in a different slot (real
+/// `unmerge.py:421-441`'s `higher_slot`: `pkg.slot_atom != inst_pkg.
+/// slot_atom` after the descending-order `pkg >= inst_pkg` break --
+/// removing this version leaves that set satisfied). Shared by
+/// `run_unmerge_pretend` and `run_prune_pretend`, matching real
+/// portage's own single `_unmerge_display` handling every
+/// `unmerge_action`.
+fn still_listed_parents<'a>(
+    root: &Path,
+    installed_sets: &'a [(String, Vec<String>)],
+    cat: &str,
+    pkg: &str,
+    version: &str,
+) -> Vec<&'a str> {
+    let installed = portage_repo::installed_candidates(root, cat, pkg);
+    let selected_slot = installed
+        .iter()
+        .find(|(v, _, _)| v == version)
+        .map(|(_, s, _)| s.as_str());
+    let covered_by_higher_slot = |atom_str: &str| -> bool {
+        installed.iter().any(|(v, s, ss)| {
+            portage_versions::vercmp(v, version).is_some_and(|c| c > 0)
+                && Some(s.as_str()) != selected_slot
+                && match_from_list(atom_str, &[format!("{cat}/{pkg}-{v}:{s}/{ss}").as_str()])
+                    .is_some_and(|m| !m.is_empty())
+        })
+    };
+    let candidate = format!("{cat}/{pkg}-{version}");
+    let mut parents: Vec<&str> = Vec::new();
+    for (set_name, atoms) in installed_sets {
+        let listed = atoms.iter().any(|atom_str| {
+            parse_atom(atom_str).is_some_and(|a| a.category == cat && a.package == pkg)
+                && match_from_list(atom_str, &[candidate.as_str()]).is_some_and(|m| !m.is_empty())
+                && !covered_by_higher_slot(atom_str)
+        });
+        if listed {
+            parents.push(set_name);
+        }
+    }
+    parents
 }
 
 fn run_unmerge_pretend(
@@ -2394,11 +2449,12 @@ fn run_unmerge_pretend(
     // Real `_unmerge_display`'s "still listed in the following package
     // sets" warning: a `selected` package that a user-editable set
     // (reached via `world_sets`) still lists would be re-pulled on the
-    // next `@world` update, so it's flagged. Real portage additionally
-    // suppresses the flag when a *higher slot* of the same cp is
-    // installed and satisfies the set atom -- a refinement this pilot's
-    // single-slot fixtures never exercise, left as a documented
-    // narrowing (the check below is cp-and-atom-match only).
+    // next `@world` update, so it's flagged. Real `unmerge.py:421-441`
+    // suppresses the flag for a set when an installed *higher-versioned*
+    // instance of the same cp *in a different slot* also matches the set
+    // atom (`pkg.slot_atom != inst_pkg.slot_atom` after the `pkg >=
+    // inst_pkg` break -> "a newer version, other slot") -- removing this
+    // version leaves the set satisfied by that one.
     let installed_sets: Vec<(String, Vec<String>)> = match collect_installed_sets(config_root, root)
     {
         Ok(sets) => sets
@@ -2413,18 +2469,7 @@ fn run_unmerge_pretend(
     let mut selected_sorted: Vec<&(String, String, String)> = all_selected.iter().collect();
     selected_sorted.sort();
     for (cat, pkg, version) in selected_sorted {
-        let candidate = format!("{cat}/{pkg}-{version}");
-        let mut parents: Vec<&str> = Vec::new();
-        for (set_name, atoms) in &installed_sets {
-            let listed = atoms.iter().any(|atom_str| {
-                parse_atom(atom_str).is_some_and(|a| a.category == *cat && a.package == *pkg)
-                    && match_from_list(atom_str, &[candidate.as_str()])
-                        .is_some_and(|m| !m.is_empty())
-            });
-            if listed {
-                parents.push(set_name);
-            }
-        }
+        let mut parents = still_listed_parents(root, &installed_sets, cat, pkg, version);
         if !parents.is_empty() {
             parents.sort_unstable();
             println!(
@@ -2815,18 +2860,7 @@ fn run_prune_nodeps_pretend(
     }
     selected_flat.sort();
     for (cat, pkg, version) in &selected_flat {
-        let candidate = format!("{cat}/{pkg}-{version}");
-        let mut parents: Vec<&str> = Vec::new();
-        for (set_name, atoms) in &installed_sets {
-            let listed = atoms.iter().any(|atom_str| {
-                parse_atom(atom_str).is_some_and(|a| a.category == *cat && a.package == *pkg)
-                    && match_from_list(atom_str, &[candidate.as_str()])
-                        .is_some_and(|m| !m.is_empty())
-            });
-            if listed {
-                parents.push(set_name);
-            }
-        }
+        let mut parents = still_listed_parents(root, &installed_sets, cat, pkg, version);
         if !parents.is_empty() {
             parents.sort_unstable();
             println!(
@@ -4932,4 +4966,42 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixtures_root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    #[test]
+    fn still_listed_parents_applies_the_higher_slot_refinement() {
+        // dev-libs/dualslotpkg is installed in slot 1 (1.0) and slot 2
+        // (2.0); `dualslotset` lists the bare `dev-libs/dualslotpkg`.
+        let root = fixtures_root();
+        let sets = vec![(
+            "dualslotset".to_string(),
+            vec!["dev-libs/dualslotpkg".to_string()],
+        )];
+
+        // Removing the slot-1 version: slot 2 (higher, different slot)
+        // still matches the bare set atom -> not a parent.
+        assert!(still_listed_parents(&root, &sets, "dev-libs", "dualslotpkg", "1.0").is_empty());
+
+        // Removing the slot-2 version: nothing higher -> the set is a
+        // parent.
+        assert_eq!(
+            still_listed_parents(&root, &sets, "dev-libs", "dualslotpkg", "2.0"),
+            vec!["dualslotset"]
+        );
+    }
+
+    #[test]
+    fn still_listed_parents_is_empty_when_no_set_lists_the_cp() {
+        let root = fixtures_root();
+        let sets = vec![("someset".to_string(), vec!["dev-libs/other".to_string()])];
+        assert!(still_listed_parents(&root, &sets, "dev-libs", "dualslotpkg", "1.0").is_empty());
+    }
 }

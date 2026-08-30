@@ -124,9 +124,16 @@ Ranked roughly by how self-contained each is.
   out) **shipped 2026-08-28**. `--depclean-lib-check` (shared with
   `--depclean` -- see above) **shipped 2026-08-29**. **Still open:**
   slot-operator rebuild edges, real (non-`--pretend`) removal.
-- Minor `-pC` narrowings: the higher-slot refinement on the
-  set-protection warning, and the Python-interpreter self-skip. The
-  literal vdb-path argument (`emerge -C /var/db/pkg/cat/pkg-ver`,
+- Minor `-pC` narrowings: ~~the higher-slot refinement on the
+  set-protection warning~~ **shipped 2026-08-30** (real
+  `unmerge.py:421-441`'s `higher_slot`: the "still listed in package
+  sets" warning is suppressed for a set when an installed newer version
+  of the same cp in a *different slot* also matches the set atom; shared
+  `still_listed_parents` used by both `-pC` and `-pP`; new
+  `dev-libs/dualslotpkg` dual-slot fixture). The "currently used Python
+  interpreter" self-skip is a **non-gap** for this pilot -- its `emerge`
+  is a Rust binary with no Python interpreter of its own to protect.
+  The literal vdb-path argument (`emerge -C /var/db/pkg/cat/pkg-ver`,
   `unmerge.py:137-182` -- `resolve_vdb_path_arg`) **shipped 2026-08-28**.
 
 ### A. Small, self-contained dry-run/config slices

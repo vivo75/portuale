@@ -1119,6 +1119,16 @@ CASES = [
         0,
     ),
     (
+        "-pC lower slot: a higher-slot install covers the set atom, no warning",
+        ["--pretend", "-C", "dev-libs/dualslotpkg:1"],
+        0,
+    ),
+    (
+        "-pC higher slot: nothing higher covers the set atom, warning shown",
+        ["--pretend", "-C", "dev-libs/dualslotpkg:2"],
+        0,
+    ),
+    (
         "-pC @nestedtestset: the set is active, so no set-protection warning",
         ["--pretend", "-C", "@nestedtestset"],
         0,
@@ -5277,6 +5287,10 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
         '[ebuild  N    ] dev-libs/withdeps-1.0 ',
         'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
         '[ebuild  N    ] dev-libs/innernestedsetpkg-1.0 ',
+        # dev-libs/dualslotpkg (installed slot 1 + slot 2) reaches @world
+        # via world_sets' own @dualslotset -- see the -pC higher-slot
+        # set-protection test.
+        'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]',
     ]
 
@@ -5298,6 +5312,7 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
         '[ebuild  N    ] dev-libs/withdeps-1.0 ',
         'dev-libs/nestedsetpkg-1.0 is already installed; nothing to do',
         '[ebuild  N    ] dev-libs/innernestedsetpkg-1.0 ',
+        'dev-libs/dualslotpkg-2.0 is already installed; nothing to do',
         '[ebuild     U ] dev-libs/upgradepkg-2.0 [1.0]',
     ]
 
@@ -6332,6 +6347,34 @@ def test_unmerge_pretend_still_listed_in_package_sets_warning(emerge_binary, fix
     # Targeting the set itself makes it "active" -> no warning for its members.
     active = _run([str(emerge_binary)], ["--pretend", "-C", "@nestedtestset"], fixture_env)
     assert "still listed in the following package sets" not in active.stdout
+
+
+def test_unmerge_pretend_set_warning_higher_slot_refinement(emerge_binary, fixture_env):
+    """Real unmerge.py:421-441's `higher_slot`: the "still listed in the
+    following package sets" warning is suppressed for a set when an
+    installed *newer* version of the same cp *in a different slot* also
+    matches the set atom -- removing this version leaves that set
+    satisfied. dev-libs/dualslotpkg is installed in slot 1 (1.0) and
+    slot 2 (2.0); etc/portage/sets/dualslotset lists the bare
+    `dev-libs/dualslotpkg`, selected via world_sets."""
+    # Unmerging the slot-1 version: slot 2 (higher) still matches the bare
+    # set atom -> NO warning.
+    low = _run(
+        [str(emerge_binary)], ["--pretend", "-C", "dev-libs/dualslotpkg:1"], fixture_env
+    )
+    assert low.returncode == 0
+    assert "still listed in the following package sets" not in low.stdout
+    # Unmerging the slot-2 version: nothing higher -> warning shown, naming
+    # the set.
+    high = _run(
+        [str(emerge_binary)], ["--pretend", "-C", "dev-libs/dualslotpkg:2"], fixture_env
+    )
+    assert high.returncode == 0
+    assert high.stdout.splitlines()[1:4] == [
+        "Package dev-libs/dualslotpkg-2.0 is going to be unmerged,",
+        "but still listed in the following package sets:",
+        "    dualslotset",
+    ]
 
 
 def test_deselect_matches_a_plain_world_atom(emerge_binary, fixture_env, tmp_path):

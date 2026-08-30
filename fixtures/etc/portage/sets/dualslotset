@@ -1,0 +1,3 @@
+# fixture custom set: a single cp installed in two slots, for the
+# -pC higher-slot set-protection refinement (real unmerge.py:421-441).
+dev-libs/dualslotpkg
