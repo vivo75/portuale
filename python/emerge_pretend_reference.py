@@ -2991,20 +2991,23 @@ def _repo_containing(directory, repos):
     return best
 
 
-def _expand_parent_colon(parent, current_repo, repos, parents_file, parent_colon_repos):
+def _expand_parent_colon(
+    parent, current_repo, repos, repo_aliases, parents_file, parent_colon_repos
+):
     """Expands a profile "parent" file line's real cross-repo ":path"/
     "reponame:path" syntax (LocationsManager._expand_parent_colon): a
     ":" with nothing before it means "this same repo" (current_repo),
     anything else before the ":" is another repo's own name, looked up
-    in repos. Both forms expand to "<repo_location>/profiles/<rest>". A
-    line with no ":" at all is returned unchanged. Real portage only
-    allows this syntax when the current profile node's own repo declares
-    profile-formats = portage-2 in layout.conf (_allow_parent_colon gate,
-    _config/LocationsManager.py:207/259) -- allow_parent_colon defaults
-    True and is only *overridden* when the node intersects a known repo,
-    so a node outside any repo keeps the permissive default and a node
-    inside a repo is gated on parent_colon_repos membership. Mirrors
-    portage-profile/src/lib.rs's expand_parent_colon exactly."""
+    in repos then repo_aliases (real repositories.get_location_for_name
+    is keyed on aliases too). Both forms expand to
+    "<repo_location>/profiles/<rest>". A line with no ":" at all is
+    returned unchanged. Real portage only allows this syntax when the
+    current profile node's own repo declares profile-formats = portage-2
+    in layout.conf (_allow_parent_colon gate, _config/LocationsManager.
+    py:207/259). Mirrors portage-profile/src/lib.rs's expand_parent_colon
+    exactly. (An atom's own "::alias" is a different thing and is NOT
+    resolved -- real match_from_list does a straight pkg.repo ==
+    atom.repo name comparison.)"""
     colon = parent.find(":")
     if colon == -1:
         return parent
@@ -3020,7 +3023,10 @@ def _expand_parent_colon(parent, current_repo, repos, parents_file, parent_colon
         rest = parent[1:]
     else:
         repo_name = parent[:colon]
-        repo_loc = next((loc for name, loc in repos if name == repo_name), None)
+        repo_loc = next(
+            (loc for name, loc in list(repos) + list(repo_aliases) if name == repo_name),
+            None,
+        )
         if repo_loc is None:
             raise ResolutionError(
                 f'parent "{parent}" not found: {parents_file} '
@@ -3030,7 +3036,7 @@ def _expand_parent_colon(parent, current_repo, repos, parents_file, parent_colon
     return os.path.join(repo_loc, "profiles", rest)
 
 
-def _visit_profile(directory, repos, parent_colon_repos, visited, chain):
+def _visit_profile(directory, repos, repo_aliases, parent_colon_repos, visited, chain):
     canon = os.path.realpath(directory)
     if not os.path.isdir(canon):
         raise ResolutionError(f"resolving profile {directory}: not a directory")
@@ -3041,18 +3047,23 @@ def _visit_profile(directory, repos, parent_colon_repos, visited, chain):
     parents_file = os.path.join(canon, "parent")
     for parent in _read_parent_lines(canon):
         expanded = _expand_parent_colon(
-            parent, current_repo, repos, parents_file, parent_colon_repos
+            parent, current_repo, repos, repo_aliases, parents_file, parent_colon_repos
         )
         _visit_profile(
-            os.path.join(canon, expanded), repos, parent_colon_repos, visited, chain
+            os.path.join(canon, expanded),
+            repos,
+            repo_aliases,
+            parent_colon_repos,
+            visited,
+            chain,
         )
     chain.append(canon)
 
 
-def _resolve_profile_chain(leaf, repos, parent_colon_repos):
+def _resolve_profile_chain(leaf, repos, repo_aliases, parent_colon_repos):
     visited = set()
     chain = []
-    _visit_profile(leaf, repos, parent_colon_repos, visited, chain)
+    _visit_profile(leaf, repos, repo_aliases, parent_colon_repos, visited, chain)
     return chain
 
 
@@ -3128,7 +3139,12 @@ def _process_make_conf_file(
 
 
 def resolve_config(
-    config_root, main_repo_location, overlay_repos=(), main_repo_name="", repo_masters=None
+    config_root,
+    main_repo_location,
+    overlay_repos=(),
+    repo_aliases=(),
+    main_repo_name="",
+    repo_masters=None,
 ):
     """Computes real USE/ACCEPT_KEYWORDS/package.mask/.unmask/
     .accept_keywords: the profile chain rooted at
@@ -3231,7 +3247,7 @@ def resolve_config(
 
     make_profile = os.path.join(config_root, "etc", "portage", "make.profile")
     chain = (
-        _resolve_profile_chain(make_profile, all_repos, parent_colon_repos)
+        _resolve_profile_chain(make_profile, all_repos, repo_aliases, parent_colon_repos)
         if os.path.exists(make_profile)
         else []
     )
@@ -9791,10 +9807,18 @@ def run(args):
         # already-resolved masters chain, keyed by name, for
         # resolve_config's own package.mask stacking.
         repo_masters = {r["name"]: r["masters"] for r in all_repos}
+        # Every repo's own aliases (repos.conf/layout.conf), each paired
+        # with that repo's location -- real
+        # repositories.get_location_for_name resolves an aliased
+        # reponame:path profile parent (see resolve_config's docstring).
+        repo_aliases = [
+            (alias, r["location"]) for r in all_repos for alias in r.get("aliases", [])
+        ]
         config = resolve_config(
             _config_root(),
             main_repo["location"],
             overlay_repos,
+            repo_aliases,
             main_repo["name"],
             repo_masters,
         )

@@ -4319,10 +4319,21 @@ pub fn run(args: &[String]) -> ExitCode {
         .map(|r| (r.name.clone(), r.masters.clone()))
         .collect();
 
+    // Every repo's own `aliases` (`repos.conf`/`layout.conf`), each
+    // paired with that repo's location -- real
+    // `repositories.get_location_for_name` resolves an aliased
+    // `reponame:path` profile `parent` (see `resolve_config`'s own doc
+    // comment).
+    let repo_aliases: Vec<(String, std::path::PathBuf)> = repos
+        .iter()
+        .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+        .collect();
+
     let mut config = match portage_profile::resolve_config(
         &config_root,
         &main_repo.location,
         &overlay_repos,
+        &repo_aliases,
         &main_repo.name,
         &repo_masters,
     ) {

@@ -8478,6 +8478,36 @@ already-narrowed check). Real-execution, Rust-only. New
 carries `RDEPEND`), which the `$PKGDIR`-scan contract test now asserts is
 actually walked.
 
+### Profile `parent` lines resolve an aliased repo name
+
+`repos.conf` / `layout.conf` `aliases =` were parsed
+(`RepoConfig::aliases`) but wired nowhere. A profile `parent` line
+`<name>:some/path` now resolves `<name>` through the alias map when it
+isn't a canonical repo name — real `LocationsManager._expand_parent_colon`
+looks the token up via `repositories.get_location_for_name`, which is
+keyed on aliases as well as canonical names. `resolve_config` gained a
+`repo_aliases: &[(String, PathBuf)]` param (every repo's aliases × its
+location), threaded to `expand_parent_colon`, which checks the canonical
+`repos` list first then `repo_aliases` (an alias never shadows a
+canonical name — real `config.py`'s alias-registration loop skips an
+already-taken name).
+
+**Not a gap, and deliberately left as-is: an atom's own `::alias`.** Real
+`match_from_list` filters `::repo` with a straight `pkg.repo ==
+atom.repo` name comparison (`dep/__init__.py:3201`) — no alias step — so
+`emerge cat/pkg::somealias` finds nothing. The pilot already matched
+this on both sides (the Python reference calls the real
+`portage.dep.match_from_list`; the fixture
+`dev-libs/repnamepkg::repnamesection` — an alias — is rejected by Rust
+and Python identically). Adding alias resolution to the Rust
+`matches_repo` would *diverge* from real portage.
+
+New contract test builds an ad-hoc config tree whose main profile's
+`parent` names an overlay by its alias (`ovl:shared`, canonical
+`otherrepo`) and asserts the aliased-in `USE=aliasflag` reaches `-pv`
+output, Rust ≡ Python; +1 `portage-profile` unit test (alias resolves,
+and an unregistered alias gets the same "no repo named" error).
+
 ## Running it
 
 Build both Rust binaries:

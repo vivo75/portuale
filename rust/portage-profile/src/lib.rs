@@ -809,6 +809,7 @@ fn expand_parent_colon(
     parent: &str,
     current_repo: Option<&(String, PathBuf)>,
     repos: &[(String, PathBuf)],
+    repo_aliases: &[(String, PathBuf)],
     parents_file: &Path,
     parent_colon_repos: &HashSet<String>,
 ) -> Result<String, String> {
@@ -839,8 +840,14 @@ fn expand_parent_colon(
             .1
     } else {
         let repo_name = &parent[..colon];
+        // Real `repositories.get_location_for_name`: canonical names and
+        // aliases share one namespace (an alias never shadows a
+        // canonical name -- real `config.py`'s own alias-registration
+        // loop skips an already-taken name), so check `repos` first,
+        // then `repo_aliases`.
         repos
             .iter()
+            .chain(repo_aliases.iter())
             .find(|(name, _)| name == repo_name)
             .map(|(_, loc)| loc)
             .ok_or_else(|| {
@@ -867,17 +874,26 @@ fn expand_parent_colon(
 fn resolve_profile_chain(
     leaf: &Path,
     repos: &[(String, PathBuf)],
+    repo_aliases: &[(String, PathBuf)],
     parent_colon_repos: &HashSet<String>,
 ) -> Result<Vec<PathBuf>, String> {
     let mut visited: HashSet<PathBuf> = HashSet::new();
     let mut chain: Vec<PathBuf> = Vec::new();
-    visit_profile(leaf, repos, parent_colon_repos, &mut visited, &mut chain)?;
+    visit_profile(
+        leaf,
+        repos,
+        repo_aliases,
+        parent_colon_repos,
+        &mut visited,
+        &mut chain,
+    )?;
     Ok(chain)
 }
 
 fn visit_profile(
     dir: &Path,
     repos: &[(String, PathBuf)],
+    repo_aliases: &[(String, PathBuf)],
     parent_colon_repos: &HashSet<String>,
     visited: &mut HashSet<PathBuf>,
     chain: &mut Vec<PathBuf>,
@@ -895,12 +911,14 @@ fn visit_profile(
             &parent,
             current_repo.as_ref(),
             repos,
+            repo_aliases,
             &parents_file,
             parent_colon_repos,
         )?;
         visit_profile(
             &canon.join(&expanded),
             repos,
+            repo_aliases,
             parent_colon_repos,
             visited,
             chain,
@@ -1392,11 +1410,21 @@ fn parse_package_use_lines(
 /// "this same repo" (whichever repo the *current* profile node's own
 /// directory belongs to -- `repo_containing`), `reponame:some/path`
 /// means a different, named repo. Both expand to
-/// `<repo_location>/profiles/some/path`.
+/// `<repo_location>/profiles/some/path`. A `reponame:path` whose
+/// `reponame` is a repo *alias* (`repos.conf`/`layout.conf` `aliases =`,
+/// `portage_repo::RepoConfig::aliases`) resolves too -- real
+/// `LocationsManager._expand_parent_colon` looks the token up in
+/// `repositories.get_location_for_name`, which is keyed on aliases as
+/// well as canonical names -- so `repo_aliases` carries every
+/// `(alias, location)` pair. (An atom's own `::alias` is a *different*
+/// thing and is deliberately NOT resolved -- real `match_from_list` does
+/// a straight `pkg.repo == atom.repo` name comparison with no alias
+/// step, and this pilot matches that.)
 pub fn resolve_config(
     config_root: &Path,
     main_repo_location: &Path,
     overlay_repos: &[(String, PathBuf)],
+    repo_aliases: &[(String, PathBuf)],
     main_repo_name: &str,
     repo_masters: &HashMap<String, Vec<PathBuf>>,
 ) -> Result<Config, String> {
@@ -1424,7 +1452,7 @@ pub fn resolve_config(
 
     let make_profile = config_root.join("etc/portage/make.profile");
     let chain: Vec<PathBuf> = if make_profile.exists() {
-        resolve_profile_chain(&make_profile, &all_repos, &parent_colon_repos)?
+        resolve_profile_chain(&make_profile, &all_repos, repo_aliases, &parent_colon_repos)?
     } else {
         Vec::new()
     };
@@ -2280,6 +2308,7 @@ sync-uri = file:///srv/pkgs
             &root,
             &root.join("repo"),
             &overlay_repos,
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -2373,6 +2402,7 @@ sync-uri = file:///srv/pkgs
             &empty_root,
             &empty_root.join("repo"),
             &[],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -2421,11 +2451,67 @@ sync-uri = file:///srv/pkgs
             &root,
             &main_repo,
             &overlay_repos,
+            &[],
             "testrepo",
             &HashMap::new(),
         )
         .expect("cross-repo parent must resolve");
         assert!(config.use_flags.contains("crossrepoflag"));
+    }
+
+    #[test]
+    fn cross_repo_profile_parent_resolves_an_aliased_repo_name() {
+        // Same as above, but the `parent` line names the repo by an
+        // *alias* ("ovl") rather than its canonical name ("otherrepo").
+        // Real `_expand_parent_colon` -> `get_location_for_name` is keyed
+        // on aliases too, so `resolve_config` gets `repo_aliases`.
+        let root = std::env::temp_dir().join("portage-profile-test-cross-repo-alias");
+        let main_repo = root.join("repo");
+        let other_repo = root.join("otherrepo");
+        let leaf = root.join("leaf-profile");
+        fs::create_dir_all(main_repo.join("profiles")).unwrap();
+        fs::create_dir_all(other_repo.join("profiles/base")).unwrap();
+        fs::create_dir_all(&leaf).unwrap();
+        fs::write(
+            other_repo.join("profiles/base/make.defaults"),
+            "USE=\"aliasedflag\"\n",
+        )
+        .unwrap();
+        fs::write(leaf.join("parent"), "ovl:base\n").unwrap();
+
+        let portage_dir = root.join("etc/portage");
+        fs::create_dir_all(&portage_dir).unwrap();
+        let make_profile = portage_dir.join("make.profile");
+        let _ = fs::remove_file(&make_profile);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
+
+        // `otherrepo` is a canonical name, `ovl` its alias.
+        let overlay_repos = [("otherrepo".to_string(), other_repo.clone())];
+        let repo_aliases = [("ovl".to_string(), other_repo.clone())];
+        let config = resolve_config(
+            &root,
+            &main_repo,
+            &overlay_repos,
+            &repo_aliases,
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("aliased cross-repo parent must resolve");
+        assert!(config.use_flags.contains("aliasedflag"));
+
+        // ...and without the alias registered, it's the same clear error
+        // an unknown repo name gets.
+        let err = resolve_config(
+            &root,
+            &main_repo,
+            &overlay_repos,
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.contains("no repo named \"ovl\""), "{err}");
     }
 
     #[test]
@@ -2441,8 +2527,15 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let err = resolve_config(&root, &root.join("repo"), &[], "testrepo", &HashMap::new())
-            .expect_err("unknown repo name must be rejected");
+        let err = resolve_config(
+            &root,
+            &root.join("repo"),
+            &[],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect_err("unknown repo name must be rejected");
         assert!(err.contains("no repo named"), "unexpected error: {err}");
     }
 
@@ -2480,7 +2573,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(main_repo.join("profiles/leaf"), &make_profile).unwrap();
 
-        let config = resolve_config(&root, &main_repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &main_repo, &[], &[], "testrepo", &HashMap::new())
             .expect("same-repo colon parent must resolve");
         assert!(config.use_flags.contains("samerepocolon"));
     }
@@ -2507,7 +2600,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(main_repo.join("profiles/leaf"), &make_profile).unwrap();
 
-        let err = resolve_config(&root, &main_repo, &[], "testrepo", &HashMap::new())
+        let err = resolve_config(&root, &main_repo, &[], &[], "testrepo", &HashMap::new())
             .expect_err("a colon parent in a non-portage-2 repo must not resolve");
         assert!(err.contains(":base"), "unexpected error: {err}");
     }
@@ -2525,8 +2618,15 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let err = resolve_config(&root, &root.join("repo"), &[], "testrepo", &HashMap::new())
-            .expect_err("same-repo colon outside any known repo must be rejected");
+        let err = resolve_config(
+            &root,
+            &root.join("repo"),
+            &[],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect_err("same-repo colon outside any known repo must be rejected");
         assert!(
             err.contains("not inside any known repo"),
             "unexpected error: {err}"
@@ -2558,8 +2658,15 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("top"), &make_profile).unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo", &HashMap::new())
-            .expect("diamond inheritance must resolve");
+        let config = resolve_config(
+            &root,
+            &root.join("repo"),
+            &[],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("diamond inheritance must resolve");
         assert_eq!(
             config.use_flags,
             HashSet::from(["sharedflag".to_string(), "topflag".to_string()])
@@ -2595,8 +2702,15 @@ sync-uri = file:///srv/pkgs
         )
         .unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo", &HashMap::new())
-            .expect("config with package.* files must resolve");
+        let config = resolve_config(
+            &root,
+            &root.join("repo"),
+            &[],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("config with package.* files must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/foo".to_string()]);
         assert_eq!(config.package_unmask, vec!["dev-libs/baz".to_string()]);
         assert_eq!(
@@ -2649,7 +2763,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.package_mask,
@@ -2689,8 +2803,15 @@ sync-uri = file:///srv/pkgs
         fs::write(overlay.join("profiles/package.mask"), "dev-libs/a\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
-            .expect("config must resolve");
+        let config = resolve_config(
+            &root,
+            &repo,
+            &overlay_repos,
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("config must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
     }
 
@@ -2712,8 +2833,15 @@ sync-uri = file:///srv/pkgs
         fs::write(overlay.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
-            .expect("config must resolve");
+        let config = resolve_config(
+            &root,
+            &repo,
+            &overlay_repos,
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("config must resolve");
         assert_eq!(config.package_mask, vec!["dev-libs/a::overlay".to_string()]);
         assert_eq!(
             config.package_unmask,
@@ -2741,8 +2869,15 @@ sync-uri = file:///srv/pkgs
         fs::write(overlay.join("profiles/package.mask"), "dev-libs/b\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
-            .expect("config must resolve");
+        let config = resolve_config(
+            &root,
+            &repo,
+            &overlay_repos,
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("config must resolve");
         assert_eq!(
             config.package_mask,
             vec![
@@ -2770,8 +2905,15 @@ sync-uri = file:///srv/pkgs
         fs::write(repo.join("profiles/package.unmask"), "dev-libs/a\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
-            .expect("config must resolve");
+        let config = resolve_config(
+            &root,
+            &repo,
+            &overlay_repos,
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("config must resolve");
         assert_eq!(
             config.package_unmask,
             vec!["dev-libs/a::testrepo".to_string()]
@@ -2795,7 +2937,7 @@ sync-uri = file:///srv/pkgs
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
         let repo_masters = HashMap::from([("overlay".to_string(), Vec::<PathBuf>::new())]);
-        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &repo_masters)
+        let config = resolve_config(&root, &repo, &overlay_repos, &[], "testrepo", &repo_masters)
             .expect("config must resolve");
         // The main repo's own "dev-libs/a" entry still applies to
         // itself (real portage's own repo-level package.mask always
@@ -2831,7 +2973,7 @@ sync-uri = file:///srv/pkgs
             ("downstream".to_string(), downstream.clone()),
         ];
         let repo_masters = HashMap::from([("downstream".to_string(), vec![overlay.clone()])]);
-        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &repo_masters)
+        let config = resolve_config(&root, &repo, &overlay_repos, &[], "testrepo", &repo_masters)
             .expect("config must resolve");
         assert!(config
             .package_mask
@@ -2858,8 +3000,15 @@ sync-uri = file:///srv/pkgs
         fs::write(overlay.join("profiles/package.use"), "dev-libs/a flag\n").unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
-            .expect("config must resolve");
+        let config = resolve_config(
+            &root,
+            &repo,
+            &overlay_repos,
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("config must resolve");
         assert_eq!(
             config.package_use,
             vec![("dev-libs/a::overlay".to_string(), vec!["flag".to_string()])]
@@ -2898,8 +3047,15 @@ sync-uri = file:///srv/pkgs
         .unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
-            .expect("config must resolve");
+        let config = resolve_config(
+            &root,
+            &repo,
+            &overlay_repos,
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("config must resolve");
         assert_eq!(
             config.package_use_mask,
             vec![
@@ -2952,8 +3108,15 @@ sync-uri = file:///srv/pkgs
         .unwrap();
 
         let overlay_repos = [("overlay".to_string(), overlay.clone())];
-        let config = resolve_config(&root, &repo, &overlay_repos, "testrepo", &HashMap::new())
-            .expect("config must resolve");
+        let config = resolve_config(
+            &root,
+            &repo,
+            &overlay_repos,
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("config must resolve");
         assert_eq!(
             config.package_use_stable_mask,
             vec![
@@ -3002,7 +3165,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(config.system_packages, vec!["dev-libs/b".to_string()]);
     }
@@ -3042,7 +3205,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(config.package_provided, vec!["dev-libs/c-1.0".to_string()]);
     }
@@ -3085,7 +3248,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.use_flags,
@@ -3127,7 +3290,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.archlist,
@@ -3168,7 +3331,7 @@ sync-uri = file:///srv/pkgs
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
         fs::write(portage_dir.join("make.conf"), "USE=\"baz\"\n").unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.use_tokens,
@@ -3216,7 +3379,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.use_expand,
@@ -3255,7 +3418,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert!(!config.use_flags.contains("video_cards_nvidia"));
         assert!(config.use_flags.contains("video_cards_intel"));
@@ -3288,7 +3451,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.use_expand_unprefixed,
@@ -3325,7 +3488,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert!(!config.use_flags.contains("foo"));
         assert!(config.use_flags.contains("bar"));
@@ -3359,7 +3522,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
@@ -3401,7 +3564,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
@@ -3439,7 +3602,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.package_accept_keywords,
@@ -3472,7 +3635,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.package_use,
@@ -3502,7 +3665,7 @@ sync-uri = file:///srv/pkgs
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.package_use,
@@ -3533,7 +3696,7 @@ sync-uri = file:///srv/pkgs
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.package_use,
@@ -3565,7 +3728,7 @@ sync-uri = file:///srv/pkgs
         )
         .unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.package_use,
@@ -3609,7 +3772,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.package_use_mask,
@@ -3651,7 +3814,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.use_stable_mask,
@@ -3709,7 +3872,7 @@ sync-uri = file:///srv/pkgs
         #[cfg(unix)]
         std::os::unix::fs::symlink(&leaf, &make_profile).unwrap();
 
-        let config = resolve_config(&root, &repo, &[], "testrepo", &HashMap::new())
+        let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
             config.package_use_stable_mask,
@@ -3738,8 +3901,15 @@ sync-uri = file:///srv/pkgs
         )
         .unwrap();
 
-        let config = resolve_config(&root, &root.join("repo"), &[], "testrepo", &HashMap::new())
-            .expect("config with package.use must resolve");
+        let config = resolve_config(
+            &root,
+            &root.join("repo"),
+            &[],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("config with package.use must resolve");
         assert_eq!(
             config.package_use,
             vec![

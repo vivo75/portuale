@@ -8989,6 +8989,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -9031,6 +9032,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -9072,6 +9074,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -9180,6 +9183,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -9475,6 +9479,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -9533,6 +9538,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -9639,6 +9645,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -9792,6 +9799,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -9937,6 +9945,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -12232,6 +12241,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -12465,6 +12475,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -12737,6 +12748,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -12936,6 +12948,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -12987,6 +13000,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -13097,6 +13111,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -13146,6 +13161,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -13197,6 +13213,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -13248,6 +13265,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -13513,6 +13531,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -13578,6 +13597,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -13689,6 +13709,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -13755,6 +13776,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -13864,6 +13886,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -13944,6 +13967,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )
@@ -14024,6 +14048,7 @@ mod tests {
             &root,
             &root.join("repo"),
             &[("overlay".to_string(), root.join("overlay"))],
+            &[],
             "testrepo",
             &HashMap::new(),
         )

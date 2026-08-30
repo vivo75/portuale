@@ -146,8 +146,16 @@ Ranked roughly by how self-contained each is.
    (`repos.conf` + `layout.conf`), and the real section-name mismatch
    **drop** (`config.py:1121` -- a repo whose name != its section name,
    with no alias covering it, is dropped with a `!!! Section ...` error).
-   **Residual:** `::alias` atom matching / `alias:path` profile parents
-   still use the canonical name only.
+   ~~**Residual:** `::alias` atom matching / `alias:path` profile
+   parents still use the canonical name only.~~ **Resolved 2026-08-30**:
+   `alias:path` **profile parents** now resolve through the alias
+   (`resolve_config` gained a `repo_aliases` param -> `expand_parent_
+   colon`, real `repositories.get_location_for_name`). `::alias` in an
+   **atom** was NOT a gap -- real `match_from_list` does a straight
+   `pkg.repo == atom.repo` name comparison with no alias step
+   (`dep/__init__.py:3201`), and the pilot (both sides, via the real
+   `portage.dep.match_from_list` the Python reference calls) already
+   matched that (fixture `dev-libs/repnamepkg::repnamesection`).
 
 2. ~~**`USE_EXPAND_HIDDEN` / `USE_EXPAND_IMPLICIT`.**~~ `USE_EXPAND_IMPLICIT`
    **shipped 2026-08-27** (`Config::iuse_effective`, real EAPI 5+

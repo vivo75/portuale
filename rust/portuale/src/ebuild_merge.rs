@@ -1778,10 +1778,15 @@ fn blocked_installed_packages(
             .iter()
             .map(|r| (r.name.clone(), r.masters.clone()))
             .collect();
+        let repo_aliases: Vec<(String, PathBuf)> = repos
+            .iter()
+            .flat_map(|r| r.aliases.iter().map(|a| (a.clone(), r.location.clone())))
+            .collect();
         let config = portage_profile::resolve_config(
             config_root,
             &main_repo.location,
             &overlay_repos,
+            &repo_aliases,
             &main_repo.name,
             &repo_masters,
         )

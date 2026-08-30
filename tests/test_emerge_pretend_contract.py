@@ -3928,6 +3928,73 @@ def test_repo_name_section_mismatch_drops_the_repo_with_a_warning(
     )
 
 
+def test_profile_parent_resolves_an_aliased_repo_name(
+    emerge_binary, emerge_pretend_python, tmp_path, fixtures_root
+):
+    """A profile `parent` line `<alias>:some/path` where `<alias>` is a
+    repo's `aliases =` (not its canonical name) resolves through the
+    alias -- real `LocationsManager._expand_parent_colon` looks the token
+    up via `repositories.get_location_for_name`, which is keyed on
+    aliases too. The aliased-in profile level provides `USE=aliasflag`,
+    which shows up at `-pv` on a package in the main repo.
+
+    (An atom's own `cat/pkg::alias` is deliberately NOT alias-resolved --
+    real `match_from_list` does a straight name comparison; the sibling
+    fixture `dev-libs/repnamepkg::repnamesection` already covers that
+    both sides reject it.)"""
+    cfg = tmp_path / "cfg"
+    main = tmp_path / "main"
+    other = tmp_path / "other"
+    (cfg / "etc/portage").mkdir(parents=True)
+    (main / "profiles/default").mkdir(parents=True)
+    (main / "metadata").mkdir()
+    (main / "metadata/md5-cache/dev-libs").mkdir(parents=True)
+    (other / "profiles/shared").mkdir(parents=True)
+    (other / "metadata").mkdir()
+
+    (main / "metadata/layout.conf").write_text("profile-formats = portage-2\n")
+    (main / "profiles/repo_name").write_text("mainrepo\n")
+    (main / "profiles/default/make.defaults").write_text(
+        'ACCEPT_KEYWORDS="amd64"\nUSE=""\n'
+    )
+    # `otherrepo` is the canonical name; `ovl` is its alias.
+    (other / "profiles/repo_name").write_text("otherrepo\n")
+    (other / "metadata/layout.conf").write_text("aliases = ovl\n")
+    (other / "profiles/shared/make.defaults").write_text('USE="aliasflag"\n')
+
+    (main / "profiles/default/parent").write_text("../base\novl:shared\n")
+    (main / "profiles/base").mkdir()
+    (main / "profiles/base/eapi").write_text("8\n")
+
+    (cfg / "etc/portage/repos.conf").write_text(
+        "[DEFAULT]\nmain-repo = mainrepo\n\n"
+        f"[mainrepo]\nlocation = {main}\n\n"
+        f"[otherrepo]\nlocation = {other}\n"
+    )
+    (cfg / "etc/portage/make.profile").symlink_to(main / "profiles/default")
+
+    (main / "profiles/default/eapi").write_text("8\n")
+    (main / "dev-libs/aliasusepkg").mkdir(parents=True)
+    (main / "dev-libs/aliasusepkg/aliasusepkg-1.0.ebuild").write_text(
+        'EAPI=8\nDESCRIPTION="x"\nSLOT="0"\nKEYWORDS="amd64"\nIUSE="aliasflag"\n'
+    )
+    (main / "metadata/md5-cache/dev-libs/aliasusepkg-1.0").write_text(
+        "DEFINED_PHASES=-\nDESCRIPTION=x\nEAPI=8\nIUSE=aliasflag\n"
+        "KEYWORDS=amd64\nSLOT=0\n_md5_=0000000000000000000000000000000\n"
+    )
+
+    env = {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
+    args = ["--pretend", "-v", "dev-libs/aliasusepkg"]
+    rust = _run([str(emerge_binary)], args, env)
+    py = _run(emerge_pretend_python, args, env)
+    assert rust.returncode == 0, (rust.stdout, rust.stderr)
+    assert rust.stdout == py.stdout
+    assert rust.stderr == py.stderr
+    # `USE="aliasflag"` -> the aliased `ovl:shared` profile level was
+    # actually reached.
+    assert 'USE="aliasflag"' in rust.stdout.splitlines()[0], rust.stdout
+
+
 def test_overlay_own_package_use_gates_a_dependency(emerge_binary, fixture_env):
     """package.mask/.unmask already read from every repo (task #40), but
     package.use/.mask/.force/.stable.mask/.stable.force were still main-
