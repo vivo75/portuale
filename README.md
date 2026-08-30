@@ -8508,6 +8508,22 @@ New contract test builds an ad-hoc config tree whose main profile's
 output, Rust ≡ Python; +1 `portage-profile` unit test (alias resolves,
 and an unregistered alias gets the same "no repo named" error).
 
+### `emerge -pv`: the `USE="…"` flag list is natural-sorted
+
+Real `output_helpers.py::_alnum_sort_key` (`any_iuse.sort(key=
+_alnum_sort_key)` in `_create_use_string`): split each flag on runs of
+digits and compare the digit runs as numbers, not lexically — so
+`python3_9` sorts *before* `python3_12` (`9 < 12`), not after (`"9" >
+"12"`). The pilot's flat list was plain lexicographic. New
+`portage_repo::alnum_sort_key` (+ an `AlnumKey` `Str`/`Num` enum,
+`u128`-or-`Str`-on-overflow) applied at all three flag-sort sites — the
+`display` list, the removed-from-IUSE list, and `pretend.rs`'s
+`--alphabetical` combined list. New `dev-libs/naturalsortpkg` fixture
+(`IUSE="+n2 +n9 +n10"`) → `USE="n2 n9 n10"`. 2 contract `CASES` + 1
+pinned test + 1 `portage-repo` unit test; mirrored in
+`emerge_pretend_reference.py` (`_alnum_sort_key`). Closes SCOPE_BACKLOG
+Part 2.A item 2 residual (b).
+
 ## Running it
 
 Build both Rust binaries:

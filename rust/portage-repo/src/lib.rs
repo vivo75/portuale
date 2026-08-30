@@ -4057,21 +4057,19 @@ struct InstalledUseState {
 /// own `USE="…" VAR="…"` line.
 ///
 /// Splits `use_flags_display` (already IUSE-declared, enabled-resolved,
-/// and sorted by bare flag name the way this pilot's `-pv` has always
-/// ordered its flat list) into the plain `USE` group plus one group per
+/// and `alnum_sort_key`-ordered -- real `_create_use_string`'s own
+/// `any_iuse.sort(key=_alnum_sort_key)`, a *natural* sort so `python3_9`
+/// precedes `python3_12`) into the plain `USE` group plus one group per
 /// `config.use_expand` variable whose `lowercase(name)_` prefixes the
 /// flag -- the prefix is stripped from the grouped flag (real
 /// `map_to_use_expand`: `val[len(exp) + 1:]`). `config.use_expand_hidden`
 /// groups are dropped (real `remove_hidden`). Within each group the
-/// enabled flags render first, then the disabled ones, each in
-/// bare-name order -- real `_create_use_string`'s own
+/// enabled flags render first, then the disabled ones, each keeping that
+/// natural order -- real `_create_use_string`'s own
 /// `" ".join(enabled + disabled)`. `emerge --alphabetical` collapses
-/// the two back into one interleaved bare-name-sorted list; that is
-/// applied at render time (`pretend.rs::use_suffix`), not here, since it
-/// needs no resolver state. (Real portage's within-group sort is a
-/// *natural* sort, `_alnum_sort_key`; this pilot uses plain
-/// lexicographic on the full flag name, a pre-existing simplification --
-/// only matters for e.g. `python3_9` vs `python3_12`.)
+/// the two back into one interleaved list (still `alnum_sort_key`); that
+/// is applied at render time (`pretend.rs::use_suffix`), not here, since
+/// it needs no resolver state.
 ///
 /// When `installed` is `Some` (an `Upgrade`/`Downgrade`/`Reinstall` entry
 /// -- i.e. real `pkg_info.previous_pkg is not None`, `is_new` false),
@@ -4105,6 +4103,56 @@ struct InstalledUseState {
 /// all (real `_create_use_string`'s own `if ret:` guard), so an
 /// `Upgrade` whose USE didn't actually change shows *no* `USE=` line, and
 /// a package with no displayable flags returns `[]`.
+/// Real `output_helpers.py::_alnum_sort_key`: split a string on runs of
+/// digits (`re.split(r"(\d+)", x)` -- so the result alternates
+/// non-digit / digit / non-digit / …), and compare the digit runs as
+/// numbers rather than lexically. `python3_9` then sorts before
+/// `python3_12` (`9 < 12`), not after (`"9" > "12"`). Used for the
+/// `emerge -pv` `USE="…"` flag list -- real `_create_use_string`'s own
+/// `any_iuse.sort(key=_alnum_sort_key)` (and the `--alphabetical` combined
+/// list, and the removed-from-IUSE list).
+///
+/// A digit run longer than `u128` can hold (~39 digits) is kept as a
+/// `Str` part instead of overflowing -- no real USE flag has one, and
+/// `Str` vs `Str` still orders it deterministically.
+pub fn alnum_sort_key(s: &str) -> Vec<AlnumKey> {
+    let mut out = Vec::new();
+    let mut rest = s;
+    loop {
+        match rest.find(|c: char| c.is_ascii_digit()) {
+            None => {
+                out.push(AlnumKey::Str(rest.to_string()));
+                break;
+            }
+            Some(start) => {
+                out.push(AlnumKey::Str(rest[..start].to_string()));
+                let digits_end = rest[start..]
+                    .find(|c: char| !c.is_ascii_digit())
+                    .map(|i| start + i)
+                    .unwrap_or(rest.len());
+                let digits = &rest[start..digits_end];
+                out.push(match digits.parse::<u128>() {
+                    Ok(n) => AlnumKey::Num(n),
+                    Err(_) => AlnumKey::Str(digits.to_string()),
+                });
+                rest = &rest[digits_end..];
+            }
+        }
+    }
+    out
+}
+
+/// One segment of an `alnum_sort_key` -- a non-digit run (`Str`) or a
+/// digit run parsed as a number (`Num`). `Str` is ordered before `Num`
+/// so a shorter key sorts before a longer one that extends it with a
+/// number (the two variants never meet at the same position between two
+/// well-formed keys -- the split always alternates `Str`/`Num`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AlnumKey {
+    Str(String),
+    Num(u128),
+}
+
 fn build_use_expand_display(
     use_flags_display: &[(String, bool)],
     config: &portage_profile::Config,
@@ -4227,7 +4275,11 @@ fn build_use_expand_display(
             .iter()
             .filter(|f| !cur.contains(f.as_str()))
             .collect();
-        removed.sort();
+        // Natural sort, same key as the `display` list above (real
+        // `_alnum_sort_key`). Real portage sorts `cur ∪ old` as one list;
+        // this pilot keeps its own cur-then-removed routing, a
+        // pre-existing structural difference -- only the key changes here.
+        removed.sort_by_key(|f| alnum_sort_key(f));
         for flag in removed {
             route(&mut groups, flag, FlagState::Removed);
         }
@@ -7636,7 +7688,8 @@ pub fn resolve_pretend_graph(
                     (flag, enabled)
                 })
                 .collect();
-            display.sort_by(|a, b| a.0.cmp(&b.0));
+            // Real `_create_use_string`'s `any_iuse.sort(key=_alnum_sort_key)`.
+            display.sort_by_key(|p| alnum_sort_key(&p.0));
             // Real `_display_use`'s `previous_pkg`: the installed
             // version's own recorded USE/IUSE, for the `*`/`%` diff
             // markers -- only for an entry that actually replaces an
@@ -12071,6 +12124,51 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn alnum_sort_key_orders_digit_runs_numerically() {
+        let mut v = vec![
+            "python3_9",
+            "python3_12",
+            "python3_10",
+            "abi_x86_32",
+            "abi_x86_64",
+            "n2",
+            "n10",
+            "n9",
+            "plainflag",
+        ];
+        v.sort_by_key(|x| alnum_sort_key(x));
+        assert_eq!(
+            v,
+            vec![
+                "abi_x86_32",
+                "abi_x86_64",
+                "n2",
+                "n9",
+                "n10",
+                "plainflag",
+                "python3_9",
+                "python3_10",
+                "python3_12",
+            ]
+        );
+        // Structure: alternating Str / Num, leading empty Str for a
+        // digit-initial string (real `re.split(r"(\d+)", "1a")` ->
+        // `["", "1", "a"]`).
+        assert_eq!(
+            alnum_sort_key("1a"),
+            vec![
+                AlnumKey::Str(String::new()),
+                AlnumKey::Num(1),
+                AlnumKey::Str("a".to_string()),
+            ]
+        );
+        // A short key sorts before a longer one that extends it.
+        assert!(alnum_sort_key("a") < alnum_sort_key("a1"));
+        // Overflow -> kept as Str, still deterministic.
+        assert!(!alnum_sort_key(&format!("x{}", "9".repeat(50))).is_empty());
     }
 
     #[test]

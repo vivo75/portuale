@@ -244,6 +244,16 @@ CASES = [
         0,
     ),
     (
+        "-pv USE= flag list is natural-sorted (_alnum_sort_key): n9 before n10",
+        ["--pretend", "-v", "dev-libs/naturalsortpkg"],
+        0,
+    ),
+    (
+        "-pv --alphabetical USE= list is natural-sorted too",
+        ["--pretend", "-v", "--alphabetical", "dev-libs/naturalsortpkg"],
+        0,
+    ),
+    (
         "REQUIRED_USE: violated on a dependency, still aborts the whole run",
         ["--pretend", "dev-libs/requiredusebadparentpkg"],
         1,
@@ -3351,6 +3361,24 @@ def test_pv_bracket_mask_marker(emerge_binary, emerge_pretend_python, fixture_en
         '',
         'Total: 1 package (1 new), Size of downloads: 0 KiB',
     ]
+
+
+def test_pv_use_flag_list_is_natural_sorted(emerge_binary, emerge_pretend_python, fixture_env):
+    """Real output_helpers.py::_alnum_sort_key
+    (`any_iuse.sort(key=_alnum_sort_key)` in `_create_use_string`): the
+    `-pv` `USE="..."` flag list splits on digit runs and compares them as
+    numbers, so `n9` sorts before `n10` (not after, as plain
+    lexicographic `"n10" < "n9"` would give). dev-libs/naturalsortpkg's
+    IUSE is `+n2 +n9 +n10`, all `+`-defaulted on."""
+    for extra in ([], ["--alphabetical"]):
+        args = ["--pretend", "-v", *extra, "dev-libs/naturalsortpkg"]
+        v = _run([str(emerge_binary)], args, fixture_env)
+        vp = _run(emerge_pretend_python, args, fixture_env)
+        assert v.returncode == 0
+        assert v.stdout == vp.stdout, extra
+        assert v.stdout.splitlines()[0] == (
+            '[ebuild  N     ] dev-libs/naturalsortpkg-1.0::testrepo  USE="n2 n9 n10"'
+        ), extra
 
 
 def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_python, fixture_env):

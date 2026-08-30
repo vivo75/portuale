@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: -pv USE= flag list natural sort (_alnum_sort_key) -- n9 must sort before n10
+EAPI=8
+IUSE=+n2 +n9 +n10
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

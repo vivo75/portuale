@@ -2343,6 +2343,21 @@ def _libc_provider_cps(root):
     return result
 
 
+def _alnum_sort_key(s):
+    """Real output_helpers.py::_alnum_sort_key: split on runs of digits
+    and compare the digit runs as numbers, not lexically -- so
+    `python3_9` sorts before `python3_12`. Used for the `emerge -pv`
+    USE="..." flag list (real `_create_use_string`'s own
+    `any_iuse.sort(key=_alnum_sort_key)`). Mirrors portage-repo/src/
+    lib.rs's alnum_sort_key."""
+    parts = re.split(r"(\d+)", s)
+    # parts alternates non-digit / digit / non-digit / ...; digit parts
+    # (odd indices) become ints. A tuple of (str, int, str, int, ...)
+    # compares element-wise; type at each position is consistent between
+    # two well-formed keys.
+    return tuple(int(p) if i % 2 else p for i, p in enumerate(parts))
+
+
 def _use_flag_sort_key(tok):
     """The bare flag name inside a rendered USE= token, for the
     --alphabetical re-sort: strip a leading '(' / '-' and any trailing
@@ -2431,7 +2446,9 @@ def _build_use_expand_display(
         route(flag, "enabled" if enabled else "disabled")
     if installed is not None:
         cur = {f for f, _ in use_display}
-        for flag in sorted(f for f in old_iuse if f not in cur):
+        for flag in sorted(
+            (f for f in old_iuse if f not in cur), key=_alnum_sort_key
+        ):
             route(flag, "removed")
 
     rank = {"enabled": 0, "disabled": 1, "removed": 2}
@@ -5686,8 +5703,11 @@ def resolve_pretend_graph(
         # portage-repo/src/lib.rs's resolve_pretend_graph exactly.
         if metadata.get("IUSE"):
             display = sorted(
-                (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
-                for flag in metadata["IUSE"].split()
+                (
+                    (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
+                    for flag in metadata["IUSE"].split()
+                ),
+                key=lambda p: _alnum_sort_key(p[0]),
             )
             entries[entry_idx] = (
                 category,
@@ -10205,7 +10225,7 @@ def run(args):
         def body(rendered):
             toks = rendered.split(" ")
             if alphabetical:
-                toks.sort(key=_use_flag_sort_key)
+                toks.sort(key=lambda t: _alnum_sort_key(_use_flag_sort_key(t)))
             # Colour (real _create_use_string's red/green/blue/yellow) is
             # applied per token *after* the sort, so the --alphabetical
             # sort key still sees plain tokens. Mirrors pretend.rs.

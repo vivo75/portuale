@@ -514,7 +514,10 @@ fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool, color: &Col
         .map(|(name, rendered)| {
             let mut toks: Vec<&str> = rendered.split(' ').collect();
             if alphabetical {
-                toks.sort_by(|a, b| use_flag_sort_key(a).cmp(use_flag_sort_key(b)));
+                // Real `_create_use_string`'s combined-list sort is
+                // `_alnum_sort_key` (natural), same as the non-alphabetical
+                // within-group sort.
+                toks.sort_by_key(|t| portage_repo::alnum_sort_key(use_flag_sort_key(t)));
             }
             let body = toks
                 .iter()

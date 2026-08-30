@@ -176,12 +176,15 @@ Ranked roughly by how self-contained each is.
    `dev-libs/builtusedivergedep`/`needsbuiltusediverge` fixtures. Real
    `_match_use` recomputes this domain rather than reading a vdb
    `IUSE_EFFECTIVE` file, so not persisting one is not a gap.
-   **Residual:** (b) `-pv` USE display still lacks real portage's *natural*
-   within-group sort (`_alnum_sort_key`; the pilot's plain lexicographic
-   only differs on e.g. `python3_9` vs `python3_12`). ANSI colour across
-   *all* of `-pv` (bracket line, USE flags, counters, cleanup actions,
-   autounmask, columns/tree) is now a scoped multi-increment buildout —
-   see item 14 below. The enabled-first
+   ~~**Residual:** (b) `-pv` USE display still lacks real portage's
+   *natural* within-group sort (`_alnum_sort_key`)~~ **shipped
+   2026-08-30**: `portage_repo::alnum_sort_key` (real
+   `output_helpers.py::_alnum_sort_key` -- split on digit runs, compare
+   them as numbers) applied at the 3 flag-sort sites (`display`,
+   `removed`, `pretend.rs` `--alphabetical`), so `python3_9` precedes
+   `python3_12`. New `dev-libs/naturalsortpkg` fixture. No residual left
+   for this item -- ANSI colour across *all* of `-pv` shipped as the
+   multi-increment buildout, see item 14. The enabled-first
    within-group order + `emerge --alphabetical` **shipped 2026-08-27**
    (`build_use_expand_display` enabled-first split, `pretend.rs::
    use_suffix` `alphabetical` param + `use_flag_sort_key`). `all_flags`
