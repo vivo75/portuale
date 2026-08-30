@@ -860,8 +860,10 @@ PORTING/
   `--- Couldn't find 'X' to depclean.` (stderr) for an args atom
   matching nothing and `>>> No packages selected` + exit 1 when none
   match, and skips the `* ` advisory block (real portage only shows it
-  with no args). **Still deferred:** `--deselect=n` (keeps the world
-  atoms as roots even in args mode), `world_sets` `@`-refs as roots.
+  with no args). `--deselect=n` (keeps the world atoms as roots even in
+  args mode) **shipped 2026-08-30** -- see "`emerge -pc <atoms>
+  --deselect=n`" below. **Still deferred:** `world_sets` `@`-refs as
+  roots in args mode.
 
   **`emerge -pc`: build-time deps are kept too (`bdeps="auto"`).** The
   first `--depclean` increment above deliberately walked only the
@@ -8716,6 +8718,32 @@ candidate" behavior (the `test_use_dep_enforcement_*` contract tests now
 pass it to keep testing raw matching). Both sides; existing
 `dev-libs/useflagpkg` / `usedeprejectedpkg` / `useeqparentoffpkg`
 fixtures. ~10 contract tests updated, 3 `portage-repo` unit tests.
+
+### `emerge -pc <atoms> --deselect=n`
+
+Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`
+(default `True`). In args mode, `if deselect:` empties `required_sets
+["selected"]` (`actions.py:1037-1042`) so a package named as an arg that
+is *also* in `world` still gets removed (and, non-`--pretend`, dropped
+from `world`). `--depclean <atoms> --deselect=n` skips that — the world
+set stays a protection root, so a world member named as an arg is
+**kept**.
+
+`depclean_cleanlist` gained a `deselect: bool` param (the world seeds
+are used as roots when `args.is_empty() || !deselect`, not just
+`args.is_empty()`); `pretend.rs` tracks a `deselect_n` flag (`--deselect
+n` / `--deselect=n`) and passes `!deselect_n` through. The same slice
+fixed a related bug: `--deselect` (bare / `y`) alongside `--depclean` /
+`--prune` / `--unmerge` was wrongly routing to the standalone deselect
+*action* — real `main.py` only makes `--deselect` an action when
+`myaction is None` (the other three set their action first), so the
+dispatch is now gated on `!depclean && !prune && !unmerge`.
+
+`emerge -pc dev-libs/dcworld` (a world member nothing needs) → removed
+(`Number to remove: 1`); `-pc dev-libs/dcworld --deselect=n` → `>>> No
+packages selected for removal by depclean` (`Number to remove: 0`).
+3 contract `CASES` + 1 pinned test + 1 `portage-repo` unit test; both
+sides.
 
 ### `emerge -pC` / `-pP`: the higher-slot set-protection refinement
 

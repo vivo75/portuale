@@ -5587,6 +5587,30 @@ def test_depclean_pretend_with_args_narrows_to_the_named_packages(
     assert ">>> No packages selected for removal by depclean" in missing.stdout
 
 
+def test_depclean_args_deselect_n_keeps_a_world_member(emerge_binary, fixture_env, tmp_path):
+    """Real action_depclean's `deselect = myopts.get("--deselect") !=
+    "n"` (default True): `-pc <atom>` in args mode empties the world
+    "selected" set so a named world member still gets removed
+    (actions.py:1037). `-pc <atom> --deselect=n` keeps the world set as a
+    protection root, so a world member named as an arg is KEPT. Also
+    proves `--depclean --deselect` no longer wrongly routes to the
+    standalone deselect action (real: `myaction` is already `depclean`)."""
+    env = _depclean_env(fixture_env, tmp_path)
+    # default: dcworld (in @world, nothing needs it) -> removed
+    default = _run([str(emerge_binary)], ["--pretend", "-c", "dev-libs/dcworld"], env)
+    assert default.returncode == 0
+    assert " dev-libs/dcworld" in default.stdout.splitlines()
+    assert default.stdout.splitlines()[-1] == "Number to remove:     1"
+    # --deselect=n: dcworld stays world-protected -> nothing to remove
+    for flag in (["--deselect=n"], ["--deselect", "n"]):
+        kept = _run(
+            [str(emerge_binary)], ["--pretend", "-c", "dev-libs/dcworld", *flag], env
+        )
+        assert kept.returncode == 0, flag
+        assert ">>> No packages selected for removal by depclean" in kept.stdout, flag
+        assert kept.stdout.splitlines()[-1] == "Number to remove:     0", flag
+
+
 def test_depclean_requires_pretend(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["--depclean"], fixture_env)
     assert result.returncode == 2
@@ -5603,6 +5627,9 @@ def test_depclean_matches_between_implementations(
         ["--pretend", "-c", "dev-libs/dcorphan"],
         ["--pretend", "-c", "dev-libs/dcdep"],
         ["--pretend", "-c", "dev-libs/dcworld"],
+        ["--pretend", "-c", "dev-libs/dcworld", "--deselect=n"],
+        ["--pretend", "-c", "dev-libs/dcworld", "--deselect", "n"],
+        ["--pretend", "-c", "dev-libs/dcorphan", "--deselect=n"],
         ["--pretend", "-c", "dcorphan"],
         ["--pretend", "-c", "dev-libs/dcorphan", "dev-libs/nope"],
         ["--pretend", "-c", "dev-libs/nope"],

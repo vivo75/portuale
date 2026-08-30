@@ -8007,7 +8007,7 @@ def _depclean_unresolved_halt(unresolved, is_prune, color):
 
 
 def _depclean_cleanlist(
-    root, world_seeds, system_atoms, args, lib_protected_providers=()
+    root, world_seeds, system_atoms, args, deselect=True, lib_protected_providers=()
 ):
     """Real emerge --depclean's removal list (_calc_depclean +
     create_cleanlist). No `args`: roots = installed pkgs @world ∪ @system
@@ -8072,7 +8072,9 @@ def _depclean_cleanlist(
             queue.append((c, p, v))
 
     seed_pairs = [(a, "@system") for a in system_atoms]
-    if not args:
+    # `args` mode drops the world "selected" seeds (real _complete_graph
+    # empties selected_set) -- unless --deselect=n keeps them.
+    if not args or not deselect:
         seed_pairs += [(a, label) for (a, label) in world_seeds]
     for atom_str, label in seed_pairs:
         for (c, p, v, _s) in matches_atom(atom_str):
@@ -8584,10 +8586,13 @@ def _prune_cleanlist(root, args, lib_protected_providers=()):
 
 
 def _run_depclean_pretend(
-    targets, root, config_root, config, color, verbose=False, lib_check=True
+    targets, root, config_root, config, color, verbose=False, lib_check=True, deselect=True
 ):
     """emerge --pretend --depclean / -pc (real action_depclean +
-    _calc_depclean). Mirrors pretend.rs's run_depclean_pretend."""
+    _calc_depclean). `deselect` is real action_depclean's
+    `myopts.get("--deselect") != "n"` (default True) -- `-pc <atoms>
+    --deselect=n` keeps the world set as a protection root. Mirrors
+    pretend.rs's run_depclean_pretend."""
     try:
         args = _resolve_cleanup_args(targets, root, "depclean")
     except _CleanupArgsExit as e:
@@ -8659,7 +8664,9 @@ def _run_depclean_pretend(
         return 1
     world_atom_count = len({a for (a, _l) in world_seeds})
 
-    result = _depclean_cleanlist(root, world_seeds, config["system_packages"], args)
+    result = _depclean_cleanlist(
+        root, world_seeds, config["system_packages"], args, deselect=deselect
+    )
     # Real _calc_depclean's unresolved_deps() safety halt (actions.py:1247)
     # -- checked before the lib scan.
     halt = _depclean_unresolved_halt(result[4], False, color)
@@ -8674,7 +8681,12 @@ def _run_depclean_pretend(
         lib_check,
         color,
         lambda providers: _depclean_cleanlist(
-            root, world_seeds, config["system_packages"], args, providers
+            root,
+            world_seeds,
+            config["system_packages"],
+            args,
+            deselect=deselect,
+            lib_protected_providers=providers,
         ),
     )
     cleanlist, required_count, ordered, kept_parents, _unresolved = result
@@ -9141,6 +9153,10 @@ def run(args):
     usepkg_include = []
     json_output = False
     deselect = False
+    # Real --deselect=n / --deselect n -- consulted by --depclean <atoms>
+    # (real action_depclean's `deselect = myopts.get("--deselect") !=
+    # "n"`). Never triggers the standalone deselect action.
+    deselect_n = False
     unmerge = False
     depclean = False
     prune = False
@@ -9386,6 +9402,7 @@ def run(args):
                 i += 2
             elif nxt == "n":
                 deselect = False
+                deselect_n = True
                 i += 2
             else:
                 deselect = True
@@ -9395,6 +9412,7 @@ def run(args):
             i += 1
         elif arg == "--deselect=n":
             deselect = False
+            deselect_n = True
             i += 1
         elif arg in ("--unmerge", "-C"):
             # Real main.py: --unmerge/-C is a standalone ACTION
@@ -9992,7 +10010,11 @@ def run(args):
         )
         return 2
 
-    if deselect:
+    # Real main.py: --deselect is a standalone action only when
+    # `myaction is None` -- --depclean/--prune/--unmerge set their own
+    # action first, and --deselect=y|n is then just a modifier (real
+    # action_depclean's `deselect`).
+    if deselect and not depclean and not prune and not unmerge:
         return _run_deselect(atom_args, _root())
 
     if not atom_args and not unmerge and not depclean and not prune:
@@ -10066,6 +10088,7 @@ def run(args):
             color,
             verbose=verbose,
             lib_check=lib_check,
+            deselect=not deselect_n,
         )
     if prune:
         if nodeps:

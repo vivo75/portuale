@@ -104,11 +104,16 @@ Ranked roughly by how self-contained each is.
   unsatisfiable hard runtime dep prints the `bad(" * ")` block and exits
   1 without removing anything; `DepcleanResult::unresolved` via
   `unresolved_runtime_deps`; `||`-group and libc-provider atoms narrowed
-  out) **shipped 2026-08-29** for both. **Still open:** slot-operator
-  rebuild edges, `--deselect=n` in args mode, the exact
-  `@selected`-vs-`@world` set nesting (approximated), the "Broken soname
-  dependencies found" *warning* half of `unresolved_deps()` (no soname
-  deps in this pilot's RDEPEND), and real (non-`--pretend`) removal.
+  out) **shipped 2026-08-29** for both. `--deselect=n` in args mode
+  (real `action_depclean`'s `deselect = myopts.get("--deselect") !=
+  "n"` -- `-pc <atoms> --deselect=n` keeps `world` as a protection
+  root; `depclean_cleanlist` `deselect` param; also fixed `--deselect`
+  wrongly triggering the standalone action alongside `--depclean`/
+  `--prune`/`--unmerge`) **shipped 2026-08-30**. **Still open:**
+  slot-operator rebuild edges, the exact `@selected`-vs-`@world` set
+  nesting (approximated), the "Broken soname dependencies found"
+  *warning* half of `unresolved_deps()` (no soname deps in this pilot's
+  RDEPEND), and real (non-`--pretend`) removal.
 - **`emerge -p --prune` / `-pP`** **shipped 2026-08-27**
   (`prune_cleanlist`: seed the closure from every installed package
   except the non-highest-in-cp ones an `args_set` matches -- `args_set`

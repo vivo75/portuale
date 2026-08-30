@@ -3129,6 +3129,7 @@ fn depclean_unresolved_halt(
 /// else needs -- see `depclean_cleanlist`'s own doc comment. Real
 /// `action_depclean` only shows the `* ` advisory block with no args, so
 /// this doesn't either.
+#[allow(clippy::too_many_arguments)]
 fn run_depclean_pretend(
     targets: &[&str],
     root: &Path,
@@ -3136,6 +3137,11 @@ fn run_depclean_pretend(
     config: &portage_profile::Config,
     verbose: bool,
     lib_check: bool,
+    // Real `action_depclean`'s `deselect = myopts.get("--deselect") !=
+    // "n"` -- `--depclean <atoms> --deselect=n` keeps the `world` set as
+    // a protection root (a world member named as an arg is kept). See
+    // `depclean_cleanlist`'s own `deselect` param.
+    deselect: bool,
     color: &Colorizer,
 ) -> ExitCode {
     // Bare-name targets get their category from the vdb, then each atom
@@ -3248,8 +3254,14 @@ fn run_depclean_pretend(
         .collect::<HashSet<_>>()
         .len();
 
-    let result =
-        portage_repo::depclean_cleanlist(root, &world_seeds, &config.system_packages, &args, &[]);
+    let result = portage_repo::depclean_cleanlist(
+        root,
+        &world_seeds,
+        &config.system_packages,
+        &args,
+        deselect,
+        &[],
+    );
     // Real `_calc_depclean`'s `unresolved_deps()` safety halt
     // (`actions.py:1247`) -- checked before the lib scan.
     if let Some(code) = depclean_unresolved_halt(&result.unresolved, false, color) {
@@ -3265,6 +3277,7 @@ fn run_depclean_pretend(
             &world_seeds,
             &config.system_packages,
             &args,
+            deselect,
             providers,
         )
     });
@@ -3370,6 +3383,11 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut usepkg_include: Vec<String> = Vec::new();
     let mut json = false;
     let mut deselect = false;
+    // Real `--deselect=n` / `--deselect n` -- distinct from "not given":
+    // consulted by `--depclean <atoms>` (real `action_depclean`'s
+    // `deselect = myopts.get("--deselect") != "n"`, default keep-behavior
+    // on). Never triggers the standalone deselect action.
+    let mut deselect_n = false;
     // --unmerge/-C: a standalone action (see run_unmerge_pretend).
     let mut unmerge = false;
     // --depclean/-c: a standalone action (see run_depclean_pretend).
@@ -3673,6 +3691,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 Some("n") => {
                     deselect = false;
+                    deselect_n = true;
                     i += 2;
                 }
                 _ => {
@@ -3685,6 +3704,7 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--deselect=n" {
             deselect = false;
+            deselect_n = true;
             i += 1;
         } else if arg == "--unmerge" || arg == "-C" {
             // Real `main.py`: `--unmerge`/`-C` is a standalone ACTION
@@ -4323,7 +4343,12 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    if deselect {
+    // Real `main.py`: `--deselect` becomes a standalone action only when
+    // `myaction is None` -- `--depclean`/`--prune`/`--unmerge` each set
+    // their own action first, and then `--deselect=y|n` is just a
+    // modifier on it (real `action_depclean`'s `deselect` -- see
+    // `run_depclean_pretend`).
+    if deselect && !depclean && !prune && !unmerge {
         return run_deselect(&atom_args, &root_from_env());
     }
 
@@ -4423,6 +4448,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &config,
             verbose,
             lib_check,
+            !deselect_n,
             &color,
         );
     }

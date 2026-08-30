@@ -3551,6 +3551,14 @@ pub fn depclean_cleanlist(
     world_seeds: &[(String, String)],
     system_atoms: &[String],
     args: &[String],
+    // Real `action_depclean`'s `deselect = myopts.get("--deselect") !=
+    // "n"` (default `true`): in `args` mode, `if deselect:` empties the
+    // `@selected`/`world` set (`actions.py:1037`) so a named package
+    // that is *also* in `world` still gets removed. `--depclean <atoms>
+    // --deselect=n` keeps `world` as a protection root instead, so a
+    // world member named as an arg is kept. No effect without `args`
+    // (the `world` seeds are always used then).
+    deselect: bool,
     // `--depclean-lib-check` feedback: installed packages the caller's
     // `NEEDED.ELF.2` soname scan found are still needed at link level by
     // a surviving consumer. Seeded as extra reachability roots. Empty on
@@ -3604,12 +3612,13 @@ pub fn depclean_cleanlist(
     // or not it was the one that first pulled that package in.
     let mut parent_atoms: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
     for (atom_str, label) in system_atoms.iter().map(|a| (a.as_str(), "@system")).chain(
-        // `args` mode drops the `@world` seeds entirely (real
-        // `_complete_graph` empties `selected_set`); `@system` still
-        // seeds in both modes.
+        // `args` mode drops the `@world` seeds (real `_complete_graph`
+        // empties `selected_set`) -- UNLESS `--deselect=n` keeps them
+        // (real `action_depclean`'s `if deselect:` guard); `@system`
+        // seeds in every mode.
         world_seeds
             .iter()
-            .filter(|_| args.is_empty())
+            .filter(|_| args.is_empty() || !deselect)
             .map(|(a, l)| (a.as_str(), l.as_str())),
     ) {
         for p in matches_atom(atom_str) {
@@ -10588,6 +10597,7 @@ mod tests {
             &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
             &["dev-libs/systempkg".to_string()],
             &[],
+            true,
             &[],
         );
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
@@ -10609,6 +10619,7 @@ mod tests {
             &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
             &["dev-libs/systempkg".to_string()],
             &["dev-libs/dcorphan".to_string()],
+            true,
             &[],
         );
         assert_eq!(
@@ -10625,6 +10636,7 @@ mod tests {
             &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
             &["dev-libs/systempkg".to_string()],
             &["dev-libs/dcsub".to_string()],
+            true,
             &[],
         );
         assert!(needed.cleanlist.is_empty());
@@ -10643,6 +10655,7 @@ mod tests {
             &[("dev-libs/dcworld".to_string(), "@selected".to_string())],
             &["dev-libs/systempkg".to_string()],
             &[],
+            true,
             std::slice::from_ref(&protected),
         );
         assert!(lib_kept.cleanlist.is_empty(), "{:?}", lib_kept.cleanlist);
@@ -10684,6 +10697,7 @@ mod tests {
             &[("dev-libs/uw".to_string(), "@selected".to_string())],
             &[],
             &[],
+            true,
             &[],
         );
         assert_eq!(
@@ -10693,6 +10707,37 @@ mod tests {
                 "dev-libs/uk-1.0".to_string()
             )]
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn depclean_cleanlist_deselect_false_keeps_a_world_member_named_as_an_arg() {
+        // dw (world) has no reverse deps.
+        let root = masters_test_root("depclean-deselect");
+        let d = root.join("var/db/pkg/dev-libs/dw-1.0");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        let world = &[("dev-libs/dw".to_string(), "@selected".to_string())];
+        let args = &["dev-libs/dw".to_string()];
+
+        // `-c dev-libs/dw` (deselect default true): the world seed is
+        // dropped in args mode -> dw is unreachable -> removed.
+        let removed = depclean_cleanlist(&root, world, &[], args, true, &[]);
+        assert_eq!(
+            removed
+                .cleanlist
+                .iter()
+                .map(|p| p.cpv())
+                .collect::<Vec<_>>(),
+            vec!["dev-libs/dw-1.0".to_string()]
+        );
+
+        // `-c dev-libs/dw --deselect=n`: the world seed is kept ->
+        // @selected still reaches dw -> nothing to remove.
+        let kept = depclean_cleanlist(&root, world, &[], args, false, &[]);
+        assert!(kept.cleanlist.is_empty(), "{:?}", kept.cleanlist);
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -10719,6 +10764,7 @@ mod tests {
             &[("dev-libs/rw".to_string(), "@selected".to_string())],
             &[],
             &[],
+            true,
             &[],
         );
         // rorphan is the cleanlist; kept = rdep, rshared, rw (cpv order).
@@ -10777,6 +10823,7 @@ mod tests {
             &[("dev-libs/dcw".to_string(), "@selected".to_string())],
             &[],
             &[],
+            true,
             &[],
         );
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
@@ -10808,7 +10855,7 @@ mod tests {
         install("aabase", "");
         install("loner", "");
 
-        let result = depclean_cleanlist(&root, &[], &[], &[], &[]);
+        let result = depclean_cleanlist(&root, &[], &[], &[], true, &[]);
         assert!(result.ordered);
         let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
         // Level 0 ready = {mmid, loner} (nothing depends on them),
@@ -10831,7 +10878,7 @@ mod tests {
             std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
             std::fs::write(d.join("SLOT"), "0\n").unwrap();
         }
-        let flat = depclean_cleanlist(&root2, &[], &[], &[], &[]);
+        let flat = depclean_cleanlist(&root2, &[], &[], &[], true, &[]);
         assert!(!flat.ordered);
         assert_eq!(
             flat.cleanlist.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
