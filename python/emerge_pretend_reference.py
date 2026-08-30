@@ -4372,6 +4372,7 @@ def resolve_pretend(
     newrepo=False,
     empty=False,
     getbinpkg=False,
+    autounmask_keywords=False,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -4582,6 +4583,16 @@ def resolve_pretend(
             )
 
     visible = [c for c in candidates if is_visible(c, category, package, config)]
+    if not visible and autounmask_keywords:
+        # Real --autounmask: a candidate masked by KEYWORDS alone becomes
+        # visible via the implicit `=cpv ~arch` change (see portage-repo's
+        # resolve_pretend `autounmask_keywords` param). Everything else
+        # (package.mask/license/properties/restrict) still has to pass.
+        visible = [
+            c
+            for c in candidates
+            if _keyword_masked_only(c, category, package, config)
+        ]
     if not visible:
         return ("no_visible_candidate",)
 
@@ -4963,6 +4974,52 @@ def _enqueue_flat_deps(flat_deps, key, version, depth, parent_use, queue, pendin
         queue.append((tok, depth + 1, key, unevaluated))
 
 
+def _autounmask_dep_chain(owner, current_atom, top_level, entries):
+    """Real _get_dep_chain_as_comment (depgraph.py:6457), narrowed to
+    this pilot's one-level-parent tracking: the `#required by ...` lines
+    for an autounmask change on `owner`'s dependency (or a top-level
+    `current_atom`). A top-level atom yields a single `required by <atom>
+    (argument)`; a dependency yields `required by <parent cpv>::<repo>`
+    and, when that parent is itself a command-line argument, a trailing
+    `required by <parent atom> (argument)`. Mirrors
+    portage-repo/src/lib.rs's autounmask_dep_chain. The list holds the
+    text after `# ` (the renderer adds the prefix)."""
+    if owner is None:
+        return [f"required by {current_atom} (argument)"]
+    oc, op = owner
+    chain = []
+    parent = next(
+        (e for e in entries if e[0] == oc and e[1] == op),
+        None,
+    )
+    if parent is not None:
+        po = parent[2]
+        pv = None
+        if po[0] in ("new", "reinstall"):
+            pv = po[1]
+        elif po[0] in ("upgrade", "downgrade"):
+            pv = po[2]
+        if pv is not None:
+            prepo = parent[8].get("repo_name") if isinstance(parent[8], dict) else None
+            if prepo:
+                chain.append(f"required by {oc}/{op}-{pv}::{prepo}")
+            else:
+                chain.append(f"required by {oc}/{op}-{pv}")
+    arg = next(
+        (
+            t
+            for t in top_level
+            if (_parse_atom(t) is not None and _parse_atom(t).cp == f"{oc}/{op}")
+        ),
+        None,
+    )
+    if arg is not None:
+        chain.append(f"required by {arg} (argument)")
+    if not chain:
+        chain.append(f"required by {oc}/{op}")
+    return chain
+
+
 def resolve_pretend_graph(
     config_root,
     root,
@@ -5186,6 +5243,9 @@ def resolve_pretend_graph(
     # portage-repo/src/lib.rs's GraphResult::pprovided_atoms.
     package_provided = config["package_provided"]
     pprovided_atoms = []
+    # Real --autounmask keyword changes applied during this walk -- see
+    # portage-repo/src/lib.rs's GraphResult::autounmask_keyword_changes.
+    autounmask_keyword_changes = []
     # (category, package) -> set of every distinct owner that reached it
     # via a dependency string, accumulated separately from the BFS's own
     # dedup/recursion decisions below (visited_atoms/resolved_slots/
@@ -5249,6 +5309,7 @@ def resolve_pretend_graph(
             newrepo,
             empty,
             getbinpkg,
+            autounmask_suggest_keywords,
         )
 
         # --changed-deps-report: real portage stays "completely silent"
@@ -5499,6 +5560,27 @@ def resolve_pretend_graph(
         provenance["keyword_mask"] = _keyword_mask_marker(
             resolved, category, package, config, provenance["mask_entry"]
         )
+        # Real --autounmask keyword resolution: this candidate resolved
+        # only because resolve_pretend was told to accept a KEYWORDS-alone
+        # mask (_keyword_masked_only). Record the implicit `=<cpv> <kw>`
+        # change (real depgraph.py::_display_autounmask's
+        # unstable_keyword_msg + _get_dep_chain_as_comment;
+        # autounmask_unrestricted_atoms defaults to "n", so always the
+        # exact-version `=` form). Mirrors portage-repo/src/lib.rs.
+        if autounmask_suggest_keywords and _keyword_masked_only(
+            resolved, category, package, config
+        ):
+            _kw = _suggested_keyword(resolved)
+            if _kw is not None:
+                autounmask_keyword_changes.append(
+                    {
+                        "cpv": f"{category}/{package}-{version}",
+                        "token": _kw,
+                        "dep_chain": _autounmask_dep_chain(
+                            owner, current_atom_str, top_level, entries
+                        ),
+                    }
+                )
         # Real output.py::_get_installed_best's own new_slot flag (the
         # "S" bracket column, PkgAttrDisplay.new_slot): a "new" entry
         # whose category/package is installed in some *other* slot (the
@@ -5923,6 +6005,7 @@ def resolve_pretend_graph(
         "changed_deps_report": changed_deps_report_entries,
         "buildpkgonly_deps_unsatisfied": buildpkgonly_deps_unsatisfied,
         "pprovided_atoms": pprovided_atoms,
+        "autounmask_keyword_changes": autounmask_keyword_changes,
     }
 
 
@@ -6543,11 +6626,29 @@ def _changed_deps_report_entry_to_json(c):
     )
 
 
-def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, verbose, running_root=None):
+def _autounmask_change_to_json(change):
+    chain = ",".join(_json_string(line) for line in change["dep_chain"])
+    return (
+        f'{{"cpv":{_json_string(change["cpv"])},'
+        f'"token":{_json_string(change["token"])},'
+        f'"dep_chain":[{chain}]}}'
+    )
+
+
+def _print_json(
+    entries,
+    slot_conflicts,
+    changed_deps_report,
+    autounmask_keyword_changes,
+    top_level_pkgs,
+    verbose,
+    running_root=None,
+):
     """The whole --json output: {"entries": [...], "slot_conflicts": [...],
-    "changed_deps_report": [...]}, one line, no pretty-printing (a
-    pilot-specific convenience format, not a stable schema -- see run()'s
-    own --json handling). Mirrors pretend.rs's own print_json exactly."""
+    "changed_deps_report": [...], "autounmask_keyword_changes": [...]}, one
+    line, no pretty-printing (a pilot-specific convenience format, not a
+    stable schema -- see run()'s own --json handling). Mirrors
+    pretend.rs's own print_json exactly."""
     entries_json = ",".join(
         _entry_to_json(
             category, package, outcome, blockers, slot, use_display, required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root, top_level_pkgs, verbose, running_root
@@ -6558,9 +6659,13 @@ def _print_json(entries, slot_conflicts, changed_deps_report, top_level_pkgs, ve
     changed_deps_report_json = ",".join(
         _changed_deps_report_entry_to_json(c) for c in changed_deps_report
     )
+    autounmask_json = ",".join(
+        _autounmask_change_to_json(c) for c in autounmask_keyword_changes
+    )
     print(
         f'{{"entries":[{entries_json}],"slot_conflicts":[{conflicts_json}],'
-        f'"changed_deps_report":[{changed_deps_report_json}]}}'
+        f'"changed_deps_report":[{changed_deps_report_json}],'
+        f'"autounmask_keyword_changes":[{autounmask_json}]}}'
     )
 
 
@@ -10266,6 +10371,7 @@ def run(args):
             entries,
             result["slot_conflicts"],
             result["changed_deps_report"],
+            result["autounmask_keyword_changes"],
             top_level_pkgs,
             verbose,
             root_deps_running_root,
@@ -10631,6 +10737,36 @@ def run(args):
             f"{c['category']}/{c['package']}-{c['resolved_version']}, which does not "
             f'satisfy "{c["conflicting_atom"]}"'
         )
+
+    # Real depgraph.py::_display_autounmask (:10625), the
+    # unstable_keyword_msg half: --autounmask accepted a KEYWORDS-alone
+    # mask to make the graph resolve, so the implicit
+    # package.accept_keywords change is reported after the merge list.
+    # Real _writemsg: `\nThe following <BAD>keyword changes</BAD> are
+    # necessary to proceed:\n (see "package.accept_keywords" in the
+    # portage(5) man page for more details)\n`; then format_msg
+    # (`#`-prefixed dep-chain comment lines stay plain, the `=<cpv> <kw>`
+    # line is INFORM-coloured). One header covers every change. Real
+    # portage does NOT print the "Use --autounmask-write" hint under
+    # --pretend (:11084 `not pretend`), and `emerge --pretend` still
+    # exits 0 (real actions.py:563 `return os.EX_OK`). Mirrors
+    # pretend.rs.
+    if result["autounmask_keyword_changes"]:
+        print(
+            f'\nThe following {color.c("BAD", "keyword changes")} are necessary to proceed:',
+            file=sys.stderr,
+        )
+        print(
+            ' (see "package.accept_keywords" in the portage(5) man page for more details)',
+            file=sys.stderr,
+        )
+        for change in result["autounmask_keyword_changes"]:
+            for line in change["dep_chain"]:
+                print(f"# {line}", file=sys.stderr)
+            print(
+                color.c("INFORM", f'={change["cpv"]} {change["token"]}'),
+                file=sys.stderr,
+            )
 
     # --changed-deps-report: real _changed_deps_report's own WARN block,
     # ported verbatim (real portage colorizes it when the terminal

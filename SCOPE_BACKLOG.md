@@ -44,7 +44,7 @@ to **either** side yet — deliberate, documented scope cuts or explicit
 | 14 | `--changed-deps-report` | **shipped** | `69ca60846` (real cosmetic "you might want `--changed-deps`" notice, its own `--json` `changed_deps_report` array) |
 | 15 | `--with-bdeps-auto` | **shipped** | `c505df6eb` |
 | 16 | Real atom-grammar wildcards/build-ids | **descoped** (not a gap) | Decision recorded: the bounded `*/*`/`category/*`/`*/package` matcher is sufficient for `package.mask`-style matching; full wildcard/glob/build-id atoms never reach `DEPEND`/`RDEPEND` parsing. Not on the backlog anymore. |
-| 17 | `--autounmask*` family | **read-only suggestion mode shipped** | `2003e020d` (`--autounmask` keyword suggestion) + `927402f3f` (extended to a dependency's own `NoVisibleCandidate`) + `--autounmask-use`/`--autounmask-keep-keywords`/`--autounmask-write` recognition. *Residual:* `--autounmask-write` itself (writes files) — a `PROMPT.md` "never writes" boundary, see Part 3. |
+| 17 | `--autounmask*` family | **keyword resolution shipped; USE next** | `2003e020d` + `927402f3f` (suggestion mode) → superseded 2026-08-30 by real keyword *resolution*: `--autounmask <kwmasked>` resolves the graph + prints real `_display_autounmask`'s `The following keyword changes are necessary to proceed:` block, exit 0 (`resolve_pretend` `autounmask_keywords` param, `GraphResult::autounmask_keyword_changes`). *Residual:* the **USE** kind (increment 2), `--autounmask-license`, and `--autounmask-write` itself (writes files — a `PROMPT.md` "never writes" boundary, Part 3). |
 | 18 | `--root-deps`/cross-`ROOT` dependency resolution | **substantially shipped** | Real `ESYSROOT`-vs-`ROOT` distinction, `running_root_satisfies_atom`, `||` branch selection fed by running-root satisfiability, `93327d274`, `356088e6c` (recursive build-entry, first increment), `678a8875d` (output marking), top-level `IDEPEND` vs running root. *Residual:* see Part 2. |
 | 19 | Binary package support | **local `PKGDIR` shipped** | `3099d9adf` (`--usepkg`/`--usepkgonly`/`--binpkg-respect-use`) + `96d8fbccb` (`--usepkg-exclude`/`-include`) + `0ae1f8be6` (`--rebuilt-binaries`) + `0b18b2140` (downgrade detection) + `7e5a380d7` (real `ebuild … package` builds an xpak binpkg) + real `PORTAGE_COMPRESSION_COMMAND` + `--pretend` half of `--getbinpkg`/`--getbinpkgonly` (`binrepos.conf` + `PORTAGE_BINHOST` parsing, remote binhost `Packages`-index candidates, the `g` bracket column, `Size of downloads:` from the index `SIZE`). *Residual:* an actual remote download / `layout.conf` negotiation, `--getbinpkg` for a real merge, `gpkg` format, `BUILD_ID`/splitdebug/packdebug/RPM, PKGDIR-index locking — see Part 2. |
 | 20 | Real ebuild phase execution | **shipped** | `eeecd96cd` (the `actionmap_deps` phase chain via embedded `brush`) + `2f5a3ddad`/`39907fee6` |
@@ -455,9 +455,17 @@ Ranked roughly by how self-contained each is.
       fixture `dev-libs/blockerorderpkg`. The teal `b` /
       `PKG_BLOCKER_SATISFIED` branch and real's `(is <desc> <parents>)`
       alternative are both unreachable in this pilot (documented).
-      **Still deferred:** `--autounmask` message colour (the pilot's text
-      is already pilot-invented, its own slice). Bar that one, the
-      `-pv` layout + colour buildout is complete.
+      **Update 2026-08-30:** the real `--autounmask` *block* (not just its
+      colour) shipped for the **keyword** kind -- `emerge --pretend
+      --autounmask <kwmasked>` now *resolves* the graph (implicit
+      `=cpv ~arch`, `[ebuild N ~]` in the merge list) and prints real
+      `depgraph.py::_display_autounmask`'s `The following keyword changes
+      are necessary to proceed:` block (`colorize("BAD")` header +
+      `colorize("INFORM")` change line + `#required by` dep chain), exit
+      0. `resolve_pretend` gained an `autounmask_keywords` param;
+      `GraphResult::autounmask_keyword_changes`; `--json` array. 6
+      contract tests updated. **Increment 2 -- the USE kind (`The
+      following USE changes are necessary to proceed:`) -- still open.**
     The two increment-1 follow-ups -- a new-slot install's other-slot
     version list, and verbosity-3 `:slot`/`::repo` decoration on the cpv
     + every `[old-ver]` -- **shipped 2026-08-29** (see item A.2).

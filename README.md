@@ -3210,12 +3210,14 @@ PORTING/
   **no** colour -- left plain, faithfully. New `_styles`: `UNMERGE_WARN`,
   `INFORM`, `MERGE_LIST_PROGRESS`; new `bold` code. A dedicated pinned
   contract test (`-pC` selected-red / legend / system-warning + the
-  counters `interactive` word) + 3 `CASES`. **Still open**: `--autounmask`
-  message colour (the pilot's suggestion-mode text is already
-  pilot-invented, not a port of real portage's autounmask block -- a
-  separate slice), and blocker-line colour (rides with the deferred real
-  blocker layout). This completes the `-pv` layout + colour buildout bar
-  those two.
+  counters `interactive` word) + 3 `CASES`. **Update 2026-08-30**: the
+  real `--autounmask` block itself (not just its colour) shipped for the
+  keyword kind -- see "`emerge --pretend --autounmask`: real keyword
+  *resolution*" below; its header is `colorize("BAD", …)` and the change
+  line `colorize("INFORM", …)`, matching real `_display_autounmask`.
+  Blocker-line colour also shipped (increment 5). This completes the
+  `-pv` layout + colour buildout bar the USE half of the autounmask
+  block (increment 2).
 
   **`emerge --pretend -v`: the `[ebuild N ~]` bracket-mask marker.** Real
   `output.py::gen_mask_str` (only with `-v` -- `include_mask_str` =
@@ -4275,6 +4277,15 @@ candidate, not for every candidate considered; `AlreadyInstalled`/
 `NoVisibleCandidate` entries never pick a fresh repo/`PKGDIR` candidate
 to trace at all, so their own `provenance` is always all-`null`, same
 scope cut as `slot`/`use_flags_display`.
+
+> **Superseded 2026-08-30** by "`emerge --pretend --autounmask`: real
+> keyword *resolution*" below: the pilot no longer *suggests* a keyword
+> change and fails — it applies the implicit `=cpv ~arch` change,
+> resolves the graph, and prints the real `The following keyword changes
+> are necessary to proceed:` block. The `!!! note:` text and the
+> `"no_visible_candidate"` + `"keyword_suggestion"` `--json` shape
+> described in this paragraph no longer apply when `--autounmask` is
+> given (they still do for the *default*, keyword-keeping behavior).
 
 `--autounmask`'s own keyword-suggestion sub-feature, extended to a
 *dependency's* own `NoVisibleCandidate`: this pilot's own v1 (task #51)
@@ -8611,6 +8622,50 @@ pinned test + 1 `portage-repo` unit test; mirrored in
 `emerge_pretend_reference.py` (`_alnum_sort_key`). Closes SCOPE_BACKLOG
 Part 2.A item 2 residual (b).
 
+### `emerge --pretend --autounmask`: real keyword *resolution* + the "necessary to proceed" block (increment 1)
+
+Until now, `emerge --pretend --autounmask <keyword-masked-pkg>` *failed*
+with a pilot-invented `there are no ebuilds to satisfy … note: … suggests
+adding …` hint. Real portage doesn't do that: when `--autounmask` can
+find a consistent set of changes, it *resolves the graph as if those
+changes were applied*, shows the normal merge list, then prints the
+`The following <X> changes are necessary to proceed:` block (real
+`depgraph.py::_display_autounmask`, `:10625`) — and `emerge --pretend`
+exits **0** (real `actions.py:563`). This increment ports that for the
+**keyword** kind.
+
+`resolve_pretend` grew an `autounmask_keywords` param: when set and the
+normal visibility filter finds nothing, a candidate masked by `KEYWORDS`
+*alone* (`keyword_masked_only` — `package.mask`/license/properties/
+restrict all still have to pass) is treated as visible, the implicit
+`=cpv ~arch` change real portage would apply. The resulting entry's
+`[ebuild N ~]` marker already reflected it (`keyword_mask_marker` keys
+off the candidate's own `~<arch>` token, not `package.accept_keywords`).
+`resolve_pretend_graph` records each such resolution as an
+`AutounmaskChange` (`cpv`, `token`, and a `#required by …` dep chain —
+real `_get_dep_chain_as_comment`: `required by <atom> (argument)` for a
+command-line target, `required by <parent cpv>::<repo>` then `required
+by <parent atom> (argument)` for a dependency), on the new
+`GraphResult::autounmask_keyword_changes`. `pretend.rs` prints the
+block to stderr after the merge list — real `_writemsg`'s
+`\nThe following <BAD>keyword changes</BAD> are necessary to proceed:\n
+ (see "package.accept_keywords" …)\n`, then `format_msg` (the
+`#`-prefixed dep-chain lines stay plain, the `=<cpv> <kw>` line is
+`INFORM`-green). `--pretend` deliberately omits real portage's `Use
+--autounmask-write …` hint (`:11084` `not pretend`). `--json` gains a
+top-level `"autounmask_keyword_changes"` array.
+
+Gating is unchanged: `--autounmask` must be *explicit* for keyword
+changes (real `--autounmask-keep-keywords` defaults to keep). Without it,
+a top-level keyword-masked atom is still fatal and a keyword-masked
+dependency still gets the `!!! no visible ebuild` line. Both sides;
+existing fixtures `dev-libs/autounmaskkeywordpkg` / `autounmaskdepconsumer`.
+6 contract tests updated (fail-and-hint → resolve-and-block), 3
+`portage-repo` unit tests. **Increment 2 — the USE kind
+(`The following USE changes are necessary to proceed:`, applying a
+`suggested_use_candidate` flip) — is a follow-up.** SCOPE_BACKLOG
+Part 2.G item 14 / Part 1 #17.
+
 ## Running it
 
 Build both Rust binaries:
@@ -8873,30 +8928,37 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/requireduseba
 # suggestions when --autounmask itself was never explicitly given)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/autounmaskkeywordpkg
 # emerge: there are no ebuilds to satisfy "dev-libs/autounmaskkeywordpkg".  (exit 1)
-# ...but once --autounmask is explicitly given, its own keyword
-# suggestion sub-feature turns on too (real portage's own "asking for
-# autounmask implies wanting its keyword suggestions" default flip)
+# ...but once --autounmask is explicitly given, real portage RESOLVES the
+# graph with the implicit `=cpv ~arch` change applied (real
+# _display_autounmask) -- normal merge list on stdout, the "necessary to
+# proceed" block on stderr, exit 0 (real actions.py:563)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/autounmaskkeywordpkg
-# emerge: there are no ebuilds to satisfy "dev-libs/autounmaskkeywordpkg".
-# note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg ~amd64" to package.accept_keywords  (exit 1)
-# the same suggestion, now for a *dependency's* own no-visible-candidate
-# (dev-libs/autounmaskdepconsumer RDEPENDs on the fixture above) -- this
-# is never fatal, so the graph still resolves; quiet by default, same as
-# the top-level case
+# [ebuild  N    ] dev-libs/autounmaskkeywordpkg-1.0          (stdout)
+#                                                            (stderr:)
+# The following keyword changes are necessary to proceed:
+#  (see "package.accept_keywords" in the portage(5) man page for more details)
+# # required by dev-libs/autounmaskkeywordpkg (argument)
+# =dev-libs/autounmaskkeywordpkg-1.0 ~amd64                  (exit 0)
+# the same, now for a *dependency's* own keyword-masked-only candidate
+# (dev-libs/autounmaskdepconsumer RDEPENDs on the fixture above) -- quiet
+# by default (just the "no visible ebuild" line), exit 0
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/autounmaskdepconsumer
 # [ebuild  N    ] dev-libs/autounmaskdepconsumer-1.0
 # !!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"  (exit 0)
-# ...and once --autounmask is given, an extra note line, exactly like
-# the top-level case's own message
+# ...and once --autounmask is given, BOTH packages resolve and the block
+# carries the real two-line dep chain
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/autounmaskdepconsumer
-# [ebuild  N    ] dev-libs/autounmaskdepconsumer-1.0
-# !!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"
-# !!! note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg ~amd64" to package.accept_keywords  (exit 0)
-# --json's own mirror: "keyword_suggestion" appears only on the
-# "no_visible_candidate" entry, in the slot "source"/"provenance"
-# occupy on every other outcome
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask --json dev-libs/autounmaskdepconsumer | python3 -c 'import json,sys; print(next(e["keyword_suggestion"] for e in json.load(sys.stdin)["entries"] if e["package"] == "autounmaskkeywordpkg"))'
-# {'version': '1.0', 'keyword': '~amd64'}
+# [ebuild  N    ] dev-libs/autounmaskdepconsumer-1.0         (stdout)
+# [ebuild  N    ] dev-libs/autounmaskkeywordpkg-1.0
+#                                                            (stderr:)
+# The following keyword changes are necessary to proceed:
+#  (see "package.accept_keywords" in the portage(5) man page for more details)
+# # required by dev-libs/autounmaskdepconsumer-1.0::testrepo
+# # required by dev-libs/autounmaskdepconsumer (argument)
+# =dev-libs/autounmaskkeywordpkg-1.0 ~amd64                  (exit 0)
+# --json exposes the change as a top-level array
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask --json dev-libs/autounmaskdepconsumer | python3 -c 'import json,sys; print(json.load(sys.stdin)["autounmask_keyword_changes"])'
+# [{'cpv': 'dev-libs/autounmaskkeywordpkg-1.0', 'token': '~amd64', 'dep_chain': ['required by dev-libs/autounmaskdepconsumer-1.0::testrepo', 'required by dev-libs/autounmaskdepconsumer (argument)']}]
 
 # --autounmask-use: on by default (unlike the keyword sub-feature
 # above), so useflagpkg's own real "foo" (globally enabled, but this

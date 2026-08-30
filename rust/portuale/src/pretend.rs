@@ -1595,10 +1595,21 @@ fn changed_deps_report_entry_to_json(c: &ChangedDepsReportEntry) -> String {
 /// The whole `--json` output: `{"entries": [...], "slot_conflicts": [...]}`,
 /// one line, no pretty-printing (a pilot-specific convenience format, not
 /// a stable schema -- see the module doc comment).
+fn autounmask_change_to_json(change: &portage_repo::AutounmaskChange) -> String {
+    let chain: Vec<String> = change.dep_chain.iter().map(|l| json_string(l)).collect();
+    format!(
+        "{{\"cpv\":{},\"token\":{},\"dep_chain\":[{}]}}",
+        json_string(&change.cpv),
+        json_string(&change.token),
+        chain.join(",")
+    )
+}
+
 fn print_json(
     entries: &[GraphEntry],
     slot_conflicts: &[SlotConflict],
     changed_deps_report: &[ChangedDepsReportEntry],
+    autounmask_keyword_changes: &[portage_repo::AutounmaskChange],
     top_level_pkgs: &HashSet<(String, String)>,
     verbose: bool,
     running_root: Option<&Path>,
@@ -1612,11 +1623,16 @@ fn print_json(
         .iter()
         .map(changed_deps_report_entry_to_json)
         .collect();
+    let autounmask_json: Vec<String> = autounmask_keyword_changes
+        .iter()
+        .map(autounmask_change_to_json)
+        .collect();
     println!(
-        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}]}}",
+        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}]}}",
         entries_json.join(","),
         conflicts_json.join(","),
-        changed_deps_report_json.join(",")
+        changed_deps_report_json.join(","),
+        autounmask_json.join(",")
     );
 }
 
@@ -4665,6 +4681,7 @@ pub fn run(args: &[String]) -> ExitCode {
             entries,
             &result.slot_conflicts,
             &result.changed_deps_report,
+            &result.autounmask_keyword_changes,
             &top_level_pkgs,
             verbose,
             root_deps_running_root.as_deref(),
@@ -4756,6 +4773,35 @@ pub fn run(args: &[String]) -> ExitCode {
             c.resolved_version,
             c.conflicting_atom
         );
+    }
+
+    // Real `depgraph.py::_display_autounmask` (`:10625`), the
+    // `unstable_keyword_msg` half: `--autounmask` accepted a
+    // `KEYWORDS`-alone mask to make the graph resolve, so the implicit
+    // `package.accept_keywords` change is reported after the merge list.
+    // Real `_writemsg`: `\nThe following <BAD>keyword changes</BAD> are
+    // necessary to proceed:\n (see "package.accept_keywords" in the
+    // portage(5) man page for more details)\n`; then `format_msg`
+    // (`#`-prefixed dep-chain comment lines stay plain, the `=<cpv>
+    // <kw>` line is `INFORM`-coloured). One header covers every change.
+    // Real portage does NOT print the "Use --autounmask-write" hint
+    // under `--pretend` (`:11084` `not pretend`), and `emerge --pretend`
+    // still exits 0 (real `actions.py:563` `return os.EX_OK`).
+    if !result.autounmask_keyword_changes.is_empty() {
+        eprintln!(
+            "\nThe following {} are necessary to proceed:",
+            color.c("BAD", "keyword changes")
+        );
+        eprintln!(" (see \"package.accept_keywords\" in the portage(5) man page for more details)");
+        for change in &result.autounmask_keyword_changes {
+            for line in &change.dep_chain {
+                eprintln!("# {line}");
+            }
+            eprintln!(
+                "{}",
+                color.c("INFORM", &format!("={} {}", change.cpv, change.token))
+            );
+        }
     }
 
     // `--changed-deps-report`: real `_changed_deps_report`'s own WARN

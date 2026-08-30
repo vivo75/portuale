@@ -5277,6 +5277,10 @@ fn resolve_root_deps_build_entries(
         // Likewise `--getbinpkg`: a `--root-deps` build entry is always
         // an ebuild built against the running root.
         false,
+        // `--autounmask` keyword resolution is a target-`ROOT` concern
+        // (`resolve_pretend_graph`); a `--root-deps` running-root build
+        // entry never applies it.
+        false,
     ) else {
         return Vec::new();
     };
@@ -5578,6 +5582,17 @@ pub fn resolve_pretend(
     // `--getbinpkg`/`-g` -- also pull *remote* binary candidates from
     // `config.binrepos` (see `resolve_pretend_graph`'s own doc comment).
     getbinpkg: bool,
+    // Real `--autounmask` keyword resolution (`--autounmask-keep-keywords=n`,
+    // default only once `--autounmask` is explicit -- see
+    // `resolve_pretend_graph`'s `autounmask_suggest_keywords`): when set, a
+    // candidate masked by `KEYWORDS` *alone* (`keyword_masked_only`) is
+    // treated as visible -- real portage's implicit `=cpv ~arch` change.
+    // The resulting entry's `[ebuild N ~]` marker (`keyword_mask_marker`,
+    // which already keys off the candidate's own `~<arch>` token, not
+    // `package.accept_keywords`) reflects it, and the caller records the
+    // change for the `The following keyword changes are necessary to
+    // proceed:` block.
+    autounmask_keywords: bool,
 ) -> Result<PretendOutcome, String> {
     // Real `create_depgraph_params.py:179`: `--emptytree` does
     // `myparams.pop("selective", None)`.
@@ -5680,10 +5695,20 @@ pub fn resolve_pretend(
         }
     }
 
-    let visible: Vec<&Candidate> = candidates
+    let mut visible: Vec<&Candidate> = candidates
         .iter()
         .filter(|c| is_visible(c, &atom.category, &atom.package, config))
         .collect();
+    if visible.is_empty() && autounmask_keywords {
+        // Real `--autounmask`: a candidate masked by `KEYWORDS` alone
+        // becomes visible via the implicit `=cpv ~arch` change (see this
+        // parameter's own doc comment). Everything else
+        // (`package.mask`/license/properties/restrict) still has to pass.
+        visible = candidates
+            .iter()
+            .filter(|c| keyword_masked_only(c, &atom.category, &atom.package, config))
+            .collect();
+    }
     if visible.is_empty() {
         return Ok(PretendOutcome::NoVisibleCandidate);
     }
@@ -6472,6 +6497,84 @@ pub struct GraphResult {
     /// from the dep walk instead (real `dep_check.py:1052`), never
     /// recorded here.
     pub pprovided_atoms: Vec<String>,
+    /// Real `--autounmask` keyword changes that were applied to make the
+    /// graph resolve (real `depgraph.py::_display_autounmask`'s
+    /// `unstable_keyword_msg`): one per entry that only became visible
+    /// because `autounmask_suggest_keywords` let `resolve_pretend` accept
+    /// a `KEYWORDS`-alone mask. The caller (`pretend.rs`) prints the
+    /// `The following keyword changes are necessary to proceed:` block
+    /// from these, after the merge list. Empty unless `--autounmask` was
+    /// explicit (see `autounmask_suggest_keywords`).
+    pub autounmask_keyword_changes: Vec<AutounmaskChange>,
+}
+
+/// One real `--autounmask` change (`depgraph.py::_display_autounmask`):
+/// the implicit `package.accept_keywords` / `package.use` line plus its
+/// own `#required by …` dep-chain comment
+/// (`_get_dep_chain_as_comment`). v1 covers the keyword kind only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutounmaskChange {
+    /// `category/package-version` -- the exact-version `=<cpv>` form
+    /// (real `autounmask_unrestricted_atoms` defaults to `"n"`).
+    pub cpv: String,
+    /// The token to add after `=<cpv>` -- a `~<arch>` keyword for the
+    /// keyword kind.
+    pub token: String,
+    /// The `#required by …` comment lines, top-to-bottom, WITHOUT the
+    /// leading `# ` (the renderer adds it) -- real
+    /// `_get_dep_chain_as_comment`: `required by <cpv>::<repo>` for a
+    /// package parent, `required by <atom> (argument)` for a command-line
+    /// argument.
+    pub dep_chain: Vec<String>,
+}
+
+/// Real `_get_dep_chain_as_comment` (`depgraph.py:6457`), narrowed to
+/// this pilot's own one-level-parent tracking: the `#required by …`
+/// lines for an autounmask change on `owner`'s dependency (or a
+/// top-level `current_atom`). A top-level atom yields a single
+/// `required by <atom> (argument)`; a dependency yields `required by
+/// <parent cpv>::<repo>` and, when that parent is itself a command-line
+/// argument, a trailing `required by <parent atom> (argument)`.
+fn autounmask_dep_chain(
+    owner: &Option<(String, String)>,
+    current_atom: &str,
+    top_level: &std::collections::HashSet<&str>,
+    entries: &[GraphEntry],
+) -> Vec<String> {
+    let Some((oc, op)) = owner else {
+        return vec![format!("required by {current_atom} (argument)")];
+    };
+    let mut chain = Vec::new();
+    if let Some(parent) = entries
+        .iter()
+        .find(|e| &e.category == oc && &e.package == op)
+    {
+        let parent_version = match &parent.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                Some(version.as_str())
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                Some(to.as_str())
+            }
+            _ => None,
+        };
+        if let Some(v) = parent_version {
+            match &parent.repo_name {
+                Some(repo) => chain.push(format!("required by {oc}/{op}-{v}::{repo}")),
+                None => chain.push(format!("required by {oc}/{op}-{v}")),
+            }
+        }
+    }
+    if let Some(arg) = top_level
+        .iter()
+        .find(|t| portage_dep::parse_atom(t).is_some_and(|a| a.category == *oc && a.package == *op))
+    {
+        chain.push(format!("required by {arg} (argument)"));
+    }
+    if chain.is_empty() {
+        chain.push(format!("required by {oc}/{op}"));
+    }
+    chain
 }
 
 /// `--deep`/`-D` (real `lib/_emerge/main.py`'s own `"--deep": valid_integers`
@@ -7028,6 +7131,9 @@ pub fn resolve_pretend_graph(
     // Top-level atoms matched by `package.provided` -- see
     // `GraphResult::pprovided_atoms`.
     let mut pprovided_atoms: Vec<String> = Vec::new();
+    // Real `--autounmask` keyword changes applied during this walk -- see
+    // `GraphResult::autounmask_keyword_changes`.
+    let mut autounmask_keyword_changes: Vec<AutounmaskChange> = Vec::new();
     let pprovided_refs: Vec<&str> = config.package_provided.iter().map(String::as_str).collect();
     // (category, package) -> every distinct owner that reached it via a
     // dependency string, accumulated separately from the BFS's own
@@ -7098,6 +7204,7 @@ pub fn resolve_pretend_graph(
             newrepo,
             empty,
             getbinpkg,
+            autounmask_suggest_keywords,
         )?;
 
         // `--changed-deps-report`: real portage stays "completely
@@ -7428,6 +7535,22 @@ pub fn resolve_pretend_graph(
         let provenance = visibility_provenance(resolved, &key.0, &key.1, config);
         let keyword_mask =
             keyword_mask_marker(resolved, &key.0, &key.1, config, &provenance.mask_entry);
+        // Real `--autounmask` keyword resolution: this candidate resolved
+        // only because `resolve_pretend` was told to accept a
+        // `KEYWORDS`-alone mask (`keyword_masked_only`). Record the
+        // implicit `=<cpv> <keyword>` change (real
+        // `depgraph.py::_display_autounmask`'s `unstable_keyword_msg` +
+        // `_get_dep_chain_as_comment`; `autounmask_unrestricted_atoms`
+        // defaults to `"n"`, so always the exact-version `=` form).
+        if autounmask_suggest_keywords && keyword_masked_only(resolved, &key.0, &key.1, config) {
+            if let Some(kw) = suggested_keyword(resolved) {
+                autounmask_keyword_changes.push(AutounmaskChange {
+                    cpv: format!("{}/{}-{version}", key.0, key.1),
+                    token: kw.to_string(),
+                    dep_chain: autounmask_dep_chain(&owner, &current_atom, &top_level, &entries),
+                });
+            }
+        }
         // Real `_get_installed_best`'s `new_slot`: a `New` entry whose
         // `category/package` is installed in some *other* slot (the
         // in-slot New/Upgrade decision already happened inside
@@ -7954,6 +8077,7 @@ pub fn resolve_pretend_graph(
         changed_deps_report: changed_deps_report_entries,
         buildpkgonly_deps_unsatisfied,
         pprovided_atoms,
+        autounmask_keyword_changes,
     })
 }
 
@@ -8532,6 +8656,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8564,6 +8689,7 @@ mod tests {
             None,
             false,
             /* empty: */ true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
@@ -8651,6 +8777,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8688,6 +8815,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8722,6 +8850,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -8811,6 +8940,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8894,6 +9024,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -9072,6 +9203,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9115,6 +9247,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9154,6 +9287,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -9263,6 +9397,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -9562,6 +9697,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9619,6 +9755,7 @@ mod tests {
             false,
             None,
             true,
+            false,
             false,
             false,
         )
@@ -9728,6 +9865,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -9792,6 +9930,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -9830,6 +9969,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -9879,6 +10019,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -10028,6 +10169,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -10056,6 +10198,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -13740,47 +13883,22 @@ mod tests {
             "there are no ebuilds to satisfy \"dev-libs/autounmaskkeywordpkg\"."
         );
 
-        let err_with_suggestion = resolve_pretend_graph(
-            &root,
-            &root,
-            &atoms,
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            true,
-            false,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-        )
-        .expect_err("no visible candidate at all");
+        // With `--autounmask` explicit, the same keyword-masked-only
+        // target now RESOLVES (real portage applies the implicit
+        // `=cpv ~arch` change and the graph succeeds) rather than being
+        // fatal -- it prints as a normal `New` entry and the change is
+        // recorded for the `The following keyword changes are necessary
+        // to proceed:` block.
+        let resolved = graph_result_autounmask("dev-libs/autounmaskkeywordpkg");
+        let entry = &resolved.entries[0];
+        assert!(matches!(entry.outcome, PretendOutcome::New { .. }));
+        assert_eq!(entry.keyword_mask, Some('~'));
+        assert_eq!(resolved.autounmask_keyword_changes.len(), 1);
         assert_eq!(
-            err_with_suggestion,
-            "there are no ebuilds to satisfy \"dev-libs/autounmaskkeywordpkg\".\n\
-             note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; \
-             --autounmask-keep-keywords=n suggests adding \"dev-libs/autounmaskkeywordpkg ~amd64\" \
-             to package.accept_keywords"
+            resolved.autounmask_keyword_changes[0].cpv,
+            "dev-libs/autounmaskkeywordpkg-1.0"
         );
+        assert_eq!(resolved.autounmask_keyword_changes[0].token, "~amd64");
     }
 
     #[test]
@@ -13852,9 +13970,18 @@ mod tests {
             .iter()
             .find(|e| e.package == "autounmaskkeywordpkg")
             .expect("dependency entry present");
+        // With `--autounmask` explicit the keyword-masked dependency now
+        // RESOLVES (was `NoVisibleCandidate` + a `keyword_suggestion`
+        // before autounmask keyword *resolution* shipped).
+        assert!(matches!(dep.outcome, PretendOutcome::New { .. }));
+        assert_eq!(dep.keyword_mask, Some('~'));
+        assert_eq!(result.autounmask_keyword_changes.len(), 1);
         assert_eq!(
-            dep.keyword_suggestion,
-            Some(("1.0".to_string(), "~amd64".to_string()))
+            result.autounmask_keyword_changes[0].dep_chain,
+            vec![
+                "required by dev-libs/autounmaskdepconsumer-1.0::testrepo".to_string(),
+                "required by dev-libs/autounmaskdepconsumer (argument)".to_string(),
+            ]
         );
     }
 
@@ -14108,6 +14235,91 @@ mod tests {
 
     fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
         graph_result_real(atom_str).entries
+    }
+
+    /// Like `graph_result_real`, but with `--autounmask` keyword
+    /// resolution enabled (`autounmask_suggest_keywords = true`).
+    fn graph_result_autounmask(atom_str: &str) -> GraphResult {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config resolves");
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+    }
+
+    #[test]
+    fn autounmask_keywords_records_the_dep_chain_for_a_keyword_masked_dependency() {
+        let result = graph_result_autounmask("dev-libs/autounmaskdepconsumer");
+        // Both the consumer and the (now un-keyword-masked) dependency
+        // resolve as New.
+        let dep = result
+            .entries
+            .iter()
+            .find(|e| e.package == "autounmaskkeywordpkg")
+            .expect("keyword-masked dep now resolves");
+        assert!(matches!(dep.outcome, PretendOutcome::New { .. }));
+        assert_eq!(dep.keyword_mask, Some('~'));
+
+        assert_eq!(result.autounmask_keyword_changes.len(), 1);
+        let change = &result.autounmask_keyword_changes[0];
+        assert_eq!(change.cpv, "dev-libs/autounmaskkeywordpkg-1.0");
+        assert_eq!(change.token, "~amd64");
+        assert_eq!(
+            change.dep_chain,
+            vec![
+                "required by dev-libs/autounmaskdepconsumer-1.0::testrepo".to_string(),
+                "required by dev-libs/autounmaskdepconsumer (argument)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn autounmask_keywords_top_level_dep_chain_is_the_argument_line() {
+        let result = graph_result_autounmask("dev-libs/autounmaskkeywordpkg");
+        assert_eq!(result.autounmask_keyword_changes.len(), 1);
+        assert_eq!(
+            result.autounmask_keyword_changes[0].dep_chain,
+            vec!["required by dev-libs/autounmaskkeywordpkg (argument)".to_string()]
+        );
     }
 
     #[test]

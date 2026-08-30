@@ -284,9 +284,9 @@ CASES = [
         1,
     ),
     (
-        "--autounmask: keyword suggestion once explicitly enabled",
+        "--autounmask: keyword-masked target resolves + prints the changes block once enabled",
         ["--pretend", "--autounmask", "dev-libs/autounmaskkeywordpkg"],
-        1,
+        0,
     ),
     (
         "--autounmask: a dependency's own no-visible-candidate gets no suggestion by default",
@@ -294,12 +294,12 @@ CASES = [
         0,
     ),
     (
-        "--autounmask: a dependency's own no-visible-candidate gets a suggestion once enabled",
+        "--autounmask: a keyword-masked dependency resolves + prints the changes block once enabled",
         ["--pretend", "--autounmask", "dev-libs/autounmaskdepconsumer"],
         0,
     ),
     (
-        "--autounmask: dependency-level keyword suggestion also appears in --json",
+        "--autounmask: keyword changes also appear in --json",
         ["--pretend", "--autounmask", "--json", "dev-libs/autounmaskdepconsumer"],
         0,
     ),
@@ -2065,27 +2065,30 @@ def test_autounmask_no_keyword_suggestion_by_default(emerge_binary, fixture_env)
 
 def test_autounmask_suggests_a_keyword_once_explicitly_enabled(emerge_binary, fixture_env):
     """Real portage's own asymmetry (create_depgraph_params.py):
-    --autounmask-keep-keywords defaults to False (i.e. keyword
-    suggestions ARE generated) once --autounmask itself was explicitly
-    given, unlike the ambient always-on default (see the sibling test
-    above) -- "explicitly asking for autounmask implies wanting its
-    keyword suggestions too." A deliberately narrow v1 (see
-    resolve_pretend_graph's own doc comment, portage-repo): only the
-    single "masked by KEYWORDS alone" case is detected, and the
-    suggestion is a pilot-specific summary, not real portage's own exact
-    suggested-atom syntax or dependency-chain-comment formatting."""
+    --autounmask-keep-keywords defaults to False (i.e. keyword changes
+    ARE applied) once --autounmask itself was explicitly given, unlike
+    the ambient always-on default (see the sibling test above) --
+    "explicitly asking for autounmask implies wanting its keyword changes
+    too." Real --autounmask then *resolves the graph* with the implicit
+    `=cpv ~arch` change applied: the package prints as a normal New entry
+    on stdout, real depgraph.py::_display_autounmask's `The following
+    keyword changes are necessary to proceed:` block goes to stderr
+    (real _writemsg + _get_dep_chain_as_comment: the `#required by ...`
+    dep chain, then `=<cpv> <kw>`), and `emerge --pretend` still exits 0
+    (real actions.py:563). v1 covers the "masked by KEYWORDS alone" case
+    only."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--autounmask", "dev-libs/autounmaskkeywordpkg"],
         fixture_env,
     )
-    assert result.returncode == 1
-    assert result.stdout == ""
-    assert result.stderr.strip() == (
-        'emerge: there are no ebuilds to satisfy "dev-libs/autounmaskkeywordpkg".\n'
-        'note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; '
-        '--autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg '
-        '~amd64" to package.accept_keywords'
+    assert result.returncode == 0
+    assert result.stdout == "[ebuild  N    ] dev-libs/autounmaskkeywordpkg-1.0 \n"
+    assert result.stderr == (
+        "\nThe following keyword changes are necessary to proceed:\n"
+        ' (see "package.accept_keywords" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/autounmaskkeywordpkg (argument)\n"
+        "=dev-libs/autounmaskkeywordpkg-1.0 ~amd64\n"
     )
 
 
@@ -2110,37 +2113,41 @@ def test_autounmask_dependency_gets_no_keyword_suggestion_by_default(emerge_bina
 
 
 def test_autounmask_dependency_gets_a_keyword_suggestion_once_enabled(emerge_binary, fixture_env):
-    """Extends --autounmask's own keyword-suggestion sub-feature (task
-    #51) to a *dependency's* own no-visible-candidate -- previously
-    deliberately out of scope (resolve_pretend_graph's own doc comment:
-    "suggestions for a dependency's own NoVisibleCandidate"). Unlike the
-    top-level case, this dependency's own no-visible-candidate is never
-    fatal -- the graph still resolves, dev-libs/autounmaskdepconsumer
-    itself still prints as a normal New entry on stdout, and the note is
-    just an extra stderr line alongside the pre-existing "no visible
-    ebuild" one."""
+    """--autounmask keyword resolution for a *dependency's* own
+    keyword-masked-only candidate: dev-libs/autounmaskdepconsumer RDEPENDs
+    on the keyword-masked dev-libs/autounmaskkeywordpkg. The graph now
+    resolves with the implicit `=cpv ~arch` change applied, so BOTH
+    packages print as normal New entries on stdout, and the `The
+    following keyword changes are necessary to proceed:` block on stderr
+    carries the real two-line dep chain (`#required by <parent
+    cpv>::<repo>` then `#required by <parent atom> (argument)` -- real
+    _get_dep_chain_as_comment)."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--autounmask", "dev-libs/autounmaskdepconsumer"],
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout == '[ebuild  N    ] dev-libs/autounmaskdepconsumer-1.0 \n'
-    assert result.stderr.strip() == (
-        '!!! no visible ebuild for dependency "dev-libs/autounmaskkeywordpkg"\n'
-        '!!! note: dev-libs/autounmaskkeywordpkg-1.0 exists but is masked by KEYWORDS; '
-        '--autounmask-keep-keywords=n suggests adding "dev-libs/autounmaskkeywordpkg '
-        '~amd64" to package.accept_keywords'
+    assert result.stdout == (
+        "[ebuild  N    ] dev-libs/autounmaskdepconsumer-1.0 \n"
+        "[ebuild  N    ] dev-libs/autounmaskkeywordpkg-1.0 \n"
+    )
+    assert result.stderr == (
+        "\nThe following keyword changes are necessary to proceed:\n"
+        ' (see "package.accept_keywords" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/autounmaskdepconsumer-1.0::testrepo\n"
+        "# required by dev-libs/autounmaskdepconsumer (argument)\n"
+        "=dev-libs/autounmaskkeywordpkg-1.0 ~amd64\n"
     )
 
 
-def test_autounmask_dependency_keyword_suggestion_appears_in_json(emerge_binary, fixture_env):
-    """--json's own mirror of the plain-text note above: a
-    "no_visible_candidate" entry carries a "keyword_suggestion" field
-    (present only for that one outcome, the mirror image of
-    "provenance", which is absent there instead) -- {"version",
-    "keyword"} when --autounmask found something to suggest, null
-    otherwise."""
+def test_autounmask_keyword_changes_appear_in_json(emerge_binary, fixture_env):
+    """--json's own mirror: with --autounmask keyword resolution, the
+    keyword-masked dependency resolves as a normal "new" entry (no more
+    "keyword_suggestion" field -- that was for the unresolved
+    "no_visible_candidate" case), and the implicit change is exposed as a
+    top-level "autounmask_keyword_changes" array
+    ({"cpv", "token", "dep_chain"})."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--autounmask", "--json", "dev-libs/autounmaskdepconsumer"],
@@ -2149,12 +2156,17 @@ def test_autounmask_dependency_keyword_suggestion_appears_in_json(emerge_binary,
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     dep = next(e for e in payload["entries"] if e["package"] == "autounmaskkeywordpkg")
-    assert dep["outcome"] == "no_visible_candidate"
-    assert "provenance" not in dep
-    assert dep["keyword_suggestion"] == {"version": "1.0", "keyword": "~amd64"}
-    consumer = next(e for e in payload["entries"] if e["package"] == "autounmaskdepconsumer")
-    assert consumer["outcome"] == "new"
-    assert "keyword_suggestion" not in consumer
+    assert dep["outcome"] == "new"
+    assert payload["autounmask_keyword_changes"] == [
+        {
+            "cpv": "dev-libs/autounmaskkeywordpkg-1.0",
+            "token": "~amd64",
+            "dep_chain": [
+                "required by dev-libs/autounmaskdepconsumer-1.0::testrepo",
+                "required by dev-libs/autounmaskdepconsumer (argument)",
+            ],
+        }
+    ]
 
 
 def test_autounmask_use_dependency_suggestion_is_suppressed_by_autounmask_use_n(
@@ -7778,7 +7790,7 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,'
         '"required_by":[],"builds_against_running_root":null,"blockers":[]}],'
-        '"slot_conflicts":[],"changed_deps_report":[]}\n'
+        '"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[]}\n'
     )
 
 
@@ -7796,7 +7808,7 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,"required_by":[],"builds_against_running_root":null,'
         '"blockers":[]}],"slot_conflicts":[],'
-        '"changed_deps_report":[]}\n'
+        '"changed_deps_report":[],"autounmask_keyword_changes":[]}\n'
     )
 
 
