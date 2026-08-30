@@ -1679,15 +1679,18 @@ PORTING/
   `overlay_repos=()` in Python -- a plain local pair type rather than
   `portage_repo::RepoConfig`, since `portage-profile` can't depend on
   `portage-repo` (the dependency only runs the other way). Digging into
-  the real mechanism turned up a genuine scope-narrowing discovery
-  before any code was written: an overlay's own `profiles/`/
-  `license_groups` are *not* part of this same "every repo,
-  unconditionally" mechanism -- real `LicenseManager.__init__`'s own
-  `license_group_locations` is tied to `locations_manager.
-  profile_locations`, i.e. the profile *chain's* own directories, which
-  only reach into an overlay once cross-repo profile parents
-  (`reponame:path` syntax) exist -- a separate mechanism, closed by a
-  later follow-up below. Also deliberately not
+  the real mechanism turned up what looked like a scope-narrowing
+  discovery: an overlay's own `profiles/`/`license_groups` are *not*
+  part of this same "every repo, unconditionally" mechanism -- real
+  `LicenseManager.__init__`'s own `license_group_locations` is tied to
+  `locations_manager.profile_locations`. **Corrected 2026-08-30** (see
+  "`license_groups` read from each repo's `profiles/`" below): real
+  `profile_locations` is `[<main_repo>/profiles] + [<overlay>/profiles
+  …]` -- the repo `profiles/` *bases*, not the profile-chain
+  directories -- so `license_groups` genuinely *is* read from every
+  configured repo unconditionally; only an overlay's own profile
+  *directory* joining the chain still needs `reponame:path`. Also
+  deliberately not
   done: retroactively scoping the *main* repo's own, already-shipped
   `package.mask`/`.unmask` entries with their own `::reponame` (real
   portage does this too, for consistency) -- an unrequested behavior
@@ -7829,6 +7832,40 @@ never contacts `example.invalid`; with the distfile **present +
 verified**, it installs via the already-verified skip path. Rust-only
 (real fetch). 4 unit tests (`fetch.rs` ×3, `ebuild_phases.rs` ×1) + 1
 black-box test.
+
+### `license_groups` read from each repo's `profiles/`, not the profile chain (real-tree finding)
+
+Found by running `portuale` against a **real Gentoo tree** in a
+container for the first time: `emerge --pretend <anything>` failed with
+`there are no ebuilds to satisfy …` for *every* package. Root cause:
+`resolve_config` read `license_groups` from each *profile-chain
+directory* (`<repo>/profiles/base/`, `.../amd64/`, …), but real gentoo
+puts the file at `<repo>/profiles/license_groups` — the repo `profiles/`
+base, which is **not** a profile-chain level. So `@FREE` (the profile's
+`ACCEPT_LICENSE`) expanded to nothing, and the default `* -@FREE`-style
+filter rejected every ebuild on a license check.
+
+Real `LicenseManager._read_license_groups` (`LicenseManager.py:47`)
+iterates `LocationsManager.profile_locations` (`LocationsManager.py:432`),
+which is exactly `[<main_repo>/profiles] + [<overlay>/profiles …]` — the
+`profiles/` directory of the main repo and each overlay, never the
+individual chain levels. `resolve_config` (both sides) now reads
+`<repo>/profiles/license_groups` for every configured repo (main first,
+then overlays) instead of `<chain-level>/license_groups`. This also
+makes an overlay's own `license_groups` unconditional (real behavior) —
+the earlier "only reachable via a `reponame:path` cross-repo `parent`"
+framing (see the profile-chain section above) is superseded; that
+mechanism is still tested for profile *directories*, just not for
+`license_groups`.
+
+The two fixture `license_groups` files moved from
+`repo/profiles/base/` → `repo/profiles/` and `overlay/profiles/
+crossrepo-parent/` → `overlay/profiles/`. A new `portage-profile` unit
+test drops a stray `license_groups` into a chain dir and asserts it's
+ignored. After the fix, `portuale --pretend` resolves real packages
+(`sys-apps/coreutils`, `app-misc/tmux` → `dev-libs/libevent`, …)
+matching real `emerge --pretend`'s package set. Both sides; 1 `CASES` +
+1 pinned test relabeled, 1 new unit test.
 
 ### `emerge --buildpkgonly --keep-going`
 

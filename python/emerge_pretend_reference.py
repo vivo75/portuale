@@ -3215,18 +3215,14 @@ def resolve_config(
     main repo alone, real config.py's own
     "repo.masters = (self.mainRepo(),)" default -- every overlay here
     gets exactly that. An explicit "masters =" override, or a
-    multi-master chain, stays unimplemented. profiles/ (an overlay's own profile
-    directory joining the active chain) and license_groups from an
-    overlay are NOT part of this same "every repo, unconditionally"
-    mechanism -- real LicenseManager's own profile_locations and the
-    profile chain itself only ever include an overlay's own directories
-    once the active chain's parent file uses reponame:path syntax to
-    reach into it (_expand_parent_colon, main_repo_name below), which is
-    exactly what makes them reachable: once a chain level's parent file
-    names an overlay, every "for level in chain" loop below
-    (license_groups included) reads from that overlay's own directory
-    the same as any other chain level, with no separate code path
-    needed.
+    multi-master chain, stays unimplemented. license_groups IS read from
+    every repo's own profiles/ dir (<repo>/profiles/license_groups, main
+    then each overlay) -- real LicenseManager._read_license_groups over
+    LocationsManager.profile_locations (LocationsManager.py:432), which
+    is [main_repo/profiles] + [overlay/profiles ...], never the
+    per-profile-chain levels. An overlay's own profiles/ PROFILE
+    DIRECTORY joining the active chain is still only reached via a chain
+    parent file's reponame:path syntax (_expand_parent_colon).
 
     main_repo_name (the main repo's own name from repos.conf, e.g.
     find_repos's main entry) plus overlay_repos above together give
@@ -3672,16 +3668,19 @@ def resolve_config(
     )
     package_provided = _stack_mask_lines(pprovided_sources)
 
-    # license_groups: every profile level's own file, in chain order,
-    # plus the user-level one -- see _parse_license_groups_lines's own
-    # docstring for the "extend, don't stack/replace" semantics. Read
-    # before ACCEPT_LICENSE/package.license below, both of which need
-    # the full, final group map to expand "@group" tokens against.
-    # Mirrors portage-profile/src/lib.rs's resolve_config exactly.
+    # license_groups: real LicenseManager._read_license_groups
+    # (LicenseManager.py:47) over LocationsManager.profile_locations
+    # (LocationsManager.py:432) -- the `profiles/` directory of the MAIN
+    # REPO and each overlay, NOT the individual profile-chain levels
+    # (real gentoo puts license_groups at <repo>/profiles/license_groups,
+    # never in a profiles/<foo>/ profile dir -- verified live). Then the
+    # user-level /etc/portage/license_groups. "extend, don't
+    # stack/replace" -- see _parse_license_groups_lines. Mirrors
+    # portage-profile/src/lib.rs's resolve_config exactly.
     license_groups = {}
-    for level in chain:
+    for _name, location in all_repos:
         for name, members in _parse_license_groups_lines(
-            _read_config_lines(os.path.join(level, "license_groups"))
+            _read_config_lines(os.path.join(location, "profiles", "license_groups"))
         ).items():
             license_groups.setdefault(name, []).extend(members)
     for name, members in _parse_license_groups_lines(

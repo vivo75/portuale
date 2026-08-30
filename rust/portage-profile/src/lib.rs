@@ -1388,18 +1388,17 @@ fn parse_package_use_lines(
 /// gets exactly that, the main repo gets `()` (itself, since it can
 /// never be its own master). An explicit `masters =` override, or a
 /// multi-master chain, stays unimplemented (would need a `masters` key
-/// threaded through `portage-repo::find_repos` first). `profiles/`
-/// (an overlay's own profile directory joining the active chain) and
-/// `license_groups` from an overlay are NOT part of this same "every
-/// repo, unconditionally" mechanism -- real `LicenseManager`'s own
-/// `profile_locations` and the profile chain itself only ever include
-/// an overlay's own directories once the active chain's `parent` file
-/// uses `reponame:path` syntax to reach into it (`expand_parent_colon`,
-/// `main_repo_name` below), which is exactly what makes them reachable:
-/// once a chain level's `parent` file names an overlay, every one of
-/// this function's own `for level in &chain` loops above (`license_groups`
-/// included) reads from that overlay's own directory the same as any
-/// other chain level, with no separate code path needed.
+/// threaded through `portage-repo::find_repos` first). `license_groups`
+/// *is* read from every repo's own `profiles/` directory
+/// (`<repo>/profiles/license_groups`, main repo then each overlay) --
+/// real `LicenseManager._read_license_groups` over
+/// `LocationsManager.profile_locations` (`LocationsManager.py:432`),
+/// which is exactly `[main_repo/profiles] + [overlay/profiles …]`, never
+/// the per-profile-chain levels (real gentoo never puts `license_groups`
+/// in a `profiles/<foo>/` profile dir). An overlay's own `profiles/`
+/// *profile directory* joining the active chain is still only reached
+/// via a chain `parent` file's `reponame:path` syntax
+/// (`expand_parent_colon`).
 ///
 /// `main_repo_name` (the main repo's own name from `repos.conf`, e.g.
 /// `portage_repo::find_repos`'s main entry) plus `overlay_repos` above
@@ -1955,16 +1954,22 @@ pub fn resolve_config(
     )?);
     config.package_provided = stack_mask_lines(&pprovided_sources);
 
-    // license_groups: every profile level's own file, in chain order,
-    // plus the user-level one -- see `parse_license_groups_lines`'s own
-    // doc comment for the "extend, don't stack/replace" semantics. Read
+    // license_groups: real `LicenseManager._read_license_groups`
+    // (`LicenseManager.py:47`) over `LocationsManager.profile_locations`
+    // (`LocationsManager.py:432`) -- which is the `profiles/` directory
+    // of the *main repo and each overlay*, NOT the individual
+    // profile-chain levels (real gentoo puts `license_groups` at
+    // `<repo>/profiles/license_groups`, never in a `profiles/<foo>/`
+    // profile dir -- verified live against a real tree). Then the
+    // user-level `/etc/portage/license_groups`. "extend, don't
+    // stack/replace" semantics -- see `parse_license_groups_lines`. Read
     // before ACCEPT_LICENSE/package.license below, both of which need
     // the full, final group map to expand `@group` tokens against.
     let mut license_groups: HashMap<String, Vec<String>> = HashMap::new();
-    for level in &chain {
-        for (name, members) in
-            parse_license_groups_lines(&read_config_lines(&level.join("license_groups"))?)
-        {
+    for (_name, location) in &all_repos {
+        for (name, members) in parse_license_groups_lines(&read_config_lines(
+            &location.join("profiles").join("license_groups"),
+        )?) {
             license_groups.entry(name).or_default().extend(members);
         }
     }
@@ -2371,12 +2376,12 @@ sync-uri = file:///srv/pkgs
         assert_eq!(config.accept_keywords, HashSet::from(["amd64".to_string()]));
         // Neither the fixture profile chain nor make.conf sets
         // ACCEPT_LICENSE at all -- real portage's own "* -@EULA"
-        // default applies; profiles/base/license_groups defines
-        // EULA="SomeEula" (see the dedicated LICENSE-masking fixtures),
-        // extended by the cross-repo-reached overlay/profiles/
-        // crossrepo-parent/license_groups with one more member,
-        // "CrossRepoNonfree" -- so "@EULA" expands to both real members,
-        // in chain order, rather than staying literal.
+        // default applies. Real `LicenseManager` reads `license_groups`
+        // from each repo's own `profiles/` dir (`LocationsManager.
+        // profile_locations`): `repo/profiles/license_groups` defines
+        // EULA="SomeEula", `overlay/profiles/license_groups` extends it
+        // with "CrossRepoNonfree" -- so "@EULA" expands to both members,
+        // main repo first then overlay, rather than staying literal.
         assert_eq!(
             config.accept_license,
             vec![
@@ -2385,6 +2390,38 @@ sync-uri = file:///srv/pkgs
                 "-CrossRepoNonfree".to_string()
             ]
         );
+        assert_eq!(
+            config.license_groups.get("EULA"),
+            Some(&vec![
+                "SomeEula".to_string(),
+                "CrossRepoNonfree".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn license_groups_come_from_each_repo_profiles_dir_not_the_profile_chain() {
+        // A `license_groups` file dropped into a profile-chain directory
+        // (`repo/profiles/base/`) must be IGNORED -- real portage reads
+        // it only from `<repo>/profiles/license_groups`
+        // (`LocationsManager.profile_locations`). The fixture's real
+        // groups live at `repo/profiles/license_groups` +
+        // `overlay/profiles/license_groups`.
+        let root = fixtures_root();
+        let stray = root.join("repo/profiles/base/license_groups");
+        std::fs::write(&stray, "EULA StrayShouldBeIgnored\n").unwrap();
+        let config = resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        );
+        std::fs::remove_file(&stray).ok();
+        let config = config.expect("fixture config must resolve");
+        // Only the two real repo-level members, in repo-then-overlay
+        // order -- the stray chain-level entry is not present.
         assert_eq!(
             config.license_groups.get("EULA"),
             Some(&vec![
