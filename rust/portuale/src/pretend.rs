@@ -4319,7 +4319,7 @@ pub fn run(args: &[String]) -> ExitCode {
         .map(|r| (r.name.clone(), r.masters.clone()))
         .collect();
 
-    let config = match portage_profile::resolve_config(
+    let mut config = match portage_profile::resolve_config(
         &config_root,
         &main_repo.location,
         &overlay_repos,
@@ -4513,6 +4513,30 @@ pub fn run(args: &[String]) -> ExitCode {
     let usepkgonly = usepkgonly || getbinpkgonly;
     let usepkg = usepkg || getbinpkg || getbinpkgonly;
     let getbinpkg = getbinpkg || getbinpkgonly;
+
+    // Real `bintree._populate_local`'s own "no trusted index" branch: when
+    // `--usepkg`/`--usepkgonly` makes local binary candidates eligible
+    // but `<PKGDIR>/Packages` is absent, walk `$PKGDIR` for binpkg files
+    // and synthesize the index from each file's own embedded metadata
+    // (`binpkg::scan_pkgdir` -- real `xpak`/`gpkg`). Unlike real portage
+    // this is NOT written back to `Packages` (see
+    // `Config::scanned_binpkgs`). A present `Packages` is always used as
+    // is (no mtime-staleness revalidation -- real
+    // `FEATURES=pkgdir-index-trusted` behavior, this pilot's own
+    // long-standing stance for the index).
+    if usepkg || usepkgonly {
+        let pkgdir_path = Path::new(&config.pkgdir);
+        if !pkgdir_path.join("Packages").is_file() {
+            match crate::binpkg::scan_pkgdir(pkgdir_path) {
+                Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("emerge: scanning {}: {e}", config.pkgdir);
+                    return ExitCode::from(1);
+                }
+            }
+        }
+    }
 
     // --binpkg-respect-use: real default is "auto" (effectively on)
     // whenever --usepkgonly is NOT given, left off (unset/falsy) when it

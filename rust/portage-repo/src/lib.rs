@@ -674,8 +674,60 @@ fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
     }
 }
 
-/// Lists every binary-package build of `category/package` recorded in
-/// `<pkgdir>/Packages` -- real portage's own `bindbapi`, the "binary"
+/// A parsed binary-package index -- either the `KEY: value` blocks of a
+/// `<pkgdir>/Packages` file (real `bintree`'s own on-disk index), or the
+/// entries a `$PKGDIR` directory scan synthesized from each binpkg
+/// file's own embedded metadata when there is no `Packages` at all
+/// (real `bintree._populate_local`). Every downstream binary-candidate
+/// function takes `&BinaryIndex` rather than re-reading a path, so the
+/// "where did these entries come from" decision -- read the index file,
+/// or scan the files -- is made exactly once, at the CLI boundary.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BinaryIndex {
+    entries: Vec<HashMap<String, String>>,
+}
+
+impl BinaryIndex {
+    /// Parse `<pkgdir>/Packages` (real `bintree`'s own index format --
+    /// `KEY: value`, blank-line-separated blocks, first block is the
+    /// global header and is skipped). A missing file is an empty index.
+    pub fn from_pkgdir(pkgdir: &Path) -> Self {
+        Self {
+            entries: read_packages_index(pkgdir),
+        }
+    }
+
+    /// Build from entries a caller assembled itself -- a `$PKGDIR`
+    /// directory scan (`portuale`'s `binpkg::scan_pkgdir`, which reads
+    /// each `.tbz2`/`.gpkg.tar`'s own embedded metadata). Each entry is a
+    /// synthesized `Packages`-style record (`CPV`, `SLOT`, `KEYWORDS`,
+    /// the dep strings, `SIZE`, `REPO`, …).
+    pub fn from_entries(entries: Vec<HashMap<String, String>>) -> Self {
+        Self { entries }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn entries(&self) -> &[HashMap<String, String>] {
+        &self.entries
+    }
+}
+
+/// The local `$PKGDIR` binary index for this run: the CLI layer's own
+/// `$PKGDIR` directory scan (`config.scanned_binpkgs`) when it did one
+/// -- i.e. `<pkgdir>/Packages` was absent -- otherwise the parsed
+/// `<pkgdir>/Packages` file.
+fn local_binpkg_index(config: &portage_profile::Config) -> BinaryIndex {
+    match &config.scanned_binpkgs {
+        Some(entries) => BinaryIndex::from_entries(entries.clone()),
+        None => BinaryIndex::from_pkgdir(Path::new(&config.pkgdir)),
+    }
+}
+
+/// Lists every binary-package build of `category/package` in `index`
+/// -- real portage's own `bindbapi`, the "binary"
 /// half of `_dynamic_depgraph_config`'s own candidate `dbs` list
 /// (`depgraph.py`'s own `if myopts.get("--usepkg") is True: dbs.append((
 /// bindb, "binary", ...))`, confirmed by reading it) -- added to the
@@ -693,8 +745,12 @@ fn read_packages_index(pkgdir: &Path) -> Vec<HashMap<String, String>> {
 /// own `metadata/md5-cache` the way an ebuild one is (`read_md5_cache`
 /// is never called for it anywhere), so those fields go unused for this
 /// source, not silently wrong.
-pub fn list_binary_candidates(pkgdir: &Path, category: &str, package: &str) -> Vec<Candidate> {
-    binary_candidates_from_index(pkgdir, category, package, false)
+pub fn list_binary_candidates(
+    index: &BinaryIndex,
+    category: &str,
+    package: &str,
+) -> Vec<Candidate> {
+    binary_candidates_from_index(index, category, package, false)
 }
 
 /// Shared body of `list_binary_candidates` (local `$PKGDIR/Packages`,
@@ -706,13 +762,13 @@ pub fn list_binary_candidates(pkgdir: &Path, category: &str, package: &str) -> V
 /// the same sentinel an installed package with no vdb `repository` file
 /// already uses.
 fn binary_candidates_from_index(
-    pkgdir: &Path,
+    index: &BinaryIndex,
     category: &str,
     package: &str,
     remote: bool,
 ) -> Vec<Candidate> {
     let mut candidates = Vec::new();
-    for entry in read_packages_index(pkgdir) {
+    for entry in index.entries() {
         let Some(cpv) = entry.get("CPV") else {
             continue;
         };
@@ -782,7 +838,7 @@ fn binary_candidates_from_index(
 pub fn list_remote_binary_candidates(
     binrepos: &[portage_profile::BinRepo],
     root: &Path,
-    local_pkgdir: &Path,
+    local: &BinaryIndex,
     category: &str,
     package: &str,
 ) -> Vec<Candidate> {
@@ -790,7 +846,7 @@ pub fn list_remote_binary_candidates(
         return Vec::new();
     }
     let local_versions: HashSet<String> =
-        binary_candidates_from_index(local_pkgdir, category, package, false)
+        binary_candidates_from_index(local, category, package, false)
             .into_iter()
             .map(|c| c.version)
             .collect();
@@ -798,9 +854,8 @@ pub fn list_remote_binary_candidates(
     let mut out: Vec<Candidate> = Vec::new();
     let mut seen: HashSet<String> = local_versions.clone();
     for binrepo in binrepos {
-        for cand in
-            binary_candidates_from_index(&binrepo.packages_dir(root), category, package, true)
-        {
+        let binrepo_index = BinaryIndex::from_pkgdir(&binrepo.packages_dir(root));
+        for cand in binary_candidates_from_index(&binrepo_index, category, package, true) {
             if seen.insert(cand.version.clone()) {
                 out.push(cand);
             }
@@ -863,15 +918,17 @@ fn filter_usepkg_exclude_include(
 /// (already-vanished binpkg, race with a concurrent build, etc.) --
 /// same tolerance a missing/unreadable md5-cache entry already gets.
 pub fn read_binary_metadata(
-    pkgdir: &Path,
+    index: &BinaryIndex,
     category: &str,
     package: &str,
     version: &str,
 ) -> Option<HashMap<String, String>> {
     let want = format!("{category}/{package}-{version}");
-    read_packages_index(pkgdir)
-        .into_iter()
+    index
+        .entries()
+        .iter()
         .find(|entry| entry.get("CPV").map(String::as_str) == Some(want.as_str()))
+        .cloned()
 }
 
 /// `read_binary_metadata` extended to a `--getbinpkg` resolution: the
@@ -882,17 +939,17 @@ pub fn read_binary_metadata(
 pub fn read_binary_metadata_any(
     config: &portage_profile::Config,
     root: &Path,
+    local: &BinaryIndex,
     category: &str,
     package: &str,
     version: &str,
 ) -> Option<HashMap<String, String>> {
-    if let Some(m) = read_binary_metadata(Path::new(&config.pkgdir), category, package, version) {
+    if let Some(m) = read_binary_metadata(local, category, package, version) {
         return Some(m);
     }
     for binrepo in &config.binrepos {
-        if let Some(m) =
-            read_binary_metadata(&binrepo.packages_dir(root), category, package, version)
-        {
+        let binrepo_index = BinaryIndex::from_pkgdir(&binrepo.packages_dir(root));
+        if let Some(m) = read_binary_metadata(&binrepo_index, category, package, version) {
             return Some(m);
         }
     }
@@ -4531,13 +4588,14 @@ fn new_repo_changed(
 /// `depgraph.py`'s own `dbs` construction exactly.
 fn rebuilt_binary_changed(
     root: &Path,
-    pkgdir: &Path,
+    binpkg_index: &BinaryIndex,
     category: &str,
     package: &str,
     version: &str,
     rebuilt_binaries_timestamp: Option<u64>,
 ) -> bool {
-    let Some(binary_metadata) = read_binary_metadata(pkgdir, category, package, version) else {
+    let Some(binary_metadata) = read_binary_metadata(binpkg_index, category, package, version)
+    else {
         return false;
     };
     let Some(built_timestamp) = binary_metadata
@@ -5391,7 +5449,7 @@ fn already_installed_or_reinstall(
         && rebuilt_binaries
         && rebuilt_binary_changed(
             root,
-            Path::new(&config.pkgdir),
+            &local_binpkg_index(config),
             &atom.category,
             &atom.package,
             &installed_best.version,
@@ -5496,8 +5554,9 @@ pub fn resolve_pretend(
         list_candidates(repos, &atom.category, &atom.package)?
     };
     if usepkg || usepkgonly {
+        let local_binpkg = local_binpkg_index(config);
         let mut binary_candidates =
-            list_binary_candidates(Path::new(&config.pkgdir), &atom.category, &atom.package);
+            list_binary_candidates(&local_binpkg, &atom.category, &atom.package);
         // `--getbinpkg`/`-g`: remote binary candidates from each
         // `config.binrepos` binrepo's own on-disk `Packages` index. A
         // remote build of a cpv the local `$PKGDIR` also has is treated
@@ -5508,7 +5567,7 @@ pub fn resolve_pretend(
             binary_candidates.extend(list_remote_binary_candidates(
                 &config.binrepos,
                 root,
-                Path::new(&config.pkgdir),
+                &local_binpkg,
                 &atom.category,
                 &atom.package,
             ));
@@ -5867,7 +5926,7 @@ pub fn resolve_pretend(
             && rebuilt_binaries
             && rebuilt_binary_changed(
                 root,
-                Path::new(&config.pkgdir),
+                &local_binpkg_index(config),
                 &atom.category,
                 &atom.package,
                 &best.version,
@@ -6862,6 +6921,14 @@ pub fn resolve_pretend_graph(
     // shared dedup key.
     let mut root_deps_build_seen: HashSet<(String, String)> = HashSet::new();
 
+    // The local `$PKGDIR` binary index, built once for the whole walk
+    // (either the CLI layer's `$PKGDIR` directory scan or the parsed
+    // `<pkgdir>/Packages` -- see `local_binpkg_index`). Only consulted
+    // under `--usepkg`/`--usepkgonly`, but cheap to build unconditionally
+    // (an absent/empty `Packages` and a `None` scan both yield an empty
+    // index).
+    let local_binpkg = local_binpkg_index(config);
+
     let mut entries: Vec<GraphEntry> = Vec::new();
     // REQUIRED_USE (see the check further below, in the main BFS loop):
     // real depgraph.py's own `_add_pkg` sets
@@ -7240,13 +7307,12 @@ pub fn resolve_pretend_graph(
             c
         };
         if usepkg || usepkgonly {
-            let mut binary_candidates =
-                list_binary_candidates(Path::new(&config.pkgdir), &key.0, &key.1);
+            let mut binary_candidates = list_binary_candidates(&local_binpkg, &key.0, &key.1);
             if getbinpkg {
                 binary_candidates.extend(list_remote_binary_candidates(
                     &config.binrepos,
                     root,
-                    Path::new(&config.pkgdir),
+                    &local_binpkg,
                     &key.0,
                     &key.1,
                 ));
@@ -7386,7 +7452,8 @@ pub fn resolve_pretend_graph(
         });
 
         let metadata = if candidate_source == CandidateSource::Binary {
-            let Some(metadata) = read_binary_metadata_any(config, root, &key.0, &key.1, &version)
+            let Some(metadata) =
+                read_binary_metadata_any(config, root, &local_binpkg, &key.0, &key.1, &version)
             else {
                 continue;
             };
@@ -8122,15 +8189,41 @@ mod tests {
     }
 
     #[test]
+    fn binary_index_from_entries_feeds_list_binary_candidates_and_read_binary_metadata() {
+        // The `$PKGDIR` directory-scan path: `BinaryIndex::from_entries`
+        // (what `config.scanned_binpkgs` becomes) is consumed exactly
+        // like a parsed `<pkgdir>/Packages`.
+        let index = BinaryIndex::from_entries(vec![HashMap::from([
+            ("CPV".to_string(), "dev-libs/scanned-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("REPO".to_string(), "gentoo".to_string()),
+            ("RDEPEND".to_string(), "dev-libs/dep".to_string()),
+        ])]);
+        let cands = list_binary_candidates(&index, "dev-libs", "scanned");
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].version, "1.0");
+        assert_eq!(cands[0].repo_name, "gentoo");
+        assert_eq!(cands[0].source, CandidateSource::Binary);
+
+        let m = read_binary_metadata(&index, "dev-libs", "scanned", "1.0").unwrap();
+        assert_eq!(m.get("RDEPEND").map(String::as_str), Some("dev-libs/dep"));
+        assert!(read_binary_metadata(&index, "dev-libs", "scanned", "9.9").is_none());
+
+        // A missing pkgdir is an empty index (unchanged tolerance).
+        assert!(BinaryIndex::from_pkgdir(Path::new("/nonexistent")).is_empty());
+    }
+
+    #[test]
     fn list_remote_binary_candidates_reads_each_binrepos_own_packages_index() {
         // dev-libs/remotebinpkg exists only in the binhost's Packages
         // index -- no ebuild, no local $PKGDIR entry.
         let binrepos = vec![fixture_binhost()];
-        let pkgdir = fixtures_root().join("pkgdir");
+        let local = BinaryIndex::from_pkgdir(&fixtures_root().join("pkgdir"));
         let cands = list_remote_binary_candidates(
             &binrepos,
             Path::new("/"),
-            &pkgdir,
+            &local,
             "dev-libs",
             "remotebinpkg",
         );
@@ -8143,12 +8236,12 @@ mod tests {
 
         // A cpv+version the local $PKGDIR already carries is dropped as
         // "already downloaded" (real bintree.isremote) -- passing the
-        // binhost dir as its own local_pkgdir makes every entry look
+        // binhost index as its own `local` makes every entry look
         // already-local, so nothing is returned.
         let none = list_remote_binary_candidates(
             &binrepos,
             Path::new("/"),
-            &fixtures_root().join("binhost"),
+            &BinaryIndex::from_pkgdir(&fixtures_root().join("binhost")),
             "dev-libs",
             "remotebinpkg",
         );
@@ -8158,7 +8251,7 @@ mod tests {
         assert!(list_remote_binary_candidates(
             &[],
             Path::new("/"),
-            &pkgdir,
+            &local,
             "dev-libs",
             "remotebinpkg",
         )
@@ -8171,11 +8264,17 @@ mod tests {
             binrepos: vec![fixture_binhost()],
             ..test_config()
         };
-        // Not in the (empty-by-default) local $PKGDIR; found in the
-        // binrepo's cached index, SIZE and REPO carried through.
-        let m =
-            read_binary_metadata_any(&config, Path::new("/"), "dev-libs", "remotebinpkg", "1.0")
-                .expect("the binrepo index has dev-libs/remotebinpkg-1.0");
+        // Not in the (empty) local index; found in the binrepo's cached
+        // `Packages`, SIZE and REPO carried through.
+        let m = read_binary_metadata_any(
+            &config,
+            Path::new("/"),
+            &BinaryIndex::default(),
+            "dev-libs",
+            "remotebinpkg",
+            "1.0",
+        )
+        .expect("the binrepo index has dev-libs/remotebinpkg-1.0");
         assert_eq!(m.get("SIZE").map(String::as_str), Some("573440"));
         assert_eq!(m.get("REPO").map(String::as_str), Some("gentoo"));
     }

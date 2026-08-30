@@ -8313,7 +8313,7 @@ target still fails — the avoid-update-against-vdb path is dependency-only.
 2 contract `CASES` + 1 dedicated pinned test + 1 `portage-repo` unit test;
 mirrored in `emerge_pretend_reference.py`.
 
-### `gpkg` + `xpak` binary-package metadata readers (`$PKGDIR` directory-scan fallback, increments 1–2)
+### `$PKGDIR` directory-scan fallback + the `gpkg`/`xpak` metadata readers
 
 Every binary-package path in this pilot so far is `<pkgdir>/Packages`-
 index-driven and format-agnostic: `portage-repo` never opens a binpkg
@@ -8394,15 +8394,48 @@ binary resolution is unaffected — but a `$PKGDIR` scan of a pilot-built
 `ebuild_package.rs` / phase-execution follow-up, orthogonal to these
 readers.
 
-**Still to wire** (increment 3): the `$PKGDIR` directory scan itself —
-when `<pkgdir>/Packages` is absent, walk `$PKGDIR` for
-`*.tbz2`/`*.gpkg.tar`, read each with the matching reader, and build the
-candidate list (both sides). Both readers currently sit under
-`#[allow(dead_code)] mod binpkg` — the same "land the mechanism first,
-wire it after" shape the `needed_elf` preserve-libs buildout used. The
-architecture decision (`portage-repo` is deliberately subprocess-free,
-so the scan/reader placement needs settling — new crate vs callback vs
-scan-in-`portuale`) is deferred to that increment.
+**Increment 3** — the `$PKGDIR` directory scan, wired in. New
+`binpkg::scan_pkgdir` walks `<pkgdir>/<cat>/<pf>.{tbz2,gpkg.tar}` (one
+level deep — `$PKGDIR`'s real layout), reads each file with the matching
+reader, and synthesizes one `Packages`-style entry per file (`CPV` from
+the path, `SIZE` from the file's own byte size, `REPO` from the embedded
+`repository`, `PATH`, `CPV`-sorted for a deterministic pool). `pretend.rs`
+runs it once, after flag parsing, only when `--usepkg`/`--usepkgonly` is
+given and `<pkgdir>/Packages` is *absent*; the result lands on the new
+`portage_profile::Config::scanned_binpkgs` field. **Not written back to
+`Packages`** — real portage caches it there, but that would make
+`--pretend` mutate `$PKGDIR` and break contract-suite determinism, so
+this pilot recomputes each run (same "recompute, don't persist" stance
+as not persisting vdb `IUSE_EFFECTIVE`).
+
+The plumbing decision (`portage-repo` is deliberately subprocess-free —
+`scan_pkgdir` shells out) landed as a **refactor**: a new
+`portage_repo::BinaryIndex` value (`from_pkgdir` — parse
+`<pkgdir>/Packages`; `from_entries` — the scan's synthesized entries)
+threads through every binary-candidate function
+(`list_binary_candidates`/`read_binary_metadata`/
+`list_remote_binary_candidates`/`read_binary_metadata_any`/
+`rebuilt_binary_changed`) in place of a re-read `pkgdir: &Path`, so "read
+the index file or scan the files" is decided exactly once
+(`local_binpkg_index`, from `config`). The scan itself stays in
+`portuale`. A present `Packages` is always trusted as is — no
+mtime-staleness revalidation (real `FEATURES=pkgdir-index-trusted`
+behavior, this pilot's long-standing stance for the index).
+
+v1 cuts: bare `.xpak` files (real `binpkg-multi-instance`
+`<pkgdir>/<cat>/<pf>/<build_id>.xpak`) are skipped — no multi-instance
+concept here, and a bare `.xpak` is a different on-disk shape; a file
+that fails to parse aborts the scan (rather than real portage's own
+skip-and-warn — a `$PKGDIR` of unreadable binpkgs is worth surfacing).
+The Python mirror scans too (`_scan_pkgdir` — `portage.xpak.tbz2` for
+`.tbz2`, a hand-rolled `tarfile` + decompressor-subprocess reader for
+`.gpkg.tar` that matches the Rust reader's cuts, since real
+`portage.gpkg` would reject a `Manifest`-less container). New contract
+test builds an ad-hoc `$PKGDIR` with no `Packages` holding both fixture
+binpkgs and resolves each under `--usepkgonly`, Rust ≡ Python; a
+regression test confirms the committed `PORTING/fixtures/pkgdir` (which
+has a `Packages` *and* the two loose fixture files) still resolves via
+the index alone. 3 more `portuale` + 1 `portage-repo` unit tests.
 
 ## Running it
 

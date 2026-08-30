@@ -13,12 +13,6 @@
 // emerge_options.rs/ebuild_options.rs) even where the underlying
 // behavior isn't implemented.
 
-// Increment 1 of the "$PKGDIR directory-scan fallback" buildout: the
-// real gpkg metadata reader exists and is unit-tested, but has no
-// non-test caller yet (the `$PKGDIR` scan that will use it is a later
-// increment) -- same "land the mechanism first, wire it after" shape the
-// `needed_elf` preserve-libs buildout used.
-#[allow(dead_code)]
 mod binpkg;
 mod color;
 mod ebuild;

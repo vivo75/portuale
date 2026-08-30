@@ -576,6 +576,19 @@ pub struct Config {
     /// `portage-repo`'s `list_remote_binary_candidates` reads each one's
     /// on-disk `Packages` index (see `BinRepo::packages_dir`).
     pub binrepos: Vec<BinRepo>,
+    /// The `$PKGDIR` directory-scan fallback (real
+    /// `bintree._populate_local`): when `<pkgdir>/Packages` is *absent*
+    /// but `$PKGDIR` holds binpkg *files*, the CLI layer walks them,
+    /// reads each file's own embedded metadata (`portuale`'s
+    /// `binpkg::scan_pkgdir` -- real `xpak`/`gpkg`), and synthesizes one
+    /// `Packages`-style entry per file here. `None` means "no scan was
+    /// done" -- either `Packages` exists (use it) or `--usepkg`/
+    /// `--usepkgonly` wasn't given (binary candidates aren't eligible
+    /// anyway). `portage-repo` builds a `BinaryIndex` from this when set,
+    /// or reads `<pkgdir>/Packages` when not. Not written back to disk --
+    /// real portage caches it as `Packages`; this pilot recomputes each
+    /// run, so `--pretend` still writes nothing.
+    pub scanned_binpkgs: Option<Vec<std::collections::HashMap<String, String>>>,
 }
 
 /// One `--getbinpkg` binary-package repository (real

@@ -661,21 +661,142 @@ def _read_packages_index(pkgdir):
     return blocks[1:]
 
 
-def list_binary_candidates(pkgdir, category, package):
-    """Local $PKGDIR/Packages binary candidates (`remote` False). Mirrors
-    portage-repo/src/lib.rs's list_binary_candidates."""
-    return _binary_candidates_from_index(pkgdir, category, package, False)
+_GPKG_COMPRESSIONS = {
+    ".gz": ["gzip", "-dc"],
+    ".bz2": ["bzip2", "-dc"],
+    ".lz4": ["lz4", "-dc"],
+    ".lz": ["lzip", "-dc"],
+    ".lzo": ["lzop", "-dc"],
+    ".xz": ["xz", "-T0", "-dc"],
+    ".zst": ["zstd", "-dc", "--long=31"],
+}
 
 
-def _binary_candidates_from_index(pkgdir, category, package, remote):
+def _read_gpkg_metadata(path):
+    """Real gpkg.get_metadata() / unpack_metadata(want=None), narrowed
+    exactly like portuale/src/binpkg.rs::read_gpkg_metadata (NO
+    Manifest/.sig verification -- so it also reads this pilot's own
+    hand-built fixture gpkgs, which real portage.gpkg would reject).
+    Hand-rolled rather than `from portage.gpkg import gpkg` for that
+    reason. Mirrors the Rust reader."""
+    import io
+    import subprocess
+    import tarfile
+
+    with tarfile.open(path, "r") as container:
+        members = container.getmembers()
+        if "gpkg-1" not in (os.path.basename(m.name) for m in members):
+            raise ValueError(f"{path}: not a gpkg container (no gpkg-1 marker)")
+        member = None
+        comp = None
+        for m in members:
+            base = os.path.basename(m.name)
+            if base == "metadata.tar":
+                member = m
+                break
+            for ext, argv in _GPKG_COMPRESSIONS.items():
+                if base == "metadata.tar" + ext:
+                    member, comp = m, argv
+                    break
+            if member is not None:
+                break
+        if member is None:
+            raise ValueError(f"{path}: no metadata.tar member")
+        raw = container.extractfile(member).read()
+
+    if comp is not None:
+        raw = subprocess.run(comp, input=raw, capture_output=True, check=True).stdout
+
+    out = {}
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as md:
+        for m in md.getmembers():
+            if not m.isfile():
+                continue
+            key = m.name.split("/", 1)[-1] if "/" in m.name else m.name
+            try:
+                out[key] = md.extractfile(m).read().decode("utf-8").strip()
+            except UnicodeDecodeError:
+                continue
+    return out
+
+
+def _scan_pkgdir(pkgdir):
+    """Real bintree._populate_local, narrowed -- see
+    portuale/src/binpkg.rs::scan_pkgdir. Walks <pkgdir>/<cat>/<pf>.{tbz2,
+    gpkg.tar} (one level deep) and synthesizes one Packages-style entry
+    per file from its own embedded metadata. CPV from the path, SIZE from
+    the file, REPO from the embedded `repository`. Bare .xpak
+    (multi-instance) skipped; a parse failure aborts the scan (surfaced
+    by run()). Mirrors the Rust scan."""
+    from portage.xpak import tbz2
+
+    out = []
+    try:
+        categories = sorted(os.listdir(pkgdir))
+    except OSError:
+        return out
+    for category in categories:
+        cat_path = os.path.join(pkgdir, category)
+        if not os.path.isdir(cat_path):
+            continue
+        for name in sorted(os.listdir(cat_path)):
+            path = os.path.join(cat_path, name)
+            if name.endswith(".gpkg.tar"):
+                pf = name[: -len(".gpkg.tar")]
+                meta = _read_gpkg_metadata(path)
+            elif name.endswith(".tbz2"):
+                pf = name[: -len(".tbz2")]
+                meta = {
+                    (k.decode("utf-8", "replace") if isinstance(k, bytes) else k): (
+                        v.decode("utf-8", "replace") if isinstance(v, bytes) else v
+                    ).strip()
+                    for k, v in tbz2(path).get_data().items()
+                }
+            else:
+                continue
+            meta["CPV"] = f"{category}/{pf}"
+            meta.setdefault("CATEGORY", category)
+            meta.setdefault("PF", pf)
+            if "repository" in meta:
+                meta.setdefault("REPO", meta.pop("repository"))
+            try:
+                meta["SIZE"] = str(os.path.getsize(path))
+            except OSError:
+                pass
+            meta["PATH"] = f"{category}/{name}"
+            out.append(meta)
+    out.sort(key=lambda e: e.get("CPV") or "")
+    return out
+
+
+def _local_binpkg_index(config):
+    """The local $PKGDIR binary index for this run -- the CLI layer's own
+    $PKGDIR directory scan (config["scanned_binpkgs"], set when
+    <pkgdir>/Packages was absent) when it did one, otherwise the parsed
+    <pkgdir>/Packages file. Mirrors portage-repo/src/lib.rs's
+    local_binpkg_index."""
+    scanned = config.get("scanned_binpkgs")
+    if scanned is not None:
+        return scanned
+    return _read_packages_index(config["pkgdir"])
+
+
+def list_binary_candidates(index, category, package):
+    """Binary candidates from a parsed binary index (`remote` False).
+    Mirrors portage-repo/src/lib.rs's list_binary_candidates."""
+    return _binary_candidates_from_index(index, category, package, False)
+
+
+def _binary_candidates_from_index(index, category, package, remote):
     """Shared body of list_binary_candidates (local, remote=False) and
-    _list_remote_binary_candidates (remote=True). repo_name comes from
-    the index entry's own REPO field (real Packages records it per
-    package -- so a --getbinpkg binary shows ::gentoo at -pv), falling
-    back to portage.versions._unknown_repo ("__unknown__"). Mirrors
+    _list_remote_binary_candidates (remote=True). `index` is a list of
+    parsed Packages-style entry dicts. repo_name comes from the entry's
+    own REPO field (real Packages records it per package -- so a
+    --getbinpkg binary shows ::gentoo at -pv), falling back to
+    portage.versions._unknown_repo ("__unknown__"). Mirrors
     portage-repo/src/lib.rs's binary_candidates_from_index."""
     candidates = []
-    for entry in _read_packages_index(pkgdir):
+    for entry in index:
         cpv = entry.get("CPV")
         if cpv is None or not cpv.startswith(f"{category}/"):
             continue
@@ -729,37 +850,42 @@ def _binrepo_packages_dir(sync_uri, root):
     return sync_uri
 
 
-def _list_remote_binary_candidates(binrepos, root, local_pkgdir, category, package):
+def _list_remote_binary_candidates(binrepos, root, local_index, category, package):
     """--getbinpkg/-g: binary candidates from every binrepo's own on-disk
-    Packages index. A remote build of a cpv+version the local $PKGDIR
-    also carries is dropped (real bintree.isremote). Mirrors
-    portage-repo/src/lib.rs's list_remote_binary_candidates."""
+    Packages index. A remote build of a cpv+version the local index
+    (`local_index`) also carries is dropped (real bintree.isremote).
+    Mirrors portage-repo/src/lib.rs's list_remote_binary_candidates."""
     if not binrepos:
         return []
     seen = {
         c["version"]
-        for c in _binary_candidates_from_index(local_pkgdir, category, package, False)
+        for c in _binary_candidates_from_index(local_index, category, package, False)
     }
     out = []
     for binrepo in binrepos:
         pkgdir = _binrepo_packages_dir(binrepo["sync_uri"], root)
-        for cand in _binary_candidates_from_index(pkgdir, category, package, True):
+        for cand in _binary_candidates_from_index(
+            _read_packages_index(pkgdir), category, package, True
+        ):
             if cand["version"] not in seen:
                 seen.add(cand["version"])
                 out.append(cand)
     return out
 
 
-def _read_binary_metadata_any(config, root, category, package, version):
-    """_read_binary_metadata extended to --getbinpkg: local $PKGDIR
+def _read_binary_metadata_any(config, root, local_index, category, package, version):
+    """read_binary_metadata extended to --getbinpkg: the local index
     first, then each binrepo's cached Packages. Mirrors
     portage-repo/src/lib.rs's read_binary_metadata_any."""
-    m = read_binary_metadata(config["pkgdir"], category, package, version)
+    m = read_binary_metadata(local_index, category, package, version)
     if m is not None:
         return m
     for binrepo in config.get("binrepos", []):
         m = read_binary_metadata(
-            _binrepo_packages_dir(binrepo["sync_uri"], root), category, package, version
+            _read_packages_index(_binrepo_packages_dir(binrepo["sync_uri"], root)),
+            category,
+            package,
+            version,
         )
         if m is not None:
             return m
@@ -797,14 +923,14 @@ def _filter_usepkg_exclude_include(binary_candidates, category, package, usepkg_
     return result
 
 
-def read_binary_metadata(pkgdir, category, package, version):
-    """Re-reads <pkgdir>/Packages for category/package-version's own
-    entry -- the binary-candidate counterpart to read_md5_cache, giving
+def read_binary_metadata(index, category, package, version):
+    """Finds category/package-version's own entry in a parsed binary
+    index -- the binary-candidate counterpart to read_md5_cache, giving
     DEPEND/RDEPEND/etc once a binary candidate has actually been chosen.
     None if not found. Mirrors portage-repo/src/lib.rs's
     read_binary_metadata exactly."""
     want = f"{category}/{package}-{version}"
-    for entry in _read_packages_index(pkgdir):
+    for entry in index:
         if entry.get("CPV") == want:
             return entry
     return None
@@ -2473,7 +2599,7 @@ def _slot_changed(root, repos, category, package, version):
     return vdb_slot != repo_slot
 
 
-def _rebuilt_binary_changed(root, pkgdir, category, package, version, rebuilt_binaries_timestamp):
+def _rebuilt_binary_changed(root, index, category, package, version, rebuilt_binaries_timestamp):
     """--rebuilt-binaries: real depgraph.py's own reinstall trigger
     (lines ~8394-8429, confirmed by reading it) comparing a binary
     candidate's own BUILD_TIME against the already-installed package's
@@ -2499,7 +2625,7 @@ def _rebuilt_binary_changed(root, pkgdir, category, package, version, rebuilt_bi
     missing local/remote BUILD_TIME must never cause a spurious
     reinstall). Mirrors portage-repo/src/lib.rs's rebuilt_binary_changed
     exactly."""
-    binary_metadata = read_binary_metadata(pkgdir, category, package, version)
+    binary_metadata = read_binary_metadata(index, category, package, version)
     if binary_metadata is None:
         return False
     try:
@@ -4164,7 +4290,7 @@ def _already_installed_or_reinstall(
         root, repos, category, package, installed_best["version"]
     )
     rebuilt_binary_flag = (usepkg or usepkgonly) and rebuilt_binaries and _rebuilt_binary_changed(
-        root, config["pkgdir"], category, package, installed_best["version"], rebuilt_binaries_timestamp
+        root, _local_binpkg_index(config), category, package, installed_best["version"], rebuilt_binaries_timestamp
     )
     new_repo_flag = newrepo and _new_repo_changed(
         root, category, package, installed_best["version"], installed_best["repo_name"]
@@ -4369,10 +4495,11 @@ def resolve_pretend(
     # resolve_pretend exactly.
     candidates = [] if usepkgonly else list_candidates(repos, category, package)
     if usepkg or usepkgonly:
-        binary_candidates = list_binary_candidates(config["pkgdir"], category, package)
+        local_index = _local_binpkg_index(config)
+        binary_candidates = list_binary_candidates(local_index, category, package)
         if getbinpkg:
             binary_candidates = binary_candidates + _list_remote_binary_candidates(
-                config.get("binrepos", []), root, config["pkgdir"], category, package
+                config.get("binrepos", []), root, local_index, category, package
             )
         candidates = candidates + _filter_usepkg_exclude_include(
             binary_candidates, category, package, usepkg_exclude, usepkg_include
@@ -5283,10 +5410,11 @@ def resolve_pretend_graph(
         # wins the tie. Mirrors portage-repo/src/lib.rs exactly.
         repo_candidates = [] if usepkgonly else list_candidates(repos, category, package)
         if usepkg or usepkgonly:
-            binary_candidates = list_binary_candidates(config["pkgdir"], category, package)
+            local_index = _local_binpkg_index(config)
+            binary_candidates = list_binary_candidates(local_index, category, package)
             if getbinpkg:
                 binary_candidates = binary_candidates + _list_remote_binary_candidates(
-                    config.get("binrepos", []), root, config["pkgdir"], category, package
+                    config.get("binrepos", []), root, local_index, category, package
                 )
             repo_candidates = repo_candidates + _filter_usepkg_exclude_include(
                 binary_candidates, category, package, usepkg_exclude, usepkg_include
@@ -5410,7 +5538,9 @@ def resolve_pretend_graph(
 
         pf = f"{package}-{version}"
         if candidate_source == "binary":
-            metadata = _read_binary_metadata_any(config, root, category, package, version)
+            metadata = _read_binary_metadata_any(
+                config, root, _local_binpkg_index(config), category, package, version
+            )
             if metadata is None:
                 continue
         else:
@@ -9825,6 +9955,24 @@ def run(args):
     usepkgonly = usepkgonly or getbinpkgonly
     usepkg = usepkg or getbinpkg or getbinpkgonly
     getbinpkg = getbinpkg or getbinpkgonly
+
+    # Real bintree._populate_local's "no trusted index" branch: when
+    # --usepkg/--usepkgonly makes local binary candidates eligible but
+    # <PKGDIR>/Packages is absent, walk $PKGDIR for binpkg files and
+    # synthesize the index from each file's own embedded metadata. NOT
+    # written back to Packages (config["scanned_binpkgs"] instead). A
+    # present Packages is always used as is. Mirrors pretend.rs.
+    config["scanned_binpkgs"] = None
+    if (usepkg or usepkgonly) and not os.path.isfile(
+        os.path.join(config["pkgdir"], "Packages")
+    ):
+        try:
+            scanned = _scan_pkgdir(config["pkgdir"])
+        except Exception as e:  # noqa: BLE001 -- surface any scan failure
+            print(f"emerge: scanning {config['pkgdir']}: {e}", file=sys.stderr)
+            return 1
+        if scanned:
+            config["scanned_binpkgs"] = scanned
 
     # --binpkg-respect-use: real default is "auto" (effectively on)
     # whenever --usepkgonly is NOT given, left off (unset/falsy) when it

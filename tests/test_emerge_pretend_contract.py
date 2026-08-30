@@ -25,6 +25,7 @@ stdout, stderr, and exit codes all match exactly.
 """
 
 import json
+import shutil
 import subprocess
 
 import pytest
@@ -2323,6 +2324,96 @@ def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
         '[binary  N    ] dev-libs/binaryusemismatchpkg-1.0 ',
     ]
     assert result.stderr == ""
+
+
+def _binscan_configroot(tmp_path, fixtures_root, binpkg_files):
+    """An ad-hoc PORTAGE_CONFIGROOT whose `PKGDIR` points at a directory
+    that holds `binpkg_files` (copied from PORTING/fixtures) but NO
+    `Packages` index -- so `--usepkg`/`--usepkgonly` must fall back to
+    the real `bintree._populate_local` `$PKGDIR` directory scan."""
+    cfg = tmp_path / "cfg"
+    repo = tmp_path / "repo"
+    pkgdir = tmp_path / "binpkgs"
+    (cfg / "etc/portage").mkdir(parents=True)
+    (repo / "profiles").mkdir(parents=True)
+    (repo / "profiles/repo_name").write_text("main\n")
+    (repo / "profiles/make.defaults").write_text('ACCEPT_KEYWORDS="amd64"\n')
+    (cfg / "etc/portage/repos.conf").write_text(
+        "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = " + str(repo) + "\n"
+    )
+    (cfg / "etc/portage/make.conf").write_text('PKGDIR="' + str(pkgdir) + '"\n')
+    (cfg / "etc/portage/make.profile").symlink_to(repo / "profiles")
+    for name in binpkg_files:
+        dest = pkgdir / "dev-libs" / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(fixtures_root / "pkgdir/dev-libs" / name, dest)
+    assert not (pkgdir / "Packages").exists()
+    return {"PORTAGE_CONFIGROOT": str(cfg), "ROOT": str(cfg)}
+
+
+def test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages_index(
+    emerge_binary, emerge_pretend_python, tmp_path, fixtures_root
+):
+    """Real `bintree._populate_local`'s "no trusted index" branch: a
+    `$PKGDIR` holding binpkg *files* but no `Packages` is scanned, each
+    file's own embedded metadata read (`portuale/src/binpkg.rs` --
+    real `xpak`/`gpkg`), and the synthesized candidates resolve exactly
+    as if a `Packages` entry had listed them.
+
+    Both fixture binpkgs are genuine: `packagepkg-1.0.tbz2` was built by
+    the pilot's own `ebuild <file> package` (real `xpak.py`);
+    `gpkgreadpkg-1.0.gpkg.tar` is a hand-built real gpkg container."""
+    env = _binscan_configroot(
+        tmp_path,
+        fixtures_root,
+        ["packagepkg-1.0.tbz2", "gpkgreadpkg-1.0.gpkg.tar"],
+    )
+    for pkg, ver in [("packagepkg", "1.0"), ("gpkgreadpkg", "1.0")]:
+        args = ["--pretend", "--usepkgonly", f"dev-libs/{pkg}"]
+        rust = _run([str(emerge_binary)], args, env)
+        py = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == 0, (pkg, rust.stdout, rust.stderr)
+        assert rust.stdout == py.stdout, pkg
+        assert rust.stderr == py.stderr, pkg
+        assert rust.stdout.splitlines()[0] == f"[binary  N    ] dev-libs/{pkg}-{ver} ", pkg
+
+    # -pv: the scanned entry's SIZE (the file's own byte size) feeds
+    # `Size of downloads:` just like a `Packages` `SIZE` field would --
+    # wait, no: a local binpkg is already present, nothing to download.
+    v = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--usepkgonly", "dev-libs/gpkgreadpkg"],
+        env,
+    )
+    vp = _run(
+        emerge_pretend_python,
+        ["--pretend", "-v", "--usepkgonly", "dev-libs/gpkgreadpkg"],
+        env,
+    )
+    assert v.returncode == 0
+    assert v.stdout == vp.stdout
+
+
+def test_pkgdir_scan_is_skipped_when_a_packages_index_is_present(
+    emerge_binary, fixture_env
+):
+    """Regression guard: the committed PORTING/fixtures/pkgdir HAS both a
+    `Packages` index AND the two loose binpkg fixture files. The scan
+    must NOT run there -- `--usepkg` resolution stays driven by the
+    `Packages` index alone (`dev-libs/binaryonlypkg` is only in the
+    index; `dev-libs/packagepkg`/`gpkgreadpkg` are only loose files and
+    must stay invisible)."""
+    idx = _run(
+        [str(emerge_binary)], ["--pretend", "--usepkgonly", "dev-libs/binaryonlypkg"], fixture_env
+    )
+    assert idx.returncode == 0
+    assert idx.stdout.splitlines() == ['[binary  N    ] dev-libs/binaryonlypkg-1.0 ']
+
+    loose = _run(
+        [str(emerge_binary)], ["--pretend", "--usepkgonly", "dev-libs/gpkgreadpkg"], fixture_env
+    )
+    assert loose.returncode == 1
+    assert 'no ebuilds to satisfy "dev-libs/gpkgreadpkg"' in loose.stderr
 
 
 def test_getbinpkg_makes_a_remote_binhost_binary_eligible(

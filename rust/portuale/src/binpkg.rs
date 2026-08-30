@@ -1,21 +1,27 @@
-// Reading a real binary package's own embedded metadata -- the piece
-// this pilot's `Packages`-index reader (`portage_repo::read_packages_
-// index`) deliberately never needed, since the index alone carries every
-// field a `--pretend` binary candidate uses. This module is increment 1
-// of the "$PKGDIR directory-scan fallback" buildout (see
-// `PORTING/PROMPT-next.md`): when `$PKGDIR` has binpkg *files* but no
-// `Packages` index at all, real `bintree._populate_local` opens each
-// file and rebuilds the index -- which needs a real per-format metadata
-// reader. This is the `gpkg` half.
+// The `$PKGDIR` directory-scan fallback -- real `bintree._populate_local`
+// (see `PORTING/PROMPT-next.md`). Every other binary-package path in this
+// pilot is `<pkgdir>/Packages`-index driven and format-agnostic, so a
+// `gpkg`/`xpak` *listed in an index* already resolves for `--pretend`.
+// What the index reader can't do is the "no trusted index" branch: when
+// `$PKGDIR` holds binpkg *files* but no `Packages`, open each file, read
+// its own embedded metadata, and build the pool from that. That needs a
+// real per-format reader -- this module has both:
 //
-// It shells out to `tar` (and the matching decompressor) rather than
-// parsing the archive natively or pulling a Rust tar/compression crate:
-// consistent with this pilot's own "real, unmodified system tools where
-// they exist" stance for every other real-execution path (`wget`,
-// `ldconfig`, `scanelf`, `bash`/`brush`, the compressors already invoked
-// by `ebuild_package.rs`), and `tar` + these compressors are hard Gentoo
-// requirements anyway (real `gpkg.py` is built on Python's `tarfile` +
-// the exact same compressor subprocesses).
+//   - `read_gpkg_metadata`: real `gpkg.get_metadata()` -- a `.gpkg.tar`
+//     is a plain tar container; find/decompress the inner `metadata.tar`.
+//     Shells out to `tar` + the matching decompressor rather than parsing
+//     natively or adding a Rust tar/compression crate -- consistent with
+//     every other real-execution path here (`wget`/`ldconfig`/`scanelf`/
+//     `bash`/`brush`/the compressors `ebuild_package.rs` already runs),
+//     and `tar` + these compressors are hard Gentoo requirements anyway.
+//   - `read_xpak_metadata`: real `xpak.tbz2.scan` -- the self-describing
+//     `XPAKPACK…XPAKSTOP…STOP` trailer appended after the image tarball.
+//     Pure Rust, no subprocess, reads only the bounded file tail.
+//   - `scan_pkgdir`: walks `<pkgdir>/<cat>/<pf>.{tbz2,gpkg.tar}` and
+//     synthesizes one `Packages`-style entry per file. Its output
+//     becomes `portage_profile::Config::scanned_binpkgs` (NOT written
+//     back to `Packages` -- this pilot recomputes each run, so
+//     `--pretend` still writes nothing).
 
 use std::collections::HashMap;
 use std::fs;
@@ -316,6 +322,74 @@ fn be32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
 
+/// Real `bintree._populate_local`, narrowed: walk `pkgdir` for binpkg
+/// *files* and synthesize one `Packages`-style entry per file from its
+/// own embedded metadata (`read_xpak_metadata` / `read_gpkg_metadata`).
+/// The caller only runs this when `<pkgdir>/Packages` is absent (see
+/// `pretend.rs`).
+///
+/// `$PKGDIR` layout is `<pkgdir>/<category>/<pf>.{tbz2,gpkg.tar}` (one
+/// level deep). `CPV` is derived from the path (`<category>/<pf>` --
+/// authoritative for a `$PKGDIR`), `SIZE` from the file's own byte size
+/// (real `bintree`'s own `st_size`), `REPO` from the embedded
+/// `repository`, `PATH` from the relative path. Entries are `CPV`-sorted
+/// for a deterministic pool order.
+///
+/// v1 cuts: bare `.xpak` files (real `binpkg-multi-instance`
+/// `<pkgdir>/<cat>/<pf>/<build_id>.xpak`) are skipped -- this pilot has
+/// no multi-instance concept and a bare `.xpak` is a different on-disk
+/// shape (just the segment, no `[tarball]…STOP` trailer); real
+/// portage's own mtime-based `Packages` staleness revalidation is not
+/// done (a present index is always trusted, this pilot's long-standing
+/// stance); a file that fails to parse aborts the scan (rather than
+/// real portage's own skip-and-warn) -- a `$PKGDIR` full of unreadable
+/// binpkgs is a real problem worth surfacing, not silently resolving
+/// against a partial pool.
+pub fn scan_pkgdir(pkgdir: &Path) -> Result<Vec<HashMap<String, String>>, String> {
+    let mut out: Vec<HashMap<String, String>> = Vec::new();
+    let Ok(categories) = fs::read_dir(pkgdir) else {
+        return Ok(out);
+    };
+    let mut cat_paths: Vec<PathBuf> = categories
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    cat_paths.sort();
+    for cat_path in cat_paths {
+        if !cat_path.is_dir() {
+            continue;
+        }
+        let Some(category) = cat_path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        for file in read_dir_sorted(&cat_path)? {
+            let Some(name) = file.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let (pf, mut meta) = if let Some(pf) = name.strip_suffix(".gpkg.tar") {
+                (pf.to_string(), read_gpkg_metadata(&file)?)
+            } else if let Some(pf) = name.strip_suffix(".tbz2") {
+                (pf.to_string(), read_xpak_metadata(&file)?)
+            } else {
+                continue;
+            };
+            meta.insert("CPV".to_string(), format!("{category}/{pf}"));
+            meta.entry("CATEGORY".to_string())
+                .or_insert_with(|| category.to_string());
+            meta.entry("PF".to_string()).or_insert_with(|| pf.clone());
+            if let Some(repo) = meta.remove("repository") {
+                meta.entry("REPO".to_string()).or_insert(repo);
+            }
+            if let Ok(st) = fs::metadata(&file) {
+                meta.insert("SIZE".to_string(), st.len().to_string());
+            }
+            meta.insert("PATH".to_string(), format!("{category}/{name}"));
+            out.push(meta);
+        }
+    }
+    out.sort_by(|a, b| a.get("CPV").cmp(&b.get("CPV")));
+    Ok(out)
+}
+
 fn run_tar(args: &[&str]) -> Result<(), String> {
     let status = Command::new("tar")
         .args(args)
@@ -519,5 +593,57 @@ mod tests {
         // `environment.bz2` is binary -> lossy-decoded but present as a
         // key; a scan consumer only ever looks up scalar keys.
         assert!(m.contains_key("environment.bz2"));
+    }
+
+    #[test]
+    fn scan_pkgdir_synthesizes_a_packages_style_entry_per_binpkg_file() {
+        // fixtures/pkgdir/dev-libs/ holds both a real `.tbz2` and a real
+        // `.gpkg.tar` (the increment-1/2 fixtures). `scan_pkgdir` itself
+        // doesn't care whether a `Packages` file is also present -- the
+        // caller (pretend.rs) makes that decision.
+        let entries = scan_pkgdir(&fixture("pkgdir")).expect("scan succeeds");
+        let by_cpv: HashMap<&str, &HashMap<String, String>> = entries
+            .iter()
+            .map(|e| (e.get("CPV").unwrap().as_str(), e))
+            .collect();
+
+        let tbz2 = by_cpv["dev-libs/packagepkg-1.0"];
+        assert_eq!(tbz2.get("SLOT").map(String::as_str), Some("0"));
+        assert_eq!(tbz2.get("EAPI").map(String::as_str), Some("8"));
+        assert_eq!(tbz2.get("CATEGORY").map(String::as_str), Some("dev-libs"));
+        assert_eq!(tbz2.get("PF").map(String::as_str), Some("packagepkg-1.0"));
+        assert_eq!(
+            tbz2.get("PATH").map(String::as_str),
+            Some("dev-libs/packagepkg-1.0.tbz2")
+        );
+        assert!(tbz2.get("SIZE").is_some_and(|s| s.parse::<u64>().is_ok()));
+
+        let gpkg = by_cpv["dev-libs/gpkgreadpkg-1.0"];
+        assert_eq!(gpkg.get("KEYWORDS").map(String::as_str), Some("amd64"));
+        assert_eq!(
+            gpkg.get("DEPEND").map(String::as_str),
+            Some("dev-libs/newpkg")
+        );
+        // `repository` -> `REPO` (real `Packages` field name).
+        assert_eq!(gpkg.get("REPO").map(String::as_str), Some("gentoo"));
+        assert!(!gpkg.contains_key("repository"));
+
+        // Entries are CPV-sorted for a deterministic candidate pool.
+        let cpvs: Vec<&str> = entries
+            .iter()
+            .map(|e| e.get("CPV").unwrap().as_str())
+            .collect();
+        let mut sorted = cpvs.clone();
+        sorted.sort_unstable();
+        assert_eq!(cpvs, sorted);
+    }
+
+    #[test]
+    fn scan_pkgdir_of_a_missing_or_empty_dir_is_empty() {
+        assert!(scan_pkgdir(Path::new("/nonexistent/pkgdir"))
+            .unwrap()
+            .is_empty());
+        let scratch = ScratchDir::new("scan-empty").unwrap();
+        assert!(scan_pkgdir(scratch.path()).unwrap().is_empty());
     }
 }

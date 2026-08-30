@@ -623,8 +623,8 @@ mod tests {
         // #53/#63's own reader) sees it immediately -- the whole point
         // of writing a real Packages entry in the exact format that
         // reader already parses.
-        let candidates =
-            portage_repo::list_binary_candidates(&options.pkgdir, "dev-libs", "packagepkg");
+        let index = portage_repo::BinaryIndex::from_pkgdir(&options.pkgdir);
+        let candidates = portage_repo::list_binary_candidates(&index, "dev-libs", "packagepkg");
         assert_eq!(candidates.len(), 1);
         let candidate = &candidates[0];
         assert_eq!(candidate.version, "1.0");
@@ -633,9 +633,8 @@ mod tests {
 
         // The real RDEPEND this fixture's own md5-cache entry declares
         // came through into the Packages index too.
-        let metadata =
-            portage_repo::read_binary_metadata(&options.pkgdir, "dev-libs", "packagepkg", "1.0")
-                .expect("binary metadata entry exists");
+        let metadata = portage_repo::read_binary_metadata(&index, "dev-libs", "packagepkg", "1.0")
+            .expect("binary metadata entry exists");
         assert_eq!(
             metadata.get("RDEPEND").map(String::as_str),
             Some("dev-libs/samepkg")
