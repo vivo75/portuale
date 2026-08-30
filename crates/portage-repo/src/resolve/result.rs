@@ -239,6 +239,45 @@ pub struct GraphResult {
     pub plain_miss_deps: Vec<PlainMissDepReport>,
 }
 
+impl GraphResult {
+    /// Portage's `_dynamic_config._autounmask_backtrack_disabled` as a pure predicate
+    /// over the settled result: the gate for `_display_autounmask`'s "backtracking has
+    /// terminated early" tail. Portage sets the flag iff autounmask changes exist,
+    /// backtracking is allowed (`--backtrack` budget > 0) and not opted back in
+    /// (`--autounmask-backtrack=y`, or `--autounmask-continue` implying it), AND
+    /// `need_config_change` reaches its third branch (neither the "zero other
+    /// problems" early return nor the slot-conflict handler branch fired).
+    ///
+    /// Portuale's terms for "zero other problems": the outcome is `Complete`, no
+    /// restart-worthy flip was folded and no post-failure parent rescue ran
+    /// ([`GraphResult::autounmask_no_clean_tail`]), no slot conflict was recorded, no
+    /// unsolvable blocker exists, and `--buildpkgonly`'s check is satisfied. Known
+    /// approximations, all on the keep-the-notice side: no slot-conflict handler and
+    /// no REQUIRED_USE early-return signal, and `autounmask_no_clean_tail`
+    /// over-approximates `want_restart_for_use_change`. Warnings that do not fail
+    /// Portage's `_resolve` correctly do not count.
+    // Portage: depgraph.py _display_autounmask:11093; need_config_change:11708-11760;
+    // _resolve tail:5793; _required_use_unsatisfied:3652
+    pub fn autounmask_backtrack_disabled(&self, autounmask_backtrack: bool) -> bool {
+        let has_changes = !self.autounmask_keyword_changes.is_empty()
+            || !self.autounmask_mask_changes.is_empty()
+            || !self.autounmask_use_changes.is_empty()
+            || !self.autounmask_license_changes.is_empty();
+        has_changes
+            && !autounmask_backtrack
+            && self.backtrack_max > 0
+            && (matches!(self.outcome, ResolveOutcome::Aborted { .. })
+                || self.autounmask_no_clean_tail
+                || !self.slot_conflicts.is_empty()
+                || self.buildpkgonly_deps_unsatisfied
+                || self
+                    .entries
+                    .iter()
+                    .any(|e| e.blockers.iter().any(|b| b.unsolvable))
+                || !self.orphan_blockers.is_empty())
+    }
+}
+
 /// One Portage `--autounmask` change: the implicit `package.accept_keywords` /
 /// `package.use` line plus its own `#required by …` dep-chain comment.
 // Portage: depgraph.py, _display_autounmask; _get_dep_chain_as_comment

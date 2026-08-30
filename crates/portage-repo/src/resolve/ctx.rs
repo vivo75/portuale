@@ -79,3 +79,12 @@ pub(crate) struct ResolveCtx<'a> {
     /// The local `$PKGDIR` binary index, built once for the whole walk.
     pub(crate) local_binpkg: std::sync::Arc<BinaryIndex>,
 }
+
+impl<'a> ResolveCtx<'a> {
+    /// The running root this walk resolves build-time groups against, if it
+    /// differs from the target root.
+    pub(crate) fn cross_root(&self) -> Option<&'a Path> {
+        self.root_deps_running_root
+            .filter(|r| r.as_os_str() != self.root.as_os_str())
+    }
+}
