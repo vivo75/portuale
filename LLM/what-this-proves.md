@@ -8567,3 +8567,44 @@ pinned test + 1 `portage-repo` unit test; mirrored in
 `emerge_pretend_reference.py` (`_alnum_sort_key`). Closes scope-backlog.md
 Part 2.A item 2 residual (b).
 
+### `emerge --pretend --autounmask`: real keyword *resolution* + the "necessary to proceed" block (increment 1)
+
+Until now, `emerge --pretend --autounmask <keyword-masked-pkg>` *failed*
+with a portuale-invented `there are no ebuilds to satisfy … note: … suggests
+adding …` hint. Real portage doesn't do that: when `--autounmask` can
+find a consistent set of changes, it *resolves the graph as if those
+changes were applied*, shows the normal merge list, then prints the
+`The following <X> changes are necessary to proceed:` block (real
+`depgraph.py::_display_autounmask`, `:10625`) — and `emerge --pretend`
+exits **0** (real `actions.py:563`). This increment ports that for the
+**keyword** kind.
+
+`resolve_pretend` grew an `autounmask_keywords` param: when set and the
+normal visibility filter finds nothing, a candidate masked by `KEYWORDS`
+*alone* (`keyword_masked_only` — `package.mask`/license/properties/
+restrict all still have to pass) is treated as visible, the implicit
+`=cpv ~arch` change real portage would apply. The resulting entry's
+`[ebuild N ~]` marker already reflected it (`keyword_mask_marker` keys
+off the candidate's own `~<arch>` token, not `package.accept_keywords`).
+`resolve_pretend_graph` records each such resolution as an
+`AutounmaskChange` (`cpv`, `token`, and a `#required by …` dep chain —
+real `_get_dep_chain_as_comment`: `required by <atom> (argument)` for a
+command-line target, `required by <parent cpv>::<repo>` then `required
+by <parent atom> (argument)` for a dependency), on the new
+`GraphResult::autounmask_keyword_changes`. `pretend.rs` prints the
+block to stderr after the merge list — real `_writemsg`'s
+`\nThe following <BAD>keyword changes</BAD> are necessary to proceed:\n
+ (see "package.accept_keywords" …)\n`, then `format_msg` (the
+`#`-prefixed dep-chain lines stay plain, the `=<cpv> <kw>` line is
+`INFORM`-green). `--pretend` deliberately omits real portage's `Use
+--autounmask-write …` hint (`:11084` `not pretend`). `--json` gains a
+top-level `"autounmask_keyword_changes"` array.
+
+Gating is unchanged: `--autounmask` must be *explicit* for keyword
+changes (real `--autounmask-keep-keywords` defaults to keep). Without it,
+a top-level keyword-masked atom is still fatal and a keyword-masked
+dependency still gets the `!!! no visible ebuild` line. Both sides;
+existing fixtures `dev-libs/autounmaskkeywordpkg` / `autounmaskdepconsumer`.
+6 contract tests updated (fail-and-hint → resolve-and-block), 3
+`portage-repo` unit tests. scope-backlog.md Part 2.G item 14 / Part 1 #17.
+

@@ -2,6 +2,15 @@
 
 use crate::remote::*;
 
+/// One repo-ledger line, shared by both sides:
+/// `<unix-ts> <repo> <commit> <cpv>`.
+pub(crate) struct LedgerEntry {
+    pub ts: u64,
+    pub repo: String,
+    pub commit: String,
+    pub cpv: String,
+}
+
 /// Append one line, keeping the last 10 (rotation both sides share).
 pub(crate) fn ledger_append(path: &std::path::Path, line: &str) -> Result<(), String> {
     use std::io::Write as _;

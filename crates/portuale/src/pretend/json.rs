@@ -294,6 +294,17 @@ pub(crate) fn changed_deps_report_entry_to_json(c: &ChangedDepsReportEntry) -> S
     )
 }
 
+/// One JSON object per autounmask change: atom, token, and dependency chain.
+pub(crate) fn autounmask_change_to_json(change: &portage_repo::AutounmaskChange) -> String {
+    let chain: Vec<String> = change.dep_chain.iter().map(|l| json_string(l)).collect();
+    format!(
+        "{{\"atom\":{},\"token\":{},\"dep_chain\":[{}]}}",
+        json_string(&change.atom),
+        json_string(&change.token),
+        chain.join(",")
+    )
+}
+
 /// The `--json` `aborted` field: `null` on the complete path,
 /// `{"reason":…}` on an abort (reason spellings pinned by the abort fixtures).
 pub(crate) fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> String {
@@ -326,4 +337,97 @@ pub(crate) fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> S
             }
         },
     }
+}
+/// Arguments of [`print_json`].
+pub(crate) struct PrintJsonArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    /// The deterministic `(backtrack: N/M)` count as data (`--json` only, no
+    /// stdout line; the wall-clock half is cut for determinism).
+    pub(crate) backtrack_restarts: u64,
+    pub(crate) backtrack_max: u32,
+    pub(crate) slot_conflicts: &'a [SlotConflict],
+    pub(crate) changed_deps_report: &'a [ChangedDepsReportEntry],
+    pub(crate) autounmask_keyword_changes: &'a [portage_repo::AutounmaskChange],
+    pub(crate) autounmask_use_changes: &'a [portage_repo::AutounmaskChange],
+    pub(crate) autounmask_license_changes: &'a [portage_repo::AutounmaskChange],
+    pub(crate) autounmask_mask_changes: &'a [portage_repo::AutounmaskChange],
+    pub(crate) abi_rebuilds: &'a [(String, String)],
+    pub(crate) outcome: &'a portage_repo::ResolveOutcome,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) verbose: bool,
+    pub(crate) running_root: Option<&'a Path>,
+}
+
+/// The whole `--json` output as one line, no pretty-printing (a
+/// portuale-specific convenience format, not a stable schema).
+pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
+    let PrintJsonArgs {
+        entries,
+        backtrack_restarts,
+        backtrack_max,
+        slot_conflicts,
+        changed_deps_report,
+        autounmask_keyword_changes,
+        autounmask_use_changes,
+        autounmask_license_changes,
+        autounmask_mask_changes,
+        abi_rebuilds,
+        outcome,
+        top_level_pkgs,
+        verbose,
+        running_root,
+    } = args;
+    let entries_json: Vec<String> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| entry_to_json(e, i, top_level_pkgs, verbose, running_root))
+        .collect();
+    let conflicts_json: Vec<String> = slot_conflicts.iter().map(slot_conflict_to_json).collect();
+    let changed_deps_report_json: Vec<String> = changed_deps_report
+        .iter()
+        .map(changed_deps_report_entry_to_json)
+        .collect();
+    let autounmask_kw_json: Vec<String> = autounmask_keyword_changes
+        .iter()
+        .map(autounmask_change_to_json)
+        .collect();
+    let autounmask_use_json: Vec<String> = autounmask_use_changes
+        .iter()
+        .map(autounmask_change_to_json)
+        .collect();
+    let autounmask_license_json: Vec<String> = autounmask_license_changes
+        .iter()
+        .map(autounmask_change_to_json)
+        .collect();
+    let autounmask_mask_json: Vec<String> = autounmask_mask_changes
+        .iter()
+        .map(autounmask_change_to_json)
+        .collect();
+    let abi_rebuilds_json: Vec<String> = abi_rebuilds
+        .iter()
+        .map(|(child, parent)| {
+            format!(
+                "{{\"provider\":{},\"consumer\":{}}}",
+                json_string(child),
+                json_string(parent)
+            )
+        })
+        .collect();
+    // On an abort the caller passes the partial display list, so a `--json`
+    // consumer sees the same rows the text list shows.
+    let aborted_json = abort_outcome_to_json(outcome);
+    println!(
+        "{{\"entries\":[{}],\"backtrack\":{{\"restarts\":{},\"max\":{}}},\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"autounmask_mask_changes\":[{}],\"abi_rebuilds\":[{}],\"aborted\":{}}}",
+        entries_json.join(","),
+        backtrack_restarts,
+        backtrack_max,
+        conflicts_json.join(","),
+        changed_deps_report_json.join(","),
+        autounmask_kw_json.join(","),
+        autounmask_use_json.join(","),
+        autounmask_license_json.join(","),
+        autounmask_mask_json.join(","),
+        abi_rebuilds_json.join(","),
+        aborted_json
+    );
 }
