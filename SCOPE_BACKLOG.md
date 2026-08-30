@@ -352,8 +352,16 @@ Ranked roughly by how self-contained each is.
    2026-08-29**: `FetchOptions::restrict_mirror` (from the md5-cache
    `RESTRICT` field via `restrict_mirror_from_restrict`,
    USE-conditional-evaluated) gates the `gentoo_mirror_fallback` step --
-   real `file_restrict_mirror`, `fetch.py:1117-1127`. `mirror+`/`fetch+`
-   SRC_URI prefixes (`override_mirror`) still not parsed. Remaining
+   real `file_restrict_mirror`, `fetch.py:1117-1127`. ~~`mirror+`/`fetch+`
+   SRC_URI prefixes (`override_mirror`) still not parsed~~ **shipped
+   2026-08-30**: `portage_fetch::flatten_src_uri` strips the prefix and
+   records `SrcUriEntry::override_mirror`/`override_fetch` (`mirror+`
+   sets both, real `fetch.py:1103-1106`); `fetch.rs` checks
+   `entry.override_mirror` per-entry so a `mirror+` URI re-permits the
+   public `GENTOO_MIRRORS` fallback even under `RESTRICT=mirror`.
+   `override_fetch` is parsed but inert (relaxes `RESTRICT=fetch`, which
+   this pilot's fetch path doesn't model -- `pkg_nofetch`/manual
+   placement is its own unstarted slice). Remaining
    items named as cuts in `fetch.rs:28-48`.
 
 ### D. Config-resolution `USE_ORDER` depth

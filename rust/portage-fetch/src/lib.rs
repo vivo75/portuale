@@ -11,7 +11,13 @@
 // separated list of plain URIs, each optionally followed by `-> name`
 // (real "arrow" rename -- PMS's own local-filename override), grouped
 // under `flag? ( ... )` / `!flag? ( ... )` USE-conditional groups,
-// recursively nested. Real SRC_URI explicitly does NOT support `||`
+// recursively nested. A URI token may also carry a real `mirror+` or
+// `fetch+` prefix (real `fetch.py:1103-1106` -- a portage extension, not
+// PMS): the prefix is stripped from the URI and recorded on the entry as
+// `override_mirror` / `override_fetch` (`mirror+` sets both). See
+// `SrcUriEntry`'s own doc comment and `portuale/src/fetch.rs` for what
+// each override actually relaxes.
+// Real SRC_URI explicitly does NOT support `||`
 // (any-of) groups the way DEPEND-family strings do (PMS 8.2.6.5: "any-
 // of dependencies (`||`) are not allowed" there) -- this parser doesn't
 // implement `||` at all, matching that real grammar restriction, not a
@@ -141,6 +147,20 @@ pub fn parse_manifest(manifest_path: &Path) -> Result<HashMap<String, DistfileDi
 pub struct SrcUriEntry {
     pub uri: String,
     pub filename: String,
+    /// Real `override_mirror` (`fetch.py:1103`): this URI token had a
+    /// `mirror+` prefix. Real `file_restrict_mirror = (restrict_fetch or
+    /// restrict_mirror) and not override_mirror` -- so a `mirror+` URI
+    /// re-permits the public flat-layout mirror list for its file even
+    /// under `RESTRICT=mirror`. Implies `override_fetch` too.
+    pub override_mirror: bool,
+    /// Real `override_fetch` (`fetch.py:1104`): `mirror+` OR `fetch+`
+    /// prefix. Real `if (restrict_fetch and not override_fetch)` skips a
+    /// normal URI entirely under `RESTRICT=fetch` -- `fetch+` exempts
+    /// this one URI. (This pilot's fetch path doesn't model
+    /// `RESTRICT=fetch` yet, so today this only guarantees the `fetch+`
+    /// prefix is stripped so the URL is valid -- see
+    /// `portuale/src/fetch.rs`.)
+    pub override_fetch: bool,
 }
 
 fn basename(uri: &str) -> String {
@@ -185,6 +205,18 @@ fn parse_list(
             return Err(format!("SRC_URI: unexpected {tok:?}"));
         } else {
             *pos += 1;
+            // Real `fetch.py:1103-1106`: strip a `mirror+`/`fetch+`
+            // prefix off the URI token and record which restriction(s)
+            // it overrides. `mirror+` implies `fetch+` (real
+            // `override_fetch = override_mirror or ...`).
+            let (uri, override_mirror, override_fetch) =
+                if let Some(rest) = tok.strip_prefix("mirror+") {
+                    (rest, true, true)
+                } else if let Some(rest) = tok.strip_prefix("fetch+") {
+                    (rest, false, true)
+                } else {
+                    (tok, false, false)
+                };
             let filename = if tokens.get(*pos) == Some(&"->") {
                 *pos += 1;
                 let Some(name) = tokens.get(*pos) else {
@@ -193,11 +225,13 @@ fn parse_list(
                 *pos += 1;
                 name.to_string()
             } else {
-                basename(tok)
+                basename(uri)
             };
             out.push(SrcUriEntry {
-                uri: tok.to_string(),
+                uri: uri.to_string(),
                 filename,
+                override_mirror,
+                override_fetch,
             });
         }
     }
@@ -420,6 +454,8 @@ mod tests {
             vec![SrcUriEntry {
                 uri: "https://example.com/a-1.0.tar.gz".to_string(),
                 filename: "a-1.0.tar.gz".to_string(),
+                override_mirror: false,
+                override_fetch: false,
             }]
         );
     }
@@ -430,6 +466,37 @@ mod tests {
             flatten_src_uri("https://example.com/dl?id=1 -> a-1.0.tar.gz", |_, _| true).unwrap();
         assert_eq!(entries[0].filename, "a-1.0.tar.gz");
         assert_eq!(entries[0].uri, "https://example.com/dl?id=1");
+    }
+
+    #[test]
+    fn flatten_src_uri_strips_a_mirror_prefix_and_records_both_overrides() {
+        let entries =
+            flatten_src_uri("mirror+https://example.com/a-1.0.tar.gz", |_, _| true).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].uri, "https://example.com/a-1.0.tar.gz");
+        assert_eq!(entries[0].filename, "a-1.0.tar.gz");
+        assert!(entries[0].override_mirror);
+        assert!(entries[0].override_fetch, "mirror+ implies fetch+");
+    }
+
+    #[test]
+    fn flatten_src_uri_strips_a_fetch_prefix_and_records_only_override_fetch() {
+        let entries = flatten_src_uri(
+            "fetch+https://example.com/dl?v=1 -> a-1.0.tar.gz",
+            |_, _| true,
+        )
+        .unwrap();
+        assert_eq!(entries[0].uri, "https://example.com/dl?v=1");
+        assert_eq!(entries[0].filename, "a-1.0.tar.gz");
+        assert!(!entries[0].override_mirror);
+        assert!(entries[0].override_fetch);
+    }
+
+    #[test]
+    fn flatten_src_uri_a_plain_uri_has_neither_override() {
+        let entries = flatten_src_uri("https://example.com/a-1.0.tar.gz", |_, _| true).unwrap();
+        assert!(!entries[0].override_mirror);
+        assert!(!entries[0].override_fetch);
     }
 
     #[test]

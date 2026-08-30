@@ -7705,15 +7705,13 @@ own `use_reduce` pass, same as `PROPERTIES`/`LICENSE`) against this
 pilot's always-empty fetch-side USE set -- so a `foo? ( mirror )` group
 drops and only an unconditional `mirror`/`nomirror` counts.
 
-v1 scope: real portage's own `mirror+`/`fetch+` `SRC_URI` prefix
-(`override_mirror`, which re-permits the public mirrors for that one URI
-even under `RESTRICT=mirror`) is not handled -- this pilot parses no such
-prefix anywhere (a separate, pre-existing `SRC_URI`-grammar gap). Three
-new tests: the public fallback is skipped (a near-clone of the existing
-`…falls_back_to_gentoo_mirrors…` test asserting failure instead of
-success), a `mirror://` custommirror still resolves under
-`restrict_mirror`, and `restrict_mirror_from_restrict`'s own
-conditional-evaluation cases. Rust-only (real fetch, no `--pretend`
+v1 scope (**superseded 2026-08-30** -- see "`mirror+`/`fetch+` `SRC_URI`
+prefixes" below): real portage's own `mirror+`/`fetch+` `SRC_URI` prefix
+was not handled here. Three new tests: the public fallback is skipped (a
+near-clone of the existing `…falls_back_to_gentoo_mirrors…` test
+asserting failure instead of success), a `mirror://` custommirror still
+resolves under `restrict_mirror`, and `restrict_mirror_from_restrict`'s
+own conditional-evaluation cases. Rust-only (real fetch, no `--pretend`
 mirror).
 
 ```sh
@@ -7738,6 +7736,42 @@ GENTOO_MIRRORS="https://distfiles.gentoo.org" PORTING/rust/target/release/portua
 # ... exits 1  (a non-restricted package would also have tried
 #     https://distfiles.gentoo.org/distfiles/restrictmirrorpkg-1.0.tar.gz)
 ```
+
+### `mirror+`/`fetch+` `SRC_URI` prefixes (`override_mirror`/`override_fetch`)
+
+Real `fetch.py:1103-1106` (a portage extension, not PMS): a `SRC_URI`
+URI token may carry a `mirror+` or `fetch+` prefix. Real portage strips
+it (`myuri = myuri.partition("+")[2]`) and sets `override_mirror =
+myuri.startswith("mirror+")` / `override_fetch = override_mirror or
+myuri.startswith("fetch+")`. Those feed `file_restrict_mirror =
+(restrict_fetch or restrict_mirror) and not override_mirror`
+(`:1117-1119`) and `if (restrict_fetch and not override_fetch)`
+(`:1167`): `mirror+` re-permits the public flat-layout mirror list for
+that file even under `RESTRICT=mirror`, and either prefix exempts the URI
+from `RESTRICT=fetch`.
+
+`portage_fetch::flatten_src_uri` now strips the prefix in the parser (so
+the recorded `uri` and its derived `filename` are both clean) and
+records `SrcUriEntry::override_mirror`/`override_fetch` (`mirror+` sets
+both, matching real `override_fetch = override_mirror or ...`).
+`portuale/src/fetch.rs` checks `entry.override_mirror` per entry:
+`public_mirrors_barred = options.restrict_mirror && !entry.override_mirror`
+now gates the `gentoo_mirror_fallback` append (and the "no working
+candidate" error wording). `override_fetch` has **no observable effect
+yet** -- it only relaxes `RESTRICT=fetch`, which this pilot's fetch path
+doesn't model at all (a `RESTRICT=fetch` package's real
+`pkg_nofetch`/manual-placement flow is its own unstarted slice); the
+prefix is still correctly stripped so the URL stays valid.
+
+Rust-only (real fetch, no `--pretend` mirror). Tests:
+`portage_fetch` gains three parser tests (`mirror+` sets both overrides
+and strips the prefix; `fetch+` sets only `override_fetch`; a plain URI
+has neither), and `portuale/src/fetch.rs` gains
+`fetch_src_uri_mirror_prefix_re_permits_the_gentoo_mirrors_fallback_under_restrict_mirror`
+-- the exact `RESTRICT=mirror` + unreachable-primary-URI setup that fails
+in `…restrict_mirror_skips_the_gentoo_mirrors_fallback`, but with a
+`mirror+` prefix on the SRC_URI so the mirror server is tried and rescues
+the fetch.
 
 ### `emerge --buildpkgonly --keep-going`
 

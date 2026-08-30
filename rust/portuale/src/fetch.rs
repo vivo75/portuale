@@ -38,10 +38,17 @@
 //     `RESTRICT=mirror` (`FetchOptions::restrict_mirror` -- the public
 //     `GENTOO_MIRRORS` flat-layout fallback is skipped) -- and the real
 //     ones deliberately not attempted: live per-mirror `layout.conf`
-//     negotiation, real candidate-ordering/shuffling, `RESTRICT=
+//     negotiation, real candidate-ordering/shuffling, and `RESTRICT=
 //     primaryuri` (doesn't port cleanly -- this pilot's candidate
-//     ordering already deviates from real), and the `mirror+`/`fetch+`
-//     SRC_URI prefixes (`override_mirror`).
+//     ordering already deviates from real). The `mirror+`/`fetch+`
+//     SRC_URI prefixes ARE parsed now (`portage_fetch::SrcUriEntry::
+//     override_mirror`/`override_fetch`): a `mirror+` URI re-permits the
+//     public `GENTOO_MIRRORS` fallback for its file even under
+//     `RESTRICT=mirror`. `override_fetch` (set by either prefix) has no
+//     observable effect yet -- it relaxes `RESTRICT=fetch`, which this
+//     pilot's fetch path doesn't model at all (a `RESTRICT=fetch`
+//     package's real `pkg_nofetch`/manual-placement flow is its own
+//     unstarted slice).
 //   - No `FEATURES=verify-sig` GPG check -- this backlog item was
 //     mis-scoped when first written: real `verify-sig`/signature
 //     verification is a `gpkg` (the newer GPG-signed binary package
@@ -159,12 +166,12 @@ pub struct FetchOptions {
     /// *public* flat-layout mirror list). Sourced from the ebuild's own
     /// `RESTRICT` md5-cache field by `ebuild_phases::fetch_sources`.
     ///
-    /// v1 scope: real portage's own `mirror+`/`fetch+` `SRC_URI` prefix
-    /// (`override_mirror`, which re-permits the public mirrors for that
-    /// one URI even under `RESTRICT=mirror`) is not handled -- this
-    /// pilot doesn't parse those prefixes anywhere (a separate,
-    /// pre-existing `SRC_URI`-grammar gap), so `restrict_mirror` is an
-    /// unconditional skip here.
+    /// Real portage's own `mirror+` `SRC_URI` prefix
+    /// (`portage_fetch::SrcUriEntry::override_mirror`) re-permits the
+    /// public `GENTOO_MIRRORS` fallback for that one file even when this
+    /// is set -- `fetch_src_uri` checks `entry.override_mirror`
+    /// per-entry, matching real `file_restrict_mirror = ... and not
+    /// override_mirror` (`fetch.py:1117-1119`).
     pub restrict_mirror: bool,
 }
 
@@ -315,18 +322,24 @@ pub fn fetch_src_uri(
             // not just the last one.
             let mut candidates =
                 resolve_mirror_candidates(&entry.uri, &custommirrors, &thirdpartymirrors);
-            // Real `RESTRICT=mirror` (`file_restrict_mirror`,
-            // `fetch.py:1117-1127`): the public `GENTOO_MIRRORS`
-            // flat-layout list is not appended -- see
-            // `FetchOptions::restrict_mirror`.
-            if !options.restrict_mirror {
+            // Real `file_restrict_mirror = (restrict_fetch or
+            // restrict_mirror) and not override_mirror`
+            // (`fetch.py:1117-1119`): the public `GENTOO_MIRRORS`
+            // flat-layout list is appended unless mirroring is
+            // restricted -- but a `mirror+` SRC_URI prefix on this URI
+            // (`entry.override_mirror`) re-permits it for this file even
+            // then. This pilot models only `RESTRICT=mirror` (not
+            // `RESTRICT=fetch`) in the fetch path -- see the module doc
+            // comment.
+            let public_mirrors_barred = options.restrict_mirror && !entry.override_mirror;
+            if !public_mirrors_barred {
                 candidates.extend(gentoo_mirror_fallback(
                     &entry.filename,
                     &options.gentoo_mirrors,
                 ));
             }
             if candidates.is_empty() {
-                let why = if options.restrict_mirror {
+                let why = if public_mirrors_barred {
                     "unknown mirror name, and RESTRICT=mirror bars the GENTOO_MIRRORS fallback"
                 } else {
                     "unknown mirror name, and GENTOO_MIRRORS is empty"
@@ -811,6 +824,41 @@ mod tests {
 
         // Unblock the still-parked server thread so it can exit cleanly.
         let _ = std::net::TcpStream::connect(&mirror_addr);
+        handle.join().unwrap();
+    }
+
+    /// Real `mirror+` SRC_URI prefix (`fetch.py:1103` -> real
+    /// `override_mirror`): re-permits the public `GENTOO_MIRRORS`
+    /// fallback for this file even under `RESTRICT=mirror`. Identical
+    /// setup to `fetch_src_uri_restrict_mirror_skips_the_gentoo_mirrors_
+    /// fallback` (unreachable primary URI, `restrict_mirror: true`) --
+    /// but the SRC_URI token has a `mirror+` prefix, so the mirror
+    /// server IS tried and rescues the fetch.
+    #[test]
+    fn fetch_src_uri_mirror_prefix_re_permits_the_gentoo_mirrors_fallback_under_restrict_mirror() {
+        let (uri_base, handle) = serve_once(b"hello world".to_vec());
+        let mirror_root = uri_base.trim_end_matches("/file").to_string();
+
+        let pkg_dir = tempdir();
+        let distdir = tempdir();
+        write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
+
+        let filenames = fetch_src_uri(
+            &pkg_dir,
+            "mirror+http://127.0.0.1:1/hello-1.0.tar.gz",
+            &FetchOptions {
+                distdir: distdir.clone(),
+                gentoo_mirrors: vec![mirror_root],
+                restrict_mirror: true,
+                ..FetchOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(filenames, vec!["hello-1.0.tar.gz".to_string()]);
+        assert_eq!(
+            fs::read_to_string(distdir.join("hello-1.0.tar.gz")).unwrap(),
+            "hello world"
+        );
         handle.join().unwrap();
     }
 
