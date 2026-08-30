@@ -345,9 +345,18 @@ Ranked roughly by how self-contained each is.
    build-info from xpak/gpkg), new `ebuild_merge::merge_binpkg` (reuses
    `merge_tree` + a refactored `write_vdb_entry_from_dir` + `env_update`),
    new `emerge_getbinpkg.rs`. Rust-unit-tested end to end over loopback
-   HTTP. **Still open:** live `layout.conf` negotiation, `Packages.gz`,
-   resume support, `pkg_preinst`/`pkg_postinst` from the saved
-   `environment.bz2`, replacing an installed version (v1 refuses it),
+   HTTP. **Replacing an installed version shipped 2026-08-31**:
+   `merge_binpkg` does the real merge-then-unmerge (new binpkg + vdb
+   entry written first, then every *same-slot* installed version's files
+   unmerged with the new `PF` folded into `others_in_slot` so a path the
+   new version owns survives, then the old vdb dir deleted, then
+   `env_update`); `run_unmerge` was split into `pub(crate)`
+   `unmerge_pkgfiles` (env-free file-removal core) + `delete_vdb_dir` so
+   the replace path reuses them phase-free; `run_getbinpkgonly` now
+   accepts `Upgrade`/`Downgrade`/`Reinstall` outcomes too. **Still
+   open:** live `layout.conf` negotiation, `Packages.gz`, resume
+   support, `pkg_prerm`/`pkg_postrm`/`pkg_preinst`/`pkg_postinst` from
+   the saved `environment.bz2`, preserve-libs on a binpkg replace,
    `--getbinpkg` (mixing ebuilds + binaries) for a real merge, and real
    digest (`SHA*`) verification. A real debug trace is vendored at
    `PORTING/helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`.

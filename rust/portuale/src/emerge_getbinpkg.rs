@@ -64,7 +64,9 @@ pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path) -> Result<(), 
 
 /// Download + merge every remote-binary entry in `entries` (already in
 /// real dependency-first merge order). `AlreadyInstalled` dependencies
-/// are skipped; anything else is a hard error (see the module cuts).
+/// are skipped; `New`/`Upgrade`/`Downgrade`/`Reinstall` are fetched and
+/// merged (`merge_binpkg` unmerges a replaced same-slot version itself);
+/// `NoVisibleCandidate` and a source-only resolution are hard errors.
 pub fn run_getbinpkgonly(
     entries: &[GraphEntry],
     config: &Config,
@@ -77,15 +79,12 @@ pub fn run_getbinpkgonly(
         let cp = format!("{}/{}", entry.category, entry.package);
         let version = match &entry.outcome {
             PretendOutcome::AlreadyInstalled { .. } => continue,
-            PretendOutcome::New { version } => version.clone(),
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                version.clone()
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
             PretendOutcome::NoVisibleCandidate => {
                 return Err(format!("no binary package available for {cp}"));
-            }
-            other => {
-                return Err(format!(
-                    "{cp}: {other:?} -- `--getbinpkgonly` merging is New-only in v1 \
-                     (no upgrade/reinstall of an installed binpkg yet)"
-                ));
             }
         };
         if entry.source != CandidateSource::Binary {
@@ -302,22 +301,62 @@ mod tests {
     }
 
     #[test]
-    fn merge_binpkg_refuses_to_replace_an_installed_version() {
+    fn merge_binpkg_replaces_a_same_slot_installed_version() {
         let tmp = tempdir();
         let root = tmp.join("root");
+
+        // An older same-slot version already installed: it owns one
+        // file the new binpkg also ships (`hello.txt`, a shared path)
+        // and one it does not (`old-only.txt`, a genuine orphan).
+        let pkgshare = root.join("usr/share/packagepkg");
+        std::fs::create_dir_all(&pkgshare).unwrap();
+        std::fs::write(pkgshare.join("hello.txt"), "old hello\n").unwrap();
+        std::fs::write(pkgshare.join("old-only.txt"), "gone after upgrade\n").unwrap();
+
         let installed = root.join("var/db/pkg/dev-libs/packagepkg-0.9");
         std::fs::create_dir_all(&installed).unwrap();
         std::fs::write(installed.join("SLOT"), "0\n").unwrap();
         std::fs::write(installed.join("COUNTER"), "1").unwrap();
+        std::fs::write(installed.join("PF"), "packagepkg-0.9\n").unwrap();
+        std::fs::write(installed.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(
+            installed.join("CONTENTS"),
+            "dir /usr\ndir /usr/share\ndir /usr/share/packagepkg\n\
+             obj /usr/share/packagepkg/hello.txt 0000 0\n\
+             obj /usr/share/packagepkg/old-only.txt 0000 0\n",
+        )
+        .unwrap();
 
-        let err = ebuild_merge::merge_binpkg(
+        let status = ebuild_merge::merge_binpkg(
             &fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
             &root,
             &tmp.join("pt"),
             &MergeOptions::default(),
         )
-        .unwrap_err();
-        assert!(err.contains("already installed"), "{err}");
+        .expect("replace merge succeeds");
+        assert_eq!(status, 0);
+
+        // The new version is in the vdb; the old one is gone.
+        assert!(root
+            .join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
+            .is_file());
+        assert!(
+            !root.join("var/db/pkg/dev-libs/packagepkg-0.9").exists(),
+            "the replaced version's vdb entry is removed"
+        );
+
+        // A file only the old version owned is unmerged; a file the new
+        // version now owns survives with the new version's content.
+        assert!(
+            !pkgshare.join("old-only.txt").exists(),
+            "the orphaned file is unmerged"
+        );
+        let hello = pkgshare.join("hello.txt");
+        assert!(
+            hello.is_file(),
+            "the shared file the new version owns stays"
+        );
+        assert!(std::fs::read_to_string(&hello).unwrap().contains("hello"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -441,6 +480,114 @@ mod tests {
         assert!(root
             .join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
             .is_file());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn run_getbinpkgonly_upgrades_over_an_installed_version() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+
+        // packagepkg-0.9 already installed, owning a soon-orphaned file.
+        let pkgshare = root.join("usr/share/packagepkg");
+        std::fs::create_dir_all(&pkgshare).unwrap();
+        std::fs::write(pkgshare.join("old-only.txt"), "orphan\n").unwrap();
+        let installed = root.join("var/db/pkg/dev-libs/packagepkg-0.9");
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(installed.join("SLOT"), "0\n").unwrap();
+        std::fs::write(installed.join("COUNTER"), "1").unwrap();
+        std::fs::write(installed.join("PF"), "packagepkg-0.9\n").unwrap();
+        std::fs::write(installed.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(
+            installed.join("CONTENTS"),
+            "dir /usr\ndir /usr/share\ndir /usr/share/packagepkg\n\
+             obj /usr/share/packagepkg/old-only.txt 0000 0\n",
+        )
+        .unwrap();
+
+        let tbz2 =
+            std::fs::read(fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
+        let index = packages_index(&[
+            "BUILD_ID: 1\nCPV: dev-libs/packagepkg-1.0\nDEFINED_PHASES: install\n\
+             EAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/packagepkg-1.0.tbz2\n\
+             RDEPEND: dev-libs/samepkg\nREPO: gentoo\nSIZE: 4618\nSLOT: 0\nUSE:",
+        ]);
+        let mut routes = HashMap::new();
+        routes.insert("/Packages".to_string(), index);
+        routes.insert("/dev-libs/packagepkg-1.0.tbz2".to_string(), tbz2);
+        let (base, _h) = serve(routes, 2);
+
+        let binrepos = vec![BinRepo {
+            name: "test".into(),
+            sync_uri: base.clone(),
+            priority: 1,
+        }];
+        refresh_binhost_indexes(&binrepos, &root).expect("index refresh");
+
+        let config = Config {
+            binrepos: binrepos.clone(),
+            pkgdir: pkgdir.to_string_lossy().to_string(),
+            ..Config::default()
+        };
+        let entry = GraphEntry {
+            category: "dev-libs".into(),
+            package: "packagepkg".into(),
+            outcome: PretendOutcome::Upgrade {
+                from: "0.9".into(),
+                to: "1.0".into(),
+            },
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("gentoo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: vec![],
+            required_by: vec![],
+            source: CandidateSource::Binary,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: true,
+        };
+
+        run_getbinpkgonly(
+            &[entry],
+            &config,
+            &root,
+            &pkgdir,
+            &tmp.join("portage_tmpdir"),
+            &MergeOptions::default(),
+        )
+        .expect("getbinpkgonly upgrade succeeds");
+
+        assert!(
+            root.join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
+                .is_file(),
+            "the new version is installed"
+        );
+        assert!(
+            !root.join("var/db/pkg/dev-libs/packagepkg-0.9").exists(),
+            "the old version's vdb entry is gone"
+        );
+        assert!(
+            !pkgshare.join("old-only.txt").exists(),
+            "the old version's orphaned file is unmerged"
+        );
+        assert!(
+            root.join("usr/share/packagepkg/hello.txt").is_file(),
+            "the new version's own file is present"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

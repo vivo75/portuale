@@ -2345,10 +2345,15 @@ fn merge_after_install(
 ///     is its own slice. Many binpkgs define neither (`DEFINED_PHASES`).
 ///   - no collision-protect / `protect-owned` abort, no blocker
 ///     exclusion, no preserve-libs registration.
-///   - **replace is refused**: if any version of `category/package` is
-///     already in the vdb, this errors rather than merging a second
-///     entry and orphaning the old one's files (real portage unmerges
-///     the replaced version afterwards -- a follow-up).
+///   - **a same-slot replace runs phase-free**: an already-installed
+///     same-slot version of `category/package` is unmerged *after* the
+///     new binpkg is written (real portage's own merge-then-unmerge
+///     order -- a file the new version still owns is left in place),
+///     but with no `pkg_prerm`/`pkg_postrm` (the old version's saved
+///     `environment.bz2` is not sourced -- same v1 cut as `preinst`/
+///     `postinst` above) and no preserve-libs / reverse-dependency
+///     check. A *different*-slot installed version is left untouched,
+///     real slot semantics.
 ///   - `environment.bz2` and the `<pf>.ebuild` are not copied into the
 ///     vdb (`extract_binpkg` drops them) -- the pilot needs neither.
 pub fn merge_binpkg(
@@ -2404,18 +2409,28 @@ pub fn merge_binpkg(
         .or_else(|| read_bi("REPO"))
         .unwrap_or_else(|| "__unknown__".to_string());
 
-    // Refuse a replace (see the doc comment).
+    // Real merge-then-unmerge replace: an already-installed *same-slot*
+    // version of this cp is removed only *after* the new binpkg is
+    // written below (so a file the new version still owns survives) --
+    // see the doc comment for the v1 cuts (phase-free, no preserve-
+    // libs). A different-slot version is left in place, real slot
+    // semantics. `<package>-<digit...>` vdb-dir names, the same shape
+    // `blocked_installed_packages` and `installed_instance_pf` match.
     let vdb_cat = root.join("var/db/pkg").join(&category);
+    let mut replaced_same_slot: Vec<String> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&vdb_cat) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with(&format!("{package}-"))
-                && name[package.len() + 1..].starts_with(|c: char| c.is_ascii_digit())
+            let is_this_cp = name.starts_with(&format!("{package}-"))
+                && name[package.len() + 1..].starts_with(|c: char| c.is_ascii_digit());
+            if !is_this_cp || name == pf {
+                continue;
+            }
+            let version = &name[package.len() + 1..];
+            if read_installed_slot(root, &category, &package, version).as_deref()
+                == Some(main_slot.as_str())
             {
-                return Err(format!(
-                    "{category}/{package} is already installed as {name}; the pilot's binpkg \
-                     merge does not replace an installed version yet"
-                ));
+                replaced_same_slot.push(name);
             }
         }
     }
@@ -2444,7 +2459,32 @@ pub fn merge_binpkg(
         &contents,
     )?;
 
-    if !contents.is_empty() {
+    // Real merge-then-unmerge: the new version's vdb entry now exists,
+    // so drop every same-slot version it replaced -- deleting only the
+    // files the *new* version does not itself own (`also_keep = [pf]`,
+    // folded into real `others_in_slot`), phase-free (see doc comment).
+    let unmerge_options = crate::ebuild_unmerge::UnmergeOptions {
+        debug: options.debug,
+        shell: options.shell,
+        config_protect: options.config_protect.clone(),
+        config_protect_mask: options.config_protect_mask.clone(),
+        config_root: options.config_root.clone(),
+        ..Default::default()
+    };
+    let keep = [pf.clone()];
+    for old_pf in &replaced_same_slot {
+        crate::ebuild_unmerge::unmerge_pkgfiles(
+            root,
+            &category,
+            &package,
+            old_pf,
+            &keep,
+            &unmerge_options,
+        )?;
+        crate::ebuild_unmerge::delete_vdb_dir(root, &category, old_pf)?;
+    }
+
+    if !contents.is_empty() || !replaced_same_slot.is_empty() {
         env_update::run_env_update(root)?;
     }
     let _ = std::fs::remove_dir_all(&scratch_root);

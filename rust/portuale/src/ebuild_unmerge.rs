@@ -566,20 +566,30 @@ impl Default for UnmergeOptions {
     }
 }
 
-/// Real top-level `unmerge()`: `dblink.unmerge()` (`prerm` -> delete
-/// files -> `postrm`), then -- only on success -- `dblink.delete()`
-/// (remove the vdb entry itself).
-pub fn run_unmerge(
-    ebuild_path: &Path,
+/// File-removal core of `dblink.unmerge()` -- everything real
+/// `_unmerge_pkgfiles()` does (delete every `CONTENTS` entry deepest-
+/// path-first, honoring the same-slot "replaced" skip, the `!mtime`
+/// CONFIG_PROTECT skip, `FEATURES=unmerge-orphans`, bug #326685's
+/// orphaned-symlink handling, `stale_confmem` pruning and preserve-
+/// libs) -- but *not* the `prerm`/`postrm` phase hooks and *not* the
+/// final vdb-directory removal (`delete_vdb_dir`). Split out of
+/// `run_unmerge` (which brackets it with the two phase calls) so
+/// `ebuild_merge::merge_binpkg`'s own replace-an-installed-version
+/// path can reuse it: a binpkg carries no ebuild to source a phase
+/// from, so its replace runs the file removal phase-free (a documented
+/// v1 cut -- see `merge_binpkg`'s own doc comment). `also_keep`, when
+/// non-empty, is folded into the real `others_in_slot` set so a path
+/// the replacing version now owns is left in place exactly as a path
+/// owned by a genuine other same-slot instance would be.
+pub(crate) fn unmerge_pkgfiles(
     root: &Path,
-    portage_tmpdir: &Path,
+    category: &str,
+    pn: &str,
+    pf: &str,
+    also_keep: &[String],
     options: &UnmergeOptions,
-) -> Result<i32, String> {
-    let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
-    let vdb_dir = root
-        .join("var/db/pkg")
-        .join(&env.category)
-        .join(&env.split.pf);
+) -> Result<(), String> {
+    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let contents_path = vdb_dir.join("CONTENTS");
     let contents_text = std::fs::read_to_string(&contents_path)
         .map_err(|e| format!("{}: not installed ({e})", vdb_dir.display()))?;
@@ -587,38 +597,25 @@ pub fn run_unmerge(
     // Real `others_in_slot`: every other installed version of this same
     // category/PN in the same SLOT, excluding self -- see this module's
     // own doc comment.
-    let own_slot = ebuild_merge::read_installed_slot(
-        root,
-        &env.category,
-        &env.split.pn,
-        &env.split.pf[env.split.pn.len() + 1..],
-    );
-    let others_in_slot: Vec<String> = match &own_slot {
-        Some(slot) => portage_repo::installed_versions(root, &env.category, &env.split.pn)
+    let version = &pf[pn.len() + 1..];
+    let own_slot = ebuild_merge::read_installed_slot(root, category, pn, version);
+    let mut others_in_slot: Vec<String> = match &own_slot {
+        Some(slot) => portage_repo::installed_versions(root, category, pn)
             .into_iter()
-            .map(|version| format!("{}-{version}", env.split.pn))
-            .filter(|pf| pf != &env.split.pf)
-            .filter(|pf| {
-                let version = &pf[env.split.pn.len() + 1..];
-                ebuild_merge::read_installed_slot(root, &env.category, &env.split.pn, version)
-                    .as_deref()
+            .map(|version| format!("{pn}-{version}"))
+            .filter(|other_pf| other_pf != pf)
+            .filter(|other_pf| {
+                let version = &other_pf[pn.len() + 1..];
+                ebuild_merge::read_installed_slot(root, category, pn, version).as_deref()
                     == Some(slot.as_str())
             })
             .collect(),
         None => Vec::new(),
     };
-
-    let prerm_status = ebuild_phases::run_single_phase(
-        ebuild_path,
-        "prerm",
-        root,
-        portage_tmpdir,
-        options.debug,
-        &options.config_root,
-        options.shell,
-    )?;
-    if prerm_status != 0 {
-        return Ok(prerm_status);
+    for keep_pf in also_keep {
+        if !others_in_slot.contains(keep_pf) {
+            others_in_slot.push(keep_pf.clone());
+        }
     }
 
     // Real `infodirs`/`infodirs_inodes` (`vartree.py:2830-2846`): real
@@ -647,16 +644,16 @@ pub fn run_unmerge(
     // recorded slot at all.
     let preserved_paths = ebuild_merge::preserve_libs_on_unmerge(
         root,
-        &env.category,
-        &env.split.pn,
-        &env.split.pf,
+        category,
+        pn,
+        pf,
         own_slot.as_deref().unwrap_or("0"),
         &contents_text,
     )?;
 
     remove_contents(
         root,
-        &env.category,
+        category,
         &others_in_slot,
         &options.config_protect,
         &options.config_protect_mask,
@@ -674,6 +671,63 @@ pub fn run_unmerge(
         }
         ebuild_merge::write_cfgfiledict(root, &updated)?;
     }
+    Ok(())
+}
+
+/// Real `dblink.delete()`: remove the vdb entry directory itself, then
+/// a best-effort `os.rmdir` of its now-maybe-empty parent category
+/// directory -- ignored on failure (another installed package in the
+/// same category is the common case). Split out of `run_unmerge` so
+/// `ebuild_merge::merge_binpkg`'s replace path can drop an old
+/// version's vdb entry without going through the phase machinery.
+pub(crate) fn delete_vdb_dir(root: &Path, category: &str, pf: &str) -> Result<(), String> {
+    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
+    std::fs::remove_dir_all(&vdb_dir).map_err(|e| format!("{}: {e}", vdb_dir.display()))?;
+    if let Some(cat_dir) = vdb_dir.parent() {
+        let _ = std::fs::remove_dir(cat_dir);
+    }
+    Ok(())
+}
+
+/// Real top-level `unmerge()`: `dblink.unmerge()` (`prerm` -> delete
+/// files -> `postrm`), then -- only on success -- `dblink.delete()`
+/// (remove the vdb entry itself).
+pub fn run_unmerge(
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &UnmergeOptions,
+) -> Result<i32, String> {
+    let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
+    let vdb_dir = root
+        .join("var/db/pkg")
+        .join(&env.category)
+        .join(&env.split.pf);
+    if !vdb_dir.join("CONTENTS").exists() {
+        return Err(format!("{}: not installed", vdb_dir.display()));
+    }
+
+    let prerm_status = ebuild_phases::run_single_phase(
+        ebuild_path,
+        "prerm",
+        root,
+        portage_tmpdir,
+        options.debug,
+        &options.config_root,
+        options.shell,
+    )?;
+    if prerm_status != 0 {
+        return Ok(prerm_status);
+    }
+
+    unmerge_pkgfiles(
+        root,
+        &env.category,
+        &env.split.pn,
+        &env.split.pf,
+        &[],
+        options,
+    )?;
 
     let postrm_status = ebuild_phases::run_single_phase(
         ebuild_path,
@@ -688,14 +742,7 @@ pub fn run_unmerge(
         return Ok(postrm_status);
     }
 
-    std::fs::remove_dir_all(&vdb_dir).map_err(|e| format!("{}: {e}", vdb_dir.display()))?;
-    if let Some(cat_dir) = vdb_dir.parent() {
-        // Real `delete()`'s own best-effort `os.rmdir` of the now-maybe-
-        // empty parent category directory -- ignored on failure (another
-        // installed package in the same category is the common case).
-        let _ = std::fs::remove_dir(cat_dir);
-    }
-
+    delete_vdb_dir(root, &env.category, &env.split.pf)?;
     Ok(0)
 }
 

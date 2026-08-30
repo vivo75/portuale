@@ -9106,9 +9106,8 @@ pattern as every other real-execution feature):
   binpkg's saved `environment.bz2` and runs them; the pilot's phase
   runner is ebuild-file-driven. `environment.bz2` and the `<pf>.ebuild`
   aren't copied into the vdb either.
-- **replace is refused** — if any version of the cp is already
-  installed, the merge errors rather than orphaning the old version's
-  files (real portage unmerges the replaced version afterwards).
+- **a same-slot replace runs phase-free** (see the next section — this
+  was originally a "replace is refused" cut, since lifted).
 - no collision-protect/`protect-owned` abort, no blocker exclusion, no
   preserve-libs registration.
 - digest check is `SIZE`-only (no crypto — the `SHA*`/`MD5` fields are
@@ -9123,6 +9122,54 @@ the edb cache, `download_and_verify` fetches + size-checks (and rejects a
 mismatch), and `run_getbinpkgonly` produces a real vdb entry +
 `${ROOT}/usr/share/packagepkg/hello.txt`. Plus `merge_binpkg` /
 `extract_binpkg` unit tests for both the xpak and gpkg image paths.
+
+### `emerge --getbinpkgonly <atom>`: a same-slot replace really unmerges the old version
+
+The section above shipped with "replace is refused" as a v1 cut — a
+binpkg merge over an already-installed version of the same cp errored
+out. That cut is now lifted: `merge_binpkg` does the real
+**merge-then-unmerge** dance.
+
+1. The new binpkg's image is merged into `${ROOT}` and its vdb entry is
+   written *first* (real portage's order — the new files, and the new
+   `CONTENTS`, exist before anything is removed).
+2. Then, for every **same-slot** already-installed version of the cp
+   (`<root>/var/db/pkg/<cat>/<pn>-<ver>` with a matching main `SLOT`),
+   the old version's files are unmerged — but a path the *new* version
+   now owns is left in place. This is the exact real `others_in_slot` /
+   `"replaced"` skip `unmerge`'s own in-place-upgrade check already does
+   (see that section above): the new `PF` is folded into
+   `others_in_slot`, and `remove_contents` skips any entry an
+   `others_in_slot` member owns. A shared file (both versions ship it)
+   survives with the *new* content; a file only the old version had is
+   removed.
+3. The old version's vdb directory is deleted (`dblink.delete()`), and
+   `env_update()` re-runs.
+
+A **different-slot** installed version is left completely untouched —
+real slot semantics (that's what slots are *for*).
+
+To make this reuse possible, `ebuild_unmerge`'s monolithic `run_unmerge`
+was split: `unmerge_pkgfiles` (the env-free file-removal core —
+`others_in_slot`, the `!mtime` CONFIG_PROTECT skip,
+`FEATURES=unmerge-orphans`, bug #326685, `stale_confmem`, preserve-libs)
+and `delete_vdb_dir` (real `dblink.delete()`) are now `pub(crate)`
+helpers; `run_unmerge` brackets `unmerge_pkgfiles` with the
+`prerm`/`postrm` phase calls that a *source* unmerge runs. A binpkg
+replace calls the two helpers directly — **phase-free**: the old
+version's saved `environment.bz2` is not sourced for `pkg_prerm`/
+`pkg_postrm` (same v1 cut as `preinst`/`postinst` on the merge side),
+and there's no preserve-libs registration or reverse-dependency check.
+
+`run_getbinpkgonly` now also accepts `Upgrade`/`Downgrade`/`Reinstall`
+resolver outcomes (extracting the target version), not just `New`.
+
+Rust-unit-tested: `merge_binpkg_replaces_a_same_slot_installed_version`
+(a seeded `packagepkg-0.9` vdb entry owning one shared + one
+old-only file → merge `1.0` → old vdb gone, old-only file unmerged,
+shared file kept with new content), and
+`run_getbinpkgonly_upgrades_over_an_installed_version` (the same, end to
+end over loopback HTTP with an `Upgrade { from, to }` entry).
 
 ## Running it
 
