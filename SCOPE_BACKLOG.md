@@ -309,11 +309,16 @@ Ranked roughly by how self-contained each is.
    portage's mtime-staleness index revalidation, and `ebuild … package`
    *emitting* gpkg (`BINPKG_FORMAT` is hardcoded `xpak`,
    `ebuild_package.rs:327`).
-   **Also found (increment 2):** the pilot's own `build-info` generation
-   omits every dependency-string metadata file
-   (`DEPEND`/`RDEPEND`/`IUSE`/`LICENSE`/…) — its own
-   `ebuild_package.rs`/phase-execution follow-up, harmless today (those
-   reach the `Packages` index via `md5-cache`). `FEATURES=verify-sig`
+   ~~**Also found (increment 2):** the pilot's own `build-info`
+   generation omits every dependency-string metadata file~~ **shipped
+   2026-08-30**: `ebuild_phases::write_post_install_metadata` (real
+   `doebuild.py::_post_src_install_write_metadata`) writes
+   `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND`/`LICENSE`/
+   `PROPERTIES`/`RESTRICT`/`IUSE` into `build-info` (`use_reduce`'d
+   against the empty phase USE), and `write_vdb_entry` now copies the
+   *whole* `build-info` dir into the vdb (real `treewalk()`). Cuts:
+   `:=` slot-operator `evaluate_slot_operator_equal_deps` binding,
+   `IUSE_EFFECTIVE`. `FEATURES=verify-sig`
    (GPG) lives here too — it is a `gpkg`/repo-sync concept, **not**
    `SRC_URI` fetch (the earlier backlog mis-scoped it).
 

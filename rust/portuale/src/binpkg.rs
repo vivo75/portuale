@@ -565,15 +565,6 @@ mod tests {
     /// reproducible bytes, and driving `run_package` (the full brush
     /// phase chain) here would add real parallel-load pressure to the
     /// suite's brush-heavy tests for no reader-coverage gain.
-    ///
-    /// NOTE: this pilot's own `build-info` generation is a subset of real
-    /// portage's -- it does NOT write the dependency-string metadata
-    /// files (`DEPEND`/`RDEPEND`/`BDEPEND`/`IUSE`/`LICENSE`/…), so those
-    /// keys are genuinely absent from the pilot's `.tbz2` (a pre-existing
-    /// `ebuild_package.rs` gap, orthogonal to this reader -- see the
-    /// `RDEPEND`-carrying `read_xpak_metadata_walks_the_index_…` test
-    /// above for the reader's own multi-value-key coverage, and the
-    /// commit message for the finding).
     #[test]
     fn read_xpak_metadata_reads_a_real_ebuild_package_tbz2() {
         let tbz2 = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
@@ -583,6 +574,13 @@ mod tests {
         assert_eq!(m.get("CATEGORY").map(String::as_str), Some("dev-libs"));
         assert_eq!(m.get("PF").map(String::as_str), Some("packagepkg-1.0"));
         assert_eq!(m.get("KEYWORDS").map(String::as_str), Some("amd64"));
+        // The fixture ebuild's `RDEPEND="dev-libs/samepkg"` came through
+        // via real `build-info` (`ebuild_phases::write_post_install_
+        // metadata`), no `Packages` index involved.
+        assert_eq!(
+            m.get("RDEPEND").map(String::as_str),
+            Some("dev-libs/samepkg")
+        );
         // The bundled `<pf>.ebuild` source is a real member too.
         assert!(m
             .get("packagepkg-1.0.ebuild")

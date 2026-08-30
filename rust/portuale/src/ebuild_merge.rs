@@ -1474,25 +1474,25 @@ fn next_counter(root: &Path) -> Result<i64, String> {
 const MERGING_IDENTIFIER: &str = "-MERGING-";
 
 /// Writes a real vdb entry under `root` for the package described by
-/// `env` -- `CATEGORY`/`SLOT`/`repository`/`COUNTER`/`CONTENTS`, matching
-/// the same one-value-per-file convention this pilot's own fixtures and
-/// `portage_repo`'s own vdb readers already use. Real `dblink.merge()`'s
-/// own vdb population is actually broader than this: `treewalk()` copies
-/// *every* file directly under `inforoot` (`PORTAGE_BUILDDIR/build-info`)
-/// into the vdb wholesale (`vartree.py:4912-4913`, `for x in os.listdir
-/// (inforoot): self.copyfile(...)`) -- real `IUSE`/`KEYWORDS`/`EAPI`/etc.
-/// metadata files this pilot's own vdb entries don't carry at all yet, a
-/// separate, broader, not-yet-attempted gap. This function copies just
-/// one of those build-info files deliberately: `NEEDED.ELF.2` (if real,
-/// unmodified `bin/misc-functions.sh install_qa_check`'s own real
-/// `scanelf`-driven step actually generated one -- see `ebuild_phases`'s
-/// own `run_commands_async` doc comment on the new post-install
-/// misc-functions step), the real ELF `NEEDED`/soname data preserve-libs
-/// registration will eventually need (`LinkageMapELF`, not itself
-/// attempted yet) -- a narrow, self-contained first step toward that
-/// subsystem, not a general build-info vdb population fix. Builds the
-/// entry in a `MERGING_IDENTIFIER`-prefixed temporary sibling directory
-/// first, then
+/// `env`. Real `dblink.merge()`/`treewalk()` copies *every* file directly
+/// under `inforoot` (`${PORTAGE_BUILDDIR}/build-info`) into the vdb
+/// wholesale (`vartree.py:4911-4913`, `for x in os.listdir(inforoot):
+/// self.copyfile(...)`) -- so this does too: every regular file in
+/// `build-info` (the `CATEGORY`/`SLOT`/`KEYWORDS`/`IUSE`/`USE`/`EAPI`/
+/// `DEFINED_PHASES`/… `bin/phase-functions.sh __dyn_install` writes, the
+/// `DEPEND`/`RDEPEND`/`LICENSE`/… `ebuild_phases::write_post_install_
+/// metadata` adds, `NEEDED.ELF.2` from the real `scanelf` QA step,
+/// `environment.bz2`, the `<PF>.ebuild` copy) lands in the vdb. Then the
+/// merge-generated files that were never in `build-info` are written on
+/// top: `CONTENTS` (the real file list, built during the copy loop) and
+/// `COUNTER` (real `cpv_counter`, this pilot's own `next_counter`).
+/// `CATEGORY`/`SLOT`/`repository` are re-asserted explicitly too -- a
+/// standalone `ebuild <file> install` outside a repo checkout has no
+/// `build-info/repository`, and `SLOT` here is the sub-slot-stripped
+/// main slot the caller resolved.
+///
+/// Builds the entry in a `MERGING_IDENTIFIER`-prefixed temporary sibling
+/// directory first, then
 /// atomically renames it into place -- mirroring real `dblink.merge()`'s
 /// own `dbtmpdir`-then-`_movefile()` approach (both are guaranteed to sit
 /// on the same filesystem, under the same `<category>` directory, so
@@ -1516,6 +1516,24 @@ fn write_vdb_entry(
     }
     std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("{}: {e}", tmp_dir.display()))?;
 
+    // Real `treewalk()`: copy every regular file from `build-info` into
+    // the vdb entry (`vartree.py:4911-4913`).
+    let build_info = env.build_info();
+    if let Ok(entries) = std::fs::read_dir(&build_info) {
+        for entry in entries.flatten() {
+            let src = entry.path();
+            if src.is_file() {
+                if let Some(name) = src.file_name() {
+                    std::fs::copy(&src, tmp_dir.join(name))
+                        .map_err(|e| format!("{}: {e}", src.display()))?;
+                }
+            }
+        }
+    }
+
+    // Merge-generated files never present in `build-info`, plus the
+    // caller-resolved values re-asserted (see this function's own doc
+    // comment).
     let counter = next_counter(root)?;
     for (name, value) in [
         ("CATEGORY", env.category.as_str()),
@@ -1529,12 +1547,6 @@ fn write_vdb_entry(
         .map_err(|e| format!("{}: {e}", tmp_dir.join("CONTENTS").display()))?;
     std::fs::write(tmp_dir.join("COUNTER"), counter.to_string())
         .map_err(|e| format!("{}: {e}", tmp_dir.join("COUNTER").display()))?;
-
-    let needed_elf2 = env.build_info().join("NEEDED.ELF.2");
-    if needed_elf2.is_file() {
-        std::fs::copy(&needed_elf2, tmp_dir.join("NEEDED.ELF.2"))
-            .map_err(|e| format!("{}: {e}", needed_elf2.display()))?;
-    }
 
     if final_dir.exists() {
         std::fs::remove_dir_all(&final_dir).map_err(|e| format!("{}: {e}", final_dir.display()))?;
@@ -3234,6 +3246,49 @@ mod tests {
             t_dir.join("postinst-ran-after-merge").is_file(),
             "pkg_postinst must run, and see the file (and vdb entry) already merged"
         );
+    }
+
+    #[test]
+    fn real_merge_writes_the_full_build_info_into_the_vdb_entry() {
+        // `dev-libs/packagepkg` has a real md5-cache entry with
+        // `RDEPEND="dev-libs/samepkg"`. Real `treewalk()` copies every
+        // `build-info` file into the vdb, and
+        // `ebuild_phases::write_post_install_metadata` now writes the
+        // dependency-string metadata files there -- so the merged vdb
+        // entry carries `RDEPEND`/`EAPI`/`KEYWORDS`/…, not just the
+        // former `CATEGORY`/`SLOT`/`repository`/`CONTENTS`/`COUNTER`.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        let repo_root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
+
+        let status = run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
+            .expect("run_merge succeeds");
+        assert_eq!(status, 0);
+
+        let vdb = root.join("var/db/pkg/dev-libs/packagepkg-1.0");
+        let read = |f: &str| {
+            std::fs::read_to_string(vdb.join(f))
+                .unwrap_or_else(|e| panic!("vdb/{f}: {e}"))
+                .trim()
+                .to_string()
+        };
+        assert_eq!(read("RDEPEND"), "dev-libs/samepkg");
+        assert_eq!(read("EAPI"), "8");
+        assert_eq!(read("KEYWORDS"), "amd64");
+        assert_eq!(read("SLOT"), "0");
+        // The bundled ebuild + saved environment come across too (real
+        // `build-info` members).
+        assert!(vdb.join("packagepkg-1.0.ebuild").is_file());
+        assert!(vdb.join("environment.bz2").is_file());
+        // An empty md5-cache value (`DEPEND=`) is not written at all
+        // (real portage unlinks it; `bin/phase-functions.sh` never wrote
+        // it).
+        assert!(!vdb.join("DEPEND").exists());
     }
 
     #[test]

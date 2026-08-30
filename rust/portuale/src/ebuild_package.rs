@@ -40,14 +40,21 @@
 //     recording an empty set is the *honest* value, not an
 //     approximation).
 //   - `SLOT`/`KEYWORDS`/`IUSE`/`LICENSE`/`PROPERTIES`/`RESTRICT`/the
-//     `*DEPEND` family are read from the ebuild's own repo's real
-//     `metadata/md5-cache` entry (via `portage_repo::read_md5_cache`,
-//     the exact same source `emerge --pretend`'s own dependency
-//     resolution already trusts) when the ebuild's own containing repo
-//     can be found by walking up for a `profiles/repo_name` file --
-//     absent entirely (empty strings throughout) for a standalone
-//     ebuild file outside any repo checkout, the same tolerance
-//     `ebuild_merge::repository_name_for` already established.
+//     `*DEPEND` family in the `Packages` *index* entry are read from the
+//     ebuild's own repo's real `metadata/md5-cache` entry (via
+//     `portage_repo::read_md5_cache`, the exact same source `emerge
+//     --pretend`'s own dependency resolution already trusts) when the
+//     ebuild's own containing repo can be found by walking up for a
+//     `profiles/repo_name` file -- absent entirely (empty strings
+//     throughout) for a standalone ebuild file outside any repo
+//     checkout. The `.tbz2`'s own appended XPAK metadata gets the same
+//     keys independently, from real `build-info` (`bin/phase-functions.
+//     sh` + `ebuild_phases::write_post_install_metadata`) -- for a
+//     USE-conditional dep string the two can differ (the index entry is
+//     flat md5-cache, the XPAK is `use_reduce`'d against the empty
+//     phase-side USE set); `--pretend` reads the index entry, so this is
+//     cosmetic. Reading the index entry from `build-info` too, for a
+//     single source of truth, is a documented follow-up.
 //   - No `BUILD_ID` support, no `packdebug`/`splitdebug` handling, no
 //     RPM (`__dyn_rpm`) format.
 //   - No `PKGDIR`-index locking -- a genuinely concurrent build racing

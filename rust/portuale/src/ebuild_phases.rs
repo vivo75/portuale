@@ -563,6 +563,106 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
     Ok((a, aa))
 }
 
+/// Real `doebuild.py::_post_src_install_write_metadata`
+/// (`lib/portage/package/ebuild/doebuild.py:2700-2782`), run right after
+/// a successful `src_install` (real portage calls it from
+/// `doebuild(mydo="install")`): write the USE-conditional-evaluated
+/// dependency / `LICENSE` / `PROPERTIES` / `RESTRICT` / `IUSE`
+/// (+ `IUSE_EFFECTIVE`) metadata files into `${PORTAGE_BUILDDIR}/build-
+/// info`. `bin/phase-functions.sh __dyn_install`'s own build-info loop
+/// (run unmodified, before this) writes `CATEGORY`/`SLOT`/`KEYWORDS`/
+/// `IUSE`/`USE`/`EAPI`/`DEFINED_PHASES`/… but *not* these keys -- real
+/// portage's Python side fills them in. Without this the merged vdb
+/// entry and the `xpak`/`gpkg` a `$PKGDIR` scan later reads carry no
+/// dependency metadata at all (found via the `binpkg.rs` scan buildout).
+///
+/// Source is the ebuild's own `metadata/md5-cache` entry (the same
+/// already-trusted source `fetch_sources` reads `SRC_URI` from) --
+/// `settings.configdict["pkg"]` in real portage. USE-conditionals are
+/// evaluated against this pilot's empty phase-side USE set (the same
+/// stance `fetch_sources` / `crate::fetch` document -- this pilot does
+/// not resolve a package's USE for real phase execution), via
+/// `use_reduce_structured` (real `paren_enclose(use_reduce(v,
+/// uselist=use))` -- the bracket/`||`-preserving normalized token
+/// stream).
+///
+/// v1 cut: real portage, for an EAPI with slot operators (every EAPI 5+),
+/// skips the `*DEPEND` keys in this loop and writes them from
+/// `evaluate_slot_operator_equal_deps` instead (which binds `:=` against
+/// the resolved depgraph). This pilot does no build-time `:=` binding
+/// anywhere, so it writes the plain `use_reduce`'d `*DEPEND` here -- an
+/// ebuild with no `:=` operator gets a byte-identical result; one with
+/// `:=` keeps the bare `:=` token rather than a resolved `:2/3=`.
+fn write_post_install_metadata(env: &Environment) -> Result<(), String> {
+    let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
+        return Ok(());
+    };
+    let Ok(metadata) = portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf)
+    else {
+        return Ok(());
+    };
+    let build_info = env.build_info();
+    let empty_use = std::collections::HashSet::new();
+
+    // real `_vdb_use_conditional_keys` = `Package._dep_keys` + LICENSE /
+    // PROPERTIES / RESTRICT.
+    for key in [
+        "DEPEND",
+        "RDEPEND",
+        "BDEPEND",
+        "PDEPEND",
+        "IDEPEND",
+        "LICENSE",
+        "PROPERTIES",
+        "RESTRICT",
+    ] {
+        let Some(raw) = metadata
+            .get(key)
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        else {
+            // real portage unlinks a stale build-info/<k> when the value
+            // is empty; `bin/phase-functions.sh` never wrote these, so
+            // there is nothing to unlink here.
+            continue;
+        };
+        let tokens: Vec<String> = raw.split_whitespace().map(String::from).collect();
+        let value = portage_use_reduce::use_reduce_structured(
+            &tokens,
+            &empty_use,
+            portage_use_reduce::MatchMode::Normal,
+        )
+        .map_err(|e| format!("{}: build-info/{key}: {e}", env.pkg_dir.display()))?
+        .join(" ");
+        if value.is_empty() {
+            continue;
+        }
+        std::fs::write(build_info.join(key), format!("{value}\n"))
+            .map_err(|e| format!("{}: {e}", build_info.join(key).display()))?;
+    }
+
+    // real: `settings.configdict["pkg"]["IUSE"]` written verbatim ("in
+    // case it's corrupted due to local environment settings", bug
+    // #386829) -- `bin/phase-functions.sh` already wrote it, but only
+    // when non-empty; re-assert from md5-cache so it is always present
+    // and canonical. `IUSE_EFFECTIVE` is the profile's own EAPI 5+
+    // `_calc_iuse_effective` result -- this pilot computes it as
+    // `Config::iuse_effective`, not reachable from here without threading
+    // a resolved `Config` through the whole phase chain; left as a
+    // documented gap (the vdb `IUSE_EFFECTIVE` file is only read by a
+    // built package's own USE-dep check, itself already narrowed -- see
+    // `dependency_avoid_update_candidate`).
+    if let Some(iuse) = metadata
+        .get("IUSE")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        std::fs::write(build_info.join("IUSE"), format!("{iuse}\n"))
+            .map_err(|e| format!("{}: {e}", build_info.join("IUSE").display()))?;
+    }
+    Ok(())
+}
+
 /// Which real shell executes a phase, and every real `bin/*.sh` this
 /// pilot sources unmodified along with it: `Brush` (the default -- an
 /// embedded `brush_core::Shell`, see this module's own doc comment for
@@ -1203,6 +1303,14 @@ async fn run_commands_async(
                 if qa_status != 0 {
                     return Ok(qa_status);
                 }
+                // Real `doebuild(mydo="install")` -> `_post_src_install_
+                // write_metadata` (see its own doc comment): the
+                // dependency/LICENSE/PROPERTIES/RESTRICT/IUSE build-info
+                // files `bin/phase-functions.sh` doesn't write. Run in
+                // the same spot -- after `install` + its post-phase
+                // misc-functions, before the vdb merge / xpak build reads
+                // `build-info`.
+                write_post_install_metadata(&env)?;
             }
         }
     }

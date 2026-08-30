@@ -8437,6 +8437,47 @@ regression test confirms the committed `PORTING/fixtures/pkgdir` (which
 has a `Packages` *and* the two loose fixture files) still resolves via
 the index alone. 3 more `portuale` + 1 `portage-repo` unit tests.
 
+### `build-info` metadata generation: a merged vdb entry / built `.tbz2` carries its real dependencies
+
+The `$PKGDIR`-scan work above surfaced this: a package the pilot *itself*
+built or merged carried **no dependency metadata**. `bin/phase-functions.
+sh __dyn_install` (run unmodified) writes `${PORTAGE_BUILDDIR}/build-info/
+{CATEGORY,SLOT,KEYWORDS,IUSE,USE,EAPI,DEFINED_PHASES,DESCRIPTION,…}` — but
+not `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND`/`LICENSE`/
+`PROPERTIES`/`RESTRICT`; in real portage the *Python* side fills those in.
+And this pilot's `write_vdb_entry` only ever copied a hardcoded
+`{CATEGORY,SLOT,repository,CONTENTS,COUNTER,NEEDED.ELF.2}` subset.
+
+New `ebuild_phases::write_post_install_metadata` ports real
+`doebuild.py::_post_src_install_write_metadata`
+(`doebuild.py:2700-2782`): after a successful `src_install` (and its
+post-phase `misc-functions.sh`), write those keys into `build-info`,
+USE-conditional-evaluated (`use_reduce_structured` — real
+`paren_enclose(use_reduce(v, uselist=use))`) against the pilot's empty
+phase-side USE set (the same stance `crate::fetch` documents). Source is
+the ebuild's own `metadata/md5-cache` entry (real `settings.configdict
+["pkg"]`). And `write_vdb_entry` now copies **every** regular file from
+`build-info` into the vdb entry (real `treewalk()`,
+`vartree.py:4911-4913`) — so a pilot-merged package's vdb dir carries
+`RDEPEND`/`EAPI`/`KEYWORDS`/`environment.bz2`/the `<PF>.ebuild` copy/…
+like a real one, and `ebuild <file> package`'s `.tbz2` (whose XPAK is
+built from `build-info` by the real `xpak-helper.py`) gets the dep
+strings too.
+
+v1 cut: real portage, for an EAPI with slot operators (every EAPI 5+),
+writes the `*DEPEND` files from `evaluate_slot_operator_equal_deps`
+(which binds `:=` against the resolved depgraph) rather than this loop.
+This pilot does no build-time `:=` binding anywhere, so it writes the
+plain `use_reduce`'d `*DEPEND` — byte-identical for an ebuild with no
+`:=` operator, the bare `:=` token kept for one with. `IUSE_EFFECTIVE`
+isn't written either (needs a resolved `Config` threaded through the
+phase chain; the vdb `IUSE_EFFECTIVE` file is only read by an
+already-narrowed check). Real-execution, Rust-only. New
+`ebuild_merge`/`binpkg` tests; the committed
+`fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2` was regenerated (it now
+carries `RDEPEND`), which the `$PKGDIR`-scan contract test now asserts is
+actually walked.
+
 ## Running it
 
 Build both Rust binaries:

@@ -2368,7 +2368,15 @@ def test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages_index(
         fixtures_root,
         ["packagepkg-1.0.tbz2", "gpkgreadpkg-1.0.gpkg.tar"],
     )
-    for pkg, ver in [("packagepkg", "1.0"), ("gpkgreadpkg", "1.0")]:
+    # Each scanned binpkg carries real dependency metadata (packagepkg's
+    # xpak has `RDEPEND=dev-libs/samepkg` from real `build-info`;
+    # gpkgreadpkg's gpkg metadata has `dev-libs/newpkg`), and those deps
+    # are actually walked -- the ad-hoc root has neither, so each shows
+    # up as an unresolvable dependency (informational, exit stays 0).
+    for pkg, ver, dep in [
+        ("packagepkg", "1.0", "dev-libs/samepkg"),
+        ("gpkgreadpkg", "1.0", "dev-libs/newpkg"),
+    ]:
         args = ["--pretend", "--usepkgonly", f"dev-libs/{pkg}"]
         rust = _run([str(emerge_binary)], args, env)
         py = _run(emerge_pretend_python, args, env)
@@ -2376,6 +2384,7 @@ def test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages_index(
         assert rust.stdout == py.stdout, pkg
         assert rust.stderr == py.stderr, pkg
         assert rust.stdout.splitlines()[0] == f"[binary  N    ] dev-libs/{pkg}-{ver} ", pkg
+        assert f'no visible ebuild for dependency "{dep}"' in rust.stderr, pkg
 
     # -pv: the scanned entry's SIZE (the file's own byte size) feeds
     # `Size of downloads:` just like a `Packages` `SIZE` field would --
