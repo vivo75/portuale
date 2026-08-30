@@ -2366,7 +2366,7 @@ def _use_flag_sort_key(tok):
 
 
 def _build_use_expand_display(
-    use_display, use_expand, use_expand_hidden, installed=None, forced=None
+    use_display, use_expand, use_expand_hidden, installed=None, forced=None, all_flags=True
 ):
     """Real output.py:_display_use + map_to_use_expand +
     output_helpers.py:_create_use_string, for `emerge --pretend -v`'s USE
@@ -2386,13 +2386,19 @@ def _build_use_expand_display(
     `installed`, when given, is (old_use, old_iuse) -- the installed
     version's own recorded USE/IUSE (bare names, old_use already
     intersected with old_iuse). Real _DisplayConfig sets verbosity=3
-    whenever --verbose is given, so all_flags is ALWAYS true for
-    `emerge -pv` and the diff shows every flag: enabled+new-IUSE ->
-    flag%*, enabled+newly-on -> flag*, enabled+unchanged -> flag;
+    whenever --verbose is given, so all_flags is true for `emerge -pv`
+    and the diff shows every flag: enabled+new-IUSE -> flag%*,
+    enabled+newly-on -> flag*, enabled+unchanged -> flag;
     disabled+new-IUSE -> -flag%, disabled+was-on -> -flag*,
     disabled+unchanged -> -flag; a flag dropped from IUSE by the new
-    ebuild -> (-flag%) / (-flag%*). reinst_flags is still not modelled
-    (only widens what all_flags already shows).
+    ebuild -> (-flag%) / (-flag%*). At plain `emerge -p` (all_flags
+    False, the default verbosity 2) real _create_use_string leaves an
+    *unchanged* flag -- and any removed-from-IUSE flag -- as flag_str =
+    None, so it's omitted: only the changed flags render for a
+    Reinstall/Upgrade, the full list for a New (is_new renders
+    everything regardless). reinst_flags is still not modelled -- a
+    documented cut, slightly more visible now that this also feeds -p
+    (see the Rust side's doc comment).
 
     `forced` (full flag names -- real self.forced_flags = pkg.use.force |
     pkg.use.mask) is any flag the user can't control: its rendered token
@@ -2408,6 +2414,8 @@ def _build_use_expand_display(
     def render_flag(bare, full, state):
         is_forced = full in forced
         if state == "removed":
+            if not all_flags:
+                return None
             in_old_use = installed is not None and full in old_use
             return f"(-{bare}%{'*' if in_old_use else ''})"
         enabled = state == "enabled"
@@ -2421,14 +2429,18 @@ def _build_use_expand_display(
                     core = f"{bare}%*"
                 elif not in_old_use:
                     core = f"{bare}*"
-                else:
+                elif all_flags:
                     core = bare
+                else:
+                    return None
             elif not in_old_iuse:
                 core = f"-{bare}" if is_forced else f"-{bare}%"
             elif in_old_use:
                 core = f"-{bare}*"
-            else:
+            elif all_flags:
                 core = f"-{bare}"
+            else:
+                return None
         return f"({core})" if is_forced else core
 
     # Entries keep the FULL flag name; the prefix is stripped at render.
@@ -2444,7 +2456,7 @@ def _build_use_expand_display(
 
     for flag, enabled in use_display:
         route(flag, "enabled" if enabled else "disabled")
-    if installed is not None:
+    if all_flags and installed is not None:
         cur = {f for f, _ in use_display}
         for flag in sorted(
             (f for f in old_iuse if f not in cur), key=_alnum_sort_key
@@ -2460,7 +2472,9 @@ def _build_use_expand_display(
         rendered_pairs = []
         for full, state in flags:
             bare = full if not name else (full[len(prefix):] if full.startswith(prefix) else full)
-            rendered_pairs.append((rank[state], render_flag(bare, full, state)))
+            tok = render_flag(bare, full, state)
+            if tok is not None:
+                rendered_pairs.append((rank[state], tok))
         # Real _create_use_string: `enabled + disabled + removed` --
         # stable, so the incoming bare-name order is kept within a rank.
         rendered_pairs.sort(key=lambda p: p[0])
@@ -10497,7 +10511,7 @@ def run(args):
             config,
         )
 
-    def use_suffix(use_display, is_new, installed=None, forced=None):
+    def use_suffix(use_display, installed=None, forced=None):
         # "  USE=\"a -b\" VIDEO_CARDS=\"-amdgpu nvidia\"", matching real
         # --pretend's own line format. Real output.py:_display_use
         # groups the flags by USE_EXPAND (plain USE group, then one
@@ -10508,19 +10522,19 @@ def run(args):
         # flags first, then disabled; --alphabetical re-sorts each group's
         # rendered tokens into one bare-name-sorted list (real
         # _create_use_string's `conf.alphabetical` branch). Still not
-        # shown: real portage's ANSI colorization and the
-        # removed-from-IUSE line (documented cuts). Mirrors
-        # portage-repo/src/lib.rs's build_use_expand_display +
+        # shown: real portage's ANSI colorization (documented cut).
+        # Mirrors portage-repo/src/lib.rs's build_use_expand_display +
         # pretend.rs's use_suffix.
         #
         # Real _DisplayConfig: print_use_string = verbosity != 1, and
         # real default `emerge -p` verbosity is 2 -- so the USE line is
-        # NOT -v-gated. But all_flags = verbosity == 3, so at plain -p a
-        # New package (is_new -> every IUSE flag renders, same list -pv
-        # shows) gets its USE line, while a Reinstall/Upgrade shows only
-        # the changed flags -- the pilot doesn't render that reduced diff
-        # yet, so those still only show USE at -pv (SCOPE_BACKLOG item 14).
-        if (not verbose and not is_new) or not use_display:
+        # NOT -v-gated. What -v (verbosity 3) changes is all_flags, i.e.
+        # WHICH flags render: -pv shows every flag (unchanged ones plain,
+        # plus the (-flag%) removed list), plain -p omits an unchanged
+        # flag -- so a New package's list is the same at -p and -pv
+        # (is_new renders everything), and a Reinstall/Upgrade shows only
+        # the changed flags at -p (often none).
+        if not use_display:
             return ""
         groups = _build_use_expand_display(
             use_display,
@@ -10528,6 +10542,7 @@ def run(args):
             config["use_expand_hidden"],
             installed,
             forced,
+            verbose,
         )
         if not groups:
             return ""
@@ -10717,7 +10732,7 @@ def run(args):
             system, world = classify(version)
             disp_ver = disp_version(version)
             oldbest = oldbest_str()
-            use_str = use_suffix(use_display, tag == "new", installed, forced)
+            use_str = use_suffix(use_display, installed, forced)
             # Real output.py::verbose_size (verbosity 3 only): verboseadd
             # += localized_size(mysize) after the USE string. Rendered
             # only for a --getbinpkg remote binary (see pretend.rs's

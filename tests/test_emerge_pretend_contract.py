@@ -47,6 +47,11 @@ CASES = [
         0,
     ),
     (
+        "an Upgrade shows only its changed USE flags at plain -p",
+        ["--pretend", "--update", "dev-libs/upgradeusepkg"],
+        0,
+    ),
+    (
         "the merge list is in dependency-first order (diamond: leaf, consumers, root)",
         ["--pretend", "dev-libs/diamond"],
         0,
@@ -5087,15 +5092,17 @@ def test_verbose_shows_use_flags_gated_by_profile_and_make_conf(emerge_binary, f
     assert "Total:" not in quiet.stdout
 
 
-def test_new_package_use_line_is_the_same_at_p_and_pv(
+def test_use_line_at_p_is_full_for_a_new_pkg_and_changed_only_for_a_reinstall(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
-    """A New package's USE list is identical at plain -p and at -pv (real
-    `_create_use_string`'s `is_new` branch renders every IUSE flag
-    regardless of `all_flags = verbosity == 3`) -- the only -pv-additions
-    are the `::repo` cpv decoration and the trailing counters line. A
-    Reinstall shows no USE line at plain -p yet (SCOPE_BACKLOG item 14 --
-    the reduced changed-flags-only diff isn't rendered)."""
+    """Real `print_use_string = verbosity != 1` (not -v-gated); it's
+    `all_flags = verbosity == 3` that changes *which* flags render. A New
+    package's `is_new` branch renders every IUSE flag regardless, so its
+    USE list is identical at -p and -pv (the -pv-only additions are the
+    `::repo` cpv decoration and the counters line). A Reinstall/Upgrade
+    at plain -p shows only the *changed* flags (`_create_use_string`
+    leaves an unchanged flag omitted when `all_flags` is off), where -pv
+    shows the whole diff plus the `(-flag%)` removed list."""
     for pkg, use in [
         ("useflagpkg", 'USE="foo -missingflag"'),
         ("useexpandpkg", 'VIDEO_CARDS="nvidia -amdgpu"'),
@@ -5112,14 +5119,32 @@ def test_new_package_use_line_is_the_same_at_p_and_pv(
         assert p_line == f"[ebuild  N     ] dev-libs/{pkg}-1.0  {use}", pkg
         assert pv_line == f"[ebuild  N     ] dev-libs/{pkg}-1.0::testrepo  {use}", pkg
 
-    # A Reinstall: no USE line at plain -p.
-    r = _run(
-        [str(emerge_binary)], ["--pretend", "--newuse", "dev-libs/reinstallpkg"], fixture_env
+    # An Upgrade with a real USE diff: -p shows only the changes,
+    # -pv shows everything (unchanged `keep`, removed `(-drop%)`).
+    up = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--update", "dev-libs/upgradeusepkg"],
+        fixture_env,
     )
-    assert r.returncode == 0
+    upv = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--update", "dev-libs/upgradeusepkg"],
+        fixture_env,
+    )
+    assert up.returncode == 0
+    assert up.stdout == _run(
+        emerge_pretend_python,
+        ["--pretend", "--update", "dev-libs/upgradeusepkg"],
+        fixture_env,
+    ).stdout
     assert (
-        next(l for l in r.stdout.splitlines() if "reinstallpkg-1.0" in l)
-        == "[ebuild   R    ] dev-libs/reinstallpkg-1.0 "
+        next(l for l in up.stdout.splitlines() if "upgradeusepkg-2.0" in l)
+        == '[ebuild     U  ] dev-libs/upgradeusepkg-2.0 [1.0] USE="added%* -change*"'
+    )
+    assert (
+        next(l for l in upv.stdout.splitlines() if "upgradeusepkg-2.0" in l)
+        == '[ebuild     U  ] dev-libs/upgradeusepkg-2.0::testrepo [1.0::testrepo]'
+        ' USE="added%* keep -change* (-drop%)"'
     )
 
 
@@ -6940,9 +6965,9 @@ def test_newuse_reinstalls_a_package_whose_use_changed(emerge_binary, fixture_en
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        '[ebuild   R    ] dev-libs/reinstallpkg-1.0 ',
-    ]
+                                             '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+                                             '[ebuild   R    ] dev-libs/reinstallpkg-1.0  USE="foo*"',
+                                         ]
 
 
 def test_newuse_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
@@ -6952,9 +6977,9 @@ def test_newuse_short_alias_bundled_with_pretend(emerge_binary, fixture_env):
     result = _run([str(emerge_binary)], ["-pN", "dev-libs/reinstallpkg"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        '[ebuild   R    ] dev-libs/reinstallpkg-1.0 ',
-    ]
+                                             '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+                                             '[ebuild   R    ] dev-libs/reinstallpkg-1.0  USE="foo*"',
+                                         ]
 
 
 def test_newuse_verbose_shows_use_flags_too(emerge_binary, fixture_env):
@@ -7040,7 +7065,9 @@ def test_newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag(emerge_binary,
     )
     assert newuse_result.returncode == 0
     assert newuse_result.stdout == (
-        '[ebuild   R    ] dev-libs/changedusepkg-1.0 \n'
+        (
+        '[ebuild   R    ] dev-libs/changedusepkg-1.0  USE="-brandnewflag%"\n'
+        )
     )
 
     changed_use_result = _run(
@@ -7076,9 +7103,9 @@ def test_changed_use_still_catches_an_enablement_change_on_a_shared_flag(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/newpkg-1.0 ',
-        '[ebuild   R    ] dev-libs/reinstallpkg-1.0 ',
-    ]
+                                             '[ebuild  N     ] dev-libs/newpkg-1.0 ',
+                                             '[ebuild   R    ] dev-libs/reinstallpkg-1.0  USE="foo*"',
+                                         ]
 
 
 def test_changed_deps_reinstalls_and_recurses_into_the_current_ebuilds_own_dependency(

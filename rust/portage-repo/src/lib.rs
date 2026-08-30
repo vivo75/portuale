@@ -4168,6 +4168,7 @@ fn build_use_expand_display(
     config: &portage_profile::Config,
     installed: Option<&InstalledUseState>,
     forced: &HashSet<String>,
+    all_flags: bool,
 ) -> Vec<(String, String)> {
     let mut expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
     expand_vars.sort();
@@ -4189,14 +4190,26 @@ fn build_use_expand_display(
     // Real `_create_use_string`'s per-flag marker + `( … )`-wrap logic
     // (see this function's own doc comment). Returns the rendered
     // `flag`/`-flag`/`(-flag%)` token with any `*`/`%` suffix and `( )`
-    // wrap.
-    let render_flag = |bare: &str, full: &str, state: FlagState| -> String {
+    // wrap, or `None` when this flag isn't shown at this verbosity: real
+    // `_create_use_string` leaves `flag_str = None` (so the flag is
+    // omitted) for an *unchanged* flag -- and for a removed-from-IUSE
+    // flag -- unless `conf.all_flags` (`verbosity == 3`, i.e. `emerge
+    // -pv`) or `reinst_flag` (not modelled -- see the doc comment).
+    // `reinst_flag` being unmodelled is slightly more visible now that
+    // this path also feeds plain `-p`: a `--newuse`/`--changed-use`
+    // reinstall's own trigger flags still render via the `%*`/`*`/`-%`/
+    // `-*` change markers, but a flag `reinstall_for_flags` would have
+    // force-shown while otherwise unchanged is omitted at `-p`.
+    let render_flag = |bare: &str, full: &str, state: FlagState| -> Option<String> {
         let is_forced = forced.contains(full);
         if state == FlagState::Removed {
+            if !all_flags {
+                return None;
+            }
             // Real: `yellow("-" + flag) + "%"`, `+ "*"` if it was on,
             // always `"(" + ... + ")"`.
             let in_old_use = installed.is_some_and(|inst| inst.old_use.contains(full));
-            return format!("(-{bare}%{})", if in_old_use { "*" } else { "" });
+            return Some(format!("(-{bare}%{})", if in_old_use { "*" } else { "" }));
         }
         let enabled = state == FlagState::Enabled;
         let core = match installed {
@@ -4212,10 +4225,12 @@ fn build_use_expand_display(
                         format!("{bare}%*")
                     } else if !in_old_use {
                         format!("{bare}*")
-                    } else {
-                        // `all_flags` is always on for `emerge -pv`: an
-                        // unchanged enabled flag is still shown, plain.
+                    } else if all_flags {
+                        // An unchanged enabled flag: shown plain only
+                        // under `-pv`'s `all_flags`; omitted at `-p`.
                         bare.to_string()
+                    } else {
+                        return None;
                     }
                 } else if !in_old_iuse {
                     // real: `if flag not in iuse_forced: flag_str += "%"`
@@ -4226,18 +4241,15 @@ fn build_use_expand_display(
                     }
                 } else if in_old_use {
                     format!("-{bare}*")
-                } else {
-                    // Unchanged disabled flag -- shown plain under
-                    // `all_flags`.
+                } else if all_flags {
+                    // Unchanged disabled flag -- `-pv` only.
                     format!("-{bare}")
+                } else {
+                    return None;
                 }
             }
         };
-        if is_forced {
-            format!("({core})")
-        } else {
-            core
-        }
+        Some(if is_forced { format!("({core})") } else { core })
     };
 
     // Group key: empty string == the plain "USE" group. Entries keep the
@@ -4277,8 +4289,10 @@ fn build_use_expand_display(
     }
     // Real `removed_iuse = set(old_iuse).difference(cur_iuse)` -- flags
     // the current ebuild dropped from IUSE, shown as `(-flag%)` under
-    // `all_flags`.
-    if let Some(inst) = installed {
+    // `all_flags` only (`_create_use_string`: the `removed` list is
+    // populated only inside the `if conf.all_flags or reinst_flag`
+    // branch).
+    if let (true, Some(inst)) = (all_flags, installed) {
         let cur: HashSet<&str> = use_flags_display.iter().map(|(f, _)| f.as_str()).collect();
         let mut removed: Vec<&String> = inst
             .old_iuse
@@ -4308,7 +4322,7 @@ fn build_use_expand_display(
         // time in `pretend.rs`, since it needs no resolver state.
         let mut rendered_pairs: Vec<(u8, String)> = flags
             .iter()
-            .map(|(full, state)| {
+            .filter_map(|(full, state)| {
                 let bare = if name.is_empty() {
                     full.as_str()
                 } else {
@@ -4319,7 +4333,7 @@ fn build_use_expand_display(
                     FlagState::Disabled => 1,
                     FlagState::Removed => 2,
                 };
-                (rank, render_flag(bare, full, *state))
+                render_flag(bare, full, *state).map(|tok| (rank, tok))
             })
             .collect();
         rendered_pairs.sort_by_key(|(rank, _)| *rank);
@@ -5324,6 +5338,7 @@ fn resolve_root_deps_build_entries(
         oldbest: Vec::new(),
         use_flags_display: Vec::new(),
         use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
         keyword_mask: None,
         new_slot: false,
         interactive: false,
@@ -6203,7 +6218,20 @@ pub struct GraphEntry {
     /// The `--json` `use_flags` map keeps the raw, ungrouped flags
     /// instead -- more useful programmatically, and real `--json` has no
     /// USE display of its own to match.
+    ///
+    /// This field is the `-pv` form (real `all_flags = verbosity == 3`,
+    /// always on for `emerge -pv`): every flag shown, unchanged ones
+    /// plain, plus the `(-flag%)` removed-from-IUSE list. See
+    /// `use_expand_display_p` for the plain `-p` form.
     pub use_expand_display: Vec<(String, String)>,
+    /// The plain `emerge -p` (`all_flags` off) form of `use_expand_display`:
+    /// real `_create_use_string` still runs at the default verbosity 2
+    /// (`print_use_string = verbosity != 1`), but leaves an *unchanged*
+    /// flag (and any removed-from-IUSE flag) omitted. So for a
+    /// `Reinstall`/`Upgrade`/`Downgrade` this is only the changed flags
+    /// (`flag%*`/`flag*`/`-flag%`/`-flag*`), often empty; for a `New`
+    /// (`is_new` -> every flag renders) it equals `use_expand_display`.
+    pub use_expand_display_p: Vec<(String, String)>,
     /// Real `output.py::gen_mask_str`'s own one-character mask column
     /// (`PkgAttrDisplay.mask`). Real `set_pkg_info` fills it in `if
     /// self.include_mask_str()` (`verbosity > 1`), and real default
@@ -7580,6 +7608,7 @@ pub fn resolve_pretend_graph(
                 oldbest: Vec::new(),
                 use_flags_display: Vec::new(),
                 use_expand_display: Vec::new(),
+                use_expand_display_p: Vec::new(),
                 keyword_mask: None,
                 new_slot: false,
                 interactive: false,
@@ -7766,6 +7795,7 @@ pub fn resolve_pretend_graph(
             oldbest,
             use_flags_display: Vec::new(),
             use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
             keyword_mask,
             new_slot,
             interactive,
@@ -8053,8 +8083,18 @@ pub fn resolve_pretend_graph(
             // pkg.use.mask`): the flags `-pv` wraps in `( … )`.
             let forced =
                 forced_or_masked_flags(iuse, &keywords, &candidate_str, &key.0, &key.1, config);
+            // Two renderings of the same flag set: `use_expand_display`
+            // is the `-pv` (`all_flags = verbosity == 3`) form -- every
+            // flag shown -- and `use_expand_display_p` is the plain `-p`
+            // (`all_flags` off) form -- only the *changed* flags for a
+            // Reinstall/Upgrade/Downgrade, the full list for a `New`
+            // (`is_new` renders everything regardless). `pretend.rs`'s
+            // `use_suffix` picks by verbosity. Both are cheap; for a
+            // `New` (no `installed` diff) they're identical.
             entries[entry_idx].use_expand_display =
-                build_use_expand_display(&display, config, installed.as_ref(), &forced);
+                build_use_expand_display(&display, config, installed.as_ref(), &forced, true);
+            entries[entry_idx].use_expand_display_p =
+                build_use_expand_display(&display, config, installed.as_ref(), &forced, false);
             entries[entry_idx].use_flags_display = display;
         }
 
@@ -12848,6 +12888,7 @@ mod tests {
                 &config,
                 None,
                 &HashSet::new(),
+                true,
             ),
             vec![("VIDEO_CARDS".to_string(), "nvidia -amdgpu".to_string())]
         );
@@ -12864,6 +12905,7 @@ mod tests {
                 &config,
                 None,
                 &HashSet::new(),
+                true,
             ),
             vec![
                 ("USE".to_string(), "plainflag".to_string()),
@@ -12871,7 +12913,7 @@ mod tests {
             ]
         );
         // No displayable flags -> no groups at all.
-        assert!(build_use_expand_display(&[], &config, None, &HashSet::new()).is_empty());
+        assert!(build_use_expand_display(&[], &config, None, &HashSet::new(), true).is_empty());
     }
 
     #[test]
@@ -12908,6 +12950,7 @@ mod tests {
                 &config,
                 Some(&installed),
                 &HashSet::new(),
+                true,
             ),
             vec![
                 ("USE".to_string(), "alpha beta* gamma%* -delta%".to_string()),
@@ -12926,6 +12969,7 @@ mod tests {
                     old_use: HashSet::from(["alpha".to_string()]),
                 }),
                 &HashSet::new(),
+                true,
             ),
             vec![("USE".to_string(), "alpha".to_string())]
         );
@@ -12944,6 +12988,7 @@ mod tests {
                     old_use: HashSet::from(["keep".to_string(), "goneon".to_string()]),
                 }),
                 &HashSet::new(),
+                true,
             ),
             vec![(
                 "USE".to_string(),
@@ -12978,6 +13023,7 @@ mod tests {
                 &config,
                 None,
                 &forced,
+                true,
             ),
             vec![
                 (
@@ -13001,6 +13047,7 @@ mod tests {
                     old_use: HashSet::new(),
                 }),
                 &HashSet::from(["maskednew".to_string()]),
+                true,
             ),
             vec![("USE".to_string(), "(-maskednew) -plainnew%".to_string())]
         );
@@ -15932,6 +15979,7 @@ mod tests {
             oldbest: Vec::new(),
             use_flags_display: Vec::new(),
             use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
             keyword_mask: None,
             new_slot: false,
             interactive: false,

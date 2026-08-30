@@ -266,17 +266,20 @@ Ranked roughly by how self-contained each is.
    stamps an explicit `"merge_order"` int per entry), and `emerge
    --buildpkgonly`; `--tree` re-derives structure from `required_by`
    unaffected. ~240 more pinned multi-entry assertions reordered.
-   **`USE="…"` at plain `-p` — increment 1 done 2026-08-30**: real
-   `print_use_string = verbosity != 1` (not `-v`-gated), and default
-   `emerge -p` verbosity is 2. `use_suffix` / `_use_suffix` now render a
-   **`New`** entry's USE line at plain `-p` (`_create_use_string`'s
-   `is_new` branch renders every IUSE flag regardless of `all_flags`, so
-   the list is identical to `-pv` bar the `::repo` cpv decoration + the
-   counters line). ~25 pinned `-p` assertions gained a `USE=` suffix.
-   **Increment 2 pending**: the `Reinstall`/`Upgrade` *changed-flags-only*
-   diff at plain `-p` — needs `build_use_expand_display` to grow an
-   `all_flags: bool` param (currently hard-assumes the `-pv`
-   `all_flags = true` shape). The `g` (remote binary)
+   **`USE="…"` at plain `-p` — done 2026-08-30** (real-tree finding):
+   real `print_use_string = verbosity != 1` (not `-v`-gated), default
+   `emerge -p` verbosity is 2; `-v` changes `all_flags` = *which* flags
+   render. Increment 1: `use_suffix` / `_use_suffix` render a **`New`**
+   entry's USE line at plain `-p` (identical to `-pv` bar `::repo` +
+   counters). Increment 2: `build_use_expand_display` /
+   `_build_use_expand_display` grew an `all_flags: bool` param,
+   `render_flag` returns `Option` and omits an *unchanged* flag (and the
+   `(-flag%)` removed list) when off — so a `Reinstall`/`Upgrade`/
+   `Downgrade` shows only its changed flags at `-p`
+   (`GraphEntry::use_expand_display` for `-pv`, `use_expand_display_p`
+   for `-p`; Python re-renders at display time). ~30 pinned `-p`
+   assertions updated total. One residual cut: `reinst_flags` still
+   unmodelled (slightly more visible at `-p`). The `g` (remote binary)
    bracket column **shipped 2026-08-29** with the `--pretend` half of
    `--getbinpkg` (item 6 / item 19). The `-pv` output arc is complete
    bar `--autounmask` message colour (its own future slice). The blocker

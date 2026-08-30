@@ -501,20 +501,22 @@ fn decorate_version(
 ///
 /// Real `_DisplayConfig`: `print_use_string = verbosity != 1`, and real
 /// default `emerge -p` verbosity is 2 -- so the USE line is *not*
-/// `-v`-gated. But `all_flags = verbosity == 3`, so at plain `-p`
-/// (verbosity 2) real `_create_use_string` renders only the flags a
-/// package's own `is_new` / diff-against-installed logic makes visible:
-/// for a **`New`** package `is_new` is true and *every* IUSE flag
-/// renders (`red(flag)` / `blue(-flag)`), exactly the same list `-pv`
-/// shows -- so a New entry's USE line is identical at `-p` and `-pv`
-/// (bar the `-pv`-only `::repo` cpv decoration and counters line). For a
-/// `Reinstall`/`Upgrade`/`Downgrade` at plain `-p`, real portage shows
-/// only the *changed* flags (`all_flags` off); the pilot doesn't render
-/// that reduced diff yet, so those still only show USE at `-pv` -- a
-/// documented follow-up (SCOPE_BACKLOG item 14).
+/// `-v`-gated. What `-v` (verbosity 3) actually changes is `all_flags`,
+/// i.e. *which* flags render: `emerge -pv` uses
+/// `GraphEntry::use_expand_display` (every flag, unchanged ones plain,
+/// plus the `(-flag%)` removed-from-IUSE list); plain `emerge -p` uses
+/// `use_expand_display_p`, where `_create_use_string` leaves an
+/// *unchanged* flag omitted -- so for a `New` package (`is_new` renders
+/// everything) the `-p` list equals the `-pv` list, and for a
+/// `Reinstall`/`Upgrade`/`Downgrade` only the changed flags
+/// (`flag%*`/`flag*`/`-flag%`/`-flag*`) show, often none.
 fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool, color: &Colorizer) -> String {
-    let is_new = matches!(entry.outcome, PretendOutcome::New { .. });
-    if (!verbose && !is_new) || entry.use_expand_display.is_empty() {
+    let display = if verbose {
+        &entry.use_expand_display
+    } else {
+        &entry.use_expand_display_p
+    };
+    if display.is_empty() {
         return String::new();
     }
     // Real `output.py:_display_use`: `USE="…"` first, then one `VAR="…"`
@@ -526,8 +528,7 @@ fn use_suffix(entry: &GraphEntry, verbose: bool, alphabetical: bool, color: &Col
     // already-rendered tokens. Colour (real `_create_use_string`'s own
     // `red`/`green`/`blue`/`yellow`) is applied per token *after* the
     // sort, so the `--alphabetical` sort key still sees plain tokens.
-    let groups: Vec<String> = entry
-        .use_expand_display
+    let groups: Vec<String> = display
         .iter()
         .map(|(name, rendered)| {
             let mut toks: Vec<&str> = rendered.split(' ').collect();
@@ -5091,7 +5092,14 @@ mod tests {
         assert_eq!(masked.chars().count(), 7);
     }
 
-    fn entry_with_use(outcome: PretendOutcome) -> GraphEntry {
+    fn entry_with_use(outcome: PretendOutcome, pv_use: &str, p_use: &str) -> GraphEntry {
+        let grp = |s: &str| {
+            if s.is_empty() {
+                vec![]
+            } else {
+                vec![("USE".to_string(), s.to_string())]
+            }
+        };
         GraphEntry {
             category: "dev-libs".into(),
             package: "foo".into(),
@@ -5102,7 +5110,8 @@ mod tests {
             repo_name: Some("testrepo".into()),
             oldbest: vec![],
             use_flags_display: vec![("bar".into(), true), ("baz".into(), false)],
-            use_expand_display: vec![("USE".into(), "bar -baz".into())],
+            use_expand_display: grp(pv_use),
+            use_expand_display_p: grp(p_use),
             keyword_mask: None,
             new_slot: false,
             interactive: false,
@@ -5121,30 +5130,57 @@ mod tests {
     }
 
     #[test]
-    fn use_suffix_shows_for_a_new_entry_at_plain_p_but_not_a_reinstall() {
+    fn use_suffix_picks_the_p_or_pv_use_rendering_by_verbosity() {
         let nc = Colorizer::new(false);
-        let new = entry_with_use(PretendOutcome::New {
-            version: "1.0".into(),
-        });
-        // A New entry renders its USE list even without `-v` (real
-        // `print_use_string = verbosity != 1`; `is_new` renders every
-        // flag regardless of `all_flags`).
+        // A `New` entry: the resolver renders the same full list into
+        // both fields (`is_new` renders every flag regardless of
+        // `all_flags`), so `-p` and `-pv` show the same USE line.
+        let new = entry_with_use(
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            "bar -baz",
+            "bar -baz",
+        );
         assert_eq!(use_suffix(&new, false, false, &nc), " USE=\"bar -baz\"");
         assert_eq!(use_suffix(&new, true, false, &nc), " USE=\"bar -baz\"");
 
-        // A Reinstall still only renders at `-v` -- the pilot doesn't
-        // produce the reduced changed-flags-only diff yet.
-        let reinstall = entry_with_use(PretendOutcome::Reinstall {
-            version: "1.0".into(),
-            changed_flags: vec![],
-            deps_changed: false,
-            slot_changed: false,
-            rebuilt_binary: false,
-            new_repo: false,
-        });
-        assert_eq!(use_suffix(&reinstall, false, false, &nc), "");
+        // A `Reinstall` with one flipped flag: `-pv` shows the full list,
+        // plain `-p` shows only the change.
+        let reinstall = entry_with_use(
+            PretendOutcome::Reinstall {
+                version: "1.0".into(),
+                changed_flags: vec![],
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+            },
+            "bar* -baz",
+            "bar*",
+        );
+        assert_eq!(use_suffix(&reinstall, false, false, &nc), " USE=\"bar*\"");
         assert_eq!(
             use_suffix(&reinstall, true, false, &nc),
+            " USE=\"bar* -baz\""
+        );
+
+        // A `Reinstall` with nothing changed: no USE line at `-p`.
+        let unchanged = entry_with_use(
+            PretendOutcome::Reinstall {
+                version: "1.0".into(),
+                changed_flags: vec![],
+                deps_changed: true,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+            },
+            "bar -baz",
+            "",
+        );
+        assert_eq!(use_suffix(&unchanged, false, false, &nc), "");
+        assert_eq!(
+            use_suffix(&unchanged, true, false, &nc),
             " USE=\"bar -baz\""
         );
     }

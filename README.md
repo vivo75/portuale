@@ -8965,7 +8965,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p --json dev-libs/diamond \
 # [('common', 0), ('shared-a', 1), ('shared-b', 2), ('diamond', 3)]
 ```
 
-### `emerge -p`: a New package's `USE="…"` line shows at plain `-p`, not only `-v` (real-tree finding, increment 1)
+### `emerge -p`: the `USE="…"` line shows at plain `-p`, not only `-v` (real-tree finding)
 
 Third gap from the same container run: real `emerge` printed
 `[ebuild  N     ] dev-libs/libevent-2.1.13  USE="clock-gettime ssl
@@ -8979,28 +8979,45 @@ regardless (`red(flag)` / `blue(-flag)`), so a New entry's USE list is
 identical at `-p` and `-pv`; for a `Reinstall`/`Upgrade` at plain `-p`,
 only the *changed* flags render.
 
-Increment 1 lands the New case: `use_suffix` / `_use_suffix` no longer
-gate a `New` entry's USE display on `verbose`. The content is exactly
-what `-pv` already produced (grouped `USE=` + `VAR="…"` per USE_EXPAND,
-enabled-first, `--alphabetical`-aware) minus the `-pv`-only `::repo` cpv
-decoration and the trailing counters line. `emerge -pv` is unchanged.
-~25 pinned `-p` assertions gained a `USE=` suffix; a handful of
-`-v`-detection tests switched their "is this verbose" probe from
-"`USE=` present" to "`::repo` present". New `pretend.rs` unit test, new
-dedicated contract test + 2 `CASES`; both sides byte-identical.
+**Increment 1** lands the New case: `use_suffix` / `_use_suffix` no
+longer gate a `New` entry's USE display on `verbose`. The content is
+exactly what `-pv` already produced (grouped `USE=` + `VAR="…"` per
+USE_EXPAND, enabled-first, `--alphabetical`-aware) minus the `-pv`-only
+`::repo` cpv decoration and the trailing counters line. ~25 pinned `-p`
+assertions gained a `USE=` suffix; a handful of `-v`-detection tests
+switched their "is this verbose" probe from "`USE=` present" to
+"`::repo` present".
 
-**Increment 2 (still pending)**: the `Reinstall`/`Upgrade` changed-flags-only
-diff at plain `-p` — needs `build_use_expand_display` to grow an
-`all_flags: bool` param (right now it hard-assumes the `-pv` `all_flags =
-true` shape).
+**Increment 2** lands the `Reinstall`/`Upgrade`/`Downgrade` changed-flags-only
+diff. `build_use_expand_display` / `_build_use_expand_display` grew an
+`all_flags: bool` param; `render_flag` returns `Option` and yields
+`None` — the flag is omitted — for an *unchanged* flag (and for any
+removed-from-IUSE flag, whose `(-flag%)` list is `all_flags`-only) when
+`all_flags` is off. `resolve_pretend_graph` computes both renderings
+(`GraphEntry::use_expand_display` for `-pv`, `use_expand_display_p` for
+`-p` — the Python reference re-renders at display time instead of
+storing both), and `use_suffix` picks by verbosity. So an Upgrade with a
+real USE diff prints e.g. `USE="added%* -change*"` at `-p` where `-pv`
+shows `USE="added%* keep -change* (-drop%)"`. The one visible cut:
+`reinst_flags` (real portage's per-flag "this flag triggered the
+reinstall" force) is still unmodelled — a `--newuse`/`--changed-use`
+reinstall's own trigger flags render via the change markers anyway, but
+a flag `reinstall_for_flags` would have force-shown while otherwise
+unchanged is omitted at `-p`.
+
+`emerge -pv` output is unchanged by either increment. New `pretend.rs`
+unit test, new dedicated contract test + 3 `CASES` total; both sides
+byte-identical.
 
 ```sh
 FX="$(realpath PORTING/fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/useflagpkg
 # [ebuild  N     ] dev-libs/newpkg-1.0            <- empty IUSE, no USE line
 # [ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/useexpandpkg
-# [ebuild  N     ] dev-libs/useexpandpkg-1.0  VIDEO_CARDS="nvidia -amdgpu"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p --update dev-libs/upgradeusepkg
+# [ebuild     U  ] dev-libs/upgradeusepkg-2.0 [1.0] USE="added%* -change*"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv --update dev-libs/upgradeusepkg
+# [ebuild     U  ] dev-libs/upgradeusepkg-2.0::testrepo [1.0::testrepo] USE="added%* keep -change* (-drop%)"
 ```
 
 ## Running it
