@@ -8375,3 +8375,93 @@ regression test confirms the committed `fixtures/pkgdir` (which
 has a `Packages` *and* the two loose fixture files) still resolves via
 the index alone. 3 more `portuale` + 1 `portage-repo` unit tests.
 
+### `build-info` metadata generation: a merged vdb entry / built `.tbz2` carries its real dependencies
+
+The `$PKGDIR`-scan work above surfaced this: a package portuale *itself*
+built or merged carried **no dependency metadata**. `bin/phase-functions.
+sh __dyn_install` (run unmodified) writes `${PORTAGE_BUILDDIR}/build-info/
+{CATEGORY,SLOT,KEYWORDS,IUSE,USE,EAPI,DEFINED_PHASES,DESCRIPTION,…}` — but
+not `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND`/`LICENSE`/
+`PROPERTIES`/`RESTRICT`; in real portage the *Python* side fills those in.
+And portuale's `write_vdb_entry` only ever copied a hardcoded
+`{CATEGORY,SLOT,repository,CONTENTS,COUNTER,NEEDED.ELF.2}` subset.
+
+New `ebuild_phases::write_post_install_metadata` ports real
+`doebuild.py::_post_src_install_write_metadata`
+(`doebuild.py:2700-2782`): after a successful `src_install` (and its
+post-phase `misc-functions.sh`), write those keys into `build-info`,
+USE-conditional-evaluated (`use_reduce_structured` — real
+`paren_enclose(use_reduce(v, uselist=use))`) against portuale's empty
+phase-side USE set (the same stance `crate::fetch` documents). Source is
+the ebuild's own `metadata/md5-cache` entry (real `settings.configdict
+["pkg"]`). And `write_vdb_entry` now copies **every** regular file from
+`build-info` into the vdb entry (real `treewalk()`,
+`vartree.py:4911-4913`) — so a portuale-merged package's vdb dir carries
+`RDEPEND`/`EAPI`/`KEYWORDS`/`environment.bz2`/the `<PF>.ebuild` copy/…
+like a real one, and `ebuild <file> package`'s `.tbz2` (whose XPAK is
+built from `build-info` by the real `xpak-helper.py`) gets the dep
+strings too.
+
+For an EAPI with slot operators (every EAPI 5+) real portage writes the
+`*DEPEND` files from `evaluate_slot_operator_equal_deps`
+(`dep/_slot_operator.py`) rather than the plain loop. **Portuale now
+does the same**: `bind_slot_operator` runs per `*DEPEND` token
+(`_eval_deps`'s own per-atom step) — an atom with a `:=` operator is
+rewritten to `:<slot>/<sub-slot>=` from the highest installed version in
+`<root>/var/db/pkg` that satisfies it (`vardb.match(x)[-1]` +
+`with_slot`); a non-`:=` atom, or a `:=` dep with nothing installed, is
+left untouched. So a package portuale merges records
+`dev-libs/foo:2/3=` in its vdb / `.tbz2` build-info — the exact data a
+later sub-slot rebuild check needs. Byte-identical to before for an
+ebuild with no installed `:=` dep. The rewrite is targeted string
+surgery on the atom's own slot-dep substring (`:=` / `:2=` / `:2/3=`,
+all reconstructable from the parsed `slot`/`sub_slot`), so operators,
+versions and `[usedep]`s pass through unchanged. v1 simplification:
+real `_eval_deps` binds `RDEPEND`/`PDEPEND` against the target vdb and
+`DEPEND`/`BDEPEND` against target/running respectively — portuale's
+single-root world binds every `*DEPEND` key against the one
+`<root>/var/db/pkg` (the `--root-deps` simplification again); the
+`|| ( A:= B:= )` "sub-slot on A only" TODO (bug #455904) is moot with no
+disjunctive `:=` handling.
+
+`IUSE_EFFECTIVE` isn't written either (needs a resolved `Config`
+threaded through the phase chain; the vdb `IUSE_EFFECTIVE` file is only
+read by an already-narrowed check). Real-execution, Rust-only — a
+`bind_slot_operator` unit test plus `test_portuale.py` (merge
+`dev-libs/slotopdepspkg` with `dev-libs/slotoptarget` installed at
+`SLOT="2"` → stored `RDEPEND` is `dev-libs/slotoptarget:2/2=`; without
+it, bare `:=`). New `ebuild_merge`/`binpkg` tests; the committed
+`fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2` was regenerated (it now
+carries `RDEPEND`), which the `$PKGDIR`-scan contract test now asserts is
+actually walked.
+
+### Profile `parent` lines resolve an aliased repo name
+
+`repos.conf` / `layout.conf` `aliases =` were parsed
+(`RepoConfig::aliases`) but wired nowhere. A profile `parent` line
+`<name>:some/path` now resolves `<name>` through the alias map when it
+isn't a canonical repo name — real `LocationsManager._expand_parent_colon`
+looks the token up via `repositories.get_location_for_name`, which is
+keyed on aliases as well as canonical names. `resolve_config` gained a
+`repo_aliases: &[(String, PathBuf)]` param (every repo's aliases × its
+location), threaded to `expand_parent_colon`, which checks the canonical
+`repos` list first then `repo_aliases` (an alias never shadows a
+canonical name — real `config.py`'s alias-registration loop skips an
+already-taken name).
+
+**Not a gap, and deliberately left as-is: an atom's own `::alias`.** Real
+`match_from_list` filters `::repo` with a straight `pkg.repo ==
+atom.repo` name comparison (`dep/__init__.py:3201`) — no alias step — so
+`emerge cat/pkg::somealias` finds nothing. Portuale already matched
+this on both sides (the Python reference calls the real
+`portage.dep.match_from_list`; the fixture
+`dev-libs/repnamepkg::repnamesection` — an alias — is rejected by Rust
+and Python identically). Adding alias resolution to the Rust
+`matches_repo` would *diverge* from real portage.
+
+New contract test builds an ad-hoc config tree whose main profile's
+`parent` names an overlay by its alias (`ovl:shared`, canonical
+`otherrepo`) and asserts the aliased-in `USE=aliasflag` reaches `-pv`
+output, Rust ≡ Python; +1 `portage-profile` unit test (alias resolves,
+and an unregistered alias gets the same "no repo named" error).
+
