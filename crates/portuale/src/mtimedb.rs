@@ -17,6 +17,10 @@ pub enum ResumeEntryKind {
     Binary,
 }
 
+/// `(kind, category, package, version)` -- one entry of a resume
+/// mergelist.
+pub type ResumeCpv = (ResumeEntryKind, String, String, String);
+
 fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');

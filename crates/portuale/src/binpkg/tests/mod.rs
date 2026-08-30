@@ -41,5 +41,24 @@ fn make_xpak_binpkg(prefix: &[u8], entries: &[(&str, &[u8])]) -> Vec<u8> {
     out.extend_from_slice(b"STOP");
     out
 }
+
+// The in-process inner metadata.tar reader.
+
+/// One inner-tar member for the unit tests, written through `tar::Builder`.
+struct InnerTestEntry<'a> {
+    name: &'a str,
+    entry_type: tar::EntryType,
+    link_name: &'a str,
+    data: &'a [u8],
+}
+
+fn inner_entry<'a>(name: &'a str, data: &'a [u8]) -> InnerTestEntry<'a> {
+    InnerTestEntry {
+        name,
+        entry_type: tar::EntryType::Regular,
+        link_name: "",
+        data,
+    }
+}
 mod inner;
 mod metadata;

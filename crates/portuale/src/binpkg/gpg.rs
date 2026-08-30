@@ -98,3 +98,124 @@ pub fn gpg_policy_for_features(features: &str) -> (bool, bool) {
         (true, false)
     }
 }
+
+/// Fill the verify command's two placeholders: `[PORTAGE_CONFIG]` becomes
+/// `--homedir <gpg_home>`, `[SIGNATURE]` becomes `signature_arg` (either
+/// `<sig-file> -` for a detached `.sig`, or `--output - -` for a
+/// clear-signed Manifest). Split on whitespace, not `shlex` +
+/// `varexpand` (a path with spaces would not split cleanly).
+// Portage: `BINPKG_GPG_VERIFY_BASE_COMMAND`.
+pub(crate) fn gpg_verify_argv(template: &str, gpg_home: &str, signature_arg: &str) -> Vec<String> {
+    template
+        .replace("[PORTAGE_CONFIG]", &format!("--homedir {gpg_home} "))
+        .replace("[SIGNATURE]", signature_arg)
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Run one `gpg --verify` argv with `stdin_data` on its stdin. Exit-status
+/// 0 is not enough: GnuPG returns OK even for an untrusted signer, so the
+/// `--status-fd` lines must carry both `GOODSIG` and
+/// `TRUST_ULTIMATE`/`TRUST_FULLY`, else `InvalidSignature`. Returns gpg's
+/// stdout (the cleartext for a clear-signed Manifest; empty for a
+/// detached `.sig`).
+// Portage: `gpkg.checksum_helper.finish`, `gpkg._check_gpg_status`.
+pub(crate) fn run_gpg_verify(argv: &[String], stdin_data: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut child = Command::new(&argv[0])
+        .args(&argv[1..])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawning {}: {e}", argv[0]))?;
+    // A write failure here (EPIPE: gpg already exited on bad input) is not
+    // the verdict; gpg's exit status + status lines below are.
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(stdin_data);
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("waiting for {}: {e}", argv[0]))?;
+    let status_lines = String::from_utf8_lossy(&output.stderr);
+    let good_sig = status_lines
+        .lines()
+        .any(|l| l.starts_with("[GNUPG:] GOODSIG"));
+    let trusted = status_lines
+        .lines()
+        .any(|l| l.starts_with("[GNUPG:] TRUST_ULTIMATE") || l.starts_with("[GNUPG:] TRUST_FULLY"));
+    if output.status.success() && good_sig && trusted {
+        return Ok(output.stdout);
+    }
+    // Single-cause summaries only; otherwise "(none available)", so a
+    // malformed signature gets no confident-sounding diagnosis.
+    // Portage: `gpkg.show_gpg_error`.
+    let mut causes = 0;
+    let mut summary = "(none available)";
+    if status_lines
+        .lines()
+        .any(|l| l.starts_with("[GNUPG:] NODATA"))
+    {
+        causes += 1;
+        summary = "binpkg appears unsigned (missing any signature)";
+    }
+    if status_lines
+        .lines()
+        .any(|l| l.starts_with("[GNUPG:] NO_PUBKEY"))
+    {
+        causes += 1;
+        summary = "binpkg signed with at least one unknown key.";
+    }
+    if status_lines
+        .lines()
+        .any(|l| l.starts_with("[GNUPG:] TRUST_UNDEFINED"))
+    {
+        causes += 1;
+        summary = "binpkg signed with a known key of undefined trust.";
+    }
+    if causes != 1 {
+        summary = "(none available)";
+    }
+    Err(format!(
+        "GnuPG verification failed: {summary}\n{}",
+        status_lines.trim_end()
+    ))
+}
+
+/// Per-file detached verification: the `.sig` sidecar goes to a temp file
+/// named in `[SIGNATURE]`, the member bytes on stdin. `what` names the
+/// member for the error.
+// Portage: `gpkg._verify_binpkg`'s `f_signature` branch.
+pub(crate) fn verify_detached_signature(
+    member_bytes: &[u8],
+    sig_bytes: &[u8],
+    gpg: &GpgVerify,
+    what: &str,
+) -> Result<(), String> {
+    let sig_dir = TempDir::new("portuale-sign").keep();
+    let sig_path = sig_dir.join("x.sig");
+    fs::write(&sig_path, sig_bytes).map_err(|e| format!("{}: {e}", sig_path.display()))?;
+    let argv = gpg_verify_argv(
+        &gpg.base_command,
+        &gpg.gpg_home,
+        &format!("{} -", sig_path.display()),
+    );
+    let result = run_gpg_verify(&argv, member_bytes).map(|_| ());
+    let _ = fs::remove_file(&sig_path);
+    result.map_err(|e| format!("{what}: {e}"))
+}
+
+/// Clear-signed-`Manifest` verification: `[SIGNATURE]` becomes `--output -
+/// -`, the whole signed Manifest goes on stdin, and gpg's stdout (the
+/// cleartext `DATA` lines) comes back for Manifest parsing.
+// Portage: `gpkg._verify_binpkg`'s Manifest branch.
+pub(crate) fn verify_clearsigned_manifest(
+    signed_manifest: &[u8],
+    gpg: &GpgVerify,
+    gpkg_path: &Path,
+) -> Result<Vec<u8>, String> {
+    let argv = gpg_verify_argv(&gpg.base_command, &gpg.gpg_home, "--output - -");
+    run_gpg_verify(&argv, signed_manifest)
+        .map_err(|e| format!("{}: Manifest {e}", gpkg_path.display()))
+}

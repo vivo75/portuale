@@ -9,6 +9,7 @@ mod buildpkgonly;
 mod entry_env;
 mod logs;
 mod resume;
+mod source_merge;
 mod status;
 
 #[cfg(test)]
@@ -18,6 +19,7 @@ pub use buildpkgonly::*;
 pub(crate) use entry_env::*;
 pub(crate) use logs::*;
 pub(crate) use resume::*;
+pub use source_merge::*;
 pub(crate) use status::*;
 
 use crate::ebuild_package::{self, PackageOptions};

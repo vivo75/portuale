@@ -715,6 +715,62 @@ pub fn verify_digests(path: &Path, digests: &DistfileDigests) -> Result<(), Erro
     Ok(())
 }
 
+/// The streaming sibling of [`verify_digests`]: the same size-first check
+/// and the same BLAKE2B/SHA512 set, but the bytes come from a reader --
+/// the gpkg outer-container member stream, so a large member is neither
+/// buffered nor copied to scratch. `name` labels the member in errors.
+pub fn verify_digests_reader<R: std::io::Read>(
+    name: &str,
+    mut reader: R,
+    digests: &DistfileDigests,
+) -> Result<(), Error> {
+    // `blake2`/`sha2` re-export the same `digest::Digest` trait; see
+    // `verify_digests`.
+    use blake2::Digest as _;
+
+    let mut blake2b = blake2::Blake2b512::new();
+    let mut sha512 = sha2::Sha512::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut size: u64 = 0;
+    loop {
+        let n = reader.read(&mut buffer).map_err(|source| Error::Io {
+            path: name.to_string(),
+            source,
+        })?;
+        if n == 0 {
+            break;
+        }
+        size += n as u64;
+        blake2b.update(&buffer[..n]);
+        sha512.update(&buffer[..n]);
+    }
+    if size != digests.size {
+        return Err(Error::SizeMismatch {
+            path: name.to_string(),
+            expected: digests.size,
+            got: size as usize,
+        });
+    }
+    let blake2b_hex = to_hex(&blake2b.finalize());
+    let sha512_hex = to_hex(&sha512.finalize());
+    for (algo, expected) in &digests.hashes {
+        let actual = match algo.as_str() {
+            "BLAKE2B" => blake2b_hex.clone(),
+            "SHA512" => sha512_hex.clone(),
+            _ => continue,
+        };
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(Error::HashMismatch {
+                path: name.to_string(),
+                algo: algo.to_string(),
+                expected: expected.to_string(),
+                actual,
+            });
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

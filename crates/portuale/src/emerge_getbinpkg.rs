@@ -24,6 +24,24 @@ fn unix_now() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Arguments of [`run_merge_plan`].
+pub struct RunMergePlanArgs<'a> {
+    pub entries: &'a [GraphEntry],
+    pub config: &'a Config,
+    pub repos: &'a [RepoConfig],
+    pub root: &'a Path,
+    pub pkgdir: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub merge_options: &'a MergeOptions,
+    pub keep_going: bool,
+    pub buildpkg: Option<&'a crate::ebuild_package::PackageOptions>,
+    pub buildpkg_exclude: &'a [String],
+    /// The scheduler-display mode, computed once by the caller. The mixed plan
+    /// runs serially, so the mode only carries the blank/`>>>` rule; `Jobs:`
+    /// events for the mixed plan are a later slice.
+    pub mode: crate::emerge_build::StatusMode,
+}
+
 /// Whether the local `<pkgdir>/Packages` index still lists this cpv. Like
 /// [`local_index_record`] minus the basename tie-break (no file to name it
 /// after): with several same-`CPV` stanzas the entry's `BUILD_ID` picks.

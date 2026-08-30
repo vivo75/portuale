@@ -2,6 +2,25 @@
 
 use crate::emerge_build::*;
 
+/// This entry's `mtimedb["resume"]` mergelist item, or `None` for an entry
+/// that never merges (an installed no-op, a blocker removal, or an entry
+/// with no visible candidate). The kind tag matches what `entries_not_merged`
+/// writes on the failure path.
+// Portage: Scheduler.py, _save_resume_list
+pub(crate) fn resume_cpv(entry: &GraphEntry) -> Option<crate::mtimedb::ResumeCpv> {
+    let version = entry_version(&entry.outcome)?;
+    let kind = match entry.source {
+        CandidateSource::Ebuild => crate::mtimedb::ResumeEntryKind::Ebuild,
+        CandidateSource::Binary => crate::mtimedb::ResumeEntryKind::Binary,
+    };
+    Some((
+        kind,
+        entry.category.clone(),
+        entry.package.clone(),
+        version.to_string(),
+    ))
+}
+
 /// The entry's `::repo` for the progress lines. An empty fallback keeps a
 /// would-be `None` loud (a visibly wrong `cpv::`) rather than silently
 /// reshaping the line.
