@@ -199,14 +199,24 @@ CASES = [
         0,
     ),
     (
-        "USE-dep enforcement: negated flag declared but enabled does not match",
-        ["--pretend", "dev-libs/useflagpkg[-foo]"],
+        "USE-dep enforcement: negated flag declared but enabled does not match (--autounmask-use=n)",
+        ["--pretend", "--autounmask-use=n", "dev-libs/useflagpkg[-foo]"],
         1,
     ),
     (
-        "USE-dep enforcement: plain flag declared but disabled does not match",
-        ["--pretend", "dev-libs/useflagpkg[missingflag]"],
+        "USE-dep enforcement: plain flag declared but disabled does not match (--autounmask-use=n)",
+        ["--pretend", "--autounmask-use=n", "dev-libs/useflagpkg[missingflag]"],
         1,
+    ),
+    (
+        "--autounmask-use: a top-level [-flag] mismatch resolves + prints the USE changes block",
+        ["--pretend", "dev-libs/useflagpkg[-foo]"],
+        0,
+    ),
+    (
+        "--autounmask-use: a top-level [flag] mismatch (flag in IUSE) resolves too",
+        ["--pretend", "dev-libs/useflagpkg[missingflag]"],
+        0,
     ),
     (
         "USE-dep enforcement: negated flag declared and disabled matches",
@@ -214,7 +224,7 @@ CASES = [
         0,
     ),
     (
-        "USE-dep enforcement: flag not declared in IUSE at all, no default, never matches",
+        "USE-dep enforcement: flag not declared in IUSE at all, no default, never matches (unfixable)",
         ["--pretend", "dev-libs/useflagpkg[nonexistentflag]"],
         1,
     ),
@@ -1701,32 +1711,32 @@ def test_use_dep_dependency_atoms_are_resolved_not_dropped(emerge_binary, fixtur
     ]
 
 
-def test_use_dep_rejected_dependency_atom_reports_no_visible_ebuild(
+def test_autounmask_use_resolves_a_dependency_use_dep_mismatch(
     emerge_binary, fixture_env
 ):
     """dev-libs/usedeprejectedpkg's own RDEPEND is
     "dev-libs/useflagpkg[-foo]" -- useflagpkg's own "foo" is enabled
-    globally by the fixture profile chain (see the plain --verbose
-    contract test), so "-foo" is genuinely never satisfied. Same "report,
-    don't fail the whole graph" spirit as an unresolvable dependency
-    (test_unresolvable_dependency_is_reported_not_silently_dropped
-    above): the parent still resolves, the rejected dependency is
-    reported on stderr, not silently dropped or silently accepted. Also
-    carries a --autounmask-use suggestion (on by default, unlike the
-    keyword one -- see the autounmask_suggest_use tests below) since
-    "foo" is genuinely settable via package.use here."""
+    globally, so "-foo" isn't satisfied by default. With --autounmask-use
+    on by default, the graph RESOLVES: both packages print as New on
+    stdout, and the `The following USE changes are necessary to proceed:`
+    block on stderr carries the real two-line dep chain (`#required by
+    <parent cpv>::<repo>` then `#required by <parent atom> (argument)`).
+    (--autounmask-use=n keeps the old "no visible ebuild" behavior -- see
+    test_autounmask_use_dependency_suggestion_is_suppressed_by_autounmask_use_n.)"""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/usedeprejectedpkg"], fixture_env
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N    ] dev-libs/usedeprejectedpkg-1.0 ',
+        "[ebuild  N    ] dev-libs/usedeprejectedpkg-1.0 ",
+        "[ebuild  N    ] dev-libs/useflagpkg-1.0 ",
     ]
-    assert result.stderr.strip() == (
-        '!!! no visible ebuild for dependency "dev-libs/useflagpkg"\n'
-        '!!! note: dev-libs/useflagpkg-1.0 exists but its USE flags don\'t satisfy '
-        'this atom; --autounmask-use suggests adding "=dev-libs/useflagpkg-1.0 -foo" '
-        'to package.use'
+    assert result.stderr == (
+        "\nThe following USE changes are necessary to proceed:\n"
+        ' (see "package.use" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/usedeprejectedpkg-1.0::testrepo\n"
+        "# required by dev-libs/usedeprejectedpkg (argument)\n"
+        ">=dev-libs/useflagpkg-1.0 -foo\n"
     )
 
 
@@ -1752,20 +1762,19 @@ def test_use_dep_enforcement_negated_flag_declared_but_enabled_does_not_match(
     emerge_binary, fixture_env
 ):
     """Same fixture as above, but "[-foo]": "foo" IS declared, but it's
-    enabled, not disabled -- genuinely unsatisfied, so there's no visible
-    candidate for this atom at all. Also carries a --autounmask-use
-    suggestion (on by default) since "foo" is genuinely settable via
-    package.use here."""
+    enabled, not disabled -- genuinely unsatisfied. With --autounmask-use=n
+    (autounmask-use is on by default and would otherwise resolve this via
+    an implicit package.use flip -- see the resolution test below) there's
+    no visible candidate for this atom at all."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg[-foo]"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-use=n", "dev-libs/useflagpkg[-foo]"],
+        fixture_env,
     )
     assert result.returncode == 1
     assert result.stdout == ""
     assert result.stderr.strip() == (
-        'emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".\n'
-        'note: dev-libs/useflagpkg-1.0 exists but its USE flags don\'t satisfy this '
-        'atom; --autounmask-use suggests adding "=dev-libs/useflagpkg-1.0 -foo" to '
-        'package.use'
+        'emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".'
     )
 
 
@@ -1774,12 +1783,42 @@ def test_use_dep_enforcement_plain_flag_declared_but_disabled_does_not_match(
 ):
     """"missingflag" is declared in useflagpkg's own IUSE but never
     enabled anywhere in the fixture profile chain -- "[missingflag]"
-    (must be enabled) is genuinely unsatisfied."""
+    (must be enabled) is genuinely unsatisfied. --autounmask-use=n keeps
+    it that way (it would otherwise resolve via an implicit flip)."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "dev-libs/useflagpkg[missingflag]"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-use=n", "dev-libs/useflagpkg[missingflag]"],
+        fixture_env,
     )
     assert result.returncode == 1
     assert result.stdout == ""
+
+
+def test_autounmask_use_resolves_a_top_level_use_dep_mismatch(emerge_binary, fixture_env):
+    """--autounmask-use is on by default (real create_depgraph_params; no
+    --autounmask-keep-keywords-style asymmetry): a top-level atom whose
+    plain USE-dep a `package.use` flip would satisfy RESOLVES, applying
+    the implicit change. `useflagpkg[-foo]` -> `foo` (default on) flipped
+    off; `-v` shows the adjusted `USE="-foo …"`, the `The following USE
+    changes are necessary to proceed:` block (real _display_autounmask's
+    use_changes_msg -- `>=<cpv>` form via check_if_latest, `(see
+    "package.use" …)`) goes to stderr, exit 0."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "dev-libs/useflagpkg[-foo]"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines()[0].startswith(
+        "[ebuild  N     ] dev-libs/useflagpkg-1.0"
+    )
+    assert 'USE="-foo' in result.stdout
+    assert result.stderr == (
+        "\nThe following USE changes are necessary to proceed:\n"
+        ' (see "package.use" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/useflagpkg[-foo] (argument)\n"
+        ">=dev-libs/useflagpkg-1.0 -foo\n"
+    )
 
 
 def test_use_dep_enforcement_negated_flag_declared_and_disabled_matches(
@@ -2147,7 +2186,7 @@ def test_autounmask_keyword_changes_appear_in_json(emerge_binary, fixture_env):
     "keyword_suggestion" field -- that was for the unresolved
     "no_visible_candidate" case), and the implicit change is exposed as a
     top-level "autounmask_keyword_changes" array
-    ({"cpv", "token", "dep_chain"})."""
+    ({"atom", "token", "dep_chain"} -- atom carries its op prefix)."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--autounmask", "--json", "dev-libs/autounmaskdepconsumer"],
@@ -2159,7 +2198,7 @@ def test_autounmask_keyword_changes_appear_in_json(emerge_binary, fixture_env):
     assert dep["outcome"] == "new"
     assert payload["autounmask_keyword_changes"] == [
         {
-            "cpv": "dev-libs/autounmaskkeywordpkg-1.0",
+            "atom": "=dev-libs/autounmaskkeywordpkg-1.0",
             "token": "~amd64",
             "dep_chain": [
                 "required by dev-libs/autounmaskdepconsumer-1.0::testrepo",
@@ -2194,12 +2233,13 @@ def test_autounmask_use_dependency_suggestion_is_suppressed_by_autounmask_use_n(
     )
 
 
-def test_autounmask_use_dependency_suggestion_appears_in_json(emerge_binary, fixture_env):
-    """--json's own mirror of the plain-text note above: a
-    "no_visible_candidate" entry carries a "use_suggestion" field
-    (present only for that one outcome, the mirror image of
-    "provenance") -- {"version", "flags": [{"flag", "enabled"}, ...]}
-    when --autounmask-use found something to suggest, null otherwise."""
+def test_autounmask_use_changes_appear_in_json(emerge_binary, fixture_env):
+    """--json's own mirror: with --autounmask-use resolution the
+    USE-masked dependency resolves as a normal "new" entry (no
+    "use_suggestion" field -- that was for the unresolved case), and the
+    implicit change is exposed as a top-level "autounmask_use_changes"
+    array ({"atom", "token", "dep_chain"} -- atom is the `>=<cpv>` form
+    real check_if_latest picks for USE, bug #536392)."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--json", "dev-libs/usedeprejectedpkg"],
@@ -2208,28 +2248,33 @@ def test_autounmask_use_dependency_suggestion_appears_in_json(emerge_binary, fix
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     dep = next(e for e in payload["entries"] if e["package"] == "useflagpkg")
-    assert dep["outcome"] == "no_visible_candidate"
-    assert "provenance" not in dep
-    assert dep["use_suggestion"] == {
-        "version": "1.0",
-        "flags": [{"flag": "foo", "enabled": False}],
-    }
-    parent = next(e for e in payload["entries"] if e["package"] == "usedeprejectedpkg")
-    assert parent["outcome"] == "new"
-    assert "use_suggestion" not in parent
+    assert dep["outcome"] == "new"
+    assert payload["autounmask_keyword_changes"] == []
+    assert payload["autounmask_use_changes"] == [
+        {
+            "atom": ">=dev-libs/useflagpkg-1.0",
+            "token": "-foo",
+            "dep_chain": [
+                "required by dev-libs/usedeprejectedpkg-1.0::testrepo",
+                "required by dev-libs/usedeprejectedpkg (argument)",
+            ],
+        }
+    ]
 
 
-def test_autounmask_use_parent_flip_suggestion_appears_in_json(emerge_binary, fixture_env):
-    """--autounmask-use's own second, architecturally distinct mechanism
-    (real _show_unsatisfied_dep's own opt=/opt? handling, flipping the
-    *requesting parent's* own flag rather than the candidate's):
-    dev-libs/useeqparentoffpkg's own RDEPEND on dev-libs/useeqchildpkg
-    "[eqflag=]" was originally conditional on the parent's own eqflag
-    (currently off) -- carries both use_suggestion (Part A, flip the
-    child's own eqflag) and the new parent_use_suggestion field (Part B,
-    flip the parent's own eqflag instead) simultaneously, matching real
-    portage's own missing_use_reasons allowing both fixes for the same
-    mismatch."""
+def test_autounmask_use_resolves_the_opt_conditional_dependency_via_the_child_flip(
+    emerge_binary, fixture_env
+):
+    """dev-libs/useeqparentoffpkg's own RDEPEND on dev-libs/useeqchildpkg
+    "[eqflag=]" evaluates to "[-eqflag]" (parent's eqflag off); the child
+    has eqflag on. With --autounmask-use on by default, real portage
+    resolves this by flipping the *child's* own eqflag off (the plain
+    candidate flip -- real _needed_use_config_changes[child]), so both
+    packages resolve as New and a single "USE changes" block covers the
+    child change. Real portage's opt=-aware *parent* flip (flipping
+    useeqparentoffpkg's own eqflag on instead) is only a fallback when
+    the child flip is impossible -- not exercised by this fixture, and a
+    separate future increment."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "--json", "dev-libs/useeqparentoffpkg"],
@@ -2238,20 +2283,17 @@ def test_autounmask_use_parent_flip_suggestion_appears_in_json(emerge_binary, fi
     assert result.returncode == 0
     payload = json.loads(result.stdout)
     dep = next(e for e in payload["entries"] if e["package"] == "useeqchildpkg")
-    assert dep["outcome"] == "no_visible_candidate"
-    assert dep["use_suggestion"] == {
-        "version": "1.0",
-        "flags": [{"flag": "eqflag", "enabled": False}],
-    }
-    assert dep["parent_use_suggestion"] == {
-        "category": "dev-libs",
-        "package": "useeqparentoffpkg",
-        "version": "1.0",
-        "flags": [{"flag": "eqflag", "enabled": True}],
-    }
-    parent = next(e for e in payload["entries"] if e["package"] == "useeqparentoffpkg")
-    assert parent["outcome"] == "new"
-    assert "parent_use_suggestion" not in parent
+    assert dep["outcome"] == "new"
+    assert payload["autounmask_use_changes"] == [
+        {
+            "atom": ">=dev-libs/useeqchildpkg-1.0",
+            "token": "-eqflag",
+            "dep_chain": [
+                "required by dev-libs/useeqparentoffpkg-1.0::testrepo",
+                "required by dev-libs/useeqparentoffpkg (argument)",
+            ],
+        }
+    ]
 
 
 def test_autounmask_use_parent_flip_suggestion_is_suppressed_by_autounmask_use_n(
@@ -4418,30 +4460,20 @@ def test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled(emerge_bin
     IUSE="eqflag" (no "+") defaults it OFF, so the identical
     "[eqflag=]" use-dep now evaluates to "[-eqflag]" (must be disabled)
     -- which does NOT match dev-libs/useeqchildpkg's own default-on
-    eqflag, so the dependency is reported unresolvable (same "genuinely
-    unresolvable, but doesn't fail the whole call" precedent
-    dev-libs/missingdep already established), not silently dropped or
-    incorrectly satisfied. Also carries *two* --autounmask-use
-    suggestions: Part A's own plain per-candidate flip (flip the child's
-    own eqflag off), and Part B's own opt=-aware parent flip (flip the
-    parent's own eqflag on instead, which would re-evaluate the RDEPEND's
-    own "[eqflag=]" to "[eqflag]", satisfied by the child's own
-    default-on eqflag) -- both real, independent fixes for the same
-    mismatch, matching real portage's own missing_use_reasons allowing
-    both at once."""
+    eqflag. With --autounmask-use=n (autounmask-use is on by default and
+    would resolve this via a child-flip -- see
+    test_autounmask_use_resolves_the_opt_conditional_dependency_via_the_child_flip)
+    the dependency is reported unresolvable, not silently dropped or
+    incorrectly satisfied."""
     result = _run(
-        [str(emerge_binary)], ["--pretend", "dev-libs/useeqparentoffpkg"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-use=n", "dev-libs/useeqparentoffpkg"],
+        fixture_env,
     )
     assert result.returncode == 0
     assert result.stdout.strip() == '[ebuild  N    ] dev-libs/useeqparentoffpkg-1.0'
     assert result.stderr.strip() == (
-        '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"\n'
-        '!!! note: dev-libs/useeqchildpkg-1.0 exists but its USE flags don\'t satisfy '
-        'this atom; --autounmask-use suggests adding "=dev-libs/useeqchildpkg-1.0 '
-        '-eqflag" to package.use\n'
-        "!!! note: dev-libs/useeqparentoffpkg-1.0's own USE flags need to change to "
-        'satisfy this dependency; --autounmask-use suggests adding '
-        '"=dev-libs/useeqparentoffpkg-1.0 eqflag" to package.use'
+        '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
     )
 
 
@@ -7790,7 +7822,7 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,'
         '"required_by":[],"builds_against_running_root":null,"blockers":[]}],'
-        '"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[]}\n'
+        '"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[]}\n'
     )
 
 
@@ -7808,7 +7840,7 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
         '"provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},'
         '"requested":true,"required_by":[],"builds_against_running_root":null,'
         '"blockers":[]}],"slot_conflicts":[],'
-        '"changed_deps_report":[],"autounmask_keyword_changes":[]}\n'
+        '"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[]}\n'
     )
 
 

@@ -1598,18 +1598,20 @@ fn changed_deps_report_entry_to_json(c: &ChangedDepsReportEntry) -> String {
 fn autounmask_change_to_json(change: &portage_repo::AutounmaskChange) -> String {
     let chain: Vec<String> = change.dep_chain.iter().map(|l| json_string(l)).collect();
     format!(
-        "{{\"cpv\":{},\"token\":{},\"dep_chain\":[{}]}}",
-        json_string(&change.cpv),
+        "{{\"atom\":{},\"token\":{},\"dep_chain\":[{}]}}",
+        json_string(&change.atom),
         json_string(&change.token),
         chain.join(",")
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn print_json(
     entries: &[GraphEntry],
     slot_conflicts: &[SlotConflict],
     changed_deps_report: &[ChangedDepsReportEntry],
     autounmask_keyword_changes: &[portage_repo::AutounmaskChange],
+    autounmask_use_changes: &[portage_repo::AutounmaskChange],
     top_level_pkgs: &HashSet<(String, String)>,
     verbose: bool,
     running_root: Option<&Path>,
@@ -1623,16 +1625,21 @@ fn print_json(
         .iter()
         .map(changed_deps_report_entry_to_json)
         .collect();
-    let autounmask_json: Vec<String> = autounmask_keyword_changes
+    let autounmask_kw_json: Vec<String> = autounmask_keyword_changes
+        .iter()
+        .map(autounmask_change_to_json)
+        .collect();
+    let autounmask_use_json: Vec<String> = autounmask_use_changes
         .iter()
         .map(autounmask_change_to_json)
         .collect();
     println!(
-        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}]}}",
+        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}]}}",
         entries_json.join(","),
         conflicts_json.join(","),
         changed_deps_report_json.join(","),
-        autounmask_json.join(",")
+        autounmask_kw_json.join(","),
+        autounmask_use_json.join(",")
     );
 }
 
@@ -4682,6 +4689,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &result.slot_conflicts,
             &result.changed_deps_report,
             &result.autounmask_keyword_changes,
+            &result.autounmask_use_changes,
             &top_level_pkgs,
             verbose,
             root_deps_running_root.as_deref(),
@@ -4787,22 +4795,35 @@ pub fn run(args: &[String]) -> ExitCode {
     // Real portage does NOT print the "Use --autounmask-write" hint
     // under `--pretend` (`:11084` `not pretend`), and `emerge --pretend`
     // still exits 0 (real `actions.py:563` `return os.EX_OK`).
-    if !result.autounmask_keyword_changes.is_empty() {
-        eprintln!(
-            "\nThe following {} are necessary to proceed:",
-            color.c("BAD", "keyword changes")
-        );
-        eprintln!(" (see \"package.accept_keywords\" in the portage(5) man page for more details)");
-        for change in &result.autounmask_keyword_changes {
-            for line in &change.dep_chain {
-                eprintln!("# {line}");
+    let print_autounmask_block =
+        |reason: &str, file: &str, changes: &[portage_repo::AutounmaskChange]| {
+            if changes.is_empty() {
+                return;
             }
             eprintln!(
-                "{}",
-                color.c("INFORM", &format!("={} {}", change.cpv, change.token))
+                "\nThe following {} are necessary to proceed:",
+                color.c("BAD", reason)
             );
-        }
-    }
+            eprintln!(" (see \"{file}\" in the portage(5) man page for more details)");
+            for change in changes {
+                for line in &change.dep_chain {
+                    eprintln!("# {line}");
+                }
+                eprintln!(
+                    "{}",
+                    color.c("INFORM", &format!("{} {}", change.atom, change.token))
+                );
+            }
+        };
+    // Real `_display_autounmask` order: keyword block, then (mask,) then
+    // USE. The `atom` field already carries its own op prefix (`=` for
+    // keywords, `>=`/`>=…:slot`/`=` for USE).
+    print_autounmask_block(
+        "keyword changes",
+        "package.accept_keywords",
+        &result.autounmask_keyword_changes,
+    );
+    print_autounmask_block("USE changes", "package.use", &result.autounmask_use_changes);
 
     // `--changed-deps-report`: real `_changed_deps_report`'s own WARN
     // block, ported verbatim (real portage colorizes it when the

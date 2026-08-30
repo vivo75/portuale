@@ -5277,9 +5277,10 @@ fn resolve_root_deps_build_entries(
         // Likewise `--getbinpkg`: a `--root-deps` build entry is always
         // an ebuild built against the running root.
         false,
-        // `--autounmask` keyword resolution is a target-`ROOT` concern
-        // (`resolve_pretend_graph`); a `--root-deps` running-root build
-        // entry never applies it.
+        // `--autounmask` keyword / USE resolution is a target-`ROOT`
+        // concern (`resolve_pretend_graph`); a `--root-deps` running-root
+        // build entry never applies either.
+        false,
         false,
     ) else {
         return Vec::new();
@@ -5593,6 +5594,17 @@ pub fn resolve_pretend(
     // change for the `The following keyword changes are necessary to
     // proceed:` block.
     autounmask_keywords: bool,
+    // Real `--autounmask-use` USE resolution (`resolve_pretend_graph`'s
+    // `autounmask_suggest_use`, on by default): when set, a candidate
+    // that is `is_visible` but whose atom use-deps don't match its
+    // default USE state is kept anyway *if* a `package.use` flip would
+    // fix it (`suggested_use_flip` is `Some`) -- real portage applies
+    // the implicit `=cpv <flags>` change and re-resolves. The caller
+    // then re-detects the flip, applies it to the entry's effective USE
+    // (so `-pv`'s `USE="…"` line, REQUIRED_USE and the dep walk all see
+    // the adjusted state), and records the change for the `The following
+    // USE changes are necessary to proceed:` block.
+    autounmask_use: bool,
 ) -> Result<PretendOutcome, String> {
     // Real `create_depgraph_params.py:179`: `--emptytree` does
     // `myparams.pop("selective", None)`.
@@ -5756,7 +5768,26 @@ pub fn resolve_pretend(
                 else {
                     return false;
                 };
-                portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
+                if portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
+                {
+                    return true;
+                }
+                // Real `--autounmask-use`: a plain USE-dep mismatch a
+                // `package.use` flip would fix (`suggested_use_flip` is
+                // `Some`) keeps the candidate -- the graph layer applies
+                // the flip and records the change. `use_masked_only`
+                // already re-checks `is_visible` (redundant here, this
+                // candidate is in `visible`) and the same
+                // "only-a-flip-away" test.
+                autounmask_use
+                    && suggested_use_flip(
+                        candidate,
+                        &atom.category,
+                        &atom.package,
+                        use_deps,
+                        config,
+                    )
+                    .is_some()
             })
             .collect(),
         _ => matched,
@@ -6506,19 +6537,29 @@ pub struct GraphResult {
     /// from these, after the merge list. Empty unless `--autounmask` was
     /// explicit (see `autounmask_suggest_keywords`).
     pub autounmask_keyword_changes: Vec<AutounmaskChange>,
+    /// Real `--autounmask` USE changes applied to make the graph resolve
+    /// (real `_display_autounmask`'s `use_changes_msg`): one per entry
+    /// whose atom use-deps didn't match its default USE state but a
+    /// `package.use` flip fixed it (`suggested_use_flip`). Printed as the
+    /// `The following USE changes are necessary to proceed:` block, after
+    /// the keyword one. On by default (`autounmask_suggest_use`, unlike
+    /// the keyword kind).
+    pub autounmask_use_changes: Vec<AutounmaskChange>,
 }
 
 /// One real `--autounmask` change (`depgraph.py::_display_autounmask`):
 /// the implicit `package.accept_keywords` / `package.use` line plus its
-/// own `#required by …` dep-chain comment
-/// (`_get_dep_chain_as_comment`). v1 covers the keyword kind only.
+/// own `#required by …` dep-chain comment (`_get_dep_chain_as_comment`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AutounmaskChange {
-    /// `category/package-version` -- the exact-version `=<cpv>` form
-    /// (real `autounmask_unrestricted_atoms` defaults to `"n"`).
-    pub cpv: String,
-    /// The token to add after `=<cpv>` -- a `~<arch>` keyword for the
-    /// keyword kind.
+    /// The left-hand atom of the change line, op prefix included:
+    /// `=<cpv>` for a keyword change (real `autounmask_unrestricted_
+    /// atoms` defaults to `"n"`), `>=<cpv>` / `>=<cpv>:<slot>` / `=<cpv>`
+    /// for a USE change (real `check_if_latest(check_visibility=True)`,
+    /// bug #536392).
+    pub atom: String,
+    /// The token(s) to add after `atom` -- a `~<arch>` keyword, or a
+    /// space-joined `flag`/`-flag` list for a USE change.
     pub token: String,
     /// The `#required by …` comment lines, top-to-bottom, WITHOUT the
     /// leading `# ` (the renderer adds it) -- real
@@ -6575,6 +6616,40 @@ fn autounmask_dep_chain(
         chain.push(format!("required by {oc}/{op}"));
     }
     chain
+}
+
+/// Real `_display_autounmask`'s own `check_if_latest(pkg,
+/// check_visibility=True)` (`depgraph.py:10649`), for a `--autounmask`
+/// USE change's left-hand atom: `>=<cpv>` when `resolved` is the highest
+/// *visible* candidate of its cp, `>=<cpv>:<slot>` when it's the highest
+/// visible *in its own slot*, else `=<cpv>`. Real portage deliberately
+/// uses `>=` for USE (unlike keywords, which always use `=` -- bug
+/// #536392, "don't unmask undesired versions") so the change keeps
+/// applying to newer builds. A use-masked-only candidate is still
+/// `is_visible` (the mismatch is the atom's own use-dep, checked
+/// separately), so `resolved` itself counts as visible here.
+fn autounmask_use_atom_form(
+    resolved: &Candidate,
+    all_candidates: &[Candidate],
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> String {
+    let cpv = format!("{category}/{package}-{}", resolved.version);
+    let higher_visible = |same_slot: bool| {
+        all_candidates.iter().any(|c| {
+            (!same_slot || c.slot == resolved.slot)
+                && vercmp_ordering(&c.version, &resolved.version) == std::cmp::Ordering::Greater
+                && is_visible(c, category, package, config)
+        })
+    };
+    if !higher_visible(false) {
+        format!(">={cpv}")
+    } else if !higher_visible(true) {
+        format!(">={cpv}:{}", resolved.slot)
+    } else {
+        format!("={cpv}")
+    }
 }
 
 /// `--deep`/`-D` (real `lib/_emerge/main.py`'s own `"--deep": valid_integers`
@@ -7131,9 +7206,10 @@ pub fn resolve_pretend_graph(
     // Top-level atoms matched by `package.provided` -- see
     // `GraphResult::pprovided_atoms`.
     let mut pprovided_atoms: Vec<String> = Vec::new();
-    // Real `--autounmask` keyword changes applied during this walk -- see
-    // `GraphResult::autounmask_keyword_changes`.
+    // Real `--autounmask` changes applied during this walk -- see
+    // `GraphResult::autounmask_keyword_changes` / `autounmask_use_changes`.
     let mut autounmask_keyword_changes: Vec<AutounmaskChange> = Vec::new();
+    let mut autounmask_use_changes: Vec<AutounmaskChange> = Vec::new();
     let pprovided_refs: Vec<&str> = config.package_provided.iter().map(String::as_str).collect();
     // (category, package) -> every distinct owner that reached it via a
     // dependency string, accumulated separately from the BFS's own
@@ -7205,6 +7281,7 @@ pub fn resolve_pretend_graph(
             empty,
             getbinpkg,
             autounmask_suggest_keywords,
+            autounmask_suggest_use,
         )?;
 
         // `--changed-deps-report`: real portage stays "completely
@@ -7545,7 +7622,7 @@ pub fn resolve_pretend_graph(
         if autounmask_suggest_keywords && keyword_masked_only(resolved, &key.0, &key.1, config) {
             if let Some(kw) = suggested_keyword(resolved) {
                 autounmask_keyword_changes.push(AutounmaskChange {
-                    cpv: format!("{}/{}-{version}", key.0, key.1),
+                    atom: format!("={}/{}-{version}", key.0, key.1),
                     token: kw.to_string(),
                     dep_chain: autounmask_dep_chain(&owner, &current_atom, &top_level, &entries),
                 });
@@ -7640,7 +7717,7 @@ pub fn resolve_pretend_graph(
             };
             metadata
         };
-        let use_flags = effective_use_flags(
+        let mut use_flags = effective_use_flags(
             metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
             &config.use_tokens,
             &config.package_use,
@@ -7659,6 +7736,62 @@ pub fn resolve_pretend_graph(
             &key.0,
             &key.1,
         );
+
+        // Real `--autounmask-use` USE resolution: `resolve_pretend` kept
+        // this candidate despite an atom use-dep mismatch because a
+        // `package.use` flip fixes it (`suggested_use_flip`). Apply the
+        // flip to `use_flags` here -- once, at the graph layer -- so the
+        // `-pv` `USE="…"` line, the REQUIRED_USE check and the dependency
+        // walk below all see the adjusted state (real `_pkg_use_enabled`)
+        // -- and record the change (real `_display_autounmask`'s
+        // `use_changes_msg` + `_get_dep_chain_as_comment(pkg,
+        // unsatisfied_dependency=True)`).
+        if autounmask_suggest_use {
+            if let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty()) {
+                let iuse_declared: HashSet<String> = metadata
+                    .get("IUSE")
+                    .map(String::as_str)
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+                    .collect();
+                let iuse_set = valid_iuse(&iuse_declared, config);
+                if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &use_flags) {
+                    if let Some(flip) =
+                        suggested_use_flip(resolved, &key.0, &key.1, use_deps, config)
+                    {
+                        for (flag, enabled) in &flip {
+                            if *enabled {
+                                use_flags.insert(flag.clone());
+                            } else {
+                                use_flags.remove(flag);
+                            }
+                        }
+                        let token = flip
+                            .iter()
+                            .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        autounmask_use_changes.push(AutounmaskChange {
+                            atom: autounmask_use_atom_form(
+                                resolved,
+                                &repo_candidates,
+                                &key.0,
+                                &key.1,
+                                config,
+                            ),
+                            token,
+                            dep_chain: autounmask_dep_chain(
+                                &owner,
+                                &current_atom,
+                                &top_level,
+                                &entries,
+                            ),
+                        });
+                    }
+                }
+            }
+        }
 
         // Real `output.py:633-641`'s own `f`/`F` fetch-restrict column
         // (`not pkg.built` -> ebuild candidates only; a binary is already
@@ -8078,6 +8211,7 @@ pub fn resolve_pretend_graph(
         buildpkgonly_deps_unsatisfied,
         pprovided_atoms,
         autounmask_keyword_changes,
+        autounmask_use_changes,
     })
 }
 
@@ -8657,6 +8791,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8689,6 +8824,7 @@ mod tests {
             None,
             false,
             /* empty: */ true,
+            false,
             false,
             false,
         )
@@ -8778,6 +8914,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8816,6 +8953,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -8850,6 +8988,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -8941,6 +9080,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9024,6 +9164,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -9204,6 +9345,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9248,6 +9390,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9287,6 +9430,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -9397,6 +9541,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -9698,6 +9843,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9755,6 +9901,7 @@ mod tests {
             false,
             None,
             true,
+            false,
             false,
             false,
             false,
@@ -9866,6 +10013,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -9931,6 +10079,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -9969,6 +10118,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -10019,6 +10169,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -10170,6 +10321,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -10198,6 +10350,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -13895,8 +14048,8 @@ mod tests {
         assert_eq!(entry.keyword_mask, Some('~'));
         assert_eq!(resolved.autounmask_keyword_changes.len(), 1);
         assert_eq!(
-            resolved.autounmask_keyword_changes[0].cpv,
-            "dev-libs/autounmaskkeywordpkg-1.0"
+            resolved.autounmask_keyword_changes[0].atom,
+            "=dev-libs/autounmaskkeywordpkg-1.0"
         );
         assert_eq!(resolved.autounmask_keyword_changes[0].token, "~amd64");
     }
@@ -13949,7 +14102,7 @@ mod tests {
             false,
             true,
             true,
-            false,
+            true,
             false,
             false,
             false,
@@ -14046,46 +14199,22 @@ mod tests {
             "there are no ebuilds to satisfy \"dev-libs/useflagpkg[-foo]\"."
         );
 
-        let err_with_suggestion = resolve_pretend_graph(
-            &root,
-            &root,
-            &atoms,
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-        )
-        .expect_err("no visible candidate at all");
+        // With `--autounmask-use` (on by default), the same
+        // `use_masked_only` atom now RESOLVES via the implicit
+        // `package.use` flip rather than being fatal.
+        let resolved = graph_result_autounmask("dev-libs/useflagpkg[-foo]");
+        let entry = resolved
+            .entries
+            .iter()
+            .find(|e| e.package == "useflagpkg")
+            .expect("resolves via the flip");
+        assert!(matches!(entry.outcome, PretendOutcome::New { .. }));
+        assert_eq!(resolved.autounmask_use_changes.len(), 1);
         assert_eq!(
-            err_with_suggestion,
-            "there are no ebuilds to satisfy \"dev-libs/useflagpkg[-foo]\".\n\
-             note: dev-libs/useflagpkg-1.0 exists but its USE flags don't satisfy this atom; \
-             --autounmask-use suggests adding \"=dev-libs/useflagpkg-1.0 -foo\" to package.use"
+            resolved.autounmask_use_changes[0].atom,
+            ">=dev-libs/useflagpkg-1.0"
         );
+        assert_eq!(resolved.autounmask_use_changes[0].token, "-foo");
     }
 
     #[test]
@@ -14105,61 +14234,26 @@ mod tests {
     }
 
     #[test]
-    fn fixture_dependency_no_visible_candidate_gets_a_use_suggestion_once_enabled() {
-        let root = fixtures_root();
-        let config = portage_profile::resolve_config(
-            &root,
-            &root.join("repo"),
-            &[("overlay".to_string(), root.join("overlay"))],
-            &[],
-            "testrepo",
-            &HashMap::new(),
-        )
-        .expect("fixture config resolves");
-        let atoms = vec!["dev-libs/usedeprejectedpkg".to_string()];
-        let result = resolve_pretend_graph(
-            &root,
-            &root,
-            &atoms,
-            &config,
-            false,
-            false,
-            false,
-            false,
-            Deep::NotRequested,
-            &[],
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            false,
-            true,
-            false,
-            false,
-            false,
-            &[],
-            &[],
-            false,
-            None,
-            false,
-            false,
-            None,
-            &fixtures_root().join("distfiles"),
-            false,
-            false,
-        )
-        .expect("dependency's own NoVisibleCandidate is never fatal");
+    fn fixture_dependency_use_dep_mismatch_resolves_via_the_flip_once_autounmask_use_is_on() {
+        // `dev-libs/usedeprejectedpkg` RDEPENDs `dev-libs/useflagpkg[-foo]`.
+        // With `--autounmask-use` on the dependency RESOLVES (was
+        // `NoVisibleCandidate` + a `use_suggestion` before autounmask-use
+        // *resolution* shipped).
+        let result = graph_result_autounmask("dev-libs/usedeprejectedpkg");
         let dep = result
             .entries
             .iter()
             .find(|e| e.package == "useflagpkg")
             .expect("dependency entry present");
+        assert!(matches!(dep.outcome, PretendOutcome::New { .. }));
         assert_eq!(
-            dep.use_suggestion,
-            Some(("1.0".to_string(), vec![("foo".to_string(), false)]))
+            dep.use_flags_display
+                .iter()
+                .find(|(f, _)| f == "foo")
+                .map(|(_, on)| *on),
+            Some(false)
         );
+        assert_eq!(result.autounmask_use_changes.len(), 1);
     }
 
     #[test]
@@ -14268,7 +14362,7 @@ mod tests {
             false,
             true,
             true,
-            false,
+            true,
             false,
             false,
             false,
@@ -14301,7 +14395,7 @@ mod tests {
 
         assert_eq!(result.autounmask_keyword_changes.len(), 1);
         let change = &result.autounmask_keyword_changes[0];
-        assert_eq!(change.cpv, "dev-libs/autounmaskkeywordpkg-1.0");
+        assert_eq!(change.atom, "=dev-libs/autounmaskkeywordpkg-1.0");
         assert_eq!(change.token, "~amd64");
         assert_eq!(
             change.dep_chain,
@@ -14319,6 +14413,55 @@ mod tests {
         assert_eq!(
             result.autounmask_keyword_changes[0].dep_chain,
             vec!["required by dev-libs/autounmaskkeywordpkg (argument)".to_string()]
+        );
+    }
+
+    #[test]
+    fn autounmask_use_resolves_a_use_dep_mismatch_and_applies_the_flip_to_the_display() {
+        // `dev-libs/useflagpkg[-foo]` -- `foo` is default-on, the atom
+        // wants it off. `--autounmask-use` (on in `graph_result_
+        // autounmask`) applies the flip so the entry resolves as `New`,
+        // the `-pv` USE display shows `foo` disabled, and the change is
+        // recorded with the `>=<cpv>` atom form (real `check_if_latest`
+        // for USE, bug #536392).
+        let result = graph_result_autounmask("dev-libs/useflagpkg[-foo]");
+        let entry = result
+            .entries
+            .iter()
+            .find(|e| e.package == "useflagpkg")
+            .expect("useflagpkg resolves via the USE flip");
+        assert!(matches!(entry.outcome, PretendOutcome::New { .. }));
+        assert_eq!(
+            entry
+                .use_flags_display
+                .iter()
+                .find(|(f, _)| f == "foo")
+                .map(|(_, on)| *on),
+            Some(false),
+            "the autounmask flip must be reflected in the -pv USE display"
+        );
+        assert!(result.autounmask_keyword_changes.is_empty());
+        assert_eq!(result.autounmask_use_changes.len(), 1);
+        let change = &result.autounmask_use_changes[0];
+        assert_eq!(change.atom, ">=dev-libs/useflagpkg-1.0");
+        assert_eq!(change.token, "-foo");
+        assert_eq!(
+            change.dep_chain,
+            vec!["required by dev-libs/useflagpkg[-foo] (argument)".to_string()]
+        );
+    }
+
+    #[test]
+    fn autounmask_use_dependency_records_the_two_line_dep_chain() {
+        // `dev-libs/usedeprejectedpkg` RDEPENDs `dev-libs/useflagpkg[-foo]`.
+        let result = graph_result_autounmask("dev-libs/usedeprejectedpkg");
+        assert_eq!(result.autounmask_use_changes.len(), 1);
+        assert_eq!(
+            result.autounmask_use_changes[0].dep_chain,
+            vec![
+                "required by dev-libs/usedeprejectedpkg-1.0::testrepo".to_string(),
+                "required by dev-libs/usedeprejectedpkg (argument)".to_string(),
+            ]
         );
     }
 

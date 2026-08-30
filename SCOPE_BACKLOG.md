@@ -44,7 +44,7 @@ to **either** side yet — deliberate, documented scope cuts or explicit
 | 14 | `--changed-deps-report` | **shipped** | `69ca60846` (real cosmetic "you might want `--changed-deps`" notice, its own `--json` `changed_deps_report` array) |
 | 15 | `--with-bdeps-auto` | **shipped** | `c505df6eb` |
 | 16 | Real atom-grammar wildcards/build-ids | **descoped** (not a gap) | Decision recorded: the bounded `*/*`/`category/*`/`*/package` matcher is sufficient for `package.mask`-style matching; full wildcard/glob/build-id atoms never reach `DEPEND`/`RDEPEND` parsing. Not on the backlog anymore. |
-| 17 | `--autounmask*` family | **keyword resolution shipped; USE next** | `2003e020d` + `927402f3f` (suggestion mode) → superseded 2026-08-30 by real keyword *resolution*: `--autounmask <kwmasked>` resolves the graph + prints real `_display_autounmask`'s `The following keyword changes are necessary to proceed:` block, exit 0 (`resolve_pretend` `autounmask_keywords` param, `GraphResult::autounmask_keyword_changes`). *Residual:* the **USE** kind (increment 2), `--autounmask-license`, and `--autounmask-write` itself (writes files — a `PROMPT.md` "never writes" boundary, Part 3). |
+| 17 | `--autounmask*` family | **keyword + USE resolution shipped** | `2003e020d` + `927402f3f` (suggestion mode) → superseded 2026-08-30 by real *resolution* for both the **keyword** (`--autounmask <kwmasked>` → `The following keyword changes are necessary to proceed:` block, exit 0) and **USE** (`--autounmask-use`, on by default → `The following USE changes are necessary to proceed:` + `-pv` USE line reflects the flip) kinds (`resolve_pretend` `autounmask_keywords`/`autounmask_use` params, `GraphResult::autounmask_keyword_changes`/`autounmask_use_changes`). *Residual:* the `opt=` parent flip (increment 3), `--autounmask-license`, `--autounmask-write` (writes files — `PROMPT.md` "never writes", Part 3). |
 | 18 | `--root-deps`/cross-`ROOT` dependency resolution | **substantially shipped** | Real `ESYSROOT`-vs-`ROOT` distinction, `running_root_satisfies_atom`, `||` branch selection fed by running-root satisfiability, `93327d274`, `356088e6c` (recursive build-entry, first increment), `678a8875d` (output marking), top-level `IDEPEND` vs running root. *Residual:* see Part 2. |
 | 19 | Binary package support | **local `PKGDIR` shipped** | `3099d9adf` (`--usepkg`/`--usepkgonly`/`--binpkg-respect-use`) + `96d8fbccb` (`--usepkg-exclude`/`-include`) + `0ae1f8be6` (`--rebuilt-binaries`) + `0b18b2140` (downgrade detection) + `7e5a380d7` (real `ebuild … package` builds an xpak binpkg) + real `PORTAGE_COMPRESSION_COMMAND` + `--pretend` half of `--getbinpkg`/`--getbinpkgonly` (`binrepos.conf` + `PORTAGE_BINHOST` parsing, remote binhost `Packages`-index candidates, the `g` bracket column, `Size of downloads:` from the index `SIZE`). *Residual:* an actual remote download / `layout.conf` negotiation, `--getbinpkg` for a real merge, `gpkg` format, `BUILD_ID`/splitdebug/packdebug/RPM, PKGDIR-index locking — see Part 2. |
 | 20 | Real ebuild phase execution | **shipped** | `eeecd96cd` (the `actionmap_deps` phase chain via embedded `brush`) + `2f5a3ddad`/`39907fee6` |
@@ -464,8 +464,20 @@ Ranked roughly by how self-contained each is.
       `colorize("INFORM")` change line + `#required by` dep chain), exit
       0. `resolve_pretend` gained an `autounmask_keywords` param;
       `GraphResult::autounmask_keyword_changes`; `--json` array. 6
-      contract tests updated. **Increment 2 -- the USE kind (`The
-      following USE changes are necessary to proceed:`) -- still open.**
+      contract tests updated. **Increment 2 -- the USE kind -- shipped
+      2026-08-30**: `--autounmask-use` (on by default) now *resolves* a
+      plain USE-dep mismatch via an implicit `package.use` flip
+      (`resolve_pretend` `autounmask_use` param + `suggested_use_flip`),
+      applies the flip to the entry's effective USE (so `-pv`'s
+      `USE="…"` line reflects it), and prints `The following USE changes
+      are necessary to proceed:` with the `>=<cpv>` atom form
+      (`check_if_latest`, bug #536392). `GraphResult::autounmask_use_
+      changes`; `--json` array; `AutounmaskChange.atom` carries the op
+      prefix. `--autounmask-use=n` restores strict matching. ~10 contract
+      tests updated. **Increment 3 -- the `opt=` parent flip + `--auto
+      unmask-license` -- still open** (the parent flip is only reachable
+      when the child flip is masked; the pilot's `parent_use_suggestion`
+      field is now dead unless `--autounmask-use=n`).
     The two increment-1 follow-ups -- a new-slot install's other-slot
     version list, and verbosity-3 `:slot`/`::repo` decoration on the cpv
     + every `[old-ver]` -- **shipped 2026-08-29** (see item A.2).

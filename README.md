@@ -4316,6 +4316,15 @@ provenance for). A new `dev-libs/autounmaskdepconsumer` fixture (RDEPEND
 on the existing keyword-masked-only package) proves it live, both with
 and without `--autounmask`, and in both plain-text and `--json` form.
 
+> **Superseded 2026-08-30** by "`emerge --pretend`: real
+> `--autounmask-use` USE *resolution*" below (increment 2): the pilot no
+> longer *suggests* a USE flip and reports the dependency unresolvable —
+> it applies the flip, resolves the graph, and prints the real `The
+> following USE changes are necessary to proceed:` block. The
+> `use_suggestion` / `parent_use_suggestion` `--json` fields and the
+> `!!! note:` text described in the next three paragraphs only apply now
+> under `--autounmask-use=n`.
+
 **`--autounmask-use`, the plain-dependency-atom half.** Real
 `create_depgraph_params.py`'s own `--autounmask` family also covers the
 far more common real-world case the KEYWORDS-only v1 above deliberately
@@ -8661,10 +8670,49 @@ a top-level keyword-masked atom is still fatal and a keyword-masked
 dependency still gets the `!!! no visible ebuild` line. Both sides;
 existing fixtures `dev-libs/autounmaskkeywordpkg` / `autounmaskdepconsumer`.
 6 contract tests updated (fail-and-hint → resolve-and-block), 3
-`portage-repo` unit tests. **Increment 2 — the USE kind
-(`The following USE changes are necessary to proceed:`, applying a
-`suggested_use_candidate` flip) — is a follow-up.** SCOPE_BACKLOG
-Part 2.G item 14 / Part 1 #17.
+`portage-repo` unit tests. SCOPE_BACKLOG Part 2.G item 14 / Part 1 #17.
+
+### `emerge --pretend`: real `--autounmask-use` USE *resolution* + the `-pv` USE line (increment 2)
+
+The USE half. Unlike keywords, `--autounmask-use` is **on by default**
+(real `create_depgraph_params` — no `--autounmask-keep-keywords`-style
+asymmetry), so `emerge -p 'dev-libs/foo[-bar]'` where `bar` is
+default-enabled now *resolves* with an implicit `package.use` flip
+rather than failing — exactly real portage's default.
+
+`resolve_pretend` grew an `autounmask_use` param: the USE-dep post-filter
+keeps a candidate whose atom use-deps its default USE state doesn't
+satisfy *if* a `package.use` flip would fix it (`suggested_use_flip` is
+`Some` — flag must be in IUSE and not mask/force-blocked). The graph
+layer then applies the flip to that entry's effective `use_flags`
+**once**, before the `-pv` USE display, the REQUIRED_USE check and the
+dependency walk — matching real `_pkg_use_enabled`. So `-pv` shows the
+adjusted `USE="-bar …"` (for a `New` entry real `_create_use_string`
+renders an autounmask-flipped flag exactly like any normally-set flag —
+`is_new=True`, no `*`/`%` marker), and a `foo? ( … )` group keyed off
+the flipped flag fires the new way.
+
+The change is recorded on `GraphResult::autounmask_use_changes` and
+printed as the `The following USE changes are necessary to proceed:`
+block (`(see "package.use" …)`), after the keyword block. The left-hand
+atom is `>=<cpv>` / `>=<cpv>:<slot>` / `=<cpv>` per real
+`check_if_latest(check_visibility=True)` (`autounmask_use_atom_form`) —
+real portage uses `>=` for USE, unlike keywords' bare `=` (bug #536392).
+`AutounmaskChange` now carries the op prefix in its `atom` field (`--json`
+field renamed `cpv` → `atom`); `--json` gains `autounmask_use_changes`.
+
+**Still deferred (increment 3):** real portage's `opt=`-aware *parent*
+flip (`_show_unsatisfied_dep`'s own mechanism — flip the *requesting*
+package's flag so the conditional re-evaluates) is only reachable when
+the plain candidate flip is impossible; this pilot's `parent_use_
+suggestion` field is now dead unless `--autounmask-use=n`. `--autounmask-
+license` also unstarted.
+
+`--autounmask-use=n` restores the strict "USE-dep mismatch → no visible
+candidate" behavior (the `test_use_dep_enforcement_*` contract tests now
+pass it to keep testing raw matching). Both sides; existing
+`dev-libs/useflagpkg` / `usedeprejectedpkg` / `useeqparentoffpkg`
+fixtures. ~10 contract tests updated, 3 `portage-repo` unit tests.
 
 ## Running it
 
@@ -8960,44 +9008,35 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask dev-libs/
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask --json dev-libs/autounmaskdepconsumer | python3 -c 'import json,sys; print(json.load(sys.stdin)["autounmask_keyword_changes"])'
 # [{'cpv': 'dev-libs/autounmaskkeywordpkg-1.0', 'token': '~amd64', 'dep_chain': ['required by dev-libs/autounmaskdepconsumer-1.0::testrepo', 'required by dev-libs/autounmaskdepconsumer (argument)']}]
 
-# --autounmask-use: on by default (unlike the keyword sub-feature
-# above), so useflagpkg's own real "foo" (globally enabled, but this
-# atom demands "-foo") gets a suggestion with no flag at all
+# --autounmask-use: on by default (unlike the keyword kind), so
+# useflagpkg's own real "foo" (globally enabled, but this atom demands
+# "-foo") RESOLVES with an implicit package.use flip -- real portage's
+# default. `>=<cpv>` atom form (real check_if_latest for USE, bug #536392)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend "dev-libs/useflagpkg[-foo]"
-# emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".
-# note: dev-libs/useflagpkg-1.0 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=dev-libs/useflagpkg-1.0 -foo" to package.use  (exit 1)
-# --autounmask-use=n is the only way to suppress it (no "ambient
-# default" asymmetry the keyword sub-feature has)
+# [ebuild  N    ] dev-libs/useflagpkg-1.0                     (stdout)
+#                                                             (stderr:)
+# The following USE changes are necessary to proceed:
+#  (see "package.use" in the portage(5) man page for more details)
+# # required by dev-libs/useflagpkg[-foo] (argument)
+# >=dev-libs/useflagpkg-1.0 -foo                              (exit 0)
+# --autounmask-use=n restores the strict "USE-dep mismatch -> no visible
+# candidate" behaviour
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask-use=n "dev-libs/useflagpkg[-foo]"
 # emerge: there are no ebuilds to satisfy "dev-libs/useflagpkg[-foo]".  (exit 1)
-# the same suggestion, for a *dependency's* own no-visible-candidate
-# (dev-libs/usedeprejectedpkg RDEPENDs on the exact atom above)
+# a dependency's own USE-dep mismatch resolves the same way, with the
+# two-line dep chain (dev-libs/usedeprejectedpkg RDEPENDs the atom above)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/usedeprejectedpkg
-# [ebuild  N    ] dev-libs/usedeprejectedpkg-1.0
-# !!! no visible ebuild for dependency "dev-libs/useflagpkg"
-# !!! note: dev-libs/useflagpkg-1.0 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=dev-libs/useflagpkg-1.0 -foo" to package.use  (exit 0)
-# --json's own mirror: "use_suggestion" ({"version", "flags"} or null)
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/usedeprejectedpkg | python3 -c 'import json,sys; print(next(e["use_suggestion"] for e in json.load(sys.stdin)["entries"] if e["package"] == "useflagpkg"))'
-# {'version': '1.0', 'flags': [{'flag': 'foo', 'enabled': False}]}
-
-# --autounmask-use's own opt?/REQUIRED_USE-conditional half (Part B):
-# useeqparentoffpkg's own IUSE="eqflag" defaults off, so its RDEPEND
-# "dev-libs/useeqchildpkg[eqflag=]" evaluates to "[-eqflag]", mismatching
-# the child's own default-on eqflag -- both a candidate-flip (Part A)
-# and a parent-flip (Part B) suggestion fire at once, two independent
-# real fixes for the same mismatch
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/useeqparentoffpkg
-# [ebuild  N    ] dev-libs/useeqparentoffpkg-1.0
-# !!! no visible ebuild for dependency "dev-libs/useeqchildpkg"
-# !!! note: dev-libs/useeqchildpkg-1.0 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=dev-libs/useeqchildpkg-1.0 -eqflag" to package.use
-# !!! note: dev-libs/useeqparentoffpkg-1.0's own USE flags need to change to satisfy this dependency; --autounmask-use suggests adding "=dev-libs/useeqparentoffpkg-1.0 eqflag" to package.use  (exit 0)
-# --autounmask-use=n suppresses both suggestions together (one shared gate)
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --autounmask-use=n dev-libs/useeqparentoffpkg
-# [ebuild  N    ] dev-libs/useeqparentoffpkg-1.0
-# !!! no visible ebuild for dependency "dev-libs/useeqchildpkg"  (exit 0)
-# --json's own mirror: "parent_use_suggestion" ({"category", "package", "version", "flags"} or null), alongside "use_suggestion"
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/useeqparentoffpkg | python3 -c 'import json,sys; print(next(e["parent_use_suggestion"] for e in json.load(sys.stdin)["entries"] if e["package"] == "useeqchildpkg"))'
-# {'category': 'dev-libs', 'package': 'useeqparentoffpkg', 'version': '1.0', 'flags': [{'flag': 'eqflag', 'enabled': True}]}
+# [ebuild  N    ] dev-libs/usedeprejectedpkg-1.0             (stdout)
+# [ebuild  N    ] dev-libs/useflagpkg-1.0
+#                                                            (stderr:)
+# The following USE changes are necessary to proceed:
+#  (see "package.use" in the portage(5) man page for more details)
+# # required by dev-libs/usedeprejectedpkg-1.0::testrepo
+# # required by dev-libs/usedeprejectedpkg (argument)
+# >=dev-libs/useflagpkg-1.0 -foo                             (exit 0)
+# --json exposes the change as a top-level array
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --json dev-libs/useeqparentoffpkg | python3 -c 'import json,sys; print(json.load(sys.stdin)["autounmask_use_changes"])'
+# [{'atom': '>=dev-libs/useeqchildpkg-1.0', 'token': '-eqflag', 'dep_chain': ['required by dev-libs/useeqparentoffpkg-1.0::testrepo', 'required by dev-libs/useeqparentoffpkg (argument)']}]
 
 # IUSE's own "+"/"-" default markers are honored now: "+enableddefault"
 # defaults on, "-disableddefault" stays off (own REQUIRED_USE requires
