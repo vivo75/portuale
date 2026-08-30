@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn alnum_sort_key_orders_digit_runs_numerically() {
+    let mut v = vec![
+        "python3_9",
+        "python3_12",
+        "python3_10",
+        "abi_x86_32",
+        "abi_x86_64",
+        "n2",
+        "n10",
+        "n9",
+        "plainflag",
+    ];
+    v.sort_by_key(|x| alnum_sort_key(x));
+    assert_eq!(
+        v,
+        vec![
+            "abi_x86_32",
+            "abi_x86_64",
+            "n2",
+            "n9",
+            "n10",
+            "plainflag",
+            "python3_9",
+            "python3_10",
+            "python3_12",
+        ]
+    );
+    // Alternating Str / Num; a leading digit run starts with an empty Str.
+    // Portage: output_helpers.py, _alnum_sort_key
+    assert_eq!(
+        alnum_sort_key("1a"),
+        vec![
+            AlnumKey::Str(String::new()),
+            AlnumKey::Num(1),
+            AlnumKey::Str("a".to_string()),
+        ]
+    );
+    // A short key sorts before a longer one that extends it.
+    assert!(alnum_sort_key("a") < alnum_sort_key("a1"));
+    // Overflow -> kept as Str, still deterministic.
+    assert!(!alnum_sort_key(&format!("x{}", "9".repeat(50))).is_empty());
+}
+
+#[test]
 fn build_use_expand_display_groups_and_hides() {
     let config = portage_profile::Config {
         use_expand: HashSet::from(["VIDEO_CARDS".to_string(), "CPU_FLAGS_X86".to_string()]),
