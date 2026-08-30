@@ -11183,7 +11183,7 @@ mod tests {
     fn fixture_eula_style_license_is_masked_by_the_real_default_accept_license() {
         // Neither the fixture profile chain nor make.conf sets
         // ACCEPT_LICENSE at all -- real portage's own "* -@EULA"
-        // default applies, and profiles/base/license_groups defines
+        // default applies, and profiles/license_groups defines
         // EULA="SomeEula", so dev-libs/eulapkg's own LICENSE="SomeEula"
         // is masked.
         assert_eq!(

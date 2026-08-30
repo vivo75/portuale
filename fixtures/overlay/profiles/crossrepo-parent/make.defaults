@@ -1,0 +1,10 @@
+# fixture: the cross-repo profile-parent target for the main repo's own
+# profiles/default/parent "overlay:crossrepo-parent" entry (real
+# LocationsManager._expand_parent_colon / get_location_for_name). This
+# directory contributes nothing to the resolved config -- its whole job
+# is to prove `emerge --pretend` still resolves a `reponame:path` parent
+# reference end to end (a broken resolver errors with "not a directory").
+# It USED to also carry a license_groups file, back when license_groups
+# was (wrongly) read per profile-chain level; that mechanism moved to
+# each repo's profiles/ base (see profiles/license_groups), so the file
+# is gone and only this resolution-guard marker remains.
