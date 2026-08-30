@@ -68,6 +68,10 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
+    fn fixtures_root() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
     fn tempdir() -> std::path::PathBuf {
         TempDir::new("portuale-getbinpkg").keep()
     }

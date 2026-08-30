@@ -7761,6 +7761,74 @@ in `…restrict_mirror_skips_the_gentoo_mirrors_fallback`, but with a
 `mirror+` prefix on the SRC_URI so the mirror server is tried and rescues
 the fetch.
 
+### `RESTRICT=fetch`: the plain `SRC_URI` URI is never downloaded
+
+Real `fetch.py:1061` (`restrict_fetch = "fetch" in restrict`) +
+`:1166-1174` (`if (restrict_fetch and not override_fetch) …: continue`):
+a *plain* (non-`mirror://`) `SRC_URI` URI is not a fetchable candidate
+under `RESTRICT=fetch`, and `file_restrict_mirror = (restrict_fetch or
+restrict_mirror) …` bars the public `GENTOO_MIRRORS` fallback too. So a
+fetch-restricted package fetches OK only from an already-verified
+`DISTDIR` copy (the user placed it by hand — the normal case), a
+`custommirrors` entry, or a `mirror://`-named mirror. A `fetch+`/`mirror+`
+`SRC_URI` prefix (`override_fetch`) re-permits the URI.
+
+`FetchOptions` gained a `restrict_fetch` field, set by
+`ebuild_phases::fetch_sources` from the ebuild's own `RESTRICT`
+md5-cache field via the new `restrict_fetch_from_restrict`
+(USE-conditional-evaluated against the empty fetch-side USE set, same as
+`restrict_mirror_from_restrict` — the two now share a `restrict_has_
+token` helper). `fetch_src_uri` `retain`s the plain URI out of the
+candidate list when `restrict_fetch && !override_fetch && !uri.starts_
+with("mirror://")`, and folds `restrict_fetch` into `public_mirrors_
+barred`. **v1 cut:** portuale does **not** run the ebuild's own
+`pkg_nofetch` phase for a missing file (real `spawn_nofetch` — custom
+"download it from … and place it in `DISTDIR`" instructions);
+`fetch_src_uri` fails with a generic pointer instead.
+
+New `dev-libs/fetchrestrictpkg` fixture (`RESTRICT="fetch"`,
+`https://example.invalid/…` SRC_URI, real Manifest digests, a
+`src_install`). `ebuild <file> install` with the distfile **absent**
+exits 1 with the `RESTRICT=fetch bars downloading it …` message and
+never contacts `example.invalid`; with the distfile **present +
+verified**, it installs via the already-verified skip path. Rust-only
+(real fetch). 4 unit tests (`fetch.rs` ×3, `ebuild_phases.rs` ×1) + 1
+black-box test.
+
+### `license_groups` read from each repo's `profiles/`, not the profile chain (real-tree finding)
+
+Found by running `portuale` against a **real Gentoo tree** in a
+container for the first time: `emerge --pretend <anything>` failed with
+`there are no ebuilds to satisfy …` for *every* package. Root cause:
+`resolve_config` read `license_groups` from each *profile-chain
+directory* (`<repo>/profiles/base/`, `.../amd64/`, …), but real gentoo
+puts the file at `<repo>/profiles/license_groups` — the repo `profiles/`
+base, which is **not** a profile-chain level. So `@FREE` (the profile's
+`ACCEPT_LICENSE`) expanded to nothing, and the default `* -@FREE`-style
+filter rejected every ebuild on a license check.
+
+Real `LicenseManager._read_license_groups` (`LicenseManager.py:47`)
+iterates `LocationsManager.profile_locations` (`LocationsManager.py:432`),
+which is exactly `[<main_repo>/profiles] + [<overlay>/profiles …]` — the
+`profiles/` directory of the main repo and each overlay, never the
+individual chain levels. `resolve_config` (both sides) now reads
+`<repo>/profiles/license_groups` for every configured repo (main first,
+then overlays) instead of `<chain-level>/license_groups`. This also
+makes an overlay's own `license_groups` unconditional (real behavior) —
+the earlier "only reachable via a `reponame:path` cross-repo `parent`"
+framing (see the profile-chain section above) is superseded; that
+mechanism is still tested for profile *directories*, just not for
+`license_groups`.
+
+The two fixture `license_groups` files moved from
+`repo/profiles/base/` → `repo/profiles/` and `overlay/profiles/
+crossrepo-parent/` → `overlay/profiles/`. A new `portage-profile` unit
+test drops a stray `license_groups` into a chain dir and asserts it's
+ignored. After the fix, `portuale --pretend` resolves real packages
+(`sys-apps/coreutils`, `app-misc/tmux` → `dev-libs/libevent`, …)
+matching real `emerge --pretend`'s package set. Both sides; 1 `CASES` +
+1 pinned test relabeled, 1 new unit test.
+
 ### `emerge --buildpkgonly --keep-going`
 
 Real `--keep-going` (real `main.py`'s own `y_or_n` option, narrowed by
@@ -8642,5 +8710,242 @@ candidate" behavior (the `test_use_dep_enforcement_*` contract tests now
 pass it to keep testing raw matching). Both sides; existing
 `dev-libs/useflagpkg` / `usedeprejectedpkg` / `useeqparentoffpkg`
 fixtures. ~10 contract tests updated, 3 `portage-repo` unit tests.
+
+### `emerge -pc <atoms> --deselect=n`
+
+Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`
+(default `True`). In args mode, `if deselect:` empties `required_sets
+["selected"]` (`actions.py:1037-1042`) so a package named as an arg that
+is *also* in `world` still gets removed (and, non-`--pretend`, dropped
+from `world`). `--depclean <atoms> --deselect=n` skips that — the world
+set stays a protection root, so a world member named as an arg is
+**kept**.
+
+`depclean_cleanlist` gained a `deselect: bool` param (the world seeds
+are used as roots when `args.is_empty() || !deselect`, not just
+`args.is_empty()`); `pretend.rs` tracks a `deselect_n` flag (`--deselect
+n` / `--deselect=n`) and passes `!deselect_n` through. The same slice
+fixed a related bug: `--deselect` (bare / `y`) alongside `--depclean` /
+`--prune` / `--unmerge` was wrongly routing to the standalone deselect
+*action* — real `main.py` only makes `--deselect` an action when
+`myaction is None` (the other three set their action first), so the
+dispatch is now gated on `!depclean && !prune && !unmerge`.
+
+`emerge -pc dev-libs/dcworld` (a world member nothing needs) → removed
+(`Number to remove: 1`); `-pc dev-libs/dcworld --deselect=n` → `>>> No
+packages selected for removal by depclean` (`Number to remove: 0`).
+3 contract `CASES` + 1 pinned test + 1 `portage-repo` unit test; both
+sides.
+
+### `emerge -pC` / `-pP`: the higher-slot set-protection refinement
+
+Real `unmerge.py:421-441`: the "still listed in the following package
+sets" warning is suppressed for a set when an installed *newer* version
+of the same cp *in a different slot* also matches that set's atom —
+removing the version being unmerged still leaves the set satisfied by
+the other one. (Real portage's `higher_slot`: it walks the atom's
+installed matches in descending order, stops at `pkg`, and takes the
+first `> pkg` version whose `slot_atom` differs.)
+
+New shared `still_listed_parents(root, installed_sets, cat, pkg,
+version)` (`pretend.rs`, mirrored `_still_listed_parents`) — used by
+**both** `run_unmerge_pretend` and `run_prune_pretend`, matching real
+portage's single `_unmerge_display` handling every `unmerge_action`.
+For each set atom that matches the selected `cat/pkg-version`, it now
+also checks `installed_candidates` for a `vercmp`-newer instance in a
+different slot that matches the atom (built with a `:slot/sub_slot`
+suffix so a slotted set atom resolves correctly); a covered atom
+doesn't make its set a "parent".
+
+New fixture `dev-libs/dualslotpkg` installed in slot 1 (`1.0`) and slot
+2 (`2.0`), with `etc/portage/sets/dualslotset` (bare
+`dev-libs/dualslotpkg`, selected via `world_sets`): `emerge -pC
+'dev-libs/dualslotpkg:1'` prints **no** warning (slot 2 covers the set
+atom), `-pC 'dev-libs/dualslotpkg:2'` prints the warning (nothing
+higher). This slice also recorded the one remaining `_unmerge_display`
+cut — the "currently used Python interpreter" self-skip (real
+`_dblink(cpv).isowner(portage._python_interpreter)`) — as a **non-gap**
+for portuale: its `emerge` is a Rust binary with no Python interpreter
+of its own to protect. 2 contract `CASES` + 1 pinned test + 2
+`pretend.rs` unit tests; both sides.
+
+```sh
+FX="$(realpath fixtures)"
+# slot 1 (1.0): slot 2 (2.0, higher) still matches the bare
+# dev-libs/dualslotpkg atom in @dualslotset -> no warning
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pC 'dev-libs/dualslotpkg:1' | grep -c 'still listed'
+# 0
+# slot 2 (2.0): nothing installed higher -> the warning fires
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pC 'dev-libs/dualslotpkg:2'
+# ...
+# Package dev-libs/dualslotpkg-2.0 is going to be unmerged,
+# but still listed in the following package sets:
+#     dualslotset
+```
+
+### `emerge -p`: the bracket mask column is present at plain `-p` too, not only `-v` (real-tree finding)
+
+Running `portuale` against a real Gentoo tree in the container turned up
+a one-column width difference from real `emerge`: portuale printed
+`[ebuild   R   ]` (13 inside the brackets) where real portage printed
+`[ebuild   R    ]` (14). Portuale had gated the 7th `PkgAttrDisplay`
+column — the `#`/`~`/`*`/space mask marker from `output.py::gen_mask_str`
+— on `-v`, per `include_mask_str()` = `verbosity > 1`. But real portage's
+**default** `emerge -p` verbosity is **2**, not 1
+(`_DisplayConfig.__init__`: `"--quiet" and 1 or "--verbose" and 3 or 2`)
+— so `include_mask_str()` is already true at plain `-p`, and the column
+is absent only under `--quiet` (verbosity 1), which portuale doesn't
+model at all.
+
+`attr_display_field` (`pretend.rs`, mirrored `_attr_display_field`) now
+always renders the 7th column; `format_blocker_lines`' own
+`empty_space_in_brackets()` pad (real `output.py:90`) is likewise always
+6 spaces after `B`, not 5. A side effect worth noting: keyword/hard-mask
+markers that were previously invisible without `-v` now show at plain
+`-p` — `[ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0`, `[ebuild  N
+   #] dev-libs/overlaymaskedpkg-1.0`, `[ebuild  N    *]
+dev-libs/livekeywordpkg-9999` — matching real `emerge -p`. Both sides;
+~240 pinned-output test assertions widened by one column, 1 new
+`pretend.rs` unit test, and `test_pv_bracket_mask_marker` rewritten to
+assert the marker at plain `-p` too. After the fix, portuale's non-`-v`
+bracket width matches real `emerge -p` on a real tree.
+
+Not addressed here (a separate gap, its own slice below — "the `USE="…"`
+line shows at plain `-p`"): at verbosity 2 real portage *also* prints
+the `USE="…"` line for a **changed** flag set or a new package
+(`_create_use_string` only returns "" when nothing changed *and*
+`all_flags` is off), where portuale still gates the whole `USE=`
+display on `-v`.
+
+```sh
+FX="$(realpath fixtures)"
+# plain -p: the 7th (mask) column is a bare space for an ordinary pkg...
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/newpkg
+# [ebuild  N     ] dev-libs/newpkg-1.0
+# ...and a real marker for a keyword-/hard-masked one, no -v needed:
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p --autounmask dev-libs/autounmaskkeywordpkg
+# [ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0
+```
+
+### `emerge -p`: the merge list is in real dependency-first order (real-tree finding)
+
+The same container run that turned up the mask-column gap showed portuale
+listing packages in the wrong order: `emerge --pretend app-misc/tmux`
+printed `tmux` *before* its dependency `libevent`, where real `emerge`
+prints `libevent` first. Real portage's `mylist` (the list
+`resolver/output.py::Display` renders) is a genuine topological **merge
+schedule** — its `Scheduler` installs every package only after the
+packages it depends on. Portuale's BFS builds `entries` the opposite
+way: a package's entry is appended *before* its dependencies are ever
+queued.
+
+`resolve_pretend_graph` (mirrored `resolve_pretend_graph` in the Python
+reference) now re-sorts `entries` into dependency-first order as its last
+step, via new `topological_merge_order` / `_topological_merge_order`: a
+**stable** topological sort keyed off the `required_by` edges every entry
+already carries — a dependency always precedes the packages that pull it
+in, and two packages with no dependency relationship keep their
+BFS-discovery (RDEPEND-string / argv) order. A genuine dependency cycle
+(real portage's `Scheduler` breaks these with slot-operator/priority
+heuristics portuale doesn't reproduce) is left in discovery order.
+
+The chosen model (confirmed with the user via `AskUserQuestion`, "Model
+A"): `entries` is *canonically* merge-ordered — one order for the flat
+`--pretend` list, `emerge --buildpkgonly`'s build loop, and the `--json`
+`entries` array alike. `--json` additionally stamps each entry with an
+explicit `"merge_order"` integer (its 0-based position) so a consumer
+that re-sorts or filters the array keeps the schedule. `--tree` is
+unaffected in structure — it re-derives its nesting from `required_by`
+top-down from the roots (real portage feeds `_tree_display`
+`reversed(mylist)`, an implementation detail this different algorithm
+doesn't need), though a `--tree` root that depends on another root now
+appears dep-first among the roots.
+
+~240 pinned multi-entry test assertions reordered (Rust unit +
+contract-suite, mechanically, both implementations verified byte-identical
+throughout); new `portage-repo` unit test, new dedicated contract test +
+3 `CASES`. After the fix, portuale's `--pretend` order matches real
+`emerge --pretend` on a real tree.
+
+```sh
+FX="$(realpath fixtures)"
+# dev-libs/diamond -> shared-a, shared-b -> common: the shared leaf first,
+# its two consumers next, the requested root last.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/diamond
+# [ebuild  N     ] dev-libs/common-1.0
+# [ebuild  N     ] dev-libs/shared-a-1.0
+# [ebuild  N     ] dev-libs/shared-b-1.0
+# [ebuild  N     ] dev-libs/diamond-1.0
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p --json dev-libs/diamond \
+  | python3 -c 'import json,sys; print([(e["package"], e["merge_order"]) for e in json.load(sys.stdin)["entries"]])'
+# [('common', 0), ('shared-a', 1), ('shared-b', 2), ('diamond', 3)]
+```
+
+### `emerge -p`: the `USE="…"` line shows at plain `-p`, not only `-v` (real-tree finding)
+
+Third gap from the same container run: real `emerge` printed
+`[ebuild  N     ] dev-libs/libevent-2.1.13  USE="clock-gettime ssl
+-debug …"` at plain `-p`, where portuale printed only the bracket line.
+Real `_DisplayConfig` sets `print_use_string = verbosity != 1` and real
+default `emerge -p` verbosity is 2 — so the `USE="…"` line is **not**
+`-v`-gated. It's `all_flags = verbosity == 3` that's `-v`-only, and it
+controls *which* flags render: for a **`New`** package
+`_create_use_string`'s `is_new` branch renders *every* IUSE flag
+regardless (`red(flag)` / `blue(-flag)`), so a New entry's USE list is
+identical at `-p` and `-pv`; for a `Reinstall`/`Upgrade` at plain `-p`,
+only the *changed* flags render.
+
+**Increment 1** lands the New case: `use_suffix` / `_use_suffix` no
+longer gate a `New` entry's USE display on `verbose`. The content is
+exactly what `-pv` already produced (grouped `USE=` + `VAR="…"` per
+USE_EXPAND, enabled-first, `--alphabetical`-aware) minus the `-pv`-only
+`::repo` cpv decoration and the trailing counters line. ~25 pinned `-p`
+assertions gained a `USE=` suffix; a handful of `-v`-detection tests
+switched their "is this verbose" probe from "`USE=` present" to
+"`::repo` present".
+
+**Increment 2** lands the `Reinstall`/`Upgrade`/`Downgrade` changed-flags-only
+diff. `build_use_expand_display` / `_build_use_expand_display` grew an
+`all_flags: bool` param; `render_flag` returns `Option` and yields
+`None` — the flag is omitted — for an *unchanged* flag (and for any
+removed-from-IUSE flag, whose `(-flag%)` list is `all_flags`-only) when
+`all_flags` is off. `resolve_pretend_graph` computes both renderings
+(`GraphEntry::use_expand_display` for `-pv`, `use_expand_display_p` for
+`-p` — the Python reference re-renders at display time instead of
+storing both), and `use_suffix` picks by verbosity. So an Upgrade with a
+real USE diff prints e.g. `USE="added%* -change*"` at `-p` where `-pv`
+shows `USE="added%* keep -change* (-drop%)"`.
+
+**Increment 3** models `reinst_flags` (real `_create_use_string`'s
+`reinst_flag` / `reinst_flags_map`): a flag is force-shown even when
+otherwise-unchanged if it is in the `Reinstall`'s own
+`_reinstall_for_flags` trigger set (`GraphEntry`'s `Reinstall {
+changed_flags }` — `Upgrade`/`Downgrade`/`New` carry none, their
+still-present changed flags already render via the `*`/`%` markers).
+`build_use_expand_display` / `_build_use_expand_display` gained a
+`reinst_flags` set; the three `all_flags`-gated `return None` branches
+in `render_flag` (unchanged-enabled, unchanged-disabled, removed-from-
+IUSE) now also pass when the flag is a trigger. The one case this
+actually changes at plain `-p`: a flag the new ebuild **dropped from
+IUSE** that nonetheless triggered a `--newuse`/`--changed-use` reinstall
+now appears in the `(-flag%)` removed list at `-p` (new fixture
+`dev-libs/reinstdropiusepkg` — vdb IUSE `gone keep` with `gone` on, the
+current ebuild has only `keep`: `-p` shows `USE="(-gone%*)"`, `-pv` still
+`USE="-keep (-gone%*)"`).
+
+`emerge -pv` output is unchanged by any of the three increments. New
+`pretend.rs` / `build_use_expand_display` unit tests, dedicated contract
+tests + 6 `CASES` total; both sides byte-identical.
+
+```sh
+FX="$(realpath fixtures)"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/useflagpkg
+# [ebuild  N     ] dev-libs/newpkg-1.0            <- empty IUSE, no USE line
+# [ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p --update dev-libs/upgradeusepkg
+# [ebuild     U  ] dev-libs/upgradeusepkg-2.0 [1.0] USE="added%* -change*"
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv --update dev-libs/upgradeusepkg
+# [ebuild     U  ] dev-libs/upgradeusepkg-2.0::testrepo [1.0::testrepo] USE="added%* keep -change* (-drop%)"
+```
 
 # # required by dev-libs/useflagpkg[-foo] (argument)

@@ -13,3 +13,13 @@ fn restrict_mirror_from_restrict_evaluates_conditionals_against_the_empty_use_se
     assert!(!restrict_mirror_from_restrict("foo? ( mirror )"));
     assert!(restrict_mirror_from_restrict("mirror foo? ( strip )"));
 }
+
+#[test]
+fn restrict_fetch_from_restrict_matches_the_fetch_token_only() {
+    assert!(restrict_fetch_from_restrict("fetch"));
+    assert!(restrict_fetch_from_restrict("mirror fetch"));
+    assert!(!restrict_fetch_from_restrict(""));
+    assert!(!restrict_fetch_from_restrict("mirror strip"));
+    // USE-conditional drops against the always-empty fetch-side USE
+    assert!(!restrict_fetch_from_restrict("foo? ( fetch )"));
+}
