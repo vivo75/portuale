@@ -249,6 +249,16 @@ CASES = [
         0,
     ),
     (
+        "--autounmask-use: an opt= dep whose child flag is masked flips the parent instead, exit 0",
+        ["--pretend", "dev-libs/parentflipeqpkg"],
+        0,
+    ),
+    (
+        "--autounmask-use=n: the masked-child opt= dep stays unresolvable (top-level still merges)",
+        ["--pretend", "--autounmask-use=n", "dev-libs/parentflipeqpkg"],
+        0,
+    ),
+    (
         "USE-dep enforcement: negated flag declared and disabled matches",
         ["--pretend", "dev-libs/useflagpkg[-missingflag]"],
         0,
@@ -2397,6 +2407,51 @@ def test_autounmask_use_parent_flip_suggestion_is_suppressed_by_autounmask_use_n
     assert (
         result.stderr.strip()
         == '!!! no visible ebuild for dependency "dev-libs/useeqchildpkg"'
+    )
+
+
+def test_autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real --autounmask-use PART B *resolution* (_apply_parent_use_changes
+    -> _show_unsatisfied_dep(collect_use_changes=True)): dev-libs/
+    parentflipeqpkg (IUSE +feat) RDEPENDs parentflipchildpkg[feat=]; the
+    child's own `feat` is use.mask'd, so no package.use flip on the child
+    can enable it. Real portage flips the *parent's* `feat` off instead
+    (dropping the conditional constraint), re-resolves, and prints
+    `>=dev-libs/parentflipeqpkg-1.0 -feat` in the "necessary to proceed"
+    USE block -- exit 0. The parent's own USE line reads `-feat`; the
+    freed child resolves as a normal New."""
+    args = ["--pretend", "dev-libs/parentflipeqpkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stderr == py.stderr
+    assert rust.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/parentflipchildpkg-1.0  USE="(-feat)"',
+        '[ebuild  N     ] dev-libs/parentflipeqpkg-1.0  USE="-feat"',
+    ]
+    assert rust.stderr == (
+        "\nThe following USE changes are necessary to proceed:\n"
+        ' (see "package.use" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/parentflipeqpkg-1.0::testrepo\n"
+        "# required by dev-libs/parentflipeqpkg (argument)\n"
+        ">=dev-libs/parentflipeqpkg-1.0 -feat\n"
+    )
+
+    # --autounmask-use=n: the shared gate is off -> the dep stays
+    # unresolvable, no change block.
+    n = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-use=n", "dev-libs/parentflipeqpkg"],
+        fixture_env,
+    )
+    assert n.returncode == 0
+    assert n.stdout.strip() == '[ebuild  N     ] dev-libs/parentflipeqpkg-1.0  USE="feat"'
+    assert (
+        n.stderr.strip()
+        == '!!! no visible ebuild for dependency "dev-libs/parentflipchildpkg"'
     )
 
 

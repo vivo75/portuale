@@ -6350,12 +6350,17 @@ pub struct GraphEntry {
     /// own doc comment for the full real grounding (`opt?`/REQUIRED_USE-
     /// conditional atoms, flipping the *requesting parent's* own flag,
     /// not the candidate's). `(parent_category, parent_package,
-    /// parent_version, [(flag, desired_state)])`, or `None` under the
-    /// same gating `use_suggestion` has. Independent of `use_suggestion`
-    /// -- both mechanisms are gated on `autounmask_suggest_use` alone and
-    /// can in principle both be `Some` at once (real portage's own
-    /// `missing_use_reasons` allows the same), though no fixture in this
-    /// pilot currently exercises that combination.
+    /// parent_version, [(flag, desired_state)])`.
+    ///
+    /// `Some` only when the parent flip is *not applied* -- i.e. it would
+    /// resolve the dep but `resolve_pretend_graph` chose not to (there is
+    /// currently no such gate beyond `autounmask_suggest_use` itself, so
+    /// in practice this is `Some` only when the re-resolve unexpectedly
+    /// still fails). When the flip *is* applied, `resolve_pretend_graph`
+    /// re-resolves the dependency, records the change in
+    /// `GraphResult::autounmask_use_changes`, and this stays `None`
+    /// (the dep is no longer `NoVisibleCandidate`). Kept as a field for
+    /// the `--json` provenance trace and symmetry with `use_suggestion`.
     pub parent_use_suggestion: Option<ParentUseSuggestion>,
     /// `--root-deps`'s own real `ESYSROOT`-vs-running-root distinction
     /// (see `running_root_satisfies_atom`'s own doc comment for the full
@@ -7368,7 +7373,7 @@ pub fn resolve_pretend_graph(
             continue;
         }
 
-        let outcome = resolve_pretend(
+        let mut outcome = resolve_pretend(
             &repos,
             root,
             &current_atom,
@@ -7395,6 +7400,140 @@ pub fn resolve_pretend_graph(
             autounmask_suggest_keywords,
             autounmask_suggest_use,
         )?;
+
+        // Real `--autounmask-use` PART B *resolution* (`_apply_parent_use_changes`
+        // -> `_show_unsatisfied_dep(collect_use_changes=True)`,
+        // `depgraph.py:5820`/`6768`): a dependency's use-dep was originally
+        // conditional on the *requesting parent's* own USE (`opt?`/`opt=`
+        // forms), and no candidate satisfies the evaluated form -- because
+        // the child's own flag is `use.mask`'d/forced, so a child-side
+        // `package.use` flip (`suggested_use_flip`) is impossible. Real
+        // portage then flips the *parent's* conditional flag instead
+        // (`suggested_parent_use_candidate`), re-resolves, and prints the
+        // change in the same "necessary to proceed" USE block. This pilot
+        // applies that one change and re-resolves only the freed
+        // dependency (real portage re-resolves the whole graph -- see the
+        // deliberate-cut note); a `--autounmask-use=n` suppresses it via
+        // the shared `autounmask_suggest_use` gate.
+        let (current_atom, atom) = 'parent_flip: {
+            if !(matches!(outcome, PretendOutcome::NoVisibleCandidate)
+                && autounmask_suggest_use
+                && depth > 0)
+            {
+                break 'parent_flip (current_atom, atom);
+            }
+            let (Some(owner_key), Some(unevaluated)) =
+                (owner.as_ref(), unevaluated_atom.as_deref())
+            else {
+                break 'parent_flip (current_atom, atom);
+            };
+            let Some((pc, pp, pv, target_use)) =
+                suggested_parent_use_candidate(&repos, &entries, unevaluated, owner_key, config)
+            else {
+                break 'parent_flip (current_atom, atom);
+            };
+            let Some((parent_cand, _piuse, parent_use, _pru)) =
+                parent_use_state(&repos, &entries, owner_key, config)
+            else {
+                break 'parent_flip (current_atom, atom);
+            };
+            let mut new_parent_use = parent_use.clone();
+            for (flag, want) in &target_use {
+                if *want {
+                    new_parent_use.insert(flag.clone());
+                } else {
+                    new_parent_use.remove(flag);
+                }
+            }
+            let Some(re_atom) =
+                portage_dep::evaluate_atom_conditionals(unevaluated, &new_parent_use)
+            else {
+                break 'parent_flip (current_atom, atom);
+            };
+            let Some(re_parsed) = portage_dep::parse_atom(&re_atom) else {
+                break 'parent_flip (current_atom, atom);
+            };
+            let re_outcome = resolve_pretend(
+                &repos,
+                root,
+                &re_atom,
+                config,
+                newuse,
+                changed_use,
+                update,
+                excluded,
+                changed_deps,
+                with_bdeps,
+                changed_slot,
+                selective,
+                depth == 0,
+                usepkg,
+                usepkgonly,
+                binpkg_respect_use,
+                usepkg_exclude,
+                usepkg_include,
+                rebuilt_binaries,
+                rebuilt_binaries_timestamp,
+                newrepo,
+                empty,
+                getbinpkg,
+                autounmask_suggest_keywords,
+                autounmask_suggest_use,
+            )?;
+            if matches!(re_outcome, PretendOutcome::NoVisibleCandidate) {
+                break 'parent_flip (current_atom, atom);
+            }
+            // The parent flip works: adopt the re-resolved outcome, record
+            // the `=parent -flag` change, and re-render the parent entry's
+            // own USE line to match (real `_pkg_use_enabled` on `myparent`).
+            outcome = re_outcome;
+            let parent_cpv = format!("{pc}/{pp}-{pv}");
+            let parent_all = list_candidates(&repos, &pc, &pp).unwrap_or_default();
+            let token = target_use
+                .iter()
+                .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })
+                .collect::<Vec<_>>()
+                .join(" ");
+            autounmask_use_changes.push(AutounmaskChange {
+                atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, config),
+                token,
+                dep_chain: autounmask_dep_chain(
+                    &Some((pc.clone(), pp.clone())),
+                    "",
+                    &top_level,
+                    &entries,
+                ),
+            });
+            let mut disp: Vec<(String, bool)> = parent_cand
+                .iuse
+                .split_whitespace()
+                .map(|t| t.trim_start_matches(['+', '-']).to_string())
+                .map(|f| {
+                    let on = new_parent_use.contains(&f);
+                    (f, on)
+                })
+                .collect();
+            disp.sort_by_key(|p| alnum_sort_key(&p.0));
+            let forced = forced_or_masked_flags(
+                &parent_cand.iuse,
+                &parent_cand.keywords,
+                &parent_cpv,
+                &pc,
+                &pp,
+                config,
+            );
+            let pv_disp = build_use_expand_display(&disp, config, None, &forced, true);
+            let p_disp = build_use_expand_display(&disp, config, None, &forced, false);
+            if let Some(pe) = entries
+                .iter_mut()
+                .find(|e| e.category == pc && e.package == pp)
+            {
+                pe.use_flags_display = disp;
+                pe.use_expand_display = pv_disp;
+                pe.use_expand_display_p = p_disp;
+            }
+            (re_atom, re_parsed)
+        };
 
         // `--changed-deps-report`: real portage stays "completely
         // silent" whenever `--changed-deps` itself is also given (its
@@ -14606,6 +14745,55 @@ mod tests {
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
 
+    /// `graph_result_autounmask` with `autounmask_suggest_use` forced off
+    /// (an explicit `--autounmask-use=n`).
+    fn graph_result_autounmask_use_n(atom_str: &str) -> GraphResult {
+        let root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &root,
+            &root.join("repo"),
+            &[("overlay".to_string(), root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config resolves");
+        resolve_pretend_graph(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+        )
+        .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
+    }
+
     #[test]
     fn autounmask_keywords_records_the_dep_chain_for_a_keyword_masked_dependency() {
         let result = graph_result_autounmask("dev-libs/autounmaskdepconsumer");
@@ -14689,6 +14877,72 @@ mod tests {
                 "required by dev-libs/usedeprejectedpkg (argument)".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn autounmask_use_parent_flip_resolves_when_the_child_flag_is_masked() {
+        // `dev-libs/parentflipeqpkg` (IUSE +feat) RDEPENDs
+        // `dev-libs/parentflipchildpkg[feat=]`; the child's own `feat` is
+        // `use.mask`'d, so a child-side flip is impossible -- real
+        // portage flips the *parent's* `feat` off instead, dropping the
+        // conditional constraint. The dependency must resolve as `New`
+        // (not stay `NoVisibleCandidate`), the parent's own `feat` must
+        // read off in its USE display, and the recorded change is the
+        // parent's own `>=cpv -feat` with the parent's own dep chain.
+        let result = graph_result_autounmask("dev-libs/parentflipeqpkg");
+        let child = result
+            .entries
+            .iter()
+            .find(|e| e.package == "parentflipchildpkg")
+            .expect("child entry");
+        assert!(
+            matches!(child.outcome, PretendOutcome::New { .. }),
+            "{child:?}"
+        );
+        assert!(child.parent_use_suggestion.is_none());
+
+        let parent = result
+            .entries
+            .iter()
+            .find(|e| e.package == "parentflipeqpkg")
+            .expect("parent entry");
+        assert_eq!(
+            parent
+                .use_flags_display
+                .iter()
+                .find(|(f, _)| f == "feat")
+                .map(|(_, on)| *on),
+            Some(false),
+            "the parent flip must show in the parent's own USE display"
+        );
+
+        assert_eq!(result.autounmask_use_changes.len(), 1);
+        let change = &result.autounmask_use_changes[0];
+        assert_eq!(change.atom, ">=dev-libs/parentflipeqpkg-1.0");
+        assert_eq!(change.token, "-feat");
+        assert_eq!(
+            change.dep_chain,
+            vec![
+                "required by dev-libs/parentflipeqpkg-1.0::testrepo".to_string(),
+                "required by dev-libs/parentflipeqpkg (argument)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn autounmask_use_n_leaves_a_masked_child_flag_dep_unresolved() {
+        // The same fixture with `--autounmask-use=n`: the shared
+        // `autounmask_suggest_use` gate is off, so neither the child nor
+        // the parent flip is attempted -- the dependency stays
+        // `NoVisibleCandidate` and no change is recorded.
+        let result = graph_result_autounmask_use_n("dev-libs/parentflipeqpkg");
+        let child = result
+            .entries
+            .iter()
+            .find(|e| e.package == "parentflipchildpkg")
+            .expect("child entry");
+        assert!(matches!(child.outcome, PretendOutcome::NoVisibleCandidate));
+        assert!(result.autounmask_use_changes.is_empty());
     }
 
     #[test]

@@ -5415,6 +5415,107 @@ def resolve_pretend_graph(
             autounmask_suggest_use,
         )
 
+        # Real --autounmask-use PART B *resolution*
+        # (_apply_parent_use_changes -> _show_unsatisfied_dep(
+        # collect_use_changes=True), depgraph.py:5820/6768): a dependency's
+        # use-dep was originally conditional on the *requesting parent's*
+        # own USE (opt?/opt= forms) and no candidate satisfies the
+        # evaluated form -- because the child's own flag is use.mask'd, so
+        # a child-side package.use flip (_suggested_use_flip) is
+        # impossible. Real portage flips the *parent's* conditional flag
+        # instead (_suggested_parent_use_candidate), re-resolves, and
+        # prints it in the same "necessary to proceed" USE block. This
+        # reference applies the one change and re-resolves only the freed
+        # dependency (real portage re-resolves the whole graph -- see the
+        # cut note); --autounmask-use=n suppresses it via the shared gate.
+        # Mirrors portage-repo/src/lib.rs's own inline block.
+        if (
+            outcome[0] == "no_visible_candidate"
+            and autounmask_suggest_use
+            and depth > 0
+            and owner is not None
+            and unevaluated_atom is not None
+        ):
+            _pfc = _suggested_parent_use_candidate(
+                repos, entries, unevaluated_atom, owner, config
+            )
+            _pstate = (
+                _parent_use_state(repos, entries, owner, config)
+                if _pfc is not None
+                else None
+            )
+            if _pfc is not None and _pstate is not None:
+                _pc, _pp, _pv, _target_use = _pfc
+                _parent_cand, _piuse, _parent_use, _pru = _pstate
+                _new_parent_use = set(_parent_use)
+                for _flag, _want in _target_use:
+                    (_new_parent_use.add if _want else _new_parent_use.discard)(_flag)
+                _re_atom = str(
+                    _parse_atom(unevaluated_atom).evaluate_conditionals(_new_parent_use)
+                )
+                _re_parsed = _parse_atom(_re_atom)
+                if _re_parsed is not None:
+                    _re_outcome = resolve_pretend(
+                        repos,
+                        root,
+                        _re_atom,
+                        config,
+                        newuse,
+                        changed_use,
+                        update,
+                        excluded,
+                        changed_deps,
+                        with_bdeps,
+                        changed_slot,
+                        selective,
+                        depth == 0,
+                        usepkg,
+                        usepkgonly,
+                        binpkg_respect_use,
+                        usepkg_exclude,
+                        usepkg_include,
+                        rebuilt_binaries,
+                        rebuilt_binaries_timestamp,
+                        newrepo,
+                        empty,
+                        getbinpkg,
+                        autounmask_suggest_keywords,
+                        autounmask_suggest_use,
+                    )
+                    if _re_outcome[0] != "no_visible_candidate":
+                        outcome = _re_outcome
+                        current_atom_str = _re_atom
+                        atom = _re_parsed
+                        _token = " ".join(
+                            f if e else f"-{f}" for f, e in _target_use
+                        )
+                        autounmask_use_changes.append(
+                            {
+                                "atom": _autounmask_use_atom_form(
+                                    _parent_cand,
+                                    list_candidates(repos, _pc, _pp),
+                                    _pc,
+                                    _pp,
+                                    config,
+                                ),
+                                "token": _token,
+                                "dep_chain": _autounmask_dep_chain(
+                                    (_pc, _pp), "", top_level, entries
+                                ),
+                            }
+                        )
+                        _pflip_display = sorted(
+                            (
+                                (t.lstrip("+-"), t.lstrip("+-") in _new_parent_use)
+                                for t in _parent_cand.get("iuse", "").split()
+                            ),
+                            key=lambda p: _alnum_sort_key(p[0]),
+                        )
+                        for _i, _e in enumerate(entries):
+                            if _e[0] == _pc and _e[1] == _pp:
+                                entries[_i] = _e[:5] + (_pflip_display,) + _e[6:]
+                                break
+
         # --changed-deps-report: real portage stays "completely silent"
         # whenever --changed-deps itself is also given (its own
         # collected _changed_deps_pkgs dict is discarded unread by
@@ -10858,10 +10959,12 @@ def run(args):
                     f'"={category}/{package}-{version} {adjustments}" to package.use',
                     file=sys.stderr,
                 )
-            # --autounmask-use's own second, architecturally distinct
-            # suggestion sub-feature -- see
-            # _suggested_parent_use_candidate's own docstring: flips the
-            # *requesting parent's* own flag, not the candidate's.
+            # --autounmask-use's own opt=-aware *parent* flip -- see
+            # _suggested_parent_use_candidate's own docstring. When that
+            # flip resolves the dep, resolve_pretend_graph applies it and
+            # this entry is no longer no_visible_candidate, so this is a
+            # fallback hint for the (currently unreachable) case where the
+            # suggestion exists but wasn't applied.
             if parent_use_suggestion is not None:
                 parent_category, parent_package, parent_version, flip = parent_use_suggestion
                 adjustments = " ".join(flag if enabled else f"-{flag}" for flag, enabled in flip)

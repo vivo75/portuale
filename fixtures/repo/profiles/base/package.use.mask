@@ -6,3 +6,9 @@
 # decides which entry wins when more than one matches.
 dev-libs/pkgusemaskforcepkg maskflag specflag
 dev-libs/wildexpandpkg linguas_en
+
+# fixture: masks "feat" for dev-libs/parentflipchildpkg so a
+# --autounmask-use *child* flip can never enable it -- this is what
+# forces real portage's opt=-aware *parent* flip (flip the requesting
+# dev-libs/parentflipeqpkg's own "feat" off instead).
+dev-libs/parentflipchildpkg feat

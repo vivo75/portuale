@@ -1115,10 +1115,12 @@ fn print_entry_line(
                     adjustments.join(" "),
                 );
             }
-            // `--autounmask-use`'s own second, architecturally distinct
-            // suggestion sub-feature -- see
-            // GraphEntry::parent_use_suggestion's own doc comment: flips
-            // the *requesting parent's* own flag, not the candidate's.
+            // `--autounmask-use`'s own opt=-aware *parent* flip -- see
+            // GraphEntry::parent_use_suggestion's own doc comment. When
+            // that flip resolves the dep, `resolve_pretend_graph` applies
+            // it and this entry is no longer NoVisibleCandidate, so this
+            // arm is a fallback hint for the (currently unreachable) case
+            // where the suggestion exists but wasn't applied.
             if let Some((parent_category, parent_package, parent_version, flip)) =
                 &entry.parent_use_suggestion
             {

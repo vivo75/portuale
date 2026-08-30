@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: IUSE feat is use.mask'd (profiles/base/package.use.mask) so it can never be enabled -- a child a --autounmask-use child-flip cannot satisfy, forcing the opt=-aware parent flip
+EAPI=8
+IUSE=feat
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000
