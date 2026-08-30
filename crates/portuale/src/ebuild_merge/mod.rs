@@ -18,6 +18,7 @@ use crate::ebuild_phases;
 
 mod after_install;
 mod collisions;
+mod from_binpkg;
 mod installed_instance;
 mod options;
 mod plib_merge;
@@ -32,6 +33,7 @@ mod tests;
 
 pub(crate) use after_install::*;
 pub(crate) use collisions::*;
+pub use from_binpkg::*;
 pub(crate) use installed_instance::*;
 pub use options::*;
 pub(crate) use plib_merge::*;
