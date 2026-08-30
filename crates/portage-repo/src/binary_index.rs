@@ -79,6 +79,10 @@ impl BinaryIndex {
         Self { entries, by_cp }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub(crate) fn entries(&self) -> &[HashMap<String, String>] {
         &self.entries
     }
