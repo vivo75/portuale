@@ -7257,6 +7257,22 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
 # [ebuild  N] dev-libs/topideplib-1.0 to /
 ```
 
+**Scope update (2026-09-01).** This closes the `--root-deps` line for
+this fork. Its ebuilds are all EAPI 7+ (profiles stay EAPI 5, but
+`--root-deps` was never a profile concern), and at EAPI 7+
+(`eapi_attrs.bdepend`, `depgraph.py:4218-4238`) **`--root-deps=rdeps` is
+a complete no-op** — its `ignore_depend_deps` branch sits inside
+`else: if eapi_attrs.bdepend`. What applies at EAPI 7+: `BDEPEND` +
+`IDEPEND` always resolve against the running root (genuinely `/`),
+`DEPEND` against `ESYSROOT` (≈ target `ROOT`), and bare
+`--root-deps`/`=True` folds them into `RDEPEND` (a debugging flag). The
+one residual — the pilot routes `BDEPEND`/`IDEPEND` to `/` only under
+`--root-deps`, real portage does it unconditionally — is observable only
+when `ROOT != /` (a stage/chroot build, outside the pilot's practical
+scope), and the `--root-deps` gate is a deliberate testability choice
+(an unconditional running-root lookup would consult the real host's
+`/var/db/pkg` in every contract test).
+
 ### Real `ebuild <file> qmerge`
 
 `qmerge` is now real too, real `doebuild()`'s own `mydo == "qmerge"`

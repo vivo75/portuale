@@ -124,11 +124,23 @@ single-pass BFS can't grow into these incrementally:
   `dev-libs/maskmaskedconsumer` fixtures. **The whole `--autounmask*`
   family is shipped now** — only `--autounmask-write` (file-writing)
   remains, a `PROMPT.md` non-goal.
-- **`--root-deps` / multi-root, remaining edges.** A top-level `IDEPEND`
-  reaches the running root only under `--root-deps` (real: unconditionally);
-  `PDEPEND` of a running-root entry stays a target-`ROOT` concern (likely
-  a permanent non-gap); the full multi-root graph (a `root` carried per
-  dependency edge) is still approximated edge by edge.
+- **`--root-deps` / multi-root, remaining edges.** *Mostly a non-gap for
+  this fork.* This fork's ebuilds are all EAPI 7+, and at EAPI 7+
+  (`eapi_attrs.bdepend`, `depgraph.py:4218-4238`) **`--root-deps=rdeps`
+  is a complete no-op** — its `ignore_depend_deps` branch sits inside
+  `else: if eapi_attrs.bdepend`. What applies at EAPI 7+: `BDEPEND` +
+  `IDEPEND` always resolve against the running root (`/`), `DEPEND`
+  against `ESYSROOT` (≈ target `ROOT`), and bare `--root-deps`/`=True`
+  folds them into `RDEPEND` (a debugging flag). The one real residual:
+  the pilot routes `BDEPEND`/`IDEPEND` to `/` only *under* `--root-deps`,
+  real portage does it unconditionally — observable only when `ROOT != /`
+  (a stage/chroot build), which is outside the pilot's practical scope,
+  and the `--root-deps` gate is a deliberate testability choice (an
+  unconditional running-root lookup would hit the real host's vdb in
+  every contract test). `PDEPEND` of a running-root entry stays a
+  target-`ROOT` concern (a permanent non-gap). The full multi-root graph
+  (a `root` per dependency edge) stays a deliberate edge-by-edge
+  approximation.
 - **Slot-operator rebuild v1 cuts**: single-pass (no backtracking for a
   rebuild that itself shifts another sub-slot), the rebuilt consumer's own
   `:=` deps not re-bound in the pretend graph, no `--changed-slot`

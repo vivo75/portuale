@@ -9858,14 +9858,14 @@ def run(args):
     # --buildpkgonly/-B: same plain-boolean shape as --newrepo above.
     buildpkgonly = False
     # --root-deps: real main.py's own choices=("True", "rdeps"), plus a
-    # bare form (no =value at all). This pilot's own v1 doesn't
-    # distinguish "True" (fold DEPEND/BDEPEND/IDEPEND into RDEPEND) from
-    # "rdeps" (additionally ignore DEPEND for non-BDEPEND-EAPI packages)
-    # -- see _root_deps_satisfied_atoms's own doc comment for why neither
-    # is observable in this pilot's own single-root graph model anyway --
-    # so every accepted real form just enables the one real behavior this
-    # pilot does implement: real running-root (ESYSROOT) satisfiability
-    # for DEPEND/BDEPEND atoms.
+    # bare form (no =value at all). This pilot doesn't distinguish "True"
+    # (fold DEPEND/BDEPEND/IDEPEND into RDEPEND) from "rdeps" -- and for
+    # this EAPI-7+-only fork it never needs to: at EAPI 7+
+    # (eapi_attrs.bdepend, depgraph.py:4218-4238) the `--root-deps ==
+    # "rdeps"` ignore_depend_deps branch is inside `else: if
+    # eapi_attrs.bdepend`, so `=rdeps` is a complete no-op. Every
+    # accepted form just enables the one behavior this pilot implements:
+    # real running-root satisfiability for DEPEND/BDEPEND/IDEPEND atoms.
     root_deps = False
     with_test_deps = False
     changed_deps_report = False
