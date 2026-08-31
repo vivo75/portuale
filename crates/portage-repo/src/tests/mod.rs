@@ -395,6 +395,41 @@ fn abi_probe_entries(consumer_outcome: PretendOutcome) -> Vec<GraphEntry> {
     ]
 }
 
+/// Residual-report helpers over the `souprov` fixtures (1.0 at 0/1, 2.0 at
+/// 0/2). A `:=`-rebuild-style dropped pin whose atom matches the installed
+/// instance but not the merged one yields one record: merge instance first,
+/// installed second, with the consumer folded in at its vdb slot and
+/// repository.
+fn residual_161_setup(dir: &Path) -> (Vec<RepoConfig>, portage_profile::Config, GraphEntry) {
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let config = test_config();
+    let d = dir.join("var/db/pkg/dev-libs/souprov-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0/1\n").unwrap();
+    fs::write(d.join("repository"), "testrepo\n").unwrap();
+    // The dropped-pin consumer: slot and repo flow verbatim into
+    // the folded parent line.
+    let c = dir.join("var/db/pkg/dev-libs/conpkg-1.0");
+    fs::create_dir_all(&c).unwrap();
+    fs::write(c.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(c.join("SLOT"), "3/0\n").unwrap();
+    fs::write(c.join("repository"), "testrepo\n").unwrap();
+    let upgrade = GraphEntry {
+        discovery: 0,
+        category: "dev-libs".into(),
+        package: "souprov".into(),
+        outcome: PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "2.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("2".into()),
+        ..graph_entry("dev-libs", "souprov", "2.0")
+    };
+    (repos, config, upgrade)
+}
+
 #[derive(Default)]
 struct CtxOpts161 {
     reachable: HashSet<(String, String)>,
