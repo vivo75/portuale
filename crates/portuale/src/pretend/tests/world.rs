@@ -69,3 +69,63 @@ fn update_world_file_records_a_new_target_and_skips_deps_and_oneshot() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn update_world_file_slot_qualifies_a_slotted_target() {
+    // A cp is "slotted" with several SLOTs, or one non-`"0"` SLOT.
+    let repos = portage_repo::find_repos(&fixtures_root()).expect("repos");
+    let tmp = TempDir::new("portuale-worldslot").keep();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+
+    let entries = vec![world_entry("dev-libs", "dualslotpkg", "1")];
+    update_world_file(UpdateWorldFileArgs {
+        root: &root,
+        target_atoms: &["dev-libs/dualslotpkg:1"],
+        entries: &entries,
+        system_atoms: &[],
+        repos: &repos,
+        oneshot: false,
+        onlydeps: false,
+    })
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
+        "dev-libs/dualslotpkg:1\n"
+    );
+
+    std::fs::write(root.join("var/lib/portage/world"), "").unwrap();
+    update_world_file(UpdateWorldFileArgs {
+        root: &root,
+        target_atoms: &["dev-libs/dualslotpkg"],
+        entries: &entries,
+        system_atoms: &[],
+        repos: &repos,
+        oneshot: false,
+        onlydeps: false,
+    })
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
+        "dev-libs/dualslotpkg\n"
+    );
+
+    std::fs::write(root.join("var/lib/portage/world"), "").unwrap();
+    let pkg_entries = vec![world_entry("dev-libs", "packagepkg", "0")];
+    update_world_file(UpdateWorldFileArgs {
+        root: &root,
+        target_atoms: &["dev-libs/packagepkg:0"],
+        entries: &pkg_entries,
+        system_atoms: &[],
+        repos: &repos,
+        oneshot: false,
+        onlydeps: false,
+    })
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
+        "dev-libs/packagepkg\n"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
