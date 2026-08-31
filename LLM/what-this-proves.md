@@ -9586,4 +9586,90 @@ exists"); `fif`/`dev` `CONTENTS` nodes. Rust-black-box-tested in
 → a valid xpak `.tbz2` (image tar + `XPAKSTOP` trailer, holds the
 installed file), a `Packages` entry, and the package gone afterward.
 
+### Slot-operator rebuilds: an upgraded sub-slot reinstalls its `:=` consumers
+
+The `:=` binding slice made a merged package record `dev-libs/foo:2/3=`
+in its vdb — this slice is the payoff. Real depgraph's
+`_slot_operator_trigger_reinstalls` (fed by the
+`@__auto_slot_operator_replace_installed__` set): when `foo` is upgraded
+to a *different* sub-slot, every installed package whose built `foo:S/SS=`
+binding is now stale must be rebuilt against the new ABI.
+
+`resolve_pretend_graph` gained a post-resolution pass,
+`slot_operator_rebuild_entries` (mirrored in
+`emerge_pretend_reference.py::_slot_operator_rebuild_entries`), run once
+every merge-bound entry is known and before the dependency-first sort:
+
+- collect, per cp, the `(slot, sub_slot)` each `Upgrade`/`Downgrade`/
+  `Reinstall` entry leaves that cp at (a new-other-slot `New` doesn't
+  touch the old slot, so it triggers nothing)
+- scan every installed package **not** already in the graph; for each
+  `*DEPEND` atom with a built slot operator (`slot_operator == "="`,
+  both slot and sub-slot present — real `Atom.slot_operator_built`),
+  check whether a provider entry keeps the atom's slot but changes its
+  sub-slot
+- if so, add the consumer as `Reinstall { slot_operator_rebuild: true }`
+  — a plain `[ebuild   R    ]` (no reason annotation; it's not
+  `--newuse`/`--changed-*`), ordered after the dep it links against.
+  `--json` gets a `slot_operator_rebuild` boolean on the reinstall
+  block.
+
+The `PretendOutcome::Reinstall` variant gained a sixth freely-combinable
+trigger field, `slot_operator_rebuild`, though the post-pass only ever
+sets it standalone.
+
+**Increment 2 — the "causing rebuilds:" block.** `slot_operator_rebuild_entries`
+also returns the `(provider-cpv, consumer-cpv)` pairs behind each
+rebuild (real `_compute_abi_rebuild_info`'s `_forced_rebuilds`), on a
+new `GraphResult::abi_rebuilds`. `pretend.rs` renders real
+`_show_abi_rebuild_info` (`depgraph.py:1210`) — after the merge
+list / autounmask blocks, before the changed-deps report, on **stdout**:
+
+```
+The following packages are causing rebuilds:
+
+  dev-libs/slotbindtarget-2.0 causes rebuilds for:
+    dev-libs/slotbindconsumer-1.0
+```
+
+Grouped by provider. `--verbose-slot-rebuilds[=y|n]` (real `y_or_n`,
+default `y`, **not** `--verbose`-gated) is wired for the first time;
+only `=n` suppresses the block. `--json` grows an `abi_rebuilds` array
+of `{provider, consumer}` objects (unconditionally, like every `--json`
+field).
+
+**v1 cuts** (same increment discipline as the `--root-deps` recursion):
+no backtracking — a rebuild that would itself shift another sub-slot
+isn't chased; the rebuilt consumer's own `:=` deps aren't re-bound here
+(the real rebuild does that); no `--changed-slot` interaction. Full
+contract-suite lockstep (new `dev-libs/slotbind{target,consumer,fresh}`
+repo fixtures; the installed consumer/target live in a test-local vdb —
+the shared fixture's whole vdb feeds every depclean/prune/`-C` test):
+`emerge -p dev-libs/slotbindtarget` → the target Upgrade, `[ebuild R]
+dev-libs/slotbindconsumer`, and the "causing rebuilds:" block,
+byte-identical between both implementations. (`slotbindfresh`, already
+bound to `:2/9=`, is not rebuilt.)
+
+**Increment 3 — `--ignore-built-slot-operator-deps`.** Real
+`main.py:470` (`y_or_n`, default `n`, "intended only for debugging
+purposes"): real portage feeds it into `FakeVartree`, which strips the
+slot/sub-slot `:=` operator parts out of every installed package's
+recorded `*DEPEND` (`_slot_operator.ignore_built_slot_operator_deps`) —
+so `_slot_operator_trigger_reinstalls` finds nothing. `resolve_pretend_graph`
+gained a matching `ignore_built_slot_operator_deps` param (threaded from
+`pretend.rs` / mirrored in `emerge_pretend_reference.py`) that, when
+set, skips the `slot_operator_rebuild_entries` post-pass entirely — same
+net effect. Portuale accepts `--ignore-built-slot-operator-deps`,
+`=y`/`=n`, and a space-separated `y`/`n` (bare form → `y`, same
+permissive shape as the sibling flags). Contract test:
+`emerge -p --ignore-built-slot-operator-deps=y dev-libs/slotbindtarget`
+→ just the target Upgrade, no consumer reinstall, no "causing
+rebuilds:" block, `"abi_rebuilds":[]`.
+
+**Increment 4 — complete-graph reachability gate, the multi-level
+cascade, and real's `r` marker + `str(Package)` block rendering
+(2026-09-03).** Container cross-check (`TEST/scripts/40-slotop-cascade.sh`,
+real portage 3.0.82.2) pinned down three things Increments 1–3 got
+wrong or missing:
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
