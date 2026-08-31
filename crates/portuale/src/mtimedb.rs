@@ -17,9 +17,40 @@ pub enum ResumeEntryKind {
     Binary,
 }
 
+impl ResumeEntryKind {
+    fn as_json_str(self) -> &'static str {
+        match self {
+            ResumeEntryKind::Ebuild => "ebuild",
+            ResumeEntryKind::Binary => "binary",
+        }
+    }
+}
+
 /// `(kind, category, package, version)` -- one entry of a resume
 /// mergelist.
 pub type ResumeCpv = (ResumeEntryKind, String, String, String);
+
+/// The subset of `mtimedb["resume"]["myopts"]` that changes how `--resume`
+/// replays the mergelist: `--oneshot` and `--onlydeps` govern
+/// world-recording.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResumeOpts {
+    pub oneshot: bool,
+    pub onlydeps: bool,
+}
+
+/// One resume section's data (`resume` and `resume_backup` share the shape).
+#[derive(Clone)]
+struct Section {
+    favorites: Vec<String>,
+    mergelist: Vec<ResumeCpv>,
+    opts: ResumeOpts,
+}
+
+/// `<root>/var/cache/edb/mtimedb`.
+pub fn mtimedb_path(root: &Path) -> PathBuf {
+    root.join("var/cache/edb/mtimedb")
+}
 
 fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
@@ -36,4 +67,256 @@ fn json_str(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// One section's body in `json.dumps(sort_keys=True)` shape (no outer key
+/// wrapper; the caller adds that). Shared by every section a write produces.
+fn format_section_body(root: &Path, section: &Section) -> String {
+    let root_str = root.display().to_string();
+    let favs: Vec<String> = section
+        .favorites
+        .iter()
+        .map(|f| format!("\t\t\t{}", json_str(f)))
+        .collect();
+    let merges: Vec<String> = section
+        .mergelist
+        .iter()
+        .map(|(kind, cat, pkg, ver)| {
+            format!(
+                "\t\t\t[\n\t\t\t\t{},\n\t\t\t\t{},\n\t\t\t\t{},\n\t\t\t\t{}\n\t\t\t]",
+                json_str(kind.as_json_str()),
+                json_str(&root_str),
+                json_str(&format!("{cat}/{pkg}-{ver}")),
+                json_str("merge")
+            )
+        })
+        .collect();
+    // `myopts` keys alphabetical (`--onlydeps` < `--oneshot`), value `true`.
+    let mut opt_pairs: Vec<String> = Vec::new();
+    if section.opts.onlydeps {
+        opt_pairs.push(format!("\t\t\t{}: true", json_str("--onlydeps")));
+    }
+    if section.opts.oneshot {
+        opt_pairs.push(format!("\t\t\t{}: true", json_str("--oneshot")));
+    }
+    let myopts = if opt_pairs.is_empty() {
+        "{}".to_string()
+    } else {
+        format!("{{\n{}\n\t\t}}", opt_pairs.join(",\n"))
+    };
+    format!(
+        "\t\t\"favorites\": [\n{}\n\t\t],\n\t\t\"mergelist\": [\n{}\n\t\t],\n\t\t\"myopts\": {myopts}",
+        favs.join(",\n"),
+        merges.join(",\n")
+    )
+}
+
+/// Writes the whole mtimedb file from scratch with the given sections (`None`
+/// omits a section). Removes the file outright when there is nothing to store.
+fn write_sections(
+    root: &Path,
+    resume: Option<&Section>,
+    resume_backup: Option<&Section>,
+    info: Option<&BTreeMap<String, i64>>,
+) -> Result<(), String> {
+    let path = mtimedb_path(root);
+    let mut parts = Vec::new();
+    if let Some(s) = resume {
+        parts.push(format!(
+            "\t\"resume\": {{\n{}\n\t}}",
+            format_section_body(root, s)
+        ));
+    }
+    if let Some(s) = resume_backup {
+        parts.push(format!(
+            "\t\"resume_backup\": {{\n{}\n\t}}",
+            format_section_body(root, s)
+        ));
+    }
+    if let Some(mtimes) = info
+        && !mtimes.is_empty()
+    {
+        // The flat `{path: mtime}` map, keys sorted.
+        let entries: Vec<String> = mtimes
+            .iter()
+            .map(|(k, v)| format!("\t\t{}: {v}", json_str(k)))
+            .collect();
+        parts.push(format!("\t\"info\": {{\n{}\n\t}}", entries.join(",\n")));
+    }
+    if parts.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    // Top-level sections ordered `info` < `resume` < `resume_backup`;
+    // the pushes above already append in that order.
+    let content = format!("{{\n{}\n}}\n", parts.join(",\n"));
+    std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The `{...}` object immediately following `"<key>":` in `content`,
+/// brace-depth-matched (quoted strings' `{`/`}` don't count), so a second
+/// top-level section following in the same file can't confuse it.
+fn extract_object<'a>(content: &'a str, key: &str) -> Option<&'a str> {
+    let marker = format!("\"{key}\"");
+    let after_key = content.split_once(&marker)?.1;
+    // Only whitespace and a single `:` may separate the key from its value;
+    // otherwise this key's own (possibly array-shaped) value could be skipped
+    // in favour of a sibling key's object.
+    let body = after_key.trim_start().strip_prefix(':')?.trim_start();
+    if !body.starts_with('{') {
+        return None;
+    }
+    let bytes = body.as_bytes();
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&body[..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parses one section's object text into a `Section`, or `None` if it is
+/// missing/malformed.
+fn parse_section(object: &str) -> Option<Section> {
+    // Match `["ebuild"|"binary", "<root>", "<cat/pkg-ver>", "merge"]`; the
+    // cpv is split into `(cat, pkg, ver)` below.
+    let entry_re =
+        Regex::new(r#"\[\s*"(ebuild|binary)"\s*,\s*"[^"]*"\s*,\s*"([^"]+)"\s*,\s*"merge"\s*\]"#)
+            .ok()?;
+
+    let mut mergelist = Vec::new();
+    for cap in entry_re.captures_iter(object) {
+        let kind = if &cap[1] == "binary" {
+            ResumeEntryKind::Binary
+        } else {
+            ResumeEntryKind::Ebuild
+        };
+        let cpv = &cap[2];
+        if let Some((cp, ver)) = split_cpv(cpv)
+            && let Some((cat, pkg)) = cp.split_once('/')
+        {
+            mergelist.push((kind, cat.to_string(), pkg.to_string(), ver.to_string()));
+        }
+    }
+    if mergelist.is_empty() {
+        return None;
+    }
+
+    let fav_block = extract_object(object, "favorites")
+        .or_else(|| object.split("\"favorites\"").nth(1))
+        .and_then(|s| s.split('[').nth(1))
+        .and_then(|s| s.split(']').next())
+        .unwrap_or("");
+    let favorites: Vec<String> = Regex::new(r#""([^"]+)""#)
+        .ok()?
+        .captures_iter(fav_block)
+        .map(|c| c[1].to_string())
+        .collect();
+
+    // `myopts` is a flat `"--flag": true` object.
+    let myopts_block = extract_object(object, "myopts").unwrap_or("");
+    let opts = ResumeOpts {
+        oneshot: myopts_block.contains("\"--oneshot\""),
+        onlydeps: myopts_block.contains("\"--onlydeps\""),
+    };
+
+    Some(Section {
+        favorites,
+        mergelist,
+        opts,
+    })
+}
+
+/// Reads one top-level section (`"resume"` or `"resume_backup"`) from
+/// the mtimedb file on disk, if present and well-formed.
+fn read_section(root: &Path, key: &str) -> Option<Section> {
+    let content = std::fs::read_to_string(mtimedb_path(root)).ok()?;
+    parse_section(extract_object(&content, key)?)
+}
+
+/// `mtimedb["info"]`: absolute GNU-info directory -> that directory's
+/// `st_mtime` (whole seconds) as `chk_updated_info_files` last left it.
+/// Empty when the file is absent or carries no `info` section.
+pub fn read_info_mtimes(root: &Path) -> BTreeMap<String, i64> {
+    let Ok(content) = std::fs::read_to_string(mtimedb_path(root)) else {
+        return BTreeMap::new();
+    };
+    let Some(object) = extract_object(&content, "info") else {
+        return BTreeMap::new();
+    };
+    // `"path": 123` pairs; a foreign-written float (`123.0`) is accepted
+    // and truncated, while what portuale writes back is always an integer.
+    let pair_re = Regex::new(r#""((?:[^"\\]|\\.)*)"\s*:\s*(-?\d+(?:\.\d+)?)"#).ok();
+    let Some(pair_re) = pair_re else {
+        return BTreeMap::new();
+    };
+    let mut mtimes = BTreeMap::new();
+    for cap in pair_re.captures_iter(object) {
+        let raw = &cap[1];
+        let mut key = String::with_capacity(raw.len());
+        let mut chars = raw.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\'
+                && let Some(e) = chars.next()
+            {
+                match e {
+                    'n' => key.push('\n'),
+                    't' => key.push('\t'),
+                    'r' => key.push('\r'),
+                    other => key.push(other),
+                }
+            } else {
+                key.push(c);
+            }
+        }
+        if let Ok(v) = cap[2].parse::<f64>() {
+            mtimes.insert(key, v as i64);
+        }
+    }
+    mtimes
+}
+
+/// Stores `mtimedb["info"]`: rewrites the file with `info` replaced,
+/// preserving any existing `resume`/`resume_backup` untouched. An empty map
+/// stores nothing for `info` itself.
+pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<(), String> {
+    let resume = read_section(root, "resume");
+    let backup = read_section(root, "resume_backup");
+    write_sections(root, resume.as_ref(), backup.as_ref(), Some(info))
+}
+
+/// `cat/pkg-1.2.3-r1` -> `("cat/pkg", "1.2.3-r1")`. Splits at the last `-`
+/// whose following char is a digit.
+fn split_cpv(cpv: &str) -> Option<(&str, &str)> {
+    let bytes = cpv.as_bytes();
+    for (i, _) in cpv.match_indices('-') {
+        if bytes.get(i + 1).is_some_and(|b| b.is_ascii_digit()) {
+            return Some((&cpv[..i], &cpv[i + 1..]));
+        }
+    }
+    None
 }

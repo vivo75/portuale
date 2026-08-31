@@ -90,6 +90,24 @@ pub fn fold_token_layers(layers: &[&[String]]) -> Vec<String> {
     set.into_iter().collect()
 }
 
+/// Portage's `prune_incremental`: drop everything up to and including the
+/// last `*`/`-*` boundary handling for header stacking (duplicates kept,
+/// order kept). Only cuts noise, never reorders.
+// Portage: package/ebuild/_config/helper.py, prune_incremental
+pub fn prune_token_layers(tokens: &[String]) -> Vec<String> {
+    for (i, tok) in tokens.iter().rev().enumerate() {
+        if tok == "*" {
+            return tokens[tokens.len() - i - 1..].to_vec();
+        } else if tok == "-*" {
+            if i == 0 {
+                return vec!["-*".to_string()];
+            }
+            return tokens[tokens.len() - i..].to_vec();
+        }
+    }
+    tokens.to_vec()
+}
+
 /// Incremental-variable token semantics: `-*` clears, `-flag` removes,
 /// `flag`/`+flag` adds. Shared by config files and per-package
 /// `package.use` application.

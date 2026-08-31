@@ -229,6 +229,17 @@ pub fn phase_compression_command(lookup: impl Fn(&str) -> Option<String>) -> Opt
     resolve_compression_command_jobs(&name, &flags, &bzip2, &makeopts_to_job_count(&makeopts))
 }
 
+/// `BINPKG_FORMAT` from the resolved config (`lookup`: calling env over
+/// `make.conf`/profile/`make.globals`): the chain value when set anywhere,
+/// else the default `"gpkg"`. An empty value stays an `Unknown BINPKG_FORMAT`
+/// error downstream, never a fallback.
+pub fn resolve_binpkg_format(lookup: impl Fn(&str) -> Option<String>) -> String {
+    // An empty value stays an `Unknown BINPKG_FORMAT` error downstream:
+    // a `make.conf` assignment overrides `make.globals` with `""` and
+    // `__dyn_package` then dies the same way.
+    lookup("BINPKG_FORMAT").unwrap_or_else(|| PackageOptions::default().binpkg_format.clone())
+}
+
 /// `PKGDIR` from the resolved config: the chain value when set anywhere, else
 /// the default `/var/cache/binpkgs`. An empty value falls back (Portage has
 /// no `PKGDIR`-empty die; an empty pkgdir only ever yields broken paths).

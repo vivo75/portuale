@@ -157,3 +157,9 @@ pub(crate) fn apply_env_layer(scalars: &mut HashMap<String, String>, config: &mu
         }
     }
 }
+
+/// The calling-env-over-config value of a plain scalar: the process
+/// environment first, then the folded `other_vars` value.
+pub fn env_over_config_scalar(config: &Config, key: &str) -> Option<String> {
+    config_env_var(key).or_else(|| config.other_vars.get(key).cloned())
+}
