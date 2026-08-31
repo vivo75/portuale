@@ -10075,6 +10075,25 @@ prints the `[slot conflict]` line. Contract-tested both as a shared
 (single-parent and two-top-level-atom forms of each); Rust-unit-tested in
 `portage-repo`.
 
+### Backtracking: the real `--backtrack=COUNT` flag (slice 2)
+
+`resolve_pretend_graph` grew a `backtrack_max: u32` parameter (real
+`emerge --backtrack=COUNT`, `type=int` / `valid_integers` in
+`_emerge/main.py`), replacing slice 1's hardcoded `MAX_BACKTRACK`
+constant. The CLI layer defaults it to `10` (real portage's default when
+the flag is absent) and parses `--backtrack N` / `--backtrack=N` exactly
+like `--deep`: the bare-flag / non-integer-next-token forms leave the
+default in place, the `=` form rejects a non-integer with
+`emerge: invalid --backtrack parameter:` (exit 2).
+
+`--backtrack=0` disables backtracking — the `backtrack_iteration <
+backtrack_max` guard is false from the first pass, so a slot conflict is
+reported without any retry, exactly the pre-slice-1 behavior, on demand.
+Contract-tested (`--backtrack=0` reports the otherwise-solvable
+`dev-libs/slotconflictparent` conflict; `--backtrack 1` still reconciles
+it) as a shared case pair + a dedicated pinned-output test;
+Rust-unit-tested via a new `graph_result_real_backtrack` helper.
+
 ## Running it
 
 Build both Rust binaries:

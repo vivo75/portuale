@@ -7903,6 +7903,15 @@ pub fn resolve_pretend_graph(
     // `slot_operator_rebuild_entries` post-pass is skipped entirely.
     // "Intended only for debugging purposes" per the real `--help`.
     ignore_built_slot_operator_deps: bool,
+    // `--backtrack=COUNT` (real `main.py`, `type=int`, `valid_integers`).
+    // The maximum number of times the `'backtrack` retry loop below may
+    // re-run the whole graph walk after a solvable slot conflict. Real
+    // portage's default is 10 (the CLI layer passes 10 when the flag is
+    // absent); `--backtrack=0` disables backtracking entirely -- the
+    // `backtrack_iteration < backtrack_max` guard is false from the first
+    // pass, so a slot conflict is reported without any retry, exactly the
+    // pre-backtracking behavior.
+    backtrack_max: u32,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
     // Real `create_depgraph_params.py:178`: `--emptytree` sets
@@ -7930,9 +7939,8 @@ pub fn resolve_pretend_graph(
     // every other per-pass accumulator below is rebuilt each iteration;
     // only `slot_constraints` (keyed by `cat/pkg`, the union of every atom
     // text that targeted a conflicted package) and the iteration counter
-    // survive across attempts. `MAX_BACKTRACK` mirrors real portage's
-    // `--backtrack` default of 10 (a later slice threads the actual flag).
-    const MAX_BACKTRACK: u32 = 10;
+    // survive across attempts. The retry ceiling is `backtrack_max` (real
+    // `--backtrack=COUNT`, default 10, `0` disables).
     let mut slot_constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
     let mut backtrack_iteration: u32 = 0;
     'backtrack: loop {
@@ -9298,9 +9306,9 @@ pub fn resolve_pretend_graph(
         // conflicted `cat/pkg` that satisfies *every* atom text that targeted
         // it this pass? If so, fold that whole atom set into `slot_constraints`
         // and re-run the entire walk. Unsolvable conflicts (no such version),
-        // and anything still conflicting after `MAX_BACKTRACK` attempts, fall
+        // and anything still conflicting after `backtrack_max` attempts, fall
         // through unchanged and are reported exactly as before.
-        if !slot_conflicts.is_empty() && backtrack_iteration < MAX_BACKTRACK {
+        if !slot_conflicts.is_empty() && backtrack_iteration < backtrack_max {
             let mut progressed = false;
             for sc in &slot_conflicts {
                 let pkg_key = (sc.category.clone(), sc.package.clone());
@@ -10952,6 +10960,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -11696,6 +11705,27 @@ mod tests {
                 version: "1.0".to_string()
             }
         );
+    }
+
+    #[test]
+    fn fixture_backtrack_max_zero_disables_slot_conflict_reconciliation() {
+        // Same solvable fixture, but `backtrack_max == 0` (real
+        // `--backtrack=0`): the retry loop never runs, so the conflict is
+        // reported exactly as it was before backtracking existed.
+        let result = graph_result_real_backtrack("dev-libs/slotconflictparent", 0);
+        assert_eq!(
+            result.slot_conflicts,
+            vec![SlotConflict {
+                category: "dev-libs".to_string(),
+                package: "slotconflicttarget".to_string(),
+                slot: "0".to_string(),
+                resolved_version: "2.0".to_string(),
+                conflicting_atom: "<dev-libs/slotconflicttarget-2.0".to_string(),
+            }]
+        );
+        // A single retry is enough to reconcile this one-step conflict.
+        let one = graph_result_real_backtrack("dev-libs/slotconflictparent", 1);
+        assert_eq!(one.slot_conflicts, vec![]);
     }
 
     #[test]
@@ -12702,6 +12732,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12748,6 +12779,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12796,6 +12828,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12848,6 +12881,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -12917,6 +12951,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12964,6 +12999,7 @@ mod tests {
             /* empty: */ true,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -13114,6 +13150,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -13258,6 +13295,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -13418,6 +13456,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -13500,6 +13539,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -13586,6 +13626,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -13652,6 +13693,7 @@ mod tests {
                 false,
                 false,
                 false,
+                10,
             )
             .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
             .entries
@@ -13722,6 +13764,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -13781,6 +13824,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -13836,6 +13880,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -14140,6 +14185,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -14470,6 +14516,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -14598,6 +14645,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14784,6 +14832,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries;
@@ -14987,6 +15036,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -15042,6 +15092,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -15156,6 +15207,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -15209,6 +15261,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -15264,6 +15317,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -15319,6 +15373,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -15592,6 +15647,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -15659,6 +15715,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -15749,6 +15806,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -15828,6 +15886,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .expect_err("no visible candidate at all");
         assert_eq!(
@@ -15975,6 +16034,10 @@ mod tests {
     }
 
     fn graph_result_real(atom_str: &str) -> GraphResult {
+        graph_result_real_backtrack(atom_str, 10)
+    }
+
+    fn graph_result_real_backtrack(atom_str: &str, backtrack_max: u32) -> GraphResult {
         let root = fixtures_root();
         let config = portage_profile::resolve_config(
             &root,
@@ -16020,6 +16083,7 @@ mod tests {
             false,
             false,
             false,
+            backtrack_max,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -16076,6 +16140,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -16128,6 +16193,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -16429,6 +16495,7 @@ mod tests {
                 false,
                 false,
                 ignore,
+                10,
             )
             .expect("resolves")
         };
@@ -16521,6 +16588,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .expect("resolves");
 
@@ -16615,6 +16683,7 @@ mod tests {
             false,
             false,
             false,
+            10,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }

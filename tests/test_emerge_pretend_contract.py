@@ -729,6 +729,8 @@ CASES = [
     ("repos.conf explicit masters=: inherits a non-main declared master's mask", ["--pretend", "dev-libs/independentmasteroverlaypkg"], 1),
     ("layout.conf masters= middle tier + repo-name= override", ["--pretend", "dev-libs/layoutmasterpkg"], 1),
     ("slot conflict: solvable, reconciled by backtracking", ["--pretend", "dev-libs/slotconflictparent"], 0),
+    ("slot conflict: --backtrack=0 disables reconciliation", ["--pretend", "--backtrack=0", "dev-libs/slotconflictparent"], 0),
+    ("slot conflict: --backtrack 1 still reconciles a one-step conflict", ["--pretend", "--backtrack", "1", "dev-libs/slotconflictparent"], 0),
     ("slot conflict: unsolvable, survives backtracking and is reported", ["--pretend", "dev-libs/slotconflictunsolvable"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
@@ -5153,6 +5155,41 @@ def test_solvable_slot_conflict_is_reconciled_by_backtracking(emerge_binary, fix
         '[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 ',
         '[ebuild  N     ] dev-libs/slotconflictparent-1.0 ',
     ]
+
+
+def test_backtrack_zero_disables_slot_conflict_reconciliation(emerge_binary, fixture_env):
+    """`--backtrack=0` (real: disable backtracking) turns the retry loop
+    off, so the otherwise-solvable dev-libs/slotconflictparent conflict is
+    reported instead of reconciled -- the pre-backtracking behavior, on
+    demand. `--backtrack=1` is enough to reconcile a one-step conflict."""
+    reported = [
+        '[ebuild  N     ] dev-libs/slotconflicttarget-2.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictparent-1.0 ',
+        '[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"',
+    ]
+    reconciled = [
+        '[ebuild  N     ] dev-libs/slotconflicttarget-1.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictparent-1.0 ',
+    ]
+    r0 = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--backtrack=0", "dev-libs/slotconflictparent"],
+        fixture_env,
+    )
+    assert r0.returncode == 0
+    assert r0.stdout.splitlines() == reported
+
+    r1 = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--backtrack", "1", "dev-libs/slotconflictparent"],
+        fixture_env,
+    )
+    assert r1.returncode == 0
+    assert r1.stdout.splitlines() == reconciled
 
 
 def test_unsolvable_slot_conflict_survives_backtracking_and_is_reported(

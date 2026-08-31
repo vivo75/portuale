@@ -5508,6 +5508,7 @@ def resolve_pretend_graph(
     empty=False,
     getbinpkg=False,
     ignore_built_slot_operator_deps=False,
+    backtrack_max=10,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -5640,10 +5641,9 @@ def resolve_pretend_graph(
     # per-pass accumulator is rebuilt each iteration; only
     # `slot_constraints` (keyed by `cat/pkg`, the union of every atom
     # text that targeted a conflicted package) and the counter survive.
-    # `_MAX_BACKTRACK` mirrors real portage's `--backtrack` default of 10
-    # (a later slice threads the actual flag). Mirrors
-    # portage-repo/src/lib.rs's resolve_pretend_graph exactly.
-    _MAX_BACKTRACK = 10
+    # The retry ceiling is `backtrack_max` (real `--backtrack=COUNT`,
+    # default 10, `0` disables). Mirrors portage-repo/src/lib.rs's
+    # resolve_pretend_graph exactly.
     slot_constraints = {}
     backtrack_iteration = 0
 
@@ -6720,8 +6720,8 @@ def resolve_pretend_graph(
         # is itself masked resolves to a plain `no_visible_candidate` on
         # the retry, which is acceptable and documented for this slice.
         # Unsolvable conflicts, and anything still conflicting after
-        # `_MAX_BACKTRACK` attempts, fall through unchanged.
-        if slot_conflicts and backtrack_iteration < _MAX_BACKTRACK:
+        # `backtrack_max` attempts, fall through unchanged.
+        if slot_conflicts and backtrack_iteration < backtrack_max:
             progressed = False
             for _sc in slot_conflicts:
                 _pkg_key = (_sc["category"], _sc["package"])
@@ -9998,6 +9998,10 @@ def run(args):
     # main.py:470). "Intended only for debugging purposes" -- when y, the
     # slot-operator auto-rebuild scan is skipped entirely.
     ignore_built_slot_operator_deps = False
+    # --backtrack=COUNT: real `type=int` / `valid_integers` (main.py). The
+    # resolver's retry ceiling after a solvable slot conflict; default
+    # (flag absent) is 10, `--backtrack=0` disables backtracking.
+    backtrack_max = 10
     # --autounmask/--autounmask-keep-keywords: None means "not explicitly
     # given" -- see the on/off default-resolution logic just below where
     # these are actually consumed, mirroring pretend.rs exactly.
@@ -10136,6 +10140,28 @@ def run(args):
                 i += 1
             else:
                 print(f'emerge: invalid --deep parameter: "{value}"', file=sys.stderr)
+                return 2
+        elif arg == "--backtrack":
+            # Real main.py --backtrack: type=int, and listed in
+            # insert_optional_args's valid_integers set, so the next token
+            # is consumed only if it parses as a non-negative integer --
+            # exactly like --deep/-D above. A bare --backtrack, or one
+            # followed by a non-integer, leaves the default (10) in place.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt is not None and nxt.isdigit():
+                backtrack_max = int(nxt)
+                i += 2
+            else:
+                i += 1
+        elif arg.startswith("--backtrack="):
+            # argparse's native "="-form -- a non-integer here is an
+            # immediate parse error, unlike a non-integer *next token*.
+            value = arg[len("--backtrack=") :]
+            if value.isdigit():
+                backtrack_max = int(value)
+                i += 1
+            else:
+                print(f'emerge: invalid --backtrack parameter: "{value}"', file=sys.stderr)
                 return 2
         elif arg in ("--exclude", "-X"):
             # Real "action": "append" -- repeatable, each occurrence's
@@ -11250,6 +11276,7 @@ def run(args):
             emptytree,
             getbinpkg,
             ignore_built_slot_operator_deps,
+            backtrack_max,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

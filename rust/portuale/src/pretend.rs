@@ -4128,6 +4128,11 @@ pub fn run(args: &[String]) -> ExitCode {
     // portage strips the built `:=` operator parts so the scan finds
     // nothing; same net effect). Threaded into `resolve_pretend_graph`.
     let mut ignore_built_slot_operator_deps = false;
+    // --backtrack=COUNT: real `type=int` / `valid_integers` (`main.py`).
+    // The resolver's retry ceiling after a solvable slot conflict; real
+    // portage's default (flag absent) is 10, `--backtrack=0` disables
+    // backtracking. Threaded into `resolve_pretend_graph`.
+    let mut backtrack_max: u32 = 10;
     // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
     // (bare flag, "=y", or "=n") for the first, plain required "y"/"n"
     // (no bare form) for the second -- see the on/off default-
@@ -4302,6 +4307,36 @@ pub fn run(args: &[String]) -> ExitCode {
                 }
                 Err(_) => {
                     eprintln!("emerge: invalid --deep parameter: {value:?}");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if arg == "--backtrack" {
+            // Real `main.py` `--backtrack`: `type=int`, and listed in
+            // `insert_optional_args`'s `valid_integers` set, so the next
+            // token is consumed only if it parses as a non-negative
+            // integer -- exactly like `--deep`/`-D` above. A bare
+            // `--backtrack`, or one followed by a non-integer, leaves the
+            // default (10) in place.
+            match args.get(i + 1).map(|s| s.parse::<u32>()) {
+                Some(Ok(n)) => {
+                    backtrack_max = n;
+                    i += 2;
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--backtrack=") {
+            // argparse's native `=` form -- a non-integer here is an
+            // immediate parse error (real `parser.error`), unlike a
+            // non-integer *next token* above.
+            match value.parse::<u32>() {
+                Ok(n) => {
+                    backtrack_max = n;
+                    i += 1;
+                }
+                Err(_) => {
+                    eprintln!("emerge: invalid --backtrack parameter: {value:?}");
                     return ExitCode::from(2);
                 }
             }
@@ -5583,6 +5618,7 @@ pub fn run(args: &[String]) -> ExitCode {
         emptytree,
         getbinpkg,
         ignore_built_slot_operator_deps,
+        backtrack_max,
     ) {
         Ok(result) => result,
         Err(e) => {

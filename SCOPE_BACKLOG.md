@@ -106,15 +106,16 @@ single-pass BFS can't grow into these incrementally:
   folds those atoms into `slot_constraints` (fed to `resolve_pretend`'s new
   `extra_constraints` param) and re-runs the whole walk, up to
   `MAX_BACKTRACK = 10`. Remaining slices:
-  - **Slice 2:** extract the pass into a `resolve_graph_once` helper (drop
-    the `loop {}` reindent), make the pass boundary clean.
+  - **Slice 2 shipped 2026-09-01:** real `--backtrack=COUNT` flag
+    (`backtrack_max` param, default 10, `=0` disables — replaces slice 1's
+    `MAX_BACKTRACK` constant).
   - **Slice 3:** unsolvable conflict → mask a version → retry
-    (`runtime_pkg_mask`); real `--backtrack=N` flag + `--backtrack=0`
-    disables (replace the `MAX_BACKTRACK` constant).
+    (`runtime_pkg_mask` equivalent).
   - **Slice 4:** diagnostics ("backtracking … exhausted" /
     "circular dependencies prevent backtracking"), autounmask levels tried
     in sequence inside the loop, autounmask parent-flip re-resolve feeding
-    `extra_constraints`.
+    `extra_constraints`, and the `resolve_graph_once` helper extraction
+    (drop slice 1's `loop {}` reindent).
   Still weeks for full parity; `PROMPT.md` lists a backtracking resolver
   as out of scope for v1, but slices 1–4 close the gap between "resolves
   the common case" and "resolves what real portage resolves".
