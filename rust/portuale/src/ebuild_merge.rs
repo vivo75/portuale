@@ -2458,6 +2458,54 @@ pub(crate) fn unmerge_replaced_same_slot(
         return Ok(replaced);
     }
 
+    let keep = [new_pf.to_string()];
+    for old_pf in &replaced {
+        unmerge_one_installed(
+            root,
+            category,
+            package,
+            old_pf,
+            &keep,
+            scratch_dir,
+            portage_tmpdir,
+            options,
+        )?;
+    }
+    Ok(replaced)
+}
+
+/// Remove ONE already-installed version from the vdb -- real
+/// `dblink.unmerge()` (`pkg_prerm` -> delete its files -> `pkg_postrm`)
+/// then `dblink.delete()` (drop the vdb dir) -- for a single
+/// `<category>/<pf>`. Both phase hooks run from *that version's own*
+/// vdb-stored `environment.bz2` + `<pf>.ebuild`
+/// (`ebuild_phases::run_phase_from_saved_env`, gated on its recorded
+/// `DEFINED_PHASES`); a version installed before the pilot kept those
+/// files has neither and its rm hooks are skipped (documented degrade).
+/// A phase failure is logged, never fatal -- real `treewalk()`'s replace
+/// loop is a literal `# TODO: Check status and abort if necessary` that
+/// doesn't, and real `emerge -C`'s own loop only aborts on the
+/// file-removal core failing, not on a phase.
+///
+/// `also_keep` is folded into real `others_in_slot` so a path a
+/// replacing version now owns is left in place -- empty for a standalone
+/// `emerge -C`, `[new_pf]` for `treewalk()`'s replace loop.
+/// `scratch_dir` holds the ebuild extracted from the vdb for its phase
+/// run (`<scratch_dir>/<cat>/<pn>/<pf>.ebuild`, so
+/// `compute_environment`'s path parse works). Shared by
+/// `unmerge_replaced_same_slot` and `pretend.rs`'s real `emerge -C`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn unmerge_one_installed(
+    root: &Path,
+    category: &str,
+    package: &str,
+    pf: &str,
+    also_keep: &[String],
+    scratch_dir: &Path,
+    portage_tmpdir: &Path,
+    options: &MergeOptions,
+) -> Result<(), String> {
+    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let unmerge_options = crate::ebuild_unmerge::UnmergeOptions {
         debug: options.debug,
         shell: options.shell,
@@ -2466,27 +2514,21 @@ pub(crate) fn unmerge_replaced_same_slot(
         config_root: options.config_root.clone(),
         ..Default::default()
     };
-    let keep = [new_pf.to_string()];
 
-    let run_old_hook = |old_pf: &str, phase: &str| -> Result<i32, String> {
-        let old_vdb = vdb_cat.join(old_pf);
-        let old_env = old_vdb.join("environment.bz2");
-        let old_ebuild = old_vdb.join(format!("{old_pf}.ebuild"));
-        let old_defined =
-            std::fs::read_to_string(old_vdb.join("DEFINED_PHASES")).unwrap_or_default();
-        if !old_env.is_file()
-            || !old_ebuild.is_file()
-            || !old_defined.split_whitespace().any(|d| d == phase)
-        {
+    let run_hook = |phase: &str| -> Result<i32, String> {
+        let env = vdb_dir.join("environment.bz2");
+        let ebuild = vdb_dir.join(format!("{pf}.ebuild"));
+        let defined = std::fs::read_to_string(vdb_dir.join("DEFINED_PHASES")).unwrap_or_default();
+        if !env.is_file() || !ebuild.is_file() || !defined.split_whitespace().any(|d| d == phase) {
             return Ok(0);
         }
         let src_dir = scratch_dir.join(category).join(package);
         std::fs::create_dir_all(&src_dir).map_err(|e| format!("{}: {e}", src_dir.display()))?;
-        let dst = src_dir.join(format!("{old_pf}.ebuild"));
-        std::fs::copy(&old_ebuild, &dst).map_err(|e| format!("{}: {e}", old_ebuild.display()))?;
+        let dst = src_dir.join(format!("{pf}.ebuild"));
+        std::fs::copy(&ebuild, &dst).map_err(|e| format!("{}: {e}", ebuild.display()))?;
         crate::ebuild_phases::run_phase_from_saved_env(
             &dst,
-            &old_env,
+            &env,
             phase,
             root,
             portage_tmpdir,
@@ -2496,26 +2538,24 @@ pub(crate) fn unmerge_replaced_same_slot(
         )
     };
 
-    for old_pf in &replaced {
-        let prerm_status = run_old_hook(old_pf, "prerm")?;
-        if prerm_status != 0 {
-            eprintln!("{category}/{old_pf}: FAILED prerm ({prerm_status}) -- unmerge continues");
-        }
-        crate::ebuild_unmerge::unmerge_pkgfiles(
-            root,
-            category,
-            package,
-            old_pf,
-            &keep,
-            &unmerge_options,
-        )?;
-        let postrm_status = run_old_hook(old_pf, "postrm")?;
-        if postrm_status != 0 {
-            eprintln!("{category}/{old_pf}: FAILED postrm ({postrm_status}) -- unmerge continues");
-        }
-        crate::ebuild_unmerge::delete_vdb_dir(root, category, old_pf)?;
+    let prerm_status = run_hook("prerm")?;
+    if prerm_status != 0 {
+        eprintln!("{category}/{pf}: FAILED prerm ({prerm_status}) -- unmerge continues");
     }
-    Ok(replaced)
+    crate::ebuild_unmerge::unmerge_pkgfiles(
+        root,
+        category,
+        package,
+        pf,
+        also_keep,
+        &unmerge_options,
+    )?;
+    let postrm_status = run_hook("postrm")?;
+    if postrm_status != 0 {
+        eprintln!("{category}/{pf}: FAILED postrm ({postrm_status}) -- unmerge continues");
+    }
+    crate::ebuild_unmerge::delete_vdb_dir(root, category, pf)?;
+    Ok(())
 }
 
 /// Merge an already-downloaded binary package (`.tbz2` xpak or

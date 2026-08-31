@@ -10175,15 +10175,11 @@ def run(args):
         )
         return 2
 
-    # --unmerge/-C: real `emerge -C` removes packages; this pilot only
-    # previews it, same --pretend-only gate --deselect has. Mirrors
-    # pretend.rs.
-    if unmerge and not pretend:
-        print(
-            "emerge (pilot v1): --unmerge/-C requires --pretend (see PROMPT.md)",
-            file=sys.stderr,
-        )
-        return 2
+    # --unmerge/-C WITHOUT --pretend is a real removal on the Rust side
+    # now (pretend.rs's execute_unmerge); this reference has no ebuild-
+    # execution machinery, so -- like every other non-`--pretend` path --
+    # it just returns 0 below. No `--pretend`-only gate (unlike
+    # --deselect/--depclean/--prune).
 
     if depclean and not pretend:
         print(

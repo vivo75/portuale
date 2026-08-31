@@ -9477,6 +9477,58 @@ first entry is attempted) and
 `mid` and `top` skipped, `other` merged, combined error names all
 three).
 
+### `emerge -C <atom>` / `emerge --unmerge <atom>` (no `--pretend`): the first real removal via `emerge`
+
+Until this slice `emerge -C`/`--unmerge` (like `--depclean`/`--prune`)
+was gated `requires --pretend` — it only ever *previewed* the removal,
+and `ebuild <file> unmerge` was `emerge`'s one real removal path. Now a
+plain `emerge -C dev-libs/foo` (no `--pretend`) does the real thing:
+after `_unmerge_display` (the same preview, minus the
+`--pretend`/`--ask`-gated `>>> These are the packages that would be
+unmerged:` header — real `unmerge.py:195`) computes the `selected` set,
+`execute_unmerge` walks it in the display's own order (real
+`unmerge()`'s `pkgmap` loop) and for each version prints
+`>>> Unmerging (N of M) <cpv>...` then removes it:
+
+- `ebuild_merge::unmerge_one_installed` (new — factored out of
+  `unmerge_replaced_same_slot`, so the standalone-`-C` and
+  `dblink.treewalk()`-replace-loop removals are now one implementation)
+  runs `pkg_prerm` → `unmerge_pkgfiles` (delete the `CONTENTS` entries,
+  CONFIG_PROTECT / preserve-libs / `unmerge-orphans` all honored) →
+  `pkg_postrm` → `delete_vdb_dir`. Both phase hooks run from *that
+  version's own* vdb-stored `environment.bz2` + `<pf>.ebuild`
+  (`run_phase_from_saved_env`, gated on its recorded `DEFINED_PHASES`) —
+  exactly as the replace loop already did. `also_keep` is `&[]` here
+  (nothing is replacing the package), `[new_pf]` for the replace loop.
+- then `deselect_from_world` (real
+  `WorldSelectedPackagesSet.cleanPackage`, `_sets/files.py:336`, called
+  per-package right after its removal): every world atom whose `cp`
+  equals the removed package's `cat/pkg` is dropped **unless** an
+  installed version still satisfies it; every other atom is left
+  untouched. The file is rewritten sorted, comment / `@set` lines not
+  carried forward (real `.write`; already the pilot's convention).
+
+`run_unmerge_pretend` gained a `pretend: bool` param: `false` from the
+`-C` CLI path (header suppressed, `execute_unmerge` runs), `true` from
+`-pC` and from the `--depclean`/`--prune` preview reuse (which still
+never remove — their real removal is a separate, larger slice that has
+to thread the topological cleanlist + the unresolved-deps safety halt
+through the same loop).
+
+**v1 cuts:** no `CLEAN_DELAY` countdown (real `countdown(5, …)`); no
+`--ask`; `FEATURES=unmerge-backup` not honored; a `pkg_prerm`/
+`pkg_postrm` non-zero is logged and removal continues (real `unmerge()`
+`sys.exit`s, but only on the file-removal core failing — which the
+pilot still surfaces as a hard error). Like every other non-`--pretend`
+`emerge` path this is **not** in the shared contract CASES (the Python
+reference has no ebuild-execution machinery — `emerge --unmerge <atom>`
+without `--pretend` just returns 0 there now); the old
+`("-C without --pretend is refused", …, 2)` CASE is gone. Rust-black-box
+-tested in `test_portuale.py`: `emerge -C dev-libs/binpkgrmpkg` after a
+seeded `1.0` → vdb entry + payload gone, `prerm-1.0`/`postrm-1.0` in the
+fixture's `${ROOT}` hook log, the atom dropped from `world` and an
+unrelated atom kept; plus `-pC` still previews and removes nothing.
+
 ## Running it
 
 Build both Rust binaries:

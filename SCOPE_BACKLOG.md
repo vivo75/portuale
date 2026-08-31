@@ -65,6 +65,18 @@ Ranked roughly by how self-contained each is.
   the "is part of your system profile" + "still listed in the following
   package sets" warnings (`collect_installed_sets`) -- `_unmerge_display`
   is complete for `unmerge_action == "unmerge"`.
+  **Real (non-`--pretend`) `emerge -C <atom>` removal shipped 2026-08-31**
+  (`pretend.rs::execute_unmerge` + `ebuild_merge::unmerge_one_installed`,
+  factored out of `unmerge_replaced_same_slot`): after the
+  `_unmerge_display` preview (its `>>> These are the packages that would
+  be unmerged:` header now correctly `--pretend`/`--ask`-gated), each
+  `selected` version's `pkg_prerm` (from its own vdb-saved env) → files
+  → `pkg_postrm` → vdb dir removal, `>>> Unmerging (N of M) <cpv>...`
+  per package, then `deselect_from_world` (real
+  `WorldSelectedPackagesSet.cleanPackage`). The old
+  `--unmerge requires --pretend` gate is gone. v1 cuts: no `CLEAN_DELAY`
+  countdown, no `--ask`, no `FEATURES=unmerge-backup`.
+  `--depclean`/`--prune` real removal is still a separate slice.
 - **`emerge --pretend --depclean` / `-pc`** **shipped 2026-08-27**
   (`depclean_cleanlist`: the reachability closure over the installed
   `RDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND` graph; `run_depclean_pretend`:

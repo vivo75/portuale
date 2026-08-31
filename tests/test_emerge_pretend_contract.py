@@ -1161,11 +1161,6 @@ CASES = [
         1,
     ),
     (
-        "-C without --pretend is refused",
-        ["--unmerge", "dev-libs/unmergepkg"],
-        2,
-    ),
-    (
         "-pC: the 'is part of your system profile' warning",
         ["--pretend", "-C", "dev-libs/systempkg"],
         0,
@@ -6630,11 +6625,17 @@ def test_unmerge_pretend_refuses_portage_itself(emerge_binary, fixture_env):
     )
 
 
-def test_unmerge_pretend_requires_pretend(emerge_binary, fixture_env):
-    result = _run([str(emerge_binary)], ["--unmerge", "dev-libs/unmergepkg"], fixture_env)
-    assert result.returncode == 2
-    assert "requires --pretend" in result.stderr
-    assert result.stdout == ""
+def test_unmerge_without_pretend_is_no_longer_gated(emerge_binary, fixture_env):
+    """`emerge -C <atom>` WITHOUT `--pretend` is a real removal now
+    (pretend.rs's execute_unmerge) -- the old `requires --pretend` exit-2
+    gate is gone. Not a Rust-vs-Python contract case: the Python
+    reference has no ebuild-execution machinery and just returns 0. The
+    real removal (files gone, vdb entry gone, world deselected, the
+    `>>> Unmerging (N of M)` lines) is covered in test_portuale.py. Here
+    we only assert the gate no longer fires against the read-only shared
+    fixture ROOT (nothing installed to match -> nothing removed)."""
+    result = _run([str(emerge_binary)], ["--unmerge", "dev-libs/nonexistent"], fixture_env)
+    assert "requires --pretend" not in result.stderr
 
 
 def test_unmerge_pretend_system_profile_warning(emerge_binary, fixture_env):

@@ -2236,11 +2236,17 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `emerge --pretend --unmerge` / `-pC <atoms>`: real
+/// `emerge --unmerge` / `-C <atoms>` (with or without `--pretend`): real
 /// `_emerge/unmerge.py::_unmerge_display` for `unmerge_action ==
-/// "unmerge"`, narrowed to a preview (this pilot never removes via
-/// `emerge` -- `ebuild <file> unmerge` is its one real removal path,
-/// same `--pretend`-only stance `--deselect` takes). Each target atom is
+/// "unmerge"`. With `pretend` this is a preview only; **without** it,
+/// after the display, `execute_unmerge` really removes each `selected`
+/// package (real `unmerge()`'s own removal loop -- see its own doc
+/// comment). The `>>> These are the packages that would be unmerged:`
+/// header is `--pretend`/`--ask`-gated in real portage
+/// (`unmerge.py:195`); everything else in the block prints either way.
+/// `--depclean`/`--prune` reuse this for their own preview and always
+/// pass `pretend = true` (their real removal is a separate, larger
+/// slice). Each target atom is
 /// matched against the vdb (`installed_candidates` + `match_from_list`,
 /// exactly real `vartree.dbapi.match`); every match goes into
 /// `selected`, and every *other* installed version of the same
@@ -2263,9 +2269,9 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
 /// "currently used Python interpreter" self-skip (real
 /// `_dblink(cpv).isowner(portage._python_interpreter)`) -- a non-gap
 /// for this pilot, whose `emerge` is a Rust binary with no Python
-/// interpreter of its own to protect -- and any real removal (the
-/// `--prune`/`--depclean` variants have their own dedicated
-/// `run_prune_pretend`/`run_depclean_pretend`).
+/// interpreter of its own to protect. The `--prune`/`--depclean`
+/// variants have their own dedicated `run_prune_pretend`/
+/// `run_depclean_pretend` and never really remove.
 /// Real `unmerge.py:137-182`'s own installed-ebuild-path handling: an
 /// `--unmerge`/`-C` argument that starts with `.` or `/`, or ends with
 /// `.ebuild`, is a path into the vdb, not an atom. Returns `Ok(None)` if
@@ -2379,6 +2385,11 @@ fn run_unmerge_pretend(
     // topologically-sorted cleanlist sets this (`run_depclean_pretend`);
     // a plain `--unmerge`/`-C` from the CLI is always unordered.
     preserve_order: bool,
+    // `false` for a real `emerge -C <atom>` (no `--pretend`): the
+    // `>>> These are the packages that would be unmerged:` header is
+    // suppressed and `execute_unmerge` runs after the display. `true`
+    // for `-pC` and for the `--depclean`/`--prune` preview reuse.
+    pretend: bool,
     color: &Colorizer,
 ) -> ExitCode {
     if targets.is_empty() {
@@ -2447,16 +2458,19 @@ fn run_unmerge_pretend(
         }
     }
 
-    // Real `_unmerge_display` prints this header unconditionally for
-    // `--pretend`, before the per-atom matching loop -- so it shows even
-    // when nothing ends up selected.
-    println!(
-        "{}",
-        color.c(
-            "darkgreen",
-            ">>> These are the packages that would be unmerged:"
-        )
-    );
+    // Real `_unmerge_display` (`unmerge.py:195`) prints this header only
+    // under `--pretend`/`--ask`, before the per-atom matching loop -- so
+    // it shows even when nothing ends up selected, but a real `emerge -C`
+    // removal run doesn't print it at all.
+    if pretend {
+        println!(
+            "{}",
+            color.c(
+                "darkgreen",
+                ">>> These are the packages that would be unmerged:"
+            )
+        );
+    }
 
     // Real `PORTAGE_PACKAGE_ATOM` -- the one package `unmerge` always
     // refuses to select, moving it to `protected` with an eerror note.
@@ -2621,6 +2635,10 @@ fn run_unmerge_pretend(
         order.sort();
     }
     let mut all_selected_display: Vec<String> = Vec::new();
+    // `(category, package, version)` of every `selected` version, in the
+    // same order the preview blocks render -- real `unmerge()`'s own
+    // removal loop walks `pkgmap` in exactly this order.
+    let mut removal_list: Vec<(String, String, String)> = Vec::new();
     for cp in &order {
         let (selected, protected) = per_cp.get_mut(cp).unwrap();
         if selected.is_empty() {
@@ -2665,6 +2683,7 @@ fn run_unmerge_pretend(
 
         for v in selected.iter() {
             all_selected_display.push(format!("={}/{}-{v}", cp.0, cp.1));
+            removal_list.push((cp.0.clone(), cp.1.clone(), v.clone()));
         }
     }
 
@@ -2682,7 +2701,120 @@ fn run_unmerge_pretend(
         color.c("GOOD", "'Protected'"),
         color.c("GOOD", "'omitted'")
     );
+
+    // Real `unmerge()` (`unmerge.py:637-699`): once `_unmerge_display`
+    // returns EX_OK and we're not in `--pretend`, the packages are
+    // actually removed.
+    if !pretend {
+        return execute_unmerge(&removal_list, root, color);
+    }
     ExitCode::SUCCESS
+}
+
+/// Real `_emerge/unmerge.py::unmerge`'s own removal loop, reached when
+/// `emerge -C`/`--unmerge <atoms>` runs **without** `--pretend`: after
+/// `_unmerge_display` (the preview above) returns, each `selected`
+/// package is really removed -- `>>> Unmerging (N of M) <cpv>...`, then
+/// `dblink.unmerge()` (`pkg_prerm` from that version's own vdb-saved
+/// env -> delete its files -> `pkg_postrm`) + `dblink.delete()` (drop
+/// the vdb dir), via `ebuild_merge::unmerge_one_installed`. On success
+/// each removed package is deselected from the world file (real
+/// `WorldSelectedPackagesSet.cleanPackage`, called per-package right
+/// after its removal).
+///
+/// **v1 cuts:** no `CLEAN_DELAY` countdown (real `countdown(5,
+/// ">>> Unmerging")`); no `--ask` prompt; `FEATURES=unmerge-backup` not
+/// honored; the trailing `for s in setconfig.active: selected.remove(@s)`
+/// pass is a no-op here (this pilot's world writer already drops `@set`
+/// lines on any rewrite). A `pkg_prerm`/`pkg_postrm` failure is logged
+/// and removal continues (`unmerge_one_installed`); real `unmerge()`
+/// `sys.exit`s on a `portage.unmerge()` non-zero, but that return only
+/// tracks the file-removal core, which the pilot still surfaces as a
+/// hard `Err`.
+fn execute_unmerge(
+    removal_list: &[(String, String, String)],
+    root: &Path,
+    color: &Colorizer,
+) -> ExitCode {
+    let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+    let options =
+        ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+    let scratch = portage_tmpdir.join("portage").join("_unmerge_src");
+    let total = removal_list.len();
+    for (idx, (category, package, version)) in removal_list.iter().enumerate() {
+        let pf = format!("{package}-{version}");
+        println!(
+            ">>> Unmerging ({} of {}) {}/{}...",
+            color.c("MERGE_LIST_PROGRESS", &(idx + 1).to_string()),
+            color.c("MERGE_LIST_PROGRESS", &total.to_string()),
+            category,
+            pf
+        );
+        if let Err(e) = ebuild_merge::unmerge_one_installed(
+            root,
+            category,
+            package,
+            &pf,
+            &[],
+            &scratch,
+            &portage_tmpdir,
+            &options,
+        ) {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+        if let Err(e) = deselect_from_world(root, category, package) {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Real `WorldSelectedPackagesSet.cleanPackage` (`_sets/files.py:336`),
+/// called by real `unmerge()` right after each package is removed: every
+/// world atom whose `cp` equals the removed package's `category/package`
+/// is dropped **unless** some installed version still satisfies it; all
+/// other atoms are kept untouched. The file is then rewritten sorted
+/// (real `.write`), with comment and `@set` lines not carried forward --
+/// matching real portage and `update_world_file`. A world file that ends
+/// up empty is written empty (real `replace([])`).
+fn deselect_from_world(root: &Path, category: &str, package: &str) -> Result<(), String> {
+    let mykey = format!("{category}/{package}");
+    let mut current = read_world_atoms(root)?;
+    let before = current.len();
+    current.retain(|raw| {
+        let Some(atom) = parse_atom(raw) else {
+            return true;
+        };
+        if format!("{}/{}", atom.category, atom.package) != mykey {
+            return true;
+        }
+        portage_repo::installed_candidates(root, &atom.category, &atom.package)
+            .into_iter()
+            .any(|(v, slot, sub_slot)| {
+                let cs = format!("{}/{}-{v}:{slot}/{sub_slot}", atom.category, atom.package);
+                match_from_list(raw, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+            })
+    });
+    if current.len() == before {
+        return Ok(());
+    }
+    current.sort();
+    current.dedup();
+    let path = root.join("var/lib/portage/world");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let body = if current.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", current.join("\n"))
+    };
+    std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(())
 }
 
 /// One `    selected: 1.0 ` / `   protected: none ` / `     omitted: ...`
@@ -2901,7 +3033,17 @@ fn run_prune_pretend(
         .map(|p| format!("={}", p.cpv()))
         .collect();
     let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
-    run_unmerge_pretend(&cpv_refs, root, config_root, config, result.ordered, color)
+    // `--prune --nodeps` is preview-only in this pilot (its real removal
+    // is a separate slice), so always `pretend = true`.
+    run_unmerge_pretend(
+        &cpv_refs,
+        root,
+        config_root,
+        config,
+        result.ordered,
+        true,
+        color,
+    )
 }
 
 /// Real `emerge --pretend --prune --nodeps` (`actions.py:2684-2697`):
@@ -3240,7 +3382,8 @@ fn depclean_unresolved_halt(
 /// Real `emerge --pretend --depclean` / `-pc` (real `action_depclean` +
 /// `_calc_depclean`, no package arguments): the packages nothing in
 /// `@world` ∪ `@system` needs, at runtime, are the cleanlist -- reported
-/// (never removed, `--pretend`-only, same stance as `--unmerge`). Real
+/// (never removed; `--depclean`'s own real removal is a separate slice,
+/// unlike `--unmerge`/`-C` which does remove now). Real
 /// `action_depclean` literally feeds its cleanlist to `unmerge(...,
 /// "unmerge", cleanlist)`, so the per-package block here is exactly
 /// `run_unmerge_pretend`'s (each cleanlist cpv passed as an `=cat/pkg-ver`
@@ -3450,8 +3593,17 @@ fn run_depclean_pretend(
         .map(|p| format!("={}", p.cpv()))
         .collect();
     let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
-    let unmerge_rc =
-        run_unmerge_pretend(&cpv_refs, root, config_root, config, result.ordered, color);
+    // `--depclean` is preview-only in this pilot (its real removal is a
+    // separate slice), so always `pretend = true`.
+    let unmerge_rc = run_unmerge_pretend(
+        &cpv_refs,
+        root,
+        config_root,
+        config,
+        result.ordered,
+        true,
+        color,
+    );
     stats();
     unmerge_rc
 }
@@ -4438,14 +4590,10 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // `--unmerge`/`-C`: real `emerge -C` actually removes packages -- a
-    // multi-package, atom-driven `unmerge` this pilot only ever *previews*
-    // (`ebuild <file> unmerge` is the pilot's one real removal path). Same
-    // `--pretend`-only gate `--deselect` has, and for the same reason.
-    if unmerge && !pretend {
-        eprintln!("emerge (pilot v1): --unmerge/-C requires --pretend (see PROMPT.md)");
-        return ExitCode::from(2);
-    }
+    // `--unmerge`/`-C` WITHOUT `--pretend` is a real removal now (see
+    // `run_unmerge_pretend`'s own `pretend` param + `execute_unmerge`),
+    // so -- unlike `--deselect`/`--depclean`/`--prune` -- it has no
+    // `--pretend`-only gate.
 
     // `--depclean`/`-c`: real `emerge -c` removes; this pilot only
     // previews it, same `--pretend`-only gate.
@@ -4563,7 +4711,17 @@ pub fn run(args: &[String]) -> ExitCode {
     // (its `@system` target support and system-profile check both need
     // it), dispatch before the ordinary resolve-graph path below.
     if unmerge {
-        return run_unmerge_pretend(&atom_args, &root, &config_root, &config, false, &color);
+        // `pretend` last: without it, `run_unmerge_pretend` really
+        // removes the selected packages after the display.
+        return run_unmerge_pretend(
+            &atom_args,
+            &root,
+            &config_root,
+            &config,
+            false,
+            pretend,
+            &color,
+        );
     }
     if depclean {
         return run_depclean_pretend(

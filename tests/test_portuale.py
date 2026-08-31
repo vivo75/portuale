@@ -551,6 +551,102 @@ def test_emerge_atom_upgrade_replaces_the_installed_version(emerge_binary, tmp_p
     )
 
 
+def test_emerge_unmerge_without_pretend_really_removes_and_deselects(
+    emerge_binary, tmp_path
+):
+    """`emerge -C <atom>` WITHOUT `--pretend` is a real removal now (real
+    `_emerge/unmerge.py::unmerge`'s own loop): after the `_unmerge_display`
+    preview, each selected package's `pkg_prerm` (from its own vdb-saved
+    env) runs, its files and vdb entry go, its `pkg_postrm` runs, and it's
+    deselected from the world file (real
+    `WorldSelectedPackagesSet.cleanPackage`). `dev-libs/binpkgrmpkg`'s
+    five hooks each append `<phase>-<PVR>` to a `${ROOT}` log."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    # Seed an installed 1.0 via a direct `ebuild <file> merge`, and record
+    # it in the world file as a directly-selected package.
+    v1 = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/binpkgrmpkg/binpkgrmpkg-1.0.ebuild"
+    )
+    ebuild_link = tmp_path / "ebuild"
+    ebuild_link.symlink_to(Path(emerge_binary).resolve())
+    r1 = subprocess.run(
+        [str(ebuild_link), v1, "merge"], capture_output=True, text=True, check=False, env=env
+    )
+    assert r1.returncode == 0, r1.stderr
+    assert (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").is_dir()
+    assert (root / "usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
+    (root / "var/lib/portage").mkdir(parents=True, exist_ok=True)
+    (root / "var/lib/portage/world").write_text(
+        "dev-libs/binpkgrmpkg\ndev-libs/keepme\n"
+    )
+    (root / "var/lib/binpkgrmpkg.log").write_text("")
+
+    result = subprocess.run(
+        [str(emerge_binary), "-C", "dev-libs/binpkgrmpkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    # The `--pretend`/`--ask`-only header is NOT printed for a real run.
+    assert ">>> These are the packages that would be unmerged:" not in result.stdout
+    assert ">>> Unmerging (1 of 1) dev-libs/binpkgrmpkg-1.0..." in result.stdout
+
+    # Really gone: vdb entry, payload file.
+    assert not (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists()
+    assert not (root / "usr/share/binpkgrmpkg/payload-1.0.txt").exists()
+    # prerm then postrm ran, from the vdb-saved env.
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == "prerm-1.0\npostrm-1.0\n"
+    # Deselected from world; the unrelated atom is untouched.
+    assert (root / "var/lib/portage/world").read_text() == "dev-libs/keepme\n"
+
+
+def test_emerge_unmerge_with_pretend_still_only_previews(emerge_binary, tmp_path):
+    """`emerge -pC <atom>` keeps the old preview-only behaviour: the
+    `>>> These are the packages that would be unmerged:` header prints and
+    nothing is removed."""
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    v1 = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/binpkgrmpkg/binpkgrmpkg-1.0.ebuild"
+    )
+    ebuild_link = tmp_path / "ebuild"
+    ebuild_link.symlink_to(Path(emerge_binary).resolve())
+    r1 = subprocess.run(
+        [str(ebuild_link), v1, "merge"], capture_output=True, text=True, check=False, env=env
+    )
+    assert r1.returncode == 0, r1.stderr
+
+    result = subprocess.run(
+        [str(emerge_binary), "-pC", "dev-libs/binpkgrmpkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> These are the packages that would be unmerged:" in result.stdout
+    assert ">>> Unmerging (" not in result.stdout
+    assert (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").is_dir()
+    assert (root / "usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
+
+
 def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(
     ebuild_binary, tmp_path
 ):
