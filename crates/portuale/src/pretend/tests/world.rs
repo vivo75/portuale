@@ -158,3 +158,28 @@ fn update_world_sets_file_records_a_new_set_and_skips_oneshot() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn installed_set_atoms_are_slot_qualified_sorted_and_deduped() {
+    // Always slot-qualified, main slot only; sorted and deduplicated.
+    let tmp = TempDir::new("portuale-instset").keep();
+    let mk = |cat: &str, dir: &str, slot: &str| {
+        let d = tmp.join("var/db/pkg").join(cat).join(dir);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), format!("{cat}\n")).unwrap();
+        std::fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+    };
+    mk("dev-libs", "zpkg-2.0", "0");
+    mk("dev-libs", "apkg-1.0", "3/7");
+    mk("app-misc", "mid-1.0", "0");
+
+    assert_eq!(
+        installed_set_atoms(&tmp),
+        vec![
+            "app-misc/mid:0".to_string(),
+            "dev-libs/apkg:3".to_string(),
+            "dev-libs/zpkg:0".to_string(),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
