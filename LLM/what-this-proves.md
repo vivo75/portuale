@@ -9332,6 +9332,88 @@ file byte-identical; a `:slot` arg for `dualslotpkg` records
 `dev-libs/dualslotpkg:1`, a bare / unslotted arg doesn't) + two
 `update_world_file` unit tests.
 
+### `emerge @set`: a user-defined package set as a build target
+
+The `--pretend`/build path recognised only the two literal tokens
+`@world` / `@system`; any other `@name` fell through to `parse_atom` and
+died `invalid atom "@name"`. Now every other `@name` is treated as a
+user-defined, file-based package set — expanded recursively (cycle-
+guarded) through the exact `resolve_custom_set` the
+`--unmerge`/`--depclean`/`--deselect` paths already used (real
+`StaticFileSet` / `SetConfig.getSetAtoms`), in place at whatever position
+the arg appears. A `@name` with no `etc/portage/sets/<name>` file is a
+real, immediate `emerge: set 'name' not found` (real `PackageSetNotFound`),
+the same error the `world_sets` reader already produced.
+
+After a successful non-`--pretend` merge, `update_world_sets_file` (real
+`depgraph.saveNomergeFavorites`'s `@set` half) records each directly-given
+set arg as `@name` in `<root>/var/lib/portage/world_sets` — the file
+`@world` unions with the plain world file. Same suppression set as the
+world file (`--oneshot`/`--onlydeps`; `--buildpkgonly` gated at the call
+site), same sorted+deduped rewrite dropping comment / non-`@` lines, the
+real `>>> Recording @name in "world_sets" favorites file...` line per
+add. The set's *member packages* are not added to the plain `world` file
+(they aren't directly-named atoms). **v1 cuts:** real's `world_candidate`
+gate (built-ins like `@security` aren't world candidates — moot here,
+portuale only knows `@world`/`@system` as built-ins and everything else
+reaching the recorder resolved via a real set file); the `--ask` prompt.
+
+Contract-tested (`@nestedtestset` alone and alongside an explicit atom,
+`@some-other-set` → error; + 3 CASES) and Rust-black-box-tested
+(`test_emerge_custom_set_is_recorded_in_world_sets`: `@innernestedset`
+recorded, members not in `world`, `--oneshot` records nothing) + an
+`update_world_sets_file` unit test.
+
+**`@selected` and `@installed` built-in sets.** Real
+`cnf/sets/portage.conf`: `@world = @profile @selected @system` (a
+`DummyPackageSet`), `@selected = WorldSelectedSet` (the world file's
+atoms + `world_sets`' nested sets), `@installed = EverythingSet`. This
+portuale's `@world` already expanded to exactly `@selected`'s contents (the
+`@profile`/`@system` union is a pre-existing simplification), so
+`@selected` is a straight alias — both now route through a shared
+`expand_selected`. `@installed` (`installed_set_atoms`) yields a
+`cat/pkg:slot` atom for every package under `<root>/var/db/pkg`, **always**
+slot-qualified even for a lone slot (real `EverythingSet.load`, bug
+#338959 — "avoid the possibility of unwanted upgrades"): so
+`emerge @installed` reinstalls each installed version in place rather
+than pulling a higher slot. Deduped + sorted for determinism (real
+`_setAtoms` is an unordered set). Both tokens are wired into both
+expansion sites — the build/`--pretend` path and the
+`--unmerge`/`--depclean`/`--deselect` path. Contract-tested (`@selected`
+byte-identical to `@world`; `@installed` against a test-local vdb, both
+impls in lockstep) + an `installed_set_atoms` unit test.
+
+**`@preserved-rebuild` built-in set.** Real
+`cnf/sets/portage.conf`: `[preserved-rebuild]` ->
+`PreservedLibraryConsumerSet` (`lib/portage/_sets/libs.py`) -- the
+installed packages that still link a library only kept alive by
+`FEATURES=preserve-libs`, i.e. the exact set the user is told to
+`emerge @preserved-rebuild` after a preserved-lib warning. New
+`preserved_rebuild_atoms` (`pretend.rs`) / `_preserved_rebuild_atoms`
+(Python mirror): for every path in the `preserved_libs_registry`,
+`consumers |= findConsumers(path, greedy=False)` (`needed_elf::find_
+consumers` / `_find_consumers`); then `consumers -= <every preserved
+path>` (real *"Don't rebuild packages just because they contain
+preserved libs that happen to be consumers of other preserved libs"*);
+then each surviving consumer path maps to `{cp}:{slot}` of its owning
+installed package (real `mapPathsToAtoms` -- here the linkmap object's
+own recorded `owner`). A preserved library whose owning package has
+already left the vdb (the common upgrade case) is no longer an indexed
+object, so the same `basename == soname` reverse lookup
+(`needed_elf::soname_consumers`) that `ebuild_merge::find_unused_
+preserved_libs` uses stands in for real `LinkageMapELF.rebuild()`'s
+`scanelf`-of-the-registry branch (`LinkageMapELF.py:233-324`, never
+ported). Slot-qualified + sorted + deduped like `@installed`; empty
+registry -> empty list -> the ordinary "nothing to resolve" path. Wired
+into both expansion sites in each language; `--list-sets` already named
+it (it is a `cnf/sets/portage.conf` section). Contract-tested against a
+test-local ROOT with a seeded registry + a surviving consumer, both
+impls in lockstep, plus an empty-registry case. Live-verified: on a box
+whose `preserved_libs_registry` holds `dev-libs/simdjson` ->
+`libsimdjson.so.33`, `portuale emerge -p @preserved-rebuild` and the
+Python reference both resolve to `net-libs/nodejs`, matching real
+`emerge -p @preserved-rebuild`.
+
 ### `emerge --getbinpkgonly`/`--getbinpkg`: collision-protect / blocker exclusion / preserve-libs parity
 
 `merge_binpkg` was the one merge path still lighter than the source

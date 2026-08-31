@@ -129,3 +129,32 @@ fn update_world_file_slot_qualifies_a_slotted_target() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn update_world_sets_file_records_a_new_set_and_skips_oneshot() {
+    let tmp = TempDir::new("portuale-worldsets").keep();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+    std::fs::write(
+        root.join("var/lib/portage/world_sets"),
+        "# a comment\n@existing\n",
+    )
+    .unwrap();
+
+    // Rewritten sorted; comments and non-`@` lines are dropped.
+    update_world_sets_file(&root, &["fresh".to_string()], false, false).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join("var/lib/portage/world_sets")).unwrap(),
+        "@existing\n@fresh\n"
+    );
+
+    update_world_sets_file(&root, &["fresh".to_string()], false, false).unwrap();
+    update_world_sets_file(&root, &["another".to_string()], true, false).unwrap();
+    update_world_sets_file(&root, &["another".to_string()], false, true).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join("var/lib/portage/world_sets")).unwrap(),
+        "@existing\n@fresh\n"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
