@@ -426,18 +426,68 @@ def test_emerge_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry(
     assert not (Path(env["PKGDIR"]) / "dev-libs").exists()
 
 
-def test_emerge_without_pretend_or_buildpkgonly_still_refuses(emerge_binary):
-    """Every other real action stays exactly as unimplemented as before
-    this slice -- `--buildpkgonly` is the one, narrow exception."""
+def test_emerge_atom_without_pretend_really_builds_and_merges_from_source(
+    emerge_binary, tmp_path
+):
+    """A plain `emerge <atom>` (no --pretend, no --buildpkgonly/-G) is the
+    pilot's first real source build-and-merge for `emerge` itself
+    (emerge_build::run_source_merge): resolve the graph, then for each New
+    source entry run the full `install` phase chain + the vdb merge
+    (ebuild_merge::run_merge). `dev-libs/packagepkg` RDEPENDs on
+    `samepkg`, already in the fixture vdb, so the graph resolves cleanly;
+    its `src_install` writes `/usr/share/packagepkg/hello.txt`."""
+    root = tmp_path / "root"
+    # A writable ROOT that still has the fixture vdb (so `samepkg` reads
+    # as installed and the resolve doesn't try to pull it in).
+    import shutil
+
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
     result = subprocess.run(
         [str(emerge_binary), "dev-libs/packagepkg"],
         capture_output=True,
         text=True,
         check=False,
-        env=_fixture_env(),
+        env=env,
     )
-    assert result.returncode == 2
-    assert "only --pretend" in result.stderr or "--buildpkgonly without --pretend" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert ">>> dev-libs/packagepkg-1.0 merged." in result.stdout
+
+    assert (root / "usr/share/packagepkg/hello.txt").read_text().strip() == (
+        "hello from packagepkg"
+    )
+    vdb = root / "var/db/pkg/dev-libs/packagepkg-1.0"
+    assert (vdb / "CONTENTS").is_file()
+    assert "/usr/share/packagepkg/hello.txt" in (vdb / "CONTENTS").read_text()
+    assert (vdb / "RDEPEND").read_text().strip() == "dev-libs/samepkg"
+
+
+def test_emerge_atom_without_pretend_rejects_an_upgrade_in_v1(emerge_binary, tmp_path):
+    """v1 of the source merge is New-only: an Upgrade/Downgrade/Reinstall
+    is a hard error until the replaced-version unmerge is wired in."""
+    root = tmp_path / "root"
+    import shutil
+
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    result = subprocess.run(
+        [str(emerge_binary), "--update", "dev-libs/upgradepkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 1
+    assert "New-only in v1" in result.stderr
 
 
 def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(

@@ -185,7 +185,9 @@ CASES = [
     ("explicit slot + \"*\" top-level atom: still invalid", ["--pretend", "dev-libs/foo:0*"], 1),
     ("syntactically invalid atom", ["--pretend", "not an atom!"], 1),
     ("no atom given", ["--pretend"], 2),
-    ("missing --pretend", ["dev-libs/newpkg"], 2),
+    # (A plain `emerge <atom>` with no --pretend is now a real source
+    #  build + merge -- a non-dry-run path, Rust-black-box-tested in
+    #  test_portuale.py, not exercised via these shared CASES.)
     ("real emerge option, value-taking, not implemented", ["--jobs", "dev-libs/newpkg"], 2),
     ("real emerge option, boolean, not implemented", ["--debug", "--pretend", "dev-libs/newpkg"], 2),
     ("real emerge option, inline =value form, not implemented", ["--jobs=4", "--pretend", "dev-libs/newpkg"], 2),

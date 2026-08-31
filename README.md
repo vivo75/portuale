@@ -5305,8 +5305,10 @@ Every prior slice in this pilot kept `emerge` itself 100% dry-run --
 changed what the dry-run *report* said (see the write-up above). This
 slice makes `emerge --buildpkgonly <atom>`, given *without* `--pretend`,
 actually build a real binary package for every entry the resolution
-graph says needs one -- the one real, non-dry-run action `emerge` itself
-now implements. `--pretend --buildpkgonly` together still stays a pure
+graph says needs one -- at the time, the one real, non-dry-run action
+`emerge` itself implemented (since joined by `--getbinpkgonly` and then a
+plain `emerge <atom>` source merge -- see their own sections below).
+`--pretend --buildpkgonly` together still stays a pure
 dry-run report, unchanged: real `--pretend` always suppresses every real
 action, no matter what else is requested alongside it, and this pilot
 now mirrors that precisely rather than only supporting dry-run at all.
@@ -9271,6 +9273,43 @@ append `<phase>-<PVR>` to a `${ROOT}` log): merge `2.0` over an installed
 (and `1.0`'s payload file unmerged, `2.0`'s kept). Still cut: `pkg_setup`
 for a *replaced* version isn't re-run (it never was installed-context);
 no preserve-libs / reverse-dep check on the replace unmerge.
+
+### `emerge <atom>` (no `--pretend`): the first source build + merge
+
+Until this slice a plain `emerge <atom>` — no `--pretend`, no
+`--buildpkgonly`/`-G` — exited 2 with "no real source merges implemented
+yet". Now it does the real thing: resolve the graph, then for each `New`
+**source** entry (already in dependency-first merge order) run the full
+`install` phase chain plus the vdb merge — `emerge_build::run_source_merge`
+→ `ebuild_merge::run_merge` (`pretend`→`setup`→…→`install` via the
+embedded `brush` + real `SRC_URI` fetch, then `merge_tree` +
+`pkg_preinst`/`pkg_postinst` + `env_update()`). `AlreadyInstalled`
+entries are skipped. It reuses `run_getbinpkgonly`'s own
+iterate-the-resolved-entries shape and every piece of the source
+`ebuild <file> merge` machinery unchanged — the only new code is the
+loop and the `pretend.rs` dispatch.
+
+`MergeOptions::from_env` (new) factors the `CONFIG_PROTECT[_MASK]` /
+`DISTDIR` / `collision-protect`·`protect-owned`·`config-protect-if-modified`
+`FEATURES` / `NOCONFMEM` / `PORTAGE_CONFIGROOT` env-var reads out of
+`ebuild.rs` so `emerge <atom>` and `ebuild <file> merge` build the same
+config the same way.
+
+**v1 cuts** (mirroring `--getbinpkgonly`'s own first slice — each a hard
+error for now): **`New` only** (an `Upgrade`/`Downgrade` needs the
+replaced version unmerged afterwards, which `run_merge` doesn't do yet; a
+`Reinstall` is a separate follow-up); a `Binary` entry (only reachable
+with `--usepkg`) → use `--getbinpkgonly` instead; stops at the first
+failure (no `--keep-going` — a later entry may genuinely depend on an
+earlier one).
+
+The Python reference has no ebuild-execution machinery, so like every
+other non-`--pretend` `emerge` path this is **not** in the shared
+contract CASES — it's Rust-black-box-tested in `test_portuale.py`
+(`emerge dev-libs/packagepkg` → real `hello.txt` under `${ROOT}` + a full
+vdb entry; `emerge --update dev-libs/upgradepkg` → the New-only error)
+plus two `emerge_build.rs` unit tests. The old `("missing --pretend", …,
+2)` contract CASE is gone (that shape is now a real merge).
 
 ## Running it
 

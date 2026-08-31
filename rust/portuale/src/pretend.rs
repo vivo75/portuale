@@ -209,6 +209,7 @@
 use crate::color::{self, Colorizer};
 use crate::ebuild_merge;
 use crate::ebuild_package;
+use crate::ebuild_phases;
 use crate::emerge_build;
 use crate::emerge_getbinpkg;
 use crate::emerge_options;
@@ -4358,20 +4359,12 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // The two real, non-dry-run execution paths this pilot implements for
-    // `emerge` itself: `--buildpkgonly` (builds a binary package, never
-    // merges -- see `emerge_build.rs`) and `--getbinpkgonly` (downloads
-    // remote binpkgs and merges them -- see `emerge_getbinpkg.rs`).
-    // Every other real action still isn't implemented.
-    if !pretend && !buildpkgonly && !getbinpkgonly {
-        eprintln!(
-            "emerge (pilot v1): no real source merges implemented yet -- only \
-             --pretend (dry-run), --buildpkgonly (real binary-package building, \
-             never merges), or --getbinpkgonly (real remote-binpkg download + \
-             merge) without --pretend are supported (see PROMPT.md)"
-        );
-        return ExitCode::from(2);
-    }
+    // Real non-dry-run execution paths this pilot implements for `emerge`
+    // itself: `--buildpkgonly` (builds a binary package, never merges --
+    // `emerge_build.rs`), `--getbinpkgonly` (downloads remote binpkgs and
+    // merges them -- `emerge_getbinpkg.rs`), and a plain `emerge <atom>`
+    // (real source build + merge -- `emerge_build::run_source_merge`).
+    // Dispatched from the `!pretend` block far below, after resolution.
 
     // Real `main.py`: `--deselect` becomes a standalone action only when
     // `myaction is None` -- `--depclean`/`--prune`/`--unmerge` each set
@@ -5039,16 +5032,33 @@ pub fn run(args: &[String]) -> ExitCode {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
-        } else if let Err(e) = emerge_build::run_buildpkgonly(
-            entries,
-            &repos,
-            &root,
-            &portage_tmpdir,
-            &package_options,
-            keep_going,
-        ) {
-            eprintln!("emerge: {e}");
-            return ExitCode::from(1);
+        } else if buildpkgonly {
+            if let Err(e) = emerge_build::run_buildpkgonly(
+                entries,
+                &repos,
+                &root,
+                &portage_tmpdir,
+                &package_options,
+                keep_going,
+            ) {
+                eprintln!("emerge: {e}");
+                return ExitCode::from(1);
+            }
+        } else {
+            // Plain `emerge <atom>`: real source build + merge (see
+            // `emerge_build::run_source_merge`).
+            let merge_options =
+                ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+            if let Err(e) = emerge_build::run_source_merge(
+                entries,
+                &repos,
+                &root,
+                &portage_tmpdir,
+                &merge_options,
+            ) {
+                eprintln!("emerge: {e}");
+                return ExitCode::from(1);
+            }
         }
     }
 

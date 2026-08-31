@@ -44,6 +44,7 @@
 //     own single-invocation-at-a-time CLI usage never needs partial-
 //     build cleanup.
 
+use crate::ebuild_merge;
 use crate::ebuild_package::{self, PackageOptions};
 use portage_repo::{Candidate, CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
 use std::path::{Path, PathBuf};
@@ -174,6 +175,75 @@ pub fn run_buildpkgonly(
             failures.join("\n")
         ))
     }
+}
+
+/// Real `emerge <atom>` with no `--pretend` and no `--buildpkgonly`/
+/// `--getbinpkgonly`: the pilot's first source build-and-merge path for
+/// `emerge` itself. Iterates the resolved entries (already in real
+/// dependency-first merge order, so every dependency merges before its
+/// dependents), and for each `New` **source** entry runs the full real
+/// `install` phase chain plus the vdb merge -- `ebuild_merge::run_merge`
+/// (`pretend`→`setup`→…→`install` via embedded `brush` + real
+/// `SRC_URI` fetch, then `merge_tree` + `pkg_preinst`/`pkg_postinst` +
+/// `env_update()`). `AlreadyInstalled` entries are skipped.
+///
+/// **v1 cuts** (mirroring `emerge_getbinpkg::run_getbinpkgonly`'s own
+/// first slice -- these are follow-ups, each a hard error for now):
+///   - **`New` only.** An `Upgrade`/`Downgrade` needs the replaced
+///     version unmerged afterwards (`run_merge` doesn't do that yet), a
+///     `Reinstall` is a separate follow-up.
+///   - a `Binary` entry (only reachable with `--usepkg`) -- a mixed
+///     source+binary merge is its own slice; use `--getbinpkgonly` for
+///     a binary-only merge.
+///   - stops at the first failure. No `--keep-going` (unlike
+///     `run_buildpkgonly`, whose own resolver gate makes that safe --
+///     here a later entry may genuinely depend on an earlier one).
+pub fn run_source_merge(
+    entries: &[GraphEntry],
+    repos: &[RepoConfig],
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &ebuild_merge::MergeOptions,
+) -> Result<(), String> {
+    for entry in entries {
+        let cp = format!("{}/{}", entry.category, entry.package);
+        let version = match &entry.outcome {
+            PretendOutcome::AlreadyInstalled { .. } => continue,
+            PretendOutcome::New { version } => version.clone(),
+            PretendOutcome::NoVisibleCandidate => {
+                return Err(format!("{cp}: no visible ebuild to merge"));
+            }
+            other => {
+                return Err(format!(
+                    "{cp}: {other:?} -- `emerge <atom>` source merge is New-only in v1 \
+                     (no upgrade/downgrade/reinstall of an installed package yet)"
+                ));
+            }
+        };
+        if entry.source == CandidateSource::Binary {
+            return Err(format!(
+                "{cp}-{version}: resolved to a binary package -- a mixed source+binary \
+                 merge is not implemented (use `--getbinpkgonly` for a binary-only merge)"
+            ));
+        }
+
+        let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version)
+        else {
+            return Err(format!(
+                "{cp}-{version}: could not locate its own ebuild file \
+                 (repo layout changed since resolution?)"
+            ));
+        };
+        let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
+
+        println!(">>> Emerging ({cp}-{version})...");
+        let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, options)?;
+        if status != 0 {
+            return Err(format!("{cp}-{version}: merge failed ({status})"));
+        }
+        println!(">>> {cp}-{version} merged.");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -375,6 +445,112 @@ mod tests {
 
         let packages = fs::read_to_string(pkgdir.join("Packages")).unwrap();
         assert!(packages.contains("CPV: dev-libs/packagepkg-1.0"));
+    }
+
+    fn source_entry(package: &str, outcome: PretendOutcome) -> GraphEntry {
+        GraphEntry {
+            category: "dev-libs".into(),
+            package: package.into(),
+            outcome,
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("testrepo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: vec![],
+            source: CandidateSource::Ebuild,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+        }
+    }
+
+    #[test]
+    fn run_source_merge_builds_and_merges_a_new_package_end_to_end() {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+
+        // `samepkg` is packagepkg's RDEPEND -- already installed, so it's
+        // an AlreadyInstalled entry that must be skipped silently.
+        let entries = vec![
+            source_entry(
+                "samepkg",
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".into(),
+                },
+            ),
+            source_entry(
+                "packagepkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+        ];
+
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        run_source_merge(&entries, &repos, &root, &portage_tmpdir, &options)
+            .expect("source merge succeeds");
+
+        assert_eq!(
+            fs::read_to_string(root.join("usr/share/packagepkg/hello.txt"))
+                .unwrap()
+                .trim(),
+            "hello from packagepkg"
+        );
+        let vdb = root.join("var/db/pkg/dev-libs/packagepkg-1.0");
+        assert!(vdb.join("CONTENTS").is_file());
+        assert_eq!(
+            fs::read_to_string(vdb.join("RDEPEND")).unwrap().trim(),
+            "dev-libs/samepkg"
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+
+    #[test]
+    fn run_source_merge_is_new_only_and_rejects_a_binary_or_upgrade_entry() {
+        // Both errors are raised before any real execution, so a bogus
+        // ROOT/tmpdir that would fail loudly if touched is safe here.
+        let bogus = PathBuf::from("/nonexistent/does/not/exist");
+        let options = ebuild_merge::MergeOptions::default();
+
+        let upgrade = vec![source_entry(
+            "upgradepkg",
+            PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+        )];
+        let err = run_source_merge(&upgrade, &[], &bogus, &bogus, &options).unwrap_err();
+        assert!(err.contains("New-only in v1"), "{err}");
+
+        let mut binary = source_entry(
+            "packagepkg",
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        );
+        binary.source = CandidateSource::Binary;
+        let err = run_source_merge(&[binary], &[], &bogus, &bogus, &options).unwrap_err();
+        assert!(err.contains("binary package"), "{err}");
     }
 
     #[test]

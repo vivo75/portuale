@@ -10191,32 +10191,17 @@ def run(args):
         )
         return 2
 
-    # `--buildpkgonly` without `--pretend` is the one real, non-dry-run
-    # execution path the Rust side implements for `emerge` itself (see
-    # portuale's own emerge_build.rs module doc comment): it only ever
-    # builds a binary package, never merges anything, so it's let through
-    # here too even though this reference implementation never actually
-    # builds anything itself -- it has no real ebuild-execution machinery
-    # at all, only the dry-run resolution logic every other CASES entry
-    # in the contract suite already exercises.
-    if not pretend and not buildpkgonly and not getbinpkgonly:
-        print(
-            "emerge (pilot v1): no real source merges implemented yet -- only "
-            "--pretend (dry-run), --buildpkgonly (real binary-package building, "
-            "never merges), or --getbinpkgonly (real remote-binpkg download + "
-            "merge) without --pretend are supported (see PROMPT.md)",
-            file=sys.stderr,
-        )
-        return 2
-
-    # `--getbinpkgonly` without `--pretend` really downloads + merges on
-    # the Rust side (portuale's emerge_getbinpkg.rs); this reference
-    # implementation has no real execution machinery at all, so there is
-    # nothing for it to do -- it is not part of the dry-run contract the
-    # rest of this file mirrors. Return success without output; no
-    # contract-suite CASES entry exercises this path (it is Rust-unit-
-    # tested).
-    if not pretend and getbinpkgonly:
+    # Every real, non-dry-run `emerge` execution path -- `--buildpkgonly`
+    # (build a binary package), `--getbinpkgonly` (download + merge remote
+    # binpkgs), and a plain `emerge <atom>` (real source build + merge) --
+    # is implemented on the Rust side (portuale's emerge_build.rs /
+    # emerge_getbinpkg.rs). This reference implementation has NO real
+    # ebuild-execution machinery at all -- only the dry-run resolution
+    # logic every CASES entry in the contract suite exercises -- so there
+    # is nothing for it to do here. Return success without output; the
+    # non-`--pretend` paths are Rust-black-box-tested (test_portuale.py),
+    # never via the shared contract CASES.
+    if not pretend:
         return 0
 
     # Real main.py: --deselect is a standalone action only when

@@ -298,6 +298,49 @@ impl Default for MergeOptions {
     }
 }
 
+impl MergeOptions {
+    /// Real portage's own `settings`-derived merge configuration, but via
+    /// the same "read the env var, fall back to `make.globals`'s own
+    /// default" shortcut every other real-execution CLI boundary in this
+    /// pilot already takes (`PORTAGE_TMPDIR`/`PKGDIR`/... -- no full
+    /// profile+`make.conf` resolution): `CONFIG_PROTECT`/
+    /// `CONFIG_PROTECT_MASK`, `DISTDIR`, the `FEATURES` tokens
+    /// `collision-protect`/`protect-owned`/`config-protect-if-modified`,
+    /// `NOCONFMEM` (presence), and `PORTAGE_CONFIGROOT` (real default
+    /// `"/"`). Shared by `ebuild <file> merge`/`qmerge` (`ebuild.rs`) and
+    /// `emerge <atom>` (`emerge_build::run_source_merge`).
+    pub fn from_env(shell: ebuild_phases::ShellBackend, debug: bool) -> Self {
+        let d = Self::default();
+        let has_feature = |tok: &str| {
+            std::env::var("FEATURES")
+                .map(|f| f.split_whitespace().any(|t| t == tok))
+                .unwrap_or(false)
+        };
+        Self {
+            debug,
+            shell,
+            config_protect: std::env::var("CONFIG_PROTECT").unwrap_or(d.config_protect),
+            config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
+                .unwrap_or(d.config_protect_mask),
+            distdir: std::env::var_os("DISTDIR")
+                .map(PathBuf::from)
+                .unwrap_or(d.distdir),
+            collision_protect: has_feature("collision-protect"),
+            protect_owned: std::env::var("FEATURES")
+                .map(|f| f.split_whitespace().any(|t| t == "protect-owned"))
+                .unwrap_or(d.protect_owned),
+            protect_if_modified: std::env::var("FEATURES")
+                .map(|f| {
+                    f.split_whitespace()
+                        .any(|t| t == "config-protect-if-modified")
+                })
+                .unwrap_or(d.protect_if_modified),
+            noconfmem: std::env::var_os("NOCONFMEM").is_some(),
+            config_root: portage_repo::config_root_from_env(),
+        }
+    }
+}
+
 /// Real `ConfigProtect.isprotected()` (`lib/portage/util/__init__.py`):
 /// longest-prefix match against `config_protect` (a whitespace-separated
 /// path list, `root`-joined) minus `config_protect_mask`. A protect/mask

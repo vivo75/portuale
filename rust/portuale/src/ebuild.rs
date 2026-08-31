@@ -247,63 +247,14 @@ pub fn run(args: &[String]) -> ExitCode {
         let distdir = std::env::var_os("DISTDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
-        let default_merge_options = ebuild_merge::MergeOptions::default();
-        // Real `"collision-protect" in self.settings.features` -- same
-        // env-var-not-full-config-resolution shortcut every other real
-        // setting at this CLI boundary already uses.
-        let collision_protect = std::env::var("FEATURES")
-            .map(|features| {
-                features
-                    .split_whitespace()
-                    .any(|tok| tok == "collision-protect")
-            })
-            .unwrap_or(default_merge_options.collision_protect);
-        // Real `"protect-owned" in self.settings.features` -- same
-        // env-var-not-full-config-resolution shortcut as
-        // `collision_protect` immediately above.
-        let protect_owned = std::env::var("FEATURES")
-            .map(|features| {
-                features
-                    .split_whitespace()
-                    .any(|tok| tok == "protect-owned")
-            })
-            .unwrap_or(default_merge_options.protect_owned);
-        // Real `"config-protect-if-modified" in self.settings.features`
-        // -- same env-var-not-full-config-resolution shortcut as
-        // `protect_owned` immediately above.
-        let protect_if_modified = std::env::var("FEATURES")
-            .map(|features| {
-                features
-                    .split_whitespace()
-                    .any(|tok| tok == "config-protect-if-modified")
-            })
-            .unwrap_or(default_merge_options.protect_if_modified);
-        // Real `"NOCONFMEM" in self.settings` -- presence-based, matching
-        // real portage's own check (any value, even an empty string,
-        // counts). Real `--noconfmem` is an `emerge`-only CLI flag with
-        // no `bin/ebuild` equivalent at all, so this pilot reads the env
-        // var directly instead of adding a CLI flag real `ebuild` doesn't
-        // have -- see `MergeOptions::noconfmem`'s own doc comment.
-        let noconfmem = std::env::var_os("NOCONFMEM").is_some();
-        let merge_options = ebuild_merge::MergeOptions {
-            debug,
-            config_protect: std::env::var("CONFIG_PROTECT")
-                .unwrap_or(default_merge_options.config_protect),
-            config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
-                .unwrap_or(default_merge_options.config_protect_mask),
-            distdir: distdir.clone(),
-            shell,
-            collision_protect,
-            protect_owned,
-            noconfmem,
-            protect_if_modified,
-            // Real PORTAGE_CONFIGROOT (real default: "/" when unset) --
-            // see MergeOptions::config_root's own doc comment for why
-            // this is the one place a real env-var default of "/" is
-            // actually correct (unlike its own Default impl, used
-            // pervasively by tests).
-            config_root: portage_repo::config_root_from_env(),
-        };
+        // Real `settings`-derived merge config via the same env-var
+        // shortcut every real-execution CLI boundary here takes -- now
+        // factored into `MergeOptions::from_env` (shared with `emerge
+        // <atom>`'s own `emerge_build::run_source_merge`): `CONFIG_
+        // PROTECT[_MASK]`, `DISTDIR`, the `collision-protect`/
+        // `protect-owned`/`config-protect-if-modified` `FEATURES`
+        // tokens, `NOCONFMEM`, `PORTAGE_CONFIGROOT`.
+        let merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
         // Real `"unmerge-orphans" in self.settings.features` -- same
         // env-var-not-full-config-resolution shortcut `collision_protect`/
         // `protect_owned` above already use.
