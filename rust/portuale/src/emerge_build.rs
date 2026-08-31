@@ -210,40 +210,55 @@ pub fn run_source_merge(
     options: &ebuild_merge::MergeOptions,
 ) -> Result<(), String> {
     for entry in entries {
-        let cp = format!("{}/{}", entry.category, entry.package);
-        let version = match &entry.outcome {
-            PretendOutcome::AlreadyInstalled { .. } => continue,
-            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
-                version.clone()
-            }
-            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
-            PretendOutcome::NoVisibleCandidate => {
-                return Err(format!("{cp}: no visible ebuild to merge"));
-            }
-        };
-        if entry.source == CandidateSource::Binary {
-            return Err(format!(
-                "{cp}-{version}: resolved to a binary package -- a mixed source+binary \
-                 merge is not implemented (use `--getbinpkgonly` for a binary-only merge)"
-            ));
-        }
-
-        let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version)
-        else {
-            return Err(format!(
-                "{cp}-{version}: could not locate its own ebuild file \
-                 (repo layout changed since resolution?)"
-            ));
-        };
-        let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
-
-        println!(">>> Emerging ({cp}-{version})...");
-        let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, options)?;
-        if status != 0 {
-            return Err(format!("{cp}-{version}: merge failed ({status})"));
-        }
-        println!(">>> {cp}-{version} merged.");
+        merge_one_source_entry(entry, repos, root, portage_tmpdir, options)?;
     }
+    Ok(())
+}
+
+/// One entry of `run_source_merge`'s own loop -- also the `Source`-entry
+/// arm of `emerge_getbinpkg::run_merge_plan` (`emerge --getbinpkg`'s
+/// mixed source+binary merge). `AlreadyInstalled` is a silent no-op; a
+/// `Binary` entry is a hard error here (the mixed dispatcher routes
+/// those to `merge_binpkg` before ever calling this).
+pub(crate) fn merge_one_source_entry(
+    entry: &GraphEntry,
+    repos: &[RepoConfig],
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &ebuild_merge::MergeOptions,
+) -> Result<(), String> {
+    let cp = format!("{}/{}", entry.category, entry.package);
+    let version = match &entry.outcome {
+        PretendOutcome::AlreadyInstalled { .. } => return Ok(()),
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            version.clone()
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+        PretendOutcome::NoVisibleCandidate => {
+            return Err(format!("{cp}: no visible ebuild to merge"));
+        }
+    };
+    if entry.source == CandidateSource::Binary {
+        return Err(format!(
+            "{cp}-{version}: resolved to a binary package -- pass `--getbinpkg` \
+             for a mixed source+binary merge, or `--getbinpkgonly` for binary-only"
+        ));
+    }
+
+    let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version) else {
+        return Err(format!(
+            "{cp}-{version}: could not locate its own ebuild file \
+             (repo layout changed since resolution?)"
+        ));
+    };
+    let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
+
+    println!(">>> Emerging ({cp}-{version})...");
+    let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, options)?;
+    if status != 0 {
+        return Err(format!("{cp}-{version}: merge failed ({status})"));
+    }
+    println!(">>> {cp}-{version} merged.");
     Ok(())
 }
 

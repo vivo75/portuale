@@ -5014,25 +5014,9 @@ pub fn run(args: &[String]) -> ExitCode {
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
-        if getbinpkgonly {
-            // Real `--getbinpkgonly` merge: download every resolved
-            // remote binpkg and merge it (see `emerge_getbinpkg.rs`).
-            let merge_options = ebuild_merge::MergeOptions {
-                config_root: portage_repo::config_root_from_env(),
-                ..ebuild_merge::MergeOptions::default()
-            };
-            if let Err(e) = emerge_getbinpkg::run_getbinpkgonly(
-                entries,
-                &config,
-                &root,
-                &package_options.pkgdir,
-                &portage_tmpdir,
-                &merge_options,
-            ) {
-                eprintln!("emerge: {e}");
-                return ExitCode::from(1);
-            }
-        } else if buildpkgonly {
+        let merge_options =
+            ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+        if buildpkgonly {
             if let Err(e) = emerge_build::run_buildpkgonly(
                 entries,
                 &repos,
@@ -5044,11 +5028,25 @@ pub fn run(args: &[String]) -> ExitCode {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
+        } else if getbinpkg {
+            // `emerge --getbinpkg`/`-g` (and `-G`, binary-only): merge
+            // every resolved entry, per-entry `Binary` vs `Source` --
+            // see `emerge_getbinpkg::run_merge_plan`.
+            if let Err(e) = emerge_getbinpkg::run_merge_plan(
+                entries,
+                &config,
+                &repos,
+                &root,
+                &package_options.pkgdir,
+                &portage_tmpdir,
+                &merge_options,
+            ) {
+                eprintln!("emerge: {e}");
+                return ExitCode::from(1);
+            }
         } else {
             // Plain `emerge <atom>`: real source build + merge (see
             // `emerge_build::run_source_merge`).
-            let merge_options =
-                ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
             if let Err(e) = emerge_build::run_source_merge(
                 entries,
                 &repos,

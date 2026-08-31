@@ -1,7 +1,8 @@
-// Real `emerge --getbinpkgonly <atom>` execution, WITHOUT `--pretend`:
-// resolve the graph against binary candidates only (`--usepkgonly`), then
-// for every entry that would newly merge as a *remote* binary, download
-// the binpkg from its binhost and merge it into the vdb.
+// Real `emerge --getbinpkg <atom>` / `--getbinpkgonly <atom>` execution,
+// WITHOUT `--pretend`: refresh each remote binhost's live index, resolve
+// the graph, then merge every resolved entry -- dispatching per entry on
+// its `source` (a `Binary` candidate is downloaded+merged, anything else
+// is built+merged from source).
 //
 // The `--pretend` half of `--getbinpkg`/`--getbinpkgonly` already shipped
 // (real `bintree`'s `binrepos.conf`/`PORTAGE_BINHOST` parsing, remote
@@ -15,12 +16,15 @@
 //     location `list_remote_binary_candidates` reads. A `file://` binhost
 //     needs no refresh (its `packages_dir` IS the source). Run BEFORE
 //     resolution, so the resolver sees the fresh pool.
-//   - `run_getbinpkgonly`: iterate the resolved entries (already in real
-//     topological merge order), and for each remote-binary `New`: find
-//     its `Packages` record (`find_remote_binpkg`), `wget`/copy the
-//     binpkg file into `$PKGDIR`, verify its `SIZE` against the index,
-//     and call `ebuild_merge::merge_binpkg` (see that function's own
-//     documented v1 cuts).
+//   - `run_merge_plan`: iterate the resolved entries (already in real
+//     topological merge order), and per entry -- `Binary` ->
+//     `merge_one_binary_entry` (find its `Packages` record via
+//     `find_remote_binpkg`, `wget`/copy into `$PKGDIR`, `SIZE`-check,
+//     `ebuild_merge::merge_binpkg`); else ->
+//     `emerge_build::merge_one_source_entry`. Real `--getbinpkg`'s own
+//     "prefer a binary, fall back to source" is the resolver's job, not
+//     this loop's; `--getbinpkgonly` (binary-only resolve) simply never
+//     produces a non-`Binary` entry.
 //
 // v1 cuts specific to this module:
 //   - `Packages.gz` / `Packages.zst` (a compressed remote index) is not
@@ -33,13 +37,10 @@
 //   - digest verification is `SIZE`-only (the pilot has no crypto; the
 //     `SHA*`/`MD5` fields are read but not checked -- see
 //     `binpkg::read_gpkg_metadata`'s own identical `Manifest`/`.sig` cut).
-//   - a source ebuild slipping through the binary-only resolve is a hard
-//     error. `New`/`Upgrade`/`Downgrade`/`Reinstall` all merge
-//     (`merge_binpkg` unmerges a replaced same-slot version itself).
 
 use crate::ebuild_merge::{self, MergeOptions};
 use portage_profile::{BinRepo, Config};
-use portage_repo::{find_remote_binpkg, CandidateSource, GraphEntry, PretendOutcome};
+use portage_repo::{find_remote_binpkg, CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
 /// Real `bintree._populate_remote`: for each `http(s)` binrepo, download
@@ -62,67 +63,100 @@ pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path) -> Result<(), 
     Ok(())
 }
 
-/// Download + merge every remote-binary entry in `entries` (already in
-/// real dependency-first merge order). `AlreadyInstalled` dependencies
-/// are skipped; `New`/`Upgrade`/`Downgrade`/`Reinstall` are fetched and
-/// merged (`merge_binpkg` unmerges a replaced same-slot version itself);
-/// `NoVisibleCandidate` and a source-only resolution are hard errors.
-pub fn run_getbinpkgonly(
+/// Real `emerge --getbinpkg <atom>` / `--getbinpkgonly <atom>` (no
+/// `--pretend`): merge every resolved entry (already in real dependency-
+/// first merge order), dispatching **per entry** on `entry.source` --
+/// real `--getbinpkg`'s own "prefer a binary package, fall back to a
+/// source build" is entirely the resolver's job (it already stamped the
+/// right `source` on each `GraphEntry`); this just executes the plan.
+///
+///   - a `Binary` entry -> download it (if remote) and merge it
+///     (`merge_one_binary_entry` -> `ebuild_merge::merge_binpkg`, all
+///     four `pkg_*` hooks + same-slot replace).
+///   - anything else -> build + merge from source
+///     (`emerge_build::merge_one_source_entry` -> `ebuild_merge::
+///     run_merge`).
+///   - `AlreadyInstalled` is a silent no-op either way.
+///
+/// `--getbinpkgonly` (binary-only resolve, `usepkgonly`) simply never
+/// yields a non-`Binary` entry, so the same function serves both.
+pub fn run_merge_plan(
     entries: &[GraphEntry],
     config: &Config,
+    repos: &[RepoConfig],
     root: &Path,
     pkgdir: &Path,
     portage_tmpdir: &Path,
     merge_options: &MergeOptions,
 ) -> Result<(), String> {
     for entry in entries {
-        let cp = format!("{}/{}", entry.category, entry.package);
-        let version = match &entry.outcome {
-            PretendOutcome::AlreadyInstalled { .. } => continue,
-            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
-                version.clone()
-            }
-            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
-            PretendOutcome::NoVisibleCandidate => {
-                return Err(format!("no binary package available for {cp}"));
-            }
-        };
-        if entry.source != CandidateSource::Binary {
-            return Err(format!(
-                "{cp}-{version}: resolved to a source ebuild, not a binary package"
-            ));
-        }
-
-        // A remote candidate must be fetched; a local `$PKGDIR` binpkg
-        // (`remote_binary == false`) is already on disk.
-        let binpkg_path = if entry.remote_binary {
-            let (sync_uri, record) = find_remote_binpkg(
-                &config.binrepos,
-                root,
-                &entry.category,
-                &entry.package,
-                &version,
-            )
-            .ok_or_else(|| format!("{cp}-{version}: not found in any binhost `Packages` index"))?;
-            download_and_verify(
-                &sync_uri,
-                &record,
-                &entry.category,
-                &entry.package,
-                &version,
-                pkgdir,
-            )?
+        if entry.source == CandidateSource::Binary {
+            merge_one_binary_entry(entry, config, root, pkgdir, portage_tmpdir, merge_options)?;
         } else {
-            resolve_local_binpkg(pkgdir, &entry.category, &entry.package, &version).ok_or_else(
-                || format!("{cp}-{version}: no binpkg file under {}", pkgdir.display()),
-            )?
-        };
-
-        println!(">>> Merging binary package {cp}-{version}...");
-        let status = ebuild_merge::merge_binpkg(&binpkg_path, root, portage_tmpdir, merge_options)?;
-        if status != 0 {
-            return Err(format!("{cp}-{version}: binpkg merge failed ({status})"));
+            crate::emerge_build::merge_one_source_entry(
+                entry,
+                repos,
+                root,
+                portage_tmpdir,
+                merge_options,
+            )?;
         }
+    }
+    Ok(())
+}
+
+/// One `Binary` entry of `run_merge_plan`'s own loop: `AlreadyInstalled`
+/// is a silent no-op; `New`/`Upgrade`/`Downgrade`/`Reinstall` are
+/// fetched (remote) or located (`$PKGDIR`) and merged (`merge_binpkg`
+/// unmerges a replaced same-slot version itself).
+fn merge_one_binary_entry(
+    entry: &GraphEntry,
+    config: &Config,
+    root: &Path,
+    pkgdir: &Path,
+    portage_tmpdir: &Path,
+    merge_options: &MergeOptions,
+) -> Result<(), String> {
+    let cp = format!("{}/{}", entry.category, entry.package);
+    let version = match &entry.outcome {
+        PretendOutcome::AlreadyInstalled { .. } => return Ok(()),
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            version.clone()
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+        PretendOutcome::NoVisibleCandidate => {
+            return Err(format!("no binary package available for {cp}"));
+        }
+    };
+
+    // A remote candidate must be fetched; a local `$PKGDIR` binpkg
+    // (`remote_binary == false`) is already on disk.
+    let binpkg_path = if entry.remote_binary {
+        let (sync_uri, record) = find_remote_binpkg(
+            &config.binrepos,
+            root,
+            &entry.category,
+            &entry.package,
+            &version,
+        )
+        .ok_or_else(|| format!("{cp}-{version}: not found in any binhost `Packages` index"))?;
+        download_and_verify(
+            &sync_uri,
+            &record,
+            &entry.category,
+            &entry.package,
+            &version,
+            pkgdir,
+        )?
+    } else {
+        resolve_local_binpkg(pkgdir, &entry.category, &entry.package, &version)
+            .ok_or_else(|| format!("{cp}-{version}: no binpkg file under {}", pkgdir.display()))?
+    };
+
+    println!(">>> Merging binary package {cp}-{version}...");
+    let status = ebuild_merge::merge_binpkg(&binpkg_path, root, portage_tmpdir, merge_options)?;
+    if status != 0 {
+        return Err(format!("{cp}-{version}: binpkg merge failed ({status})"));
     }
     Ok(())
 }
@@ -255,6 +289,38 @@ mod tests {
             s.push_str("\n\n");
         }
         s.into_bytes()
+    }
+
+    fn graph_entry(package: &str, source: CandidateSource, version: &str) -> GraphEntry {
+        GraphEntry {
+            category: "dev-libs".into(),
+            package: package.into(),
+            outcome: PretendOutcome::New {
+                version: version.into(),
+            },
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("testrepo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: vec![],
+            required_by: vec![],
+            source,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+        }
     }
 
     #[test]
@@ -496,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn run_getbinpkgonly_downloads_a_remote_binpkg_and_merges_it() {
+    fn run_merge_plan_downloads_a_remote_binpkg_and_merges_it() {
         let tmp = tempdir();
         let root = tmp.join("root");
         let pkgdir = tmp.join("pkgdir");
@@ -561,15 +627,16 @@ mod tests {
             remote_binary: true,
         };
 
-        run_getbinpkgonly(
+        run_merge_plan(
             &[entry],
             &config,
+            &[],
             &root,
             &pkgdir,
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
         )
-        .expect("getbinpkgonly merge succeeds");
+        .expect("getbinpkg merge succeeds");
 
         assert!(
             pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file(),
@@ -586,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn run_getbinpkgonly_upgrades_over_an_installed_version() {
+    fn run_merge_plan_upgrades_over_an_installed_binpkg() {
         let tmp = tempdir();
         let root = tmp.join("root");
         let pkgdir = tmp.join("pkgdir");
@@ -663,15 +730,16 @@ mod tests {
             remote_binary: true,
         };
 
-        run_getbinpkgonly(
+        run_merge_plan(
             &[entry],
             &config,
+            &[],
             &root,
             &pkgdir,
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
         )
-        .expect("getbinpkgonly upgrade succeeds");
+        .expect("getbinpkg merge succeeds");
 
         assert!(
             root.join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
@@ -689,6 +757,60 @@ mod tests {
         assert!(
             root.join("usr/share/packagepkg/hello.txt").is_file(),
             "the new version's own file is present"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn run_merge_plan_merges_a_binary_and_a_source_entry_in_one_run() {
+        // `emerge --getbinpkg`'s own mixed plan: one `Binary` entry
+        // (a local `$PKGDIR` `.tbz2`) and one `Source` entry (built from
+        // its fixture ebuild), both merged in the same pass.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        std::fs::copy(
+            fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            pkgdir.join("dev-libs/packagepkg-1.0.tbz2"),
+        )
+        .unwrap();
+
+        let config_root = fixtures_root();
+        let repos = portage_repo::find_repos(&config_root).unwrap();
+        let options = MergeOptions {
+            distdir: tmp.join("distdir"),
+            config_root: config_root.clone(),
+            ..MergeOptions::default()
+        };
+
+        run_merge_plan(
+            &[
+                graph_entry("packagepkg", CandidateSource::Binary, "1.0"),
+                graph_entry("binpkgphasepkg", CandidateSource::Ebuild, "1.0"),
+            ],
+            &Config::default(),
+            &repos,
+            &root,
+            &pkgdir,
+            &tmp.join("portage_tmpdir"),
+            &options,
+        )
+        .expect("mixed merge plan succeeds");
+
+        // The Binary entry: merged from the local .tbz2.
+        assert!(root
+            .join("var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS")
+            .is_file());
+        assert!(root.join("usr/share/packagepkg/hello.txt").is_file());
+        // The Source entry: built + merged from its ebuild, hooks ran.
+        assert!(root
+            .join("var/db/pkg/dev-libs/binpkgphasepkg-1.0/CONTENTS")
+            .is_file());
+        assert!(root.join("usr/share/binpkgphasepkg/payload.txt").is_file());
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/binpkgphasepkg.phases")).unwrap(),
+            "preinst\npostinst\n"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }

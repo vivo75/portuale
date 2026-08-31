@@ -9309,11 +9309,12 @@ long-standing `ebuild <file> merge` cut: merging `v2` over an installed
 `ebuild.rs` so `emerge <atom>` and `ebuild <file> merge` build the same
 config the same way.
 
-**v1 cuts:** a `Binary` entry (only reachable with `--usepkg`) is a hard
-error → use `--getbinpkgonly` for a binary-only merge; stops at the first
-failure (no `--keep-going` — a later entry may genuinely depend on an
-earlier one); the replace skips the preserve-libs / reverse-dependency
-check `dblink.unmerge()` would otherwise do.
+**v1 cuts:** a `Binary` entry (only reachable with `--usepkg`, no
+`--getbinpkg`) is a hard error here — see the next section for the
+`--getbinpkg` mixed path; stops at the first failure (no `--keep-going`
+— a later entry may genuinely depend on an earlier one); the replace
+skips the preserve-libs / reverse-dependency check `dblink.unmerge()`
+would otherwise do.
 
 The Python reference has no ebuild-execution machinery, so like every
 other non-`--pretend` `emerge` path this is **not** in the shared
@@ -9327,6 +9328,40 @@ postinst-2.0` hook interleave) plus `emerge_build.rs` unit tests
 (`ebuild <file> merge` `v1` then `v2` → `v2` replaces `v1`). The old
 `("missing --pretend", …, 2)` contract CASE is gone (that shape is now a
 real merge).
+
+### `emerge --getbinpkg <atom>` (no `--pretend`): the mixed source + binary merge
+
+With `--getbinpkgonly` every resolved entry is a binary; with plain
+`--getbinpkg` (or `--usepkg`) the resolver picks per package — some
+entries resolve as `Binary`, some as `Source`. This slice makes the
+non-`--pretend` merge handle a mix.
+
+`emerge_getbinpkg::run_getbinpkgonly` is replaced by `run_merge_plan`,
+which dispatches **per entry** on `entry.source`:
+
+- `Binary` → `merge_one_binary_entry` (the old `run_getbinpkgonly` body,
+  factored out): download it if remote (`SIZE`-checked) or take the
+  `$PKGDIR` copy, then `ebuild_merge::merge_binpkg` (all four `pkg_*`
+  hooks + same-slot replace).
+- anything else → `emerge_build::merge_one_source_entry` (the
+  `run_source_merge` loop body, factored out): locate the ebuild, then
+  `ebuild_merge::run_merge`.
+- `AlreadyInstalled` → silent no-op either way.
+
+Real `--getbinpkg`'s "prefer a binary, fall back to source" needs no
+code here — the resolver already stamped the right `source` on each
+`GraphEntry` during the (unchanged) `--pretend`-half resolution;
+`run_merge_plan` just executes the plan. `--getbinpkgonly` (binary-only
+resolve) simply never yields a non-`Binary` entry, so one function
+serves both. `pretend.rs`'s non-`--pretend` dispatch is now
+`buildpkgonly` / `getbinpkg` (→ `run_merge_plan`) / else
+(`run_source_merge`).
+
+Rust-unit-tested: `run_merge_plan_merges_a_binary_and_a_source_entry_in_one_run`
+(one local-`$PKGDIR` `.tbz2` + one fixture ebuild, both merged in one
+pass, the source one's `pkg_preinst`/`pkg_postinst` verified), plus the
+existing remote-download and binary-upgrade tests (renamed from
+`run_getbinpkgonly_*`).
 
 ## Running it
 
