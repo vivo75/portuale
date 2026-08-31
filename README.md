@@ -8659,16 +8659,35 @@ like a real one, and `ebuild <file> package`'s `.tbz2` (whose XPAK is
 built from `build-info` by the real `xpak-helper.py`) gets the dep
 strings too.
 
-v1 cut: real portage, for an EAPI with slot operators (every EAPI 5+),
-writes the `*DEPEND` files from `evaluate_slot_operator_equal_deps`
-(which binds `:=` against the resolved depgraph) rather than this loop.
-This pilot does no build-time `:=` binding anywhere, so it writes the
-plain `use_reduce`'d `*DEPEND` — byte-identical for an ebuild with no
-`:=` operator, the bare `:=` token kept for one with. `IUSE_EFFECTIVE`
-isn't written either (needs a resolved `Config` threaded through the
-phase chain; the vdb `IUSE_EFFECTIVE` file is only read by an
-already-narrowed check). Real-execution, Rust-only. New
-`ebuild_merge`/`binpkg` tests; the committed
+For an EAPI with slot operators (every EAPI 5+) real portage writes the
+`*DEPEND` files from `evaluate_slot_operator_equal_deps`
+(`dep/_slot_operator.py`) rather than the plain loop. **The pilot now
+does the same**: `bind_slot_operator` runs per `*DEPEND` token
+(`_eval_deps`'s own per-atom step) — an atom with a `:=` operator is
+rewritten to `:<slot>/<sub-slot>=` from the highest installed version in
+`<root>/var/db/pkg` that satisfies it (`vardb.match(x)[-1]` +
+`with_slot`); a non-`:=` atom, or a `:=` dep with nothing installed, is
+left untouched. So a package the pilot merges records
+`dev-libs/foo:2/3=` in its vdb / `.tbz2` build-info — the exact data a
+later sub-slot rebuild check needs. Byte-identical to before for an
+ebuild with no installed `:=` dep. The rewrite is targeted string
+surgery on the atom's own slot-dep substring (`:=` / `:2=` / `:2/3=`,
+all reconstructable from the parsed `slot`/`sub_slot`), so operators,
+versions and `[usedep]`s pass through unchanged. v1 simplification:
+real `_eval_deps` binds `RDEPEND`/`PDEPEND` against the target vdb and
+`DEPEND`/`BDEPEND` against target/running respectively — this pilot's
+single-root world binds every `*DEPEND` key against the one
+`<root>/var/db/pkg` (the `--root-deps` simplification again); the
+`|| ( A:= B:= )` "sub-slot on A only" TODO (bug #455904) is moot with no
+disjunctive `:=` handling.
+
+`IUSE_EFFECTIVE` isn't written either (needs a resolved `Config`
+threaded through the phase chain; the vdb `IUSE_EFFECTIVE` file is only
+read by an already-narrowed check). Real-execution, Rust-only — a
+`bind_slot_operator` unit test plus `test_portuale.py` (merge
+`dev-libs/slotopdepspkg` with `dev-libs/slotoptarget` installed at
+`SLOT="2"` → stored `RDEPEND` is `dev-libs/slotoptarget:2/2=`; without
+it, bare `:=`). New `ebuild_merge`/`binpkg` tests; the committed
 `fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2` was regenerated (it now
 carries `RDEPEND`), which the `$PKGDIR`-scan contract test now asserts is
 actually walked.

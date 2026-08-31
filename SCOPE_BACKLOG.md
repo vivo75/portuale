@@ -474,9 +474,15 @@ Ranked roughly by how self-contained each is.
    `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND`/`LICENSE`/
    `PROPERTIES`/`RESTRICT`/`IUSE` into `build-info` (`use_reduce`'d
    against the empty phase USE), and `write_vdb_entry` now copies the
-   *whole* `build-info` dir into the vdb (real `treewalk()`). Cuts:
-   `:=` slot-operator `evaluate_slot_operator_equal_deps` binding,
-   `IUSE_EFFECTIVE`. `FEATURES=verify-sig`
+   *whole* `build-info` dir into the vdb (real `treewalk()`).
+   **`:=` slot-operator binding shipped 2026-08-31**: `bind_slot_operator`
+   (real `_slot_operator._eval_deps`'s per-atom step) rewrites each
+   `*DEPEND` `:=` atom to `:<slot>/<sub-slot>=` from the highest
+   installed match in `<root>/var/db/pkg`, bare if unresolvable —
+   groundwork for the still-open slot-operator rebuild edges. v1
+   simplification: every `*DEPEND` key bound against the one target-`ROOT`
+   vdb (real splits RDEPEND/PDEPEND vs DEPEND/BDEPEND); no `|| ( A:= B:= )`
+   handling. Cut still: `IUSE_EFFECTIVE`. `FEATURES=verify-sig`
    (GPG) lives here too — it is a `gpkg`/repo-sync concept, **not**
    `SRC_URI` fetch (the earlier backlog mis-scoped it).
 

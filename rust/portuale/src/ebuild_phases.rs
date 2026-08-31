@@ -609,14 +609,72 @@ fn fetch_sources(env: &Environment, distdir: &Path) -> Result<(Vec<String>, Vec<
 /// uselist=use))` -- the bracket/`||`-preserving normalized token
 /// stream).
 ///
-/// v1 cut: real portage, for an EAPI with slot operators (every EAPI 5+),
-/// skips the `*DEPEND` keys in this loop and writes them from
-/// `evaluate_slot_operator_equal_deps` instead (which binds `:=` against
-/// the resolved depgraph). This pilot does no build-time `:=` binding
-/// anywhere, so it writes the plain `use_reduce`'d `*DEPEND` here -- an
-/// ebuild with no `:=` operator gets a byte-identical result; one with
-/// `:=` keeps the bare `:=` token rather than a resolved `:2/3=`.
-fn write_post_install_metadata(env: &Environment) -> Result<(), String> {
+/// Real `_slot_operator._eval_deps`'s own per-atom step: an atom with a
+/// `:=` slot operator (`slot_operator == "="`) is rewritten to
+/// `:<slot>/<sub-slot>=` taken from the highest installed version in
+/// `<root>/var/db/pkg` that satisfies it (`vardb.match(x)[-1]`). A
+/// non-atom token, a non-`:=` atom, or a `:=` dep with nothing installed
+/// is returned unchanged (real "just leave it as-is for now ... keeping
+/// the information in vdb").
+///
+/// The rewrite is string surgery on the atom's own slot-dep substring
+/// (`:=` / `:2=` / `:2/3=`, all reconstructable from the parsed
+/// `slot`/`sub_slot`) rather than reserialising the whole atom -- that
+/// substring is distinctive enough to appear exactly once in a
+/// well-formed atom, so `replacen(.., 1)` is safe (a version can't
+/// contain `:`, `::repo` carries no `=`, a `[usedep]` carries no `:`).
+fn bind_slot_operator(token: &str, root: &Path) -> String {
+    let Some(atom) = portage_dep::parse_atom(token) else {
+        return token.to_string();
+    };
+    if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
+        return token.to_string();
+    }
+    let best = portage_repo::installed_candidates(root, &atom.category, &atom.package)
+        .into_iter()
+        .filter(|(version, slot, sub_slot)| {
+            let cpv_slot = format!(
+                "{}/{}-{version}:{slot}/{sub_slot}",
+                atom.category, atom.package
+            );
+            portage_dep::match_from_list(token, &[cpv_slot.as_str()]).is_some_and(|m| !m.is_empty())
+        })
+        .max_by(|(a, _, _), (b, _, _)| {
+            portage_versions::vercmp(a, b)
+                .map(|c| c.cmp(&0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    let Some((_, slot, sub_slot)) = best else {
+        return token.to_string();
+    };
+    let old_slotdep = match (&atom.slot, &atom.sub_slot) {
+        (None, _) => ":=".to_string(),
+        (Some(s), None) => format!(":{s}="),
+        (Some(s), Some(ss)) => format!(":{s}/{ss}="),
+    };
+    token.replacen(&old_slotdep, &format!(":{slot}/{sub_slot}="), 1)
+}
+
+/// Real portage, for an EAPI with slot operators (every EAPI 5+), skips
+/// the `*DEPEND` keys in this loop and writes them from
+/// `evaluate_slot_operator_equal_deps` (`portage/dep/_slot_operator.py`)
+/// instead: every `:=` slot-operator atom is bound to the actual
+/// `<slot>/<sub-slot>=` of the highest installed version that satisfies
+/// it (`vardb.match(x)[-1]`), leaving an unresolvable one bare. This
+/// pilot now does the same, `bind_slot_operator` per `*DEPEND` token
+/// (`_eval_deps`'s own per-atom loop) -- so a package the pilot merges
+/// records `dev-libs/foo:2/3=` in its vdb/binpkg build-info, the data a
+/// later sub-slot rebuild check needs. An ebuild with no `:=` operator,
+/// or one whose `:=` dep isn't installed, is byte-identical to before.
+///
+/// v1 cut still: real `_eval_deps` walks `RDEPEND`/`PDEPEND` against the
+/// target `ROOT` vdb and `DEPEND`/`BDEPEND` against the target/running
+/// vdb respectively -- this pilot's own single-root world binds every
+/// `*DEPEND` key against the one `<root>/var/db/pkg` (same simplification
+/// `--root-deps` documents); and the real `|| ( A:= B:= )` "record
+/// sub-slot on A only" TODO (bug #455904) is moot without disjunctive
+/// `:=` handling anywhere.
+fn write_post_install_metadata(env: &Environment, root: &Path) -> Result<(), String> {
     let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
         return Ok(());
     };
@@ -650,13 +708,24 @@ fn write_post_install_metadata(env: &Environment) -> Result<(), String> {
             continue;
         };
         let tokens: Vec<String> = raw.split_whitespace().map(String::from).collect();
-        let value = portage_use_reduce::use_reduce_structured(
+        let reduced = portage_use_reduce::use_reduce_structured(
             &tokens,
             &empty_use,
             portage_use_reduce::MatchMode::Normal,
         )
-        .map_err(|e| format!("{}: build-info/{key}: {e}", env.pkg_dir.display()))?
-        .join(" ");
+        .map_err(|e| format!("{}: build-info/{key}: {e}", env.pkg_dir.display()))?;
+        // Real `_post_src_install_write_metadata`: the `*DEPEND` keys go
+        // through `evaluate_slot_operator_equal_deps` -- bind every `:=`
+        // atom to the installed dependency's `<slot>/<sub-slot>=`.
+        let value = if key.ends_with("DEPEND") {
+            reduced
+                .into_iter()
+                .map(|tok| bind_slot_operator(&tok, root))
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            reduced.join(" ")
+        };
         if value.is_empty() {
             continue;
         }
@@ -1333,7 +1402,7 @@ async fn run_commands_async(
                 // the same spot -- after `install` + its post-phase
                 // misc-functions, before the vdb merge / xpak build reads
                 // `build-info`.
-                write_post_install_metadata(&env)?;
+                write_post_install_metadata(&env, root)?;
             }
         }
     }
@@ -1505,6 +1574,57 @@ pub(crate) fn run_phase_from_saved_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bind_slot_operator_binds_a_matched_equals_dep_and_leaves_the_rest_alone() {
+        let root = std::env::temp_dir().join(format!(
+            "portuale-slotbind-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let vdb = root.join("var/db/pkg/dev-libs/foo-1.2");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(vdb.join("SLOT"), "4/9\n").unwrap();
+
+        // A bare `:=` against an installed dep -> bound to its slot/sub-slot.
+        assert_eq!(
+            bind_slot_operator("dev-libs/foo:=", &root),
+            "dev-libs/foo:4/9="
+        );
+        // An operator + version + `:=` -> only the slot dep is rewritten.
+        assert_eq!(
+            bind_slot_operator(">=dev-libs/foo-1:=", &root),
+            ">=dev-libs/foo-1:4/9="
+        );
+        // An already-slotted `:2=` still rebinds (real `vardb.match` +
+        // `with_slot`), but a slot the vdb doesn't have -> no match, bare.
+        assert_eq!(
+            bind_slot_operator("dev-libs/foo:4=", &root),
+            "dev-libs/foo:4/9="
+        );
+        assert_eq!(
+            bind_slot_operator("dev-libs/foo:7=", &root),
+            "dev-libs/foo:7="
+        );
+        // Not a `:=` operator, and a `:=` dep with nothing installed:
+        // both untouched.
+        assert_eq!(
+            bind_slot_operator("dev-libs/foo:4", &root),
+            "dev-libs/foo:4"
+        );
+        assert_eq!(
+            bind_slot_operator("dev-libs/bar:=", &root),
+            "dev-libs/bar:="
+        );
+        // Not an atom at all (a `||`-group token).
+        assert_eq!(bind_slot_operator("||", &root), "||");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn restrict_mirror_from_restrict_evaluates_conditionals_against_the_empty_use_set() {

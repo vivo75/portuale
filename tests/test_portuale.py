@@ -854,6 +854,57 @@ def test_emerge_unmerge_backup_quickpkgs_before_removing(emerge_binary, tmp_path
     assert not (root / "usr/share/emergeconfigpkg/emergeconfigpkg.txt").exists()
 
 
+def _merge_slotopdepspkg(emerge_binary, root, env):
+    ebuild = str(
+        Path(FIXTURES_ROOT)
+        / "repo/dev-libs/slotopdepspkg/slotopdepspkg-1.0.ebuild"
+    )
+    link = root.parent / "ebuild"
+    if not link.exists():
+        link.symlink_to(Path(emerge_binary).resolve())
+    r = subprocess.run(
+        [str(link), ebuild, "merge"], capture_output=True, text=True, check=False, env=env
+    )
+    assert r.returncode == 0, r.stderr
+
+
+def test_merge_binds_the_slot_operator_in_stored_dep_metadata(emerge_binary, tmp_path):
+    """Real `_post_src_install_write_metadata` ->
+    `evaluate_slot_operator_equal_deps`: a merged package records its `:=`
+    deps bound to the installed dependency's `<slot>/<sub-slot>=`.
+    `dev-libs/slotopdepspkg` RDEPENDs `dev-libs/slotoptarget:=`."""
+    root = tmp_path / "root"
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    # dev-libs/slotoptarget installed in slot 2 (SLOT="2" -> sub-slot 2).
+    tgt = root / "var/db/pkg/dev-libs/slotoptarget-1.0"
+    tgt.mkdir(parents=True)
+    (tgt / "CATEGORY").write_text("dev-libs\n")
+    (tgt / "SLOT").write_text("2\n")
+
+    _merge_slotopdepspkg(emerge_binary, root, env)
+    rdepend = (root / "var/db/pkg/dev-libs/slotopdepspkg-1.0/RDEPEND").read_text().strip()
+    assert rdepend == "dev-libs/slotoptarget:2/2="
+
+
+def test_merge_leaves_an_unresolvable_slot_operator_bare(emerge_binary, tmp_path):
+    """Real `_eval_deps`: a `:=` dep with nothing installed to satisfy it
+    is left as-is (`dev-libs/slotoptarget:=`)."""
+    root = tmp_path / "root"
+    root.mkdir()
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    _merge_slotopdepspkg(emerge_binary, root, env)
+    rdepend = (root / "var/db/pkg/dev-libs/slotopdepspkg-1.0/RDEPEND").read_text().strip()
+    assert rdepend == "dev-libs/slotoptarget:="
+
+
 def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(
     ebuild_binary, tmp_path
 ):
