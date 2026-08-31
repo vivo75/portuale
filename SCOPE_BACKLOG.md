@@ -109,13 +109,18 @@ single-pass BFS can't grow into these incrementally:
   - **Slice 2 shipped 2026-09-01:** real `--backtrack=COUNT` flag
     (`backtrack_max` param, default 10, `=0` disables — replaces slice 1's
     `MAX_BACKTRACK` constant).
-  - **Slice 3:** unsolvable conflict → mask a version → retry
-    (`runtime_pkg_mask` equivalent).
+  - **Slice 3 shipped 2026-09-01:** unsolvable conflict → real
+    `runtime_pkg_mask` (`extra_constraints` gained a `!`-negation form,
+    `slot_pullers` tracking, a trial-and-revert state machine — mask the
+    conflicted version + puller-parent versions with a lower alternative,
+    keep only if every conflict clears with no new `NoVisibleCandidate`).
   - **Slice 4:** diagnostics ("backtracking … exhausted" /
-    "circular dependencies prevent backtracking"), autounmask levels tried
-    in sequence inside the loop, autounmask parent-flip re-resolve feeding
-    `extra_constraints`, and the `resolve_graph_once` helper extraction
-    (drop slice 1's `loop {}` reindent).
+    "circular dependencies prevent backtracking") + the real
+    `_show_slot_collision_notice` block (enrich `SlotConflict` to carry
+    every conflicting instance + its parent atoms), autounmask levels
+    tried in sequence inside the loop, autounmask parent-flip re-resolve
+    feeding `extra_constraints`, and the `resolve_graph_once` helper
+    extraction (drop slice 1's `loop {}` reindent).
   Still weeks for full parity; `PROMPT.md` lists a backtracking resolver
   as out of scope for v1, but slices 1–4 close the gap between "resolves
   the common case" and "resolves what real portage resolves".

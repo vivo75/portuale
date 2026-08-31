@@ -4870,22 +4870,24 @@ def resolve_pretend(
     # first): when `resolve_pretend_graph` re-resolves a package that hit
     # a slot conflict, it passes every other parent atom that targeted the
     # same `cat/pkg:slot` here -- the winning candidate must satisfy all of
-    # them at once. An empty list (the default at every ordinary call
-    # site) is a strict no-op. Mirrors portage-repo/src/lib.rs exactly.
+    # them at once. An entry beginning with "!" is a *negative* constraint
+    # (real backtracking's runtime_pkg_mask): the winning candidate must
+    # NOT match the atom after the "!". An empty list (the default at every
+    # ordinary call site) is a strict no-op. Mirrors portage-repo/src/lib.rs
+    # exactly.
     if extra_constraints:
+
+        def _con_ok(c, con):
+            candidate_str = [
+                f"{category}/{package}-{c['version']}:{c['slot']}"
+                f"/{c['sub_slot']}::{c['repo_name']}"
+            ]
+            if con.startswith("!"):
+                return not match_from_list(con[1:], candidate_str)
+            return bool(match_from_list(con, candidate_str))
+
         matched = [
-            c
-            for c in matched
-            if all(
-                match_from_list(
-                    con,
-                    [
-                        f"{category}/{package}-{c['version']}:{c['slot']}"
-                        f"/{c['sub_slot']}::{c['repo_name']}"
-                    ],
-                )
-                for con in extra_constraints
-            )
+            c for c in matched if all(_con_ok(c, con) for con in extra_constraints)
         ]
 
     # USE deps (dev-libs/foo[bar]/[-bar], (+)/(-) defaults -- PMS 8.3.4):
@@ -5646,6 +5648,17 @@ def resolve_pretend_graph(
     # resolve_pretend_graph exactly.
     slot_constraints = {}
     backtrack_iteration = 0
+    # Backtracking slice 3 (unsolvable conflict -> runtime_pkg_mask): a
+    # small state machine across passes. "none" = ordinary pass; "trying" =
+    # the pass just ran with a trial set of "!=cpv" masks and its result
+    # must be judged (kept if every conflict cleared with no new
+    # no_visible_candidate, else reverted); "reverting" = one final clean
+    # pass after a rejected trial. `mask_trial_spent` stops a second trial
+    # once the first has been judged. Mirrors portage-repo/src/lib.rs.
+    mask_phase = "none"
+    mask_trial_spent = False
+    mask_negatives = []
+    pre_trial_nvc = 0
 
     def _graph_pass():
         # Guards against infinite requeuing (e.g. a dependency cycle): the
@@ -5738,6 +5751,12 @@ def resolve_pretend_graph(
         # set for the conflicted package becomes its `slot_constraints`
         # entry for the next attempt. Mirrors portage-repo/src/lib.rs.
         slot_want = {}
+        # Backtracking (slice 3): for each `cat/pkg` targeted by a
+        # dependency string this pass, the (cat, pkg, version) of every
+        # package that pulled it in. The unsolvable-slot-conflict handler
+        # masks a puller version that has a lower alternative so the retry
+        # falls back to it (real runtime_pkg_mask propagation).
+        slot_pullers = {}
 
         while queue:
             current_atom_str, depth, owner, unevaluated_atom = queue.popleft()
@@ -6597,6 +6616,13 @@ def resolve_pretend_graph(
                             repos, root_deps_running_root, atom_str, config, key, root_deps_build_seen
                         )
                     )
+            # Backtracking (slice 3): record this package as a puller of
+            # every non-blocker cat/pkg its dependency string names.
+            for tok in flat_deps:
+                dep_atom = _parse_atom(tok)
+                if dep_atom is not None and not dep_atom.blocker:
+                    dc, dp = dep_atom.cp.split("/", 1)
+                    slot_pullers.setdefault((dc, dp), []).append((key[0], key[1], version))
             _enqueue_flat_deps(flat_deps, key, version, depth, use_flags, queue, pending_blockers)
 
             # --with-test-deps: additive on top of the normal deps just
@@ -6693,7 +6719,11 @@ def resolve_pretend_graph(
             autounmask_license_changes,
             autounmask_mask_changes,
             slot_want,
+            slot_pullers,
         )
+
+    def _nvc_count(rows):
+        return sum(1 for r in rows if r[2][0] == "no_visible_candidate")
 
     while True:
         (
@@ -6707,21 +6737,38 @@ def resolve_pretend_graph(
             autounmask_license_changes,
             autounmask_mask_changes,
             slot_want,
+            slot_pullers,
         ) = _graph_pass()
 
         if required_use_violations:
             raise ResolutionError("\n".join(required_use_violations))
 
+        # Backtracking slice 3: judge a pending runtime_pkg_mask trial.
+        if mask_phase == "trying":
+            mask_phase = "none"
+            if not slot_conflicts and _nvc_count(entries) <= pre_trial_nvc:
+                # The trial cleared every conflict without making any
+                # dependency unsatisfiable -- keep the masks.
+                pass
+            else:
+                # Rejected: drop the trial masks and re-run one clean pass.
+                for _k, _neg in mask_negatives:
+                    if _k in slot_constraints and _neg in slot_constraints[_k]:
+                        slot_constraints[_k].remove(_neg)
+                mask_negatives = []
+                mask_phase = "reverting"
+                continue
+        elif mask_phase == "reverting":
+            mask_phase = "none"
+
         # Solvable slot conflict -> fold every atom that targeted the
         # conflicted `cat/pkg` into `slot_constraints` and re-run the
         # whole walk. Solvability is pre-checked against the raw
         # candidate list (real `_select_pkg_highest_available` over the
-        # full atom set); the rare case where the one satisfying version
-        # is itself masked resolves to a plain `no_visible_candidate` on
-        # the retry, which is acceptable and documented for this slice.
-        # Unsolvable conflicts, and anything still conflicting after
-        # `backtrack_max` attempts, fall through unchanged.
-        if slot_conflicts and backtrack_iteration < backtrack_max:
+        # full atom set). Unsolvable conflicts fall through to the
+        # runtime_pkg_mask trial below; anything still conflicting after
+        # `backtrack_max` attempts is reported as before.
+        if mask_phase == "none" and slot_conflicts and backtrack_iteration < backtrack_max:
             progressed = False
             for _sc in slot_conflicts:
                 _pkg_key = (_sc["category"], _sc["package"])
@@ -6745,6 +6792,48 @@ def resolve_pretend_graph(
                         _bucket.append(_w)
                         progressed = True
             if progressed:
+                backtrack_iteration += 1
+                continue
+
+        # Backtracking slice 3 (real _slot_conflict_backtrack ->
+        # runtime_pkg_mask): a slot conflict no single version can solve.
+        # Hide the currently-resolved version of the conflicted package,
+        # plus every puller-parent version that has a lower alternative,
+        # then re-run once and judge the result above.
+        if (
+            mask_phase == "none"
+            and not mask_trial_spent
+            and slot_conflicts
+            and backtrack_iteration < backtrack_max
+        ):
+            negatives = []
+            for _sc in slot_conflicts:
+                _cp = (_sc["category"], _sc["package"])
+                negatives.append(
+                    (_cp, f'!={_sc["category"]}/{_sc["package"]}-{_sc["resolved_version"]}')
+                )
+                _seen = set()
+                for _pc, _pp, _pv in slot_pullers.get(_cp, []):
+                    if (_pc, _pp, _pv) in _seen:
+                        continue
+                    _seen.add((_pc, _pp, _pv))
+                    _lower = any(
+                        (vercmp(_c["version"], _pv) or 0) < 0
+                        for _c in list_candidates(repos, _pc, _pp)
+                    )
+                    if _lower:
+                        negatives.append(((_pc, _pp), f"!={_pc}/{_pp}-{_pv}"))
+            added = False
+            for _k, _neg in negatives:
+                _bucket = slot_constraints.setdefault(_k, [])
+                if _neg not in _bucket:
+                    _bucket.append(_neg)
+                    added = True
+            if added:
+                mask_negatives = negatives
+                pre_trial_nvc = _nvc_count(entries)
+                mask_phase = "trying"
+                mask_trial_spent = True
                 backtrack_iteration += 1
                 continue
         break

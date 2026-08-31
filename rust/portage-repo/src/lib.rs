@@ -6052,7 +6052,10 @@ pub fn resolve_pretend(
     // atom texts the winning candidate must ALSO satisfy, beyond
     // `atom_str` itself. `resolve_pretend_graph` supplies the other parent
     // atoms that targeted the same `cat/pkg:slot` when re-resolving a
-    // conflicted package. Empty (`&[]`) at every ordinary call site.
+    // conflicted package. An entry beginning with `!` is a *negative*
+    // constraint (real backtracking's `runtime_pkg_mask`): the winning
+    // candidate must NOT match the atom after the `!`. Empty (`&[]`) at
+    // every ordinary call site.
     extra_constraints: &[String],
 ) -> Result<PretendOutcome, String> {
     // Real `create_depgraph_params.py:179`: `--emptytree` does
@@ -6218,6 +6221,13 @@ pub fn resolve_pretend(
     // the same `cat/pkg:slot` here -- the winning candidate must satisfy
     // all of them at once. An empty list (the default at every ordinary
     // call site) is a strict no-op.
+    //
+    // A constraint that begins with `!` is a *negative* constraint (real
+    // backtracking's `runtime_pkg_mask`): the winning candidate must NOT
+    // match the atom after the `!` -- `resolve_pretend_graph`'s unsolvable
+    // slot-conflict handler adds `!=cat/pkg-<ver>` entries here to hide a
+    // specific version (of the conflicted package or of a parent that
+    // pulled the losing atom) and force a lower one on the retry.
     let matched: Vec<&str> = if extra_constraints.is_empty() {
         matched
     } else {
@@ -6225,8 +6235,13 @@ pub fn resolve_pretend(
             .into_iter()
             .filter(|m| {
                 extra_constraints.iter().all(|c| {
-                    portage_dep::match_from_list(c, std::slice::from_ref(m))
-                        .is_some_and(|r| !r.is_empty())
+                    if let Some(neg) = c.strip_prefix('!') {
+                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    } else {
+                        portage_dep::match_from_list(c, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    }
                 })
             })
             .collect()
@@ -7493,6 +7508,11 @@ impl Deep {
 /// it in the queued atom text itself.
 type QueueItem = (String, u32, Option<(String, String)>, Option<String>);
 
+/// Backtracking slice 3: `(cat, pkg)` targeted by a dependency string ->
+/// the `(cat, pkg, version)` of every package that pulled it in this
+/// pass. See `resolve_pretend_graph`'s `slot_pullers`.
+type SlotPullers = HashMap<(String, String), Vec<(String, String, String)>>;
+
 /// Queues every atom in `flat_deps` (a `use_reduce_flat`/
 /// `use_reduce_flat_subset` result) onto `queue` at `depth + 1`, owned by
 /// `key`/`version`, splitting off a blocker atom into `pending_blockers`
@@ -7943,6 +7963,24 @@ pub fn resolve_pretend_graph(
     // `--backtrack=COUNT`, default 10, `0` disables).
     let mut slot_constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
     let mut backtrack_iteration: u32 = 0;
+    // Backtracking slice 3 (unsolvable conflict -> `runtime_pkg_mask`): a
+    // small state machine across passes. `None` = ordinary pass; `Trying`
+    // = the pass just ran with a trial set of `!=cpv` masks and its result
+    // must be judged (kept if every conflict cleared with no new
+    // `NoVisibleCandidate`, else reverted); `Reverting` = one final clean
+    // pass after a rejected trial, so the reported graph isn't the
+    // masked-and-worse one. `mask_trial_spent` stops a second trial once
+    // the first has been judged -- one `runtime_pkg_mask` round per call.
+    #[derive(PartialEq)]
+    enum MaskPhase {
+        None,
+        Trying,
+        Reverting,
+    }
+    let mut mask_phase = MaskPhase::None;
+    let mut mask_trial_spent = false;
+    let mut mask_negatives: Vec<((String, String), String)> = Vec::new();
+    let mut pre_trial_nvc: usize = 0;
     'backtrack: loop {
         // Guards against infinite requeuing (e.g. a dependency cycle): the
         // exact same atom *text* is only ever resolved once. This is
@@ -7979,6 +8017,13 @@ pub fn resolve_pretend_graph(
         // for the conflicted package becomes its `slot_constraints` entry for
         // the next attempt.
         let mut slot_want: HashMap<(String, String), Vec<String>> = HashMap::new();
+        // Backtracking (slice 3, unsolvable conflicts): for each `cat/pkg`
+        // targeted by some package's dependency string this pass, the
+        // `(cat, pkg, version)` of every package that pulled it in. The
+        // unsolvable-slot-conflict handler masks a puller version that has
+        // a lower alternative so the retry falls back to it (real
+        // `runtime_pkg_mask` propagation).
+        let mut slot_pullers: SlotPullers = HashMap::new();
 
         let mut entries: Vec<GraphEntry> = Vec::new();
         // REQUIRED_USE (see the check further below, in the main BFS loop):
@@ -9206,6 +9251,19 @@ pub fn resolve_pretend_graph(
                     ));
                 }
             }
+            // Backtracking (slice 3): record this package as a puller of
+            // every non-blocker `cat/pkg` its dependency string names,
+            // before `flat_deps` is consumed below.
+            for tok in &flat_deps {
+                if let Some(dep_atom) = portage_dep::parse_atom(tok) {
+                    if dep_atom.blocker == portage_dep::Blocker::None {
+                        slot_pullers
+                            .entry((dep_atom.category.clone(), dep_atom.package.clone()))
+                            .or_default()
+                            .push((key.0.clone(), key.1.clone(), version.clone()));
+                    }
+                }
+            }
             enqueue_flat_deps(
                 flat_deps,
                 &key,
@@ -9300,15 +9358,54 @@ pub fn resolve_pretend_graph(
             return Err(required_use_violations.join("\n"));
         }
 
+        let nvc_count = |entries: &[GraphEntry]| {
+            entries
+                .iter()
+                .filter(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate))
+                .count()
+        };
+
+        // Backtracking slice 3: judge a pending `runtime_pkg_mask` trial.
+        match mask_phase {
+            MaskPhase::Trying => {
+                mask_phase = MaskPhase::None;
+                if slot_conflicts.is_empty() && nvc_count(&entries) <= pre_trial_nvc {
+                    // The trial cleared every conflict without making any
+                    // dependency unsatisfiable -- keep the masks (they stay
+                    // in `slot_constraints`) and fall through to output.
+                } else {
+                    // Rejected: drop the trial masks and re-run one clean
+                    // pass so the reported graph isn't the masked, worse one.
+                    for (k, neg) in &mask_negatives {
+                        if let Some(bucket) = slot_constraints.get_mut(k) {
+                            bucket.retain(|c| c != neg);
+                        }
+                    }
+                    mask_negatives.clear();
+                    mask_phase = MaskPhase::Reverting;
+                    continue 'backtrack;
+                }
+            }
+            MaskPhase::Reverting => {
+                // The clean re-run after a rejected trial: report whatever
+                // conflicts remain, exactly as before backtracking.
+                mask_phase = MaskPhase::None;
+            }
+            MaskPhase::None => {}
+        }
+
         // Backtracking (real `backtracking.py` retry loop driven by
         // `_process_slot_conflicts`): if this attempt left any slot conflicts,
         // check each one for solvability -- is there a single version of the
         // conflicted `cat/pkg` that satisfies *every* atom text that targeted
         // it this pass? If so, fold that whole atom set into `slot_constraints`
-        // and re-run the entire walk. Unsolvable conflicts (no such version),
-        // and anything still conflicting after `backtrack_max` attempts, fall
-        // through unchanged and are reported exactly as before.
-        if !slot_conflicts.is_empty() && backtrack_iteration < backtrack_max {
+        // and re-run the entire walk. Unsolvable conflicts fall through to the
+        // `runtime_pkg_mask` trial below; anything still conflicting after
+        // `backtrack_max` attempts is reported exactly as before.
+        if mask_phase == MaskPhase::None
+            && !slot_conflicts.is_empty()
+            && backtrack_iteration < backtrack_max
+        {
             let mut progressed = false;
             for sc in &slot_conflicts {
                 let pkg_key = (sc.category.clone(), sc.package.clone());
@@ -9346,6 +9443,62 @@ pub fn resolve_pretend_graph(
                 }
             }
             if progressed {
+                backtrack_iteration += 1;
+                continue 'backtrack;
+            }
+        }
+
+        // Backtracking slice 3 (real `_slot_conflict_backtrack` ->
+        // `runtime_pkg_mask`): a slot conflict no single version can solve.
+        // Hide the currently-resolved version of the conflicted package,
+        // plus every puller-parent version that has a lower alternative
+        // (masking a newer parent whose dependency string carries the
+        // tighter constraint lets the retry fall back to an older parent
+        // with looser deps), then re-run once and judge the result above.
+        if mask_phase == MaskPhase::None
+            && !mask_trial_spent
+            && !slot_conflicts.is_empty()
+            && backtrack_iteration < backtrack_max
+        {
+            let mut negatives: Vec<((String, String), String)> = Vec::new();
+            for sc in &slot_conflicts {
+                let cp = (sc.category.clone(), sc.package.clone());
+                negatives.push((
+                    cp.clone(),
+                    format!("!={}/{}-{}", sc.category, sc.package, sc.resolved_version),
+                ));
+                if let Some(pullers) = slot_pullers.get(&cp) {
+                    let mut seen: HashSet<(String, String, String)> = HashSet::new();
+                    for (pc, pp, pv) in pullers {
+                        if !seen.insert((pc.clone(), pp.clone(), pv.clone())) {
+                            continue;
+                        }
+                        let has_lower = list_candidates(&repos, pc, pp)
+                            .map(|cands| {
+                                cands.iter().any(|c| {
+                                    vercmp_ordering(&c.version, pv) == std::cmp::Ordering::Less
+                                })
+                            })
+                            .unwrap_or(false);
+                        if has_lower {
+                            negatives.push(((pc.clone(), pp.clone()), format!("!={pc}/{pp}-{pv}")));
+                        }
+                    }
+                }
+            }
+            let mut added = false;
+            for (k, neg) in &negatives {
+                let bucket = slot_constraints.entry(k.clone()).or_default();
+                if !bucket.contains(neg) {
+                    bucket.push(neg.clone());
+                    added = true;
+                }
+            }
+            if added {
+                mask_negatives = negatives;
+                pre_trial_nvc = nvc_count(&entries);
+                mask_phase = MaskPhase::Trying;
+                mask_trial_spent = true;
                 backtrack_iteration += 1;
                 continue 'backtrack;
             }
@@ -11726,6 +11879,59 @@ mod tests {
         // A single retry is enough to reconcile this one-step conflict.
         let one = graph_result_real_backtrack("dev-libs/slotconflictparent", 1);
         assert_eq!(one.slot_conflicts, vec![]);
+    }
+
+    #[test]
+    fn fixture_unsolvable_slot_conflict_is_resolved_by_masking_a_puller_version() {
+        // dev-libs/btparent -> btconsumer (resolves -2.0, RDEPEND
+        // >=bttarget-2.0) + btpin (RDEPEND <bttarget-2.0). No bttarget
+        // version satisfies both, so slice 1's solvability check fails.
+        // Slice 3's runtime_pkg_mask trial hides bttarget-2.0 AND
+        // btconsumer-2.0 (which has a lower -1.0 with only a bare bttarget
+        // RDEPEND); the retry falls back to btconsumer-1.0 + bttarget-1.0
+        // and every constraint is met.
+        let result = graph_result_real("dev-libs/btparent");
+        assert_eq!(result.slot_conflicts, vec![]);
+        let ver = |pkg: &str| {
+            result
+                .entries
+                .iter()
+                .find(|e| e.package == pkg)
+                .map(|e| match &e.outcome {
+                    PretendOutcome::New { version } => version.clone(),
+                    other => panic!("{pkg}: unexpected {other:?}"),
+                })
+                .unwrap_or_else(|| panic!("no entry for {pkg}"))
+        };
+        assert_eq!(ver("btconsumer"), "1.0");
+        assert_eq!(ver("bttarget"), "1.0");
+    }
+
+    #[test]
+    fn fixture_masking_trial_is_reverted_when_it_makes_a_dependency_unsatisfiable() {
+        // dev-libs/slotconflictunsolvable: both pullers of
+        // slotconflicttarget:0 have a single version, so masking
+        // slotconflicttarget-2.0 only turns the >=2.0 dependency into a
+        // NoVisibleCandidate -- strictly worse. Slice 3 must revert the
+        // trial and report the original slot conflict unchanged.
+        let result = graph_result_real("dev-libs/slotconflictunsolvable");
+        assert_eq!(
+            result.slot_conflicts,
+            vec![SlotConflict {
+                category: "dev-libs".to_string(),
+                package: "slotconflicttarget".to_string(),
+                slot: "0".to_string(),
+                resolved_version: "2.0".to_string(),
+                conflicting_atom: "<dev-libs/slotconflicttarget-2.0".to_string(),
+            }]
+        );
+        assert!(
+            !result
+                .entries
+                .iter()
+                .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate)),
+            "the reverted graph must not carry the trial's NoVisibleCandidate"
+        );
     }
 
     #[test]

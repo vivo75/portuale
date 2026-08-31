@@ -10094,6 +10094,42 @@ Contract-tested (`--backtrack=0` reports the otherwise-solvable
 it) as a shared case pair + a dedicated pinned-output test;
 Rust-unit-tested via a new `graph_result_real_backtrack` helper.
 
+### Backtracking: an unsolvable slot conflict → real `runtime_pkg_mask` (slice 3)
+
+Slice 1 reconciles a slot conflict when one version satisfies every atom
+that landed on the slot. When *no* version can (`>=X-2.0` from one
+consumer, `<X-2.0` from another), real portage's `_slot_conflict_backtrack`
+adds one of the packages to `runtime_pkg_mask` — hiding a specific `cpv`
+so a different version is tried — and re-runs the whole graph, keeping
+the mask only if it helps.
+
+`resolve_pretend`'s `extra_constraints` parameter grew a negation form: an
+entry beginning with `!` means "the winning candidate must **not** match
+the atom after the `!`". `resolve_pretend_graph` now tracks `slot_pullers`
+(every `(cat, pkg, version)` whose dependency string named a given
+`cat/pkg` this pass) and runs a small state machine across passes: on an
+unsolvable conflict it builds a trial set of `!=cpv` masks — the
+conflicted package's resolved version, plus every puller-parent version
+that has a lower alternative (masking a newer parent whose dep string
+carries the tighter constraint lets the retry fall back to an older
+parent with looser deps) — applies them, and re-runs. The next pass is
+judged: if every slot conflict cleared **and** no new
+`NoVisibleCandidate` appeared, the masks stay; otherwise they're dropped
+and one final clean pass produces the reported graph, exactly as before
+backtracking. One `runtime_pkg_mask` round per call; `--backtrack=0`
+disables it along with the rest of the loop.
+
+Fixtures: new `dev-libs/btparent` → `btconsumer` (`-2.0` RDEPEND
+`>=bttarget-2.0`, `-1.0` RDEPEND bare `bttarget`) + `btpin` (RDEPEND
+`<bttarget-2.0`). Masking `bttarget-2.0` + `btconsumer-2.0` lets the
+retry pick `btconsumer-1.0` + `bttarget-1.0` with every constraint met.
+`dev-libs/slotconflictunsolvable` (both pullers single-version) is the
+revert case — masking only turns the `>=2.0` dep into a
+`NoVisibleCandidate`, so the trial is rejected and the `[slot conflict]`
+line is reported unchanged. Contract-tested as a CASE pair + a dedicated
+pinned-output test (with `--backtrack=0`); two `portage-repo` unit tests
+(the mask win, and the revert).
+
 ## Running it
 
 Build both Rust binaries:

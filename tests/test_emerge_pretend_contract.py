@@ -732,6 +732,8 @@ CASES = [
     ("slot conflict: --backtrack=0 disables reconciliation", ["--pretend", "--backtrack=0", "dev-libs/slotconflictparent"], 0),
     ("slot conflict: --backtrack 1 still reconciles a one-step conflict", ["--pretend", "--backtrack", "1", "dev-libs/slotconflictparent"], 0),
     ("slot conflict: unsolvable, survives backtracking and is reported", ["--pretend", "dev-libs/slotconflictunsolvable"], 0),
+    ("slot conflict: unsolvable, resolved by masking a puller version", ["--pretend", "dev-libs/btparent"], 0),
+    ("slot conflict: --backtrack=0 also disables the runtime_pkg_mask trial", ["--pretend", "--backtrack=0", "dev-libs/btparent"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
     ("virtual: resolved as a dependency", ["--pretend", "dev-libs/virtualconsumerpkg"], 0),
@@ -5190,6 +5192,41 @@ def test_backtrack_zero_disables_slot_conflict_reconciliation(emerge_binary, fix
     )
     assert r1.returncode == 0
     assert r1.stdout.splitlines() == reconciled
+
+
+def test_unsolvable_slot_conflict_resolved_by_masking_a_puller_version(
+    emerge_binary, fixture_env
+):
+    """dev-libs/btparent -> btconsumer (resolves -2.0, RDEPEND
+    >=bttarget-2.0) + btpin (RDEPEND <bttarget-2.0). No bttarget version
+    satisfies both, so slice 1's solvability check fails. Slice 3's real
+    runtime_pkg_mask trial hides bttarget-2.0 AND btconsumer-2.0 (which
+    has a lower -1.0 whose RDEPEND is only a bare bttarget); the retry
+    falls back to btconsumer-1.0 + bttarget-1.0 and every constraint is
+    met, with no [slot conflict] line. `--backtrack=0` turns the trial
+    off, so the conflict is reported instead."""
+    r = _run([str(emerge_binary)], ["--pretend", "dev-libs/btparent"], fixture_env)
+    assert r.returncode == 0
+    assert r.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/bttarget-1.0 ',
+        '[ebuild  N     ] dev-libs/btconsumer-1.0 ',
+        '[ebuild  N     ] dev-libs/btpin-1.0 ',
+        '[ebuild  N     ] dev-libs/btparent-1.0 ',
+    ]
+
+    r0 = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--backtrack=0", "dev-libs/btparent"],
+        fixture_env,
+    )
+    assert r0.returncode == 0
+    assert r0.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/bttarget-2.0 ',
+        '[ebuild  N     ] dev-libs/btconsumer-2.0 ',
+        '[ebuild  N     ] dev-libs/btpin-1.0 ',
+        '[ebuild  N     ] dev-libs/btparent-1.0 ',
+        '[slot conflict] dev-libs/bttarget:0 resolved to dev-libs/bttarget-2.0, which does not satisfy "<dev-libs/bttarget-2.0"',
+    ]
 
 
 def test_unsolvable_slot_conflict_survives_backtracking_and_is_reported(
