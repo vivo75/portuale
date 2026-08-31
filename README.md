@@ -3294,9 +3294,7 @@ PORTING/
   candidate's own main slot at every "already installed" decision point
   in `resolve_pretend` (`--exclude` keep, the `!update` selective
   shortcut, the Reinstall/AlreadyInstalled branch, and the
-  Upgrade/Downgrade/New branch); `dependency_avoid_update_candidate`'s
-  own `avoid_update` matching stays version-only across slots, a
-  documented residual. New `GraphEntry::new_slot: bool` (Python: stashed
+  Upgrade/Downgrade/New branch). New `GraphEntry::new_slot: bool` (Python: stashed
   on the `provenance` dict like `keyword_mask`), set in
   `resolve_pretend_graph` for a `New` entry whose cp has any installed
   candidate; `pretend.rs` renders `S` right after the `N` letter
@@ -3305,6 +3303,20 @@ PORTING/
   `dev-libs/newslotpkg` (`-1.0` SLOT 0 installed, `-2.0` SLOT 1 not):
   `:1` (or the bare atom, non-selective) -> `[ebuild  NS]
   dev-libs/newslotpkg-2.0`; `:0` stays an in-slot outcome.
+
+  **Follow-up (2026-08-31): `dependency_avoid_update_candidate` is
+  slot-aware too now.** The `!update` shortcut for a *dependency* atom
+  (real `_select_pkg_highest_available_imp`'s early `avoid_update`
+  return, `depgraph.py` ~8440) picked its "already installed, don't
+  touch" package by matching an installed **version string** across all
+  slots. Real portage's `inst_pkg` comes from `vardb.match(atom)`, which
+  honours the atom's slot -- so it now takes a repo candidate only when
+  that exact `(version, slot)` pair is in the vdb (`installed_candidates`
+  triples instead of `installed_versions`). New `dev-libs/avoidslotpkg`
+  (repo `-1.0` SLOT 1 / `-2.0` SLOT 2) + `dev-libs/avoidslotconsumer`
+  (`RDEPEND dev-libs/avoidslotpkg:1`): with `avoidslotpkg-1.0` installed
+  at SLOT 2, the `:1` dependency is genuinely new (`[ebuild NS]
+  dev-libs/avoidslotpkg-1.0 [1.0]`), not silently `AlreadyInstalled`.
 
   **`emerge --pretend`: the `[ebuild I..]` interactive bracket column.**
   Real `output.py:833`: `if "interactive" in pkg.properties and

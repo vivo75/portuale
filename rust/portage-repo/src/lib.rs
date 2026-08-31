@@ -5509,6 +5509,15 @@ fn resolve_root_deps_build_entries(
 /// profile `IUSE_EFFECTIVE` ∪ the package's own recorded `USE`, bug
 /// #640318 -- see the inline comment). `None` when no installed version
 /// qualifies.
+///
+/// `installed` is the vdb's own `(version, slot, sub_slot)` triples
+/// (`installed_candidates`): a repo candidate only counts as the
+/// avoid-update package when that *exact `(version, slot)` pair* is
+/// installed -- real `vardb.match(atom)` returns installed cpvs that
+/// match the atom's slot too, so `cat/pkg-1.0` installed only at slot 0
+/// never satisfies a `cat/pkg:2` dependency even when the repo offers
+/// `cat/pkg-1.0` in slot 2.
+///
 /// Called from two places in `resolve_pretend` below: once *before*
 /// visibility/USE-dep filtering against the tree even begins (so a
 /// dependency reached only via a keyword-masked-but-installed version
@@ -5521,7 +5530,7 @@ fn dependency_avoid_update_candidate<'a>(
     atom: &portage_dep::Atom,
     atom_str: &str,
     candidates: &'a [Candidate],
-    installed: &[String],
+    installed: &[(String, String, String)],
     config: &portage_profile::Config,
 ) -> Option<&'a Candidate> {
     let all_candidates_by_str: HashMap<String, &Candidate> = candidates
@@ -5540,7 +5549,11 @@ fn dependency_avoid_update_candidate<'a>(
     portage_dep::match_from_list(atom_str, &all_refs)?
         .into_iter()
         .filter_map(|m| all_candidates_by_str.get(m).copied())
-        .filter(|c| installed.iter().any(|v| v == &c.version))
+        .filter(|c| {
+            installed
+                .iter()
+                .any(|(v, s, _sub)| v == &c.version && s == &c.slot)
+        })
         .filter(|c| match &atom.use_deps {
             Some(use_deps) if !use_deps.is_empty() => {
                 let vdb_iuse =
@@ -5815,7 +5828,7 @@ pub fn resolve_pretend(
     // later, `!is_top_level`-aware `!update` shortcut's own comment) --
     // skipped here so that block still gets a chance to run.
     if !update && !is_top_level && excluded.is_empty() {
-        let installed = installed_versions(root, &atom.category, &atom.package);
+        let installed = installed_candidates(root, &atom.category, &atom.package);
         if let Some(installed_best) = dependency_avoid_update_candidate(
             root,
             &atom,
@@ -6007,14 +6020,8 @@ pub fn resolve_pretend(
     // mis-classifies a new-slot install as an `Upgrade`/`Downgrade`
     // (real portage: `[ebuild NS]`). `installed` (version-only, all
     // slots) is still what `dependency_avoid_update_candidate` consumes
-    // -- its own `avoid_update` grounding is a separate concern and its
-    // slot-awareness stays a documented residual (see the "KNOWN,
-    // DOCUMENTED SCOPE CUTS" note below).
+    // -- its own `avoid_update` grounding is a separate concern.
     let installed_pairs = installed_candidates(root, &atom.category, &atom.package);
-    let installed: Vec<String> = installed_pairs
-        .iter()
-        .map(|(version, _slot, _sub_slot)| version.clone())
-        .collect();
     // A matched candidate counts as already-installed only when its own
     // main slot is installed at that version (sub-slot ignored, exactly
     // like real `pkg.slot_atom`).
@@ -6079,7 +6086,7 @@ pub fn resolve_pretend(
                 &atom,
                 atom_str,
                 &candidates,
-                &installed,
+                &installed_pairs,
                 config,
             )
         } else {
@@ -7399,12 +7406,11 @@ fn enqueue_flat_deps(
 ///     (`pkg.slot_atom`, sub-slot ignored), so requesting a slot the
 ///     package isn't installed in resolves as `New` (with `GraphEntry::
 ///     new_slot` set when another slot *is* installed), never as a bogus
-///     `Upgrade`/`Downgrade` off an unrelated slot's version. Residual:
-///     `dependency_avoid_update_candidate`'s own installed matching (the
-///     `!update` shortcut for a *dependency* atom, real `avoid_update`)
-///     still compares version-only across all slots -- a documented cut,
-///     its `avoid_update` grounding being a separate concern from the
-///     top-level New/Upgrade decision this bullet covers.
+///     `Upgrade`/`Downgrade` off an unrelated slot's version.
+///     `dependency_avoid_update_candidate` (the `!update` shortcut for a
+///     *dependency* atom, real `avoid_update`) is slot-aware too now --
+///     it matches an installed `(version, slot)` pair, not merely a
+///     version present in some slot.
 ///   - `--autounmask` (`autounmask_suggest_keywords`): a deliberately
 ///     narrow v1 of a considerably bigger real feature (real portage's
 ///     own version tracks *why* each candidate was rejected via
@@ -15660,6 +15666,87 @@ mod tests {
             "--ignore-built-slot-operator-deps drops the consumer rebuild"
         );
         assert!(ignored.abi_rebuilds.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dependency_avoid_update_candidate_is_slot_aware() {
+        // avoidslotpkg-1.0 is installed at SLOT="2" (the repo ebuild says
+        // SLOT="1"); avoidslotconsumer RDEPENDs `dev-libs/avoidslotpkg:1`.
+        // The `:1` dependency must NOT short-circuit to "already
+        // installed" off the slot-2 install -- slot 1 is genuinely new.
+        let cfg_root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &cfg_root,
+            &cfg_root.join("repo"),
+            &[("overlay".to_string(), cfg_root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config resolves");
+        let dir = std::env::temp_dir().join(format!(
+            "portage-repo-avoidslot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let d = dir.join("var/db/pkg/dev-libs/avoidslotpkg-1.0");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "2\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+
+        let result = resolve_pretend_graph(
+            &cfg_root,
+            &dir,
+            &["dev-libs/avoidslotconsumer".to_string()],
+            &config,
+            false,
+            false,
+            false,
+            false,
+            Deep::NotRequested,
+            &[],
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+            false,
+            None,
+            false,
+            false,
+            None,
+            &fixtures_root().join("distfiles"),
+            false,
+            false,
+            false,
+        )
+        .expect("resolves");
+
+        let dep = result
+            .entries
+            .iter()
+            .find(|e| e.package == "avoidslotpkg")
+            .expect("the :1 dependency is a real graph entry, not silently AlreadyInstalled");
+        assert!(
+            matches!(dep.outcome, PretendOutcome::New { .. }),
+            "slot 1 is new: {:?}",
+            dep.outcome
+        );
+        assert_eq!(dep.slot.as_deref(), Some("1"));
 
         let _ = fs::remove_dir_all(&dir);
     }

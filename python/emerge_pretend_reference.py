@@ -4268,6 +4268,12 @@ def _dependency_avoid_update_candidate(root, atom, atom_str, category, package, 
     dbapi._iuse_implicit_cnstr for a built package (recorded IUSE |
     profile IUSE_EFFECTIVE | the package's own recorded USE, bug 640318 --
     see the inline comment). None when no installed version qualifies.
+
+    `installed` is the vdb's own (version, slot) pairs: a repo candidate
+    counts only when that exact (version, slot) pair is installed -- real
+    vardb.match(atom) returns installed cpvs that match the atom's slot
+    too, so cat/pkg-1.0 installed only at slot 0 never satisfies a
+    cat/pkg:2 dependency even when the repo offers cat/pkg-1.0 in slot 2.
     Called
     from two places in resolve_pretend below: once before visibility/
     USE-dep filtering against the tree even begins (so a dependency
@@ -4285,7 +4291,9 @@ def _dependency_avoid_update_candidate(root, atom, atom_str, category, package, 
     all_matched = [
         all_by_str[m] for m in match_from_list(atom_str, all_candidate_strs) if m in all_by_str
     ]
-    installed_matched = [c for c in all_matched if c["version"] in installed]
+    installed_matched = [
+        c for c in all_matched if (c["version"], c["slot"]) in installed
+    ]
     if atom.use:
 
         def _built_use_dep_ok(c):
@@ -4585,7 +4593,9 @@ def resolve_pretend(
     # skipped here so that block still gets a chance to run. Mirrors
     # portage-repo/src/lib.rs's resolve_pretend exactly.
     if not update and not is_top_level and not excluded:
-        installed = installed_versions(root, category, package)
+        installed = {
+            (v, s) for v, s, _sub in installed_candidates(root, category, package)
+        }
         installed_best = _dependency_avoid_update_candidate(
             root, atom, atom_str, category, package, candidates, installed, config
         )
@@ -4703,13 +4713,10 @@ def resolve_pretend(
     # slot), not merely "this version exists in some slot". Without the
     # slot filter, `emerge -p cat/foo:1` with only foo:0 installed
     # mis-classifies a new-slot install as an upgrade/downgrade (real
-    # portage: "[ebuild NS]"). installed (version-only, all slots) is
-    # still what _dependency_avoid_update_candidate consumes -- its own
-    # avoid_update grounding is a separate concern, its slot-awareness a
-    # documented residual. Mirrors portage-repo/src/lib.rs's
+    # portage: "[ebuild NS]"). Mirrors portage-repo/src/lib.rs's
     # resolve_pretend exactly.
     installed_pairs = installed_candidates(root, category, package)
-    installed = [version for version, _slot, _sub_slot in installed_pairs]
+    installed = {(v, s) for v, s, _sub in installed_pairs}
 
     def _candidate_is_installed(c):
         # In-slot only, at that version, sub-slot ignored (real
@@ -5349,10 +5356,10 @@ def resolve_pretend_graph(
     sub-slot ignored), so requesting a slot the package isn't installed
     in resolves as "new" (with provenance["new_slot"] set when another
     slot IS installed), never as a bogus upgrade/downgrade off an
-    unrelated slot's version. Residual:
-    _dependency_avoid_update_candidate's own installed matching (the
-    not-update shortcut for a dependency atom, real avoid_update) still
-    compares version-only across all slots -- a documented cut.
+    unrelated slot's version. _dependency_avoid_update_candidate (the
+    not-update shortcut for a dependency atom, real avoid_update) is
+    slot-aware too now -- it matches an installed (version, slot) pair,
+    not merely a version present in some slot.
 
     `empty` (--emptytree/-e): forces `deep` on (real
     create_depgraph_params.py:178) and is threaded into every

@@ -1812,6 +1812,33 @@ def test_sub_slot_restricted_dependency_atom_rejects_a_real_mismatch(
     )
 
 
+def test_dependency_avoid_update_is_slot_aware(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Real `avoid_update` for a dependency atom returns an installed
+    package only when `vardb.match(atom)` -- which honours the atom's
+    slot -- has a hit. dev-libs/avoidslotpkg-1.0 is installed at SLOT=2
+    (a version/slot mismatch vs the repo ebuild's SLOT=1); a
+    `dev-libs/avoidslotpkg:1` dependency must NOT be short-circuited to
+    "already installed" just because version 1.0 exists in *some* slot --
+    slot 1 is genuinely new, so it resolves as `[ebuild NS]`."""
+    d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / "avoidslotpkg-1.0"
+    d.mkdir(parents=True)
+    (d / "CATEGORY").write_text("dev-libs\n")
+    (d / "SLOT").write_text("2\n")
+    (d / "repository").write_text("testrepo\n")
+    env = dict(fixture_env)
+    env["ROOT"] = str(tmp_path)
+    args = ["--pretend", "dev-libs/avoidslotconsumer"]
+    result = _run([str(emerge_binary)], args, env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild  NS    ] dev-libs/avoidslotpkg-1.0 [1.0]",
+        "[ebuild  N     ] dev-libs/avoidslotconsumer-1.0 ",
+    ]
+    assert _run(emerge_pretend_python, args, env).stdout == result.stdout
+
+
 def _slotbind_root(tmp_path):
     """A test-local ROOT: dev-libs/slotbindtarget-1.0 installed at
     SLOT="2" (sub-slot 2), plus two := consumers -- slotbindconsumer,

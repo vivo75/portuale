@@ -275,9 +275,12 @@ Ranked roughly by how self-contained each is.
    carried a correctness fix: `resolve_pretend`'s "already installed"
    checks are now filtered to the resolved candidate's own main slot, so
    a cross-slot request resolves as `New` instead of a bogus
-   `Upgrade`/`Downgrade`. **Residual:** `dependency_avoid_update_candidate`
-   (dependency-atom `avoid_update`) still matches version-only across
-   slots.
+   `Upgrade`/`Downgrade`. `dependency_avoid_update_candidate`
+   (dependency-atom `avoid_update`) **shipped slot-aware 2026-08-31**: it
+   now matches an installed `(version, slot)` pair (`installed_candidates`
+   triples), not a version present in any slot -- real `inst_pkg` comes
+   from `vardb.match(atom)`, which honours the atom's slot. New
+   `dev-libs/avoidslot{pkg,consumer}` fixtures.
    The `[ebuild I..]` interactive column (`GraphEntry::interactive` +
    new `evaluated_metadata_tokens`, real `output.py:833` +
    `PkgAttrDisplay.__str__`) **shipped 2026-08-27** too — `I` before the
