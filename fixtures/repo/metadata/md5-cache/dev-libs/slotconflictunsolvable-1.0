@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: pulls in dev-libs/slotconflictnewpin and dev-libs/slotconflictoldpin, whose RDEPENDs on dev-libs/slotconflicttarget:0 have no common satisfying version (>=2.0 vs <2.0) -- an unsolvable slot conflict that backtracking cannot reconcile
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=dev-libs/slotconflictnewpin dev-libs/slotconflictoldpin
+SLOT=0
+_md5_=0000000000000000000000000000000

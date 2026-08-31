@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: RDEPEND pins dev-libs/slotconflicttarget to >=2.0, reached first so slot 0 resolves to 2.0
+EAPI=8
+KEYWORDS=amd64
+RDEPEND=>=dev-libs/slotconflicttarget-2.0
+SLOT=0
+_md5_=0000000000000000000000000000000

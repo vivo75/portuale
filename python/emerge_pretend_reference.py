@@ -4610,6 +4610,7 @@ def resolve_pretend(
     autounmask_use=False,
     autounmask_license=False,
     autounmask_masks=False,
+    extra_constraints=(),
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -4863,6 +4864,29 @@ def resolve_pretend(
     ]
     by_str = dict(zip(candidate_strs, visible))
     matched = [by_str[m] for m in match_from_list(atom_str, candidate_strs) if m in by_str]
+
+    # Slot-conflict reconciliation (real `_process_slot_conflicts` /
+    # `_select_pkg`'s "all the atoms pulling this slot", not just the
+    # first): when `resolve_pretend_graph` re-resolves a package that hit
+    # a slot conflict, it passes every other parent atom that targeted the
+    # same `cat/pkg:slot` here -- the winning candidate must satisfy all of
+    # them at once. An empty list (the default at every ordinary call
+    # site) is a strict no-op. Mirrors portage-repo/src/lib.rs exactly.
+    if extra_constraints:
+        matched = [
+            c
+            for c in matched
+            if all(
+                match_from_list(
+                    con,
+                    [
+                        f"{category}/{package}-{c['version']}:{c['slot']}"
+                        f"/{c['sub_slot']}::{c['repo_name']}"
+                    ],
+                )
+                for con in extra_constraints
+            )
+        ]
 
     # USE deps (dev-libs/foo[bar]/[-bar], (+)/(-) defaults -- PMS 8.3.4):
     # a post-filter on top of match_from_list's own version/slot/repo
@@ -5608,1022 +5632,1122 @@ def resolve_pretend_graph(
     if empty:
         deep = True
 
-    # Guards against infinite requeuing (e.g. a dependency cycle): the
-    # exact same atom text is only ever resolved once -- deliberately
-    # coarser than the (category, package, slot) dedup below, which
-    # exists to decide whether a given slot has already been fully
-    # resolved, not just to guarantee termination.
-    visited_atoms = set()
-    # (category, package, slot) -> index into entries, for New/Upgrade
-    # outcomes only. The first atom to resolve a given slot "wins" (its
-    # version is what gets recursed into); every later atom landing on
-    # the same slot is checked against that already-resolved version
-    # (see slot_conflicts) instead of triggering a second, independent
-    # resolution.
-    resolved_slots = {}
-    # (category, package) -> already added an AlreadyInstalled/
-    # NoVisibleCandidate entry for it -- neither outcome carries a slot
-    # to usefully key repeats by.
-    other_outcomes = set()
-    # (category, package) -> already added a targets_running_root entry
-    # for it (see _resolve_root_deps_build_entries's own docstring).
-    # Deliberately separate from resolved_slots/other_outcomes above --
-    # those two dedup ROOT-targeted resolutions, and a package genuinely
-    # can need building into both ROOT (as an ordinary RDEPEND) and the
-    # running root (as some other package's own BDEPEND) at once.
-    root_deps_build_seen = set()
+    # Backtracking (real `_emerge/resolver/backtracking.py`): run the
+    # whole graph walk, and if it hits a *solvable* slot conflict (real
+    # `_process_slot_conflicts` -- one version can satisfy every parent
+    # atom that landed on the slot), record the extra constraints and
+    # re-run the entire walk from scratch. `entries` and every other
+    # per-pass accumulator is rebuilt each iteration; only
+    # `slot_constraints` (keyed by `cat/pkg`, the union of every atom
+    # text that targeted a conflicted package) and the counter survive.
+    # `_MAX_BACKTRACK` mirrors real portage's `--backtrack` default of 10
+    # (a later slice threads the actual flag). Mirrors
+    # portage-repo/src/lib.rs's resolve_pretend_graph exactly.
+    _MAX_BACKTRACK = 10
+    slot_constraints = {}
+    backtrack_iteration = 0
 
-    entries = []
-    # REQUIRED_USE (see the check further below, in the main BFS loop):
-    # real depgraph.py's own _add_pkg sets
-    # _dynamic_config._required_use_unsatisfied = True and returns 0 on
-    # a violation -- it does NOT abort the whole graph walk, unlike a
-    # top-level atom's own NoVisibleCandidate. Every violation
-    # encountered anywhere in the walk is collected here and the BFS
-    # keeps going; the whole call only fails at the very end, once every
-    # reachable candidate has had a chance to resolve (or fail) on its
-    # own terms -- matching real portage's own _unsatisfied_deps_for_
-    # display list (checked once, at the very end of the real resolve)
-    # rather than this pilot's own previous "abort on the first hit"
-    # shortcut. Mirrors portage-repo/src/lib.rs's own
-    # required_use_violations exactly.
-    required_use_violations = []
-    slot_conflicts = []
-    # --changed-deps-report: real _changed_deps_pkgs is a dict keyed by
-    # the installed Package object, so a repeat visit to the same
-    # installed category/package/version (e.g. via both a bare
-    # "dev-libs/foo" and an explicit "dev-libs/foo:0" atom text, or a
-    # diamond dependency) naturally collapses to one entry -- mirrored
-    # here with an explicit dedup set, keyed the same way, preserving
-    # first-encountered order (real dict iteration order) rather than
-    # sorting.
-    changed_deps_report_seen = set()
-    changed_deps_report_entries = []
-    # Each queued atom carries its own depth (0 for a directly-requested
-    # top-level atom, parent's depth + 1 for anything reached only via a
-    # dependency string) -- only consulted by _deep_recurses_at below,
-    # for deciding whether an AlreadyInstalled package's own further
-    # dependencies get walked; every other outcome ignores it entirely --
-    # and the (category, package) that pushed it, if any (None for a
-    # directly-requested top-level atom), only consulted by
-    # required_by_map below, for each entry's own required_by.
-    # A top-level atom has no "unevaluated" form distinct from itself (no
-    # parent to ever flip a flag on).
-    queue = deque((a, 0, None, None) for a in atoms)
-    pending_blockers = []
-    # Top-level atoms matched by package.provided -- see
-    # portage-repo/src/lib.rs's GraphResult::pprovided_atoms.
-    package_provided = config["package_provided"]
-    pprovided_atoms = []
-    # Real --autounmask changes applied during this walk -- see
-    # portage-repo/src/lib.rs's GraphResult::autounmask_keyword_changes /
-    # autounmask_use_changes.
-    autounmask_keyword_changes = []
-    autounmask_use_changes = []
-    autounmask_license_changes = []
-    autounmask_mask_changes = []
-    # (category, package) -> set of every distinct owner that reached it
-    # via a dependency string, accumulated separately from the BFS's own
-    # dedup/recursion decisions below (visited_atoms/resolved_slots/
-    # other_outcomes) so a diamond dependency's second (deduped) owner
-    # still gets recorded even though it never triggers a new
-    # resolution -- merged into entries in a single post-pass at the
-    # end, the same "accumulate now, merge once the whole graph is
-    # known" shape pending_blockers/resolve_blockers already use.
-    # Pilot-specific, no real portage equivalent -- see run()'s own
-    # --json handling for why it exists at all.
-    required_by_map = {}
+    def _graph_pass():
+        # Guards against infinite requeuing (e.g. a dependency cycle): the
+        # exact same atom text is only ever resolved once -- deliberately
+        # coarser than the (category, package, slot) dedup below, which
+        # exists to decide whether a given slot has already been fully
+        # resolved, not just to guarantee termination.
+        visited_atoms = set()
+        # (category, package, slot) -> index into entries, for New/Upgrade
+        # outcomes only. The first atom to resolve a given slot "wins" (its
+        # version is what gets recursed into); every later atom landing on
+        # the same slot is checked against that already-resolved version
+        # (see slot_conflicts) instead of triggering a second, independent
+        # resolution.
+        resolved_slots = {}
+        # (category, package) -> already added an AlreadyInstalled/
+        # NoVisibleCandidate entry for it -- neither outcome carries a slot
+        # to usefully key repeats by.
+        other_outcomes = set()
+        # (category, package) -> already added a targets_running_root entry
+        # for it (see _resolve_root_deps_build_entries's own docstring).
+        # Deliberately separate from resolved_slots/other_outcomes above --
+        # those two dedup ROOT-targeted resolutions, and a package genuinely
+        # can need building into both ROOT (as an ordinary RDEPEND) and the
+        # running root (as some other package's own BDEPEND) at once.
+        root_deps_build_seen = set()
 
-    while queue:
-        current_atom_str, depth, owner, unevaluated_atom = queue.popleft()
-        atom = _parse_atom(current_atom_str)
-        if atom is None:
-            continue
-        if atom.blocker:
-            continue
-        # package.provided (real dep_check.py:1052 for a dependency,
-        # depgraph.py:5497-5615 for a top-level target): an atom matched
-        # by a listed CPV is treated as already installed. A dependency
-        # is silently dropped (no entry, no required_by edge); a
-        # top-level atom is recorded for the WARNING block. Mirrors
-        # portage-repo/src/lib.rs's resolve_pretend_graph.
-        if package_provided and match_from_list(
-            Atom(current_atom_str, allow_wildcard=True), package_provided
-        ):
-            if depth == 0 and current_atom_str not in pprovided_atoms:
-                pprovided_atoms.append(current_atom_str)
-            continue
-        category, package = atom.cp.split("/", 1)
-        key = (category, package)
-        if owner is not None:
-            required_by_map.setdefault(key, set()).add(owner)
-        if current_atom_str in visited_atoms:
-            continue
-        visited_atoms.add(current_atom_str)
+        entries = []
+        # REQUIRED_USE (see the check further below, in the main BFS loop):
+        # real depgraph.py's own _add_pkg sets
+        # _dynamic_config._required_use_unsatisfied = True and returns 0 on
+        # a violation -- it does NOT abort the whole graph walk, unlike a
+        # top-level atom's own NoVisibleCandidate. Every violation
+        # encountered anywhere in the walk is collected here and the BFS
+        # keeps going; the whole call only fails at the very end, once every
+        # reachable candidate has had a chance to resolve (or fail) on its
+        # own terms -- matching real portage's own _unsatisfied_deps_for_
+        # display list (checked once, at the very end of the real resolve)
+        # rather than this pilot's own previous "abort on the first hit"
+        # shortcut. Mirrors portage-repo/src/lib.rs's own
+        # required_use_violations exactly.
+        required_use_violations = []
+        slot_conflicts = []
+        # --changed-deps-report: real _changed_deps_pkgs is a dict keyed by
+        # the installed Package object, so a repeat visit to the same
+        # installed category/package/version (e.g. via both a bare
+        # "dev-libs/foo" and an explicit "dev-libs/foo:0" atom text, or a
+        # diamond dependency) naturally collapses to one entry -- mirrored
+        # here with an explicit dedup set, keyed the same way, preserving
+        # first-encountered order (real dict iteration order) rather than
+        # sorting.
+        changed_deps_report_seen = set()
+        changed_deps_report_entries = []
+        # Each queued atom carries its own depth (0 for a directly-requested
+        # top-level atom, parent's depth + 1 for anything reached only via a
+        # dependency string) -- only consulted by _deep_recurses_at below,
+        # for deciding whether an AlreadyInstalled package's own further
+        # dependencies get walked; every other outcome ignores it entirely --
+        # and the (category, package) that pushed it, if any (None for a
+        # directly-requested top-level atom), only consulted by
+        # required_by_map below, for each entry's own required_by.
+        # A top-level atom has no "unevaluated" form distinct from itself (no
+        # parent to ever flip a flag on).
+        queue = deque((a, 0, None, None) for a in atoms)
+        pending_blockers = []
+        # Top-level atoms matched by package.provided -- see
+        # portage-repo/src/lib.rs's GraphResult::pprovided_atoms.
+        package_provided = config["package_provided"]
+        pprovided_atoms = []
+        # Real --autounmask changes applied during this walk -- see
+        # portage-repo/src/lib.rs's GraphResult::autounmask_keyword_changes /
+        # autounmask_use_changes.
+        autounmask_keyword_changes = []
+        autounmask_use_changes = []
+        autounmask_license_changes = []
+        autounmask_mask_changes = []
+        # (category, package) -> set of every distinct owner that reached it
+        # via a dependency string, accumulated separately from the BFS's own
+        # dedup/recursion decisions below (visited_atoms/resolved_slots/
+        # other_outcomes) so a diamond dependency's second (deduped) owner
+        # still gets recorded even though it never triggers a new
+        # resolution -- merged into entries in a single post-pass at the
+        # end, the same "accumulate now, merge once the whole graph is
+        # known" shape pending_blockers/resolve_blockers already use.
+        # Pilot-specific, no real portage equivalent -- see run()'s own
+        # --json handling for why it exists at all.
+        required_by_map = {}
+        # Backtracking: every atom text (bare or constrained) that targeted
+        # a given `cat/pkg` this pass. On a solvable slot conflict the whole
+        # set for the conflicted package becomes its `slot_constraints`
+        # entry for the next attempt. Mirrors portage-repo/src/lib.rs.
+        slot_want = {}
 
-        outcome = resolve_pretend(
-            repos,
-            root,
-            current_atom_str,
-            config,
-            newuse,
-            changed_use,
-            update,
-            excluded,
-            changed_deps,
-            with_bdeps,
-            changed_slot,
-            selective,
-            depth == 0,
-            usepkg,
-            usepkgonly,
-            binpkg_respect_use,
-            usepkg_exclude,
-            usepkg_include,
-            rebuilt_binaries,
-            rebuilt_binaries_timestamp,
-            newrepo,
-            empty,
-            getbinpkg,
-            autounmask_suggest_keywords,
-            autounmask_suggest_use,
-            autounmask_suggest_license,
-            autounmask_suggest_masks,
-        )
-
-        # Real --autounmask-use PART B *resolution*
-        # (_apply_parent_use_changes -> _show_unsatisfied_dep(
-        # collect_use_changes=True), depgraph.py:5820/6768): a dependency's
-        # use-dep was originally conditional on the *requesting parent's*
-        # own USE (opt?/opt= forms) and no candidate satisfies the
-        # evaluated form -- because the child's own flag is use.mask'd, so
-        # a child-side package.use flip (_suggested_use_flip) is
-        # impossible. Real portage flips the *parent's* conditional flag
-        # instead (_suggested_parent_use_candidate), re-resolves, and
-        # prints it in the same "necessary to proceed" USE block. This
-        # reference applies the one change and re-resolves only the freed
-        # dependency (real portage re-resolves the whole graph -- see the
-        # cut note); --autounmask-use=n suppresses it via the shared gate.
-        # Mirrors portage-repo/src/lib.rs's own inline block.
-        if (
-            outcome[0] == "no_visible_candidate"
-            and autounmask_suggest_use
-            and depth > 0
-            and owner is not None
-            and unevaluated_atom is not None
-        ):
-            _pfc = _suggested_parent_use_candidate(
-                repos, entries, unevaluated_atom, owner, config
-            )
-            _pstate = (
-                _parent_use_state(repos, entries, owner, config)
-                if _pfc is not None
-                else None
-            )
-            if _pfc is not None and _pstate is not None:
-                _pc, _pp, _pv, _target_use = _pfc
-                _parent_cand, _piuse, _parent_use, _pru = _pstate
-                _new_parent_use = set(_parent_use)
-                for _flag, _want in _target_use:
-                    (_new_parent_use.add if _want else _new_parent_use.discard)(_flag)
-                _re_atom = str(
-                    _parse_atom(unevaluated_atom).evaluate_conditionals(_new_parent_use)
-                )
-                _re_parsed = _parse_atom(_re_atom)
-                if _re_parsed is not None:
-                    _re_outcome = resolve_pretend(
-                        repos,
-                        root,
-                        _re_atom,
-                        config,
-                        newuse,
-                        changed_use,
-                        update,
-                        excluded,
-                        changed_deps,
-                        with_bdeps,
-                        changed_slot,
-                        selective,
-                        depth == 0,
-                        usepkg,
-                        usepkgonly,
-                        binpkg_respect_use,
-                        usepkg_exclude,
-                        usepkg_include,
-                        rebuilt_binaries,
-                        rebuilt_binaries_timestamp,
-                        newrepo,
-                        empty,
-                        getbinpkg,
-                        autounmask_suggest_keywords,
-                        autounmask_suggest_use,
-                        autounmask_suggest_license,
-                        autounmask_suggest_masks,
-                    )
-                    if _re_outcome[0] != "no_visible_candidate":
-                        outcome = _re_outcome
-                        current_atom_str = _re_atom
-                        atom = _re_parsed
-                        _token = " ".join(
-                            f if e else f"-{f}" for f, e in _target_use
-                        )
-                        autounmask_use_changes.append(
-                            {
-                                "atom": _autounmask_use_atom_form(
-                                    _parent_cand,
-                                    list_candidates(repos, _pc, _pp),
-                                    _pc,
-                                    _pp,
-                                    config,
-                                ),
-                                "token": _token,
-                                "dep_chain": _autounmask_dep_chain(
-                                    (_pc, _pp), "", top_level, entries
-                                ),
-                            }
-                        )
-                        _pflip_display = sorted(
-                            (
-                                (t.lstrip("+-"), t.lstrip("+-") in _new_parent_use)
-                                for t in _parent_cand.get("iuse", "").split()
-                            ),
-                            key=lambda p: _alnum_sort_key(p[0]),
-                        )
-                        for _i, _e in enumerate(entries):
-                            if _e[0] == _pc and _e[1] == _pp:
-                                entries[_i] = _e[:5] + (_pflip_display,) + _e[6:]
-                                break
-
-        # --changed-deps-report: real portage stays "completely silent"
-        # whenever --changed-deps itself is also given (its own
-        # collected _changed_deps_pkgs dict is discarded unread by
-        # _changed_deps_report's own early return in that case) -- so,
-        # rather than collecting anything now and discarding it at print
-        # time, this simply never bothers computing deps_changed at all
-        # when changed_deps is true, an equivalent, simpler
-        # no-op-preserving shortcut. Only already_installed/reinstall
-        # outcomes name a version that's genuinely installed right now
-        # (the only case _deps_changed -- a vdb-vs-current-ebuild
-        # comparison for one specific version -- is meaningful for); a
-        # reinstall here can only be for newuse/changed_use/changed_slot
-        # (never for changed_deps itself, since that's false in this
-        # branch), so this still fires independently of those other
-        # reasons, matching real portage's own freely-combinable
-        # reinstall triggers.
-        if changed_deps_report and not changed_deps:
-            installed_version = None
-            if outcome[0] in ("already_installed", "reinstall"):
-                installed_version = outcome[1]
-            if installed_version is not None:
-                dedup_key = (category, package, installed_version)
-                if dedup_key not in changed_deps_report_seen:
-                    changed_deps_report_seen.add(dedup_key)
-                    if _deps_changed(
-                        root, repos, category, package, installed_version, with_bdeps
-                    ):
-                        repo_candidates = [
-                            c
-                            for c in list_candidates(repos, category, package)
-                            if c["version"] == installed_version
-                        ]
-                        if repo_candidates:
-                            resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
-                            changed_deps_report_entries.append(
-                                {
-                                    "category": category,
-                                    "package": package,
-                                    "version": installed_version,
-                                    "repo_name": resolved["repo_name"],
-                                }
-                            )
-
-        # A top-level atom (as opposed to a dependency reached while
-        # recursing) with no visible candidate aborts the whole call --
-        # matching real portage's own depgraph.py behavior for an
-        # unsatisfiable target, not the "report and keep going" treatment
-        # a dependency's own NoVisibleCandidate gets a few lines down.
-        if current_atom_str in top_level and outcome[0] == "no_visible_candidate":
-            message = f'there are no ebuilds to satisfy "{current_atom_str}".'
-            # --autounmask's own keyword-suggestion sub-feature (see
-            # this function's own docstring for the full on/off
-            # default-resolution logic): only even attempted when
-            # enabled, and only ever finds something to suggest when a
-            # real candidate exists that's masked by KEYWORDS alone
-            # (see _keyword_masked_only's own docstring) -- a candidate
-            # masked by package.mask/license/etc. too gets no
-            # suggestion here, matching real portage's own "only
-            # suggest a change that would actually fix it" spirit.
-            if autounmask_suggest_keywords:
-                suggestion = _suggested_keyword_candidate(repos, category, package, config)
-                if suggestion is not None:
-                    version, keyword = suggestion
-                    message += (
-                        f"\nnote: {category}/{package}-{version} exists but is "
-                        f"masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding "
-                        f'"{category}/{package} {keyword}" to package.accept_keywords'
-                    )
-            # --autounmask-use's own suggestion sub-feature -- same
-            # gating/"only suggest a fix that would actually work"
-            # spirit as the keyword one just above. Message format
-            # mirrors real package.use suggestion syntax
-            # (=category/package-version flag -flag).
-            if autounmask_suggest_use:
-                use_suggestion = _suggested_use_candidate(repos, category, package, atom, config)
-                if use_suggestion is not None:
-                    version, flip = use_suggestion
-                    adjustments = " ".join(
-                        flag if enabled else f"-{flag}" for flag, enabled in flip
-                    )
-                    message += (
-                        f"\nnote: {category}/{package}-{version} exists but its USE flags "
-                        f"don't satisfy this atom; --autounmask-use suggests adding "
-                        f'"={category}/{package}-{version} {adjustments}" to package.use'
-                    )
-            # --autounmask-license's own suggestion sub-feature.
-            if autounmask_suggest_license:
-                lic_suggestion = _suggested_license_candidate(
-                    repos, category, package, config
-                )
-                if lic_suggestion is not None:
-                    version, licenses = lic_suggestion
-                    message += (
-                        f"\nnote: {category}/{package}-{version} exists but its LICENSE "
-                        f"is not accepted; --autounmask-license suggests adding "
-                        f'"={category}/{package}-{version} {licenses}" to package.license'
-                    )
-            # --autounmask-keep-masks=n's own suggestion sub-feature.
-            if autounmask_suggest_masks:
-                mask_version = _suggested_mask_candidate(repos, category, package, config)
-                if mask_version is not None:
-                    message += (
-                        f"\nnote: {category}/{package}-{mask_version} exists but is "
-                        f"package.mask'd; --autounmask-keep-masks=n suggests adding "
-                        f'"={category}/{package}-{mask_version}" to package.unmask'
-                    )
-            raise ResolutionError(message)
-
-        if outcome[0] == "new":
-            version = outcome[1]
-        elif outcome[0] in ("upgrade", "downgrade"):
-            version = outcome[2]
-        elif outcome[0] == "reinstall":
-            version = outcome[1]
-        else:
-            # AlreadyInstalled / NoVisibleCandidate: no slot to key a
-            # repeat by, so dedup on category/package alone, same as v1
-            # always did before slot-aware resolution existed.
-            if key in other_outcomes:
+        while queue:
+            current_atom_str, depth, owner, unevaluated_atom = queue.popleft()
+            atom = _parse_atom(current_atom_str)
+            if atom is None:
                 continue
-            other_outcomes.add(key)
-            # --deep: an AlreadyInstalled package's own further
-            # dependencies are walked too, once `deep` allows recursion
-            # at this package's own depth (see _deep_recurses_at) --
-            # never for NoVisibleCandidate (no version to look anything
-            # up by), and never when `nodeps` disables the dependency
-            # walk entirely, matching every other outcome's own `nodeps`
-            # handling further below.
-            if outcome[0] == "already_installed" and not nodeps and _deep_recurses_at(deep, depth):
-                _enqueue_dependencies(
-                    repos,
-                    category,
-                    package,
-                    outcome[1],
-                    config,
-                    depth + 1,
-                    queue,
-                    pending_blockers,
-                    key,
-                    outcome[1],
-                    with_bdeps,
-                    root_deps_running_root,
-                    entries,
-                    root_deps_build_seen,
-                )
-            # --autounmask's own keyword-suggestion sub-feature, extended
-            # here to a *dependency's* own NoVisibleCandidate -- see
-            # portage-repo/src/lib.rs's GraphEntry::keyword_suggestion own
-            # doc comment.
-            keyword_suggestion = None
-            if outcome[0] == "no_visible_candidate" and autounmask_suggest_keywords:
-                keyword_suggestion = _suggested_keyword_candidate(repos, category, package, config)
-            # --autounmask-use's own suggestion sub-feature -- see
-            # portage-repo/src/lib.rs's GraphEntry::use_suggestion own
-            # doc comment. `atom.use` is the dependency atom's own
-            # use-dep spec (already conditional-evaluated by
-            # _enqueue_flat_deps before this atom was ever queued, so
-            # only plain flag/-flag forms survive to be checked here).
-            use_suggestion = None
-            if outcome[0] == "no_visible_candidate" and autounmask_suggest_use:
-                use_suggestion = _suggested_use_candidate(repos, category, package, atom, config)
-            # --autounmask-use's own second, architecturally distinct
-            # suggestion sub-feature -- see
-            # _suggested_parent_use_candidate's own docstring. Only ever
-            # attempted when this atom actually had a conditional
-            # use-dep evaluated away (unevaluated_atom is not None) and
-            # has a real parent to flip a flag on (owner is always set
-            # here: a top-level atom's own no_visible_candidate already
-            # aborted the whole call via the fatal check above, so any
-            # no_visible_candidate reaching this point is necessarily a
-            # dependency's own, which always has an owner).
-            parent_use_suggestion = None
+            if atom.blocker:
+                continue
+            # package.provided (real dep_check.py:1052 for a dependency,
+            # depgraph.py:5497-5615 for a top-level target): an atom matched
+            # by a listed CPV is treated as already installed. A dependency
+            # is silently dropped (no entry, no required_by edge); a
+            # top-level atom is recorded for the WARNING block. Mirrors
+            # portage-repo/src/lib.rs's resolve_pretend_graph.
+            if package_provided and match_from_list(
+                Atom(current_atom_str, allow_wildcard=True), package_provided
+            ):
+                if depth == 0 and current_atom_str not in pprovided_atoms:
+                    pprovided_atoms.append(current_atom_str)
+                continue
+            category, package = atom.cp.split("/", 1)
+            key = (category, package)
+            if owner is not None:
+                required_by_map.setdefault(key, set()).add(owner)
+            if current_atom_str in visited_atoms:
+                continue
+            visited_atoms.add(current_atom_str)
+            # Backtracking: record this atom as one of the constraints
+            # pulling `cat/pkg` (real `_select_pkg_highest_available` sees
+            # the whole atom set for a package, not just the first).
+            slot_want.setdefault(key, []).append(current_atom_str)
+
+            # Backtracking: if an earlier attempt hit a *solvable* slot
+            # conflict on this `cat/pkg`, every parent atom that targeted it
+            # is now enforced together, so this attempt picks the one
+            # version that satisfies all of them and the conflict
+            # disappears.
+            extra_constraints = slot_constraints.get(key, ())
+
+            outcome = resolve_pretend(
+                repos,
+                root,
+                current_atom_str,
+                config,
+                newuse,
+                changed_use,
+                update,
+                excluded,
+                changed_deps,
+                with_bdeps,
+                changed_slot,
+                selective,
+                depth == 0,
+                usepkg,
+                usepkgonly,
+                binpkg_respect_use,
+                usepkg_exclude,
+                usepkg_include,
+                rebuilt_binaries,
+                rebuilt_binaries_timestamp,
+                newrepo,
+                empty,
+                getbinpkg,
+                autounmask_suggest_keywords,
+                autounmask_suggest_use,
+                autounmask_suggest_license,
+                autounmask_suggest_masks,
+                extra_constraints,
+            )
+
+            # Real --autounmask-use PART B *resolution*
+            # (_apply_parent_use_changes -> _show_unsatisfied_dep(
+            # collect_use_changes=True), depgraph.py:5820/6768): a dependency's
+            # use-dep was originally conditional on the *requesting parent's*
+            # own USE (opt?/opt= forms) and no candidate satisfies the
+            # evaluated form -- because the child's own flag is use.mask'd, so
+            # a child-side package.use flip (_suggested_use_flip) is
+            # impossible. Real portage flips the *parent's* conditional flag
+            # instead (_suggested_parent_use_candidate), re-resolves, and
+            # prints it in the same "necessary to proceed" USE block. This
+            # reference applies the one change and re-resolves only the freed
+            # dependency (real portage re-resolves the whole graph -- see the
+            # cut note); --autounmask-use=n suppresses it via the shared gate.
+            # Mirrors portage-repo/src/lib.rs's own inline block.
             if (
                 outcome[0] == "no_visible_candidate"
                 and autounmask_suggest_use
+                and depth > 0
                 and owner is not None
                 and unevaluated_atom is not None
             ):
-                parent_use_suggestion = _suggested_parent_use_candidate(
+                _pfc = _suggested_parent_use_candidate(
                     repos, entries, unevaluated_atom, owner, config
                 )
+                _pstate = (
+                    _parent_use_state(repos, entries, owner, config)
+                    if _pfc is not None
+                    else None
+                )
+                if _pfc is not None and _pstate is not None:
+                    _pc, _pp, _pv, _target_use = _pfc
+                    _parent_cand, _piuse, _parent_use, _pru = _pstate
+                    _new_parent_use = set(_parent_use)
+                    for _flag, _want in _target_use:
+                        (_new_parent_use.add if _want else _new_parent_use.discard)(_flag)
+                    _re_atom = str(
+                        _parse_atom(unevaluated_atom).evaluate_conditionals(_new_parent_use)
+                    )
+                    _re_parsed = _parse_atom(_re_atom)
+                    if _re_parsed is not None:
+                        _re_outcome = resolve_pretend(
+                            repos,
+                            root,
+                            _re_atom,
+                            config,
+                            newuse,
+                            changed_use,
+                            update,
+                            excluded,
+                            changed_deps,
+                            with_bdeps,
+                            changed_slot,
+                            selective,
+                            depth == 0,
+                            usepkg,
+                            usepkgonly,
+                            binpkg_respect_use,
+                            usepkg_exclude,
+                            usepkg_include,
+                            rebuilt_binaries,
+                            rebuilt_binaries_timestamp,
+                            newrepo,
+                            empty,
+                            getbinpkg,
+                            autounmask_suggest_keywords,
+                            autounmask_suggest_use,
+                            autounmask_suggest_license,
+                            autounmask_suggest_masks,
+                        )
+                        if _re_outcome[0] != "no_visible_candidate":
+                            outcome = _re_outcome
+                            current_atom_str = _re_atom
+                            atom = _re_parsed
+                            _token = " ".join(
+                                f if e else f"-{f}" for f, e in _target_use
+                            )
+                            autounmask_use_changes.append(
+                                {
+                                    "atom": _autounmask_use_atom_form(
+                                        _parent_cand,
+                                        list_candidates(repos, _pc, _pp),
+                                        _pc,
+                                        _pp,
+                                        config,
+                                    ),
+                                    "token": _token,
+                                    "dep_chain": _autounmask_dep_chain(
+                                        (_pc, _pp), "", top_level, entries
+                                    ),
+                                }
+                            )
+                            _pflip_display = sorted(
+                                (
+                                    (t.lstrip("+-"), t.lstrip("+-") in _new_parent_use)
+                                    for t in _parent_cand.get("iuse", "").split()
+                                ),
+                                key=lambda p: _alnum_sort_key(p[0]),
+                            )
+                            for _i, _e in enumerate(entries):
+                                if _e[0] == _pc and _e[1] == _pp:
+                                    entries[_i] = _e[:5] + (_pflip_display,) + _e[6:]
+                                    break
+
+            # --changed-deps-report: real portage stays "completely silent"
+            # whenever --changed-deps itself is also given (its own
+            # collected _changed_deps_pkgs dict is discarded unread by
+            # _changed_deps_report's own early return in that case) -- so,
+            # rather than collecting anything now and discarding it at print
+            # time, this simply never bothers computing deps_changed at all
+            # when changed_deps is true, an equivalent, simpler
+            # no-op-preserving shortcut. Only already_installed/reinstall
+            # outcomes name a version that's genuinely installed right now
+            # (the only case _deps_changed -- a vdb-vs-current-ebuild
+            # comparison for one specific version -- is meaningful for); a
+            # reinstall here can only be for newuse/changed_use/changed_slot
+            # (never for changed_deps itself, since that's false in this
+            # branch), so this still fires independently of those other
+            # reasons, matching real portage's own freely-combinable
+            # reinstall triggers.
+            if changed_deps_report and not changed_deps:
+                installed_version = None
+                if outcome[0] in ("already_installed", "reinstall"):
+                    installed_version = outcome[1]
+                if installed_version is not None:
+                    dedup_key = (category, package, installed_version)
+                    if dedup_key not in changed_deps_report_seen:
+                        changed_deps_report_seen.add(dedup_key)
+                        if _deps_changed(
+                            root, repos, category, package, installed_version, with_bdeps
+                        ):
+                            repo_candidates = [
+                                c
+                                for c in list_candidates(repos, category, package)
+                                if c["version"] == installed_version
+                            ]
+                            if repo_candidates:
+                                resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
+                                changed_deps_report_entries.append(
+                                    {
+                                        "category": category,
+                                        "package": package,
+                                        "version": installed_version,
+                                        "repo_name": resolved["repo_name"],
+                                    }
+                                )
+
+            # A top-level atom (as opposed to a dependency reached while
+            # recursing) with no visible candidate aborts the whole call --
+            # matching real portage's own depgraph.py behavior for an
+            # unsatisfiable target, not the "report and keep going" treatment
+            # a dependency's own NoVisibleCandidate gets a few lines down.
+            if current_atom_str in top_level and outcome[0] == "no_visible_candidate":
+                message = f'there are no ebuilds to satisfy "{current_atom_str}".'
+                # --autounmask's own keyword-suggestion sub-feature (see
+                # this function's own docstring for the full on/off
+                # default-resolution logic): only even attempted when
+                # enabled, and only ever finds something to suggest when a
+                # real candidate exists that's masked by KEYWORDS alone
+                # (see _keyword_masked_only's own docstring) -- a candidate
+                # masked by package.mask/license/etc. too gets no
+                # suggestion here, matching real portage's own "only
+                # suggest a change that would actually fix it" spirit.
+                if autounmask_suggest_keywords:
+                    suggestion = _suggested_keyword_candidate(repos, category, package, config)
+                    if suggestion is not None:
+                        version, keyword = suggestion
+                        message += (
+                            f"\nnote: {category}/{package}-{version} exists but is "
+                            f"masked by KEYWORDS; --autounmask-keep-keywords=n suggests adding "
+                            f'"{category}/{package} {keyword}" to package.accept_keywords'
+                        )
+                # --autounmask-use's own suggestion sub-feature -- same
+                # gating/"only suggest a fix that would actually work"
+                # spirit as the keyword one just above. Message format
+                # mirrors real package.use suggestion syntax
+                # (=category/package-version flag -flag).
+                if autounmask_suggest_use:
+                    use_suggestion = _suggested_use_candidate(repos, category, package, atom, config)
+                    if use_suggestion is not None:
+                        version, flip = use_suggestion
+                        adjustments = " ".join(
+                            flag if enabled else f"-{flag}" for flag, enabled in flip
+                        )
+                        message += (
+                            f"\nnote: {category}/{package}-{version} exists but its USE flags "
+                            f"don't satisfy this atom; --autounmask-use suggests adding "
+                            f'"={category}/{package}-{version} {adjustments}" to package.use'
+                        )
+                # --autounmask-license's own suggestion sub-feature.
+                if autounmask_suggest_license:
+                    lic_suggestion = _suggested_license_candidate(
+                        repos, category, package, config
+                    )
+                    if lic_suggestion is not None:
+                        version, licenses = lic_suggestion
+                        message += (
+                            f"\nnote: {category}/{package}-{version} exists but its LICENSE "
+                            f"is not accepted; --autounmask-license suggests adding "
+                            f'"={category}/{package}-{version} {licenses}" to package.license'
+                        )
+                # --autounmask-keep-masks=n's own suggestion sub-feature.
+                if autounmask_suggest_masks:
+                    mask_version = _suggested_mask_candidate(repos, category, package, config)
+                    if mask_version is not None:
+                        message += (
+                            f"\nnote: {category}/{package}-{mask_version} exists but is "
+                            f"package.mask'd; --autounmask-keep-masks=n suggests adding "
+                            f'"={category}/{package}-{mask_version}" to package.unmask'
+                        )
+                raise ResolutionError(message)
+
+            if outcome[0] == "new":
+                version = outcome[1]
+            elif outcome[0] in ("upgrade", "downgrade"):
+                version = outcome[2]
+            elif outcome[0] == "reinstall":
+                version = outcome[1]
+            else:
+                # AlreadyInstalled / NoVisibleCandidate: no slot to key a
+                # repeat by, so dedup on category/package alone, same as v1
+                # always did before slot-aware resolution existed.
+                if key in other_outcomes:
+                    continue
+                other_outcomes.add(key)
+                # --deep: an AlreadyInstalled package's own further
+                # dependencies are walked too, once `deep` allows recursion
+                # at this package's own depth (see _deep_recurses_at) --
+                # never for NoVisibleCandidate (no version to look anything
+                # up by), and never when `nodeps` disables the dependency
+                # walk entirely, matching every other outcome's own `nodeps`
+                # handling further below.
+                if outcome[0] == "already_installed" and not nodeps and _deep_recurses_at(deep, depth):
+                    _enqueue_dependencies(
+                        repos,
+                        category,
+                        package,
+                        outcome[1],
+                        config,
+                        depth + 1,
+                        queue,
+                        pending_blockers,
+                        key,
+                        outcome[1],
+                        with_bdeps,
+                        root_deps_running_root,
+                        entries,
+                        root_deps_build_seen,
+                    )
+                # --autounmask's own keyword-suggestion sub-feature, extended
+                # here to a *dependency's* own NoVisibleCandidate -- see
+                # portage-repo/src/lib.rs's GraphEntry::keyword_suggestion own
+                # doc comment.
+                keyword_suggestion = None
+                if outcome[0] == "no_visible_candidate" and autounmask_suggest_keywords:
+                    keyword_suggestion = _suggested_keyword_candidate(repos, category, package, config)
+                # --autounmask-use's own suggestion sub-feature -- see
+                # portage-repo/src/lib.rs's GraphEntry::use_suggestion own
+                # doc comment. `atom.use` is the dependency atom's own
+                # use-dep spec (already conditional-evaluated by
+                # _enqueue_flat_deps before this atom was ever queued, so
+                # only plain flag/-flag forms survive to be checked here).
+                use_suggestion = None
+                if outcome[0] == "no_visible_candidate" and autounmask_suggest_use:
+                    use_suggestion = _suggested_use_candidate(repos, category, package, atom, config)
+                # --autounmask-use's own second, architecturally distinct
+                # suggestion sub-feature -- see
+                # _suggested_parent_use_candidate's own docstring. Only ever
+                # attempted when this atom actually had a conditional
+                # use-dep evaluated away (unevaluated_atom is not None) and
+                # has a real parent to flip a flag on (owner is always set
+                # here: a top-level atom's own no_visible_candidate already
+                # aborted the whole call via the fatal check above, so any
+                # no_visible_candidate reaching this point is necessarily a
+                # dependency's own, which always has an owner).
+                parent_use_suggestion = None
+                if (
+                    outcome[0] == "no_visible_candidate"
+                    and autounmask_suggest_use
+                    and owner is not None
+                    and unevaluated_atom is not None
+                ):
+                    parent_use_suggestion = _suggested_parent_use_candidate(
+                        repos, entries, unevaluated_atom, owner, config
+                    )
+                entries.append(
+                    (
+                        category,
+                        package,
+                        outcome,
+                        [],
+                        None,
+                        [],
+                        [],
+                        "ebuild",
+                        {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
+                        keyword_suggestion,
+                        use_suggestion,
+                        parent_use_suggestion,
+                        False,
+                    )
+                )
+                continue
+
+            # The resolved version may have come from any of `repos`, or
+            # from PKGDIR (--usepkg/--usepkgonly), so re-derive which one it
+            # actually lives in -- reusing list_candidates/
+            # list_binary_candidates rather than threading a repo location
+            # back out of resolve_pretend's outcome tuple, since more than
+            # one source could in principle carry the identical version. The
+            # ordinary repo_priority tie-break already does the right thing
+            # with no special-casing: a binary candidate's own repo_priority
+            # (list_binary_candidates) is deliberately float("-inf"), lower
+            # than any real repo, so an identical-version ebuild naturally
+            # wins the tie. Mirrors portage-repo/src/lib.rs exactly.
+            repo_candidates = [] if usepkgonly else list_candidates(repos, category, package)
+            if usepkg or usepkgonly:
+                local_index = _local_binpkg_index(config)
+                binary_candidates = list_binary_candidates(local_index, category, package)
+                if getbinpkg:
+                    binary_candidates = binary_candidates + _list_remote_binary_candidates(
+                        config.get("binrepos", []), root, local_index, category, package
+                    )
+                repo_candidates = repo_candidates + _filter_usepkg_exclude_include(
+                    binary_candidates, category, package, usepkg_exclude, usepkg_include
+                )
+            repo_candidates = [c for c in repo_candidates if c["version"] == version]
+            if not repo_candidates:
+                continue
+            resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
+            slot = resolved["slot"]
+            sub_slot = resolved["sub_slot"]
+            repo_location = resolved["repo_location"]
+            repo_name = resolved["repo_name"]
+            candidate_source = resolved["source"]
+
+            slot_key = (category, package, slot)
+            if slot_key in resolved_slots:
+                # This exact category/package/slot was already resolved by
+                # an earlier atom. If the current atom's own constraint
+                # doesn't accept that already-resolved version, it's a real
+                # slot conflict -- report it and move on, without a second,
+                # independent resolution or any attempt to reconcile the two.
+                existing_idx = resolved_slots[slot_key]
+                existing_outcome = entries[existing_idx][2]
+                existing_version = (
+                    existing_outcome[1]
+                    if existing_outcome[0] in ("new", "reinstall")
+                    else existing_outcome[2]
+                )
+                existing_str = f"{category}/{package}-{existing_version}:{slot}"
+                satisfied = bool(match_from_list(current_atom_str, [existing_str]))
+                if not satisfied:
+                    slot_conflicts.append(
+                        {
+                            "category": category,
+                            "package": package,
+                            "slot": slot,
+                            "resolved_version": existing_version,
+                            "conflicting_atom": current_atom_str,
+                        }
+                    )
+                continue
+            entry_idx = len(entries)
+            resolved_slots[slot_key] = entry_idx
+            provenance = _visibility_provenance(resolved, category, package, config)
+            # Real output.py:gen_mask_str's -v bracket-mask column -- stashed
+            # on the provenance dict (not serialized by _entry_to_json, which
+            # picks out specific keys) rather than growing the entry tuple.
+            # Mirrors portage-repo/src/lib.rs's GraphEntry::keyword_mask.
+            provenance["keyword_mask"] = _keyword_mask_marker(
+                resolved, category, package, config, provenance["mask_entry"]
+            )
+            # Real --autounmask keyword resolution: this candidate resolved
+            # only because resolve_pretend was told to accept a KEYWORDS-alone
+            # mask (_keyword_masked_only). Record the implicit `=<cpv> <kw>`
+            # change (real depgraph.py::_display_autounmask's
+            # unstable_keyword_msg + _get_dep_chain_as_comment;
+            # autounmask_unrestricted_atoms defaults to "n", so always the
+            # exact-version `=` form). Mirrors portage-repo/src/lib.rs.
+            if autounmask_suggest_keywords and _keyword_masked_only(
+                resolved, category, package, config
+            ):
+                _kw = _suggested_keyword(resolved)
+                if _kw is not None:
+                    autounmask_keyword_changes.append(
+                        {
+                            "atom": f"={category}/{package}-{version}",
+                            "token": _kw,
+                            "dep_chain": _autounmask_dep_chain(
+                                owner, current_atom_str, top_level, entries
+                            ),
+                        }
+                    )
+            # Real --autounmask-license: this candidate resolved only because
+            # resolve_pretend was told to accept a LICENSE-alone mask
+            # (_license_masked_only). Record the missing licenses (real
+            # _display_autounmask's license_msg; check_if_latest(pkg) without
+            # check_visibility -> the `>=` / `>=…:slot` / `=` form).
+            if autounmask_suggest_license and _license_masked_only(
+                resolved, category, package, config
+            ):
+                _cs = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
+                _missing = _missing_licenses(resolved, category, package, _cs, config)
+                if _missing:
+                    _all = list_candidates(repos, category, package)
+                    autounmask_license_changes.append(
+                        {
+                            "atom": _check_if_latest_atom_form(
+                                resolved, _all, category, package, config, False
+                            ),
+                            "token": " ".join(_missing),
+                            "dep_chain": _autounmask_dep_chain(
+                                owner, current_atom_str, top_level, entries
+                            ),
+                        }
+                    )
+            # Real --autounmask-keep-masks=n: this candidate resolved only
+            # because resolve_pretend was told to accept a package.mask-alone
+            # mask (_mask_masked_only). Record `=<cpv>` (real p_mask_change_msg;
+            # no token, always the exact-version form).
+            if autounmask_suggest_masks and _mask_masked_only(
+                resolved, category, package, config
+            ):
+                autounmask_mask_changes.append(
+                    {
+                        "atom": f"={category}/{package}-{version}",
+                        "token": "",
+                        "dep_chain": _autounmask_dep_chain(
+                            owner, current_atom_str, top_level, entries
+                        ),
+                    }
+                )
+            # Real output.py::_get_installed_best's own new_slot flag (the
+            # "S" bracket column, PkgAttrDisplay.new_slot): a "new" entry
+            # whose category/package is installed in some *other* slot (the
+            # in-slot new/upgrade decision already happened inside
+            # resolve_pretend, so "new" here means nothing is installed in
+            # *this* slot). Stashed on provenance like keyword_mask above.
+            # Mirrors portage-repo/src/lib.rs's GraphEntry::new_slot.
+            provenance["new_slot"] = outcome[0] == "new" and bool(
+                installed_candidates(root, category, package)
+            )
+            # Real output.py:833: `if "interactive" in pkg.properties and
+            # pkg.operation == "merge"`. pkg.properties is PROPERTIES after
+            # real USE-conditional evaluation; every graph entry reaching
+            # this point is a merge (new/upgrade/downgrade/reinstall -- the
+            # only outcomes resolved_slots ever indexes), so no separate
+            # operation check is needed. Stashed on provenance like
+            # keyword_mask/new_slot above. Mirrors portage-repo/src/lib.rs's
+            # GraphEntry::interactive.
+            _candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
+            provenance["interactive"] = "interactive" in _evaluated_metadata_tokens(
+                resolved.get("properties", ""), resolved, category, package, _candidate_str, config
+            )
+            # Real output.py:633: `not pkg.built and "fetch" in pkg.restrict`
+            # (ebuild candidates only). fetch_restrict_satisfied is filled in
+            # below, once metadata (SRC_URI) + use_flags are read. Stashed on
+            # provenance (shared dict, mutated after append) like interactive.
+            # Mirrors portage-repo/src/lib.rs's GraphEntry::fetch_restrict.
+            provenance["fetch_restrict"] = candidate_source != "binary" and (
+                "fetch"
+                in _evaluated_metadata_tokens(
+                    resolved.get("restrict", ""), resolved, category, package, _candidate_str, config
+                )
+            )
+            provenance["fetch_restrict_satisfied"] = False
+            # Real output.py:648: attr_display.remote_binary = pkg.remote (the
+            # `g` bracket column). Mirrors portage-repo/src/lib.rs's
+            # GraphEntry::remote_binary.
+            provenance["remote_binary"] = bool(resolved.get("remote"))
+            # Real _append_slot / _append_repository / convert_myoldbest
+            # inputs (verbosity 3 -- emerge -pv), stashed on provenance like
+            # new_slot/interactive above. Mirrors portage-repo/src/lib.rs's
+            # GraphEntry::sub_slot / repo_name / oldbest.
+            provenance["sub_slot"] = sub_slot
+            provenance["repo_name"] = repo_name
+            if outcome[0] in ("upgrade", "downgrade"):
+                _ob = [r for r in _installed_refs(root, category, package) if r["slot"] == slot]
+            elif outcome[0] == "new" and provenance["new_slot"]:
+                _ob = _installed_refs(root, category, package)
+            else:
+                _ob = []
+            _ob.sort(key=functools.cmp_to_key(lambda a, b: vercmp(a["version"], b["version"]) or 0))
+            provenance["oldbest"] = _ob
             entries.append(
                 (
                     category,
                     package,
                     outcome,
                     [],
+                    slot,
+                    [],
+                    [],
+                    candidate_source,
+                    provenance,
                     None,
-                    [],
-                    [],
-                    "ebuild",
-                    {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
-                    keyword_suggestion,
-                    use_suggestion,
-                    parent_use_suggestion,
+                    None,
+                    None,
                     False,
                 )
             )
-            continue
 
-        # The resolved version may have come from any of `repos`, or
-        # from PKGDIR (--usepkg/--usepkgonly), so re-derive which one it
-        # actually lives in -- reusing list_candidates/
-        # list_binary_candidates rather than threading a repo location
-        # back out of resolve_pretend's outcome tuple, since more than
-        # one source could in principle carry the identical version. The
-        # ordinary repo_priority tie-break already does the right thing
-        # with no special-casing: a binary candidate's own repo_priority
-        # (list_binary_candidates) is deliberately float("-inf"), lower
-        # than any real repo, so an identical-version ebuild naturally
-        # wins the tie. Mirrors portage-repo/src/lib.rs exactly.
-        repo_candidates = [] if usepkgonly else list_candidates(repos, category, package)
-        if usepkg or usepkgonly:
-            local_index = _local_binpkg_index(config)
-            binary_candidates = list_binary_candidates(local_index, category, package)
-            if getbinpkg:
-                binary_candidates = binary_candidates + _list_remote_binary_candidates(
-                    config.get("binrepos", []), root, local_index, category, package
+            pf = f"{package}-{version}"
+            if candidate_source == "binary":
+                metadata = _read_binary_metadata_any(
+                    config, root, _local_binpkg_index(config), category, package, version
                 )
-            repo_candidates = repo_candidates + _filter_usepkg_exclude_include(
-                binary_candidates, category, package, usepkg_exclude, usepkg_include
+                if metadata is None:
+                    continue
+            else:
+                try:
+                    metadata = read_md5_cache(repo_location, category, pf)
+                except OSError:
+                    continue
+            candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
+            use_flags = effective_use_flags(
+                metadata.get("IUSE", ""),
+                config["use_tokens"],
+                config["package_use"],
+                config["package_use_force"],
+                config["package_use_mask"],
+                config["use_force"],
+                config["use_mask"],
+                config["use_stable_force"],
+                config["use_stable_mask"],
+                config["package_use_stable_force"],
+                config["package_use_stable_mask"],
+                resolved["keywords"],
+                config["accept_keywords"],
+                config["package_accept_keywords"],
+                candidate_str,
+                category,
+                package,
             )
-        repo_candidates = [c for c in repo_candidates if c["version"] == version]
-        if not repo_candidates:
-            continue
-        resolved = max(repo_candidates, key=lambda c: c["repo_priority"])
-        slot = resolved["slot"]
-        sub_slot = resolved["sub_slot"]
-        repo_location = resolved["repo_location"]
-        repo_name = resolved["repo_name"]
-        candidate_source = resolved["source"]
 
-        slot_key = (category, package, slot)
-        if slot_key in resolved_slots:
-            # This exact category/package/slot was already resolved by
-            # an earlier atom. If the current atom's own constraint
-            # doesn't accept that already-resolved version, it's a real
-            # slot conflict -- report it and move on, without a second,
-            # independent resolution or any attempt to reconcile the two.
-            existing_idx = resolved_slots[slot_key]
-            existing_outcome = entries[existing_idx][2]
-            existing_version = (
-                existing_outcome[1]
-                if existing_outcome[0] in ("new", "reinstall")
-                else existing_outcome[2]
-            )
-            existing_str = f"{category}/{package}-{existing_version}:{slot}"
-            satisfied = bool(match_from_list(current_atom_str, [existing_str]))
-            if not satisfied:
-                slot_conflicts.append(
-                    {
-                        "category": category,
-                        "package": package,
-                        "slot": slot,
-                        "resolved_version": existing_version,
-                        "conflicting_atom": current_atom_str,
-                    }
-                )
-            continue
-        entry_idx = len(entries)
-        resolved_slots[slot_key] = entry_idx
-        provenance = _visibility_provenance(resolved, category, package, config)
-        # Real output.py:gen_mask_str's -v bracket-mask column -- stashed
-        # on the provenance dict (not serialized by _entry_to_json, which
-        # picks out specific keys) rather than growing the entry tuple.
-        # Mirrors portage-repo/src/lib.rs's GraphEntry::keyword_mask.
-        provenance["keyword_mask"] = _keyword_mask_marker(
-            resolved, category, package, config, provenance["mask_entry"]
-        )
-        # Real --autounmask keyword resolution: this candidate resolved
-        # only because resolve_pretend was told to accept a KEYWORDS-alone
-        # mask (_keyword_masked_only). Record the implicit `=<cpv> <kw>`
-        # change (real depgraph.py::_display_autounmask's
-        # unstable_keyword_msg + _get_dep_chain_as_comment;
-        # autounmask_unrestricted_atoms defaults to "n", so always the
-        # exact-version `=` form). Mirrors portage-repo/src/lib.rs.
-        if autounmask_suggest_keywords and _keyword_masked_only(
-            resolved, category, package, config
-        ):
-            _kw = _suggested_keyword(resolved)
-            if _kw is not None:
-                autounmask_keyword_changes.append(
-                    {
-                        "atom": f"={category}/{package}-{version}",
-                        "token": _kw,
-                        "dep_chain": _autounmask_dep_chain(
-                            owner, current_atom_str, top_level, entries
-                        ),
-                    }
-                )
-        # Real --autounmask-license: this candidate resolved only because
-        # resolve_pretend was told to accept a LICENSE-alone mask
-        # (_license_masked_only). Record the missing licenses (real
-        # _display_autounmask's license_msg; check_if_latest(pkg) without
-        # check_visibility -> the `>=` / `>=…:slot` / `=` form).
-        if autounmask_suggest_license and _license_masked_only(
-            resolved, category, package, config
-        ):
-            _cs = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
-            _missing = _missing_licenses(resolved, category, package, _cs, config)
-            if _missing:
-                _all = list_candidates(repos, category, package)
-                autounmask_license_changes.append(
-                    {
-                        "atom": _check_if_latest_atom_form(
-                            resolved, _all, category, package, config, False
-                        ),
-                        "token": " ".join(_missing),
-                        "dep_chain": _autounmask_dep_chain(
-                            owner, current_atom_str, top_level, entries
-                        ),
-                    }
-                )
-        # Real --autounmask-keep-masks=n: this candidate resolved only
-        # because resolve_pretend was told to accept a package.mask-alone
-        # mask (_mask_masked_only). Record `=<cpv>` (real p_mask_change_msg;
-        # no token, always the exact-version form).
-        if autounmask_suggest_masks and _mask_masked_only(
-            resolved, category, package, config
-        ):
-            autounmask_mask_changes.append(
-                {
-                    "atom": f"={category}/{package}-{version}",
-                    "token": "",
-                    "dep_chain": _autounmask_dep_chain(
-                        owner, current_atom_str, top_level, entries
-                    ),
+            # Real --autounmask-use USE resolution: resolve_pretend kept this
+            # candidate despite an atom use-dep mismatch because a
+            # package.use flip fixes it (_suggested_use_flip). Apply the flip
+            # to use_flags here -- once, at the graph layer -- so the -pv
+            # USE="..." line, the REQUIRED_USE check and the dependency walk
+            # all see the adjusted state (real _pkg_use_enabled) -- and
+            # record the change (real _display_autounmask's use_changes_msg +
+            # _get_dep_chain_as_comment(pkg, unsatisfied_dependency=True)).
+            # Mirrors portage-repo/src/lib.rs.
+            if autounmask_suggest_use and atom.use:
+                _iuse_declared = {
+                    tok.lstrip("+-") for tok in metadata.get("IUSE", "").split()
                 }
+                if not _use_deps_satisfied(
+                    atom, _valid_iuse(_iuse_declared, config), use_flags
+                ):
+                    _flip = _suggested_use_flip(resolved, category, package, atom, config)
+                    if _flip is not None:
+                        for _flag, _enabled in _flip:
+                            if _enabled:
+                                use_flags.add(_flag)
+                            else:
+                                use_flags.discard(_flag)
+                        _token = " ".join(
+                            _f if _e else f"-{_f}" for _f, _e in _flip
+                        )
+                        autounmask_use_changes.append(
+                            {
+                                "atom": _autounmask_use_atom_form(
+                                    resolved,
+                                    list_candidates(repos, category, package),
+                                    category,
+                                    package,
+                                    config,
+                                ),
+                                "token": _token,
+                                "dep_chain": _autounmask_dep_chain(
+                                    owner, current_atom_str, top_level, entries
+                                ),
+                            }
+                        )
+
+            # Real output.py:636's `not getfetchsizes(only_restricted=True)`.
+            if provenance["fetch_restrict"]:
+                provenance["fetch_restrict_satisfied"] = _fetch_restrict_files_all_present(
+                    metadata.get("SRC_URI", ""),
+                    use_flags,
+                    repo_location,
+                    category,
+                    package,
+                    distdir,
+                )
+            # Real output.py:300-332's _calc_size -> counters.totalsize (the
+            # -v Total: line's "Size of downloads"), for every merge-bound
+            # ebuild entry. Stashed on provenance like the other bracket
+            # data. Mirrors portage-repo/src/lib.rs's GraphEntry::download_files.
+            if candidate_source != "binary":
+                provenance["download_files"] = _fetch_bytes_to_download(
+                    metadata.get("SRC_URI", ""),
+                    use_flags,
+                    repo_location,
+                    category,
+                    package,
+                    distdir,
+                )
+            elif provenance["remote_binary"]:
+                # A --getbinpkg remote binary: real bindbapi.getfetchsizes ->
+                # {<cpv>: SIZE} from the binhost Packages index. Feeds both
+                # the -v per-line " N KiB" suffix and Size of downloads:.
+                _size = _int_or_none(metadata.get("SIZE"))
+                if _size is not None:
+                    provenance["download_files"] = [
+                        (f"{category}/{package}-{version}", _size)
+                    ]
+
+            # REQUIRED_USE (PMS 7.3.4/8.2): checked once, here, right after a
+            # candidate is newly resolved -- real depgraph.py's own "NOTE:
+            # REQUIRED_USE checks are delayed until after package selection"
+            # (a genuine *post*-selection check, no part of matching/
+            # visibility at all). A violation eventually fails the whole run
+            # regardless of whether this candidate was reached as a
+            # top-level atom or a dependency deep in the graph -- but NOT
+            # immediately: real depgraph.py's own _add_pkg (~line 3600) sets
+            # _dynamic_config._required_use_unsatisfied = True and returns 0
+            # on a violation, which does NOT stop the rest of the graph walk
+            # (unlike a top-level atom's own NoVisibleCandidate, which
+            # genuinely does abort immediately). Every violation anywhere in
+            # the walk is collected into required_use_violations and the BFS
+            # keeps going -- see that variable's own doc comment, near the
+            # top of this function, for the full grounding and where the
+            # collected violations actually get turned into this call's own
+            # ResolutionError. A genuinely *invalid* REQUIRED_USE (the
+            # "except InvalidDependString" branch below) is different: real
+            # check_required_use itself raises for that case, outside the
+            # explicit "if not required_use_is_sat:" branch the delayed
+            # collection above lives in -- so this pilot keeps that one
+            # immediately fatal, same as before. Calls the real
+            # portage.dep.check_required_use directly (pinned to eapi="8",
+            # same reasoning as required_use_harness.py's own docstring) --
+            # mirrors portage-repo/src/lib.rs's own ported algorithm
+            # (portage_required_use::check_required_use) exactly, verified
+            # to agree via the shared required-use-harness contract suite.
+            required_use = metadata.get("REQUIRED_USE", "").strip()
+            if required_use:
+                # Real check_required_use validates a referenced flag against
+                # pkg.iuse.is_valid_flag, not a package's own literal IUSE
+                # alone -- real config.py's own _get_implicit_iuse() folds
+                # PORTAGE_ARCHLIST (profiles/arch.list), use.mask ∪
+                # use.force, and literal "build"/"bootstrap" into every
+                # package's effective IUSE regardless of what that package's
+                # own IUSE declares. Mirrors portage-repo/src/lib.rs's own
+                # resolve_pretend_graph exactly -- see portage_profile::
+                # Config::archlist's own doc comment for the full grounding.
+                iuse_set = _implicit_iuse_set(metadata.get("IUSE", ""), config)
+                try:
+                    satisfied = bool(
+                        check_required_use(
+                            required_use, use_flags, lambda flag: flag in iuse_set, eapi="8"
+                        )
+                    )
+                except InvalidDependString as e:
+                    raise ResolutionError(
+                        f"REQUIRED_USE for {category}/{package}-{version} is invalid: {e}"
+                    ) from e
+                if not satisfied:
+                    normalized = " ".join(required_use.split())
+                    required_use_violations.append(
+                        f'REQUIRED_USE not satisfied for {category}/{package}-{version}: '
+                        f'"{normalized}"'
+                    )
+                    continue
+
+            # IUSE's own "+flag"/"-flag" default markers only matter for
+            # resolving a flag's default when nothing else decides it --
+            # already handled upstream, wherever use_flags itself came from --
+            # so display only needs the bare flag name, paired with whatever
+            # use_flags (the real resolved set) says. Computed (and shown by
+            # --pretend -v) regardless of nodeps below -- real portage's own
+            # USE display is about the package's own metadata, unrelated to
+            # whether its dependencies get walked. Mirrors
+            # portage-repo/src/lib.rs's resolve_pretend_graph exactly.
+            if metadata.get("IUSE"):
+                display = sorted(
+                    (
+                        (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
+                        for flag in metadata["IUSE"].split()
+                    ),
+                    key=lambda p: _alnum_sort_key(p[0]),
+                )
+                entries[entry_idx] = (
+                    category,
+                    package,
+                    outcome,
+                    [],
+                    slot,
+                    display,
+                    [],
+                    candidate_source,
+                    entries[entry_idx][8],
+                    entries[entry_idx][9],
+                    entries[entry_idx][10],
+                    entries[entry_idx][11],
+                    entries[entry_idx][12],
+                )
+
+            # --nodeps: skip this package's own DEPEND/RDEPEND/etc entirely --
+            # see this function's own docstring.
+            if nodeps:
+                continue
+
+            depstr = " ".join(
+                metadata[k]
+                for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
+                if metadata.get(k)
             )
-        # Real output.py::_get_installed_best's own new_slot flag (the
-        # "S" bracket column, PkgAttrDisplay.new_slot): a "new" entry
-        # whose category/package is installed in some *other* slot (the
-        # in-slot new/upgrade decision already happened inside
-        # resolve_pretend, so "new" here means nothing is installed in
-        # *this* slot). Stashed on provenance like keyword_mask above.
-        # Mirrors portage-repo/src/lib.rs's GraphEntry::new_slot.
-        provenance["new_slot"] = outcome[0] == "new" and bool(
-            installed_candidates(root, category, package)
-        )
-        # Real output.py:833: `if "interactive" in pkg.properties and
-        # pkg.operation == "merge"`. pkg.properties is PROPERTIES after
-        # real USE-conditional evaluation; every graph entry reaching
-        # this point is a merge (new/upgrade/downgrade/reinstall -- the
-        # only outcomes resolved_slots ever indexes), so no separate
-        # operation check is needed. Stashed on provenance like
-        # keyword_mask/new_slot above. Mirrors portage-repo/src/lib.rs's
-        # GraphEntry::interactive.
-        _candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
-        provenance["interactive"] = "interactive" in _evaluated_metadata_tokens(
-            resolved.get("properties", ""), resolved, category, package, _candidate_str, config
-        )
-        # Real output.py:633: `not pkg.built and "fetch" in pkg.restrict`
-        # (ebuild candidates only). fetch_restrict_satisfied is filled in
-        # below, once metadata (SRC_URI) + use_flags are read. Stashed on
-        # provenance (shared dict, mutated after append) like interactive.
-        # Mirrors portage-repo/src/lib.rs's GraphEntry::fetch_restrict.
-        provenance["fetch_restrict"] = candidate_source != "binary" and (
-            "fetch"
-            in _evaluated_metadata_tokens(
-                resolved.get("restrict", ""), resolved, category, package, _candidate_str, config
+            # --root-deps branch-selection feed-in (see
+            # _root_deps_satisfied_atoms's own docstring): a "||" group with
+            # no branch tree-visible still needs a branch selected here too,
+            # not just in _root_deps_satisfied_atoms's own separate
+            # re-flatten -- otherwise the *other*, genuinely unsatisfiable
+            # branch would remain in flat_deps and get queued as an ordinary
+            # (and wrongly reported) dependency. Real --root-deps only ever
+            # applies to DEPEND/BDEPEND -- this closure can't tell which of
+            # the five merged dep keys a given atom came from (this pilot's
+            # own single-unified-graph architecture merges them into one
+            # combined string before flattening at all), so an
+            # RDEPEND/PDEPEND/IDEPEND "||" group gets this same permissive
+            # check too -- harmless in practice, mirrors
+            # portage-repo/src/lib.rs's identical fix exactly.
+            try:
+                flat_deps = _use_reduce_flat_disjunctive(
+                    depstr,
+                    use_flags,
+                    lambda atoms: all(
+                        _atom_currently_satisfiable(repos, a, config)
+                        or (
+                            root_deps_running_root is not None
+                            and _running_root_satisfies_atom(a, root_deps_running_root)
+                        )
+                        for a in atoms
+                    ),
+                )
+            except InvalidDependString:
+                continue
+            # --root-deps: real ESYSROOT-vs-ROOT distinction (see
+            # _root_deps_satisfied_atoms's own doc comment for the full
+            # grounding) -- a strict no-op when root_deps_running_root is
+            # None, matching every pre-existing call site/test.
+            root_deps_satisfied = (
+                _root_deps_satisfied_atoms(
+                    metadata,
+                    use_flags,
+                    repos,
+                    config,
+                    root_deps_running_root,
+                    dep_keys=("DEPEND", "BDEPEND", "IDEPEND"),
+                )
+                if root_deps_running_root is not None
+                else set()
             )
-        )
-        provenance["fetch_restrict_satisfied"] = False
-        # Real output.py:648: attr_display.remote_binary = pkg.remote (the
-        # `g` bracket column). Mirrors portage-repo/src/lib.rs's
-        # GraphEntry::remote_binary.
-        provenance["remote_binary"] = bool(resolved.get("remote"))
-        # Real _append_slot / _append_repository / convert_myoldbest
-        # inputs (verbosity 3 -- emerge -pv), stashed on provenance like
-        # new_slot/interactive above. Mirrors portage-repo/src/lib.rs's
-        # GraphEntry::sub_slot / repo_name / oldbest.
-        provenance["sub_slot"] = sub_slot
-        provenance["repo_name"] = repo_name
-        if outcome[0] in ("upgrade", "downgrade"):
-            _ob = [r for r in _installed_refs(root, category, package) if r["slot"] == slot]
-        elif outcome[0] == "new" and provenance["new_slot"]:
-            _ob = _installed_refs(root, category, package)
-        else:
-            _ob = []
-        _ob.sort(key=functools.cmp_to_key(lambda a, b: vercmp(a["version"], b["version"]) or 0))
-        provenance["oldbest"] = _ob
-        entries.append(
+            # Real "recursively pull in and build new packages against the
+            # running root" -- the other half of the same real DEPEND/BDEPEND
+            # set root_deps_satisfied above already covers -- every atom in
+            # it isn't satisfied by the running root either, so it must not
+            # fall through into the ordinary flat_deps queue below and get
+            # wrongly resolved against ROOT instead (real DEPEND/BDEPEND
+            # never targets ROOT/ESYSROOT at all under this pilot's own
+            # established --root-deps simplification). Each one instead gets
+            # resolved against the running root directly, added as its own
+            # targets_running_root entry, and recursed into. Kept as a list
+            # (not a set) for deterministic entry order. Mirrors
+            # portage-repo/src/lib.rs's identical step exactly.
+            root_deps_unsatisfied = (
+                _unsatisfied_root_deps_atoms(
+                    metadata,
+                    use_flags,
+                    repos,
+                    config,
+                    root_deps_running_root,
+                    dep_keys=("DEPEND", "BDEPEND", "IDEPEND"),
+                )
+                if root_deps_running_root is not None
+                else []
+            )
+            flat_deps = [
+                tok for tok in flat_deps if tok not in root_deps_satisfied and tok not in root_deps_unsatisfied
+            ]
+            if root_deps_running_root is not None:
+                for atom_str in root_deps_unsatisfied:
+                    entries.extend(
+                        _resolve_root_deps_build_entries(
+                            repos, root_deps_running_root, atom_str, config, key, root_deps_build_seen
+                        )
+                    )
+            _enqueue_flat_deps(flat_deps, key, version, depth, use_flags, queue, pending_blockers)
+
+            # --with-test-deps: additive on top of the normal deps just
+            # queued above, never a replacement for them -- see this
+            # function's own docstring for the full gating (depth == 0,
+            # "test" a valid, not-already-enabled, not-masked IUSE flag).
+            if with_test_deps and depth == 0 and "test" not in use_flags:
+                iuse_flags = {
+                    tok.lstrip("+-") for tok in metadata.get("IUSE", "").split()
+                }
+                test_masked = "test" in config["use_mask"] or "test" in _specificity_ordered_flags(
+                    config["package_use_mask"], candidate_str, category, package
+                )
+                if "test" in iuse_flags and not test_masked:
+                    try:
+                        test_deps = use_reduce(
+                            depstr, flat=True, uselist=use_flags | {"test"}, subset={"test"}
+                        )
+                    except InvalidDependString:
+                        test_deps = []
+                    _enqueue_flat_deps(
+                        test_deps, key, version, depth, use_flags | {"test"}, queue, pending_blockers
+                    )
+
+        # Merge required_by_map into entries in a single post-pass, mirroring
+        # portage-repo/src/lib.rs's own identical final loop (run before
+        # resolve_blockers below, same order) -- entries are tuples
+        # (immutable), so this rebuilds each one rather than mutating in
+        # place. Only entries the map actually has a key for get their
+        # required_by replaced -- matching the Rust side's own `if let
+        # Some(owners) = required_by_map.get(...)` guard: an entry added
+        # outside the normal flat-deps queue (a --root-deps running-root
+        # build entry, whose own [owner] was set at construction by
+        # _resolve_root_deps_build_entries) keeps that value instead of being
+        # wiped to []. Both sides use a non-destructive lookup, not a pop/
+        # remove: more than one entry can share a (category, package) -- one
+        # per resolved slot -- and every one was pulled in by the same
+        # owner(s), so every one needs the same required_by (a destructive
+        # lookup would hand the owners to the first slot's entry only).
+        entries = [
             (
                 category,
                 package,
                 outcome,
-                [],
+                blockers,
                 slot,
-                [],
-                [],
-                candidate_source,
+                use_display,
+                sorted(required_by_map[(category, package)])
+                if (category, package) in required_by_map
+                else _required_by,
+                source,
                 provenance,
-                None,
-                None,
-                None,
-                False,
+                keyword_suggestion,
+                use_suggestion,
+                parent_use_suggestion,
+                targets_running_root,
             )
-        )
-
-        pf = f"{package}-{version}"
-        if candidate_source == "binary":
-            metadata = _read_binary_metadata_any(
-                config, root, _local_binpkg_index(config), category, package, version
-            )
-            if metadata is None:
-                continue
-        else:
-            try:
-                metadata = read_md5_cache(repo_location, category, pf)
-            except OSError:
-                continue
-        candidate_str = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
-        use_flags = effective_use_flags(
-            metadata.get("IUSE", ""),
-            config["use_tokens"],
-            config["package_use"],
-            config["package_use_force"],
-            config["package_use_mask"],
-            config["use_force"],
-            config["use_mask"],
-            config["use_stable_force"],
-            config["use_stable_mask"],
-            config["package_use_stable_force"],
-            config["package_use_stable_mask"],
-            resolved["keywords"],
-            config["accept_keywords"],
-            config["package_accept_keywords"],
-            candidate_str,
-            category,
-            package,
-        )
-
-        # Real --autounmask-use USE resolution: resolve_pretend kept this
-        # candidate despite an atom use-dep mismatch because a
-        # package.use flip fixes it (_suggested_use_flip). Apply the flip
-        # to use_flags here -- once, at the graph layer -- so the -pv
-        # USE="..." line, the REQUIRED_USE check and the dependency walk
-        # all see the adjusted state (real _pkg_use_enabled) -- and
-        # record the change (real _display_autounmask's use_changes_msg +
-        # _get_dep_chain_as_comment(pkg, unsatisfied_dependency=True)).
-        # Mirrors portage-repo/src/lib.rs.
-        if autounmask_suggest_use and atom.use:
-            _iuse_declared = {
-                tok.lstrip("+-") for tok in metadata.get("IUSE", "").split()
-            }
-            if not _use_deps_satisfied(
-                atom, _valid_iuse(_iuse_declared, config), use_flags
-            ):
-                _flip = _suggested_use_flip(resolved, category, package, atom, config)
-                if _flip is not None:
-                    for _flag, _enabled in _flip:
-                        if _enabled:
-                            use_flags.add(_flag)
-                        else:
-                            use_flags.discard(_flag)
-                    _token = " ".join(
-                        _f if _e else f"-{_f}" for _f, _e in _flip
-                    )
-                    autounmask_use_changes.append(
-                        {
-                            "atom": _autounmask_use_atom_form(
-                                resolved,
-                                list_candidates(repos, category, package),
-                                category,
-                                package,
-                                config,
-                            ),
-                            "token": _token,
-                            "dep_chain": _autounmask_dep_chain(
-                                owner, current_atom_str, top_level, entries
-                            ),
-                        }
-                    )
-
-        # Real output.py:636's `not getfetchsizes(only_restricted=True)`.
-        if provenance["fetch_restrict"]:
-            provenance["fetch_restrict_satisfied"] = _fetch_restrict_files_all_present(
-                metadata.get("SRC_URI", ""),
-                use_flags,
-                repo_location,
-                category,
-                package,
-                distdir,
-            )
-        # Real output.py:300-332's _calc_size -> counters.totalsize (the
-        # -v Total: line's "Size of downloads"), for every merge-bound
-        # ebuild entry. Stashed on provenance like the other bracket
-        # data. Mirrors portage-repo/src/lib.rs's GraphEntry::download_files.
-        if candidate_source != "binary":
-            provenance["download_files"] = _fetch_bytes_to_download(
-                metadata.get("SRC_URI", ""),
-                use_flags,
-                repo_location,
-                category,
-                package,
-                distdir,
-            )
-        elif provenance["remote_binary"]:
-            # A --getbinpkg remote binary: real bindbapi.getfetchsizes ->
-            # {<cpv>: SIZE} from the binhost Packages index. Feeds both
-            # the -v per-line " N KiB" suffix and Size of downloads:.
-            _size = _int_or_none(metadata.get("SIZE"))
-            if _size is not None:
-                provenance["download_files"] = [
-                    (f"{category}/{package}-{version}", _size)
-                ]
-
-        # REQUIRED_USE (PMS 7.3.4/8.2): checked once, here, right after a
-        # candidate is newly resolved -- real depgraph.py's own "NOTE:
-        # REQUIRED_USE checks are delayed until after package selection"
-        # (a genuine *post*-selection check, no part of matching/
-        # visibility at all). A violation eventually fails the whole run
-        # regardless of whether this candidate was reached as a
-        # top-level atom or a dependency deep in the graph -- but NOT
-        # immediately: real depgraph.py's own _add_pkg (~line 3600) sets
-        # _dynamic_config._required_use_unsatisfied = True and returns 0
-        # on a violation, which does NOT stop the rest of the graph walk
-        # (unlike a top-level atom's own NoVisibleCandidate, which
-        # genuinely does abort immediately). Every violation anywhere in
-        # the walk is collected into required_use_violations and the BFS
-        # keeps going -- see that variable's own doc comment, near the
-        # top of this function, for the full grounding and where the
-        # collected violations actually get turned into this call's own
-        # ResolutionError. A genuinely *invalid* REQUIRED_USE (the
-        # "except InvalidDependString" branch below) is different: real
-        # check_required_use itself raises for that case, outside the
-        # explicit "if not required_use_is_sat:" branch the delayed
-        # collection above lives in -- so this pilot keeps that one
-        # immediately fatal, same as before. Calls the real
-        # portage.dep.check_required_use directly (pinned to eapi="8",
-        # same reasoning as required_use_harness.py's own docstring) --
-        # mirrors portage-repo/src/lib.rs's own ported algorithm
-        # (portage_required_use::check_required_use) exactly, verified
-        # to agree via the shared required-use-harness contract suite.
-        required_use = metadata.get("REQUIRED_USE", "").strip()
-        if required_use:
-            # Real check_required_use validates a referenced flag against
-            # pkg.iuse.is_valid_flag, not a package's own literal IUSE
-            # alone -- real config.py's own _get_implicit_iuse() folds
-            # PORTAGE_ARCHLIST (profiles/arch.list), use.mask ∪
-            # use.force, and literal "build"/"bootstrap" into every
-            # package's effective IUSE regardless of what that package's
-            # own IUSE declares. Mirrors portage-repo/src/lib.rs's own
-            # resolve_pretend_graph exactly -- see portage_profile::
-            # Config::archlist's own doc comment for the full grounding.
-            iuse_set = _implicit_iuse_set(metadata.get("IUSE", ""), config)
-            try:
-                satisfied = bool(
-                    check_required_use(
-                        required_use, use_flags, lambda flag: flag in iuse_set, eapi="8"
-                    )
-                )
-            except InvalidDependString as e:
-                raise ResolutionError(
-                    f"REQUIRED_USE for {category}/{package}-{version} is invalid: {e}"
-                ) from e
-            if not satisfied:
-                normalized = " ".join(required_use.split())
-                required_use_violations.append(
-                    f'REQUIRED_USE not satisfied for {category}/{package}-{version}: '
-                    f'"{normalized}"'
-                )
-                continue
-
-        # IUSE's own "+flag"/"-flag" default markers only matter for
-        # resolving a flag's default when nothing else decides it --
-        # already handled upstream, wherever use_flags itself came from --
-        # so display only needs the bare flag name, paired with whatever
-        # use_flags (the real resolved set) says. Computed (and shown by
-        # --pretend -v) regardless of nodeps below -- real portage's own
-        # USE display is about the package's own metadata, unrelated to
-        # whether its dependencies get walked. Mirrors
-        # portage-repo/src/lib.rs's resolve_pretend_graph exactly.
-        if metadata.get("IUSE"):
-            display = sorted(
-                (
-                    (flag.lstrip("+-"), flag.lstrip("+-") in use_flags)
-                    for flag in metadata["IUSE"].split()
-                ),
-                key=lambda p: _alnum_sort_key(p[0]),
-            )
-            entries[entry_idx] = (
-                category,
-                package,
-                outcome,
-                [],
-                slot,
-                display,
-                [],
-                candidate_source,
-                entries[entry_idx][8],
-                entries[entry_idx][9],
-                entries[entry_idx][10],
-                entries[entry_idx][11],
-                entries[entry_idx][12],
-            )
-
-        # --nodeps: skip this package's own DEPEND/RDEPEND/etc entirely --
-        # see this function's own docstring.
-        if nodeps:
-            continue
-
-        depstr = " ".join(
-            metadata[k]
-            for k in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND")
-            if metadata.get(k)
-        )
-        # --root-deps branch-selection feed-in (see
-        # _root_deps_satisfied_atoms's own docstring): a "||" group with
-        # no branch tree-visible still needs a branch selected here too,
-        # not just in _root_deps_satisfied_atoms's own separate
-        # re-flatten -- otherwise the *other*, genuinely unsatisfiable
-        # branch would remain in flat_deps and get queued as an ordinary
-        # (and wrongly reported) dependency. Real --root-deps only ever
-        # applies to DEPEND/BDEPEND -- this closure can't tell which of
-        # the five merged dep keys a given atom came from (this pilot's
-        # own single-unified-graph architecture merges them into one
-        # combined string before flattening at all), so an
-        # RDEPEND/PDEPEND/IDEPEND "||" group gets this same permissive
-        # check too -- harmless in practice, mirrors
-        # portage-repo/src/lib.rs's identical fix exactly.
-        try:
-            flat_deps = _use_reduce_flat_disjunctive(
-                depstr,
-                use_flags,
-                lambda atoms: all(
-                    _atom_currently_satisfiable(repos, a, config)
-                    or (
-                        root_deps_running_root is not None
-                        and _running_root_satisfies_atom(a, root_deps_running_root)
-                    )
-                    for a in atoms
-                ),
-            )
-        except InvalidDependString:
-            continue
-        # --root-deps: real ESYSROOT-vs-ROOT distinction (see
-        # _root_deps_satisfied_atoms's own doc comment for the full
-        # grounding) -- a strict no-op when root_deps_running_root is
-        # None, matching every pre-existing call site/test.
-        root_deps_satisfied = (
-            _root_deps_satisfied_atoms(
-                metadata,
-                use_flags,
-                repos,
-                config,
-                root_deps_running_root,
-                dep_keys=("DEPEND", "BDEPEND", "IDEPEND"),
-            )
-            if root_deps_running_root is not None
-            else set()
-        )
-        # Real "recursively pull in and build new packages against the
-        # running root" -- the other half of the same real DEPEND/BDEPEND
-        # set root_deps_satisfied above already covers -- every atom in
-        # it isn't satisfied by the running root either, so it must not
-        # fall through into the ordinary flat_deps queue below and get
-        # wrongly resolved against ROOT instead (real DEPEND/BDEPEND
-        # never targets ROOT/ESYSROOT at all under this pilot's own
-        # established --root-deps simplification). Each one instead gets
-        # resolved against the running root directly, added as its own
-        # targets_running_root entry, and recursed into. Kept as a list
-        # (not a set) for deterministic entry order. Mirrors
-        # portage-repo/src/lib.rs's identical step exactly.
-        root_deps_unsatisfied = (
-            _unsatisfied_root_deps_atoms(
-                metadata,
-                use_flags,
-                repos,
-                config,
-                root_deps_running_root,
-                dep_keys=("DEPEND", "BDEPEND", "IDEPEND"),
-            )
-            if root_deps_running_root is not None
-            else []
-        )
-        flat_deps = [
-            tok for tok in flat_deps if tok not in root_deps_satisfied and tok not in root_deps_unsatisfied
+            for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root in entries
         ]
-        if root_deps_running_root is not None:
-            for atom_str in root_deps_unsatisfied:
-                entries.extend(
-                    _resolve_root_deps_build_entries(
-                        repos, root_deps_running_root, atom_str, config, key, root_deps_build_seen
-                    )
-                )
-        _enqueue_flat_deps(flat_deps, key, version, depth, use_flags, queue, pending_blockers)
 
-        # --with-test-deps: additive on top of the normal deps just
-        # queued above, never a replacement for them -- see this
-        # function's own docstring for the full gating (depth == 0,
-        # "test" a valid, not-already-enabled, not-masked IUSE flag).
-        if with_test_deps and depth == 0 and "test" not in use_flags:
-            iuse_flags = {
-                tok.lstrip("+-") for tok in metadata.get("IUSE", "").split()
-            }
-            test_masked = "test" in config["use_mask"] or "test" in _specificity_ordered_flags(
-                config["package_use_mask"], candidate_str, category, package
-            )
-            if "test" in iuse_flags and not test_masked:
-                try:
-                    test_deps = use_reduce(
-                        depstr, flat=True, uselist=use_flags | {"test"}, subset={"test"}
-                    )
-                except InvalidDependString:
-                    test_deps = []
-                _enqueue_flat_deps(
-                    test_deps, key, version, depth, use_flags | {"test"}, queue, pending_blockers
-                )
-
-    # Merge required_by_map into entries in a single post-pass, mirroring
-    # portage-repo/src/lib.rs's own identical final loop (run before
-    # resolve_blockers below, same order) -- entries are tuples
-    # (immutable), so this rebuilds each one rather than mutating in
-    # place. Only entries the map actually has a key for get their
-    # required_by replaced -- matching the Rust side's own `if let
-    # Some(owners) = required_by_map.get(...)` guard: an entry added
-    # outside the normal flat-deps queue (a --root-deps running-root
-    # build entry, whose own [owner] was set at construction by
-    # _resolve_root_deps_build_entries) keeps that value instead of being
-    # wiped to []. Both sides use a non-destructive lookup, not a pop/
-    # remove: more than one entry can share a (category, package) -- one
-    # per resolved slot -- and every one was pulled in by the same
-    # owner(s), so every one needs the same required_by (a destructive
-    # lookup would hand the owners to the first slot's entry only).
-    entries = [
-        (
+        # setdefault (not a dict comprehension) so the *first* entry for a
+        # given owner wins when the same category/package appears more than
+        # once (multiple slots) -- mirrors portage-repo/src/lib.rs's
+        # `entries.iter_mut().find(...)`, which also attaches to the first
+        # match.
+        blockers_by_owner = {}
+        for (
             category,
             package,
-            outcome,
+            _o,
             blockers,
-            slot,
-            use_display,
-            sorted(required_by_map[(category, package)])
-            if (category, package) in required_by_map
-            else _required_by,
-            source,
-            provenance,
-            keyword_suggestion,
-            use_suggestion,
-            parent_use_suggestion,
-            targets_running_root,
-        )
-        for category, package, outcome, blockers, slot, use_display, _required_by, source, provenance, keyword_suggestion, use_suggestion, parent_use_suggestion, targets_running_root in entries
-    ]
+            _slot,
+            _use_display,
+            _required_by,
+            _source,
+            _provenance,
+            _keyword_suggestion,
+            _use_suggestion,
+            _parent_use_suggestion,
+            _targets_running_root,
+        ) in entries:
+            blockers_by_owner.setdefault((category, package), blockers)
+        for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
+            blockers_by_owner[owner_key].append(conflict)
 
-    # setdefault (not a dict comprehension) so the *first* entry for a
-    # given owner wins when the same category/package appears more than
-    # once (multiple slots) -- mirrors portage-repo/src/lib.rs's
-    # `entries.iter_mut().find(...)`, which also attaches to the first
-    # match.
-    blockers_by_owner = {}
-    for (
-        category,
-        package,
-        _o,
-        blockers,
-        _slot,
-        _use_display,
-        _required_by,
-        _source,
-        _provenance,
-        _keyword_suggestion,
-        _use_suggestion,
-        _parent_use_suggestion,
-        _targets_running_root,
-    ) in entries:
-        blockers_by_owner.setdefault((category, package), blockers)
-    for owner_key, conflict in resolve_blockers(root, pending_blockers, entries):
-        blockers_by_owner[owner_key].append(conflict)
+        return (
+            entries,
+            slot_conflicts,
+            required_use_violations,
+            changed_deps_report_entries,
+            pprovided_atoms,
+            autounmask_keyword_changes,
+            autounmask_use_changes,
+            autounmask_license_changes,
+            autounmask_mask_changes,
+            slot_want,
+        )
+
+    while True:
+        (
+            entries,
+            slot_conflicts,
+            required_use_violations,
+            changed_deps_report_entries,
+            pprovided_atoms,
+            autounmask_keyword_changes,
+            autounmask_use_changes,
+            autounmask_license_changes,
+            autounmask_mask_changes,
+            slot_want,
+        ) = _graph_pass()
+
+        if required_use_violations:
+            raise ResolutionError("\n".join(required_use_violations))
+
+        # Solvable slot conflict -> fold every atom that targeted the
+        # conflicted `cat/pkg` into `slot_constraints` and re-run the
+        # whole walk. Solvability is pre-checked against the raw
+        # candidate list (real `_select_pkg_highest_available` over the
+        # full atom set); the rare case where the one satisfying version
+        # is itself masked resolves to a plain `no_visible_candidate` on
+        # the retry, which is acceptable and documented for this slice.
+        # Unsolvable conflicts, and anything still conflicting after
+        # `_MAX_BACKTRACK` attempts, fall through unchanged.
+        if slot_conflicts and backtrack_iteration < _MAX_BACKTRACK:
+            progressed = False
+            for _sc in slot_conflicts:
+                _pkg_key = (_sc["category"], _sc["package"])
+                _wants = slot_want.get(_pkg_key, [])
+                if len(_wants) < 2:
+                    continue
+                _cands = list_candidates(repos, _pkg_key[0], _pkg_key[1])
+                _cand_strs = [
+                    f"{_pkg_key[0]}/{_pkg_key[1]}-{_c['version']}:{_c['slot']}"
+                    for _c in _cands
+                ]
+                _solvable = any(
+                    all(match_from_list(_w, [_cs]) for _w in _wants)
+                    for _cs in _cand_strs
+                )
+                if not _solvable:
+                    continue
+                _bucket = slot_constraints.setdefault(_pkg_key, [])
+                for _w in _wants:
+                    if _w not in _bucket:
+                        _bucket.append(_w)
+                        progressed = True
+            if progressed:
+                backtrack_iteration += 1
+                continue
+        break
 
     if required_use_violations:
         raise ResolutionError("\n".join(required_use_violations))

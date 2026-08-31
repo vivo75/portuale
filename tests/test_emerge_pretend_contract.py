@@ -135,7 +135,8 @@ CASES = [
     ("--json: diamond dependency, required_by lists both owners", ["--pretend", "--json", "dev-libs/diamond"], 0),
     ("--json: upgrade includes from_version", ["--pretend", "--update", "--json", "dev-libs/upgradepkg"], 0),
     ("--json: blocker match", ["--pretend", "--json", "dev-libs/blockerpkg"], 0),
-    ("--json: slot conflict", ["--pretend", "--json", "dev-libs/slotconflictparent"], 0),
+    ("--json: solvable slot conflict reconciled", ["--pretend", "--json", "dev-libs/slotconflictparent"], 0),
+    ("--json: unsolvable slot conflict reported", ["--pretend", "--json", "dev-libs/slotconflictunsolvable"], 0),
     ("--json: combined with --deep", ["--pretend", "--update", "--deep", "--json", "dev-libs/deeppkg"], 0),
     (
         "--json: provenance records a mask cancelled by a matching unmask",
@@ -727,14 +728,16 @@ CASES = [
     ("repos.conf explicit masters=: does not inherit the main repo's mask", ["--pretend", "dev-libs/independentmastermainonlypkg"], 0),
     ("repos.conf explicit masters=: inherits a non-main declared master's mask", ["--pretend", "dev-libs/independentmasteroverlaypkg"], 1),
     ("layout.conf masters= middle tier + repo-name= override", ["--pretend", "dev-libs/layoutmasterpkg"], 1),
-    ("slot conflict: two incompatible version constraints on one slot", ["--pretend", "dev-libs/slotconflictparent"], 0),
+    ("slot conflict: solvable, reconciled by backtracking", ["--pretend", "dev-libs/slotconflictparent"], 0),
+    ("slot conflict: unsolvable, survives backtracking and is reported", ["--pretend", "dev-libs/slotconflictunsolvable"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
     ("virtual: resolved as a dependency", ["--pretend", "dev-libs/virtualconsumerpkg"], 0),
     ("multi-atom: two independent new packages", ["--pretend", "dev-libs/newpkg", "dev-libs/withdeps"], 0),
     ("multi-atom: literal duplicate atom dedupes silently", ["--pretend", "dev-libs/newpkg", "dev-libs/newpkg"], 0),
     ("multi-atom: dependency shared between two targets dedupes", ["--pretend", "dev-libs/shared-a", "dev-libs/shared-b"], 0),
-    ("multi-atom: slot conflict between two targets (not just two deps)", ["--pretend", "dev-libs/slotconflictnewconsumer", "dev-libs/slotconflictoldconsumer"], 0),
+    ("multi-atom: solvable slot conflict between two targets is reconciled", ["--pretend", "dev-libs/slotconflictnewconsumer", "dev-libs/slotconflictoldconsumer"], 0),
+    ("multi-atom: unsolvable slot conflict between two targets is reported", ["--pretend", "dev-libs/slotconflictnewpin", "dev-libs/slotconflictoldpin"], 0),
     ("multi-atom: all requested atoms already installed", ["--pretend", "dev-libs/samepkg", "dev-libs/samepkg"], 0),
     ("multi-atom: a nonexistent atom aborts the whole run, first-bad-wins", ["--pretend", "dev-libs/does-not-exist", "dev-libs/newpkg"], 1),
     ("multi-atom: a later nonexistent atom still aborts the whole run", ["--pretend", "dev-libs/newpkg", "dev-libs/does-not-exist"], 1),
@@ -5132,23 +5135,45 @@ def test_columns_columnwidth_falls_back_to_default_on_an_unparsable_value(
     )
 
 
-def test_slot_conflict_is_reported_between_two_incompatible_version_constraints(
-    emerge_binary, fixture_env
-):
+def test_solvable_slot_conflict_is_reconciled_by_backtracking(emerge_binary, fixture_env):
     """dev-libs/slotconflictparent pulls in slotconflictnewconsumer (bare
     RDEPEND on slotconflicttarget, resolves the best version, 2.0, first)
     and slotconflictoldconsumer (RDEPEND "<dev-libs/slotconflicttarget-2.0",
-    which 2.0 itself does NOT satisfy) -- both want slot 0 of the same
-    package at versions that can't both be right, so this must surface as
-    a [slot conflict] line, not a second, silently-overwriting entry, and
-    must not change the exit code (purely informational, like blockers)."""
+    which 2.0 itself does NOT satisfy). The first pass hits a slot conflict
+    on slotconflicttarget:0, but 1.0 satisfies *both* atoms, so the
+    backtracking retry (real _emerge/resolver/backtracking.py driven by
+    _process_slot_conflicts) re-resolves the whole graph with both
+    constraints enforced together: slotconflicttarget settles on 1.0 and
+    no [slot conflict] line is printed."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/slotconflictparent"], fixture_env)
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/slotconflicttarget-2.0 ',
+        '[ebuild  N     ] dev-libs/slotconflicttarget-1.0 ',
         '[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 ',
         '[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 ',
         '[ebuild  N     ] dev-libs/slotconflictparent-1.0 ',
+    ]
+
+
+def test_unsolvable_slot_conflict_survives_backtracking_and_is_reported(
+    emerge_binary, fixture_env
+):
+    """dev-libs/slotconflictunsolvable pulls in slotconflictnewpin (RDEPEND
+    ">=dev-libs/slotconflicttarget-2.0", resolves 2.0 first) and
+    slotconflictoldpin (RDEPEND "<dev-libs/slotconflicttarget-2.0"). No
+    single version of slotconflicttarget satisfies both, so the
+    backtracking solvability pre-check fails, no retry is attempted, and
+    the [slot conflict] line is printed exactly as before -- purely
+    informational, exit code unchanged."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/slotconflictunsolvable"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/slotconflicttarget-2.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictnewpin-1.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictoldpin-1.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictunsolvable-1.0 ',
         '[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"',
     ]
 
@@ -5372,16 +5397,16 @@ def test_multiple_top_level_atoms_share_dedup_and_slot_conflict_machinery(
     ]
 
 
-def test_multiple_top_level_atoms_detect_a_slot_conflict_between_targets(
+def test_multiple_top_level_atoms_reconcile_a_solvable_slot_conflict_between_targets(
     emerge_binary, fixture_env
 ):
-    """Same slot-conflict fixture pair as
-    test_slot_conflict_is_reported_between_two_incompatible_version_constraints,
-    but requested directly as two top-level atoms instead of reached
-    through a shared parent -- proving a slot conflict between two
-    *targets* (not just between two dependencies of one target) is
-    detected too, since resolve_pretend_graph now seeds all top-level
-    atoms into the same BFS/resolved_slots bookkeeping."""
+    """Same solvable fixture pair as
+    test_solvable_slot_conflict_is_reconciled_by_backtracking, but
+    requested directly as two top-level atoms instead of reached through a
+    shared parent -- backtracking reconciles a slot conflict between two
+    *targets* (not just between two dependencies of one target) too, since
+    resolve_pretend_graph seeds all top-level atoms into the same
+    BFS/slot_want bookkeeping the retry loop reads."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "dev-libs/slotconflictnewconsumer", "dev-libs/slotconflictoldconsumer"],
@@ -5389,9 +5414,29 @@ def test_multiple_top_level_atoms_detect_a_slot_conflict_between_targets(
     )
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
-        '[ebuild  N     ] dev-libs/slotconflicttarget-2.0 ',
+        '[ebuild  N     ] dev-libs/slotconflicttarget-1.0 ',
         '[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 ',
         '[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 ',
+    ]
+
+
+def test_multiple_top_level_atoms_report_an_unsolvable_slot_conflict_between_targets(
+    emerge_binary, fixture_env
+):
+    """dev-libs/slotconflictnewpin (">=dev-libs/slotconflicttarget-2.0")
+    and dev-libs/slotconflictoldpin ("<dev-libs/slotconflicttarget-2.0")
+    as two top-level atoms: no common satisfying version, so backtracking
+    leaves the [slot conflict] line in place."""
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/slotconflictnewpin", "dev-libs/slotconflictoldpin"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/slotconflicttarget-2.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictnewpin-1.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictoldpin-1.0 ',
         '[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"',
     ]
 
@@ -8801,7 +8846,9 @@ def test_json_dumps_the_whole_graph_unaffected_by_onlydeps(emerge_binary, fixtur
 
 def test_json_includes_slot_conflicts(emerge_binary, fixture_env):
     result = _run(
-        [str(emerge_binary)], ["--pretend", "--json", "dev-libs/slotconflictparent"], fixture_env
+        [str(emerge_binary)],
+        ["--pretend", "--json", "dev-libs/slotconflictunsolvable"],
+        fixture_env,
     )
     assert result.returncode == 0
     payload = json.loads(result.stdout)
@@ -8809,6 +8856,20 @@ def test_json_includes_slot_conflicts(emerge_binary, fixture_env):
     conflict = payload["slot_conflicts"][0]
     assert conflict["category"] == "dev-libs"
     assert conflict["package"] == "slotconflicttarget"
+
+
+def test_json_solvable_slot_conflict_is_reconciled_to_no_conflict(emerge_binary, fixture_env):
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "--json", "dev-libs/slotconflictparent"], fixture_env
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["slot_conflicts"] == []
+    target = next(
+        e for e in payload["entries"] if e["package"] == "slotconflicttarget"
+    )
+    assert target["outcome"] == "new"
+    assert target["version"] == "1.0"
 
 
 def test_virtual_is_resolved_directly(emerge_binary, fixture_env):

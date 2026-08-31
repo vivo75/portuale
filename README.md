@@ -10025,6 +10025,56 @@ no-op. Rust-black-box-tested in `test_portuale.py`: `-b
 --buildpkg-exclude dev-libs/packagepkg` → merged, no `.tbz2`;
 `--buildpkg-exclude dev-libs/other` → `.tbz2` still written.
 
+### Backtracking: a solvable slot conflict is reconciled by re-resolving the whole graph (slice 1)
+
+Real portage's resolver is a retry loop (`_emerge/resolver/backtracking.py`
++ `BacktrackParameters`): `depgraph._resolve` runs the whole graph walk,
+and if `_process_slot_conflicts` finds a slot conflict that *one* version
+could resolve (every parent atom that landed on the slot is jointly
+satisfiable), it records the extra constraints and re-runs the entire
+walk from scratch, up to `--backtrack` (default 10) times. The pilot's
+BFS was single-pass with first-atom-wins, so two dependencies that
+disagreed about a slot always surfaced a `[slot conflict]` line even when
+a lower version would have satisfied both.
+
+`resolve_pretend_graph` now wraps its whole BFS + blocker/`required_by`
+merge in a `'backtrack` loop. Each pass rebuilds `entries` and every
+other accumulator from scratch; only `slot_constraints` (keyed by
+`cat/pkg`, the union of every atom text that targeted a conflicted
+package) and the iteration counter survive between passes. During a pass,
+`slot_want` records every atom text that pulled each `cat/pkg`; after a
+pass, each `SlotConflict` is checked for solvability against the raw
+candidate list (is there one version matching *all* of that package's
+`slot_want` atoms?). A solvable conflict folds the whole atom set into
+`slot_constraints` and `continue`s the loop; `resolve_pretend` grew an
+`extra_constraints: &[String]` parameter (a strict no-op when empty, at
+every ordinary call site) that filters `matched` down to candidates
+satisfying every one of them, so the retry pass picks the reconciled
+version and the conflict is gone. Unsolvable conflicts (no such version),
+and anything still conflicting after `MAX_BACKTRACK = 10` passes, fall
+through unchanged and are reported exactly as before.
+
+Cut for this slice (removed by later slices): only *slot* conflicts drive
+a retry — an unsolvable conflict is not yet masked-and-retried, `--backtrack`
+is a hardcoded constant not a real flag, there is no "backtracking
+exhausted" / "circular dependencies" diagnostic, and the autounmask
+parent-flip re-resolve does not yet feed `extra_constraints`. The
+solvability pre-check ignores keyword/mask visibility, so the rare case
+where the one satisfying version is itself masked resolves to a plain
+`no_visible_candidate` on the retry.
+
+Fixtures: the existing `dev-libs/slotconflictparent` chain
+(`slotconflictnewconsumer` bare RDEPEND + `slotconflictoldconsumer`
+`<dev-libs/slotconflicttarget-2.0`) is now a *solvable* case —
+`slotconflicttarget` reconciles to `1.0` with no conflict line. New
+`dev-libs/slotconflictunsolvable` (`slotconflictnewpin`
+`>=dev-libs/slotconflicttarget-2.0` + `slotconflictoldpin`
+`<dev-libs/slotconflicttarget-2.0`) is genuinely unsolvable and still
+prints the `[slot conflict]` line. Contract-tested both as a shared
+`--pretend` / `--json` case pair and via dedicated pinned-output tests
+(single-parent and two-top-level-atom forms of each); Rust-unit-tested in
+`portage-repo`.
+
 ## Running it
 
 Build both Rust binaries:
