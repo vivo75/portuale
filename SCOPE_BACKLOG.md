@@ -94,11 +94,20 @@ See `README.md` for the cited-source grounding of each, and `git log
 
 ### A. Resolver
 
-- **Backtracking.** The single biggest gap. The resolver is one forward
-  BFS pass: it *detects and reports* slot conflicts but cannot *resolve*
-  them by re-trying a different version / USE combination, and `--autounmask`
-  is a narrow forward-only approximation of real portage's backtracking
-  autounmask. Real `depgraph.py` + `_emerge/resolver/backtracking.py`.
+Every *forward-pass* resolver feature is shipped (the `--autounmask*`
+family completed 2026-08-31). What remains is architectural — a
+single-pass BFS can't grow into these incrementally:
+
+- **Backtracking.** The single biggest gap, and the one architectural
+  rewrite that separates "resolves the common case" from "resolves what
+  portage resolves". The resolver is one forward BFS pass: it *detects
+  and reports* slot / USE / mask conflicts but cannot *resolve* them by
+  re-trying a different version / USE combination. `resolve_pretend_graph`
+  would need to become a retry loop over `_dynamic_config`-style state
+  (`_backtrack_infos` propagation, `_slot_operator_trigger_reinstalls`
+  feedback, autounmask levels tried in sequence). Real `depgraph.py` +
+  `_emerge/resolver/backtracking.py` (~400 lines + deep depgraph
+  integration). Weeks of work, and a `PROMPT.md` non-goal for v1.
   (`PROMPT.md` lists a backtracking resolver as out of scope — but it is
   what stands between "resolves the common case" and "resolves what real
   portage resolves".)
