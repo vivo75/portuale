@@ -22,6 +22,97 @@ pub(crate) struct RunPrunePretendArgs<'a> {
     pub(crate) noinfo: bool,
 }
 
+/// `emerge --prune`: unlike `--depclean` there is no `* ` advisory block
+/// and no stats block, and the empty-cleanlist message gains a `To ignore
+/// dependencies, use --nodeps` line. Without `--pretend` the shared
+/// `run_unmerge_pretend` really removes the cleanlist. See
+/// `portage_repo::prune_cleanlist` for the removal-set semantics.
+/// Portage: _emerge/actions.py, action_depclean
+pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
+    let RunPrunePretendArgs {
+        targets,
+        root,
+        config_root,
+        config,
+        repos,
+        verbose,
+        lib_check,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        quiet,
+        noinfo,
+    } = args;
+    let args = match resolve_cleanup_args(targets, root, "prune") {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+
+    let result = portage_repo::prune_cleanlist(root, &args, &[], &config.package_provided);
+    // The `unresolved_deps()` safety halt applies here too (with the
+    // prune-only trailer).
+    // Portage: _emerge/actions.py, _calc_depclean
+    if let Some(code) = depclean_unresolved_halt(&result.unresolved, true, color) {
+        return code;
+    }
+    // `--depclean-lib-check` applies to `--prune` too.
+    // Portage: _emerge/actions.py, _calc_depclean
+    let result = apply_depclean_lib_check(root, result, lib_check, color, |providers| {
+        portage_repo::prune_cleanlist(root, &args, providers, &config.package_provided)
+    });
+
+    // The inline reverse-dep display prints while the removal list is
+    // built, before the removal-order line / empty message.
+    // Portage: _emerge/actions.py, create_cleanlist
+    if verbose {
+        for (pkg, lines) in &result.kept_parents {
+            println!("  {} pulled in by:", pkg.cpv());
+            for line in lines {
+                println!("    {line}");
+            }
+            println!();
+        }
+    }
+
+    if result.cleanlist.is_empty() {
+        println!(">>> No packages selected for removal by prune");
+        // Real `create_cleanlist`: `if "--verbose" not in myopts`.
+        if !verbose {
+            println!(">>> To see reverse dependencies, use --verbose");
+        }
+        println!(">>> To ignore dependencies, use --nodeps");
+        return ExitCode::SUCCESS;
+    }
+
+    println!(">>> Calculating removal order...");
+    let cpv_atoms: Vec<String> = result
+        .cleanlist
+        .iter()
+        .map(|p| format!("={}", p.cpv()))
+        .collect();
+    let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
+    // Without `--pretend`, the shared unmerge path removes them.
+    // Portage: _emerge/actions.py, action_depclean
+    run_unmerge_pretend(RunUnmergePretendArgs {
+        targets: &cpv_refs,
+        action: "unmerge",
+        root,
+        config_root,
+        config,
+        repos,
+        preserve_order: result.ordered,
+        pretend,
+        ask,
+        shell,
+        debug,
+        color,
+        quiet,
+        noinfo,
+    })
+}
+
 /// Arguments of [`run_prune_nodeps_pretend`].
 pub(crate) struct RunPruneNodepsPretendArgs<'a> {
     pub(crate) targets: &'a [&'a str],
