@@ -9457,4 +9457,133 @@ seeded `1.0` → vdb entry + payload gone, `prerm-1.0`/`postrm-1.0` in the
 fixture's `${ROOT}` hook log, the atom dropped from `world` and an
 unrelated atom kept; plus `-pC` still previews and removes nothing.
 
+### `emerge --depclean` / `emerge --prune` (no `--pretend`): real removal, completing the story
+
+`emerge -C`'s removal machinery (`execute_unmerge` /
+`unmerge_one_installed` / `deselect_from_world`) is exactly what real
+`action_depclean` needs: it literally feeds its computed cleanlist to
+`unmerge(root_config, myopts, "unmerge", cleanlist, ordered=ordered)` —
+the *same* `unmerge()` `-C` calls. So this slice is mostly wiring:
+
+- `run_depclean_pretend` / `run_prune_pretend` / the `--prune --nodeps`
+  path each gained a `pretend: bool`. They already compute everything —
+  the topological cleanlist, the `unresolved_deps()` safety halt, the
+  `--depclean-lib-check` scan, the `--verbose` reverse-dep blocks — and
+  pass the cleanlist cpvs to the shared `run_unmerge_pretend`. Now they
+  pass the real `pretend` through: without it, `run_unmerge_pretend`
+  runs `execute_unmerge` after the preview (per-package `pkg_prerm` from
+  the vdb-saved env → files → `pkg_postrm` → vdb dir, then
+  `deselect_from_world`), in the cleanlist's own dependency-respecting
+  order.
+- The safety halt and lib-check still run *before* any removal — real
+  `_calc_depclean` returns non-`EX_OK` and `action_depclean` bails
+  before `unmerge()`, so a kept package with an unsatisfiable hard
+  runtime dep still aborts with nothing removed.
+- `run_depclean_pretend`'s stats block reads `Number removed:` instead
+  of `Number to remove:` when not `--pretend` (real
+  `action_depclean:908-911`); `--prune` has no stats block either way.
+- The `>>> These are the packages that would be unmerged:` header stays
+  `--pretend`/`--ask`-gated (real `unmerge.py:195`) — including in the
+  `--prune --nodeps` path, which reimplements `_unmerge_display`'s prune
+  branch directly.
+
+The `--unmerge`/`--depclean`/`--prune` `requires --pretend` gates are
+all gone now (see `--deselect` below for the last one). **v1 cuts** carry
+over from `-C`: no `CLEAN_DELAY` countdown, no `--ask`, no
+`FEATURES=unmerge-backup`; slot-operator rebuild edges on the cleanlist
+still unmodelled. Not in the contract CASES (the Python reference
+returns 0 for any non-`--pretend` path); the `("real emerge action, not
+implemented", ["--depclean"], 2)` / `["-c"]` CASES are gone, and
+`test_depclean_requires_pretend` / `test_prune_requires_pretend` became
+`test_*_without_pretend_is_no_longer_gated`. Rust-black-box-tested in
+`test_portuale.py`: `emerge --depclean` removes a seeded orphan
+(`Number removed: 1`, hooks ran, files + vdb gone); `emerge --prune`
+removes the non-highest version of a multi-version cp and keeps the
+highest.
+
+### `emerge --config <atom>`: run `pkg_config` for an installed package
+
+Real `action_config` is the emerge-level `pkg_config` runner (the
+counterpart to `ebuild <file> config`, which portuale already had).
+`run_config_action` ports it:
+
+- exactly one atom (real `if len(myfiles) != 1` → `!!! config can only
+  take a single package atom at this time`, exit 1)
+- matched against the vdb the same way `--unmerge` matches — a bare name
+  gets its category from the vdb (ambiguous is a hard error), `cat/pkg`
+  via `installed_candidates` + `match_from_list` (real
+  `vartree.dbapi.match`)
+- zero matches → `No packages found.` exit 0; more than one →
+  `The following packages available:` + `* <cpv>` list + exit 1;
+  exactly one → `Configuring pkg...`, then `pkg_config` from *that
+  version's own* vdb-stored `environment.bz2` + `<pf>.ebuild`
+
+`ebuild_merge::run_vdb_saved_env_phase` (new — factored out of
+`unmerge_one_installed`'s prerm/postrm hook runner, minus its
+`DEFINED_PHASES` gate since real `doebuild(ebuildpath, "config", …)`
+runs `pkg_config` unconditionally) does the copy-into-scratch +
+`run_phase_from_saved_env`; a best-effort builddir removal follows on
+success (real `doebuild(…, "clean")`). `--config` is dispatched as a
+standalone action that ignores `--pretend` entirely (real `action_config`
+never checks it) and needs nothing from the resolved config.
+
+**v1 cuts:** `--ask` (the interactive package picker and the "Ready to
+configure?" prompt) — portuale's non-interactive stance, matching real
+portage's own non-`--ask` branch; `elog` processing. Not in the contract
+CASES (the Python reference returns 0 for this action — no
+ebuild-execution machinery). `--config` was added to the "implemented so
+far" list in the recognized-but-unimplemented message. Rust-black-box
+-tested in `test_portuale.py`: a merged `dev-libs/emergeconfigpkg` (new
+fixture, `pkg_config` writes `${EROOT}/var/lib/emergeconfigpkg.configured`)
+→ `emerge --config` writes the marker; the multi-atom and no-match paths
+hit their respective messages/exit codes.
+
+### `FEATURES=unmerge-backup`: a `quickpkg` before every `emerge -C` / `--depclean` / `--prune`
+
+Real `dblink._pre_unmerge_backup` (`vartree.py:6287`) runs at the very
+top of `dblink.unmerge()` — before `pkg_prerm`, before a single file is
+touched — and, when `FEATURES=unmerge-backup`, builds a binpkg of the
+still-installed package via `quickpkg ={cpv}`. This is the "don't lose a
+package you can't rebuild" safety net; it was the one flagged v1 cut
+across all the removal paths shipped in the previous slices.
+
+`ebuild_package::quickpkg_from_vdb` ports real `dblink.quickpkg` +
+`_quickpkg_dblink`:
+
+- stage the installed tree into `${PORTAGE_BUILDDIR}/image` by walking
+  the vdb `CONTENTS` and copying each `obj` from `${ROOT}` / recreating
+  each `sym` / `mkdir`-ing each `dir` (real `tar_contents(contents,
+  ROOT, tar)`). A CONFIG_PROTECT'd (not `-MASK`'d) file is left out —
+  real `include_config=False` (`is_protected`, shared with the merge
+  side). `fif`/`dev` nodes are skipped (the same `CAP_MKNOD` cut the
+  merge side's `create_special_node` has).
+- copy the whole vdb dir verbatim into `${PORTAGE_BUILDDIR}/build-info`
+  (real `xpak.xpak(dblnk.dbdir)`)
+- run the *same* real, unmodified `bin/misc-functions.sh __dyn_package`
+  the `ebuild <file> package` / `--buildpkgonly` paths already use —
+  factored out of `run_package`'s tail into `invoke_dyn_package` — which
+  tars `${D}` and appends `build-info/` as the xpak segment (byte-shape
+  identical to real quickpkg's `xpak.recompose_mem`) or hands both to
+  `gpkg-helper.py`
+- write a `$PKGDIR/Packages` entry from the vdb's **own** recorded
+  `*DEPEND`/`SLOT`/… build-info (not md5-cache — the package may no
+  longer be in any repo)
+
+Wired into `unmerge_one_installed` (a new `backup: Option<&PackageOptions>`
+param): `execute_unmerge` passes `Some(package_options_from_env())` when
+`FEATURES` names `unmerge-backup`, and prints `>>> Building backup
+package for <cpv>`. A `quickpkg` failure **aborts** that package's
+unmerge (real `unmerge()`'s own `if retval != os.EX_OK: … return
+retval`). `unmerge_replaced_same_slot` (the `treewalk()` replace loop)
+passes `None` — real portage there uses `_pre_merge_backup` /
+`downgrade-backup` instead, a documented cut.
+
+**v1 cuts:** the replace-loop `_pre_merge_backup` / `FEATURES=
+downgrade-backup` path; the real `BUILD_TIME` idempotency check
+(narrowed to "skip if `$PKGDIR/<cat>/<pf>.{tbz2,gpkg.tar}` already
+exists"); `fif`/`dev` `CONTENTS` nodes. Rust-black-box-tested in
+`test_portuale.py`: `emerge -C` with `FEATURES=unmerge-backup` + `PKGDIR`
+→ a valid xpak `.tbz2` (image tar + `XPAKSTOP` trailer, holds the
+installed file), a `Packages` entry, and the package gone afterward.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
