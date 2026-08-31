@@ -9403,11 +9403,23 @@ file is rewritten sorted + deduplicated with the real
 `>>> Recording <atom> in "world" favorites file...` line per addition,
 and (exactly like real `WorldSelectedPackagesSet.write`) comment and
 `@set` lines are not carried forward. **v1 cuts:** the recorded atom is
-`cat/pkg` (+ `::repo` if the arg carried one) — real `create_world_atom`'s
-full slot-atom / system-virtual logic isn't ported, so the pilot's world
-file is `cat/pkg`-granular; an unslotted `@system` member isn't recorded
-(real "unslotted system packages will not be stored in world"); a `@set`
-target isn't added to `world_sets`.
+`cat/pkg` (+ `::repo` if the arg carried one); an unslotted `@system`
+member isn't recorded (real "unslotted system packages will not be
+stored in world"); a `@set` target isn't added to `world_sets`.
+
+**Slot atoms** (real `create_world_atom`: "If the argument atom is
+precise enough to identify a specific slot then a slot atom will be
+returned"). A `cat/pkg:slot` argument is now recorded slot-qualified —
+`dev-libs/dualslotpkg:1` — **when `cat/pkg` is genuinely slotted**, real's
+own test: more than one `SLOT` available in the repo, or a single `SLOT`
+that isn't `"0"` (`portage_repo::list_candidates` supplies the slot set).
+A bare `cat/pkg` arg, or a `:0` arg for an unslotted cp, still records
+the plain `cat/pkg`. `atom.slot` is the main slot only, so a `:2/9` arg
+records `cat/pkg:2` (matching real `pkg.slot_atom`). Still cut: a
+*version*-pinned arg that identifies one slot (real records the slot
+atom there too); the vdb-only multislot fallback; the system-virtual
+exclusion; and `@set` → `world_sets` (blocked on `emerge @set` build
+support, not implemented yet).
 
 **`--oneshot`/`-1`** — previously rejected as "recognized but not
 implemented" — now: suppresses the world-file write on a real merge
@@ -9419,7 +9431,9 @@ the contract CASE just confirms both sides agree; a dedicated
 `--color=y` test pins the `\x1b[32;01m` → `\x1b[32m` flip. The world
 write itself is Rust-black-box-tested in `test_portuale.py` (target
 recorded, dep not, sorted, existing entries kept; `--oneshot` leaves the
-file byte-identical) + an `update_world_file` unit test.
+file byte-identical; a `:slot` arg for `dualslotpkg` records
+`dev-libs/dualslotpkg:1`, a bare / unslotted arg doesn't) + two
+`update_world_file` unit tests.
 
 ### `emerge --getbinpkgonly`/`--getbinpkg`: collision-protect / blocker exclusion / preserve-libs parity
 

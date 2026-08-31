@@ -588,6 +588,58 @@ def test_emerge_atom_oneshot_does_not_touch_the_world_file(emerge_binary, tmp_pa
     assert (root / "var/lib/portage/world").read_bytes() == world_before
 
 
+def test_emerge_slotted_atom_is_recorded_slot_qualified_in_world(emerge_binary, tmp_path):
+    """Real create_world_atom: "If the argument atom is precise enough to
+    identify a specific slot then a slot atom will be returned." A
+    `cat/pkg:slot` argument for a genuinely slotted cp (dev-libs/dualslotpkg
+    has SLOT=1 and SLOT=2, neither "0") records `dev-libs/dualslotpkg:1`.
+    An unslotted cp (dev-libs/packagepkg, SLOT="0" only) records the plain
+    `cat/pkg` even when the arg carried `:0`."""
+    import shutil
+
+    def _root(n):
+        root = tmp_path / f"root{n}"
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+        env["PORTAGE_TMPDIR"] = str(tmp_path / f"portage-tmpdir{n}")
+        return root, env
+
+    # Slotted cp + slot-specific arg -> slot atom in world.
+    root, env = _root(0)
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/dualslotpkg:1"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert '>>> Recording dev-libs/dualslotpkg:1 in "world" favorites file...' in r.stdout
+    assert "dev-libs/dualslotpkg:1" in (root / "var/lib/portage/world").read_text().split()
+
+    # Bare arg for the same slotted cp -> plain cat/pkg (arg isn't slot-specific).
+    root, env = _root(1)
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/dualslotpkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    world = (root / "var/lib/portage/world").read_text().split()
+    assert "dev-libs/dualslotpkg" in world
+    assert not any(w.startswith("dev-libs/dualslotpkg:") for w in world)
+
+    # Unslotted cp (SLOT="0" only) + `:0` arg -> still plain cat/pkg.
+    root, env = _root(2)
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/packagepkg:0"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    world = (root / "var/lib/portage/world").read_text().split()
+    assert world.count("dev-libs/packagepkg") == 1
+    assert "dev-libs/packagepkg:0" not in world
+
+
 def test_emerge_atom_upgrade_replaces_the_installed_version(emerge_binary, tmp_path):
     """`emerge <atom>` handles an Upgrade too now: merge the new version,
     then unmerge the replaced same-slot version (real

@@ -1859,9 +1859,16 @@ fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
 /// `<root>/var/lib/portage/world` -- whether it merged or was already
 /// installed. `--oneshot`/`--onlydeps` suppress this entirely (real
 /// `_world_atom`'s own early-return set). The recorded atom is the
-/// argument's own `cat/pkg` (plus `::repo` when the arg carried one) --
-/// real `create_world_atom`'s full slot-atom / system-virtual logic is a
-/// documented v1 cut, so the pilot's world file is `cat/pkg`-granular.
+/// argument's own `cat/pkg` (plus `::repo` when the arg carried one),
+/// EXCEPT that a `cat/pkg:slot` argument is recorded slot-qualified when
+/// `cat/pkg` is genuinely slotted -- real `create_world_atom`: "If the
+/// argument atom is precise enough to identify a specific slot then a
+/// slot atom will be returned." "Slotted" here is real's own test: more
+/// than one `SLOT` available in the repo, or a single `SLOT` that isn't
+/// `"0"`. v1 cuts still: a *version*-pinned arg that identifies one slot
+/// (real records the slot atom there too); the vdb-only multislot
+/// fallback; system-virtual exclusion; and the `@set` target -> `world_sets`
+/// half (needs `emerge @set` build support, not implemented yet).
 /// An unslotted `@system` member is not recorded (real "unslotted system
 /// packages will not be stored in world"). Already-present atoms are
 /// left alone; when anything is added the file is rewritten sorted +
@@ -1872,6 +1879,7 @@ fn update_world_file(
     target_atoms: &[&str],
     entries: &[GraphEntry],
     system_atoms: &[String],
+    repos: &[portage_repo::RepoConfig],
     oneshot: bool,
     onlydeps: bool,
 ) -> Result<(), String> {
@@ -1909,7 +1917,27 @@ fn update_world_file(
             continue;
         }
 
+        // Real `create_world_atom`: keep the arg's `:slot` iff (a) the
+        // arg actually carried one and it matches the resolved slot, and
+        // (b) `cat/pkg` is "slotted" -- >1 SLOT in the repo, or a lone
+        // SLOT that isn't "0". `atom.slot` is the main slot only (a
+        // `:2/9` arg still records `cat/pkg:2`, matching `pkg.slot_atom`).
+        let slot_suffix = atom.slot.as_deref().filter(|s| {
+            entry.slot.as_deref() == Some(s)
+                && portage_repo::list_candidates(repos, &atom.category, &atom.package)
+                    .map(|cands| {
+                        let slots: std::collections::HashSet<&str> =
+                            cands.iter().map(|c| c.slot.as_str()).collect();
+                        slots.len() > 1 || (slots.len() == 1 && !slots.contains("0"))
+                    })
+                    .unwrap_or(false)
+        });
+
         let mut world_atom = format!("{}/{}", atom.category, atom.package);
+        if let Some(slot) = slot_suffix {
+            world_atom.push(':');
+            world_atom.push_str(slot);
+        }
         if let Some(repo) = &atom.repo {
             world_atom.push_str("::");
             world_atom.push_str(repo);
@@ -5668,9 +5696,15 @@ pub fn run(args: &[String]) -> ExitCode {
         // never merges, so a package that isn't installed can't be a
         // world member yet); `--oneshot`/`--onlydeps` are handled inside.
         if !buildpkgonly {
-            if let Err(e) =
-                update_world_file(&root, &atom_args, entries, system_atoms, oneshot, onlydeps)
-            {
+            if let Err(e) = update_world_file(
+                &root,
+                &atom_args,
+                entries,
+                system_atoms,
+                &repos,
+                oneshot,
+                onlydeps,
+            ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
@@ -5721,15 +5755,42 @@ mod tests {
             world_entry("dev-libs", "adep", "0"),
         ];
         // `adep` isn't a requested atom -> not recorded; `wanted` is.
-        update_world_file(&root, &["dev-libs/wanted"], &entries, &[], false, false).unwrap();
+        update_world_file(
+            &root,
+            &["dev-libs/wanted"],
+            &entries,
+            &[],
+            &[],
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
             "dev-libs/existing\ndev-libs/wanted\n"
         );
 
         // A second run is idempotent, and `--oneshot` writes nothing.
-        update_world_file(&root, &["dev-libs/wanted"], &entries, &[], false, false).unwrap();
-        update_world_file(&root, &["dev-libs/wanted2"], &entries, &[], true, false).unwrap();
+        update_world_file(
+            &root,
+            &["dev-libs/wanted"],
+            &entries,
+            &[],
+            &[],
+            false,
+            false,
+        )
+        .unwrap();
+        update_world_file(
+            &root,
+            &["dev-libs/wanted2"],
+            &entries,
+            &[],
+            &[],
+            true,
+            false,
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
             "dev-libs/existing\ndev-libs/wanted\n"
@@ -5742,6 +5803,7 @@ mod tests {
             &["dev-libs/wanted"],
             &entries,
             &["dev-libs/wanted".to_string()],
+            &[],
             false,
             false,
         )
@@ -5750,6 +5812,77 @@ mod tests {
             std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
             ""
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn update_world_file_slot_qualifies_a_slotted_target() {
+        // dev-libs/dualslotpkg has SLOT=1 and SLOT=2 in the repo (neither
+        // "0") -> "slotted"; dev-libs/packagepkg is SLOT="0" only.
+        let repos = portage_repo::find_repos(&fixtures_root()).expect("repos");
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-worldslot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+
+        // Slotted cp + `:1` arg -> `dev-libs/dualslotpkg:1`.
+        let entries = vec![world_entry("dev-libs", "dualslotpkg", "1")];
+        update_world_file(
+            &root,
+            &["dev-libs/dualslotpkg:1"],
+            &entries,
+            &[],
+            &repos,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
+            "dev-libs/dualslotpkg:1\n"
+        );
+
+        // Bare arg for the same slotted cp -> plain `cat/pkg`.
+        std::fs::write(root.join("var/lib/portage/world"), "").unwrap();
+        update_world_file(
+            &root,
+            &["dev-libs/dualslotpkg"],
+            &entries,
+            &[],
+            &repos,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
+            "dev-libs/dualslotpkg\n"
+        );
+
+        // Unslotted cp (SLOT="0" only) + `:0` arg -> still plain `cat/pkg`.
+        std::fs::write(root.join("var/lib/portage/world"), "").unwrap();
+        let pkg_entries = vec![world_entry("dev-libs", "packagepkg", "0")];
+        update_world_file(
+            &root,
+            &["dev-libs/packagepkg:0"],
+            &pkg_entries,
+            &[],
+            &repos,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
+            "dev-libs/packagepkg\n"
+        );
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
