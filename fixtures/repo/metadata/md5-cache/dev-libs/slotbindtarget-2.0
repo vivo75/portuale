@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: slot-operator rebuild -- new sub-slot 2/9
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=2/9
+_md5_=0000000000000000000000000000000

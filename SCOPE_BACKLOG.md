@@ -141,7 +141,8 @@ Ranked roughly by how self-contained each is.
   machinery) after the preview -- real `action_depclean` feeds its
   cleanlist to the very same `unmerge()`. Safety halt + `--depclean-lib-
   check` still gate removal; stats block reads `Number removed:`. **Still
-  open:** slot-operator rebuild edges, the exact `@selected`-vs-`@world`
+  open:** the depclean-specific slot-operator rebuild interaction (see
+  A.7 for the general resolver rebuild), the exact `@selected`-vs-`@world`
   set nesting (approximated), the "Broken soname dependencies found"
   *warning* half of `unresolved_deps()` (no soname deps in this pilot's
   RDEPEND).
@@ -163,8 +164,7 @@ Ranked roughly by how self-contained each is.
   2026-08-31** (same `pretend: bool` wiring as `--depclean`;
   `run_prune_nodeps_pretend` builds its own `removal_list` and calls
   `execute_unmerge` directly, real `actions.py:2684` routing `prune
-  --nodeps` through the same `unmerge()` `-C` uses). **Still open:**
-  slot-operator rebuild edges.
+  --nodeps` through the same `unmerge()` `-C` uses). **Still open:** the depclean-specific slot-operator rebuild interaction (see A.7 for the general resolver rebuild).
 - Minor `-pC` narrowings: ~~the higher-slot refinement on the
   set-protection warning~~ **shipped 2026-08-30** (real
   `unmerge.py:421-441`'s `higher_slot`: the "still listed in package
@@ -478,11 +478,22 @@ Ranked roughly by how self-contained each is.
    **`:=` slot-operator binding shipped 2026-08-31**: `bind_slot_operator`
    (real `_slot_operator._eval_deps`'s per-atom step) rewrites each
    `*DEPEND` `:=` atom to `:<slot>/<sub-slot>=` from the highest
-   installed match in `<root>/var/db/pkg`, bare if unresolvable —
-   groundwork for the still-open slot-operator rebuild edges. v1
+   installed match in `<root>/var/db/pkg`, bare if unresolvable. v1
    simplification: every `*DEPEND` key bound against the one target-`ROOT`
    vdb (real splits RDEPEND/PDEPEND vs DEPEND/BDEPEND); no `|| ( A:= B:= )`
-   handling. Cut still: `IUSE_EFFECTIVE`. `FEATURES=verify-sig`
+   handling. **Slot-operator REBUILD edges shipped 2026-08-31 (v1)**:
+   `resolve_pretend_graph`'s post-pass `slot_operator_rebuild_entries`
+   (real `_slot_operator_trigger_reinstalls` / the
+   `@__auto_slot_operator_replace_installed__` set) — an installed
+   package whose built `cat/pkg:S/SS=` dep no longer matches how the run
+   leaves `cat/pkg` in that slot becomes a
+   `Reinstall { slot_operator_rebuild: true }` (`[ebuild R]`, `--json`
+   `slot_operator_rebuild` bool), ordered after the dep. New sixth
+   `PretendOutcome::Reinstall` trigger field. v1 cuts: single-pass (no
+   backtracking), consumer's own `:=` not re-bound, no `--changed-slot`/
+   `--ignore-built-slot-operator-deps` interaction, no "causing rebuilds:"
+   (`_show_abi_rebuild_info`) block. New `dev-libs/slotbind{target,consumer}`
+   fixtures. Cut still: `IUSE_EFFECTIVE`. `FEATURES=verify-sig`
    (GPG) lives here too — it is a `gpkg`/repo-sync concept, **not**
    `SRC_URI` fetch (the earlier backlog mis-scoped it).
 

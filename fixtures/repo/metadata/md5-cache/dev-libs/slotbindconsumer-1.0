@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture: slot-operator rebuild -- consumer with a := dep
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+RDEPEND=dev-libs/slotbindtarget:=
+SLOT=0
+_md5_=0000000000000000000000000000000

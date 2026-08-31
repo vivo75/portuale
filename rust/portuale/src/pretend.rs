@@ -1052,6 +1052,7 @@ fn print_entry_line(
             slot_changed: _,
             rebuilt_binary: _,
             new_repo: _,
+            slot_operator_rebuild: _,
         } => {
             // Real `_get_installed_best`: the exact cpv is already
             // installed -> `attr.replace` (the yellow `R` at column 2),
@@ -1439,6 +1440,7 @@ fn entry_to_json(
             slot_changed,
             rebuilt_binary,
             new_repo,
+            slot_operator_rebuild,
         } => {
             fields.push(format!("\"version\":{}", json_string(version)));
             let changed_use: Vec<String> = changed_flags.iter().map(|f| json_string(f)).collect();
@@ -1447,6 +1449,7 @@ fn entry_to_json(
             fields.push(format!("\"changed_slot\":{slot_changed}"));
             fields.push(format!("\"rebuilt_binary\":{rebuilt_binary}"));
             fields.push(format!("\"new_repo\":{new_repo}"));
+            fields.push(format!("\"slot_operator_rebuild\":{slot_operator_rebuild}"));
         }
         PretendOutcome::NoVisibleCandidate => {}
     }
@@ -5733,6 +5736,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             },
             "bar* -baz",
             "bar*",
@@ -5752,6 +5756,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             },
             "bar -baz",
             "",

@@ -3044,8 +3044,18 @@ pub enum PretendOutcome {
     /// display, matching `Upgrade`'s own `from`/`to` pattern) -- empty
     /// when it didn't trigger this outcome. At least one of
     /// `changed_flags`/`deps_changed`/`slot_changed`/`rebuilt_binary`/
-    /// `new_repo` is always non-empty/`true`; a `Reinstall` with none of
-    /// the five is never constructed.
+    /// `new_repo`/`slot_operator_rebuild` is always non-empty/`true`; a
+    /// `Reinstall` with none of the six is never constructed.
+    ///
+    /// `slot_operator_rebuild` is real depgraph's own
+    /// `_slot_operator_trigger_reinstalls` / the
+    /// `@__auto_slot_operator_replace_installed__` set: this installed
+    /// package's vdb `*DEPEND` carries a *built* slot-operator atom
+    /// (`cat/pkg:S/SS=`) whose bound `S/SS` no longer matches how this
+    /// run leaves `cat/pkg` in that slot, so it must be rebuilt against
+    /// the new ABI (`slot_operator_rebuild_entries`, a single-pass v1 --
+    /// see its own doc comment). Never combined with the other five in
+    /// this pilot: the post-pass only ever constructs it standalone.
     Reinstall {
         version: String,
         changed_flags: Vec<String>,
@@ -3053,6 +3063,7 @@ pub enum PretendOutcome {
         slot_changed: bool,
         rebuilt_binary: bool,
         new_repo: bool,
+        slot_operator_rebuild: bool,
     },
 }
 
@@ -3491,9 +3502,18 @@ fn unresolved_runtime_deps(
     installed: &[InstalledPackage],
     libc_cps: &HashSet<(String, String)>,
 ) -> Vec<(String, String)> {
+    // Include the sub-slot (real `_match_slot` checks it whenever the
+    // atom specifies one, slot operator or not -- a built `foo:2/3=` dep
+    // is only satisfied by an installed `foo` at slot 2 sub-slot 3).
     let candidate_strs: Vec<String> = installed
         .iter()
-        .map(|p| format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot))
+        .map(|p| {
+            let (_slot, sub_slot) = read_vdb_slot(root, &p.category, &p.package, &p.version);
+            format!(
+                "{}/{}-{}:{}/{}",
+                p.category, p.package, p.version, p.slot, sub_slot
+            )
+        })
         .collect();
     let matches_any = |atom_str: &str, atom: &portage_dep::Atom| -> bool {
         for (p, cs) in installed.iter().zip(candidate_strs.iter()) {
@@ -5588,6 +5608,7 @@ fn already_installed_or_reinstall(
             slot_changed: slot_changed_flag,
             rebuilt_binary: rebuilt_binary_flag,
             new_repo: new_repo_flag,
+            slot_operator_rebuild: false,
         });
     }
     Ok(PretendOutcome::AlreadyInstalled {
@@ -6123,6 +6144,7 @@ pub fn resolve_pretend(
                 slot_changed: slot_changed_flag,
                 rebuilt_binary: rebuilt_binary_flag,
                 new_repo: new_repo_flag,
+                slot_operator_rebuild: false,
             });
         }
         return Ok(PretendOutcome::AlreadyInstalled {
@@ -6449,6 +6471,142 @@ pub struct GraphEntry {
 /// nesting from `required_by` and is unaffected by the Vec order (see
 /// `pretend.rs::print_tree`).
 fn topological_merge_order(entries: Vec<GraphEntry>) -> Vec<GraphEntry> {
+    topological_merge_order_impl(entries)
+}
+
+/// Real depgraph's `_slot_operator_trigger_reinstalls` +
+/// `_slot_operator_replace_installed` (the
+/// `@__auto_slot_operator_replace_installed__` set), as a **single-pass
+/// v1** run once every merge-bound entry is resolved: an installed
+/// package whose vdb `*DEPEND` carries a *built* slot-operator atom
+/// (`cat/pkg:S/SS=` -- operator `=`, both slot and sub-slot present, real
+/// `Atom.slot_operator_built`) whose bound `S/SS` no longer matches how
+/// this run leaves `cat/pkg` **in that same slot** is scheduled for a
+/// reinstall (`Reinstall { slot_operator_rebuild: true, .. }`) -- real
+/// portage's "don't leave a broken ABI link" auto-rebuild.
+///
+/// A provider entry counts only when it *replaces* an installed version
+/// in a slot (`Upgrade`/`Downgrade`/`Reinstall` -- a new-other-slot
+/// `New` leaves the old slot untouched, so it triggers nothing), and
+/// only for a consumer whose bound atom names that exact slot with a
+/// **different** sub-slot. The vdb `*DEPEND` is read verbatim (already
+/// USE-reduced and `:=`-bound at merge time, see
+/// `ebuild_phases::bind_slot_operator`), not re-reduced.
+///
+/// v1 cuts (the same "narrow v1, document the cut" pattern as the
+/// `--root-deps` recursion increments): no backtracking -- a rebuild
+/// that would itself shift another package's sub-slot is not chased;
+/// the rebuilt consumer's own `:=` deps aren't re-bound here (the real
+/// rebuild does that); no `--changed-slot` / `--ignore-built-slot-
+/// operator-deps` interaction; the "The following packages are causing
+/// rebuilds:" display block (`_show_abi_rebuild_info`) is not produced.
+fn slot_operator_rebuild_entries(root: &Path, entries: &[GraphEntry]) -> Vec<GraphEntry> {
+    let mut new_slot: HashMap<(String, String), (String, String)> = HashMap::new();
+    let mut in_graph: HashSet<(String, String)> = HashSet::new();
+    for e in entries {
+        if !matches!(
+            e.outcome,
+            PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::NoVisibleCandidate
+        ) {
+            in_graph.insert((e.category.clone(), e.package.clone()));
+        }
+        if matches!(
+            e.outcome,
+            PretendOutcome::Upgrade { .. }
+                | PretendOutcome::Downgrade { .. }
+                | PretendOutcome::Reinstall { .. }
+        ) {
+            if let (Some(slot), Some(sub_slot)) = (e.slot.clone(), e.sub_slot.clone()) {
+                new_slot.insert((e.category.clone(), e.package.clone()), (slot, sub_slot));
+            }
+        }
+    }
+    if new_slot.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out: Vec<GraphEntry> = Vec::new();
+    for pkg in all_installed_packages(root) {
+        let cp = (pkg.category.clone(), pkg.package.clone());
+        if in_graph.contains(&cp) {
+            continue;
+        }
+        let triggered = ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
+            .iter()
+            .flat_map(|key| {
+                read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key)
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            })
+            .filter_map(|tok| portage_dep::parse_atom(&tok))
+            .any(|atom| {
+                if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
+                    return false;
+                }
+                let (Some(a_slot), Some(a_sub)) = (atom.slot.as_deref(), atom.sub_slot.as_deref())
+                else {
+                    return false;
+                };
+                new_slot
+                    .get(&(atom.category.clone(), atom.package.clone()))
+                    .is_some_and(|(n_slot, n_sub)| a_slot == n_slot && a_sub != n_sub)
+            });
+        if !triggered {
+            continue;
+        }
+
+        let (slot, sub_slot) = read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
+        let repo = read_vdb_string(
+            root,
+            &pkg.category,
+            &pkg.package,
+            &pkg.version,
+            "repository",
+        )
+        .trim()
+        .to_string();
+        out.push(GraphEntry {
+            category: pkg.category.clone(),
+            package: pkg.package.clone(),
+            outcome: PretendOutcome::Reinstall {
+                version: pkg.version.clone(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: true,
+            },
+            blockers: Vec::new(),
+            slot: Some(slot),
+            sub_slot: Some(sub_slot),
+            repo_name: (!repo.is_empty()).then_some(repo),
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: Vec::new(),
+            source: CandidateSource::Ebuild,
+            provenance: VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+        });
+    }
+    out.sort_by(|a, b| (a.category.as_str(), a.package.as_str()).cmp(&(&b.category, &b.package)));
+    out
+}
+
+fn topological_merge_order_impl(entries: Vec<GraphEntry>) -> Vec<GraphEntry> {
     let n = entries.len();
     if n < 2 {
         return entries;
@@ -8503,6 +8661,13 @@ pub fn resolve_pretend_graph(
         return Err(required_use_violations.join("\n"));
     }
 
+    // Real depgraph's slot-operator auto-rebuild: an installed consumer
+    // whose built `cat/pkg:S/SS=` dep no longer matches how this run
+    // leaves `cat/pkg` in that slot is scheduled for a reinstall. Added
+    // before the merge-order sort so it lands in dependency-first order
+    // like every other entry.
+    entries.extend(slot_operator_rebuild_entries(root, &entries));
+
     // Real portage's `mylist` is dependency-first (its Scheduler installs
     // a package only after everything it depends on); the pilot's BFS
     // builds `entries` the other way (a package's entry is pushed before
@@ -9182,6 +9347,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -9205,6 +9371,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             })
         );
     }
@@ -9336,6 +9503,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -9782,6 +9950,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -9892,6 +10061,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -9920,6 +10090,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -9941,6 +10112,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -9979,6 +10151,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -9998,6 +10171,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
         // ...but a redundant-bracket difference is not (real `use_reduce`
@@ -10097,6 +10271,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -10195,6 +10370,7 @@ mod tests {
                 slot_changed: true,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -10256,6 +10432,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: true,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -10290,6 +10467,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: true,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -10516,6 +10694,7 @@ mod tests {
                 slot_changed: true,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -10539,6 +10718,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
         assert_eq!(
@@ -10563,6 +10743,7 @@ mod tests {
                 slot_changed: false,
                 rebuilt_binary: false,
                 new_repo: false,
+                slot_operator_rebuild: false,
             }
         );
     }
@@ -10589,6 +10770,7 @@ mod tests {
                         slot_changed: false,
                         rebuilt_binary: false,
                         new_repo: false,
+                        slot_operator_rebuild: false,
                     }
                 )
             ]
@@ -11931,6 +12113,7 @@ mod tests {
             slot_changed: false,
             rebuilt_binary: false,
             new_repo: false,
+            slot_operator_rebuild: false,
         };
         assert_eq!(
             entries,
@@ -14236,6 +14419,7 @@ mod tests {
                         slot_changed: false,
                         rebuilt_binary: false,
                         new_repo: false,
+                        slot_operator_rebuild: false,
                     }
                 )
             ]
@@ -15086,6 +15270,66 @@ mod tests {
             .expect("child entry");
         assert!(matches!(child.outcome, PretendOutcome::NoVisibleCandidate));
         assert!(result.autounmask_use_changes.is_empty());
+    }
+
+    #[test]
+    fn slot_operator_rebuild_entries_flags_only_the_stale_bindings() {
+        // A throwaway vdb: `foo` (unused here), a `stale` consumer bound
+        // `bar:2/2=`, a `fresh` consumer bound `bar:2/9=`, an
+        // `otherslot` consumer bound `bar:1/1=`, and a `nonop` consumer
+        // with a plain (no `=`) `bar:2` dep.
+        let dir = std::env::temp_dir().join(format!(
+            "portage-repo-slotop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mk = |name: &str, slot: &str, rdepend: &str| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        mk("stale-1.0", "0", "dev-libs/bar:2/2=");
+        mk("fresh-1.0", "0", "dev-libs/bar:2/9=");
+        mk("otherslot-1.0", "0", "dev-libs/bar:1/1=");
+        mk("nonop-1.0", "0", "dev-libs/bar:2");
+
+        // `bar` is being upgraded to slot 2 sub-slot 9 this run.
+        let bar_upgrade = GraphEntry {
+            category: "dev-libs".into(),
+            package: "bar".into(),
+            outcome: PretendOutcome::Upgrade {
+                from: "1.0".into(),
+                to: "2.0".into(),
+            },
+            slot: Some("2".into()),
+            sub_slot: Some("9".into()),
+            ..graph_entry("dev-libs", "bar", "2.0")
+        };
+        let out = slot_operator_rebuild_entries(&dir, std::slice::from_ref(&bar_upgrade));
+        let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["stale"],
+            "only the stale :2/2= binding rebuilds"
+        );
+        assert!(matches!(
+            out[0].outcome,
+            PretendOutcome::Reinstall {
+                slot_operator_rebuild: true,
+                ..
+            }
+        ));
+
+        // Nothing changing `bar` -> no rebuilds.
+        assert!(slot_operator_rebuild_entries(&dir, &[]).is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

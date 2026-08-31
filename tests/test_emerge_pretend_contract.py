@@ -962,6 +962,11 @@ CASES = [
         ["--pretend", "--changed-deps", "--changed-slot", "dev-libs/changedslotpkg"],
         0,
     ),
+    # (slot-operator rebuild edges need an installed consumer with a
+    #  stale `:S/SS=` binding -- set up in a test-local vdb, not the
+    #  shared fixture whose whole vdb feeds every depclean/prune/-C test.
+    #  Rust-vs-Python lockstep in
+    #  test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer.)
     (
         "without --with-test-deps, a test?-gated dep is never pulled in",
         ["--pretend", "dev-libs/withtestdeppkg"],
@@ -1801,6 +1806,62 @@ def test_sub_slot_restricted_dependency_atom_rejects_a_real_mismatch(
         result.stderr.splitlines()
         == ['!!! no visible ebuild for dependency "dev-libs/subslotpkg"']
     )
+
+
+def _slotbind_root(tmp_path):
+    """A test-local ROOT: dev-libs/slotbindtarget-1.0 installed at
+    SLOT="2" (sub-slot 2), plus two := consumers -- slotbindconsumer,
+    bound to the stale "dev-libs/slotbindtarget:2/2=", and slotbindfresh,
+    already bound to "dev-libs/slotbindtarget:2/9=" (what -2.0 provides).
+    PORTAGE_CONFIGROOT stays at the shared fixtures so the
+    slotbindtarget-2.0 (SLOT="2/9") ebuild is visible."""
+    for name, files in {
+        "slotbindtarget-1.0": {"CATEGORY": "dev-libs\n", "SLOT": "2\n", "repository": "testrepo\n"},
+        "slotbindconsumer-1.0": {
+            "CATEGORY": "dev-libs\n",
+            "SLOT": "0\n",
+            "repository": "testrepo\n",
+            "RDEPEND": "dev-libs/slotbindtarget:2/2=\n",
+        },
+        "slotbindfresh-1.0": {
+            "CATEGORY": "dev-libs\n",
+            "SLOT": "0\n",
+            "repository": "testrepo\n",
+            "RDEPEND": "dev-libs/slotbindtarget:2/9=\n",
+        },
+    }.items():
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / name
+        d.mkdir(parents=True)
+        for fn, content in files.items():
+            (d / fn).write_text(content)
+    return tmp_path
+
+
+def test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Real depgraph's _slot_operator_trigger_reinstalls: dev-libs/
+    slotbindconsumer's vdb RDEPEND is "dev-libs/slotbindtarget:2/2="
+    (bound when the target was at SLOT="2"). Emerging the target picks
+    slotbindtarget-2.0 (SLOT="2/9"), so that built ABI link is stale and
+    the consumer is scheduled for a reinstall -- `[ebuild R]`, no reason
+    annotation (a slot-operator rebuild, not --newuse/--changed-*), in
+    dependency-first merge order after the target. dev-libs/slotbindfresh
+    is already bound to "2/9=" -> NOT rebuilt."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(_slotbind_root(tmp_path))
+    args = ["--pretend", "dev-libs/slotbindtarget"]
+    result = _run([str(emerge_binary)], args, env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/slotbindtarget-2.0 [1.0]",
+        "[ebuild   R    ] dev-libs/slotbindconsumer-1.0 ",
+    ]
+    # Full Rust-vs-Python lockstep, incl. --json's slot_operator_rebuild.
+    python = _run(emerge_pretend_python, args + ["--json"], env)
+    rust = _run([str(emerge_binary)], args + ["--json"], env)
+    assert rust.stdout == python.stdout, (rust.stdout, python.stdout)
+    assert '"slot_operator_rebuild":true' in rust.stdout
 
 
 def test_use_dep_dependency_atoms_are_resolved_not_dropped(emerge_binary, fixture_env):

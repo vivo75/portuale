@@ -4367,6 +4367,10 @@ def _already_installed_or_reinstall(
             slot_changed_flag,
             rebuilt_binary_flag,
             new_repo_flag,
+            # slot_operator_rebuild -- a separate post-resolution pass
+            # (_slot_operator_rebuild_entries in run()), never a property
+            # of the resolved candidate itself.
+            False,
         )
     return ("already_installed", installed_best["version"])
 
@@ -4841,6 +4845,7 @@ def resolve_pretend(
                 slot_changed_flag,
                 rebuilt_binary_flag,
                 new_repo_flag,
+                False,
             )
         return ("already_installed", best["version"])
     # Upgrade/downgrade/new is decided against only what's installed in
@@ -5071,6 +5076,79 @@ def _autounmask_use_atom_form(resolved, all_candidates, category, package, confi
     if not higher_visible(True):
         return f">={cpv}:{resolved['slot']}"
     return f"={cpv}"
+
+
+def _slot_operator_rebuild_entries(root, repos, entries):
+    """Real depgraph's _slot_operator_trigger_reinstalls +
+    _slot_operator_replace_installed (the
+    @__auto_slot_operator_replace_installed__ set), single-pass v1: an
+    installed package whose vdb *DEPEND carries a built slot-operator
+    atom (cat/pkg:S/SS=) whose bound S/SS no longer matches how this run
+    leaves cat/pkg in that same slot is scheduled for a reinstall.
+    Mirrors portage-repo/src/lib.rs's slot_operator_rebuild_entries
+    exactly (including the v1 cuts documented there)."""
+    new_slot = {}
+    in_graph = set()
+    for entry in entries:
+        category, package, outcome = entry[0], entry[1], entry[2]
+        tag = outcome[0]
+        if tag not in ("already_installed", "no_visible_candidate"):
+            in_graph.add((category, package))
+        if tag in ("upgrade", "downgrade", "reinstall"):
+            version = outcome[2] if tag in ("upgrade", "downgrade") else outcome[1]
+            matching = [
+                c for c in list_candidates(repos, category, package) if c["version"] == version
+            ]
+            if not matching:
+                continue
+            resolved = max(matching, key=lambda c: c["repo_priority"])
+            new_slot[(category, package)] = (resolved["slot"], resolved["sub_slot"])
+    if not new_slot:
+        return []
+
+    out = []
+    for category, package, version, _slot in _all_installed_packages(root):
+        if (category, package) in in_graph:
+            continue
+        triggered = False
+        for key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"):
+            for tok in _read_vdb_string(root, category, package, version, key).split():
+                try:
+                    atom = Atom(tok, allow_repo=True)
+                except Exception:
+                    continue
+                if atom.slot_operator != "=" or atom.slot is None or atom.sub_slot is None:
+                    continue
+                ns = new_slot.get(tuple(atom.cp.split("/", 1)))
+                if ns is not None and atom.slot == ns[0] and atom.sub_slot != ns[1]:
+                    triggered = True
+                    break
+            if triggered:
+                break
+        if not triggered:
+            continue
+        slot, sub_slot = _read_vdb_slot(root, category, package, version)
+        repo = _read_vdb_string(root, category, package, version, "repository").strip()
+        outcome = ("reinstall", version, [], False, False, False, False, True)
+        out.append(
+            (
+                category,
+                package,
+                outcome,
+                [],
+                slot,
+                [],
+                [],
+                "ebuild",
+                {"mask_entry": None, "unmask_entry": None, "keyword_entry": None},
+                None,
+                None,
+                None,
+                False,
+            )
+        )
+    out.sort(key=lambda e: (e[0], e[1]))
+    return out
 
 
 def _topological_merge_order(entries):
@@ -6240,6 +6318,10 @@ def resolve_pretend_graph(
     if required_use_violations:
         raise ResolutionError("\n".join(required_use_violations))
 
+    # Real depgraph's slot-operator auto-rebuild -- see
+    # portage-repo/src/lib.rs's slot_operator_rebuild_entries.
+    entries.extend(_slot_operator_rebuild_entries(root, repos, entries))
+
     # Real portage's `mylist` is dependency-first (its Scheduler installs
     # a package only after everything it depends on); this BFS builds
     # `entries` the other way (a package's entry is appended before its
@@ -6787,6 +6869,7 @@ def _entry_to_json(category, package, merge_order, outcome, blockers, slot, use_
         fields.append(f'"changed_slot":{_json_bool(outcome[4])}')
         fields.append(f'"rebuilt_binary":{_json_bool(outcome[5])}')
         fields.append(f'"new_repo":{_json_bool(outcome[6])}')
+        fields.append(f'"slot_operator_rebuild":{_json_bool(outcome[7])}')
     # Real output.py's own "S" bracket column, exposed unconditionally
     # (like every other --json field): true for a "new" into a slot the
     # package isn't installed in while another slot of it is

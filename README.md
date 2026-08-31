@@ -9676,6 +9676,50 @@ exists"); `fif`/`dev` `CONTENTS` nodes. Rust-black-box-tested in
 → a valid xpak `.tbz2` (image tar + `XPAKSTOP` trailer, holds the
 installed file), a `Packages` entry, and the package gone afterward.
 
+### Slot-operator rebuilds: an upgraded sub-slot reinstalls its `:=` consumers
+
+The `:=` binding slice made a merged package record `dev-libs/foo:2/3=`
+in its vdb — this slice is the payoff. Real depgraph's
+`_slot_operator_trigger_reinstalls` (fed by the
+`@__auto_slot_operator_replace_installed__` set): when `foo` is upgraded
+to a *different* sub-slot, every installed package whose built `foo:S/SS=`
+binding is now stale must be rebuilt against the new ABI.
+
+`resolve_pretend_graph` gained a post-resolution pass,
+`slot_operator_rebuild_entries` (mirrored in
+`emerge_pretend_reference.py::_slot_operator_rebuild_entries`), run once
+every merge-bound entry is known and before the dependency-first sort:
+
+- collect, per cp, the `(slot, sub_slot)` each `Upgrade`/`Downgrade`/
+  `Reinstall` entry leaves that cp at (a new-other-slot `New` doesn't
+  touch the old slot, so it triggers nothing)
+- scan every installed package **not** already in the graph; for each
+  `*DEPEND` atom with a built slot operator (`slot_operator == "="`,
+  both slot and sub-slot present — real `Atom.slot_operator_built`),
+  check whether a provider entry keeps the atom's slot but changes its
+  sub-slot
+- if so, add the consumer as `Reinstall { slot_operator_rebuild: true }`
+  — a plain `[ebuild   R    ]` (no reason annotation; it's not
+  `--newuse`/`--changed-*`), ordered after the dep it links against.
+  `--json` gets a `slot_operator_rebuild` boolean on the reinstall
+  block.
+
+The `PretendOutcome::Reinstall` variant gained a sixth freely-combinable
+trigger field, `slot_operator_rebuild`, though the post-pass only ever
+sets it standalone. **v1 cuts** (same increment discipline as the
+`--root-deps` recursion): no backtracking — a rebuild that would itself
+shift another sub-slot isn't chased; the rebuilt consumer's own `:=`
+deps aren't re-bound here (the real rebuild does that); no
+`--changed-slot` / `--ignore-built-slot-operator-deps` interaction; the
+"The following packages are causing rebuilds:" display block
+(`_show_abi_rebuild_info`) isn't produced. Full contract-suite lockstep
+(new `dev-libs/slotbind{target,consumer}` fixtures — `slotbindtarget-1.0`
+installed at `SLOT="2"`, `-2.0` in the repo at `SLOT="2/9"`,
+`slotbindconsumer`'s vdb `RDEPEND` bound `dev-libs/slotbindtarget:2/2=`):
+`emerge -p dev-libs/slotbindtarget` → the target Upgrade **plus**
+`[ebuild R] dev-libs/slotbindconsumer`, byte-identical between both
+implementations.
+
 ## Running it
 
 Build both Rust binaries:
