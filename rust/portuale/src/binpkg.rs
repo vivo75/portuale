@@ -237,6 +237,32 @@ pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, S
 /// does for gpkg). Codec-agnostic: the trailer is raw, whatever
 /// compressor produced the tarball.
 pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>, String> {
+    let seg = read_xpak_segment(binpkg_path)?;
+    Ok(parse_xpak_members(&seg)?
+        .into_iter()
+        .map(|(key, bytes)| (key, String::from_utf8_lossy(bytes).trim().to_string()))
+        .collect())
+}
+
+/// The raw bytes of one xpak-segment member (real `tbz2.getfile(name)`),
+/// or `None` when the binpkg doesn't carry it. Used for the two
+/// non-scalar members `read_xpak_metadata` can only return lossily: the
+/// saved `environment.bz2` (needed verbatim so it can be `bunzip2`'d
+/// into `${T}/environment` for a real `pkg_preinst`/`pkg_postinst`) and
+/// the `<pf>.ebuild` source. Reads only the bounded `infosize + 8` tail.
+fn read_xpak_member_raw(binpkg_path: &Path, want: &str) -> Result<Option<Vec<u8>>, String> {
+    let seg = read_xpak_segment(binpkg_path)?;
+    Ok(parse_xpak_members(&seg)?
+        .into_iter()
+        .find(|(key, _)| key == want)
+        .map(|(_, bytes)| bytes.to_vec()))
+}
+
+/// The `"XPAKPACK" … "XPAKSTOP"` segment bytes (real `tbz2.scan`): read
+/// the last 16 bytes (`"XPAKSTOP" be32(infosize) "STOP"`), then the
+/// `infosize + 8` byte segment they point back to. Only this bounded
+/// tail of the file is ever touched.
+fn read_xpak_segment(binpkg_path: &Path) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
 
     let mut f =
@@ -251,8 +277,6 @@ pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>,
         ));
     }
 
-    // Real `tbz2.scan`: the last 16 bytes are
-    // `"XPAKSTOP" be32(infosize) "STOP"`.
     let mut trailer = [0u8; 16];
     f.seek(SeekFrom::End(-16))
         .and_then(|_| f.read_exact(&mut trailer))
@@ -272,34 +296,33 @@ pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>,
         ));
     }
 
-    // The XPAK segment: `"XPAKPACK" be32(indexsize) be32(datasize)
-    // <index> <data> "XPAKSTOP"`.
     let mut seg = vec![0u8; xpaksize as usize];
     f.seek(SeekFrom::End(-(xpaksize as i64)))
         .and_then(|_| f.read_exact(&mut seg))
         .map_err(|e| format!("{}: {e}", binpkg_path.display()))?;
+    Ok(seg)
+}
+
+/// Walk an xpak segment's index (real `getindex_mem`/`searchindex`:
+/// `"XPAKPACK" be32(indexsize) be32(datasize) <index> <data>`, then
+/// `while startpos + 8 < len` over `be32(namelen) name be32(datapos)
+/// be32(datalen)` records into `<data>`). Returns every member as
+/// `(name, &data bytes)`, borrowing from `seg`.
+fn parse_xpak_members(seg: &[u8]) -> Result<Vec<(String, &[u8])>, String> {
     if seg.len() < 16 || &seg[0..8] != b"XPAKPACK" {
-        return Err(format!(
-            "{}: not an xpak binary package (no XPAKPACK header)",
-            binpkg_path.display()
-        ));
+        return Err("not an xpak binary package (no XPAKPACK header)".to_string());
     }
     let indexsize = be32(&seg[8..12]) as usize;
     let datasize = be32(&seg[12..16]) as usize;
     let index_start = 16;
     let data_start = index_start + indexsize;
     if data_start + datasize > seg.len() {
-        return Err(format!(
-            "{}: xpak index/data segments overrun the file",
-            binpkg_path.display()
-        ));
+        return Err("xpak index/data segments overrun the file".to_string());
     }
     let index = &seg[index_start..data_start];
     let data = &seg[data_start..data_start + datasize];
 
-    // Walk the index (real `getindex_mem`/`searchindex`: `while startpos
-    // + 8 < len`, `startpos += namelen + 12`).
-    let mut out = HashMap::new();
+    let mut out = Vec::new();
     let mut pos = 0usize;
     while pos + 8 < index.len() {
         let namelen = be32(&index[pos..pos + 4]) as usize;
@@ -310,8 +333,7 @@ pub fn read_xpak_metadata(binpkg_path: &Path) -> Result<HashMap<String, String>,
         let datapos = be32(&index[pos + 4 + namelen..pos + 8 + namelen]) as usize;
         let datalen = be32(&index[pos + 8 + namelen..pos + 12 + namelen]) as usize;
         if let (Ok(key), true) = (std::str::from_utf8(name), datapos + datalen <= data.len()) {
-            let value = String::from_utf8_lossy(&data[datapos..datapos + datalen]);
-            out.insert(key.to_string(), value.trim().to_string());
+            out.push((key.to_string(), &data[datapos..datapos + datalen]));
         }
         pos += namelen + 12;
     }
@@ -333,11 +355,14 @@ fn be32(b: &[u8]) -> u32 {
 /// codec `tar` auto-detects. gpkg (`.gpkg.tar`): the outer tar's
 /// `<basename>/image.tar[.<comp>]` member.
 ///
-/// Metadata is `read_{xpak,gpkg}_metadata`'s own map minus the
-/// non-scalar `environment.bz2` / `*.ebuild` members (real portage keeps
-/// a decompressed `environment` + the ebuild in the vdb; the pilot's
-/// binpkg merge runs no phases and needs neither -- a documented
-/// `emerge_binmerge` cut).
+/// The scalar metadata is `read_{xpak,gpkg}_metadata`'s own map; the two
+/// non-scalar members (`environment.bz2` -- the package's saved build-
+/// time bash environment -- and `<pf>.ebuild`) are written back
+/// **verbatim** as raw bytes, not through the lossy scalar path. Real
+/// portage keeps both in the vdb, and the pilot now needs them: the
+/// binpkg merge runs real `pkg_preinst`/`pkg_postinst` by `bunzip2`'ing
+/// `environment.bz2` into `${T}/environment` (real `BinpkgEnvExtractor`
+/// -> `bin/ebuild.sh`'s own saved-env source path).
 pub fn extract_binpkg(
     binpkg_path: &Path,
     image_dest: &Path,
@@ -351,7 +376,8 @@ pub fn extract_binpkg(
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default();
-    let metadata = if name.ends_with(".gpkg.tar") {
+    let is_gpkg = name.ends_with(".gpkg.tar");
+    let metadata = if is_gpkg {
         extract_gpkg_member(binpkg_path, "image", image_dest)?;
         read_gpkg_metadata(binpkg_path)?
     } else {
@@ -359,13 +385,39 @@ pub fn extract_binpkg(
         read_xpak_metadata(binpkg_path)?
     };
 
-    for (key, value) in metadata {
+    let mut non_scalar: Vec<String> = Vec::new();
+    for (key, value) in &metadata {
         if key == "environment.bz2" || key.ends_with(".ebuild") {
+            non_scalar.push(key.clone());
             continue;
         }
-        let dest = build_info_dest.join(&key);
+        let dest = build_info_dest.join(key);
         fs::write(&dest, format!("{}\n", value.trim()))
             .map_err(|e| format!("{}: {e}", dest.display()))?;
+    }
+
+    // The raw bytes of the two non-scalar members (verbatim, no trim / no
+    // lossy UTF-8 round-trip). gpkg carries them as real files inside the
+    // `metadata.tar`; xpak needs a targeted segment read.
+    if !non_scalar.is_empty() {
+        if is_gpkg {
+            let md = ScratchDir::new("gpkg-nonscalar")?;
+            extract_gpkg_member(binpkg_path, "metadata", md.path())?;
+            for key in &non_scalar {
+                let src = md.path().join("metadata").join(key);
+                if src.is_file() {
+                    fs::copy(&src, build_info_dest.join(key))
+                        .map_err(|e| format!("{}: {e}", src.display()))?;
+                }
+            }
+        } else {
+            for key in &non_scalar {
+                if let Some(bytes) = read_xpak_member_raw(binpkg_path, key)? {
+                    fs::write(build_info_dest.join(key), bytes)
+                        .map_err(|e| format!("{}: {e}", build_info_dest.join(key).display()))?;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -771,9 +823,13 @@ mod tests {
             fs::read_to_string(bi.join("RDEPEND")).unwrap().trim(),
             "dev-libs/samepkg"
         );
-        // The non-scalar members are dropped.
-        assert!(!bi.join("environment.bz2").exists());
-        assert!(!bi.join("packagepkg-1.0.ebuild").exists());
+        // The two non-scalar members are kept verbatim: a real bzip2
+        // stream (magic `BZh`) and the real ebuild source.
+        let env_bz2 = fs::read(bi.join("environment.bz2")).expect("environment.bz2 kept");
+        assert_eq!(&env_bz2[..3], b"BZh", "a real bzip2 stream, byte-exact");
+        assert!(fs::read_to_string(bi.join("packagepkg-1.0.ebuild"))
+            .unwrap()
+            .contains("EAPI=8"));
         let _ = fs::remove_dir_all(&tmp);
     }
 

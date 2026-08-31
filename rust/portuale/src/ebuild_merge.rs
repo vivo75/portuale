@@ -2337,54 +2337,60 @@ fn merge_after_install(
 /// included), writes the vdb entry from the binpkg's own metadata plus
 /// the freshly-generated `CONTENTS`, and runs `env_update()`/`ldconfig`.
 ///
+/// Real `pkg_preinst`/`pkg_postinst` run (real `_emerge/Binpkg` +
+/// `dblink.treewalk()` order: `preinst` before a single file is copied,
+/// `postinst` after the vdb entry is live and any replaced version is
+/// gone, before `env_update()`). They run from the extracted
+/// `<pf>.ebuild` plus the `bunzip2`'d `environment.bz2` -- see
+/// `ebuild_phases::run_phase_from_saved_env` -- and only when
+/// `DEFINED_PHASES` names them (real `_defined_phases`), so a binpkg
+/// that defines neither (the common case) spawns no shell.
+///
 /// **v1 cuts, all deliberate** (same "narrow the first slice, document
 /// it" pattern as every other real-execution feature here):
-///   - no `pkg_preinst`/`pkg_postinst` -- real portage sources the
-///     binpkg's saved `environment.bz2` and runs them; the pilot's phase
-///     runner is ebuild-file-driven, so running a phase from a saved env
-///     is its own slice. Many binpkgs define neither (`DEFINED_PHASES`).
+///   - no `pkg_setup` (real `_emerge/Binpkg` runs it too -- a narrower
+///     follow-up; `preinst`/`postinst` are the ones that actually touch
+///     `${ROOT}`).
+///   - a binpkg carrying no `environment.bz2` / `<pf>.ebuild` (older, or
+///     built before the pilot kept them) gets no hooks -- a documented
+///     degrade, not a fallback to re-sourcing the ebuild.
 ///   - no collision-protect / `protect-owned` abort, no blocker
 ///     exclusion, no preserve-libs registration.
 ///   - **a same-slot replace runs phase-free**: an already-installed
 ///     same-slot version of `category/package` is unmerged *after* the
 ///     new binpkg is written (real portage's own merge-then-unmerge
 ///     order -- a file the new version still owns is left in place),
-///     but with no `pkg_prerm`/`pkg_postrm` (the old version's saved
-///     `environment.bz2` is not sourced -- same v1 cut as `preinst`/
-///     `postinst` above) and no preserve-libs / reverse-dependency
-///     check. A *different*-slot installed version is left untouched,
-///     real slot semantics.
-///   - `environment.bz2` and the `<pf>.ebuild` are not copied into the
-///     vdb (`extract_binpkg` drops them) -- the pilot needs neither.
+///     but with no `pkg_prerm`/`pkg_postrm` and no preserve-libs /
+///     reverse-dependency check. A *different*-slot installed version is
+///     left untouched, real slot semantics.
 pub fn merge_binpkg(
     binpkg_path: &Path,
     root: &Path,
     portage_tmpdir: &Path,
     options: &MergeOptions,
 ) -> Result<i32, String> {
-    let scratch_root = portage_tmpdir.join("portage").join("binpkg-merge").join(
-        binpkg_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("pkg"),
-    );
-    if scratch_root.exists() {
-        std::fs::remove_dir_all(&scratch_root)
-            .map_err(|e| format!("{}: {e}", scratch_root.display()))?;
-    }
-    let image = scratch_root.join("image");
-    let build_info = scratch_root.join("build-info");
-    crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info)?;
-
-    let read_bi = |key: &str| -> Option<String> {
-        std::fs::read_to_string(build_info.join(key))
-            .ok()
+    // Peek the embedded metadata first -- real portage knows the cpv
+    // (and so `${PORTAGE_BUILDDIR}`) before it extracts anything. This
+    // lets the image land straight in `${PORTAGE_BUILDDIR}/image`, the
+    // exact `${D}` a real `pkg_preinst`/`pkg_postinst` expects.
+    let name = binpkg_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let meta = if name.ends_with(".gpkg.tar") {
+        crate::binpkg::read_gpkg_metadata(binpkg_path)?
+    } else {
+        crate::binpkg::read_xpak_metadata(binpkg_path)?
+    };
+    let meta_get = |key: &str| -> Option<String> {
+        meta.get(key)
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
     };
-    let category = read_bi("CATEGORY")
+    let category = meta_get("CATEGORY")
         .ok_or_else(|| format!("{}: binpkg has no CATEGORY", binpkg_path.display()))?;
-    let pf = read_bi("PF").ok_or_else(|| format!("{}: binpkg has no PF", binpkg_path.display()))?;
+    let pf =
+        meta_get("PF").ok_or_else(|| format!("{}: binpkg has no PF", binpkg_path.display()))?;
     let package = pf
         .rsplit_once('-')
         .and_then(|(rest, last)| {
@@ -2403,11 +2409,61 @@ pub fn merge_binpkg(
         .unwrap_or_else(|| pf.clone());
     // Real vdb `SLOT` keeps the full `slot/sub_slot`; `merge_tree` only
     // wants the main slot for the installed-instance lookup.
-    let full_slot = read_bi("SLOT").unwrap_or_else(|| "0".to_string());
+    let full_slot = meta_get("SLOT").unwrap_or_else(|| "0".to_string());
     let main_slot = full_slot.split('/').next().unwrap_or("0").to_string();
-    let repository = read_bi("repository")
-        .or_else(|| read_bi("REPO"))
+    let repository = meta_get("repository")
+        .or_else(|| meta_get("REPO"))
         .unwrap_or_else(|| "__unknown__".to_string());
+
+    // Real `${PORTAGE_BUILDDIR}` = `${PORTAGE_TMPDIR}/portage/<cat>/<pf>`
+    // -- `ebuild_phases::compute_environment` derives the same path from
+    // the (extracted) ebuild, so this is exactly where a `pkg_preinst`/
+    // `pkg_postinst` run will look for `${D}` / `${T}`.
+    let builddir = portage_tmpdir.join("portage").join(&category).join(&pf);
+    if builddir.exists() {
+        std::fs::remove_dir_all(&builddir).map_err(|e| format!("{}: {e}", builddir.display()))?;
+    }
+    let image = builddir.join("image");
+    let build_info = builddir.join("build-info");
+    crate::binpkg::extract_binpkg(binpkg_path, &image, &build_info)?;
+
+    // Real `_emerge/Binpkg`: `pkg_setup`/`pkg_preinst`/`pkg_postinst`
+    // run from the extracted `<pf>.ebuild` + the `bunzip2`'d
+    // `environment.bz2` (see `ebuild_phases::run_phase_from_saved_env`).
+    // Gated on `DEFINED_PHASES` (real `_defined_phases`) so a binpkg
+    // that defines neither -- the common case -- spawns no shell at all.
+    // Both files must be present (an older binpkg, or one built before
+    // the pilot kept them, gets no hooks -- a documented degrade).
+    let defined_phases = meta_get("DEFINED_PHASES").unwrap_or_default();
+    let phase_defined = |p: &str| defined_phases.split_whitespace().any(|d| d == p);
+    let saved_env = build_info.join("environment.bz2");
+    let extracted_ebuild = {
+        let src = build_info.join(format!("{pf}.ebuild"));
+        if src.is_file() && saved_env.is_file() {
+            let pkgdir = builddir.join("ebuild-src").join(&category).join(&package);
+            std::fs::create_dir_all(&pkgdir).map_err(|e| format!("{}: {e}", pkgdir.display()))?;
+            let dst = pkgdir.join(format!("{pf}.ebuild"));
+            std::fs::copy(&src, &dst).map_err(|e| format!("{}: {e}", src.display()))?;
+            Some(dst)
+        } else {
+            None
+        }
+    };
+    let run_hook = |phase: &str| -> Result<i32, String> {
+        match &extracted_ebuild {
+            Some(ebuild) if phase_defined(phase) => crate::ebuild_phases::run_phase_from_saved_env(
+                ebuild,
+                &saved_env,
+                phase,
+                root,
+                portage_tmpdir,
+                options.debug,
+                &options.config_root,
+                options.shell,
+            ),
+            _ => Ok(0),
+        }
+    };
 
     // Real merge-then-unmerge replace: an already-installed *same-slot*
     // version of this cp is removed only *after* the new binpkg is
@@ -2433,6 +2489,13 @@ pub fn merge_binpkg(
                 replaced_same_slot.push(name);
             }
         }
+    }
+
+    // Real `dblink.treewalk()` order: `pkg_preinst` runs before a single
+    // file is copied.
+    let preinst_status = run_hook("preinst")?;
+    if preinst_status != 0 {
+        return Ok(preinst_status);
     }
 
     let installed_instance = installed_instance_pf(root, &category, &package, &main_slot);
@@ -2484,11 +2547,23 @@ pub fn merge_binpkg(
         crate::ebuild_unmerge::delete_vdb_dir(root, &category, old_pf)?;
     }
 
+    // Real `treewalk()` order: `pkg_postinst` runs after the vdb entry
+    // is live *and* every replaced same-slot version is gone, but before
+    // `env_update()`. Its own non-zero exit is logged, never fatal (real
+    // `_postinst_failure` -- "It's stupid to bail out here").
+    let postinst_status = run_hook("postinst")?;
+    if postinst_status != 0 {
+        eprintln!(
+            "{category}/{pf}: FAILED postinst ({postinst_status}) -- merge kept (real _postinst_failure)"
+        );
+    }
+
     if !contents.is_empty() || !replaced_same_slot.is_empty() {
         env_update::run_env_update(root)?;
     }
-    let _ = std::fs::remove_dir_all(&scratch_root);
-    Ok(0)
+
+    let _ = std::fs::remove_dir_all(&builddir);
+    Ok(postinst_status)
 }
 
 #[cfg(test)]

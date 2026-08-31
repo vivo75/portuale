@@ -1420,6 +1420,71 @@ pub(crate) fn run_single_phase(
     })
 }
 
+/// Like `run_single_phase`, but first seeds `${T}/environment` from a
+/// binary package's saved `environment.bz2` so the phase runs against
+/// the package's own build-time bash environment (every phase function,
+/// eclass-inherited ones included, and the recorded metadata) rather
+/// than a re-sourced ebuild -- the only way a binary package's
+/// `pkg_preinst`/`pkg_postinst`/`pkg_prerm`/`pkg_postrm` can run at all.
+///
+/// Real `_emerge/BinpkgEnvExtractor`: `${PORTAGE_BUNZIP2_COMMAND:-
+/// ${PORTAGE_BZIP2_COMMAND} -d} -c -- <environment.bz2> > ${T}/environment`,
+/// then `touch ${T}/environment.raw` -- the marker real
+/// `bin/phase-functions.sh::__preprocess_ebuild_env` checks (its own
+/// `[[ -f ${T}/environment.raw ]] || return 0`) before filtering stale
+/// `SANDBOX_*`/`FEATURES`/locale vars a different build host may have
+/// baked in. `bin/ebuild.sh`'s own top-level code (line ~565) then
+/// sources the result and, because `${T}/environment` now exists,
+/// skips re-sourcing the ebuild file (line ~617) -- exactly the path a
+/// multi-phase source build already exercises between its own phases,
+/// so this is not new phase-execution machinery, only a different way
+/// of populating `${T}/environment`. Build-time-only path vars (`D`,
+/// `ROOT`, `T`, `WORKDIR`, `PORTAGE_BUILDDIR`, `EBUILD`, ...) are never
+/// in the saved env -- real `save-ebuild-env.sh` + `__filter_readonly_
+/// variables` strip every `portage_readonly_vars` entry when it is
+/// written -- so `phase_setup_script`'s own fresh exports win.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_phase_from_saved_env(
+    ebuild_path: &Path,
+    saved_env_bz2: &Path,
+    phase: &str,
+    root: &Path,
+    portage_tmpdir: &Path,
+    debug: bool,
+    config_root: &Path,
+    shell: ShellBackend,
+) -> Result<i32, String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("failed to start async runtime: {e}"))?;
+    runtime.block_on(async {
+        let env = compute_environment(ebuild_path, portage_tmpdir)?;
+        create_directories(&env)?;
+
+        let dest_env = env.t().join("environment");
+        let out =
+            std::fs::File::create(&dest_env).map_err(|e| format!("{}: {e}", dest_env.display()))?;
+        let status = std::process::Command::new("bzip2")
+            .args(["-d", "-c", "--"])
+            .arg(saved_env_bz2)
+            .stdout(out)
+            .status()
+            .map_err(|e| format!("failed to spawn bzip2: {e}"))?;
+        if !status.success() {
+            let _ = std::fs::remove_file(&dest_env);
+            return Err(format!(
+                "bzip2 failed to decompress {} ({status})",
+                saved_env_bz2.display()
+            ));
+        }
+        std::fs::write(env.t().join("environment.raw"), [])
+            .map_err(|e| format!("{}: {e}", env.t().join("environment.raw").display()))?;
+
+        run_one_phase(&env, root, phase, debug, &[], config_root, shell).await
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

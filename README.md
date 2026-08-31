@@ -9102,10 +9102,8 @@ which builds but never merges).
 
 **Deliberate v1 cuts** (same "narrow the first slice, document it"
 pattern as every other real-execution feature):
-- **no `pkg_preinst`/`pkg_postinst`** — real portage sources the
-  binpkg's saved `environment.bz2` and runs them; the pilot's phase
-  runner is ebuild-file-driven. `environment.bz2` and the `<pf>.ebuild`
-  aren't copied into the vdb either.
+- **no `pkg_preinst`/`pkg_postinst`** (originally — since lifted, see the
+  "runs `pkg_preinst`/`pkg_postinst`" section two below).
 - **a same-slot replace runs phase-free** (see the next section — this
   was originally a "replace is refused" cut, since lifted).
 - no collision-protect/`protect-owned` abort, no blocker exclusion, no
@@ -9170,6 +9168,61 @@ old-only file → merge `1.0` → old vdb gone, old-only file unmerged,
 shared file kept with new content), and
 `run_getbinpkgonly_upgrades_over_an_installed_version` (the same, end to
 end over loopback HTTP with an `Upgrade { from, to }` entry).
+
+### `emerge --getbinpkgonly <atom>`: a binpkg merge runs `pkg_preinst`/`pkg_postinst`
+
+The first getbinpkgonly section shipped with "no `pkg_preinst`/
+`pkg_postinst`" as a v1 cut. Lifted: a binary-package merge now runs the
+package's real install-phase hooks.
+
+A binary package has no ebuild-with-phase-function-bodies to re-source
+(eclass-inherited phases in particular live only in the *saved*
+environment) — so real portage runs a binpkg's `pkg_*` phases from the
+package's **saved build-time bash environment**, decompressed from the
+xpak/gpkg's own `environment.bz2`. The pilot now does the same:
+
+- `binpkg::extract_binpkg` keeps `environment.bz2` and `<pf>.ebuild`
+  **verbatim** (raw bytes — the earlier scalar-metadata path stringified
+  them lossily). A targeted xpak-segment reader (`read_xpak_member_raw`,
+  factored out of `read_xpak_metadata` alongside a shared
+  `parse_xpak_members`) pulls them without unpacking the image; gpkg
+  carries them as real files in `metadata.tar`. Both land in the vdb too,
+  as real portage keeps them.
+- `ebuild_phases::run_phase_from_saved_env` is `run_single_phase` plus
+  real `_emerge/BinpkgEnvExtractor`: `bunzip2 environment.bz2 >
+  ${T}/environment`, then `touch ${T}/environment.raw` (the marker real
+  `__preprocess_ebuild_env` checks before filtering stale
+  `SANDBOX_*`/`FEATURES`). `bin/ebuild.sh`'s own top-level code then
+  sources `${T}/environment` and — because it now exists — skips
+  re-sourcing the ebuild. This is the exact `${T}/environment` path a
+  multi-phase *source* build already runs between its phases; only the
+  way the file gets populated is new. Build-time-only path vars (`D`,
+  `ROOT`, `T`, `PORTAGE_BUILDDIR`, `EBUILD`, …) are never in a saved env
+  (`save-ebuild-env.sh` + `__filter_readonly_variables` strip every
+  `portage_readonly_vars` entry), so the merge host's fresh values win.
+- `ebuild_merge::merge_binpkg` peeks the embedded metadata *first* (real
+  portage knows the cpv before extracting), so the image lands straight
+  in `${PORTAGE_TMPDIR}/portage/<cat>/<pf>/image` — the exact `${D}` a
+  `pkg_preinst` inspects. It runs `preinst` **before** a single file is
+  copied and `postinst` **after** the vdb entry is live and any replaced
+  same-slot version is gone, before `env_update()` — real
+  `dblink.treewalk()` order. Gated on `DEFINED_PHASES` (real
+  `_defined_phases`): a binpkg defining neither hook — the common case,
+  and every pre-existing fixture — spawns no shell.
+
+**v1 cuts:** no `pkg_setup` for a binpkg (narrower follow-up — it doesn't
+touch `${ROOT}`); a binpkg carrying no `environment.bz2`/`<pf>.ebuild`
+gets no hooks (a documented degrade, not a fall-back to re-sourcing the
+ebuild); `pkg_prerm`/`pkg_postrm` on a same-slot replace still don't run
+(the replace path stays phase-free).
+
+Rust-unit-tested with a new committed fixture
+`pkgdir/dev-libs/binpkgphasepkg-1.0.tbz2` (built once via `emerge
+--buildpkgonly`) whose `pkg_preinst` `die`s if its payload is already
+merged and whose `pkg_postinst` `die`s if it is *not* —
+`merge_binpkg_runs_pkg_preinst_and_pkg_postinst_from_the_saved_env`
+asserts both ran (a `${ROOT}` marker file with both phase names), proving
+the real ordering held.
 
 ## Running it
 

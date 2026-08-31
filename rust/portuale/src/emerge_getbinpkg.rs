@@ -33,9 +33,9 @@
 //   - digest verification is `SIZE`-only (the pilot has no crypto; the
 //     `SHA*`/`MD5` fields are read but not checked -- see
 //     `binpkg::read_gpkg_metadata`'s own identical `Manifest`/`.sig` cut).
-//   - a non-`New`/non-remote-binary entry (an upgrade or reinstall of an
-//     already-installed binpkg, a source ebuild slipping through) is a
-//     hard error -- `--getbinpkgonly` merging is New-only in v1.
+//   - a source ebuild slipping through the binary-only resolve is a hard
+//     error. `New`/`Upgrade`/`Downgrade`/`Reinstall` all merge
+//     (`merge_binpkg` unmerges a replaced same-slot version itself).
 
 use crate::ebuild_merge::{self, MergeOptions};
 use portage_profile::{BinRepo, Config};
@@ -293,9 +293,44 @@ mod tests {
             std::fs::read_to_string(vdb.join("SLOT")).unwrap().trim(),
             "0"
         );
-        assert!(
-            !vdb.join("environment.bz2").exists(),
-            "the non-scalar environment/ebuild are dropped in v1"
+        // The saved env + ebuild are kept in the vdb now (real portage
+        // does; the pilot needs them for pkg_preinst/pkg_postinst). This
+        // fixture's DEFINED_PHASES is `install` only, so no hook ran.
+        assert!(vdb.join("environment.bz2").is_file());
+        assert!(vdb.join("packagepkg-1.0.ebuild").is_file());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_binpkg_runs_pkg_preinst_and_pkg_postinst_from_the_saved_env() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let binpkg = fixtures_root().join("pkgdir/dev-libs/binpkgphasepkg-1.0.tbz2");
+
+        let status = ebuild_merge::merge_binpkg(
+            &binpkg,
+            &root,
+            &tmp.join("portage_tmpdir"),
+            &MergeOptions::default(),
+        )
+        .expect("merge succeeds");
+        assert_eq!(status, 0, "both hooks exited 0");
+
+        // The image landed, vdb entry written.
+        assert!(root.join("usr/share/binpkgphasepkg/payload.txt").is_file());
+        assert!(root
+            .join("var/db/pkg/dev-libs/binpkgphasepkg-1.0/CONTENTS")
+            .is_file());
+
+        // The fixture's own pkg_preinst `die`s if the payload is already
+        // merged and pkg_postinst `die`s if it is not -- so this file
+        // existing with both lines proves the real treewalk() ordering
+        // (preinst before the copy, postinst after) held.
+        let phases = root.join("var/lib/binpkgphasepkg.phases");
+        assert_eq!(
+            std::fs::read_to_string(&phases).unwrap(),
+            "preinst\npostinst\n"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
