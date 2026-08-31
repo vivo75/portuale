@@ -564,9 +564,16 @@ Ranked roughly by how self-contained each is.
     (`update_world_sets_file`, real `depgraph.py:11360-11400`, the
     `>>> Recording @name in "world_sets" favorites file...` line; same
     suppression set as the world file). v1 cuts: real's `world_candidate`
-    gate (moot — the pilot only knows `@world`/`@system` as built-ins),
-    the `--ask` prompt. Mirrored in `emerge_pretend_reference.py` for
-    `--pretend`; Rust-only for the non-pretend `world_sets` write.
+    gate (moot — the pilot only knows `@world`/`@system`/`@selected`/
+    `@installed` as built-ins), the `--ask` prompt. Mirrored in
+    `emerge_pretend_reference.py` for `--pretend`; Rust-only for the
+    non-pretend `world_sets` write. **`@selected` + `@installed` built-in
+    sets shipped 2026-08-31** (real `cnf/sets/portage.conf`): `@selected`
+    = the pilot's existing `@world` expansion (world file atoms +
+    `world_sets`), factored into a shared `expand_selected`; `@installed`
+    (`installed_set_atoms`, real `EverythingSet.load`) = a `cat/pkg:slot`
+    atom per vdb package, always slot-qualified (bug #338959), deduped +
+    sorted. Both wired into both expansion sites, both impls.
 
 ### D. Config-resolution `USE_ORDER` depth
 

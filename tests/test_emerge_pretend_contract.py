@@ -713,6 +713,8 @@ CASES = [
     ("@system combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@system"], 0),
     ("a user-defined set given directly expands to its members", ["--pretend", "@nestedtestset"], 0),
     ("a user-defined set combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@nestedtestset"], 0),
+    ("@selected expands like the pilot's @world", ["--pretend", "--update", "@selected"], 0),
+    ("@selected combined with an explicit atom too", ["--pretend", "--update", "dev-libs/samepkg", "@selected"], 0),
     ("an unknown @set name is a real error", ["--pretend", "@some-other-set"], 1),
     (
         "--newuse reinstalls a package whose USE changed since it was installed",
@@ -5746,6 +5748,46 @@ def test_custom_set_as_a_top_level_target_expands_to_its_members(
     ]
 
 
+def test_selected_set_expands_the_same_as_world(emerge_binary, fixture_env):
+    """Real cnf/sets/portage.conf: @world = @profile @selected @system,
+    and @selected = WorldSelectedSet (the world file's atoms + world_sets'
+    nested sets). This pilot's @world already IS that (the @profile /
+    @system union is a pre-existing simplification), so @selected is the
+    exact same expansion."""
+    a = _run([str(emerge_binary)], ["--pretend", "--update", "@selected"], fixture_env)
+    b = _run([str(emerge_binary)], ["--pretend", "--update", "@world"], fixture_env)
+    assert a.returncode == 0
+    assert a.stdout == b.stdout
+    assert a.stdout != ""
+
+
+def test_installed_set_expands_to_a_slot_atom_per_vdb_package(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Real @installed (EverythingSet): a `cat/pkg:slot` atom for every
+    package under var/db/pkg -- always slot-qualified, even for a lone
+    slot (bug #338959). A test-local ROOT with dev-libs/dualslotpkg-1.0
+    (SLOT=1) and dev-libs/nestedsetpkg-1.0 (SLOT=0) installed; the slot
+    atom `dev-libs/dualslotpkg:1` pins slot 1, so 1.0 reinstalls rather
+    than upgrading to the repo's 2.0 (SLOT=2)."""
+    for name, slot in (("dualslotpkg-1.0", "1"), ("nestedsetpkg-1.0", "0")):
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / name
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text(f"{slot}\n")
+        (d / "repository").write_text("testrepo\n")
+    env = dict(fixture_env)
+    env["ROOT"] = str(tmp_path)
+    args = ["--pretend", "@installed"]
+    result = _run([str(emerge_binary)], args, env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild   R    ] dev-libs/dualslotpkg-1.0 ",
+        "[ebuild   R    ] dev-libs/nestedsetpkg-1.0 ",
+    ]
+    assert _run(emerge_pretend_python, args, env).stdout == result.stdout
+
+
 def test_world_missing_file_expands_to_nothing_not_an_error(
     emerge_binary, fixture_env, tmp_path
 ):
@@ -5765,7 +5807,7 @@ def test_world_missing_file_expands_to_nothing_not_an_error(
     assert (
         result.stderr.strip()
         == "emerge (pilot v1): no package atoms to resolve (the target list, "
-        "after expanding any @world/@system/@<set>, is empty)"
+        "after expanding any @world/@selected/@system/@installed/@<set>, is empty)"
     )
 
 

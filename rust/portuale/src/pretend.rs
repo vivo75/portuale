@@ -1853,6 +1853,39 @@ fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// Real `@selected` (`WorldSelectedSet` -- `cnf/sets/portage.conf`): the
+/// world file's own package atoms unioned with every nested set named in
+/// `world_sets` (real `chain(WorldSelectedPackagesSet,
+/// WorldSelectedSetsSet)`). This pilot's `@world` expands to exactly
+/// this too -- real `@world = @profile @selected @system` and the
+/// `@profile`/`@system` union is a pre-existing documented simplification
+/// (see `read_world_atoms`/`read_world_sets`). Errors carry their own
+/// `emerge: ` prefix so every caller can just `eprintln!("{e}")`.
+fn expand_selected(root: &Path, config_root: &Path) -> Result<Vec<String>, String> {
+    let mut atoms = read_world_atoms(root).map_err(|e| format!("emerge: {e}"))?;
+    for name in read_world_sets(root).map_err(|e| format!("emerge: {e}"))? {
+        let mut seen = HashSet::new();
+        atoms.extend(resolve_custom_set(config_root, &name, &mut seen)?);
+    }
+    Ok(atoms)
+}
+
+/// Real `@installed` (`EverythingSet.load`, `_sets/dbapi.py`): a
+/// `cat/pkg:slot` atom for every package under `<root>/var/db/pkg` --
+/// always slot-qualified, even for a lone installed slot (bug #338959,
+/// "avoid the possibility of unwanted upgrades"). Deduplicated + sorted
+/// here for deterministic output; real portage's own `_setAtoms` is an
+/// unordered set.
+fn installed_set_atoms(root: &Path) -> Vec<String> {
+    let mut atoms: Vec<String> = portage_repo::all_installed_packages(root)
+        .into_iter()
+        .map(|p| format!("{}/{}:{}", p.category, p.package, p.slot))
+        .collect();
+    atoms.sort();
+    atoms.dedup();
+    atoms
+}
+
 /// Real `Scheduler._world_atom` + `depgraph.saveNomergeFavorites`: after
 /// a successful non-`--pretend` `emerge <atom>`, each directly-requested
 /// **plain** target atom (not a dependency, not a `@set`) is recorded in
@@ -2498,9 +2531,10 @@ fn run_unmerge_pretend(
 
     // Expand every `@set` target into its member atoms first (real
     // `root_config.sets[s].getAtoms()` / `_iter_atoms_for_pkg`), so the
-    // vdb-matching loop below only ever sees ordinary atoms. `@world` and
-    // `@system` are the two built-in sets; anything else `@name` is a
-    // custom set file (recursively expanded, cycle-guarded).
+    // vdb-matching loop below only ever sees ordinary atoms.
+    // `@world`/`@selected`/`@system`/`@installed` are the built-in sets;
+    // anything else `@name` is a custom set file (recursively expanded,
+    // cycle-guarded).
     let mut expanded: Vec<String> = Vec::new();
     // Real `root_config.setconfig.active` -- the sets the user passed as
     // `-C` targets. Excluded from the "still listed in package sets"
@@ -2511,34 +2545,15 @@ fn run_unmerge_pretend(
             active_sets.insert(name.to_string());
         }
         match *target {
-            "@world" => match read_world_atoms(root) {
-                Ok(atoms) => {
-                    expanded.extend(atoms);
-                    match read_world_sets(root) {
-                        Ok(names) => {
-                            for name in names {
-                                let mut seen = HashSet::new();
-                                match resolve_custom_set(config_root, &name, &mut seen) {
-                                    Ok(atoms) => expanded.extend(atoms),
-                                    Err(e) => {
-                                        eprintln!("{e}");
-                                        return ExitCode::from(1);
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("emerge: {e}");
-                            return ExitCode::from(1);
-                        }
-                    }
-                }
+            "@world" | "@selected" => match expand_selected(root, config_root) {
+                Ok(atoms) => expanded.extend(atoms),
                 Err(e) => {
-                    eprintln!("emerge: {e}");
+                    eprintln!("{e}");
                     return ExitCode::from(1);
                 }
             },
             "@system" => expanded.extend(config.system_packages.iter().cloned()),
+            "@installed" => expanded.extend(installed_set_atoms(root)),
             other if other.starts_with('@') => {
                 let mut seen = HashSet::new();
                 match resolve_custom_set(config_root, &other[1..], &mut seen) {
@@ -5167,12 +5182,13 @@ pub fn run(args: &[String]) -> ExitCode {
         );
     }
 
-    // "@world"/"@system" each expand to their own real atom list, in
-    // place, at whichever position they appear -- see read_world_atoms's
-    // doc comment for the world file's own scope, read_world_sets's for
-    // the world_sets file's own nested-@set half of real @world's union,
-    // and portage-profile's `system_packages` doc comment for @system's.
-    // Any other `@name` token is a user-defined (file-based) package set
+    // The built-in set tokens each expand to their own real atom list,
+    // in place, at whatever position they appear: `@world`/`@selected`
+    // (`expand_selected` -- the world file's atoms + `world_sets`' nested
+    // sets), `@system` (the profile chain's `packages` files), and
+    // `@installed` (`installed_set_atoms` -- a `cat/pkg:slot` atom per
+    // vdb package). Any other `@name` token is a user-defined (file-based)
+    // package set
     // -- expanded recursively via `resolve_custom_set` (real
     // `StaticFileSet` / `SetConfig.getSetAtoms`), the same machinery the
     // `--unmerge`/`--depclean`/`--deselect` paths already use; a `@name`
@@ -5184,33 +5200,18 @@ pub fn run(args: &[String]) -> ExitCode {
     // non-`--pretend` merge (real `depgraph.saveNomergeFavorites`).
     let mut selected_set_args: Vec<String> = Vec::new();
     for atom_str in &atom_args {
-        if *atom_str == "@world" {
-            match read_world_atoms(&root) {
-                Ok(world_atoms) => expanded_atoms.extend(world_atoms),
+        if *atom_str == "@world" || *atom_str == "@selected" {
+            match expand_selected(&root, &config_root) {
+                Ok(atoms) => expanded_atoms.extend(atoms),
                 Err(e) => {
-                    eprintln!("emerge: {e}");
+                    eprintln!("{e}");
                     return ExitCode::from(1);
-                }
-            }
-            let set_names = match read_world_sets(&root) {
-                Ok(names) => names,
-                Err(e) => {
-                    eprintln!("emerge: {e}");
-                    return ExitCode::from(1);
-                }
-            };
-            for name in set_names {
-                let mut seen = HashSet::new();
-                match resolve_custom_set(&config_root, &name, &mut seen) {
-                    Ok(atoms) => expanded_atoms.extend(atoms),
-                    Err(e) => {
-                        eprintln!("{e}");
-                        return ExitCode::from(1);
-                    }
                 }
             }
         } else if *atom_str == "@system" {
             expanded_atoms.extend(config.system_packages.iter().cloned());
+        } else if *atom_str == "@installed" {
+            expanded_atoms.extend(installed_set_atoms(&root));
         } else if let Some(name) = atom_str.strip_prefix('@') {
             let mut seen = HashSet::new();
             match resolve_custom_set(&config_root, name, &mut seen) {
@@ -5231,7 +5232,7 @@ pub fn run(args: &[String]) -> ExitCode {
     if expanded_atoms.is_empty() {
         eprintln!(
             "emerge (pilot v1): no package atoms to resolve (the target list, after \
-             expanding any @world/@system/@<set>, is empty)"
+             expanding any @world/@selected/@system/@installed/@<set>, is empty)"
         );
         return ExitCode::from(2);
     }
@@ -6002,6 +6003,39 @@ mod tests {
             "@existing\n@fresh\n"
         );
 
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn installed_set_atoms_are_slot_qualified_sorted_and_deduped() {
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-instset-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mk = |cat: &str, dir: &str, slot: &str| {
+            let d = tmp.join("var/db/pkg").join(cat).join(dir);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), format!("{cat}\n")).unwrap();
+            std::fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        };
+        // A lone-slot package is still slot-qualified (bug #338959); a
+        // sub-slot is dropped (only the main slot); output sorted.
+        mk("dev-libs", "zpkg-2.0", "0");
+        mk("dev-libs", "apkg-1.0", "3/7");
+        mk("app-misc", "mid-1.0", "0");
+
+        assert_eq!(
+            installed_set_atoms(&tmp),
+            vec![
+                "app-misc/mid:0".to_string(),
+                "dev-libs/apkg:3".to_string(),
+                "dev-libs/zpkg:0".to_string(),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

@@ -9467,6 +9467,25 @@ Contract-tested (`@nestedtestset` alone and alongside an explicit atom,
 recorded, members not in `world`, `--oneshot` records nothing) + an
 `update_world_sets_file` unit test.
 
+**`@selected` and `@installed` built-in sets.** Real
+`cnf/sets/portage.conf`: `@world = @profile @selected @system` (a
+`DummyPackageSet`), `@selected = WorldSelectedSet` (the world file's
+atoms + `world_sets`' nested sets), `@installed = EverythingSet`. This
+pilot's `@world` already expanded to exactly `@selected`'s contents (the
+`@profile`/`@system` union is a pre-existing simplification), so
+`@selected` is a straight alias — both now route through a shared
+`expand_selected`. `@installed` (`installed_set_atoms`) yields a
+`cat/pkg:slot` atom for every package under `<root>/var/db/pkg`, **always**
+slot-qualified even for a lone slot (real `EverythingSet.load`, bug
+#338959 — "avoid the possibility of unwanted upgrades"): so
+`emerge @installed` reinstalls each installed version in place rather
+than pulling a higher slot. Deduped + sorted for determinism (real
+`_setAtoms` is an unordered set). Both tokens are wired into both
+expansion sites — the build/`--pretend` path and the
+`--unmerge`/`--depclean`/`--deselect` path. Contract-tested (`@selected`
+byte-identical to `@world`; `@installed` against a test-local vdb, both
+impls in lockstep) + an `installed_set_atoms` unit test.
+
 ### `emerge --getbinpkgonly`/`--getbinpkg`: collision-protect / blocker exclusion / preserve-libs parity
 
 `merge_binpkg` was the one merge path still lighter than the source

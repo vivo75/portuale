@@ -7265,6 +7265,33 @@ def _resolve_custom_set(config_root, name, seen):
     return atoms
 
 
+def _expand_selected(config_root, root):
+    """Real @selected (WorldSelectedSet -- cnf/sets/portage.conf): the
+    world file's own package atoms unioned with every nested set named in
+    world_sets. This pilot's @world expands to exactly this too -- real
+    @world = @profile @selected @system and the @profile/@system union is
+    a pre-existing documented simplification. Mirrors pretend.rs's
+    expand_selected."""
+    atoms = list(_read_world_atoms(root))
+    for name in _read_world_sets(root):
+        atoms.extend(_resolve_custom_set(config_root, name, set()))
+    return atoms
+
+
+def _installed_set_atoms(root):
+    """Real @installed (EverythingSet.load, _sets/dbapi.py): a
+    "cat/pkg:slot" atom for every package under <root>/var/db/pkg --
+    always slot-qualified, even for a lone installed slot (bug #338959).
+    Deduplicated + sorted for deterministic output (real portage's own
+    _setAtoms is an unordered set). Mirrors pretend.rs's
+    installed_set_atoms."""
+    atoms = {
+        f"{cat}/{name}:{slot}"
+        for cat, name, _version, slot in _all_installed_packages(root)
+    }
+    return sorted(atoms)
+
+
 def _collect_installed_sets(config_root, root):
     """Real _unmerge_display's own `installed_sets` -- every custom set
     directly/indirectly selected via world_sets, paired with its DIRECT
@@ -7571,17 +7598,16 @@ def _run_unmerge_pretend(targets, root, config_root, config, preserve_order=Fals
     # from the "still listed in package sets" check below.
     active_sets = {t[1:] for t in targets if t.startswith("@")}
     for target in targets:
-        if target == "@world":
+        if target in ("@world", "@selected"):
             try:
-                expanded.extend(_read_world_atoms(root))
-                for name in _read_world_sets(root):
-                    seen = set()
-                    expanded.extend(_resolve_custom_set(config_root, name, seen))
+                expanded.extend(_expand_selected(config_root, root))
             except ResolutionError as e:
                 print(f"emerge: {e}", file=sys.stderr)
                 return 1
         elif target == "@system":
             expanded.extend(config["system_packages"])
+        elif target == "@installed":
+            expanded.extend(_installed_set_atoms(root))
         elif target.startswith("@"):
             try:
                 seen = set()
@@ -10470,25 +10496,22 @@ def run(args):
             lib_check=lib_check,
         )
 
-    # "@world"/"@system" each expand to their own real atom list, in
-    # place, at whichever position they appear -- see _read_world_atoms's
-    # own docstring for the world file's own scope, _read_world_sets's
-    # for the world_sets file's own nested-@set half of real @world's
-    # union, and resolve_config's own docstring for @system's. Any other
-    # "@name" token is a user-defined (file-based) package set, expanded
-    # recursively via _resolve_custom_set -- the same machinery the
-    # --unmerge/--depclean/--deselect paths already use.
+    # The built-in set tokens each expand to their own real atom list, in
+    # place, at whatever position they appear: @world/@selected
+    # (_expand_selected -- the world file's atoms + world_sets' nested
+    # sets), @system (the profile chain's packages files), and @installed
+    # (_installed_set_atoms -- a cat/pkg:slot atom per vdb package). Any
+    # other "@name" token is a user-defined (file-based) package set,
+    # expanded recursively via _resolve_custom_set.
     try:
         expanded_atoms = []
         for atom_arg in atom_args:
-            if atom_arg == "@world":
-                expanded_atoms.extend(_read_world_atoms(_root()))
-                for set_name in _read_world_sets(_root()):
-                    expanded_atoms.extend(
-                        _resolve_custom_set(_config_root(), set_name, set())
-                    )
+            if atom_arg in ("@world", "@selected"):
+                expanded_atoms.extend(_expand_selected(_config_root(), _root()))
             elif atom_arg == "@system":
                 expanded_atoms.extend(config["system_packages"])
+            elif atom_arg == "@installed":
+                expanded_atoms.extend(_installed_set_atoms(_root()))
             elif atom_arg.startswith("@"):
                 expanded_atoms.extend(
                     _resolve_custom_set(_config_root(), atom_arg[1:], set())
@@ -10503,7 +10526,7 @@ def run(args):
     if not atom_args:
         print(
             "emerge (pilot v1): no package atoms to resolve (the target list, "
-            "after expanding any @world/@system/@<set>, is empty)",
+            "after expanding any @world/@selected/@system/@installed/@<set>, is empty)",
             file=sys.stderr,
         )
         return 2
