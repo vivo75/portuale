@@ -9672,4 +9672,48 @@ cascade, and real's `r` marker + `str(Package)` block rendering
 real portage 3.0.82.2) pinned down three things Increments 1–3 got
 wrong or missing:
 
+### `FEATURES=buildpkg` / `emerge --buildpkg` / `-b`: a binpkg as a side effect of a source merge
+
+Real `_emerge/EbuildBinpkg`: after `src_install` and **before** the vdb
+merge, a binpkg of the freshly built `${D}` is written into `$PKGDIR`
+(the `EbuildBuild` → `EbuildBinpkg` → `EbuildMerge` task order — a build
+failure means nothing is merged), then the merge proceeds. So a
+`FEATURES=buildpkg` box keeps a `.tbz2`/`.gpkg.tar` of everything it
+compiles.
+
+`run_package`'s packaging tail was split into
+`ebuild_package::package_after_install` (the `__dyn_package` invocation +
+the `$PKGDIR/Packages` entry, assuming a populated `${D}`);
+`ebuild_merge::run_merge` gained a `buildpkg: Option<&PackageOptions>`
+param that runs it between the `install` chain and `merge_after_install`.
+`emerge_build::merge_one_source_entry` / `run_source_merge` /
+`emerge_getbinpkg::run_merge_plan` thread it through;
+`pretend.rs`'s non-`--pretend` dispatch turns it on when
+`--buildpkg`/`-b`/`--buildpkg=y` is given **or** `FEATURES` names
+`buildpkg` — `--buildpkg=n` wins over the FEATURE. `ebuild <file> merge`
+and every internal `run_merge` reuse pass `None` (`FEATURES=buildpkg` is
+an `emerge`-flow concept with no `bin/ebuild` equivalent).
+
+`--buildpkg`/`-b` is a recognized no-op for `--pretend` in the Python
+reference (it has no execution machinery). Rust-black-box-tested in
+`test_portuale.py`: `emerge dev-libs/packagepkg` with
+`FEATURES=buildpkg` → a valid xpak `.tbz2` (image tar + `XPAKSTOP`
+trailer, holds the built file) + a `Packages` entry + the package
+merged; `-b` alone does the same; `--buildpkg=n` over
+`FEATURES=buildpkg` builds no binpkg but still merges.
+
+`--buildpkg-exclude <atoms>` (real `_emerge/main.py`'s own
+space-separated, repeatable option, backed by an `InternalPackageSet`)
+suppresses the binpkg for any resolved entry whose cpv+slot matches one
+of the atoms — the entry is still merged, just not packaged.
+`emerge_build::entry_matches_any` is the transcription of real
+`--buildpkg-exclude`'s own `findAtomForPackage` check (`match_from_list`
+over the resolved `cat/pkg-ver:slot/sub_slot`); `run_source_merge` /
+`run_merge_plan` filter `buildpkg` to `None` per matching entry. A
+missing value is the usual `emerge: option "--buildpkg-exclude"
+requires an argument` (exit 2); `--pretend` treats it as a recognized
+no-op. Rust-black-box-tested in `test_portuale.py`: `-b
+--buildpkg-exclude dev-libs/packagepkg` → merged, no `.tbz2`;
+`--buildpkg-exclude dev-libs/other` → `.tbz2` still written.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
