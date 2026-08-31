@@ -495,11 +495,16 @@ Ranked roughly by how self-contained each is.
    block (`GraphResult::abi_rebuilds` pairs; `--verbose-slot-rebuilds[=y|n]`
    wired, default on, NOT `--verbose`-gated; `--json` `abi_rebuilds`
    array). Also fixed `unresolved_runtime_deps`' sub-slot-less candidate
-   strings (a kept `foo:2/3=` dep falsely read unsatisfied). v1 cuts:
-   single-pass (no backtracking), consumer's own `:=` not re-bound, no
-   `--changed-slot`/`--ignore-built-slot-operator-deps` interaction. New
-   `dev-libs/slotbind{target,consumer,fresh}` fixtures. Cut still:
-   `IUSE_EFFECTIVE`. `FEATURES=verify-sig`
+   strings (a kept `foo:2/3=` dep falsely read unsatisfied).
+   **Increment 3 shipped 2026-08-31**: `--ignore-built-slot-operator-deps`
+   (real `main.py:470`, `y_or_n`, default `n`, debug-only) —
+   `resolve_pretend_graph` gained an `ignore_built_slot_operator_deps`
+   param that skips the `slot_operator_rebuild_entries` post-pass
+   entirely (real portage strips the built `:=` parts via `FakeVartree`
+   so the scan finds nothing; same net effect). v1 cuts: single-pass (no
+   backtracking), consumer's own `:=` not re-bound, no `--changed-slot`
+   interaction. New `dev-libs/slotbind{target,consumer,fresh}` fixtures.
+   Cut still: `IUSE_EFFECTIVE`. `FEATURES=verify-sig`
    (GPG) lives here too — it is a `gpkg`/repo-sync concept, **not**
    `SRC_URI` fetch (the earlier backlog mis-scoped it).
 

@@ -1880,6 +1880,34 @@ def test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer(
     assert "causing rebuilds" not in no_block.stdout
 
 
+def test_ignore_built_slot_operator_deps_suppresses_the_rebuild(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Real --ignore-built-slot-operator-deps (main.py:470, y_or_n): real
+    portage strips the built := operator parts out of every installed
+    package's recorded *DEPEND, so _slot_operator_trigger_reinstalls
+    finds nothing. Same net effect here -- the whole scan is skipped.
+    Same fixture as
+    test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer, but
+    with --ignore-built-slot-operator-deps=y: slotbindconsumer is NOT
+    reinstalled, no "causing rebuilds:" block, "abi_rebuilds":[]."""
+    env = dict(fixture_env)
+    env["ROOT"] = str(_slotbind_root(tmp_path))
+    args = ["--pretend", "--ignore-built-slot-operator-deps=y", "dev-libs/slotbindtarget"]
+    result = _run([str(emerge_binary)], args, env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild     U  ] dev-libs/slotbindtarget-2.0 [1.0]",
+    ]
+    # Full Rust-vs-Python lockstep, incl. --json and the bare form.
+    for these in (args, args + ["--json"],
+                  ["--pretend", "--ignore-built-slot-operator-deps", "dev-libs/slotbindtarget"]):
+        python = _run(emerge_pretend_python, these, env)
+        rust = _run([str(emerge_binary)], these, env)
+        assert rust.stdout == python.stdout, (these, rust.stdout, python.stdout)
+    assert '"abi_rebuilds":[]' in _run([str(emerge_binary)], args + ["--json"], env).stdout
+
+
 def test_use_dep_dependency_atoms_are_resolved_not_dropped(emerge_binary, fixture_env):
     """dev-libs/usedeppkg's own RDEPEND is
     "dev-libs/newpkg[bar(+)] dev-libs/multislotpkg:1[baz(+)?]" -- same
@@ -5534,7 +5562,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -8498,7 +8526,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -8512,7 +8540,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -8528,7 +8556,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
         'emerge (pilot v1): action "--search" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, "
-        "--with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "
+        "--with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "
         "--noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected

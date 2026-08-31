@@ -1725,7 +1725,7 @@ fn report_option(token: &str) -> ExitCode {
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
              --unmerge/-C, --depclean/-c, --prune/-P, --config, \
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
-             --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, \
+             --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, \
              --noreplace/-n, --selective, and --help/-h are implemented \
              so far; see PROMPT.md)",
             found.canonical
@@ -3955,6 +3955,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // on `--verbose`. Only `=n` suppresses the "The following packages
     // are causing rebuilds:" block (`_show_abi_rebuild_info`).
     let mut verbose_slot_rebuilds = true;
+    // --ignore-built-slot-operator-deps: real `y_or_n` (default `"n"`,
+    // `main.py:470`). "Intended only for debugging purposes" -- when `y`,
+    // the slot-operator auto-rebuild scan is skipped entirely (real
+    // portage strips the built `:=` operator parts so the scan finds
+    // nothing; same net effect). Threaded into `resolve_pretend_graph`.
+    let mut ignore_built_slot_operator_deps = false;
     // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
     // (bare flag, "=y", or "=n") for the first, plain required "y"/"n"
     // (no bare form) for the second -- see the on/off default-
@@ -4433,6 +4439,29 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--verbose-slot-rebuilds=n" {
             verbose_slot_rebuilds = false;
+            i += 1;
+        } else if arg == "--ignore-built-slot-operator-deps" {
+            // Real `y_or_n` (no default arg); this pilot accepts the bare
+            // form as `y`, same permissive shape as its sibling flags.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    ignore_built_slot_operator_deps = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    ignore_built_slot_operator_deps = false;
+                    i += 2;
+                }
+                _ => {
+                    ignore_built_slot_operator_deps = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--ignore-built-slot-operator-deps=y" {
+            ignore_built_slot_operator_deps = true;
+            i += 1;
+        } else if arg == "--ignore-built-slot-operator-deps=n" {
+            ignore_built_slot_operator_deps = false;
             i += 1;
         } else if arg == "--selective" {
             // Real "--selective": y_or_n (default_arg_opts), the same
@@ -5302,6 +5331,7 @@ pub fn run(args: &[String]) -> ExitCode {
         &distdir,
         emptytree,
         getbinpkg,
+        ignore_built_slot_operator_deps,
     ) {
         Ok(result) => result,
         Err(e) => {

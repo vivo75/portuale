@@ -5244,6 +5244,7 @@ def resolve_pretend_graph(
     distdir="/var/cache/distfiles",
     empty=False,
     getbinpkg=False,
+    ignore_built_slot_operator_deps=False,
 ):
     """Recursively resolves every atom in `atoms` and -- for packages that
     would newly merge or upgrade -- its DEPEND+RDEPEND+BDEPEND+PDEPEND+
@@ -6324,7 +6325,13 @@ def resolve_pretend_graph(
 
     # Real depgraph's slot-operator auto-rebuild -- see
     # portage-repo/src/lib.rs's slot_operator_rebuild_entries.
-    slot_op_rebuilds, abi_rebuilds = _slot_operator_rebuild_entries(root, repos, entries)
+    # --ignore-built-slot-operator-deps (real main.py:470) skips the scan
+    # entirely (real portage strips the built := parts so it finds
+    # nothing; same net effect).
+    if ignore_built_slot_operator_deps:
+        slot_op_rebuilds, abi_rebuilds = [], []
+    else:
+        slot_op_rebuilds, abi_rebuilds = _slot_operator_rebuild_entries(root, repos, entries)
     entries.extend(slot_op_rebuilds)
 
     # Real portage's `mylist` is dependency-first (its Scheduler installs
@@ -7056,7 +7063,7 @@ def _report_option(token):
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
             "--deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, "
-            "--changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "
+            "--changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "
             "--noreplace/-n, --selective, and --help/-h are implemented so "
             "far; see PROMPT.md)",
             file=sys.stderr,
@@ -9485,6 +9492,10 @@ def run(args):
     with_test_deps = False
     changed_deps_report = False
     verbose_slot_rebuilds = True
+    # --ignore-built-slot-operator-deps: real y_or_n (default "n",
+    # main.py:470). "Intended only for debugging purposes" -- when y, the
+    # slot-operator auto-rebuild scan is skipped entirely.
+    ignore_built_slot_operator_deps = False
     # --autounmask/--autounmask-keep-keywords: None means "not explicitly
     # given" -- see the on/off default-resolution logic just below where
     # these are actually consumed, mirroring pretend.rs exactly.
@@ -9885,6 +9896,25 @@ def run(args):
             i += 1
         elif arg == "--verbose-slot-rebuilds=n":
             verbose_slot_rebuilds = False
+            i += 1
+        elif arg == "--ignore-built-slot-operator-deps":
+            # Real y_or_n (no default arg); this pilot accepts the bare
+            # form as y, same permissive shape as its sibling flags.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "n":
+                ignore_built_slot_operator_deps = False
+                i += 2
+            elif nxt == "y":
+                ignore_built_slot_operator_deps = True
+                i += 2
+            else:
+                ignore_built_slot_operator_deps = True
+                i += 1
+        elif arg == "--ignore-built-slot-operator-deps=y":
+            ignore_built_slot_operator_deps = True
+            i += 1
+        elif arg == "--ignore-built-slot-operator-deps=n":
+            ignore_built_slot_operator_deps = False
             i += 1
         elif arg == "--selective":
             # Real "--selective": y_or_n (default_arg_opts), the same
@@ -10641,6 +10671,7 @@ def run(args):
             os.environ.get("DISTDIR", "/var/cache/distfiles"),
             emptytree,
             getbinpkg,
+            ignore_built_slot_operator_deps,
         )
     except ResolutionError as e:
         print(f"emerge: {e}", file=sys.stderr)

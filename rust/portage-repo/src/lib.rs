@@ -7443,6 +7443,16 @@ pub fn resolve_pretend_graph(
     // candidate that wins resolution renders the real `g` bracket column
     // and contributes its download `SIZE` to `Size of downloads:`.
     getbinpkg: bool,
+    // `--ignore-built-slot-operator-deps` (real `main.py:470`, `y_or_n`,
+    // default `"n"`). Real portage feeds this into `FakeVartree`, which
+    // then strips the slot/sub-slot `:=` operator parts out of every
+    // installed package's recorded `*DEPEND` (`_slot_operator.
+    // ignore_built_slot_operator_deps`) -- so the slot-operator
+    // auto-rebuild scan (`_slot_operator_trigger_reinstalls`) finds
+    // nothing to trigger. Same net effect here: when set, the
+    // `slot_operator_rebuild_entries` post-pass is skipped entirely.
+    // "Intended only for debugging purposes" per the real `--help`.
+    ignore_built_slot_operator_deps: bool,
 ) -> Result<GraphResult, String> {
     let repos = find_repos(config_root)?;
     // Real `create_depgraph_params.py:178`: `--emptytree` sets
@@ -8695,7 +8705,11 @@ pub fn resolve_pretend_graph(
     // leaves `cat/pkg` in that slot is scheduled for a reinstall. Added
     // before the merge-order sort so it lands in dependency-first order
     // like every other entry. `abi_rebuilds` feeds `_show_abi_rebuild_info`.
-    let (slot_op_rebuilds, abi_rebuilds) = slot_operator_rebuild_entries(root, &entries);
+    let (slot_op_rebuilds, abi_rebuilds) = if ignore_built_slot_operator_deps {
+        (Vec::new(), Vec::new())
+    } else {
+        slot_operator_rebuild_entries(root, &entries)
+    };
     entries.extend(slot_op_rebuilds);
 
     // Real portage's `mylist` is dependency-first (its Scheduler installs
@@ -10253,6 +10267,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -11873,6 +11888,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -11914,6 +11930,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -11959,6 +11976,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -12008,6 +12026,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -12076,6 +12095,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12119,6 +12139,7 @@ mod tests {
             None,
             &fixtures_root().join("distfiles"),
             /* empty: */ true,
+            false,
             false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
@@ -12267,6 +12288,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -12406,6 +12428,7 @@ mod tests {
             false,
             root_deps_running_root,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -12565,6 +12588,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries;
@@ -12642,6 +12666,7 @@ mod tests {
             false,
             Some(&root),
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -12727,6 +12752,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -12788,6 +12814,7 @@ mod tests {
                 false,
                 root_deps_running_root,
                 &fixtures_root().join("distfiles"),
+                false,
                 false,
                 false,
             )
@@ -12857,6 +12884,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -12913,6 +12941,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph failed: {e}"))
         .entries
@@ -12963,6 +12992,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -13264,6 +13294,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -13593,6 +13624,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .expect("resolve_pretend_graph must succeed")
         .entries
@@ -13716,6 +13748,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -13899,6 +13932,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -14101,6 +14135,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14151,6 +14186,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -14264,6 +14300,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .expect_err(&format!(
             "resolve_pretend_graph({atom_str}) should have failed"
@@ -14312,6 +14349,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -14366,6 +14404,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
         .entries
@@ -14416,6 +14455,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -14688,6 +14728,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .expect_err("both atoms should fail their own REQUIRED_USE");
         assert_eq!(
@@ -14750,6 +14791,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -14839,6 +14881,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .expect("dependency's own NoVisibleCandidate is never fatal");
         let dep = result
@@ -14913,6 +14956,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -15046,6 +15090,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -15099,6 +15144,7 @@ mod tests {
             &fixtures_root().join("distfiles"),
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend_graph({atom_str}) failed: {e}"))
     }
@@ -15146,6 +15192,7 @@ mod tests {
             false,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )
@@ -15372,6 +15419,109 @@ mod tests {
     }
 
     #[test]
+    fn ignore_built_slot_operator_deps_skips_the_rebuild_scan() {
+        // A test-local vdb (the shared fixtures keep only the slotbind
+        // repo ebuilds/md5-cache): slotbindtarget-1.0 at SLOT="2" plus a
+        // stale `:2/2=` consumer. Emerging the target picks
+        // slotbindtarget-2.0 (SLOT="2/9") from the shared repo, so the
+        // consumer is normally rebuilt -- unless
+        // `ignore_built_slot_operator_deps` is set.
+        let cfg_root = fixtures_root();
+        let config = portage_profile::resolve_config(
+            &cfg_root,
+            &cfg_root.join("repo"),
+            &[("overlay".to_string(), cfg_root.join("overlay"))],
+            &[],
+            "testrepo",
+            &HashMap::new(),
+        )
+        .expect("fixture config resolves");
+        let dir = std::env::temp_dir().join(format!(
+            "portage-repo-ignoreslotop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mk = |name: &str, slot: &str, rdepend: &str| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+            fs::write(d.join("repository"), "testrepo\n").unwrap();
+            if !rdepend.is_empty() {
+                fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+            }
+        };
+        mk("slotbindtarget-1.0", "2", "");
+        mk("slotbindconsumer-1.0", "0", "dev-libs/slotbindtarget:2/2=");
+
+        let resolve = |ignore: bool| {
+            resolve_pretend_graph(
+                &cfg_root,
+                &dir,
+                &["dev-libs/slotbindtarget".to_string()],
+                &config,
+                false,
+                false,
+                false,
+                false,
+                Deep::NotRequested,
+                &[],
+                true,
+                false,
+                false,
+                false,
+                false,
+                // selective = false: a directly-named installed atom
+                // with a higher version still upgrades (matching real
+                // `emerge <atom>` without `--noreplace`).
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                &[],
+                &[],
+                false,
+                None,
+                false,
+                false,
+                None,
+                &fixtures_root().join("distfiles"),
+                false,
+                false,
+                ignore,
+            )
+            .expect("resolves")
+        };
+
+        let normal = resolve(false);
+        assert!(
+            normal
+                .entries
+                .iter()
+                .any(|e| e.package == "slotbindconsumer"),
+            "consumer is rebuilt by default"
+        );
+        assert!(!normal.abi_rebuilds.is_empty());
+
+        let ignored = resolve(true);
+        assert!(
+            !ignored
+                .entries
+                .iter()
+                .any(|e| e.package == "slotbindconsumer"),
+            "--ignore-built-slot-operator-deps drops the consumer rebuild"
+        );
+        assert!(ignored.abi_rebuilds.is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn graph_entry_carries_sub_slot_repo_and_oldbest_for_slot_repo_decoration() {
         // A New from testrepo: sub_slot/repo populated, oldbest empty.
         let n = &graph_entries_real("dev-libs/newpkg")[0];
@@ -15442,6 +15592,7 @@ mod tests {
             true,
             None,
             &fixtures_root().join("distfiles"),
+            false,
             false,
             false,
         )

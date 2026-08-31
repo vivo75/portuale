@@ -9731,15 +9731,30 @@ field).
 **v1 cuts** (same increment discipline as the `--root-deps` recursion):
 no backtracking — a rebuild that would itself shift another sub-slot
 isn't chased; the rebuilt consumer's own `:=` deps aren't re-bound here
-(the real rebuild does that); no `--changed-slot` /
-`--ignore-built-slot-operator-deps` interaction. Full contract-suite
-lockstep (new `dev-libs/slotbind{target,consumer,fresh}` repo fixtures;
-the installed consumer/target live in a test-local vdb — the shared
-fixture's whole vdb feeds every depclean/prune/`-C` test):
+(the real rebuild does that); no `--changed-slot` interaction. Full
+contract-suite lockstep (new `dev-libs/slotbind{target,consumer,fresh}`
+repo fixtures; the installed consumer/target live in a test-local vdb —
+the shared fixture's whole vdb feeds every depclean/prune/`-C` test):
 `emerge -p dev-libs/slotbindtarget` → the target Upgrade, `[ebuild R]
 dev-libs/slotbindconsumer`, and the "causing rebuilds:" block,
 byte-identical between both implementations. (`slotbindfresh`, already
 bound to `:2/9=`, is not rebuilt.)
+
+**Increment 3 — `--ignore-built-slot-operator-deps`.** Real
+`main.py:470` (`y_or_n`, default `n`, "intended only for debugging
+purposes"): real portage feeds it into `FakeVartree`, which strips the
+slot/sub-slot `:=` operator parts out of every installed package's
+recorded `*DEPEND` (`_slot_operator.ignore_built_slot_operator_deps`) —
+so `_slot_operator_trigger_reinstalls` finds nothing. `resolve_pretend_graph`
+gained a matching `ignore_built_slot_operator_deps` param (threaded from
+`pretend.rs` / mirrored in `emerge_pretend_reference.py`) that, when
+set, skips the `slot_operator_rebuild_entries` post-pass entirely — same
+net effect. The pilot accepts `--ignore-built-slot-operator-deps`,
+`=y`/`=n`, and a space-separated `y`/`n` (bare form → `y`, same
+permissive shape as the sibling flags). Contract test:
+`emerge -p --ignore-built-slot-operator-deps=y dev-libs/slotbindtarget`
+→ just the target Upgrade, no consumer reinstall, no "causing
+rebuilds:" block, `"abi_rebuilds":[]`.
 
 ### `FEATURES=buildpkg` / `emerge --buildpkg` / `-b`: a binpkg as a side effect of a source merge
 
