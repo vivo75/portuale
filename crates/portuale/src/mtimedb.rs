@@ -309,6 +309,20 @@ pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<()
     write_sections(root, resume.as_ref(), backup.as_ref(), Some(info))
 }
 
+/// Right before a fresh, non-`--resume` merge starts, an existing `resume`
+/// entry with more than one item is preserved as `resume_backup` (replacing
+/// whatever backup existed) and `resume` itself is cleared. A single-item
+/// list, or no `resume` entry, is a no-op.
+pub fn rotate_resume_to_backup(root: &Path) {
+    let Some(resume) = read_section(root, "resume") else {
+        return;
+    };
+    if resume.mergelist.len() <= 1 {
+        return;
+    }
+    let _ = write_sections(root, None, Some(&resume), Some(&read_info_mtimes(root)));
+}
+
 /// `cat/pkg-1.2.3-r1` -> `("cat/pkg", "1.2.3-r1")`. Splits at the last `-`
 /// whose following char is a digit.
 fn split_cpv(cpv: &str) -> Option<(&str, &str)> {

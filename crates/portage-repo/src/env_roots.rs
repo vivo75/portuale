@@ -26,6 +26,17 @@ pub fn portage_tmpdir_from_env() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(PORTAGE_TMPDIR_DEFAULT))
 }
 
+/// The resolved config's own `PORTAGE_TMPDIR` scalar, else the default.
+/// Callers layer the calling environment on top (highest config layer).
+pub fn portage_tmpdir_from_config(config: &portage_profile::Config) -> PathBuf {
+    config
+        .other_vars
+        .get("PORTAGE_TMPDIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(PORTAGE_TMPDIR_DEFAULT))
+}
+
 /// `--root-deps`' running-root default: `/`, since ESYSROOT resolves to the
 /// build machine's own `/` when SYSROOT is unset. `PORTAGE_RUNNING_ROOT` is
 /// not a Portage variable -- a portuale-only test override for fixture vdb

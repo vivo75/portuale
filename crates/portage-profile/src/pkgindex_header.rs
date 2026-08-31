@@ -224,3 +224,32 @@ pub fn pkgindex_header(config: &Config) -> PkgIndexHeader {
     sort_snapshot(&mut child);
     PkgIndexHeader { parent, child }
 }
+
+/// Mirror Portage's `--buildpkg`/`--buildpkg=n` post-resolve settings
+/// mutation on a header snapshot: the transient CLI flag is folded into
+/// `settings.features` for the run, so a `--buildpkg` inject's header
+/// carries `buildpkg` (parent snapshot only; `quickpkg` never runs under
+/// `--buildpkg`).
+// Portage: _emerge/actions.py, action_build
+pub fn pkgindex_header_apply_buildpkg_opt(header: &mut PkgIndexHeader, opt: Option<bool>) {
+    let Some(slot) = header.parent.iter_mut().find(|(k, _)| k == "FEATURES") else {
+        return;
+    };
+    let mut tokens: Vec<String> = slot
+        .1
+        .as_ref()
+        .map(|v| v.split_whitespace().map(String::from).collect())
+        .unwrap_or_default();
+    match opt {
+        Some(true) if !tokens.iter().any(|t| t == "buildpkg") => {
+            tokens.push("buildpkg".to_string());
+            tokens.sort();
+            slot.1 = Some(tokens.join(" "));
+        }
+        Some(false) => {
+            tokens.retain(|t| t != "buildpkg");
+            slot.1 = (!tokens.is_empty()).then(|| tokens.join(" "));
+        }
+        _ => {}
+    }
+}

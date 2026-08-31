@@ -122,6 +122,18 @@ pub(crate) fn config_bzip2_command(config: &portage_profile::Config) -> String {
         .unwrap_or_else(|| "bzip2".to_string())
 }
 
+/// Resolved merge-time `INSTALL_MASK` + `no{man,info,doc}` fold; shared with the
+/// remote server. Portage: bin/misc-functions.sh, preinst_mask
+pub(crate) fn config_install_mask(config: &portage_profile::Config) -> (String, bool) {
+    let features = config_features_list(config);
+    let configured = std::env::var("INSTALL_MASK")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| config.other_vars.get("INSTALL_MASK").cloned())
+        .unwrap_or_default();
+    crate::install_mask::resolve(&configured, &features)
+}
+
 /// Profile half over a loaded repo list: both roots resolve the same trees.
 /// Portage: create_trees (running tree inherits `PORTAGE_REPOSITORIES`)
 pub(crate) fn resolve_config_for_root(

@@ -114,6 +114,27 @@ impl StatusMode {
     }
 }
 
+/// The scheduler-display predicate over the CLI flags. `jobs` is the
+/// `--jobs` value (`usize::MAX` is a bare `-j`); `quiet_build` is the
+/// `--quiet-build` tri-state (`Some(true)` is bare/`=y`).
+pub(crate) fn scheduler_status_mode(
+    jobs: usize,
+    quiet: bool,
+    quiet_build: Option<bool>,
+    mergelist_len: usize,
+    verbose: bool,
+) -> StatusMode {
+    let background_quiet = quiet || quiet_build == Some(true);
+    let mut background = jobs > 1 || background_quiet;
+    if mergelist_len <= 1 && !background_quiet {
+        background = false;
+    }
+    StatusMode {
+        background,
+        show_jobs: background && (!quiet || verbose),
+    }
+}
+
 /// The `>>> Jobs:` line plus the `Scheduler._status_msg` half that prefixes
 /// every status line with a blank line unless in background mode. One value
 /// per merge run, shared by reference (the `-jN` scheduler prints from worker
