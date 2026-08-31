@@ -9224,6 +9224,41 @@ merged and whose `pkg_postinst` `die`s if it is *not* —
 asserts both ran (a `${ROOT}` marker file with both phase names), proving
 the real ordering held.
 
+### `emerge --getbinpkgonly <atom>`: `pkg_setup` and a replace's `pkg_prerm`/`pkg_postrm`
+
+The two remaining binpkg phase-hook cuts, lifted — all four install/
+remove `pkg_*` phases now run for a binary-package merge:
+
+- **`pkg_setup`** runs from the new binpkg's own saved env right after
+  metadata extraction, before `pkg_preinst` / the file copy — real
+  `_emerge/Binpkg` runs `setup` as an `EbuildPhase` in that slot.
+  `run_phase_from_saved_env` now also exports `EMERGE_FROM=binary` (real
+  `doebuild.py:1293`), which is load-bearing here: it makes
+  `bin/ebuild.sh:616`'s `[[ setup && EMERGE_FROM == ebuild ]]` false, so
+  `pkg_setup` too runs from the saved env instead of re-sourcing (and
+  re-`inherit`-ing — no repo, would `die`) the extracted ebuild. It also
+  selects `__filter_readonly_variables`' binary branch (filter the
+  untrusted `CATEGORY PVR PF PN PR PV P` from the saved env — real
+  binpkg-rename handling).
+- **`pkg_prerm` / `pkg_postrm`** run for *every same-slot version this
+  merge replaces*, each from *that* version's **own** vdb-stored
+  `environment.bz2` + `<pf>.ebuild` (real `dblink.unmerge()` inside
+  `treewalk()`'s replace loop): `pkg_prerm` → remove that version's
+  files (`unmerge_pkgfiles`) → `pkg_postrm` → drop its vdb entry
+  (`delete_vdb_dir`). A phase failure in the replace loop is logged, not
+  fatal — real `treewalk()` there is a literal `# TODO: Check status and
+  abort if necessary` that doesn't.
+
+The full real interleaving for a replacing merge, all verified in one
+test (`merge_binpkg_replace_runs_the_replaced_versions_pkg_prerm_and_pkg_postrm`,
+new fixtures `dev-libs/binpkgrmpkg-{1.0,2.0}.tbz2` whose five hooks each
+append `<phase>-<PVR>` to a `${ROOT}` log): merge `2.0` over an installed
+`1.0` →
+`setup-2.0`, `preinst-2.0`, `prerm-1.0`, `postrm-1.0`, `postinst-2.0`
+(and `1.0`'s payload file unmerged, `2.0`'s kept). Still cut: `pkg_setup`
+for a *replaced* version isn't re-run (it never was installed-context);
+no preserve-libs / reverse-dep check on the replace unmerge.
+
 ## Running it
 
 Build both Rust binaries:

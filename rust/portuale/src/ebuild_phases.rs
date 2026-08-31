@@ -1443,6 +1443,15 @@ pub(crate) fn run_single_phase(
 /// in the saved env -- real `save-ebuild-env.sh` + `__filter_readonly_
 /// variables` strip every `portage_readonly_vars` entry when it is
 /// written -- so `phase_setup_script`'s own fresh exports win.
+///
+/// `EMERGE_FROM=binary` (real `doebuild.py:1293` for a binpkg): this
+/// selects `__filter_readonly_variables`' own binary branch (filter the
+/// untrusted `CATEGORY PVR PF PN PR PV P` from the saved env, so they
+/// come from the current, possibly-renamed cpv) and -- load-bearing for
+/// `pkg_setup` -- makes `bin/ebuild.sh:616`'s `[[ setup && EMERGE_FROM
+/// == ebuild ]]` false, so a binpkg's `pkg_setup` runs from the saved
+/// env too instead of re-sourcing (and re-`inherit`-ing, which would
+/// `die` -- no repo) the extracted ebuild.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_phase_from_saved_env(
     ebuild_path: &Path,
@@ -1481,7 +1490,8 @@ pub(crate) fn run_phase_from_saved_env(
         std::fs::write(env.t().join("environment.raw"), [])
             .map_err(|e| format!("{}: {e}", env.t().join("environment.raw").display()))?;
 
-        run_one_phase(&env, root, phase, debug, &[], config_root, shell).await
+        let extra_env = [("EMERGE_FROM".to_string(), "binary".to_string())];
+        run_one_phase(&env, root, phase, debug, &extra_env, config_root, shell).await
     })
 }
 

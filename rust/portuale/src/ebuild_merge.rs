@@ -2337,32 +2337,36 @@ fn merge_after_install(
 /// included), writes the vdb entry from the binpkg's own metadata plus
 /// the freshly-generated `CONTENTS`, and runs `env_update()`/`ldconfig`.
 ///
-/// Real `pkg_preinst`/`pkg_postinst` run (real `_emerge/Binpkg` +
-/// `dblink.treewalk()` order: `preinst` before a single file is copied,
-/// `postinst` after the vdb entry is live and any replaced version is
-/// gone, before `env_update()`). They run from the extracted
-/// `<pf>.ebuild` plus the `bunzip2`'d `environment.bz2` -- see
-/// `ebuild_phases::run_phase_from_saved_env` -- and only when
-/// `DEFINED_PHASES` names them (real `_defined_phases`), so a binpkg
-/// that defines neither (the common case) spawns no shell.
+/// All four install/remove `pkg_*` phase hooks run, each from a saved
+/// bash environment (`ebuild_phases::run_phase_from_saved_env`) and only
+/// when the relevant `DEFINED_PHASES` names it (real `_defined_phases`),
+/// so a binpkg that defines none -- the common case -- spawns no shell:
+///   - `pkg_setup` -> `pkg_preinst` from the *new* binpkg's own
+///     `environment.bz2` + `<pf>.ebuild`, before a single file is copied
+///     (real `_emerge/Binpkg`: `setup` is an `EbuildPhase` right after
+///     metadata extraction; `dblink.treewalk()` runs `preinst` before
+///     `mergeme()`).
+///   - for every same-slot version this merge replaces, real
+///     `dblink.unmerge()` inside `treewalk()`'s replace loop:
+///     `pkg_prerm`, then remove that version's files, then `pkg_postrm`,
+///     then drop its vdb entry -- each phase from *that* version's own
+///     vdb-stored `environment.bz2` + `<pf>.ebuild`. A phase failure
+///     here is logged, not fatal (real "TODO: Check status and abort if
+///     necessary" -- it doesn't).
+///   - `pkg_postinst` from the new binpkg, after the vdb entry is live
+///     and every replaced version is gone, before `env_update()`.
 ///
 /// **v1 cuts, all deliberate** (same "narrow the first slice, document
 /// it" pattern as every other real-execution feature here):
-///   - no `pkg_setup` (real `_emerge/Binpkg` runs it too -- a narrower
-///     follow-up; `preinst`/`postinst` are the ones that actually touch
-///     `${ROOT}`).
-///   - a binpkg carrying no `environment.bz2` / `<pf>.ebuild` (older, or
-///     built before the pilot kept them) gets no hooks -- a documented
+///   - a binpkg (or a replaced version) carrying no `environment.bz2` /
+///     `<pf>.ebuild` -- older, built before the pilot kept them, or
+///     merged via `ebuild <file> merge` -- gets no hooks: a documented
 ///     degrade, not a fallback to re-sourcing the ebuild.
 ///   - no collision-protect / `protect-owned` abort, no blocker
 ///     exclusion, no preserve-libs registration.
-///   - **a same-slot replace runs phase-free**: an already-installed
-///     same-slot version of `category/package` is unmerged *after* the
-///     new binpkg is written (real portage's own merge-then-unmerge
-///     order -- a file the new version still owns is left in place),
-///     but with no `pkg_prerm`/`pkg_postrm` and no preserve-libs /
-///     reverse-dependency check. A *different*-slot installed version is
-///     left untouched, real slot semantics.
+///   - a *different*-slot installed version is left untouched (real slot
+///     semantics); the replace also skips the preserve-libs /
+///     reverse-dependency check `dblink.unmerge()` would otherwise do.
 pub fn merge_binpkg(
     binpkg_path: &Path,
     root: &Path,
@@ -2465,6 +2469,39 @@ pub fn merge_binpkg(
         }
     };
 
+    // Real `dblink.unmerge()` (`prerm` -> remove files -> `postrm`) for
+    // every same-slot version this merge replaces: run from *that*
+    // version's own vdb-stored `environment.bz2` + `<pf>.ebuild` (a
+    // version merged before the pilot kept them, or via `ebuild <file>
+    // merge`, has neither and gets no rm hooks -- documented degrade).
+    let run_old_hook = |old_pf: &str, phase: &str| -> Result<i32, String> {
+        let old_vdb = root.join("var/db/pkg").join(&category).join(old_pf);
+        let old_env = old_vdb.join("environment.bz2");
+        let old_ebuild = old_vdb.join(format!("{old_pf}.ebuild"));
+        let old_defined =
+            std::fs::read_to_string(old_vdb.join("DEFINED_PHASES")).unwrap_or_default();
+        if !old_env.is_file()
+            || !old_ebuild.is_file()
+            || !old_defined.split_whitespace().any(|d| d == phase)
+        {
+            return Ok(0);
+        }
+        let src_dir = builddir.join("unmerge-src").join(&category).join(&package);
+        std::fs::create_dir_all(&src_dir).map_err(|e| format!("{}: {e}", src_dir.display()))?;
+        let dst = src_dir.join(format!("{old_pf}.ebuild"));
+        std::fs::copy(&old_ebuild, &dst).map_err(|e| format!("{}: {e}", old_ebuild.display()))?;
+        crate::ebuild_phases::run_phase_from_saved_env(
+            &dst,
+            &old_env,
+            phase,
+            root,
+            portage_tmpdir,
+            options.debug,
+            &options.config_root,
+            options.shell,
+        )
+    };
+
     // Real merge-then-unmerge replace: an already-installed *same-slot*
     // version of this cp is removed only *after* the new binpkg is
     // written below (so a file the new version still owns survives) --
@@ -2489,6 +2526,14 @@ pub fn merge_binpkg(
                 replaced_same_slot.push(name);
             }
         }
+    }
+
+    // Real `_emerge/Binpkg` order: `pkg_setup` (an `EbuildPhase`) runs
+    // right after the metadata is extracted, before `unpack_contents` /
+    // the merge.
+    let setup_status = run_hook("setup")?;
+    if setup_status != 0 {
+        return Ok(setup_status);
     }
 
     // Real `dblink.treewalk()` order: `pkg_preinst` runs before a single
@@ -2523,9 +2568,13 @@ pub fn merge_binpkg(
     )?;
 
     // Real merge-then-unmerge: the new version's vdb entry now exists,
-    // so drop every same-slot version it replaced -- deleting only the
-    // files the *new* version does not itself own (`also_keep = [pf]`,
-    // folded into real `others_in_slot`), phase-free (see doc comment).
+    // so drop every same-slot version it replaced -- `dblink.unmerge()`
+    // (`pkg_prerm` -> remove files -> `pkg_postrm`) then `dblink.delete()`
+    // -- deleting only the files the *new* version does not itself own
+    // (`also_keep = [pf]`, folded into real `others_in_slot`). Matching
+    // real `treewalk()`'s own replace loop, a phase failure here is
+    // logged, never fatal (real "TODO: Check status and abort if
+    // necessary" -- it doesn't).
     let unmerge_options = crate::ebuild_unmerge::UnmergeOptions {
         debug: options.debug,
         shell: options.shell,
@@ -2536,6 +2585,10 @@ pub fn merge_binpkg(
     };
     let keep = [pf.clone()];
     for old_pf in &replaced_same_slot {
+        let prerm_status = run_old_hook(old_pf, "prerm")?;
+        if prerm_status != 0 {
+            eprintln!("{category}/{old_pf}: FAILED prerm ({prerm_status}) -- unmerge continues");
+        }
         crate::ebuild_unmerge::unmerge_pkgfiles(
             root,
             &category,
@@ -2544,6 +2597,10 @@ pub fn merge_binpkg(
             &keep,
             &unmerge_options,
         )?;
+        let postrm_status = run_old_hook(old_pf, "postrm")?;
+        if postrm_status != 0 {
+            eprintln!("{category}/{old_pf}: FAILED postrm ({postrm_status}) -- unmerge continues");
+        }
         crate::ebuild_unmerge::delete_vdb_dir(root, &category, old_pf)?;
     }
 

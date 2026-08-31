@@ -354,21 +354,23 @@ Ranked roughly by how self-contained each is.
    `unmerge_pkgfiles` (env-free file-removal core) + `delete_vdb_dir` so
    the replace path reuses them phase-free; `run_getbinpkgonly` now
    accepts `Upgrade`/`Downgrade`/`Reinstall` outcomes too.
-   **`pkg_preinst`/`pkg_postinst` for a binpkg merge shipped 2026-08-31**:
-   `extract_binpkg` keeps `environment.bz2` + `<pf>.ebuild` verbatim;
-   `ebuild_phases::run_phase_from_saved_env` = `run_single_phase` + real
-   `BinpkgEnvExtractor` (`bunzip2 environment.bz2 > ${T}/environment` +
-   `${T}/environment.raw` marker) so `bin/ebuild.sh` sources the saved
-   env instead of re-sourcing the ebuild; `merge_binpkg` peeks metadata
-   first (image → real `${PORTAGE_BUILDDIR}/image`), runs `preinst`
-   before the copy and `postinst` after the vdb write / any replace,
-   gated on `DEFINED_PHASES`. New committed fixture
-   `dev-libs/binpkgphasepkg-1.0.tbz2`. **Still open:** `pkg_setup` for a
-   binpkg, `pkg_prerm`/`pkg_postrm` on a same-slot replace, live
-   `layout.conf` negotiation, `Packages.gz`, resume support, preserve-
-   libs on a binpkg replace, `--getbinpkg` (mixing ebuilds + binaries)
-   for a real merge, and real digest (`SHA*`) verification. A real debug
-   trace is vendored at
+   **All four install/remove `pkg_*` phase hooks for a binpkg merge
+   shipped 2026-08-31**: `extract_binpkg` keeps `environment.bz2` +
+   `<pf>.ebuild` verbatim; `ebuild_phases::run_phase_from_saved_env` =
+   `run_single_phase` + real `BinpkgEnvExtractor` (`bunzip2
+   environment.bz2 > ${T}/environment` + `${T}/environment.raw` marker,
+   `EMERGE_FROM=binary`) so `bin/ebuild.sh` sources the saved env instead
+   of re-sourcing (and re-`inherit`-ing) the ebuild -- for `pkg_setup`
+   too. `merge_binpkg` peeks metadata first (image → real
+   `${PORTAGE_BUILDDIR}/image`), runs `setup`→`preinst` before the copy,
+   then for every replaced same-slot version `prerm`→remove files→`postrm`
+   from *that* version's own vdb `environment.bz2`, then `postinst`, all
+   gated on `DEFINED_PHASES`. New committed fixtures
+   `dev-libs/binpkgphasepkg-1.0.tbz2`, `dev-libs/binpkgrmpkg-{1.0,2.0}.tbz2`.
+   **Still open:** live `layout.conf` negotiation, `Packages.gz`, resume
+   support, preserve-libs / reverse-dep check on a binpkg replace,
+   `--getbinpkg` (mixing ebuilds + binaries) for a real merge, and real
+   digest (`SHA*`) verification. A real debug trace is vendored at
    `PORTING/helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`.
 
 7. **`gpkg` binary package format** (`bin/gpkg-helper.py`,

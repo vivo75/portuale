@@ -336,6 +336,73 @@ mod tests {
     }
 
     #[test]
+    fn merge_binpkg_runs_pkg_setup_then_preinst_then_postinst() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let status = ebuild_merge::merge_binpkg(
+            &fixtures_root().join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"),
+            &root,
+            &tmp.join("portage_tmpdir"),
+            &MergeOptions::default(),
+        )
+        .expect("merge succeeds");
+        assert_eq!(status, 0);
+
+        assert!(root.join("usr/share/binpkgrmpkg/payload-1.0.txt").is_file());
+        // Each hook appends its own `<phase>-<PVR>` line, in call order.
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/binpkgrmpkg.log")).unwrap(),
+            "setup-1.0\npreinst-1.0\npostinst-1.0\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_binpkg_replace_runs_the_replaced_versions_pkg_prerm_and_pkg_postrm() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let portage_tmpdir = tmp.join("portage_tmpdir");
+
+        // Install 1.0, then merge 2.0 over it (same slot).
+        ebuild_merge::merge_binpkg(
+            &fixtures_root().join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("1.0 merges");
+        let status = ebuild_merge::merge_binpkg(
+            &fixtures_root().join("pkgdir/dev-libs/binpkgrmpkg-2.0.tbz2"),
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+        )
+        .expect("2.0 merges");
+        assert_eq!(status, 0);
+
+        // 2.0 replaced 1.0 in the vdb; 1.0's own file is unmerged.
+        assert!(root
+            .join("var/db/pkg/dev-libs/binpkgrmpkg-2.0/CONTENTS")
+            .is_file());
+        assert!(!root.join("var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists());
+        assert!(root.join("usr/share/binpkgrmpkg/payload-2.0.txt").is_file());
+        assert!(!root.join("usr/share/binpkgrmpkg/payload-1.0.txt").exists());
+
+        // The full real interleaving: 2.0 setup+preinst, then 1.0's
+        // prerm+postrm (from 1.0's own vdb-stored environment.bz2, inside
+        // treewalk()'s replace loop), then 2.0 postinst.
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/binpkgrmpkg.log")).unwrap(),
+            "setup-1.0\npreinst-1.0\npostinst-1.0\n\
+             setup-2.0\npreinst-2.0\nprerm-1.0\npostrm-1.0\npostinst-2.0\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn merge_binpkg_replaces_a_same_slot_installed_version() {
         let tmp = tempdir();
         let root = tmp.join("root");

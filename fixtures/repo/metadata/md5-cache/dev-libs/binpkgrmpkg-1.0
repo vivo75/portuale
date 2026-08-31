@@ -1,0 +1,7 @@
+DEFINED_PHASES=install postinst postrm preinst prerm setup
+DESCRIPTION=fixture package: the full binpkg pkg_* phase-hook chain (setup/preinst/postinst/prerm/postrm)
+EAPI=8
+IUSE=
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000
