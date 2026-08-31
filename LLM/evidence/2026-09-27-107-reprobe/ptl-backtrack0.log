@@ -1,0 +1,11 @@
+[ebuild  r  U  ] media-libs/libdisplay-info-0.4.0 [0.3.0]
+[ebuild     U  ] dev-libs/md4c-0.6.0 [0.5.3]
+[ebuild  N     ] net-libs/rest-0.10.2  USE="introspection -gtk-doc -test -vala"
+
+The following packages are causing rebuilds:
+
+  (media-libs/libdisplay-info-0.4.0:0/4::gentoo, ebuild scheduled for merge) causes rebuilds for:
+    dev-libs/weston-16.0.0
+    kde-plasma/kwin-6.7.5-r1
+    kde-plasma/kwin-x11-6.7.5-r1
+    media-libs/mesa-26.2.3
