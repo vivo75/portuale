@@ -425,6 +425,38 @@ struct CtxOpts161 {
     set_args: HashSet<String>,
 }
 
+fn pass_161() -> PassResult {
+    PassResult {
+        entries: Vec::new(),
+        slot_conflicts: Vec::new(),
+        skipped_updates: Vec::new(),
+        orphan_blockers: Vec::new(),
+        slot_want: HashMap::new(),
+        slot_pullers: HashMap::new(),
+        masked_deps: Vec::new(),
+        use_unsat_deps: Vec::new(),
+        plain_miss_deps: Vec::new(),
+        nvc_dep_atoms: HashMap::new(),
+        missing_dep_trigger: None,
+        missing_args: Vec::new(),
+        autounmask_grew: false,
+        parent_flip_rescued: false,
+        edge_kind_map: HashMap::new(),
+        changed_deps_report_entries: Vec::new(),
+        pprovided_atoms: Vec::new(),
+        autounmask_keyword_changes: Vec::new(),
+        autounmask_use_changes: Vec::new(),
+        autounmask_license_changes: Vec::new(),
+        autounmask_mask_changes: Vec::new(),
+        use_overlay: HashMap::new(),
+        use_change_overlay: Vec::new(),
+        use_broke: false,
+        abi_rebuilds: None,
+        suppressed_nvc: false,
+        parent_atoms: Vec::new(),
+    }
+}
+
 /// The `souprov` slot conflict for the solvable legs: 1.0 and 2.0
 /// pulled, 2.0 resolved.
 fn souprov_conflict_161() -> SlotConflict {
@@ -469,6 +501,31 @@ struct SlotundoVdbArgs<'a> {
     slot: &'a str,
     rdepend: &'a str,
     installed_use: &'a str,
+}
+
+/// recordered `USE`.
+fn slotundo_vdb(args: SlotundoVdbArgs<'_>) {
+    let SlotundoVdbArgs {
+        dir,
+        name,
+        version,
+        slot,
+        rdepend,
+        installed_use,
+    } = args;
+    let d = dir
+        .join("var/db/pkg/dev-libs")
+        .join(format!("{name}-{version}"));
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+    fs::write(d.join("repository"), "testrepo\n").unwrap();
+    if !rdepend.is_empty() {
+        fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+    }
+    if !installed_use.is_empty() {
+        fs::write(d.join("USE"), format!("{installed_use}\n")).unwrap();
+    }
 }
 
 /// A walked rebuild entry: `Reinstall { slot_operator_rebuild: true }`
@@ -1098,7 +1155,11 @@ mod tests_165;
 
 mod tests_166;
 
+mod tests_184;
+
+mod abi_probe;
 mod binary_index;
+mod bind;
 mod binpkg_use;
 mod blockers;
 mod candidates;
@@ -1113,7 +1174,6 @@ mod pretend;
 mod queue;
 mod reinstall;
 mod repo_config;
-mod tests_184;
 mod use_display;
 mod use_flags;
 mod visibility;

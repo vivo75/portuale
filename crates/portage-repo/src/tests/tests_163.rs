@@ -476,6 +476,44 @@ fn resolve_pretend_each_reinstall_trigger_fires_on_its_own() {
     }
 }
 
+/// `--binpkg-changed-deps` drops a binary built against different
+/// dependencies: the stale binary must not win over the installed
+/// ebuild.
+#[test]
+fn resolve_pretend_changed_deps_drops_a_stale_binary() {
+    let dir = dir_163("rp-bindeps");
+    let repos = repo_pkgs_163(
+        &dir,
+        &[
+            ("dev-libs/rp", "1.0", "0", "", "", "amd64"),
+            ("dev-libs/rp", "2.0", "0", "", "", "amd64"),
+        ],
+    );
+    install_163(&dir, "dev-libs", "rp-2.0", "0", &[]);
+    let mut config = cfg_163();
+    config.scanned_binpkgs = Some(vec![binpkg_163(
+        "dev-libs/rp-2.0",
+        "1",
+        &[("RDEPEND", "dev-libs/other")],
+    )]);
+    let mut o = RpOpts163::top();
+    o.selective = false;
+    o.usepkg = true;
+    assert_eq!(
+        resolve_163(&repos, &dir, &config, "dev-libs/rp", &o),
+        PretendOutcome::Reinstall {
+            version: "2.0".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        }
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `--rebuilt-binaries` with a newer binary build reinstalls with
 /// the rebuild flag; without the flag the same shape reinstalls
 /// bare (the `--emptytree` arm).

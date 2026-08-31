@@ -1,0 +1,64 @@
+use super::*;
+
+/// One token of the binder: another package never binds, graph entries beat the
+/// installed fallback, and the greatest same-cp version wins.
+#[test]
+fn bind_slot_operator_token_prefers_graph_entries_then_installed() {
+    let dir = slotundo_temp_dir("161-bind");
+    let d = dir.join("var/db/pkg/dev-libs/bar-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0/3\n").unwrap();
+    let new_entry = |package: &str, version: &str, slot: &str, sub: &str| GraphEntry {
+        discovery: 0,
+        category: "dev-libs".into(),
+        package: package.into(),
+        outcome: PretendOutcome::New {
+            version: version.into(),
+        },
+        slot: Some(slot.into()),
+        sub_slot: Some(sub.into()),
+        ..graph_entry("dev-libs", package, version)
+    };
+    assert_eq!(
+        bind_slot_operator_token("dev-libs/bar:=", &[new_entry("baz", "2.0", "9", "9")], &dir),
+        "dev-libs/bar:0/3="
+    );
+    assert_eq!(
+        bind_slot_operator_token("dev-libs/bar:=", &[new_entry("bar", "2.0", "5", "5")], &dir),
+        "dev-libs/bar:5/5="
+    );
+    assert_eq!(
+        bind_slot_operator_token(
+            "dev-libs/bar:=",
+            &[
+                new_entry("bar", "2.0", "2", "2"),
+                new_entry("bar", "1.0", "0", "1")
+            ],
+            &dir
+        ),
+        "dev-libs/bar:2/2="
+    );
+    let reinstall = GraphEntry {
+        discovery: 0,
+        category: "dev-libs".into(),
+        package: "bar".into(),
+        outcome: PretendOutcome::Reinstall {
+            version: "2.0".into(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        },
+        slot: Some("5".into()),
+        sub_slot: Some("5".into()),
+        ..graph_entry("dev-libs", "bar", "2.0")
+    };
+    assert_eq!(
+        bind_slot_operator_token("dev-libs/bar:=", &[reinstall], &dir),
+        "dev-libs/bar:5/5="
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

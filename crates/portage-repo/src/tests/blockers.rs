@@ -102,6 +102,128 @@ fn resolve_blockers_drops_a_use_dep_blocker_the_target_does_not_satisfy() {
 }
 
 #[test]
+fn resolve_blockers_keeps_an_installed_match_replaced_in_its_slot_as_satisfied() {
+    // Installed match replaced in-slot: the row is kept as `Replacement`.
+    let dir = slotundo_temp_dir("blocker-s1-a");
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "blocked",
+        version: "1.0",
+        slot: "0",
+        rdepend: "",
+        installed_use: "",
+    });
+    let owner = graph_entry("dev-libs", "bparent", "1.0");
+    let mut upgrade = graph_entry("dev-libs", "blocked", "2.0");
+    upgrade.outcome = PretendOutcome::Upgrade {
+        from: "1.0".into(),
+        to: "2.0".into(),
+    };
+    let pending = PendingBlocker {
+        atom_str: "!<dev-libs/blocked-2.0".to_string(),
+        strong: false,
+        buildtime: false,
+        target_category: "dev-libs".to_string(),
+        target_package: "blocked".to_string(),
+        owner_key: ("dev-libs".to_string(), "bparent".to_string()),
+        owner_version: "1.0".to_string(),
+        owner_merging: true,
+        owner_installed: false,
+    };
+    let conflicts = resolve_blockers(&dir, &[pending], &[owner, upgrade], &HashSet::new(), false);
+    assert_eq!(
+        conflicts.len(),
+        1,
+        "a replaced-in-slot installed match keeps its row"
+    );
+    assert!(!conflicts[0].conflict.unsolvable);
+    assert_eq!(
+        conflicts[0].conflict.satisfied_by,
+        Some(BlockerSatisfiedBy::Replacement {
+            cp: ("dev-libs".to_string(), "blocked".to_string()),
+            slot: "0".to_string(),
+        })
+    );
+
+    // Cell a': different-slot replacement uninstalls the installed match instead.
+    let owner = graph_entry("dev-libs", "bparent", "1.0");
+    let mut other_slot = graph_entry("dev-libs", "blocked", "2.0");
+    other_slot.slot = Some("1".to_string());
+    other_slot.sub_slot = Some("1".to_string());
+    let pending = PendingBlocker {
+        atom_str: "!<dev-libs/blocked-2.0".to_string(),
+        strong: false,
+        buildtime: false,
+        target_category: "dev-libs".to_string(),
+        target_package: "blocked".to_string(),
+        owner_key: ("dev-libs".to_string(), "bparent".to_string()),
+        owner_version: "1.0".to_string(),
+        owner_merging: true,
+        owner_installed: false,
+    };
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pending],
+        &[owner, other_slot],
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(
+        conflicts.len(),
+        1,
+        "a different-slot replacement keeps the row"
+    );
+    assert!(!conflicts[0].conflict.unsolvable);
+    assert_eq!(
+        conflicts[0].conflict.satisfied_by,
+        Some(BlockerSatisfiedBy::Uninstall {
+            cpv: "dev-libs/blocked-1.0".to_string(),
+            anchor: ("dev-libs".to_string(), "bparent".to_string()),
+        }),
+        "a different-slot installed match is removed (#72 B3)"
+    );
+
+    // Cell b: a same-version reinstall is merge-bound, never "replaced".
+    let owner = graph_entry("dev-libs", "bparent", "1.0");
+    let mut reinstall = graph_entry("dev-libs", "blocked", "1.0");
+    reinstall.outcome = PretendOutcome::Reinstall {
+        version: "1.0".into(),
+        changed_flags: Vec::new(),
+        deps_changed: false,
+        slot_changed: false,
+        rebuilt_binary: false,
+        new_repo: false,
+        slot_operator_rebuild: false,
+    };
+    let pending = PendingBlocker {
+        atom_str: "!<dev-libs/blocked-2.0".to_string(),
+        strong: false,
+        buildtime: false,
+        target_category: "dev-libs".to_string(),
+        target_package: "blocked".to_string(),
+        owner_key: ("dev-libs".to_string(), "bparent".to_string()),
+        owner_version: "1.0".to_string(),
+        owner_merging: true,
+        owner_installed: false,
+    };
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pending],
+        &[owner, reinstall],
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(
+        conflicts.len(),
+        1,
+        "a same-version reinstall is merge-bound"
+    );
+    assert!(conflicts[0].conflict.unsolvable);
+    assert_eq!(conflicts[0].conflict.satisfied_by, None);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn resolve_blockers_returns_nothing_when_the_target_matches_nothing() {
     let entries = vec![graph_entry("dev-libs", "owner", "1.0")];
     let pending = vec![PendingBlocker {
