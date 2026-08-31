@@ -61,3 +61,37 @@ fn stale_merging_entry_is_invisible_and_replaced_by_the_next_merge() {
     assert!(!stale.exists(), "the stale temporary is wiped");
     assert_eq!(portage_repo::all_installed_packages(&root).len(), 1);
 }
+
+/// Every `!atom`/`!!atom` in an already-flat dep list is matched against
+/// the installed vdb; non-blocker atoms are ignored.
+/// Portage: `vartree.py`, `blocked_installed_packages`.
+#[test]
+fn blockers_from_flat_deps_matches_only_blocker_atoms_against_the_vdb() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    // `normalpkg` carries a sub-slot, so the re-point through the vdb seam
+    // must preserve the `split_once('/')` post-processing.
+    for (pf, slot) in [("blockedpkg-1.0", "0"), ("normalpkg-2.0", "3/3.1")] {
+        let vdb = root.join("var/db/pkg/dev-libs").join(pf);
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("SLOT"), format!("{slot}\n")).unwrap();
+    }
+
+    let deps = [
+        "!dev-libs/blockedpkg".to_string(),
+        "dev-libs/normalpkg".to_string(),
+        "!!dev-libs/notinstalled".to_string(),
+    ];
+    let blocked = blockers_from_flat_deps(&root, &deps);
+    assert_eq!(
+        blocked,
+        HashSet::from([("dev-libs".to_string(), "blockedpkg-1.0".to_string())])
+    );
+
+    // A slot-restricted blocker only matches the matching slot.
+    assert!(blockers_from_flat_deps(&root, &["!dev-libs/normalpkg:0".to_string()]).is_empty());
+    assert_eq!(
+        blockers_from_flat_deps(&root, &["!dev-libs/normalpkg:3".to_string()]),
+        HashSet::from([("dev-libs".to_string(), "normalpkg-2.0".to_string())])
+    );
+}

@@ -9332,4 +9332,79 @@ file byte-identical; a `:slot` arg for `dualslotpkg` records
 `dev-libs/dualslotpkg:1`, a bare / unslotted arg doesn't) + two
 `update_world_file` unit tests.
 
+### `emerge --getbinpkgonly`/`--getbinpkg`: collision-protect / blocker exclusion / preserve-libs parity
+
+`merge_binpkg` was the one merge path still lighter than the source
+`merge_after_install`. That gap is closed — the same real
+`dblink.merge()` pre-copy machinery now runs for a binary package:
+
+- **`FEATURES=collision-protect` / `protect-owned`** — before `pkg_preinst`
+  and the file copy, `find_collisions` walks the extracted image against
+  `${ROOT}`; an ordinary collision aborts the merge with the real
+  `Package '<cpv>' NOT merged due to file collisions` message
+  (naming the owning package) under `collision-protect`, or under
+  `protect-owned` when an owner is actually identified; a
+  symlink-over-directory always aborts (PMS 13.4). Same abort logic as
+  `merge_after_install`, byte for byte.
+- **real blocker exclusion** (`mypkglist = others_in_slot + blockers`) —
+  a file owned by a package the merging binpkg `!`-blocks is not a
+  collision (the binpkg is meant to replace it). The `blockers` term is
+  new for a binpkg: it has no ebuild/repo to resolve config against, so
+  `blockers_from_flat_deps` (factored out of `blocked_installed_packages`)
+  reads the **already-USE-reduced** `*DEPEND` build-info files directly
+  and matches every `!atom`/`!!atom` against the installed vdb
+  (slot-restricted blockers included).
+- **preserve-libs** — `find_collisions` takes the
+  `preserved_libs_registry` inode set, so a registered preserved lib the
+  new binpkg also ships isn't flagged as a collision; after the vdb
+  write, `unregister_preserved_libs` hands any preserved paths this
+  version now provides back to it and strips them from the old owner's
+  `CONTENTS`. (The unmerge side — a still-needed `.so` surviving when the
+  binpkg replaces the version that owned it — already worked, via
+  `unmerge_pkgfiles` → `preserve_libs_on_unmerge`.)
+
+Rust-tested: `merge_binpkg_collision_protect_aborts_when_another_package_owns_the_file`
+(a seeded vdb entry owns `hello.txt`; `collision_protect: true` →
+`merge_binpkg` errors, nothing written) + a `blockers_from_flat_deps`
+unit test (blocker atoms matched, non-blockers ignored, slot-restricted
+blockers respected). The `find_collisions` / `unregister_preserved_libs`
+code itself is the same path `merge_after_install`'s own collision /
+preserve-libs tests already exercise.
+
+### `emerge <atom>` / `emerge --getbinpkg <atom>` (no `--pretend`): real `--keep-going`
+
+`--buildpkgonly --keep-going` was already real (its resolver gate
+guarantees no entry depends on another, so a failure invalidates
+nothing for a later entry). A plain `emerge <atom>` merge is different:
+`resolve_pretend_graph` returns the entries in dependency-first order,
+so a later entry *can* genuinely need an earlier one — the old
+`run_source_merge` / `run_merge_plan` therefore just stopped at the
+first failure.
+
+Now, with `--keep-going`, they run real `Scheduler`'s own
+`_calc_resume_list` shape: on a merge failure, drop that entry **and
+every entry that (transitively) depends on it** — a BFS over the
+`GraphEntry.required_by` reverse-dependency edges the resolver already
+recorded — then merge the rest. At the end, if anything failed, return
+a combined error (`N package(s) failed to merge (--keep-going):` +
+the failure messages, then `N dependent package(s) not merged:` + the
+skipped `cat/pkg` list); real `emerge` likewise exits non-zero when
+`--keep-going` swallowed a failure.
+
+Both paths now share `emerge_build::run_merge_loop` — a small generic
+loop (`FnMut(&GraphEntry) -> Result<(), String>` per entry) that owns
+the skip-set BFS and the combined-error formatting; `run_source_merge`
+passes it `merge_one_source_entry`, `run_merge_plan` passes it a
+closure that routes `Binary` entries to `merge_one_binary_entry` and
+the rest to `merge_one_source_entry`. Without `--keep-going` the loop
+returns the first `Err` verbatim (unchanged behaviour).
+
+Rust-unit-tested at the `run_merge_loop` level:
+`run_merge_loop_without_keep_going_stops_at_the_first_failure` (only the
+first entry is attempted) and
+`run_merge_loop_keep_going_skips_the_failed_packages_transitive_dependents`
+(`dep <- mid <- top` chain + an independent `other`: `dep` fails →
+`mid` and `top` skipped, `other` merged, combined error names all
+three).
+
 # # required by dev-libs/useflagpkg[-foo] (argument)

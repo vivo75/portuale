@@ -20,6 +20,7 @@ use clap::ArgMatches;
 
 mod binpkg_flow;
 mod ledger;
+mod plan;
 mod preflight;
 mod ssh;
 
@@ -28,6 +29,7 @@ pub(crate) mod tests;
 
 pub(crate) use binpkg_flow::*;
 pub(crate) use ledger::*;
+pub use plan::*;
 pub(crate) use preflight::*;
 pub use ssh::*;
 
