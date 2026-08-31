@@ -10175,25 +10175,11 @@ def run(args):
         )
         return 2
 
-    # --unmerge/-C WITHOUT --pretend is a real removal on the Rust side
-    # now (pretend.rs's execute_unmerge); this reference has no ebuild-
-    # execution machinery, so -- like every other non-`--pretend` path --
-    # it just returns 0 below. No `--pretend`-only gate (unlike
-    # --deselect/--depclean/--prune).
-
-    if depclean and not pretend:
-        print(
-            "emerge (pilot v1): --depclean/-c requires --pretend (see PROMPT.md)",
-            file=sys.stderr,
-        )
-        return 2
-
-    if prune and not pretend:
-        print(
-            "emerge (pilot v1): --prune/-P requires --pretend (see PROMPT.md)",
-            file=sys.stderr,
-        )
-        return 2
+    # --unmerge/-C, --depclean/-c and --prune/-P WITHOUT --pretend are all
+    # real removals on the Rust side now (pretend.rs's execute_unmerge);
+    # this reference has no ebuild-execution machinery, so -- like every
+    # other non-`--pretend` path -- it just returns 0 below. Only
+    # --deselect still has a `--pretend`-only gate here.
 
     # Every real, non-dry-run `emerge` execution path -- `--buildpkgonly`
     # (build a binary package), `--getbinpkgonly` (download + merge remote

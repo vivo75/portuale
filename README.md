@@ -9509,11 +9509,9 @@ unmerged:` header — real `unmerge.py:195`) computes the `selected` set,
   carried forward (real `.write`; already the pilot's convention).
 
 `run_unmerge_pretend` gained a `pretend: bool` param: `false` from the
-`-C` CLI path (header suppressed, `execute_unmerge` runs), `true` from
-`-pC` and from the `--depclean`/`--prune` preview reuse (which still
-never remove — their real removal is a separate, larger slice that has
-to thread the topological cleanlist + the unresolved-deps safety halt
-through the same loop).
+`-C` CLI path (header suppressed, `execute_unmerge` runs), `true` under
+`--pretend`. `--depclean`/`--prune` pass their own real `pretend` flag
+through too — see the next section.
 
 **v1 cuts:** no `CLEAN_DELAY` countdown (real `countdown(5, …)`); no
 `--ask`; `FEATURES=unmerge-backup` not honored; a `pkg_prerm`/
@@ -9528,6 +9526,51 @@ without `--pretend` just returns 0 there now); the old
 seeded `1.0` → vdb entry + payload gone, `prerm-1.0`/`postrm-1.0` in the
 fixture's `${ROOT}` hook log, the atom dropped from `world` and an
 unrelated atom kept; plus `-pC` still previews and removes nothing.
+
+### `emerge --depclean` / `emerge --prune` (no `--pretend`): real removal, completing the story
+
+`emerge -C`'s removal machinery (`execute_unmerge` /
+`unmerge_one_installed` / `deselect_from_world`) is exactly what real
+`action_depclean` needs: it literally feeds its computed cleanlist to
+`unmerge(root_config, myopts, "unmerge", cleanlist, ordered=ordered)` —
+the *same* `unmerge()` `-C` calls. So this slice is mostly wiring:
+
+- `run_depclean_pretend` / `run_prune_pretend` / the `--prune --nodeps`
+  path each gained a `pretend: bool`. They already compute everything —
+  the topological cleanlist, the `unresolved_deps()` safety halt, the
+  `--depclean-lib-check` scan, the `--verbose` reverse-dep blocks — and
+  pass the cleanlist cpvs to the shared `run_unmerge_pretend`. Now they
+  pass the real `pretend` through: without it, `run_unmerge_pretend`
+  runs `execute_unmerge` after the preview (per-package `pkg_prerm` from
+  the vdb-saved env → files → `pkg_postrm` → vdb dir, then
+  `deselect_from_world`), in the cleanlist's own dependency-respecting
+  order.
+- The safety halt and lib-check still run *before* any removal — real
+  `_calc_depclean` returns non-`EX_OK` and `action_depclean` bails
+  before `unmerge()`, so a kept package with an unsatisfiable hard
+  runtime dep still aborts with nothing removed.
+- `run_depclean_pretend`'s stats block reads `Number removed:` instead
+  of `Number to remove:` when not `--pretend` (real
+  `action_depclean:908-911`); `--prune` has no stats block either way.
+- The `>>> These are the packages that would be unmerged:` header stays
+  `--pretend`/`--ask`-gated (real `unmerge.py:195`) — including in the
+  `--prune --nodeps` path, which reimplements `_unmerge_display`'s prune
+  branch directly.
+
+The `--unmerge`/`--depclean`/`--prune` `requires --pretend` gates are
+all gone now (only `--deselect` keeps one — its `run_deselect` never
+writes the world file at all, a separate v1 cut). **v1 cuts** carry
+over from `-C`: no `CLEAN_DELAY` countdown, no `--ask`, no
+`FEATURES=unmerge-backup`; slot-operator rebuild edges on the cleanlist
+still unmodelled. Not in the contract CASES (the Python reference
+returns 0 for any non-`--pretend` path); the `("real emerge action, not
+implemented", ["--depclean"], 2)` / `["-c"]` CASES are gone, and
+`test_depclean_requires_pretend` / `test_prune_requires_pretend` became
+`test_*_without_pretend_is_no_longer_gated`. Rust-black-box-tested in
+`test_portuale.py`: `emerge --depclean` removes a seeded orphan
+(`Number removed: 1`, hooks ran, files + vdb gone); `emerge --prune`
+removes the non-highest version of a multi-version cp and keeps the
+highest.
 
 ## Running it
 

@@ -76,7 +76,8 @@ Ranked roughly by how self-contained each is.
   `WorldSelectedPackagesSet.cleanPackage`). The old
   `--unmerge requires --pretend` gate is gone. v1 cuts: no `CLEAN_DELAY`
   countdown, no `--ask`, no `FEATURES=unmerge-backup`.
-  `--depclean`/`--prune` real removal is still a separate slice.
+  **`--depclean`/`--prune`/`--prune --nodeps` real removal shipped the
+  same day** -- see their own bullets below.
 - **`emerge --pretend --depclean` / `-pc`** **shipped 2026-08-27**
   (`depclean_cleanlist`: the reachability closure over the installed
   `RDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND` graph; `run_depclean_pretend`:
@@ -121,11 +122,17 @@ Ranked roughly by how self-contained each is.
   "n"` -- `-pc <atoms> --deselect=n` keeps `world` as a protection
   root; `depclean_cleanlist` `deselect` param; also fixed `--deselect`
   wrongly triggering the standalone action alongside `--depclean`/
-  `--prune`/`--unmerge`) **shipped 2026-08-30**. **Still open:**
-  slot-operator rebuild edges, the exact `@selected`-vs-`@world` set
-  nesting (approximated), the "Broken soname dependencies found"
+  `--prune`/`--unmerge`) **shipped 2026-08-30**. **Real (non-`--pretend`)
+  `emerge --depclean` removal shipped 2026-08-31**: `run_depclean_pretend`
+  gained a `pretend: bool` and passes the real flag to the shared
+  `run_unmerge_pretend`, which runs `execute_unmerge` (the `-C` slice's
+  machinery) after the preview -- real `action_depclean` feeds its
+  cleanlist to the very same `unmerge()`. Safety halt + `--depclean-lib-
+  check` still gate removal; stats block reads `Number removed:`. **Still
+  open:** slot-operator rebuild edges, the exact `@selected`-vs-`@world`
+  set nesting (approximated), the "Broken soname dependencies found"
   *warning* half of `unresolved_deps()` (no soname deps in this pilot's
-  RDEPEND), and real (non-`--pretend`) removal.
+  RDEPEND).
 - **`emerge -p --prune` / `-pP`** **shipped 2026-08-27**
   (`prune_cleanlist`: seed the closure from every installed package
   except the non-highest-in-cp ones an `args_set` matches -- `args_set`
@@ -139,8 +146,13 @@ Ranked roughly by how self-contained each is.
   `_calc_depclean` -- no dep check at all; `prune_nodeps_selection` +
   `run_prune_nodeps_pretend`; best-version `COUNTER` tiebreak narrowed
   out) **shipped 2026-08-28**. `--depclean-lib-check` (shared with
-  `--depclean` -- see above) **shipped 2026-08-29**. **Still open:**
-  slot-operator rebuild edges, real (non-`--pretend`) removal.
+  `--depclean` -- see above) **shipped 2026-08-29**. **Real
+  (non-`--pretend`) `emerge --prune` / `--prune --nodeps` removal shipped
+  2026-08-31** (same `pretend: bool` wiring as `--depclean`;
+  `run_prune_nodeps_pretend` builds its own `removal_list` and calls
+  `execute_unmerge` directly, real `actions.py:2684` routing `prune
+  --nodeps` through the same `unmerge()` `-C` uses). **Still open:**
+  slot-operator rebuild edges.
 - Minor `-pC` narrowings: ~~the higher-slot refinement on the
   set-protection warning~~ **shipped 2026-08-30** (real
   `unmerge.py:421-441`'s `higher_slot`: the "still listed in package

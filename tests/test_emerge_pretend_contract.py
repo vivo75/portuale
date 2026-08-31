@@ -191,8 +191,10 @@ CASES = [
     ("real emerge option, value-taking, not implemented", ["--jobs", "dev-libs/newpkg"], 2),
     ("real emerge option, boolean, not implemented", ["--debug", "--pretend", "dev-libs/newpkg"], 2),
     ("real emerge option, inline =value form, not implemented", ["--jobs=4", "--pretend", "dev-libs/newpkg"], 2),
-    ("real emerge action, not implemented", ["--depclean"], 2),
-    ("real emerge action, short alias, not implemented", ["-c"], 2),
+    # (`emerge --depclean` / `-c` / `--prune` / `-P` / `-C` with no
+    #  --pretend are all real removals now -- non-dry-run paths,
+    #  Rust-black-box-tested in test_portuale.py, deliberately not run
+    #  through these shared CASES against the read-only fixture ROOT.)
     ("genuinely unrecognized option", ["--totally-fake-option", "dev-libs/newpkg"], 2),
     ("recursion: basic dependency chain", ["--pretend", "dev-libs/withdeps"], 0),
     ("recursion: diamond dependency dedup", ["--pretend", "dev-libs/diamond"], 0),
@@ -5902,10 +5904,17 @@ def test_depclean_args_deselect_n_keeps_a_world_member(emerge_binary, fixture_en
         assert kept.stdout.splitlines()[-1] == "Number to remove:     0", flag
 
 
-def test_depclean_requires_pretend(emerge_binary, fixture_env):
-    result = _run([str(emerge_binary)], ["--depclean"], fixture_env)
-    assert result.returncode == 2
-    assert "requires --pretend" in result.stderr
+def test_depclean_without_pretend_is_no_longer_gated(emerge_binary, fixture_env):
+    """`emerge --depclean` WITHOUT `--pretend` really removes the cleanlist
+    now (pretend.rs's execute_unmerge). Not a Rust-vs-Python contract
+    case: the Python reference has no ebuild-execution machinery and just
+    returns 0. The real removal is covered in test_portuale.py. Here we
+    only assert the old `requires --pretend` exit-2 gate is gone, using a
+    non-matching atom so nothing is removed from the read-only fixture."""
+    result = _run(
+        [str(emerge_binary)], ["--depclean", "dev-libs/nonexistent"], fixture_env
+    )
+    assert "requires --pretend" not in result.stderr
 
 
 def test_depclean_matches_between_implementations(
@@ -6374,10 +6383,16 @@ def test_prune_pretend_nothing_to_prune(emerge_binary, fixture_env, tmp_path):
     ]
 
 
-def test_prune_requires_pretend(emerge_binary, fixture_env):
-    result = _run([str(emerge_binary)], ["--prune"], fixture_env)
-    assert result.returncode == 2
-    assert "requires --pretend" in result.stderr
+def test_prune_without_pretend_is_no_longer_gated(emerge_binary, fixture_env):
+    """`emerge --prune` WITHOUT `--pretend` really removes now
+    (pretend.rs's execute_unmerge). Not a Rust-vs-Python contract case
+    (the Python reference just returns 0). Real removal is covered in
+    test_portuale.py; here we only assert the exit-2 gate is gone, using a
+    non-matching atom so nothing is removed from the read-only fixture."""
+    result = _run(
+        [str(emerge_binary)], ["--prune", "dev-libs/nonexistent"], fixture_env
+    )
+    assert "requires --pretend" not in result.stderr
 
 
 def test_prune_nodeps_pretend_prunes_every_old_version(emerge_binary, fixture_env, tmp_path):

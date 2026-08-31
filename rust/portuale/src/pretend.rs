@@ -2244,9 +2244,10 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
 /// comment). The `>>> These are the packages that would be unmerged:`
 /// header is `--pretend`/`--ask`-gated in real portage
 /// (`unmerge.py:195`); everything else in the block prints either way.
-/// `--depclean`/`--prune` reuse this for their own preview and always
-/// pass `pretend = true` (their real removal is a separate, larger
-/// slice). Each target atom is
+/// `--depclean`/`--prune` reuse this with their computed cleanlist and
+/// their own real `pretend` flag -- so without `--pretend` this same
+/// path removes their cleanlist too (real `action_depclean` feeds it to
+/// the identical `unmerge()`). Each target atom is
 /// matched against the vdb (`installed_candidates` + `match_from_list`,
 /// exactly real `vartree.dbapi.match`); every match goes into
 /// `selected`, and every *other* installed version of the same
@@ -2967,15 +2968,18 @@ fn resolve_cleanup_args(
     Ok(args)
 }
 
-/// Real `emerge --pretend --prune` / `-pP` (real `action_depclean` with
+/// Real `emerge --prune` / `-P` (real `action_depclean` with
 /// `action="prune"`). Unlike `--depclean`, real `action_depclean`
-/// returns right after the `unmerge()` preview (`actions.py:888`), so
-/// there is **no** `* ` advisory block (only `action == "depclean"`
-/// prints it, `:840`) and **no** `Packages installed:` / `Required
-/// packages:` / `Number to remove:` stats block. The empty-cleanlist
-/// message gains a `>>> To ignore dependencies, use --nodeps` line
-/// (`create_cleanlist`, `:1348`). See `portage_repo::prune_cleanlist`'s
-/// own doc comment for the removal-set semantics.
+/// returns right after `unmerge()` (`actions.py:888`), so there is
+/// **no** `* ` advisory block (only `action == "depclean"` prints it,
+/// `:840`) and **no** `Packages installed:` / `Required packages:` /
+/// `Number ...` stats block. The empty-cleanlist message gains a `>>>
+/// To ignore dependencies, use --nodeps` line (`create_cleanlist`,
+/// `:1348`). Without `--pretend` the shared `run_unmerge_pretend` really
+/// removes the cleanlist (`execute_unmerge`). See
+/// `portage_repo::prune_cleanlist`'s own doc comment for the removal-set
+/// semantics.
+#[allow(clippy::too_many_arguments)]
 fn run_prune_pretend(
     targets: &[&str],
     root: &Path,
@@ -2983,6 +2987,7 @@ fn run_prune_pretend(
     config: &portage_profile::Config,
     verbose: bool,
     lib_check: bool,
+    pretend: bool,
     color: &Colorizer,
 ) -> ExitCode {
     let args = match resolve_cleanup_args(targets, root, "prune") {
@@ -3033,15 +3038,16 @@ fn run_prune_pretend(
         .map(|p| format!("={}", p.cpv()))
         .collect();
     let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
-    // `--prune --nodeps` is preview-only in this pilot (its real removal
-    // is a separate slice), so always `pretend = true`.
+    // Real `action_depclean` (`action == "prune"`): `unmerge(...,
+    // "unmerge", cleanlist, ordered=ordered)`. Without `--pretend`,
+    // `run_unmerge_pretend` removes them.
     run_unmerge_pretend(
         &cpv_refs,
         root,
         config_root,
         config,
         result.ordered,
-        true,
+        pretend,
         color,
     )
 }
@@ -3062,11 +3068,14 @@ fn run_prune_pretend(
 /// were found on your system.` with no args (real `global_unmerge`),
 /// else `>>> No packages selected for removal by prune` -- both exit 1
 /// (real `_unmerge_display` returns `(1, {})`, unlike plain `--prune`'s
-/// exit 0).
+/// exit 0). Without `--pretend`, `execute_unmerge` removes the selected
+/// versions after the display -- real `actions.py:2684` routes `prune
+/// --nodeps` through the very same `unmerge()` `-C` uses.
 fn run_prune_nodeps_pretend(
     targets: &[&str],
     root: &Path,
     config_root: &Path,
+    pretend: bool,
     color: &Colorizer,
 ) -> ExitCode {
     let args = match resolve_cleanup_args(targets, root, "prune") {
@@ -3076,13 +3085,17 @@ fn run_prune_nodeps_pretend(
 
     let mut selection = portage_repo::prune_nodeps_selection(root, &args);
 
-    println!(
-        "{}",
-        color.c(
-            "darkgreen",
-            ">>> These are the packages that would be unmerged:"
-        )
-    );
+    // Real `_unmerge_display` (`unmerge.py:195`): the header is
+    // `--pretend`/`--ask`-only.
+    if pretend {
+        println!(
+            "{}",
+            color.c(
+                "darkgreen",
+                ">>> These are the packages that would be unmerged:"
+            )
+        );
+    }
 
     // Real `sys-apps/portage` self-skip (`unmerge.py:368-391`): move any
     // selected `sys-apps/portage` version into `protected` with the
@@ -3147,6 +3160,7 @@ fn run_prune_nodeps_pretend(
 
     // Per-cp blocks (already cp-sorted by `prune_nodeps_selection`).
     let mut all_selected_display: Vec<String> = Vec::new();
+    let mut removal_list: Vec<(String, String, String)> = Vec::new();
     for cp in &selection {
         if cp.other_versions.is_empty() {
             continue;
@@ -3157,6 +3171,7 @@ fn run_prune_nodeps_pretend(
         print_unmerge_row("omitted", &[], color);
         for v in &cp.other_versions {
             all_selected_display.push(format!("={}/{}-{v}", cp.category, cp.package));
+            removal_list.push((cp.category.clone(), cp.package.clone(), v.clone()));
         }
     }
 
@@ -3174,6 +3189,10 @@ fn run_prune_nodeps_pretend(
         color.c("GOOD", "'Protected'"),
         color.c("GOOD", "'omitted'")
     );
+
+    if !pretend {
+        return execute_unmerge(&removal_list, root, color);
+    }
     ExitCode::SUCCESS
 }
 
@@ -3381,14 +3400,16 @@ fn depclean_unresolved_halt(
 
 /// Real `emerge --pretend --depclean` / `-pc` (real `action_depclean` +
 /// `_calc_depclean`, no package arguments): the packages nothing in
-/// `@world` ∪ `@system` needs, at runtime, are the cleanlist -- reported
-/// (never removed; `--depclean`'s own real removal is a separate slice,
-/// unlike `--unmerge`/`-C` which does remove now). Real
+/// `@world` ∪ `@system` needs, at runtime, are the cleanlist. Real
 /// `action_depclean` literally feeds its cleanlist to `unmerge(...,
-/// "unmerge", cleanlist)`, so the per-package block here is exactly
-/// `run_unmerge_pretend`'s (each cleanlist cpv passed as an `=cat/pkg-ver`
-/// atom). See `portage_repo::depclean_cleanlist`'s own doc comment for
-/// the graph and its documented narrowings.
+/// "unmerge", cleanlist, ordered=ordered)`, so the per-package block
+/// here is exactly `run_unmerge_pretend`'s (each cleanlist cpv passed as
+/// an `=cat/pkg-ver` atom) -- and **without `--pretend` that same
+/// `run_unmerge_pretend` really removes them** (`execute_unmerge` +
+/// per-package `deselect_from_world`), after the safety halt and
+/// `--depclean-lib-check` have already run. See
+/// `portage_repo::depclean_cleanlist`'s own doc comment for the graph
+/// and its documented narrowings.
 ///
 /// `emerge -pc <atoms>` (the `--depclean <atoms>` narrowing): the world
 /// "selected" plain atoms are dropped (the named packages get deselected
@@ -3410,6 +3431,11 @@ fn run_depclean_pretend(
     // a protection root (a world member named as an arg is kept). See
     // `depclean_cleanlist`'s own `deselect` param.
     deselect: bool,
+    // `false` for a real `emerge --depclean` (no `--pretend`): after the
+    // preview, `run_unmerge_pretend` removes the cleanlist, and the stats
+    // block reads `Number removed:` instead of `Number to remove:`
+    // (real `action_depclean:908-911`).
+    pretend: bool,
     color: &Colorizer,
 ) -> ExitCode {
     // Bare-name targets get their category from the vdb, then each atom
@@ -3570,7 +3596,11 @@ fn run_depclean_pretend(
         println!("Packages in world:    {world_atom_count}");
         println!("Packages in system:   {}", config.system_packages.len());
         println!("Required packages:    {}", result.required_count);
-        println!("Number to remove:     {}", result.cleanlist.len());
+        if pretend {
+            println!("Number to remove:     {}", result.cleanlist.len());
+        } else {
+            println!("Number removed:       {}", result.cleanlist.len());
+        }
     };
 
     if result.cleanlist.is_empty() {
@@ -3593,17 +3623,23 @@ fn run_depclean_pretend(
         .map(|p| format!("={}", p.cpv()))
         .collect();
     let cpv_refs: Vec<&str> = cpv_atoms.iter().map(String::as_str).collect();
-    // `--depclean` is preview-only in this pilot (its real removal is a
-    // separate slice), so always `pretend = true`.
+    // Real `action_depclean`: `unmerge(root_config, myopts, "unmerge",
+    // cleanlist, ordered=ordered)` -- the same `unmerge()` the `-C` path
+    // uses. Without `--pretend`, `run_unmerge_pretend` removes them.
     let unmerge_rc = run_unmerge_pretend(
         &cpv_refs,
         root,
         config_root,
         config,
         result.ordered,
-        true,
+        pretend,
         color,
     );
+    // Real `action_depclean` prints the stats block after `unmerge()`
+    // returns (`Number removed:` without `--pretend`). A mid-removal
+    // failure real-`sys.exit`s before this; the pilot still prints it
+    // then propagates `unmerge_rc` -- a harmless cosmetic divergence on
+    // the error path only.
     stats();
     unmerge_rc
 }
@@ -4590,24 +4626,13 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // `--unmerge`/`-C` WITHOUT `--pretend` is a real removal now (see
-    // `run_unmerge_pretend`'s own `pretend` param + `execute_unmerge`),
-    // so -- unlike `--deselect`/`--depclean`/`--prune` -- it has no
-    // `--pretend`-only gate.
-
-    // `--depclean`/`-c`: real `emerge -c` removes; this pilot only
-    // previews it, same `--pretend`-only gate.
-    if depclean && !pretend {
-        eprintln!("emerge (pilot v1): --depclean/-c requires --pretend (see PROMPT.md)");
-        return ExitCode::from(2);
-    }
-
-    // `--prune`/`-P`: real `emerge -P` removes; this pilot only previews
-    // it, same `--pretend`-only gate `--depclean` has.
-    if prune && !pretend {
-        eprintln!("emerge (pilot v1): --prune/-P requires --pretend (see PROMPT.md)");
-        return ExitCode::from(2);
-    }
+    // `--unmerge`/`-C`, `--depclean`/`-c` and `--prune`/`-P` WITHOUT
+    // `--pretend` are all real removals now -- `run_unmerge_pretend` /
+    // `run_depclean_pretend` / `run_prune_pretend` / the `--nodeps`
+    // variant each take the real `pretend` flag and run `execute_unmerge`
+    // after the display when it's `false`. Only `--deselect` still has a
+    // `--pretend`-only gate (its `run_deselect` never writes the world
+    // file at all -- a documented v1 cut).
 
     // Real non-dry-run execution paths this pilot implements for `emerge`
     // itself: `--buildpkgonly` (builds a binary package, never merges --
@@ -4732,12 +4757,13 @@ pub fn run(args: &[String]) -> ExitCode {
             verbose,
             lib_check,
             !deselect_n,
+            pretend,
             &color,
         );
     }
     if prune {
         if nodeps {
-            return run_prune_nodeps_pretend(&atom_args, &root, &config_root, &color);
+            return run_prune_nodeps_pretend(&atom_args, &root, &config_root, pretend, &color);
         }
         return run_prune_pretend(
             &atom_args,
@@ -4746,6 +4772,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &config,
             verbose,
             lib_check,
+            pretend,
             &color,
         );
     }

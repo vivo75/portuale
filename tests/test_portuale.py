@@ -647,6 +647,101 @@ def test_emerge_unmerge_with_pretend_still_only_previews(emerge_binary, tmp_path
     assert (root / "usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
 
 
+def _seed_binpkgrmpkg(emerge_binary, root, env, version):
+    """Merge dev-libs/binpkgrmpkg-<version> into `root` via a direct
+    `ebuild <file> merge` (full vdb entry: CONTENTS, environment.bz2,
+    <pf>.ebuild, DEFINED_PHASES) so the removal paths have a real
+    installed package to work on."""
+    ebuild = str(
+        Path(FIXTURES_ROOT)
+        / f"repo/dev-libs/binpkgrmpkg/binpkgrmpkg-{version}.ebuild"
+    )
+    link = root.parent / "ebuild"
+    if not link.exists():
+        link.symlink_to(Path(emerge_binary).resolve())
+    r = subprocess.run(
+        [str(link), ebuild, "merge"], capture_output=True, text=True, check=False, env=env
+    )
+    assert r.returncode == 0, r.stderr
+    assert (root / f"var/db/pkg/dev-libs/binpkgrmpkg-{version}").is_dir()
+
+
+def test_emerge_depclean_without_pretend_really_removes_orphans(emerge_binary, tmp_path):
+    """`emerge --depclean` (no args) WITHOUT `--pretend` really removes
+    the cleanlist now (real `action_depclean` -> `unmerge(..., "unmerge",
+    cleanlist, ordered=True)`). A lone installed `binpkgrmpkg-1.0` that no
+    world/@system member needs is an orphan -> removed, its
+    prerm/postrm run, and the stats block reads `Number removed:`."""
+    root = tmp_path / "root"
+    (root / "var/lib/portage").mkdir(parents=True)
+    (root / "var/lib/portage/world").write_text("")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    _seed_binpkgrmpkg(emerge_binary, root, env, "1.0")
+    (root / "var/lib/binpkgrmpkg.log").write_text("")
+
+    result = subprocess.run(
+        [str(emerge_binary), "--depclean"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert " * Always study the list of packages to be cleaned" in result.stdout
+    assert ">>> Calculating removal order..." in result.stdout
+    assert ">>> These are the packages that would be unmerged:" not in result.stdout
+    assert ">>> Unmerging (1 of 1) dev-libs/binpkgrmpkg-1.0..." in result.stdout
+    assert "Number removed:       1" in result.stdout
+
+    assert not (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists()
+    assert not (root / "usr/share/binpkgrmpkg/payload-1.0.txt").exists()
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == "prerm-1.0\npostrm-1.0\n"
+
+
+def test_emerge_prune_without_pretend_really_removes_lower_versions(emerge_binary, tmp_path):
+    """`emerge --prune` WITHOUT `--pretend` really removes every installed
+    version of a multi-version cp except the highest (real
+    `action_depclean` `action="prune"` -> `unmerge(...)`). Seed 1.0 + 2.0,
+    prune -> 1.0 gone, 2.0 kept."""
+    root = tmp_path / "root"
+    (root / "var/lib/portage").mkdir(parents=True)
+    (root / "var/lib/portage/world").write_text("")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    # Merge 1.0 for real (full vdb entry so its files/hooks are real), then
+    # hand-place a minimal 2.0 vdb entry -- merging 2.0 via `ebuild merge`
+    # would same-slot-replace 1.0 (both SLOT=0), leaving nothing to prune.
+    _seed_binpkgrmpkg(emerge_binary, root, env, "1.0")
+    v2 = root / "var/db/pkg/dev-libs/binpkgrmpkg-2.0"
+    v2.mkdir(parents=True)
+    (v2 / "CATEGORY").write_text("dev-libs\n")
+    (v2 / "SLOT").write_text("0\n")
+    (v2 / "CONTENTS").write_text("")
+    (root / "var/lib/binpkgrmpkg.log").write_text("")
+
+    result = subprocess.run(
+        [str(emerge_binary), "--prune"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Unmerging (1 of 1) dev-libs/binpkgrmpkg-1.0..." in result.stdout
+
+    assert not (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists()
+    assert (root / "var/db/pkg/dev-libs/binpkgrmpkg-2.0").is_dir()
+    assert not (root / "usr/share/binpkgrmpkg/payload-1.0.txt").exists()
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == "prerm-1.0\npostrm-1.0\n"
+
+
 def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(
     ebuild_binary, tmp_path
 ):
