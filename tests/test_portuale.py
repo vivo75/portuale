@@ -467,27 +467,52 @@ def test_emerge_atom_without_pretend_really_builds_and_merges_from_source(
     assert (vdb / "RDEPEND").read_text().strip() == "dev-libs/samepkg"
 
 
-def test_emerge_atom_without_pretend_rejects_an_upgrade_in_v1(emerge_binary, tmp_path):
-    """v1 of the source merge is New-only: an Upgrade/Downgrade/Reinstall
-    is a hard error until the replaced-version unmerge is wired in."""
-    root = tmp_path / "root"
+def test_emerge_atom_upgrade_replaces_the_installed_version(emerge_binary, tmp_path):
+    """`emerge <atom>` handles an Upgrade too now: merge the new version,
+    then unmerge the replaced same-slot version (real
+    `dblink.treewalk()`'s merge-then-unmerge). `dev-libs/binpkgrmpkg`'s
+    two versions define all five `pkg_*` hooks, each appending
+    `<phase>-<PVR>` to a `${ROOT}` log -- so the full real interleave is
+    checkable end to end."""
     import shutil
 
+    root = tmp_path / "root"
     shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
     env = dict(os.environ)
     env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
     env["ROOT"] = str(root)
     env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
 
+    # `emerge dev-libs/binpkgrmpkg` resolves the highest version (2.0);
+    # pre-seed the 1.0 install by merging its ebuild directly first.
+    v1 = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/binpkgrmpkg/binpkgrmpkg-1.0.ebuild"
+    )
+    ebuild_link = tmp_path / "ebuild"
+    ebuild_link.symlink_to(Path(emerge_binary).resolve())
+    r1 = subprocess.run(
+        [str(ebuild_link), v1, "merge"], capture_output=True, text=True, check=False, env=env
+    )
+    assert r1.returncode == 0, r1.stderr
+    assert (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").is_dir()
+
     result = subprocess.run(
-        [str(emerge_binary), "--update", "dev-libs/upgradepkg"],
+        [str(emerge_binary), "dev-libs/binpkgrmpkg"],
         capture_output=True,
         text=True,
         check=False,
         env=env,
     )
-    assert result.returncode == 1
-    assert "New-only in v1" in result.stderr
+    assert result.returncode == 0, result.stderr
+
+    assert (root / "var/db/pkg/dev-libs/binpkgrmpkg-2.0/CONTENTS").is_file()
+    assert not (root / "var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists()
+    assert (root / "usr/share/binpkgrmpkg/payload-2.0.txt").is_file()
+    assert not (root / "usr/share/binpkgrmpkg/payload-1.0.txt").exists()
+    assert (root / "var/lib/binpkgrmpkg.log").read_text() == (
+        "setup-1.0\npreinst-1.0\npostinst-1.0\n"
+        "setup-2.0\npreinst-2.0\nprerm-1.0\npostrm-1.0\npostinst-2.0\n"
+    )
 
 
 def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(

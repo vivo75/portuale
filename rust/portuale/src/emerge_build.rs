@@ -187,14 +187,18 @@ pub fn run_buildpkgonly(
 /// `SRC_URI` fetch, then `merge_tree` + `pkg_preinst`/`pkg_postinst` +
 /// `env_update()`). `AlreadyInstalled` entries are skipped.
 ///
+/// An `Upgrade`/`Downgrade`/`Reinstall` is handled too: `run_merge`
+/// merges the new version, then `ebuild_merge::unmerge_replaced_same_slot`
+/// (inside `merge_after_install`) unmerges the replaced same-slot
+/// version -- real `dblink.treewalk()`'s own merge-then-unmerge order,
+/// with that version's own `pkg_prerm`/`pkg_postrm` run from its saved
+/// vdb environment.
+///
 /// **v1 cuts** (mirroring `emerge_getbinpkg::run_getbinpkgonly`'s own
-/// first slice -- these are follow-ups, each a hard error for now):
-///   - **`New` only.** An `Upgrade`/`Downgrade` needs the replaced
-///     version unmerged afterwards (`run_merge` doesn't do that yet), a
-///     `Reinstall` is a separate follow-up.
-///   - a `Binary` entry (only reachable with `--usepkg`) -- a mixed
-///     source+binary merge is its own slice; use `--getbinpkgonly` for
-///     a binary-only merge.
+/// first slice):
+///   - a `Binary` entry (only reachable with `--usepkg`) is a hard
+///     error -- a mixed source+binary merge is its own slice; use
+///     `--getbinpkgonly` for a binary-only merge.
 ///   - stops at the first failure. No `--keep-going` (unlike
 ///     `run_buildpkgonly`, whose own resolver gate makes that safe --
 ///     here a later entry may genuinely depend on an earlier one).
@@ -209,15 +213,12 @@ pub fn run_source_merge(
         let cp = format!("{}/{}", entry.category, entry.package);
         let version = match &entry.outcome {
             PretendOutcome::AlreadyInstalled { .. } => continue,
-            PretendOutcome::New { version } => version.clone(),
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                version.clone()
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
             PretendOutcome::NoVisibleCandidate => {
                 return Err(format!("{cp}: no visible ebuild to merge"));
-            }
-            other => {
-                return Err(format!(
-                    "{cp}: {other:?} -- `emerge <atom>` source merge is New-only in v1 \
-                     (no upgrade/downgrade/reinstall of an installed package yet)"
-                ));
             }
         };
         if entry.source == CandidateSource::Binary {
@@ -526,21 +527,11 @@ mod tests {
     }
 
     #[test]
-    fn run_source_merge_is_new_only_and_rejects_a_binary_or_upgrade_entry() {
-        // Both errors are raised before any real execution, so a bogus
+    fn run_source_merge_rejects_a_binary_entry() {
+        // The error is raised before any real execution, so a bogus
         // ROOT/tmpdir that would fail loudly if touched is safe here.
         let bogus = PathBuf::from("/nonexistent/does/not/exist");
         let options = ebuild_merge::MergeOptions::default();
-
-        let upgrade = vec![source_entry(
-            "upgradepkg",
-            PretendOutcome::Upgrade {
-                from: "1.0".into(),
-                to: "2.0".into(),
-            },
-        )];
-        let err = run_source_merge(&upgrade, &[], &bogus, &bogus, &options).unwrap_err();
-        assert!(err.contains("New-only in v1"), "{err}");
 
         let mut binary = source_entry(
             "packagepkg",
@@ -551,6 +542,65 @@ mod tests {
         binary.source = CandidateSource::Binary;
         let err = run_source_merge(&[binary], &[], &bogus, &bogus, &options).unwrap_err();
         assert!(err.contains("binary package"), "{err}");
+    }
+
+    #[test]
+    fn run_source_merge_upgrade_replaces_the_installed_version() {
+        // Merge binpkgrmpkg-1.0 (New), then 2.0 (Upgrade) -- 2.0's files
+        // land, 1.0's own file is unmerged, 1.0's vdb entry is gone, and
+        // 1.0's pkg_prerm/pkg_postrm run from its own saved vdb env (the
+        // fixture's five hooks each append `<phase>-<PVR>` to a ROOT log).
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+
+        run_source_merge(
+            &[source_entry(
+                "binpkgrmpkg",
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            )],
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+        )
+        .expect("1.0 merges");
+        run_source_merge(
+            &[source_entry(
+                "binpkgrmpkg",
+                PretendOutcome::Upgrade {
+                    from: "1.0".into(),
+                    to: "2.0".into(),
+                },
+            )],
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+        )
+        .expect("2.0 upgrade merges");
+
+        assert!(root
+            .join("var/db/pkg/dev-libs/binpkgrmpkg-2.0/CONTENTS")
+            .is_file());
+        assert!(!root.join("var/db/pkg/dev-libs/binpkgrmpkg-1.0").exists());
+        assert!(root.join("usr/share/binpkgrmpkg/payload-2.0.txt").is_file());
+        assert!(!root.join("usr/share/binpkgrmpkg/payload-1.0.txt").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("var/lib/binpkgrmpkg.log")).unwrap(),
+            "setup-1.0\npreinst-1.0\npostinst-1.0\n\
+             setup-2.0\npreinst-2.0\nprerm-1.0\npostrm-1.0\npostinst-2.0\n"
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
     }
 
     #[test]

@@ -371,6 +371,13 @@ pub(crate) fn compute_environment(
 }
 
 impl Environment {
+    /// Real `${PORTAGE_BUILDDIR}` (`${PORTAGE_TMPDIR}/portage/<cat>/<pf>`)
+    /// -- a per-merge scratch root the caller can hang its own temp
+    /// subdirectories off (e.g. `ebuild_merge`'s replace-loop
+    /// extracted-from-vdb ebuilds).
+    pub(crate) fn portage_builddir(&self) -> &Path {
+        &self.portage_builddir
+    }
     pub(crate) fn d(&self) -> PathBuf {
         self.portage_builddir.join("image")
     }

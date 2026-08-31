@@ -4807,14 +4807,18 @@ sub-case is out of v1 scope.
 
 New fixtures `dev-libs/othersinslotpkg-1.0`/`-2.0`, both `SLOT="0"`,
 both installing a real shared file (`shared.txt`) plus a version-unique
-one (`only-in-v1.txt`/`only-in-v2.txt`). Proven via a real, end-to-end
-test: merge both versions, unmerge the *old* one -- `shared.txt`
-survives (2.0 still owns it) while `only-in-v1.txt` is deleted normally
-(no other owner); unmerge the *remaining* 2.0 entry too, and
-`shared.txt` finally goes, proving the skip isn't unconditional. No
-Python mirror needed -- like every other real-execution (non-dry-run)
-slice in this pilot, this is Rust-only; the shared pytest contract suite
-doesn't touch real `merge`/`unmerge` at all.
+one (`only-in-v1.txt`/`only-in-v2.txt`). No Python mirror needed -- like
+every other real-execution (non-dry-run) slice in this pilot, this is
+Rust-only; the shared pytest contract suite doesn't touch real
+`merge`/`unmerge` at all.
+
+**Update (later slice — "`emerge <atom>` upgrade/replace"):** merging a
+new same-slot version now *automatically* unmerges the old one, as real
+`dblink.treewalk()` does (`ebuild_merge::unmerge_replaced_same_slot`),
+so the "merge both, then manually unmerge the old one" flow below is now
+just "merge `1.0`, then merge `2.0`". The `is_owned` / `others_in_slot`
+skip this section is about is what keeps `shared.txt` alive through that
+automatic replace; the runnable example is updated to match.
 
 Running it:
 
@@ -4826,14 +4830,13 @@ BIN=PORTING/rust/target/release/portuale
 
 $BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild merge
 $BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild merge
+# merging 2.0 replaces 1.0 in place (real treewalk() merge-then-unmerge)
 ls "$ROOT"/usr/share/othersinslotpkg/
-# only-in-v1.txt  only-in-v2.txt  shared.txt
-
-$BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild unmerge
-ls "$ROOT"/usr/share/othersinslotpkg/
-# only-in-v2.txt  shared.txt -- only-in-v1.txt is gone, shared.txt survives
+# only-in-v2.txt  shared.txt -- only-in-v1.txt is already gone, shared.txt survives
 cat "$ROOT"/usr/share/othersinslotpkg/shared.txt
 # shared, from 2.0
+ls "$ROOT"/var/db/pkg/dev-libs/
+# othersinslotpkg-2.0 -- 1.0's vdb entry was dropped by the replace
 
 $BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild unmerge
 ls "$ROOT"/usr/share/
@@ -9278,16 +9281,27 @@ no preserve-libs / reverse-dep check on the replace unmerge.
 
 Until this slice a plain `emerge <atom>` — no `--pretend`, no
 `--buildpkgonly`/`-G` — exited 2 with "no real source merges implemented
-yet". Now it does the real thing: resolve the graph, then for each `New`
-**source** entry (already in dependency-first merge order) run the full
-`install` phase chain plus the vdb merge — `emerge_build::run_source_merge`
-→ `ebuild_merge::run_merge` (`pretend`→`setup`→…→`install` via the
-embedded `brush` + real `SRC_URI` fetch, then `merge_tree` +
-`pkg_preinst`/`pkg_postinst` + `env_update()`). `AlreadyInstalled`
-entries are skipped. It reuses `run_getbinpkgonly`'s own
-iterate-the-resolved-entries shape and every piece of the source
-`ebuild <file> merge` machinery unchanged — the only new code is the
-loop and the `pretend.rs` dispatch.
+yet". Now it does the real thing: resolve the graph, then for each
+`New`/`Upgrade`/`Downgrade`/`Reinstall` **source** entry (already in
+dependency-first merge order) run the full `install` phase chain plus the
+vdb merge — `emerge_build::run_source_merge` → `ebuild_merge::run_merge`
+(`pretend`→`setup`→…→`install` via the embedded `brush` + real `SRC_URI`
+fetch, then `merge_tree` + `pkg_preinst`/`pkg_postinst` +
+`env_update()`). `AlreadyInstalled` entries are skipped. It reuses
+`run_getbinpkgonly`'s own iterate-the-resolved-entries shape and every
+piece of the source `ebuild <file> merge` machinery unchanged — the only
+new code is the loop and the `pretend.rs` dispatch.
+
+An `Upgrade`/`Downgrade` replaces the installed version in place — real
+`dblink.treewalk()`'s **merge-then-unmerge**: `merge_after_install`
+writes the new version's vdb entry, then `ebuild_merge::
+unmerge_replaced_same_slot` (new — factored out of `merge_binpkg`, so the
+binpkg and source replace paths are now one implementation) runs the old
+version's `pkg_prerm` (from its own saved vdb env) → removes its files
+(keeping any the new version now owns) → `pkg_postrm` → drops its vdb
+entry, all before the new version's `pkg_postinst`. This also fixes a
+long-standing `ebuild <file> merge` cut: merging `v2` over an installed
+`v1` in the same slot no longer orphans `v1`'s files.
 
 `MergeOptions::from_env` (new) factors the `CONFIG_PROTECT[_MASK]` /
 `DISTDIR` / `collision-protect`·`protect-owned`·`config-protect-if-modified`
@@ -9295,21 +9309,24 @@ loop and the `pretend.rs` dispatch.
 `ebuild.rs` so `emerge <atom>` and `ebuild <file> merge` build the same
 config the same way.
 
-**v1 cuts** (mirroring `--getbinpkgonly`'s own first slice — each a hard
-error for now): **`New` only** (an `Upgrade`/`Downgrade` needs the
-replaced version unmerged afterwards, which `run_merge` doesn't do yet; a
-`Reinstall` is a separate follow-up); a `Binary` entry (only reachable
-with `--usepkg`) → use `--getbinpkgonly` instead; stops at the first
+**v1 cuts:** a `Binary` entry (only reachable with `--usepkg`) is a hard
+error → use `--getbinpkgonly` for a binary-only merge; stops at the first
 failure (no `--keep-going` — a later entry may genuinely depend on an
-earlier one).
+earlier one); the replace skips the preserve-libs / reverse-dependency
+check `dblink.unmerge()` would otherwise do.
 
 The Python reference has no ebuild-execution machinery, so like every
 other non-`--pretend` `emerge` path this is **not** in the shared
 contract CASES — it's Rust-black-box-tested in `test_portuale.py`
 (`emerge dev-libs/packagepkg` → real `hello.txt` under `${ROOT}` + a full
-vdb entry; `emerge --update dev-libs/upgradepkg` → the New-only error)
-plus two `emerge_build.rs` unit tests. The old `("missing --pretend", …,
-2)` contract CASE is gone (that shape is now a real merge).
+vdb entry; a pre-seeded `dev-libs/binpkgrmpkg-1.0` then `emerge
+dev-libs/binpkgrmpkg` → `2.0` merged, `1.0` unmerged, the full
+`setup-1.0…postinst-1.0 / setup-2.0 preinst-2.0 prerm-1.0 postrm-1.0
+postinst-2.0` hook interleave) plus `emerge_build.rs` unit tests
+(including the same upgrade end to end) and an `ebuild_unmerge.rs` one
+(`ebuild <file> merge` `v1` then `v2` → `v2` replaces `v1`). The old
+`("missing --pretend", …, 2)` contract CASE is gone (that shape is now a
+real merge).
 
 ## Running it
 

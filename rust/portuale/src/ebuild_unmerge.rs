@@ -1568,13 +1568,15 @@ mod tests {
     }
 
     #[test]
-    fn real_unmerge_of_an_in_place_upgraded_slot_mate_keeps_the_shared_file() {
-        // Real, end-to-end `others_in_slot` proof: merge both
-        // othersinslotpkg-1.0 and -2.0 (same SLOT, both writing the same
-        // real shared path -- an in-place upgrade, real portage's own
-        // "install new, then remove old" merge-list order), then unmerge
-        // the *old* 1.0 vdb entry. The shared file must survive (2.0
-        // still owns it); the 1.0-only file must not.
+    fn real_in_place_upgrade_via_ebuild_merge_replaces_the_old_slot_mate() {
+        // Real, end-to-end `others_in_slot` proof: `ebuild <file> merge`
+        // othersinslotpkg-1.0, then -2.0 (same SLOT, both writing the
+        // same real shared path). Merging 2.0 is a real in-place upgrade
+        // -- `merge_after_install`'s own replace loop
+        // (`unmerge_replaced_same_slot`, real `dblink.treewalk()`) removes
+        // 1.0 automatically: the shared file survives (2.0 owns it), the
+        // 1.0-only file goes, 1.0's vdb entry is dropped. Then unmerging
+        // 2.0 -- now the sole owner -- finally removes the shared file.
         let tmp = tempdir();
         let root = tmp.join("root");
         let portage_tmpdir = tmp.join("tmp");
@@ -1595,45 +1597,31 @@ mod tests {
             .expect("run_merge succeeds");
             assert_eq!(merge_status, 0);
         }
-        assert!(root.join("usr/share/othersinslotpkg/shared.txt").is_file());
-        assert!(root
-            .join("usr/share/othersinslotpkg/only-in-v1.txt")
-            .is_file());
-        assert!(root
-            .join("usr/share/othersinslotpkg/only-in-v2.txt")
-            .is_file());
         let vdb_v1 = root.join("var/db/pkg/dev-libs/othersinslotpkg-1.0");
         let vdb_v2 = root.join("var/db/pkg/dev-libs/othersinslotpkg-2.0");
-        assert!(vdb_v1.is_dir());
-        assert!(vdb_v2.is_dir());
 
-        let unmerge_status = run_unmerge(
-            &ebuild_v1,
-            &root,
-            &portage_tmpdir,
-            &UnmergeOptions::default(),
-        )
-        .expect("run_unmerge succeeds");
-        assert_eq!(unmerge_status, 0);
-
+        // Merging 2.0 replaced 1.0 in place.
         assert!(
             root.join("usr/share/othersinslotpkg/shared.txt").is_file(),
-            "othersinslotpkg-2.0 still owns shared.txt -- unmerging 1.0 must not delete it"
+            "2.0 owns shared.txt -- replacing 1.0 must not delete it"
         );
         assert!(
             !root
                 .join("usr/share/othersinslotpkg/only-in-v1.txt")
                 .exists(),
-            "only-in-v1.txt has no other owner -- unmerging 1.0 must delete it normally"
+            "only-in-v1.txt has no other owner -- the replace unmerges it"
         );
         assert!(root
             .join("usr/share/othersinslotpkg/only-in-v2.txt")
             .is_file());
-        assert!(!vdb_v1.exists());
-        assert!(vdb_v2.is_dir(), "the 2.0 vdb entry itself is untouched");
+        assert!(
+            !vdb_v1.exists(),
+            "1.0's vdb entry is dropped by the replace"
+        );
+        assert!(vdb_v2.is_dir());
 
-        // Now unmerge the remaining 2.0 entry too: with no other owner
-        // left, the shared file finally goes.
+        // Now unmerge the remaining 2.0 entry too: sole owner gone, the
+        // shared file finally goes.
         let unmerge_v2_status = run_unmerge(
             &ebuild_v2,
             &root,
