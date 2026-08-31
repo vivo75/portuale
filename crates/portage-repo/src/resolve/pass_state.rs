@@ -2,6 +2,57 @@
 
 use crate::*;
 
+/// Every per-pass value the decision chain or the tail assembly reads. Built once
+/// per pass from the walk locals; `Feedback` drops it, `Settle` moves it into
+/// `assemble_result` (plus the overlay trio, folded into the node params beforehand).
+pub(crate) struct PassResult {
+    pub(crate) entries: Vec<GraphEntry>,
+    pub(crate) slot_conflicts: Vec<SlotConflict>,
+    /// Withheld upgrades for the skip-conflict `WARNING` (rc 0). Merged into
+    /// `GraphResult::skipped_updates` by `assemble_result`.
+    pub(crate) skipped_updates: Vec<SkippedUpdate>,
+    /// Unresolved blocker rows with no owner entry, filed by this pass's scan.
+    pub(crate) orphan_blockers: Vec<OrphanBlocker>,
+    pub(crate) slot_want: HashMap<(String, String), Vec<String>>,
+    pub(crate) slot_pullers: SlotPullers,
+    pub(crate) masked_deps: Vec<MaskedDepReport>,
+    pub(crate) use_unsat_deps: Vec<UseUnsatDepReport>,
+    pub(crate) plain_miss_deps: Vec<PlainMissDepReport>,
+    pub(crate) nvc_dep_atoms: HashMap<(String, String), String>,
+    pub(crate) missing_dep_trigger: Option<((String, String), String, String)>,
+    /// The pass's dropped set-member atoms (see `PassState::missing_args`).
+    pub(crate) missing_args: Vec<String>,
+    pub(crate) autounmask_grew: bool,
+    /// Set when the pass rescued a failed dependency via a parent USE flip with
+    /// `--autounmask-backtrack` off. Rides into
+    /// [`GraphResult::autounmask_no_clean_tail`].
+    // Portage: depgraph.py, _apply_parent_use_changes
+    pub(crate) parent_flip_rescued: bool,
+    pub(crate) edge_kind_map: EdgeKindMap,
+    pub(crate) changed_deps_report_entries: Vec<ChangedDepsReportEntry>,
+    pub(crate) pprovided_atoms: Vec<String>,
+    pub(crate) autounmask_keyword_changes: Vec<AutounmaskChange>,
+    pub(crate) autounmask_use_changes: Vec<AutounmaskChange>,
+    pub(crate) autounmask_license_changes: Vec<AutounmaskChange>,
+    pub(crate) autounmask_mask_changes: Vec<AutounmaskChange>,
+    /// This pass's overlay accumulators, folded into `bp` by `next_step` before the
+    /// decision chain (see `PassState`).
+    pub(crate) use_overlay: HashMap<(String, String), HashMap<String, bool>>,
+    pub(crate) use_change_overlay: Vec<AutounmaskChange>,
+    pub(crate) use_broke: bool,
+    /// The `(provider_cpv, consumer_cpv)` pairs this pass's slot-operator scan found,
+    /// stashed so `assemble_result` renders "The following packages are causing
+    /// rebuilds:" without a second vdb scan. `None` = the scan did not run for this
+    /// pass.
+    // Portage: _forced_rebuilds
+    pub(crate) abi_rebuilds: Option<Vec<(String, String)>>,
+    /// See `PassState::suppressed_nvc`.
+    pub(crate) suppressed_nvc: bool,
+    /// The walk's per-instance `Parent Dep:` rows, rendered by `resolver_trace`.
+    // Portage: depgraph.py, _add_parent_atom
+    pub(crate) parent_atoms: Vec<resolver_trace::ParentAtom>,
+}
+
 /// The walk's per-pass `let mut`s, moved out of the loop body so the `'queue` walk
 /// can live in `run_pass`. The walk writes the cross-pass autounmask accumulators
 /// through the overlay trio and reads them back overlay-then-`bp` within the same

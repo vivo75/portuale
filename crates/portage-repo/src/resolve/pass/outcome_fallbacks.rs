@@ -22,3 +22,150 @@ pub(crate) struct ApplyOutcomeFallbacksArgs<'a> {
     pub(crate) buildtime_hard: bool,
     pub(crate) from_disjunction: bool,
 }
+
+/// The installed fallbacks and reinstall flips applied to a resolved outcome.
+///
+/// A slot-operator miss with an installed satisfier settles `AlreadyInstalled`;
+/// the reinstall flips then force the re-merge verdicts. Keyed on `cat/pkg`,
+/// so whichever visit comes first flips.
+pub(crate) fn apply_outcome_fallbacks(
+    args: ApplyOutcomeFallbacksArgs<'_>,
+) -> Result<PretendOutcome, Error> {
+    let ApplyOutcomeFallbacksArgs {
+        mut outcome,
+        current_atom,
+        atom,
+        key,
+        ctx,
+        config,
+        bp,
+        union_constraints,
+        state,
+        atom_root,
+        item_targets_running_root,
+        owner,
+        depth,
+        buildtime_hard,
+        from_disjunction,
+    } = args;
+    // An argument-pinned installed instance satisfying this atom reuses it
+    // instead of scheduling a merge (fresh verdicts only, never `||`-chosen).
+    // See `arg_pinned_installed_reuse`.
+    if !from_disjunction
+        && let Some(fresh) = match &outcome {
+            PretendOutcome::New { version } => Some(version.clone()),
+            PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+            PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
+            _ => None,
+        }
+        && let Some(kept) = arg_pinned_installed_reuse(ArgPinnedInstalledReuseArgs {
+            ctx,
+            config,
+            bp,
+            union_constraints,
+            cache: &mut state.top_pinned_installed,
+            atom_root,
+            key,
+            current_atom,
+            atom,
+            fresh_version: &fresh,
+        })
+    {
+        outcome = PretendOutcome::AlreadyInstalled { version: kept };
+    }
+
+    // A slot-operator dependency no ebuild satisfies but an installed instance
+    // does settles `AlreadyInstalled`, never a miss (Portage iterates the
+    // installed db on every resolve). Scoped to genuine non-build-time
+    // dependency edges; `||`-chosen edges keep their miss (the disjunction
+    // layer classifies installed-ness itself); bare and version-range atoms
+    // stay on the old path. Match requires the installed USE to satisfy the
+    // atom's use-deps, and reads this atom's own resolving root.
+    // Portage: depgraph.py, _wrapped_select_pkg_highest_available_imp.
+    if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+        && owner.is_some()
+        && depth != 0
+        && !buildtime_hard
+        && !from_disjunction
+        && !ctx.empty
+        && (atom.slot.is_some() || atom.slot_operator.is_some())
+        && let Some(version) = best_installed_matching(atom_root, current_atom, config)
+    {
+        outcome = PretendOutcome::AlreadyInstalled { version };
+    }
+    // A running-root dep no ebuild satisfies but the running root has
+    // installed settles `AlreadyInstalled` (Portage resolves those groups
+    // against the running root's installed db). Loosens both gates above
+    // (`buildtime_hard`, slot-operator-only); `||` and `--emptytree` stay out.
+    if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+        && owner.is_some()
+        && depth != 0
+        && !from_disjunction
+        && !ctx.empty
+        && item_targets_running_root
+        && let Some(version) = best_installed_matching(atom_root, current_atom, config)
+    {
+        outcome = PretendOutcome::AlreadyInstalled { version };
+    }
+
+    // `--reinstall-atoms` forces a matching installed package to re-merge
+    // (Portage drops it from every `inst_pkgs` list): the `--emptytree`
+    // rewrite, scoped to the matched atom.
+    // The same flip point carries the auto slot-operator `force_reinstall`:
+    // keyed on `cat/pkg` so whichever visit comes first flips (patching the
+    // entry afterwards would leave its deps unenqueued).
+    // Portage: depgraph.py, _gen_reinstall_sets.
+    // An installed child the update probe forced is never kept: the first visit
+    // selects the probe's candidate (like `force_reinstall` excluding the
+    // installed instance).
+    if let PretendOutcome::AlreadyInstalled { version } = &outcome
+        && let Some((_, _, target)) = bp
+            .slot_operator_forced_upgrade
+            .iter()
+            .find(|(c, p, _)| *c == key.0 && *p == key.1)
+        && target != version
+    {
+        let forced = resolve_queue_atom(ResolveQueueAtomArgs {
+            ctx,
+            config,
+            bp,
+            depth,
+            union_constraints,
+            key,
+            atom_text: &format!("={}/{}-{target}", key.0, key.1),
+            running: item_targets_running_root,
+        })?;
+        if !matches!(forced, PretendOutcome::NoVisibleCandidate) {
+            outcome = forced;
+        }
+    }
+    if let PretendOutcome::AlreadyInstalled { version } = &outcome {
+        let cpv = format!("{}/{}-{version}", key.0, key.1);
+        if ctx
+            .reinstall_atoms
+            .iter()
+            .any(|a| matches_config_entry(a, &cpv, &key.0, &key.1))
+        {
+            outcome = PretendOutcome::Reinstall {
+                version: version.clone(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            };
+        } else if bp.slot_operator_replace_installed.contains(key) {
+            outcome = PretendOutcome::Reinstall {
+                version: version.clone(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: true,
+            };
+        }
+    }
+    Ok(outcome)
+}
