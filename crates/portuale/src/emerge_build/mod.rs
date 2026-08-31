@@ -9,6 +9,7 @@ mod buildpkgonly;
 mod entry_env;
 mod logs;
 mod resume;
+mod scheduler;
 mod source_merge;
 mod status;
 
@@ -19,6 +20,7 @@ pub use buildpkgonly::*;
 pub(crate) use entry_env::*;
 pub(crate) use logs::*;
 pub(crate) use resume::*;
+pub(crate) use scheduler::*;
 pub use source_merge::*;
 pub(crate) use status::*;
 

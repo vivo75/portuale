@@ -122,4 +122,5 @@ fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntr
 mod buildpkgonly;
 mod entries;
 mod resume;
+mod source_merge;
 mod status;

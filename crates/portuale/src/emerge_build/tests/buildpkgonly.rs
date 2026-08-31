@@ -417,6 +417,90 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
     );
 }
 
+/// `--buildpkgonly` threads the same resolved env as the `-b` merge path: the
+/// archive's `metadata/USE`/`metadata/FEATURES` and the `Packages` index `USE`
+/// carry the effective flags. Expected value from Portage source.
+#[allow(clippy::field_reassign_with_default)]
+#[test]
+fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let pkgdir = tempdir();
+    let mut config = portage_profile::Config::default();
+    config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
+    config.iuse_effective = ["abi_x86_64", "amd64", "elibc_glibc", "kernel_linux"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    config
+        .other_vars
+        .insert("FEATURES".to_string(), "sandbox".to_string());
+
+    let entries = vec![source_entry(
+        "phaseenvpkg",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    )];
+    run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &config,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
+            debug: false,
+            pkgdir: pkgdir.clone(),
+            distdir: tempdir(),
+            binpkg_format: "gpkg".to_string(),
+            binpkg_compress: "bzip2".to_string(),
+            ..PackageOptions::default()
+        },
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    })
+    .expect("--buildpkgonly succeeds");
+
+    let archive = pkgdir.join("dev-libs/phaseenvpkg-1.0.gpkg.tar");
+    let meta = crate::binpkg::read_gpkg_metadata(&archive)
+        .expect("portuale's gpkg reader parses the real writer's output");
+    assert_eq!(
+        meta.get("USE").map(String::as_str),
+        Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
+    );
+    assert_eq!(meta.get("FEATURES").map(String::as_str), Some("sandbox"));
+    assert_eq!(meta.get("SLOT").map(String::as_str), Some("0"));
+    // Portage always writes `IUSE` (empty for a no-IUSE ebuild), the
+    // profile-computed `IUSE_EFFECTIVE`, and the installed-size `SIZE` walk.
+    assert_eq!(meta.get("IUSE").map(String::as_str), Some(""));
+    assert_eq!(
+        meta.get("IUSE_EFFECTIVE").map(String::as_str),
+        Some("abi_x86_64 amd64 elibc_glibc kernel_linux")
+    );
+    // `phaseenvpkg` installs only a `keepdir`, so its image holds no regular
+    // file and the walk writes `0` -- the member must still be *present*.
+    assert!(
+        meta.get("SIZE")
+            .and_then(|s| s.parse::<u64>().ok())
+            .is_some(),
+        "SIZE must be the real installed-size walk, got {:?}",
+        meta.get("SIZE")
+    );
+
+    let packages = fs::read_to_string(pkgdir.join("Packages")).unwrap();
+    assert!(
+        packages.contains("USE: abi_x86_64 amd64 elibc_glibc kernel_linux"),
+        "Packages index USE missing the resolved flags:
+{packages}"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+    let _ = fs::remove_dir_all(&portage_tmpdir);
+    let _ = fs::remove_dir_all(&pkgdir);
+}
+
 /// A successful `--buildpkgonly` package runs the `clean` phase afterwards,
 /// so the builddir is gone. Expected value from Portage source.
 #[test]
