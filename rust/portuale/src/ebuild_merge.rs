@@ -1901,15 +1901,24 @@ fn blocked_installed_packages(
             portage_use_reduce::MatchMode::Normal,
         )
         .ok()?;
+        Some(blockers_from_flat_deps(root, &flat_deps))
+    })()
+    .unwrap_or_default()
+}
 
-        // Every real installed package, as (category, pf, candidate_str)
-        // -- candidate_str needs real SLOT info too (a blocker atom can
-        // be slot-restricted, e.g. `!dev-libs/foo:0`), read directly
-        // from each vdb entry's own SLOT file, mirroring real
-        // `resolve_blockers`'s own candidate-string construction
-        // (portage-repo) rather than the bare `category/pf` shortcut
-        // `find_owners`'s own error-reporting-only scan uses (which
-        // never needs slot-restricted matching at all).
+/// The installed-package scan + blocker-atom match half of
+/// `blocked_installed_packages` (real `mypkglist`'s `blockers` term),
+/// split out so `merge_binpkg` can reuse it: a binary package's
+/// `*DEPEND` build-info files are already USE-reduced at build time, so
+/// the merge side has a flat token list in hand without ever resolving
+/// config/USE against a repo (which a binpkg has no path to). Matches
+/// every `!atom`/`!!atom` (`portage_dep::parse_atom`'s own `.blocker`)
+/// against every installed vdb entry (`category/pf:slot/sub_slot`, so a
+/// slot-restricted blocker like `!dev-libs/foo:0` matches correctly).
+/// Weak vs. strong blockers are not distinguished (`dblink.merge()`'s
+/// own `mypkglist` construction doesn't either).
+fn blockers_from_flat_deps(root: &Path, flat_deps: &[String]) -> HashSet<(String, String)> {
+    (|| -> Option<HashSet<(String, String)>> {
         let pkg_root = root.join("var/db/pkg");
         let categories = std::fs::read_dir(&pkg_root).ok()?;
         let installed: Vec<(String, String, String)> = categories
@@ -1949,7 +1958,7 @@ fn blocked_installed_packages(
             .collect();
 
         let mut blocked: HashSet<(String, String)> = HashSet::new();
-        for tok in &flat_deps {
+        for tok in flat_deps {
             let Some(dep_atom) = portage_dep::parse_atom(tok) else {
                 continue;
             };
@@ -2535,14 +2544,19 @@ pub(crate) fn unmerge_replaced_same_slot(
 ///   - `pkg_postinst` from the new binpkg, after the vdb entry is live
 ///     and every replaced version is gone, before `env_update()`.
 ///
+/// `FEATURES=collision-protect` / `protect-owned`, real blocker
+/// exclusion (`mypkglist = others_in_slot + blockers` -- the blocker
+/// term reads the binpkg's already-USE-reduced `*DEPEND` build-info
+/// files, `blockers_from_flat_deps`), and preserve-libs collision
+/// exclusion + `unregister_preserved_libs` all run now, identical to the
+/// source `merge_after_install`.
+///
 /// **v1 cuts, all deliberate** (same "narrow the first slice, document
 /// it" pattern as every other real-execution feature here):
 ///   - a binpkg (or a replaced version) carrying no `environment.bz2` /
 ///     `<pf>.ebuild` -- older, or built before the pilot kept them --
 ///     gets no hooks: a documented degrade, not a fallback to
 ///     re-sourcing the ebuild.
-///   - no collision-protect / `protect-owned` abort, no blocker
-///     exclusion, no preserve-libs registration.
 ///   - a *different*-slot installed version is left untouched (real slot
 ///     semantics); the replace also skips the preserve-libs /
 ///     reverse-dependency check `dblink.unmerge()` would otherwise do.
@@ -2656,6 +2670,52 @@ pub fn merge_binpkg(
         return Ok(setup_status);
     }
 
+    // Real `dblink.merge()`'s own `_collision_protect` check, run before
+    // `pkg_preinst` and the file copy (real `treewalk()` ordering) --
+    // now shared with the source `merge_after_install`. A binary package
+    // carries no ebuild/repo, so `mypkglist`'s blocker term
+    // (`blockers_from_flat_deps`) reads the already-USE-reduced
+    // `*DEPEND` build-info files directly. The preserve-libs registry is
+    // consulted unconditionally (real `_plib_registry` is never `None`).
+    let plib_registry = read_plib_registry(root);
+    let plib_inodes = plib_inode_map(root, &plib_registry.preserved_libs());
+    let mut flat_deps: Vec<String> = Vec::new();
+    for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
+        if let Ok(d) = std::fs::read_to_string(build_info.join(dep_key)) {
+            flat_deps.extend(d.split_whitespace().map(String::from));
+        }
+    }
+    let blocked = blockers_from_flat_deps(root, &flat_deps);
+    let (collisions, symlink_collisions, plib_collisions) = find_collisions(
+        &image,
+        root,
+        &category,
+        &package,
+        &main_slot,
+        &options.config_protect,
+        &options.config_protect_mask,
+        &plib_inodes,
+        &blocked,
+    )?;
+    // Real `dblink.merge()`'s own abort condition (Python operator
+    // precedence: `collision_protect or (protect_owned and owners)`);
+    // identical to `merge_after_install`.
+    let protect_owned_abort = options.protect_owned
+        && !collisions.is_empty()
+        && !find_owners(root, &collisions).is_empty();
+    if !symlink_collisions.is_empty()
+        || (options.collision_protect && !collisions.is_empty())
+        || protect_owned_abort
+    {
+        let cpv = format!("{category}/{pf}");
+        return Err(collision_message(
+            root,
+            &cpv,
+            &collisions,
+            &symlink_collisions,
+        ));
+    }
+
     // Real `dblink.treewalk()` order: `pkg_preinst` runs before a single
     // file is copied.
     let preinst_status = run_hook("preinst")?;
@@ -2686,6 +2746,15 @@ pub fn merge_binpkg(
         &repository,
         &contents,
     )?;
+
+    // Real `treewalk()`: a preserved lib this new version now provides
+    // itself is taken over from the `preserved_libs_registry` and
+    // stripped from the previous owner's `CONTENTS` -- identical to
+    // `merge_after_install`.
+    if !plib_collisions.is_empty() {
+        let cpv = format!("{category}/{pf}");
+        unregister_preserved_libs(root, &cpv, plib_registry, &plib_collisions)?;
+    }
 
     // Real merge-then-unmerge: the new version's vdb entry now exists,
     // so drop every same-slot version it replaced (see
@@ -4119,6 +4188,40 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("usr/share/collisiontest/shared.txt")).unwrap(),
             "hello from collisionpkg-a\n"
+        );
+    }
+
+    /// `blockers_from_flat_deps` (the `blockers` term of real
+    /// `mypkglist = others_in_slot + blockers`, factored out of
+    /// `blocked_installed_packages` for `merge_binpkg`'s own use): every
+    /// `!atom`/`!!atom` in an already-flat dep list is matched against
+    /// the installed vdb, non-blocker atoms ignored.
+    #[test]
+    fn blockers_from_flat_deps_matches_only_blocker_atoms_against_the_vdb() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        for (pf, slot) in [("blockedpkg-1.0", "0"), ("normalpkg-2.0", "3")] {
+            let vdb = root.join("var/db/pkg/dev-libs").join(pf);
+            std::fs::create_dir_all(&vdb).unwrap();
+            std::fs::write(vdb.join("SLOT"), format!("{slot}\n")).unwrap();
+        }
+
+        let deps = [
+            "!dev-libs/blockedpkg".to_string(), // blocker, installed -> matched
+            "dev-libs/normalpkg".to_string(),   // not a blocker -> ignored
+            "!!dev-libs/notinstalled".to_string(), // blocker, not installed -> no match
+        ];
+        let blocked = blockers_from_flat_deps(&root, &deps);
+        assert_eq!(
+            blocked,
+            HashSet::from([("dev-libs".to_string(), "blockedpkg-1.0".to_string())])
+        );
+
+        // A slot-restricted blocker only matches the matching slot.
+        assert!(blockers_from_flat_deps(&root, &["!dev-libs/normalpkg:0".to_string()]).is_empty());
+        assert_eq!(
+            blockers_from_flat_deps(&root, &["!dev-libs/normalpkg:3".to_string()]),
+            HashSet::from([("dev-libs".to_string(), "normalpkg-2.0".to_string())])
         );
     }
 

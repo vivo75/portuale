@@ -381,9 +381,15 @@ Ranked roughly by how self-contained each is.
    (`merge_binpkg`), else → `emerge_build::merge_one_source_entry`
    (`run_merge`). "Prefer binary, fall back to source" is the resolver's
    job (unchanged); `--getbinpkgonly` just never yields a source entry.
+   **`merge_binpkg` collision-protect / blocker exclusion / preserve-libs
+   parity with `merge_after_install` shipped 2026-08-31**: the same
+   `find_collisions` pre-copy check + `collision-protect`/`protect-owned`
+   abort + `unregister_preserved_libs` now run for a binpkg;
+   `blockers_from_flat_deps` (factored out of `blocked_installed_packages`)
+   supplies the `mypkglist` blocker term from the binpkg's own
+   already-USE-reduced `*DEPEND` build-info files (no repo/config resolve).
    **Still open:** live `layout.conf` negotiation, `Packages.gz`, resume
-   support, preserve-libs / reverse-dep check on a binpkg replace, and
-   real digest (`SHA*`) verification. A real debug trace is vendored at
+   support, and real digest (`SHA*`) verification. A real debug trace is vendored at
    `PORTING/helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`.
 
 7. **`gpkg` binary package format** (`bin/gpkg-helper.py`,

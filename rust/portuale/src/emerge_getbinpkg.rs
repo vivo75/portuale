@@ -368,6 +368,52 @@ mod tests {
     }
 
     #[test]
+    fn merge_binpkg_collision_protect_aborts_when_another_package_owns_the_file() {
+        // Real `dblink.merge()`'s `_collision_protect` -- now shared with
+        // the source `merge_after_install`. A pre-existing vdb entry owns
+        // `/usr/share/packagepkg/hello.txt`; `FEATURES=collision-protect`
+        // must abort the binpkg merge rather than overwrite it.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let shared = root.join("usr/share/packagepkg/hello.txt");
+        std::fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        std::fs::write(&shared, "owned by collideowner\n").unwrap();
+
+        let owner = root.join("var/db/pkg/dev-libs/collideowner-1.0");
+        std::fs::create_dir_all(&owner).unwrap();
+        std::fs::write(owner.join("SLOT"), "0\n").unwrap();
+        std::fs::write(owner.join("PF"), "collideowner-1.0\n").unwrap();
+        std::fs::write(owner.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(
+            owner.join("CONTENTS"),
+            "obj /usr/share/packagepkg/hello.txt 0000 0\n",
+        )
+        .unwrap();
+
+        let options = MergeOptions {
+            collision_protect: true,
+            ..MergeOptions::default()
+        };
+        let err = ebuild_merge::merge_binpkg(
+            &fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+            &root,
+            &tmp.join("pt"),
+            &options,
+        )
+        .unwrap_err();
+        assert!(err.contains("dev-libs/collideowner-1.0"), "{err}");
+        assert!(err.contains("/usr/share/packagepkg/hello.txt"), "{err}");
+        assert!(err.contains("NOT merged"), "{err}");
+        // Nothing was written: the file is untouched, no vdb entry.
+        assert_eq!(
+            std::fs::read_to_string(&shared).unwrap(),
+            "owned by collideowner\n"
+        );
+        assert!(!root.join("var/db/pkg/dev-libs/packagepkg-1.0").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn merge_binpkg_runs_pkg_preinst_and_pkg_postinst_from_the_saved_env() {
         let tmp = tempdir();
         let root = tmp.join("root");

@@ -9125,8 +9125,9 @@ pattern as every other real-execution feature):
   "runs `pkg_preinst`/`pkg_postinst`" section two below).
 - **a same-slot replace runs phase-free** (see the next section — this
   was originally a "replace is refused" cut, since lifted).
-- no collision-protect/`protect-owned` abort, no blocker exclusion, no
-  preserve-libs registration.
+- **no collision-protect/`protect-owned` abort, no blocker exclusion, no
+  preserve-libs** (originally — since lifted, see the "collision-protect
+  / blocker exclusion / preserve-libs parity" section below).
 - digest check is `SIZE`-only (no crypto — the `SHA*`/`MD5` fields are
   read but not verified, the same `Manifest`/`.sig` cut the gpkg
   metadata reader already documents); no `Packages.gz` (compressed
@@ -9399,6 +9400,45 @@ the contract CASE just confirms both sides agree; a dedicated
 write itself is Rust-black-box-tested in `test_portuale.py` (target
 recorded, dep not, sorted, existing entries kept; `--oneshot` leaves the
 file byte-identical) + an `update_world_file` unit test.
+
+### `emerge --getbinpkgonly`/`--getbinpkg`: collision-protect / blocker exclusion / preserve-libs parity
+
+`merge_binpkg` was the one merge path still lighter than the source
+`merge_after_install`. That gap is closed — the same real
+`dblink.merge()` pre-copy machinery now runs for a binary package:
+
+- **`FEATURES=collision-protect` / `protect-owned`** — before `pkg_preinst`
+  and the file copy, `find_collisions` walks the extracted image against
+  `${ROOT}`; an ordinary collision aborts the merge with the real
+  `Package '<cpv>' NOT merged due to file collisions` message
+  (naming the owning package) under `collision-protect`, or under
+  `protect-owned` when an owner is actually identified; a
+  symlink-over-directory always aborts (PMS 13.4). Same abort logic as
+  `merge_after_install`, byte for byte.
+- **real blocker exclusion** (`mypkglist = others_in_slot + blockers`) —
+  a file owned by a package the merging binpkg `!`-blocks is not a
+  collision (the binpkg is meant to replace it). The `blockers` term is
+  new for a binpkg: it has no ebuild/repo to resolve config against, so
+  `blockers_from_flat_deps` (factored out of `blocked_installed_packages`)
+  reads the **already-USE-reduced** `*DEPEND` build-info files directly
+  and matches every `!atom`/`!!atom` against the installed vdb
+  (slot-restricted blockers included).
+- **preserve-libs** — `find_collisions` takes the
+  `preserved_libs_registry` inode set, so a registered preserved lib the
+  new binpkg also ships isn't flagged as a collision; after the vdb
+  write, `unregister_preserved_libs` hands any preserved paths this
+  version now provides back to it and strips them from the old owner's
+  `CONTENTS`. (The unmerge side — a still-needed `.so` surviving when the
+  binpkg replaces the version that owned it — already worked, via
+  `unmerge_pkgfiles` → `preserve_libs_on_unmerge`.)
+
+Rust-tested: `merge_binpkg_collision_protect_aborts_when_another_package_owns_the_file`
+(a seeded vdb entry owns `hello.txt`; `collision_protect: true` →
+`merge_binpkg` errors, nothing written) + a `blockers_from_flat_deps`
+unit test (blocker atoms matched, non-blockers ignored, slot-restricted
+blockers respected). The `find_collisions` / `unregister_preserved_libs`
+code itself is the same path `merge_after_install`'s own collision /
+preserve-libs tests already exercise.
 
 ## Running it
 
