@@ -20,6 +20,55 @@ pub(crate) struct SimilarMask {
     pub(crate) parents: Vec<((String, String, String), String)>,
 }
 
+/// One pass's outcome in `_backtrack_depgraph` terms. Every variant carries
+/// the overlay-merged working copy (`base` for the mask kinds, `params` for
+/// `Config`): a pass that folded flips or dropped pins AND hit a
+/// conflict/mask reports or retries with the union. `feedback` advances the
+/// counters; mask kinds are non-terminal, `Config` preserves the current
+/// terminal value. First hit wins.
+/// Portage: _backtrack_depgraph.
+pub(crate) enum BacktrackFeedback {
+    Config {
+        params: Box<BacktrackParams>,
+    },
+    /// The reverse-dependency feed (installed-consumer pins): these enforce
+    /// in-pass even under `--backtrack=0`; the driver re-runs the pass with
+    /// them instead of settling. Carries the same working copy as `Config`.
+    /// Portage: _complete_graph (no `_allow_backtracking` gate).
+    RevDep {
+        params: Box<BacktrackParams>,
+    },
+    SlotConflict {
+        base: Box<BacktrackParams>,
+        choices: Vec<MaskChoice>,
+    },
+    /// The serialize dead-end retry: carries the grown working copy like
+    /// `Config`/`RevDep` (budget-free re-pass, not a mask step). The driver
+    /// explores it when backtracking and settles the pass as-is under
+    /// `--backtrack=0`.
+    /// Portage: _serialize_tasks' `not selected_nodes` branch.
+    Circular {
+        params: Box<BacktrackParams>,
+    },
+    MissingDep {
+        base: Box<BacktrackParams>,
+        owner: (String, String),
+        entry: MaskEntry,
+    },
+}
+
+/// Settle (report this pass with its merged working copy), feed one outcome
+/// back into the search, or abandon this node. `DeadEnd` is a pass Portage
+/// would not retry from (an unsatisfiable dependency no feedback covers);
+/// the node is consumed but keeps the merged copy, the search continues
+/// elsewhere and `get_best_run` picks the report.
+/// Portage: _create_graph returning 0.
+pub(crate) enum PassDecision {
+    Settle { params: Box<BacktrackParams> },
+    Feedback(BacktrackFeedback),
+    DeadEnd { params: Box<BacktrackParams> },
+}
+
 /// The cross-pass accumulators, cloned per search node (hence `Clone`).
 /// `slot_constraints` holds only the solvable-conflict atom sets; every
 /// `!=cpv` negative lives in `runtime_pkg_mask` with its `MaskReason`;
