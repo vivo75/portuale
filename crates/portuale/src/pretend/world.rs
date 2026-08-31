@@ -100,6 +100,137 @@ pub(crate) fn preserved_rebuild_atoms(root: &Path) -> Vec<String> {
     atoms
 }
 
+/// The new world atoms in argument order, for the pre-record `--ask` prompt.
+/// `@set` targets belong in `world_sets`, not here.
+/// Portage: depgraph.py, saveNomergeFavorites.
+pub(crate) fn world_file_additions(
+    current: &[String],
+    target_atoms: &[&str],
+    entries: &[GraphEntry],
+    system_atoms: &[String],
+    repos: &[portage_repo::RepoConfig],
+) -> Vec<String> {
+    let before: std::collections::HashSet<String> = current.iter().cloned().collect();
+    let mut added = Vec::new();
+
+    for raw in target_atoms {
+        if raw.starts_with('@') {
+            // A `@set` target belongs in `world_sets`, not `world`.
+            continue;
+        }
+        let Some(atom) = parse_atom(raw) else {
+            continue;
+        };
+        let Some(entry) = entries
+            .iter()
+            .find(|e| e.category == atom.category && e.package == atom.package)
+        else {
+            continue;
+        };
+        // Unslotted `@system` members are never recorded.
+        let cpv_any = format!("{}/{}-0", atom.category, atom.package);
+        let in_system = system_atoms
+            .iter()
+            .any(|a| match_from_list(a, &[cpv_any.as_str()]).is_some_and(|m| !m.is_empty()));
+        let unslotted = entry.slot.as_deref().unwrap_or("0") == "0";
+        if in_system && unslotted && atom.repo.is_none() {
+            continue;
+        }
+
+        // The arg's `:slot` is kept only when it matches the resolved slot and the
+        // cp is slotted (several SLOTs, or one non-`"0"` SLOT).
+        let slot_suffix = atom.slot.as_deref().filter(|s| {
+            entry.slot.as_deref() == Some(s)
+                && portage_repo::list_candidates(repos, &atom.category, &atom.package)
+                    .map(|cands| {
+                        let slots: std::collections::HashSet<&str> =
+                            cands.iter().map(|c| c.slot.as_str()).collect();
+                        slots.len() > 1 || (slots.len() == 1 && !slots.contains("0"))
+                    })
+                    .unwrap_or(false)
+        });
+
+        let mut world_atom = format!("{}/{}", atom.category, atom.package);
+        if let Some(slot) = slot_suffix {
+            world_atom.push(':');
+            world_atom.push_str(slot);
+        }
+        if let Some(repo) = &atom.repo {
+            world_atom.push_str("::");
+            world_atom.push_str(repo);
+        }
+        if before.contains(&world_atom) {
+            continue;
+        }
+        added.push(world_atom);
+    }
+    added
+}
+
+/// Arguments of [`update_world_file`].
+pub(crate) struct UpdateWorldFileArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) target_atoms: &'a [&'a str],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) system_atoms: &'a [String],
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) oneshot: bool,
+    pub(crate) onlydeps: bool,
+}
+
+/// Record directly-requested plain targets in the world file after a successful
+/// run. `--oneshot`/`--onlydeps` suppress it. Prints `>>> Recording ...` per addition.
+/// Portage: depgraph.py, saveNomergeFavorites.
+pub(crate) fn update_world_file(args: UpdateWorldFileArgs<'_>) -> Result<(), String> {
+    let UpdateWorldFileArgs {
+        root,
+        target_atoms,
+        entries,
+        system_atoms,
+        repos,
+        oneshot,
+        onlydeps,
+    } = args;
+    if oneshot || onlydeps {
+        return Ok(());
+    }
+    let mut current = read_world_atoms(root)?;
+    let mut added = world_file_additions(&current, target_atoms, entries, system_atoms, repos);
+    // Sorted before printing, like Portage.
+    added.sort();
+    for world_atom in &added {
+        println!(">>> Recording {world_atom} in \"world\" favorites file...");
+        current.push(world_atom.clone());
+    }
+
+    if !added.is_empty() {
+        current.sort();
+        current.dedup();
+        let db = portage_vdb::for_root(root);
+        let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+        txn.set_world(&portage_vdb::World { atoms: current })
+            .map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// The new `@set` lines in argument order, for the same pre-record `--ask`
+/// prompt as `world_file_additions`.
+/// Portage: depgraph.py, saveNomergeFavorites.
+pub(crate) fn world_sets_additions(current: &[String], set_names: &[String]) -> Vec<String> {
+    let before: std::collections::HashSet<String> = current.iter().cloned().collect();
+    let mut added = Vec::new();
+    for name in set_names {
+        let line = format!("@{name}");
+        if before.contains(&line) {
+            continue;
+        }
+        added.push(line);
+    }
+    added
+}
+
 /// Whether file sets are world candidates: true unless `sets.conf` says
 /// otherwise. Unparsable values are ignored (a leniency: Portage aborts).
 /// Portage: _sets/__init__.py.
@@ -158,6 +289,46 @@ pub(crate) fn usersets_world_candidate(config_root: &Path) -> bool {
         }
     }
     candidate
+}
+
+/// Record directly-given set args in `world_sets` after a successful run.
+/// Prints `>>> Recording ...` per addition.
+/// Portage: depgraph.py, saveNomergeFavorites.
+pub(crate) fn update_world_sets_file(
+    root: &Path,
+    set_names: &[String],
+    oneshot: bool,
+    onlydeps: bool,
+) -> Result<(), String> {
+    if oneshot || onlydeps || set_names.is_empty() {
+        return Ok(());
+    }
+    let mut current: Vec<String> = read_world_sets(root)?
+        .into_iter()
+        .map(|n| format!("@{n}"))
+        .collect();
+    let mut added = world_sets_additions(&current, set_names);
+    // Sorted before printing, like Portage.
+    added.sort();
+    for line in &added {
+        println!(">>> Recording {line} in \"world_sets\" favorites file...");
+        current.push(line.clone());
+    }
+    if !added.is_empty() {
+        current.sort();
+        current.dedup();
+        let db = portage_vdb::for_root(root);
+        let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+        txn.set_world_sets(&portage_vdb::WorldSets {
+            sets: current
+                .into_iter()
+                .map(|l| l.strip_prefix('@').unwrap_or(&l).to_string())
+                .collect(),
+        })
+        .map_err(|e| e.to_string())?;
+        txn.commit().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// The `@name` set references in `world_sets`, with the `@` stripped. A missing

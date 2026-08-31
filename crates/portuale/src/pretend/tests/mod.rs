@@ -86,6 +86,20 @@ fn wait_pty_output_bound(
     }
 }
 
+fn world_entry(category: &str, package: &str, slot: &str) -> GraphEntry {
+    let mut e = entry_with_use(
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        "",
+        "",
+    );
+    e.category = category.into();
+    e.package = package.into();
+    e.slot = Some(slot.into());
+    e
+}
+
 fn entry_with_use(outcome: PretendOutcome, pv_use: &str, p_use: &str) -> GraphEntry {
     let grp = |s: &str| {
         if s.is_empty() {
@@ -128,3 +142,4 @@ fn entry_with_use(outcome: PretendOutcome, pv_use: &str, p_use: &str) -> GraphEn
 mod attrs;
 mod env_config;
 mod unmerge;
+mod world;

@@ -265,6 +265,12 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_oneshot_itself() {
+        assert!(lookup("--oneshot").is_none());
+        assert!(lookup("-1").is_none());
+    }
+
+    #[test]
     fn does_not_recognize_deep_itself() {
         assert!(lookup("--deep").is_none());
         assert!(lookup("-D").is_none());

@@ -9282,4 +9282,54 @@ pass, the source one's `pkg_preinst`/`pkg_postinst` verified), plus the
 existing remote-download and binary-upgrade tests (renamed from
 `run_getbinpkgonly_*`).
 
+### `emerge <atom>` records the target in the world file (`--oneshot` suppresses)
+
+Real `emerge dev-libs/foo` adds `dev-libs/foo` to
+`<root>/var/lib/portage/world` — the `@world` set `--update`/`--depclean`
+start from. Portuale's merge paths didn't; a package merged by
+`emerge <atom>` would be wrongly removed by a subsequent
+`emerge --depclean`.
+
+After a successful non-`--pretend` merge (`run_source_merge` /
+`run_merge_plan`, but **not** `--buildpkgonly` — real
+`Scheduler._world_atom`'s own suppression set), `update_world_file`
+records each directly-requested **plain** target atom (real
+`Scheduler._world_atom` + `depgraph.saveNomergeFavorites`) — whether it
+merged or was already installed; a *dependency* is never recorded. The
+file is rewritten sorted + deduplicated with the real
+`>>> Recording <atom> in "world" favorites file...` line per addition,
+and (exactly like real `WorldSelectedPackagesSet.write`) comment and
+`@set` lines are not carried forward. **v1 cuts:** the recorded atom is
+`cat/pkg` (+ `::repo` if the arg carried one); an unslotted `@system`
+member isn't recorded (real "unslotted system packages will not be
+stored in world"); a `@set` target isn't added to `world_sets`.
+
+**Slot atoms** (real `create_world_atom`: "If the argument atom is
+precise enough to identify a specific slot then a slot atom will be
+returned"). A `cat/pkg:slot` argument is now recorded slot-qualified —
+`dev-libs/dualslotpkg:1` — **when `cat/pkg` is genuinely slotted**, real's
+own test: more than one `SLOT` available in the repo, or a single `SLOT`
+that isn't `"0"` (`portage_repo::list_candidates` supplies the slot set).
+A bare `cat/pkg` arg, or a `:0` arg for an unslotted cp, still records
+the plain `cat/pkg`. `atom.slot` is the main slot only, so a `:2/9` arg
+records `cat/pkg:2` (matching real `pkg.slot_atom`). Still cut: a
+*version*-pinned arg that identifies one slot (real records the slot
+atom there too); the vdb-only multislot fallback; the system-virtual
+exclusion; and `@set` → `world_sets` (blocked on `emerge @set` build
+support, not implemented yet).
+
+**`--oneshot`/`-1`** — previously rejected as "recognized but not
+implemented" — now: suppresses the world-file write on a real merge
+**and** (at `--pretend`) drops a favorite from `PKG_MERGE_WORLD` colour
+to plain `PKG_MERGE` (real `_DisplayConfig.oneshot` = `--oneshot ||
+--onlydeps`, fed into `check_system_world`). Plain-text `--pretend`
+output is byte-identical with or without `--oneshot` (colour only), so
+the contract CASE just confirms both sides agree; a dedicated
+`--color=y` test pins the `\x1b[32;01m` → `\x1b[32m` flip. The world
+write itself is Rust-black-box-tested in `test_portuale.py` (target
+recorded, dep not, sorted, existing entries kept; `--oneshot` leaves the
+file byte-identical; a `:slot` arg for `dualslotpkg` records
+`dev-libs/dualslotpkg:1`, a bare / unslotted arg doesn't) + two
+`update_world_file` unit tests.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
