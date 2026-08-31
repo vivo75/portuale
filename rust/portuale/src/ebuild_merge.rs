@@ -2199,6 +2199,15 @@ pub fn run_merge(
     root: &Path,
     portage_tmpdir: &Path,
     options: &MergeOptions,
+    // `Some` for a source `emerge <atom>` under `FEATURES=buildpkg` /
+    // `--buildpkg` (real `_emerge/EbuildBinpkg`): a binpkg of the freshly
+    // built `${D}` is written into `$PKGDIR` **before** the vdb merge,
+    // matching real portage's `EbuildBuild` -> `EbuildBinpkg` ->
+    // `EbuildMerge` task order -- a build failure means nothing is
+    // merged. `ebuild <file> merge` (and every internal reuse) passes
+    // `None`: `FEATURES=buildpkg` is an `emerge`-flow concept with no
+    // real `bin/ebuild` equivalent.
+    buildpkg: Option<&crate::ebuild_package::PackageOptions>,
 ) -> Result<i32, String> {
     let status = ebuild_phases::run_commands(
         ebuild_path,
@@ -2212,6 +2221,17 @@ pub fn run_merge(
     )?;
     if status != 0 {
         return Ok(status);
+    }
+    if let Some(package_options) = buildpkg {
+        let status = crate::ebuild_package::package_after_install(
+            ebuild_path,
+            root,
+            portage_tmpdir,
+            package_options,
+        )?;
+        if status != 0 {
+            return Ok(status);
+        }
     }
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
     merge_after_install(ebuild_path, root, portage_tmpdir, &env, options)
@@ -3781,8 +3801,14 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild");
 
-        let status = run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
-            .expect("run_merge succeeds");
+        let status = run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
         assert_eq!(status, 0);
 
         assert!(root.join("usr/share/mergepkg/hello.txt").is_file());
@@ -3870,8 +3896,14 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/packagepkg/packagepkg-1.0.ebuild");
 
-        let status = run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
-            .expect("run_merge succeeds");
+        let status = run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
         assert_eq!(status, 0);
 
         let vdb = root.join("var/db/pkg/dev-libs/packagepkg-1.0");
@@ -3977,7 +4009,14 @@ mod tests {
         let vdb_dir = root.join("var/db/pkg/dev-libs/mergepkg-1.0");
 
         assert_eq!(
-            run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default()).unwrap(),
+            run_merge(
+                &ebuild,
+                &root,
+                &portage_tmpdir,
+                &MergeOptions::default(),
+                None
+            )
+            .unwrap(),
             0
         );
         let first_counter: i64 = std::fs::read_to_string(vdb_dir.join("COUNTER"))
@@ -3986,7 +4025,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default()).unwrap(),
+            run_merge(
+                &ebuild,
+                &root,
+                &portage_tmpdir,
+                &MergeOptions::default(),
+                None
+            )
+            .unwrap(),
             0
         );
         let second_counter: i64 = std::fs::read_to_string(vdb_dir.join("COUNTER"))
@@ -4018,8 +4064,14 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/configpkg/configpkg-1.0.ebuild");
 
-        let status = run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
-            .expect("run_merge succeeds");
+        let status = run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
         assert_eq!(status, 0);
 
         // The real, logical /etc/configpkg.conf is never touched.
@@ -4062,8 +4114,14 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
         let ebuild = repo_root.join("dev-libs/configsympkg/configsympkg-1.0.ebuild");
 
-        let status = run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
-            .expect("run_merge succeeds");
+        let status = run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
         assert_eq!(status, 0);
 
         // The real, logical /etc/configsympkg.conf is never touched.
@@ -4123,6 +4181,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("collisionpkg-a merges cleanly");
 
@@ -4135,6 +4194,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &options,
+            None,
         )
         .expect("run_merge should not itself error");
         assert_eq!(status, 0);
@@ -4165,6 +4225,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("collisionpkg-a merges cleanly");
 
@@ -4173,6 +4234,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect_err("protect-owned is on by real default, so this should abort");
         assert!(err.contains("dev-libs/collisionpkg-a-1.0"), "{err}");
@@ -4204,6 +4266,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("collisionpkg-a merges cleanly");
 
@@ -4216,6 +4279,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &options,
+            None,
         )
         .expect_err("collision-protect should abort the merge");
         assert!(err.contains("dev-libs/collisionpkg-a-1.0"), "{err}");
@@ -4249,6 +4313,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("collisionpkg-a merges cleanly");
 
@@ -4257,6 +4322,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect_err("a symlink-over-directory violation should always abort");
         assert!(err.contains("PMS section 13.4"), "{err}");
@@ -4285,6 +4351,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("collisionpkg-a merges cleanly");
 
@@ -4297,6 +4364,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &options,
+            None,
         )
         .expect_err("protect-owned alone should abort once an owner is identified");
         assert!(err.contains("dev-libs/collisionpkg-a-1.0"), "{err}");
@@ -4371,6 +4439,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &options,
+            None,
         )
         .expect("protect-owned alone must not abort an unclaimed collision");
         assert_eq!(status, 0);
@@ -4580,6 +4649,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("preservepkg-old merges cleanly");
 
@@ -4592,6 +4662,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &options,
+            None,
         )
         .expect_err("without a registry entry this is an ordinary collision");
         assert!(err.contains("dev-libs/preservepkg-old-1.0"), "{err}");
@@ -4621,6 +4692,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("preservepkg-old merges cleanly");
 
@@ -4645,6 +4717,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &options,
+            None,
         )
         .expect("a preserved-lib collision is excluded, not aborted");
         assert_eq!(status, 0);
@@ -4779,8 +4852,14 @@ mod tests {
         std::fs::create_dir_all(&portage_tmpdir).unwrap();
 
         let ebuild = collision_fixture("fifopkg");
-        let status = run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
-            .expect("run_merge succeeds");
+        let status = run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
         assert_eq!(status, 0);
 
         let fifo_path = root.join("usr/lib/fifopkg/myfifo");
@@ -4798,8 +4877,14 @@ mod tests {
         // plant something else there and confirm it survives.
         std::fs::remove_file(&fifo_path).unwrap();
         std::fs::write(&fifo_path, b"not actually a fifo anymore").unwrap();
-        let status = run_merge(&ebuild, &root, &portage_tmpdir, &MergeOptions::default())
-            .expect("second run_merge succeeds");
+        let status = run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("second run_merge succeeds");
         assert_eq!(status, 0);
         assert_eq!(
             std::fs::read_to_string(&fifo_path).unwrap(),
@@ -4896,6 +4981,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("run_merge succeeds");
         assert_eq!(status, 0);
@@ -4963,6 +5049,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("run_merge succeeds");
         assert_eq!(status, 0);
@@ -4997,6 +5084,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("run_merge succeeds");
         assert_eq!(status, 0);
@@ -5087,6 +5175,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("run_merge (library) succeeds");
         assert_eq!(lib_status, 0);
@@ -5096,6 +5185,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("run_merge (consumer) succeeds");
         assert_eq!(consumer_status, 0);
@@ -5164,6 +5254,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("mergeblockedbypkg merges cleanly");
 
@@ -5176,6 +5267,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &options,
+            None,
         )
         .expect_err("without config resolution this is an ordinary collision");
         assert!(err.contains("dev-libs/mergeblockedbypkg-1.0"), "{err}");
@@ -5205,6 +5297,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
+            None,
         )
         .expect("mergeblockedbypkg merges cleanly");
 
@@ -5218,6 +5311,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &options,
+            None,
         )
         .expect("a blocker-excluded collision is not an abort");
         assert_eq!(status, 0);

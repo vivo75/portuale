@@ -9741,6 +9741,36 @@ dev-libs/slotbindconsumer`, and the "causing rebuilds:" block,
 byte-identical between both implementations. (`slotbindfresh`, already
 bound to `:2/9=`, is not rebuilt.)
 
+### `FEATURES=buildpkg` / `emerge --buildpkg` / `-b`: a binpkg as a side effect of a source merge
+
+Real `_emerge/EbuildBinpkg`: after `src_install` and **before** the vdb
+merge, a binpkg of the freshly built `${D}` is written into `$PKGDIR`
+(the `EbuildBuild` → `EbuildBinpkg` → `EbuildMerge` task order — a build
+failure means nothing is merged), then the merge proceeds. So a
+`FEATURES=buildpkg` box keeps a `.tbz2`/`.gpkg.tar` of everything it
+compiles.
+
+`run_package`'s packaging tail was split into
+`ebuild_package::package_after_install` (the `__dyn_package` invocation +
+the `$PKGDIR/Packages` entry, assuming a populated `${D}`);
+`ebuild_merge::run_merge` gained a `buildpkg: Option<&PackageOptions>`
+param that runs it between the `install` chain and `merge_after_install`.
+`emerge_build::merge_one_source_entry` / `run_source_merge` /
+`emerge_getbinpkg::run_merge_plan` thread it through;
+`pretend.rs`'s non-`--pretend` dispatch turns it on when
+`--buildpkg`/`-b`/`--buildpkg=y` is given **or** `FEATURES` names
+`buildpkg` — `--buildpkg=n` wins over the FEATURE. `ebuild <file> merge`
+and every internal `run_merge` reuse pass `None` (`FEATURES=buildpkg` is
+an `emerge`-flow concept with no `bin/ebuild` equivalent).
+
+`--buildpkg`/`-b` is a recognized no-op for `--pretend` in the Python
+reference (it has no execution machinery). Rust-black-box-tested in
+`test_portuale.py`: `emerge dev-libs/packagepkg` with
+`FEATURES=buildpkg` → a valid xpak `.tbz2` (image tar + `XPAKSTOP`
+trailer, holds the built file) + a `Packages` entry + the package
+merged; `-b` alone does the same; `--buildpkg=n` over
+`FEATURES=buildpkg` builds no binpkg but still merges.
+
 ## Running it
 
 Build both Rust binaries:

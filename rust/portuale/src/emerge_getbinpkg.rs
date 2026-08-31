@@ -90,6 +90,7 @@ pub fn run_merge_plan(
     portage_tmpdir: &Path,
     merge_options: &MergeOptions,
     keep_going: bool,
+    buildpkg: Option<&crate::ebuild_package::PackageOptions>,
 ) -> Result<(), String> {
     crate::emerge_build::run_merge_loop(entries, keep_going, |entry| {
         if entry.source == CandidateSource::Binary {
@@ -101,6 +102,7 @@ pub fn run_merge_plan(
                 root,
                 portage_tmpdir,
                 merge_options,
+                buildpkg,
             )
         }
     })
@@ -683,6 +685,7 @@ mod tests {
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
             false,
+            None,
         )
         .expect("getbinpkg merge succeeds");
 
@@ -787,6 +790,7 @@ mod tests {
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
             false,
+            None,
         )
         .expect("getbinpkg merge succeeds");
 
@@ -845,6 +849,7 @@ mod tests {
             &tmp.join("portage_tmpdir"),
             &options,
             false,
+            None,
         )
         .expect("mixed merge plan succeeds");
 

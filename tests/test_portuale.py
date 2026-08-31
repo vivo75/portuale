@@ -476,6 +476,70 @@ def test_emerge_atom_without_pretend_really_builds_and_merges_from_source(
     assert world_lines == sorted(world_lines)
 
 
+def test_emerge_atom_with_buildpkg_writes_a_binpkg_and_still_merges(
+    emerge_binary, tmp_path
+):
+    """`FEATURES=buildpkg` / `--buildpkg`/`-b` (real _emerge/EbuildBinpkg):
+    a source `emerge <atom>` also writes a binpkg into $PKGDIR (before the
+    vdb merge), then merges normally. `--buildpkg=n` wins over the
+    FEATURE."""
+    import shutil
+    import tarfile as _tarfile
+
+    def _fresh_root():
+        root = tmp_path / f"root{_fresh_root.n}"
+        _fresh_root.n += 1
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+        env["PORTAGE_TMPDIR"] = str(root / "portage-tmpdir")
+        env["PKGDIR"] = str(root / "pkgdir")
+        env.pop("FEATURES", None)
+        return root, env
+
+    _fresh_root.n = 0
+
+    # FEATURES=buildpkg: binpkg built + merged.
+    root, env = _fresh_root()
+    env["FEATURES"] = "buildpkg"
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert ">>> Building package for dev-libs/packagepkg-1.0..." in r.stdout
+    tbz2 = root / "pkgdir/dev-libs/packagepkg-1.0.tbz2"
+    assert tbz2.is_file()
+    assert b"XPAKSTOP" in tbz2.read_bytes()[-4096:]
+    with _tarfile.open(tbz2, "r|*") as tf:
+        names = [m.name.lstrip("./") for m in tf]
+    assert "usr/share/packagepkg/hello.txt" in names
+    assert "CPV: dev-libs/packagepkg-1.0" in (root / "pkgdir/Packages").read_text()
+    assert (root / "var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS").is_file()
+
+    # -b flag, no FEATURE: same.
+    root, env = _fresh_root()
+    r = subprocess.run(
+        [str(emerge_binary), "-b", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert (root / "pkgdir/dev-libs/packagepkg-1.0.tbz2").is_file()
+
+    # --buildpkg=n wins over FEATURES=buildpkg: no binpkg, still merges.
+    root, env = _fresh_root()
+    env["FEATURES"] = "buildpkg"
+    r = subprocess.run(
+        [str(emerge_binary), "--buildpkg=n", "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert not (root / "pkgdir/dev-libs/packagepkg-1.0.tbz2").exists()
+    assert (root / "var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS").is_file()
+
+
 def test_emerge_atom_oneshot_does_not_touch_the_world_file(emerge_binary, tmp_path):
     """--oneshot/-1 (real Scheduler._world_atom's own suppression set):
     the package still merges, but its atom is NOT recorded in world."""

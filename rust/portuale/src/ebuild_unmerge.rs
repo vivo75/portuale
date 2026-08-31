@@ -1458,6 +1458,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &crate::ebuild_merge::MergeOptions::default(),
+            None,
         )
         .expect("run_merge succeeds");
         assert_eq!(merge_status, 0);
@@ -1495,6 +1496,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &crate::ebuild_merge::MergeOptions::default(),
+            None,
         )
         .expect("run_merge succeeds");
         assert_eq!(merge_status, 0);
@@ -1535,6 +1537,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &crate::ebuild_merge::MergeOptions::default(),
+            None,
         )
         .expect("run_merge succeeds");
         assert_eq!(merge_status, 0);
@@ -1593,6 +1596,7 @@ mod tests {
                 &root,
                 &portage_tmpdir,
                 &crate::ebuild_merge::MergeOptions::default(),
+                None,
             )
             .expect("run_merge succeeds");
             assert_eq!(merge_status, 0);

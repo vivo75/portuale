@@ -325,7 +325,20 @@ pub fn run_package(
     if status != 0 {
         return Ok(status);
     }
+    package_after_install(ebuild_path, root, portage_tmpdir, options)
+}
 
+/// The packaging tail of `run_package`, split out so it can also run as a
+/// side effect of a source merge (`FEATURES=buildpkg` / `--buildpkg`,
+/// real `_emerge/EbuildBinpkg`: after `src_install`, before the vdb
+/// merge -- `ebuild_merge::run_merge`'s own `buildpkg` param). Assumes a
+/// populated `${D}` from a prior real `install` chain.
+pub(crate) fn package_after_install(
+    ebuild_path: &Path,
+    root: &Path,
+    portage_tmpdir: &Path,
+    options: &PackageOptions,
+) -> Result<i32, String> {
     let binpkg_extension = binpkg_extension(&options.binpkg_format)?;
 
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;

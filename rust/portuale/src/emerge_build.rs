@@ -199,6 +199,7 @@ pub fn run_buildpkgonly(
 /// mixed path (`emerge_getbinpkg::run_merge_plan`). Failure handling
 /// (stop at the first, or `--keep-going` -> drop the failed package's
 /// dependents and continue) is `run_merge_loop`'s.
+#[allow(clippy::too_many_arguments)]
 pub fn run_source_merge(
     entries: &[GraphEntry],
     repos: &[RepoConfig],
@@ -206,9 +207,10 @@ pub fn run_source_merge(
     portage_tmpdir: &Path,
     options: &ebuild_merge::MergeOptions,
     keep_going: bool,
+    buildpkg: Option<&ebuild_package::PackageOptions>,
 ) -> Result<(), String> {
     run_merge_loop(entries, keep_going, |entry| {
-        merge_one_source_entry(entry, repos, root, portage_tmpdir, options)
+        merge_one_source_entry(entry, repos, root, portage_tmpdir, options, buildpkg)
     })
 }
 
@@ -310,6 +312,7 @@ pub(crate) fn merge_one_source_entry(
     root: &Path,
     portage_tmpdir: &Path,
     options: &ebuild_merge::MergeOptions,
+    buildpkg: Option<&ebuild_package::PackageOptions>,
 ) -> Result<(), String> {
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
@@ -338,7 +341,10 @@ pub(crate) fn merge_one_source_entry(
     let path = ebuild_path(&candidate, &entry.category, &entry.package, &version);
 
     println!(">>> Emerging ({cp}-{version})...");
-    let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, options)?;
+    if buildpkg.is_some() {
+        println!(">>> Building package for {cp}-{version}...");
+    }
+    let status = ebuild_merge::run_merge(&path, root, portage_tmpdir, options, buildpkg)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: merge failed ({status})"));
     }
@@ -606,8 +612,16 @@ mod tests {
             config_root: config_root.clone(),
             ..ebuild_merge::MergeOptions::default()
         };
-        run_source_merge(&entries, &repos, &root, &portage_tmpdir, &options, false)
-            .expect("source merge succeeds");
+        run_source_merge(
+            &entries,
+            &repos,
+            &root,
+            &portage_tmpdir,
+            &options,
+            false,
+            None,
+        )
+        .expect("source merge succeeds");
 
         assert_eq!(
             fs::read_to_string(root.join("usr/share/packagepkg/hello.txt"))
@@ -639,7 +653,8 @@ mod tests {
             },
         );
         binary.source = CandidateSource::Binary;
-        let err = run_source_merge(&[binary], &[], &bogus, &bogus, &options, false).unwrap_err();
+        let err =
+            run_source_merge(&[binary], &[], &bogus, &bogus, &options, false, None).unwrap_err();
         assert!(err.contains("binary package"), "{err}");
     }
 
@@ -748,6 +763,7 @@ mod tests {
             &portage_tmpdir,
             &options,
             false,
+            None,
         )
         .expect("1.0 merges");
         run_source_merge(
@@ -763,6 +779,7 @@ mod tests {
             &portage_tmpdir,
             &options,
             false,
+            None,
         )
         .expect("2.0 upgrade merges");
 

@@ -318,7 +318,7 @@ pub fn run(args: &[String]) -> ExitCode {
         // for every top-level command argument.
         for &cmd in &commands {
             let result = if ebuild_merge::is_real_merge_command(cmd) {
-                ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options)
+                ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options, None)
             } else if ebuild_merge::is_real_qmerge_command(cmd) {
                 ebuild_merge::run_qmerge(ebuild_path, &root, &portage_tmpdir, &merge_options)
             } else if ebuild_unmerge::is_real_unmerge_command(cmd) {

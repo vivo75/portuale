@@ -1725,7 +1725,7 @@ fn report_option(token: &str) -> ExitCode {
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
              --unmerge/-C, --depclean/-c, --prune/-P, --config, \
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
-             --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --with-test-deps, \
+             --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --with-test-deps, \
              --noreplace/-n, --selective, and --help/-h are implemented \
              so far; see PROMPT.md)",
             found.canonical
@@ -3921,6 +3921,11 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut emptytree = false;
     // --buildpkgonly/-B: same plain-boolean shape as --newrepo above.
     let mut buildpkgonly = false;
+    // --buildpkg/-b: real `true_y_or_n`. `None` = not given (fall back
+    // to `FEATURES=buildpkg`); `Some(true/false)` = explicit. Only
+    // matters on a real (non-`--pretend`) source merge -- see the
+    // `!pretend` block below.
+    let mut buildpkg_opt: Option<bool> = None;
     // --keep-going: real main.py's own `y_or_n` validator, but this
     // pilot's own transcription (`emerge_options::BOOLEAN_OPTIONS`)
     // already narrows it to the bare/`y` form only, the same shape
@@ -4475,6 +4480,28 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--buildpkgonly" || arg == "-B" {
             buildpkgonly = true;
             i += 1;
+        } else if arg == "--buildpkg" || arg == "-b" {
+            // Real `true_y_or_n`: bare / `y` -> on, `n` -> off.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    buildpkg_opt = Some(true);
+                    i += 2;
+                }
+                Some("n") => {
+                    buildpkg_opt = Some(false);
+                    i += 2;
+                }
+                _ => {
+                    buildpkg_opt = Some(true);
+                    i += 1;
+                }
+            }
+        } else if arg == "--buildpkg=y" {
+            buildpkg_opt = Some(true);
+            i += 1;
+        } else if arg == "--buildpkg=n" {
+            buildpkg_opt = Some(false);
+            i += 1;
         } else if arg == "--keep-going" {
             keep_going = true;
             i += 1;
@@ -4801,6 +4828,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'c' => depclean = true,
                     'P' => prune = true,
                     'B' => buildpkgonly = true,
+                    'b' => buildpkg_opt = Some(true),
                     'X' => {
                         // Unlike every other bundle-compatible short flag
                         // here, -X's own value is *required*, not
@@ -5532,6 +5560,12 @@ pub fn run(args: &[String]) -> ExitCode {
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
         let merge_options =
             ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+        // Real `FEATURES=buildpkg` / `--buildpkg`/`-b` (real
+        // `_emerge/EbuildBinpkg`): a binpkg of each source entry is
+        // written into `$PKGDIR` as a side effect of the merge.
+        // `--buildpkg=n` wins over the FEATURE.
+        let buildpkg_on = buildpkg_opt.unwrap_or_else(|| feature_enabled("buildpkg"));
+        let buildpkg = buildpkg_on.then_some(&package_options);
         if buildpkgonly {
             if let Err(e) = emerge_build::run_buildpkgonly(
                 entries,
@@ -5557,6 +5591,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &portage_tmpdir,
                 &merge_options,
                 keep_going,
+                buildpkg,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
@@ -5571,6 +5606,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &portage_tmpdir,
                 &merge_options,
                 keep_going,
+                buildpkg,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
