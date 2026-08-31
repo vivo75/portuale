@@ -5144,6 +5144,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &package_options.pkgdir,
                 &portage_tmpdir,
                 &merge_options,
+                keep_going,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
@@ -5157,6 +5158,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &root,
                 &portage_tmpdir,
                 &merge_options,
+                keep_going,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);

@@ -194,25 +194,109 @@ pub fn run_buildpkgonly(
 /// with that version's own `pkg_prerm`/`pkg_postrm` run from its saved
 /// vdb environment.
 ///
-/// **v1 cuts** (mirroring `emerge_getbinpkg::run_getbinpkgonly`'s own
-/// first slice):
-///   - a `Binary` entry (only reachable with `--usepkg`) is a hard
-///     error -- a mixed source+binary merge is its own slice; use
-///     `--getbinpkgonly` for a binary-only merge.
-///   - stops at the first failure. No `--keep-going` (unlike
-///     `run_buildpkgonly`, whose own resolver gate makes that safe --
-///     here a later entry may genuinely depend on an earlier one).
+/// A `Binary` entry (only reachable with `--usepkg` without
+/// `--getbinpkg`) is a hard error here -- pass `--getbinpkg` for the
+/// mixed path (`emerge_getbinpkg::run_merge_plan`). Failure handling
+/// (stop at the first, or `--keep-going` -> drop the failed package's
+/// dependents and continue) is `run_merge_loop`'s.
 pub fn run_source_merge(
     entries: &[GraphEntry],
     repos: &[RepoConfig],
     root: &Path,
     portage_tmpdir: &Path,
     options: &ebuild_merge::MergeOptions,
+    keep_going: bool,
 ) -> Result<(), String> {
+    run_merge_loop(entries, keep_going, |entry| {
+        merge_one_source_entry(entry, repos, root, portage_tmpdir, options)
+    })
+}
+
+/// The shared per-entry loop for `run_source_merge` /
+/// `emerge_getbinpkg::run_merge_plan`. Without `keep_going` it stops at
+/// the first failure (`merge_one`'s own `Err`), the pilot's long-
+/// standing default. With real `--keep-going` (real `Scheduler`'s own
+/// `_calc_resume_list`) it records the failure, drops every entry that
+/// (transitively) depends on the failed one via the `GraphEntry`'s
+/// reverse-dependency edges (`required_by`), and merges the rest --
+/// then returns a combined `Err` naming what failed and what was
+/// skipped (real `emerge` also exits non-zero when anything failed
+/// under `--keep-going`).
+pub(crate) fn run_merge_loop<F>(
+    entries: &[GraphEntry],
+    keep_going: bool,
+    mut merge_one: F,
+) -> Result<(), String>
+where
+    F: FnMut(&GraphEntry) -> Result<(), String>,
+{
+    use std::collections::{HashMap, HashSet};
+
+    // cp -> the cps that depend on it (each entry's own `required_by`).
+    let dependents: HashMap<(String, String), Vec<(String, String)>> = entries
+        .iter()
+        .map(|e| {
+            (
+                (e.category.clone(), e.package.clone()),
+                e.required_by.clone(),
+            )
+        })
+        .collect();
+
+    let mut skip: HashSet<(String, String)> = HashSet::new();
+    let mut failures: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+
     for entry in entries {
-        merge_one_source_entry(entry, repos, root, portage_tmpdir, options)?;
+        let cp = (entry.category.clone(), entry.package.clone());
+        if skip.contains(&cp) {
+            skipped.push(format!("{}/{}", entry.category, entry.package));
+            continue;
+        }
+        if let Err(e) = merge_one(entry) {
+            if !keep_going {
+                return Err(e);
+            }
+            failures.push(e);
+            // Real `_calc_resume_list`: every (transitive) dependent of
+            // the failed package can no longer be merged.
+            let mut queue = vec![cp];
+            while let Some(x) = queue.pop() {
+                if let Some(deps) = dependents.get(&x) {
+                    for p in deps {
+                        if skip.insert(p.clone()) {
+                            queue.push(p.clone());
+                        }
+                    }
+                }
+            }
+        }
     }
-    Ok(())
+
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let mut msg = format!(
+        "{} package(s) failed to merge (--keep-going):\n{}",
+        failures.len(),
+        failures
+            .iter()
+            .map(|f| format!("  {f}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    if !skipped.is_empty() {
+        msg.push_str(&format!(
+            "\n{} dependent package(s) not merged:\n{}",
+            skipped.len(),
+            skipped
+                .iter()
+                .map(|s| format!("  {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    Err(msg)
 }
 
 /// One entry of `run_source_merge`'s own loop -- also the `Source`-entry
@@ -522,7 +606,7 @@ mod tests {
             config_root: config_root.clone(),
             ..ebuild_merge::MergeOptions::default()
         };
-        run_source_merge(&entries, &repos, &root, &portage_tmpdir, &options)
+        run_source_merge(&entries, &repos, &root, &portage_tmpdir, &options, false)
             .expect("source merge succeeds");
 
         assert_eq!(
@@ -555,8 +639,85 @@ mod tests {
             },
         );
         binary.source = CandidateSource::Binary;
-        let err = run_source_merge(&[binary], &[], &bogus, &bogus, &options).unwrap_err();
+        let err = run_source_merge(&[binary], &[], &bogus, &bogus, &options, false).unwrap_err();
         assert!(err.contains("binary package"), "{err}");
+    }
+
+    #[test]
+    fn run_merge_loop_without_keep_going_stops_at_the_first_failure() {
+        let a = source_entry(
+            "aaa",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        let b = source_entry(
+            "bbb",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        let mut seen: Vec<String> = Vec::new();
+        let err = run_merge_loop(&[a, b], false, |e| {
+            seen.push(e.package.clone());
+            Err(format!("{} boom", e.package))
+        })
+        .unwrap_err();
+        assert_eq!(err, "aaa boom");
+        assert_eq!(seen, vec!["aaa".to_string()]);
+    }
+
+    #[test]
+    fn run_merge_loop_keep_going_skips_the_failed_packages_transitive_dependents() {
+        // dep <- mid <- top   (top depends on mid depends on dep);
+        // `other` is independent. `dep` fails, so `mid` and `top` are
+        // dropped, `other` still merges, and the combined Err names all.
+        let mut dep = source_entry(
+            "dep",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        dep.required_by = vec![("dev-libs".into(), "mid".into())];
+        let mut mid = source_entry(
+            "mid",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        mid.required_by = vec![("dev-libs".into(), "top".into())];
+        let top = source_entry(
+            "top",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        let other = source_entry(
+            "other",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+
+        let mut merged: Vec<String> = Vec::new();
+        let err = run_merge_loop(&[dep, mid, top, other], true, |e| {
+            if e.package == "dep" {
+                return Err("dep boom".into());
+            }
+            merged.push(e.package.clone());
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert_eq!(merged, vec!["other".to_string()]);
+        assert!(
+            err.contains("1 package(s) failed to merge (--keep-going):"),
+            "{err}"
+        );
+        assert!(err.contains("  dep boom"), "{err}");
+        assert!(err.contains("2 dependent package(s) not merged:"), "{err}");
+        assert!(err.contains("  dev-libs/mid"), "{err}");
+        assert!(err.contains("  dev-libs/top"), "{err}");
     }
 
     #[test]
@@ -586,6 +747,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &options,
+            false,
         )
         .expect("1.0 merges");
         run_source_merge(
@@ -600,6 +762,7 @@ mod tests {
             &root,
             &portage_tmpdir,
             &options,
+            false,
         )
         .expect("2.0 upgrade merges");
 

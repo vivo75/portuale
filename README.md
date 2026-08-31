@@ -9313,10 +9313,11 @@ config the same way.
 
 **v1 cuts:** a `Binary` entry (only reachable with `--usepkg`, no
 `--getbinpkg`) is a hard error here — see the next section for the
-`--getbinpkg` mixed path; stops at the first failure (no `--keep-going`
-— a later entry may genuinely depend on an earlier one); the replace
-skips the preserve-libs / reverse-dependency check `dblink.unmerge()`
-would otherwise do.
+`--getbinpkg` mixed path; without `--keep-going` it stops at the first
+failure (a later entry may genuinely depend on an earlier one — real
+`--keep-going` is wired in now, see the `run_merge_loop` section below);
+the replace skips the preserve-libs / reverse-dependency check
+`dblink.unmerge()` would otherwise do.
 
 The Python reference has no ebuild-execution machinery, so like every
 other non-`--pretend` `emerge` path this is **not** in the shared
@@ -9439,6 +9440,42 @@ unit test (blocker atoms matched, non-blockers ignored, slot-restricted
 blockers respected). The `find_collisions` / `unregister_preserved_libs`
 code itself is the same path `merge_after_install`'s own collision /
 preserve-libs tests already exercise.
+
+### `emerge <atom>` / `emerge --getbinpkg <atom>` (no `--pretend`): real `--keep-going`
+
+`--buildpkgonly --keep-going` was already real (its resolver gate
+guarantees no entry depends on another, so a failure invalidates
+nothing for a later entry). A plain `emerge <atom>` merge is different:
+`resolve_pretend_graph` returns the entries in dependency-first order,
+so a later entry *can* genuinely need an earlier one — the old
+`run_source_merge` / `run_merge_plan` therefore just stopped at the
+first failure.
+
+Now, with `--keep-going`, they run real `Scheduler`'s own
+`_calc_resume_list` shape: on a merge failure, drop that entry **and
+every entry that (transitively) depends on it** — a BFS over the
+`GraphEntry.required_by` reverse-dependency edges the resolver already
+recorded — then merge the rest. At the end, if anything failed, return
+a combined error (`N package(s) failed to merge (--keep-going):` +
+the failure messages, then `N dependent package(s) not merged:` + the
+skipped `cat/pkg` list); real `emerge` likewise exits non-zero when
+`--keep-going` swallowed a failure.
+
+Both paths now share `emerge_build::run_merge_loop` — a small generic
+loop (`FnMut(&GraphEntry) -> Result<(), String>` per entry) that owns
+the skip-set BFS and the combined-error formatting; `run_source_merge`
+passes it `merge_one_source_entry`, `run_merge_plan` passes it a
+closure that routes `Binary` entries to `merge_one_binary_entry` and
+the rest to `merge_one_source_entry`. Without `--keep-going` the loop
+returns the first `Err` verbatim (unchanged behaviour).
+
+Rust-unit-tested at the `run_merge_loop` level:
+`run_merge_loop_without_keep_going_stops_at_the_first_failure` (only the
+first entry is attempted) and
+`run_merge_loop_keep_going_skips_the_failed_packages_transitive_dependents`
+(`dep <- mid <- top` chain + an independent `other`: `dep` fails →
+`mid` and `top` skipped, `other` merged, combined error names all
+three).
 
 ## Running it
 

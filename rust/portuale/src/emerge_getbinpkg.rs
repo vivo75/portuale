@@ -80,6 +80,7 @@ pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path) -> Result<(), 
 ///
 /// `--getbinpkgonly` (binary-only resolve, `usepkgonly`) simply never
 /// yields a non-`Binary` entry, so the same function serves both.
+#[allow(clippy::too_many_arguments)]
 pub fn run_merge_plan(
     entries: &[GraphEntry],
     config: &Config,
@@ -88,10 +89,11 @@ pub fn run_merge_plan(
     pkgdir: &Path,
     portage_tmpdir: &Path,
     merge_options: &MergeOptions,
+    keep_going: bool,
 ) -> Result<(), String> {
-    for entry in entries {
+    crate::emerge_build::run_merge_loop(entries, keep_going, |entry| {
         if entry.source == CandidateSource::Binary {
-            merge_one_binary_entry(entry, config, root, pkgdir, portage_tmpdir, merge_options)?;
+            merge_one_binary_entry(entry, config, root, pkgdir, portage_tmpdir, merge_options)
         } else {
             crate::emerge_build::merge_one_source_entry(
                 entry,
@@ -99,10 +101,9 @@ pub fn run_merge_plan(
                 root,
                 portage_tmpdir,
                 merge_options,
-            )?;
+            )
         }
-    }
-    Ok(())
+    })
 }
 
 /// One `Binary` entry of `run_merge_plan`'s own loop: `AlreadyInstalled`
@@ -681,6 +682,7 @@ mod tests {
             &pkgdir,
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
+            false,
         )
         .expect("getbinpkg merge succeeds");
 
@@ -784,6 +786,7 @@ mod tests {
             &pkgdir,
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
+            false,
         )
         .expect("getbinpkg merge succeeds");
 
@@ -841,6 +844,7 @@ mod tests {
             &pkgdir,
             &tmp.join("portage_tmpdir"),
             &options,
+            false,
         )
         .expect("mixed merge plan succeeds");
 
