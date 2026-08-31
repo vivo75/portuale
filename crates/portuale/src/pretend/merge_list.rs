@@ -5,6 +5,99 @@ use portage_profile::Config;
 use portage_repo::GraphResult;
 use portage_repo::RepoConfig;
 
+/// The values [`print_json_result`] reads from its caller.
+pub(crate) struct PrintJsonResultArgs<'a> {
+    pub(crate) plan: &'a ResolvePlan,
+    pub(crate) opts: &'a EmergeOpts<'a>,
+    pub(crate) display_entries: &'a [GraphEntry],
+    pub(crate) result: &'a GraphResult,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) has_autounmask_changes: bool,
+    pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
+}
+
+/// The `--json` output, which replaces the merge list.
+pub(crate) fn print_json_result(args: PrintJsonResultArgs<'_>) -> Option<ExitCode> {
+    let PrintJsonResultArgs {
+        plan,
+        opts,
+        display_entries,
+        result,
+        top_level_pkgs,
+        has_autounmask_changes,
+        gated_abort_partial,
+    } = args;
+    let ResolvePlan {
+        root_deps_running_root,
+        ..
+    } = plan;
+    let &EmergeOpts {
+        json,
+        verbose,
+        autounmask_only,
+        pretend,
+        autounmask_continue,
+        backtrack_max,
+        buildpkgonly,
+        nodeps,
+        ..
+    } = opts;
+    if json {
+        print_json(PrintJsonArgs {
+            entries: display_entries,
+            backtrack_restarts: result.backtrack_restarts,
+            backtrack_max: result.backtrack_max,
+            slot_conflicts: &result.slot_conflicts,
+            changed_deps_report: &result.changed_deps_report,
+            autounmask_keyword_changes: &result.autounmask_keyword_changes,
+            autounmask_use_changes: &result.autounmask_use_changes,
+            autounmask_license_changes: &result.autounmask_license_changes,
+            autounmask_mask_changes: &result.autounmask_mask_changes,
+            abi_rebuilds: &result.abi_rebuilds,
+            outcome: &result.outcome,
+            top_level_pkgs,
+            verbose,
+            running_root: root_deps_running_root.as_deref(),
+        });
+        // Same non-zero-on-autounmask-changes contract as the text path: a
+        // `--json` consumer's exit-code check must see the "config still needs
+        // editing" signal too. `--autounmask-only` stays exit 0.
+        if has_autounmask_changes
+            && !autounmask_only
+            && !(!pretend && autounmask_continue == Some(true))
+        {
+            return Some(ExitCode::from(1));
+        }
+        // An unsolvable blocker fails the run for a `--json` consumer's `$?`
+        // check too -- entry-owned rows and orphans alike.
+        // Portage: _emerge/actions.py, action_build
+        if result
+            .entries
+            .iter()
+            .any(|e| e.blockers.iter().any(|b| b.unsolvable))
+            || !result.orphan_blockers.is_empty()
+        {
+            return Some(ExitCode::from(1));
+        }
+        // Same slot-conflict rule as the text path (see `failure_gates` for the
+        // full grounding): a recorded conflict fails the run unless an escape
+        // holds (`--autounmask-only`, or backtracking disabled plus
+        // `--buildpkgonly`/`--nodeps`).
+        if !autounmask_only
+            && !result.slot_conflicts.is_empty()
+            && !(backtrack_max == 0 && (buildpkgonly || nodeps))
+        {
+            return Some(ExitCode::from(1));
+        }
+        // An aborted resolve exits 1 in every output format.
+        if gated_abort_partial.is_some() {
+            return Some(ExitCode::from(1));
+        }
+        return Some(ExitCode::SUCCESS);
+    }
+    None
+}
+
 /// The notice for targets satisfied by package.provided.
 pub(crate) fn show_pprovided_notice(result: &GraphResult, color: &Colorizer) {
     // Printed to stderr, before the merge list. The "pulled in by" ref is
