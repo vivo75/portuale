@@ -230,6 +230,13 @@ pub(crate) fn update_move_targets() -> &'static HashMap<String, HashSet<String>>
     })
 }
 
+/// Apply every `move`/`slotmove` (in order, so chains resolve) to one
+/// atom string -- for a command-line or world atom.
+pub fn apply_updates_to_atom(atom: &str) -> String {
+    apply_updates_to_atom_with(atom, global_package_updates(), update_move_targets())
+        .unwrap_or_else(|| atom.to_string())
+}
+
 /// `Some(rewritten)` only when a command actually changed the token,
 /// `None` when byte-identical (no `String` allocated).
 pub(crate) fn apply_updates_to_atom_with(
