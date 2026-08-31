@@ -9609,6 +9609,54 @@ fixture, `pkg_config` writes `${EROOT}/var/lib/emergeconfigpkg.configured`)
 → `emerge --config` writes the marker; the multi-atom and no-match paths
 hit their respective messages/exit codes.
 
+### `FEATURES=unmerge-backup`: a `quickpkg` before every `emerge -C` / `--depclean` / `--prune`
+
+Real `dblink._pre_unmerge_backup` (`vartree.py:6287`) runs at the very
+top of `dblink.unmerge()` — before `pkg_prerm`, before a single file is
+touched — and, when `FEATURES=unmerge-backup`, builds a binpkg of the
+still-installed package via `quickpkg ={cpv}`. This is the "don't lose a
+package you can't rebuild" safety net; it was the one flagged v1 cut
+across all the removal paths shipped in the previous slices.
+
+`ebuild_package::quickpkg_from_vdb` ports real `dblink.quickpkg` +
+`_quickpkg_dblink`:
+
+- stage the installed tree into `${PORTAGE_BUILDDIR}/image` by walking
+  the vdb `CONTENTS` and copying each `obj` from `${ROOT}` / recreating
+  each `sym` / `mkdir`-ing each `dir` (real `tar_contents(contents,
+  ROOT, tar)`). A CONFIG_PROTECT'd (not `-MASK`'d) file is left out —
+  real `include_config=False` (`is_protected`, shared with the merge
+  side). `fif`/`dev` nodes are skipped (the same `CAP_MKNOD` cut the
+  merge side's `create_special_node` has).
+- copy the whole vdb dir verbatim into `${PORTAGE_BUILDDIR}/build-info`
+  (real `xpak.xpak(dblnk.dbdir)`)
+- run the *same* real, unmodified `bin/misc-functions.sh __dyn_package`
+  the `ebuild <file> package` / `--buildpkgonly` paths already use —
+  factored out of `run_package`'s tail into `invoke_dyn_package` — which
+  tars `${D}` and appends `build-info/` as the xpak segment (byte-shape
+  identical to real quickpkg's `xpak.recompose_mem`) or hands both to
+  `gpkg-helper.py`
+- write a `$PKGDIR/Packages` entry from the vdb's **own** recorded
+  `*DEPEND`/`SLOT`/… build-info (not md5-cache — the package may no
+  longer be in any repo)
+
+Wired into `unmerge_one_installed` (a new `backup: Option<&PackageOptions>`
+param): `execute_unmerge` passes `Some(package_options_from_env())` when
+`FEATURES` names `unmerge-backup`, and prints `>>> Building backup
+package for <cpv>`. A `quickpkg` failure **aborts** that package's
+unmerge (real `unmerge()`'s own `if retval != os.EX_OK: … return
+retval`). `unmerge_replaced_same_slot` (the `treewalk()` replace loop)
+passes `None` — real portage there uses `_pre_merge_backup` /
+`downgrade-backup` instead, a documented cut.
+
+**v1 cuts:** the replace-loop `_pre_merge_backup` / `FEATURES=
+downgrade-backup` path; the real `BUILD_TIME` idempotency check
+(narrowed to "skip if `$PKGDIR/<cat>/<pf>.{tbz2,gpkg.tar}` already
+exists"); `fif`/`dev` `CONTENTS` nodes. Rust-black-box-tested in
+`test_portuale.py`: `emerge -C` with `FEATURES=unmerge-backup` + `PKGDIR`
+→ a valid xpak `.tbz2` (image tar + `XPAKSTOP` trailer, holds the
+installed file), a `Packages` entry, and the package gone afterward.
+
 ## Running it
 
 Build both Rust binaries:

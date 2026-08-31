@@ -2469,6 +2469,7 @@ pub(crate) fn unmerge_replaced_same_slot(
             scratch_dir,
             portage_tmpdir,
             options,
+            None,
         )?;
     }
     Ok(replaced)
@@ -2494,6 +2495,16 @@ pub(crate) fn unmerge_replaced_same_slot(
 /// run (`<scratch_dir>/<cat>/<pn>/<pf>.ebuild`, so
 /// `compute_environment`'s path parse works). Shared by
 /// `unmerge_replaced_same_slot` and `pretend.rs`'s real `emerge -C`.
+///
+/// `backup` is `Some` only for the standalone removal paths with
+/// `FEATURES=unmerge-backup` (real `dblink._pre_unmerge_backup`, run at
+/// the very top of `dblink.unmerge()` -- before `pkg_prerm`, before a
+/// single file is touched): a `quickpkg` of the still-installed package
+/// into `$PKGDIR` (`ebuild_package::quickpkg_from_vdb`). A quickpkg
+/// failure aborts this package's unmerge, real `unmerge()`'s own
+/// `if retval != os.EX_OK: ... return retval`. `treewalk()`'s replace
+/// loop passes `None` -- its own `_pre_merge_backup`/`downgrade-backup`
+/// path is a documented cut.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn unmerge_one_installed(
     root: &Path,
@@ -2504,6 +2515,7 @@ pub(crate) fn unmerge_one_installed(
     scratch_dir: &Path,
     portage_tmpdir: &Path,
     options: &MergeOptions,
+    backup: Option<&crate::ebuild_package::PackageOptions>,
 ) -> Result<(), String> {
     let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
     let unmerge_options = crate::ebuild_unmerge::UnmergeOptions {
@@ -2514,6 +2526,27 @@ pub(crate) fn unmerge_one_installed(
         config_root: options.config_root.clone(),
         ..Default::default()
     };
+
+    if let Some(pkg_options) = backup {
+        match crate::ebuild_package::quickpkg_from_vdb(
+            root,
+            category,
+            package,
+            pf,
+            scratch_dir,
+            portage_tmpdir,
+            pkg_options,
+            &options.config_protect,
+            &options.config_protect_mask,
+        ) {
+            Ok(Some(path)) => {
+                println!(">>> Building backup package for {category}/{pf}");
+                println!(">>> Wrote {}", path.display());
+            }
+            Ok(None) => {}
+            Err(e) => return Err(format!("!!! FAILED prerm: quickpkg: {e}")),
+        }
+    }
 
     let run_hook = |phase: &str| -> Result<i32, String> {
         let defined = std::fs::read_to_string(vdb_dir.join("DEFINED_PHASES")).unwrap_or_default();

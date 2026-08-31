@@ -2732,6 +2732,46 @@ fn run_unmerge_pretend(
 /// `sys.exit`s on a `portage.unmerge()` non-zero, but that return only
 /// tracks the file-removal core, which the pilot still surfaces as a
 /// hard `Err`.
+/// Real `BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_<NAME>]`/
+/// `PORTAGE_BZIP2_COMMAND`/`PKGDIR`/`BINPKG_FORMAT`/... resolution, via
+/// the same env-var-sourced CLI boundary `ebuild.rs`'s own real
+/// `merge`/`qmerge`/`package` construction uses. Shared by the
+/// non-`--pretend` build/merge dispatch and `execute_unmerge`'s own
+/// `FEATURES=unmerge-backup` `quickpkg`.
+fn package_options_from_env() -> ebuild_package::PackageOptions {
+    let d = ebuild_package::PackageOptions::default();
+    let binpkg_compress =
+        std::env::var("BINPKG_COMPRESS").unwrap_or_else(|_| d.binpkg_compress.clone());
+    let flags_name = format!("BINPKG_COMPRESS_FLAGS_{}", binpkg_compress.to_uppercase());
+    let binpkg_compress_flags = std::env::var(&flags_name)
+        .or_else(|_| std::env::var("BINPKG_COMPRESS_FLAGS"))
+        .unwrap_or_else(|_| d.binpkg_compress_flags.clone());
+    ebuild_package::PackageOptions {
+        debug: false,
+        pkgdir: std::env::var_os("PKGDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| d.pkgdir.clone()),
+        distdir: std::env::var_os("DISTDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| d.distdir.clone()),
+        shell: d.shell,
+        binpkg_compress,
+        binpkg_compress_flags,
+        portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
+            .unwrap_or(d.portage_bzip2_command),
+        binpkg_format: std::env::var("BINPKG_FORMAT").unwrap_or(d.binpkg_format),
+        config_root: portage_repo::config_root_from_env(),
+    }
+}
+
+/// Real `"unmerge-backup" in self.settings.features` -- not a
+/// `make.globals` default token, so absent unless `FEATURES` names it.
+fn feature_enabled(token: &str) -> bool {
+    std::env::var("FEATURES")
+        .map(|f| f.split_whitespace().any(|t| t == token))
+        .unwrap_or(false)
+}
+
 fn execute_unmerge(
     removal_list: &[(String, String, String)],
     root: &Path,
@@ -2742,6 +2782,9 @@ fn execute_unmerge(
         .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
     let options =
         ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+    // Real `dblink._pre_unmerge_backup`: `FEATURES=unmerge-backup` -> a
+    // `quickpkg` of each package before it's removed.
+    let backup = feature_enabled("unmerge-backup").then(package_options_from_env);
     let scratch = portage_tmpdir.join("portage").join("_unmerge_src");
     let total = removal_list.len();
     for (idx, (category, package, version)) in removal_list.iter().enumerate() {
@@ -2762,6 +2805,7 @@ fn execute_unmerge(
             &scratch,
             &portage_tmpdir,
             &options,
+            backup.as_ref(),
         ) {
             eprintln!("emerge: {e}");
             return ExitCode::from(1);
@@ -5418,36 +5462,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // for what this actually does (and doesn't) build.
     if !pretend {
         // Real BINPKG_COMPRESS/BINPKG_COMPRESS_FLAGS[_<NAME>]/
-        // PORTAGE_BZIP2_COMMAND resolution -- same env-var-sourced CLI
-        // boundary as `ebuild.rs`'s own real `merge`/`qmerge`/`package`
-        // construction (see `ebuild_package::PackageOptions::
-        // binpkg_compress_flags`'s own doc comment for why the
-        // per-compressor override is resolved here, once).
-        let default_package_options = ebuild_package::PackageOptions::default();
-        let binpkg_compress = std::env::var("BINPKG_COMPRESS")
-            .unwrap_or_else(|_| default_package_options.binpkg_compress.clone());
-        let binpkg_compress_flags_name =
-            format!("BINPKG_COMPRESS_FLAGS_{}", binpkg_compress.to_uppercase());
-        let binpkg_compress_flags = std::env::var(&binpkg_compress_flags_name)
-            .or_else(|_| std::env::var("BINPKG_COMPRESS_FLAGS"))
-            .unwrap_or_else(|_| default_package_options.binpkg_compress_flags.clone());
-        let package_options = ebuild_package::PackageOptions {
-            debug: false,
-            pkgdir: std::env::var_os("PKGDIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| default_package_options.pkgdir.clone()),
-            distdir: std::env::var_os("DISTDIR")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| default_package_options.distdir.clone()),
-            shell: default_package_options.shell,
-            binpkg_compress,
-            binpkg_compress_flags,
-            portage_bzip2_command: std::env::var("PORTAGE_BZIP2_COMMAND")
-                .unwrap_or(default_package_options.portage_bzip2_command),
-            binpkg_format: std::env::var("BINPKG_FORMAT")
-                .unwrap_or(default_package_options.binpkg_format),
-            config_root: portage_repo::config_root_from_env(),
-        };
+        // PORTAGE_BZIP2_COMMAND/PKGDIR/... resolution -- see
+        // `package_options_from_env`.
+        let package_options = package_options_from_env();
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));

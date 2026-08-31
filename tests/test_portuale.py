@@ -801,6 +801,59 @@ def test_emerge_config_rejects_multiple_atoms_and_reports_missing(emerge_binary,
     assert "No packages found." in missing.stdout
 
 
+def test_emerge_unmerge_backup_quickpkgs_before_removing(emerge_binary, tmp_path):
+    """`FEATURES=unmerge-backup` (real `dblink._pre_unmerge_backup` ->
+    quickpkg): `emerge -C` builds a binpkg of the *installed* package into
+    $PKGDIR from its CONTENTS files, THEN removes it. Reuses
+    `dev-libs/emergeconfigpkg` (installs
+    /usr/share/emergeconfigpkg/emergeconfigpkg.txt)."""
+    import tarfile as _tarfile
+
+    root = tmp_path / "root"
+    (root / "var/lib/portage").mkdir(parents=True)
+    pkgdir = tmp_path / "pkgdir"
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+    env["PKGDIR"] = str(pkgdir)
+
+    ebuild = str(
+        Path(FIXTURES_ROOT)
+        / "repo/dev-libs/emergeconfigpkg/emergeconfigpkg-1.0.ebuild"
+    )
+    link = tmp_path / "ebuild"
+    link.symlink_to(Path(emerge_binary).resolve())
+    r = subprocess.run(
+        [str(link), ebuild, "merge"], capture_output=True, text=True, check=False, env=env
+    )
+    assert r.returncode == 0, r.stderr
+    assert (root / "usr/share/emergeconfigpkg/emergeconfigpkg.txt").is_file()
+
+    env["FEATURES"] = "unmerge-backup"
+    result = subprocess.run(
+        [str(emerge_binary), "-C", "dev-libs/emergeconfigpkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ">>> Building backup package for dev-libs/emergeconfigpkg-1.0" in result.stdout
+
+    # The backup binpkg exists, is a valid xpak (image tar + XPAK trailer),
+    # holds the installed file, and got a Packages index entry.
+    tbz2 = pkgdir / "dev-libs/emergeconfigpkg-1.0.tbz2"
+    assert tbz2.is_file()
+    assert b"XPAKSTOP" in tbz2.read_bytes()[-4096:]
+    with _tarfile.open(tbz2, "r|*") as tf:
+        names = [m.name.lstrip("./") for m in tf]
+    assert "usr/share/emergeconfigpkg/emergeconfigpkg.txt" in names
+    packages = (pkgdir / "Packages").read_text()
+    assert "CPV: dev-libs/emergeconfigpkg-1.0" in packages
+
+    # ...and only then is the package actually gone.
+    assert not (root / "var/db/pkg/dev-libs/emergeconfigpkg-1.0").exists()
+    assert not (root / "usr/share/emergeconfigpkg/emergeconfigpkg.txt").exists()
+
+
 def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(
     ebuild_binary, tmp_path
 ):

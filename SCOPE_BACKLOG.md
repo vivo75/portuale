@@ -75,9 +75,21 @@ Ranked roughly by how self-contained each is.
   per package, then `deselect_from_world` (real
   `WorldSelectedPackagesSet.cleanPackage`). The old
   `--unmerge requires --pretend` gate is gone. v1 cuts: no `CLEAN_DELAY`
-  countdown, no `--ask`, no `FEATURES=unmerge-backup`.
+  countdown, no `--ask`.
   **`--depclean`/`--prune`/`--prune --nodeps` real removal shipped the
   same day** -- see their own bullets below.
+  **`FEATURES=unmerge-backup` shipped 2026-08-31**: real `dblink._pre_
+  unmerge_backup` -> `ebuild_package::quickpkg_from_vdb` (real
+  `dblink.quickpkg` -- stage the vdb `CONTENTS` files from `${ROOT}` into
+  an `image/` dir, copy the vdb dir as `build-info/`, run the same real
+  `bin/misc-functions.sh __dyn_package` `ebuild <file> package` uses, via
+  the new `invoke_dyn_package`; `$PKGDIR/Packages` entry from the vdb's
+  own build-info). Wired into `unmerge_one_installed` (`backup:
+  Option<&PackageOptions>`) for the standalone `-C`/`--depclean`/`--prune`
+  paths; a quickpkg failure aborts that unmerge. v1 cuts: the
+  `treewalk()` replace-loop `_pre_merge_backup`/`FEATURES=downgrade-backup`
+  path, the real `BUILD_TIME` idempotency check (narrowed to file
+  existence), `fif`/`dev` `CONTENTS` nodes.
 - **`emerge --pretend --depclean` / `-pc`** **shipped 2026-08-27**
   (`depclean_cleanlist`: the reachability closure over the installed
   `RDEPEND`/`PDEPEND`/`DEPEND`/`BDEPEND` graph; `run_depclean_pretend`:

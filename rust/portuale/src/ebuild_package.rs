@@ -78,6 +78,7 @@
 //     pilot has no long-lived `bindbapi` process at all, only ever
 //     re-reading `Packages` fresh each invocation.
 
+use crate::ebuild_merge;
 use crate::ebuild_phases;
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
@@ -325,16 +326,7 @@ pub fn run_package(
         return Ok(status);
     }
 
-    // Real `bin/misc-functions.sh __dyn_package`'s own
-    // `die "Unknown BINPKG_FORMAT ${BINPKG_FORMAT}"` -- rejected here
-    // rather than letting the real bash hit it, so the caller gets a
-    // clean `Err` instead of a phase-script failure exit code.
-    let binpkg_format = options.binpkg_format.as_str();
-    let binpkg_extension = match binpkg_format {
-        "xpak" => "tbz2",
-        "gpkg" => "gpkg.tar",
-        other => return Err(format!("Unknown BINPKG_FORMAT {other}")),
-    };
+    let binpkg_extension = binpkg_extension(&options.binpkg_format)?;
 
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
 
@@ -353,6 +345,77 @@ pub fn run_package(
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
 
+    let package_status =
+        invoke_dyn_package(ebuild_path, portage_tmpdir, root, options, &binpkg_path)?;
+    if package_status != 0 {
+        return Ok(package_status);
+    }
+    let binpkg_format = options.binpkg_format.as_str();
+
+    let cpv = format!("{}/{}", env.category, env.split.pf);
+    let metadata: HashMap<String, String> = ebuild_phases::repo_root_for(&env.pkg_dir)
+        .and_then(|repo_root| {
+            portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok()
+        })
+        .unwrap_or_default();
+    let get = |key: &str| metadata.get(key).map(String::as_str).unwrap_or("");
+    let build_time_str = build_time.to_string();
+    let path_field = if binpkg_format == "gpkg" {
+        format!("{}/{}.{binpkg_extension}", env.category, env.split.pf)
+    } else {
+        String::new()
+    };
+    write_packages_index_entry(
+        &options.pkgdir,
+        &cpv,
+        &[
+            ("CPV", &cpv),
+            ("SLOT", get("SLOT")),
+            ("KEYWORDS", get("KEYWORDS")),
+            ("USE", ""),
+            ("LICENSE", get("LICENSE")),
+            ("IUSE", get("IUSE")),
+            ("PROPERTIES", get("PROPERTIES")),
+            ("RESTRICT", get("RESTRICT")),
+            ("DEPEND", get("DEPEND")),
+            ("RDEPEND", get("RDEPEND")),
+            ("BDEPEND", get("BDEPEND")),
+            ("PDEPEND", get("PDEPEND")),
+            ("IDEPEND", get("IDEPEND")),
+            ("PATH", &path_field),
+            ("BUILD_TIME", &build_time_str),
+        ],
+    )?;
+
+    Ok(0)
+}
+
+/// Real `bin/misc-functions.sh __dyn_package`'s own `die "Unknown
+/// BINPKG_FORMAT ${BINPKG_FORMAT}"` -- rejected here rather than letting
+/// the real bash hit it, so the caller gets a clean `Err` instead of a
+/// phase-script failure exit code.
+fn binpkg_extension(binpkg_format: &str) -> Result<&'static str, String> {
+    match binpkg_format {
+        "xpak" => Ok("tbz2"),
+        "gpkg" => Ok("gpkg.tar"),
+        other => Err(format!("Unknown BINPKG_FORMAT {other}")),
+    }
+}
+
+/// Runs the real, unmodified `bin/misc-functions.sh __dyn_package`
+/// against `ebuild_path` (tars `${D}` + appends `${PORTAGE_BUILDDIR}/
+/// build-info` as the xpak segment / hands both to `gpkg-helper.py`),
+/// with the compressor / `PKGDIR` / `PORTAGE_BINPKG_TMPFILE` environment
+/// real portage sets. Shared by `run_package` (fresh `src_install`
+/// image) and `quickpkg_from_vdb` (installed-files image).
+fn invoke_dyn_package(
+    ebuild_path: &Path,
+    portage_tmpdir: &Path,
+    root: &Path,
+    options: &PackageOptions,
+    binpkg_path: &Path,
+) -> Result<i32, String> {
+    let binpkg_format = options.binpkg_format.as_str();
     let repo_lib_path = ebuild_phases::repo_root().join("lib");
     let mut extra_env = vec![
         ("PKGDIR".to_string(), options.pkgdir.display().to_string()),
@@ -413,7 +476,7 @@ pub fn run_package(
         ));
     }
 
-    let package_status = ebuild_phases::run_misc_function(
+    ebuild_phases::run_misc_function(
         ebuild_path,
         portage_tmpdir,
         root,
@@ -423,27 +486,131 @@ pub fn run_package(
         options.debug,
         &options.config_root,
         options.shell,
-    )?;
-    if package_status != 0 {
-        return Ok(package_status);
+    )
+}
+
+/// Real `dblink.quickpkg` + `_quickpkg_dblink` (`vartree.py:2307` /
+/// `:6296`) -- `FEATURES=unmerge-backup`'s pre-unmerge binpkg of the
+/// **installed** package, built from its files under `${ROOT}` per
+/// `CONTENTS` rather than from a fresh `src_install`. Stages the
+/// installed tree into `${PORTAGE_BUILDDIR}/image` and a verbatim copy
+/// of the vdb dir into `${PORTAGE_BUILDDIR}/build-info`, then runs the
+/// same real, unmodified `bin/misc-functions.sh __dyn_package` the
+/// `ebuild <file> package` / `--buildpkgonly` paths already use -- which
+/// tars `${D}` and appends `build-info/` as the xpak segment, byte-shape
+/// identical to real quickpkg's own `tar_contents(...)` +
+/// `xpak.tbz2(...).recompose_mem(xpak.xpak(dbdir))`. A `$PKGDIR/Packages`
+/// entry is written from the vdb's own recorded dependency metadata (not
+/// md5-cache -- the package may no longer be in any repo).
+///
+/// Real `include_config=False`: a CONFIG_PROTECT'd (not -MASK'd) file is
+/// left out of the image. fifo/device `CONTENTS` nodes are skipped -- a
+/// documented cut, the same `CAP_MKNOD` limitation the merge side's own
+/// `create_special_node` has. Returns `Ok(None)` when `$PKGDIR` already
+/// holds a binpkg for this cpv (real portage's own `BUILD_TIME`
+/// idempotency check, narrowed here to file existence).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn quickpkg_from_vdb(
+    root: &Path,
+    category: &str,
+    package: &str,
+    pf: &str,
+    scratch_ebuild_dir: &Path,
+    portage_tmpdir: &Path,
+    options: &PackageOptions,
+    config_protect: &str,
+    config_protect_mask: &str,
+) -> Result<Option<PathBuf>, String> {
+    let ext = binpkg_extension(&options.binpkg_format)?;
+    let binpkg_path = options.pkgdir.join(category).join(format!("{pf}.{ext}"));
+    if binpkg_path.exists() {
+        return Ok(None);
     }
 
-    let cpv = format!("{}/{}", env.category, env.split.pf);
-    let metadata: HashMap<String, String> = ebuild_phases::repo_root_for(&env.pkg_dir)
-        .and_then(|repo_root| {
-            portage_repo::read_md5_cache(&repo_root, &env.category, &env.split.pf).ok()
-        })
-        .unwrap_or_default();
-    let get = |key: &str| metadata.get(key).map(String::as_str).unwrap_or("");
-    let build_time_str = build_time.to_string();
-    // Real portage records a `PATH` field for every gpkg entry (real
-    // `bintree.gpkg_only`/`_pkgindex_write` -- a gpkg file is
-    // `<cat>/<pf>.gpkg.tar`, not derivable from the CPV the way a plain
-    // `<cat>/<pf>.tbz2` is). A plain xpak entry has no `PATH`; the reader
-    // reconstructs `<cat>/<pf>.tbz2` from `CPV`. `format_packages_entry`
-    // drops empty values, so the xpak entry is unchanged.
-    let path_field = if binpkg_format == "gpkg" {
-        format!("{}/{}.{binpkg_extension}", env.category, env.split.pf)
+    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
+    let contents = std::fs::read_to_string(vdb_dir.join("CONTENTS"))
+        .map_err(|e| format!("{}: {e}", vdb_dir.join("CONTENTS").display()))?;
+    let vdb_ebuild = vdb_dir.join(format!("{pf}.ebuild"));
+    if !vdb_ebuild.is_file() {
+        return Err(format!(
+            "{}: no vdb ebuild to package from (installed before the pilot kept one?)",
+            vdb_dir.display()
+        ));
+    }
+
+    // Copy the vdb ebuild into a <cat>/<pn>/<pf>.ebuild layout so
+    // `compute_environment`'s path parse works (the vdb layout is
+    // <cat>/<pf>/<pf>.ebuild).
+    let src_dir = scratch_ebuild_dir.join(category).join(package);
+    std::fs::create_dir_all(&src_dir).map_err(|e| format!("{}: {e}", src_dir.display()))?;
+    let scratch_ebuild = src_dir.join(format!("{pf}.ebuild"));
+    std::fs::copy(&vdb_ebuild, &scratch_ebuild)
+        .map_err(|e| format!("{}: {e}", vdb_ebuild.display()))?;
+
+    let env = ebuild_phases::compute_environment(&scratch_ebuild, portage_tmpdir)?;
+
+    // Fresh image dir, then stage every CONTENTS entry from ${ROOT}.
+    let image = env.d();
+    let _ = std::fs::remove_dir_all(&image);
+    std::fs::create_dir_all(&image).map_err(|e| format!("{}: {e}", image.display()))?;
+    for line in contents.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(kind), Some(abs)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let src = root.join(abs.trim_start_matches('/'));
+        let dst = image.join(abs.trim_start_matches('/'));
+        match kind {
+            "dir" => {
+                std::fs::create_dir_all(&dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+            }
+            "obj" => {
+                if ebuild_merge::is_protected(root, config_protect, config_protect_mask, &src) {
+                    continue;
+                }
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("{}: {e}", parent.display()))?;
+                }
+                std::fs::copy(&src, &dst)
+                    .map_err(|e| format!("quickpkg: {}: {e}", src.display()))?;
+            }
+            "sym" => {
+                let target = std::fs::read_link(&src)
+                    .map_err(|e| format!("quickpkg: {}: {e}", src.display()))?;
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("{}: {e}", parent.display()))?;
+                }
+                std::os::unix::fs::symlink(&target, &dst)
+                    .map_err(|e| format!("quickpkg: {}: {e}", dst.display()))?;
+            }
+            // "fif"/"dev": documented cut (needs CAP_MKNOD).
+            _ => {}
+        }
+    }
+
+    // build-info/ = a verbatim copy of the vdb dir (real `xpak(dbdir)`).
+    let build_info = env.build_info();
+    let _ = std::fs::remove_dir_all(&build_info);
+    copy_dir_recursive(&vdb_dir, &build_info)?;
+
+    let status = invoke_dyn_package(&scratch_ebuild, portage_tmpdir, root, options, &binpkg_path)?;
+    if status != 0 {
+        return Err(format!("{category}/{pf}: __dyn_package failed ({status})"));
+    }
+
+    // `$PKGDIR/Packages` entry from the vdb's own build-info files.
+    let bi = |k: &str| {
+        std::fs::read_to_string(vdb_dir.join(k))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let cpv = format!("{category}/{pf}");
+    let build_time = bi("BUILD_TIME");
+    let path_field = if options.binpkg_format == "gpkg" {
+        format!("{category}/{pf}.{ext}")
     } else {
         String::new()
     };
@@ -452,24 +619,48 @@ pub fn run_package(
         &cpv,
         &[
             ("CPV", &cpv),
-            ("SLOT", get("SLOT")),
-            ("KEYWORDS", get("KEYWORDS")),
-            ("USE", ""),
-            ("LICENSE", get("LICENSE")),
-            ("IUSE", get("IUSE")),
-            ("PROPERTIES", get("PROPERTIES")),
-            ("RESTRICT", get("RESTRICT")),
-            ("DEPEND", get("DEPEND")),
-            ("RDEPEND", get("RDEPEND")),
-            ("BDEPEND", get("BDEPEND")),
-            ("PDEPEND", get("PDEPEND")),
-            ("IDEPEND", get("IDEPEND")),
+            ("SLOT", &bi("SLOT")),
+            ("KEYWORDS", &bi("KEYWORDS")),
+            ("USE", &bi("USE")),
+            ("LICENSE", &bi("LICENSE")),
+            ("IUSE", &bi("IUSE")),
+            ("PROPERTIES", &bi("PROPERTIES")),
+            ("RESTRICT", &bi("RESTRICT")),
+            ("DEPEND", &bi("DEPEND")),
+            ("RDEPEND", &bi("RDEPEND")),
+            ("BDEPEND", &bi("BDEPEND")),
+            ("PDEPEND", &bi("PDEPEND")),
+            ("IDEPEND", &bi("IDEPEND")),
             ("PATH", &path_field),
-            ("BUILD_TIME", &build_time_str),
+            ("BUILD_TIME", &build_time),
         ],
     )?;
 
-    Ok(0)
+    Ok(Some(binpkg_path))
+}
+
+/// Recursively copy `src` -> `dst` (files, symlinks-as-symlinks,
+/// subdirs), creating `dst`. Used to stage the vdb dir as
+/// `${PORTAGE_BUILDDIR}/build-info` for `quickpkg_from_vdb`.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+    for entry in std::fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))? {
+        let entry = entry.map_err(|e| format!("{}: {e}", src.display()))?;
+        let ft = entry.file_type().map_err(|e| format!("{e}"))?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if ft.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if ft.is_symlink() {
+            let target =
+                std::fs::read_link(&from).map_err(|e| format!("{}: {e}", from.display()))?;
+            std::os::unix::fs::symlink(&target, &to)
+                .map_err(|e| format!("{}: {e}", to.display()))?;
+        } else {
+            std::fs::copy(&from, &to).map_err(|e| format!("{}: {e}", from.display()))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
