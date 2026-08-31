@@ -181,6 +181,75 @@ fn build_use_expand_display_diffs_against_the_installed_use_iuse() {
 }
 
 #[test]
+fn build_use_expand_display_force_shows_reinstall_trigger_flags_at_plain_p() {
+    let config = portage_profile::Config::default();
+    // Installed with IUSE `gone keep`, `gone` on; the ebuild dropped
+    // `gone` -> a `--newuse` reinstall triggered by `{gone}`.
+    let installed = InstalledUseState {
+        old_iuse: HashSet::from(["gone".to_string(), "keep".to_string()]),
+        old_use: HashSet::from(["gone".to_string()]),
+    };
+    let display = [("keep".to_string(), false)];
+    let reinst = HashSet::from(["gone".to_string()]);
+
+    // Plain `-p` (`all_flags = false`): without the trigger set the
+    // line is empty; with it, the dropped trigger flag shows.
+    assert_eq!(
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &display,
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: false,
+            reinst_flags: &HashSet::new()
+        }),
+        vec![]
+    );
+    assert_eq!(
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &display,
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: false,
+            reinst_flags: &reinst
+        }),
+        vec![("USE".to_string(), "(-gone%*)".to_string())]
+    );
+    // `-pv` (`all_flags = true`) already shows every flag regardless
+    // of the trigger set.
+    assert_eq!(
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &display,
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &HashSet::new()
+        }),
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &display,
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &reinst
+        }),
+    );
+    assert_eq!(
+        build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &display,
+            config: &config,
+            installed: Some(&installed),
+            forced: &HashSet::new(),
+            all_flags: true,
+            reinst_flags: &reinst
+        }),
+        vec![("USE".to_string(), "-keep (-gone%*)".to_string())]
+    );
+}
+
+#[test]
 fn build_use_expand_display_wraps_forced_and_masked_flags() {
     let config = portage_profile::Config {
         use_expand: HashSet::from(["VIDEO_CARDS".to_string()]),
