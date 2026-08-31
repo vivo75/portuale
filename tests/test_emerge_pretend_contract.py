@@ -754,6 +754,21 @@ CASES = [
         0,
     ),
     (
+        "reinst_flags: a flag dropped from IUSE that triggered the reinstall shows at plain -p",
+        ["--pretend", "--newuse", "dev-libs/reinstdropiusepkg"],
+        0,
+    ),
+    (
+        "reinst_flags: same flag under --changed-use (it was enabled, so also a trigger)",
+        ["--pretend", "--changed-use", "dev-libs/reinstdropiusepkg"],
+        0,
+    ),
+    (
+        "reinst_flags: -pv is unaffected -- it already showed every flag",
+        ["--pretend", "-v", "--newuse", "dev-libs/reinstdropiusepkg"],
+        0,
+    ),
+    (
         "--nodeps disables recursion into DEPEND/RDEPEND entirely",
         ["--pretend", "--nodeps", "dev-libs/withdeps"],
         0,
@@ -5201,6 +5216,50 @@ def test_use_line_at_p_is_full_for_a_new_pkg_and_changed_only_for_a_reinstall(
         == '[ebuild     U  ] dev-libs/upgradeusepkg-2.0::testrepo [1.0::testrepo]'
         ' USE="added%* keep -change* (-drop%)"'
     )
+
+
+def test_reinst_flags_force_show_a_dropped_iuse_trigger_flag_at_plain_p(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """Real `_create_use_string`'s `reinst_flag` (`reinst_flags_map`, the
+    Reinstall's own `_reinstall_for_flags` trigger set): a flag is shown
+    even when otherwise-unchanged if it triggered the reinstall. The one
+    case this changes at plain -p: `dev-libs/reinstdropiusepkg`'s vdb has
+    IUSE="gone keep" with `gone` enabled, but the current ebuild dropped
+    `gone` from IUSE -- so `--newuse`/`--changed-use` reinstall it, with
+    `{gone}` as the trigger set, and `gone` now shows in the `(-flag%)`
+    removed list at -p (previously -pv-only). `keep` (unchanged-disabled,
+    not a trigger) stays omitted at -p."""
+    for flag in ("--newuse", "--changed-use"):
+        p = _run(
+            [str(emerge_binary)],
+            ["--pretend", flag, "dev-libs/reinstdropiusepkg"],
+            fixture_env,
+        )
+        assert p.returncode == 0
+        assert p.stdout == _run(
+            emerge_pretend_python,
+            ["--pretend", flag, "dev-libs/reinstdropiusepkg"],
+            fixture_env,
+        ).stdout, flag
+        assert p.stdout.strip() == (
+            '[ebuild   R    ] dev-libs/reinstdropiusepkg-1.0  USE="(-gone%*)"'
+        ), flag
+
+    pv = _run(
+        [str(emerge_binary)],
+        ["--pretend", "-v", "--newuse", "dev-libs/reinstdropiusepkg"],
+        fixture_env,
+    )
+    assert pv.stdout == _run(
+        emerge_pretend_python,
+        ["--pretend", "-v", "--newuse", "dev-libs/reinstdropiusepkg"],
+        fixture_env,
+    ).stdout
+    # -pv already showed every flag: unchanged `-keep` plus the removed one.
+    assert next(
+        l for l in pv.stdout.splitlines() if "reinstdropiusepkg-1.0" in l
+    ) == '[ebuild   R    ] dev-libs/reinstdropiusepkg-1.0::testrepo  USE="-keep (-gone%*)"'
 
 
 def test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it(

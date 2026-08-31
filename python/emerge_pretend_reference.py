@@ -2366,7 +2366,13 @@ def _use_flag_sort_key(tok):
 
 
 def _build_use_expand_display(
-    use_display, use_expand, use_expand_hidden, installed=None, forced=None, all_flags=True
+    use_display,
+    use_expand,
+    use_expand_hidden,
+    installed=None,
+    forced=None,
+    all_flags=True,
+    reinst_flags=None,
 ):
     """Real output.py:_display_use + map_to_use_expand +
     output_helpers.py:_create_use_string, for `emerge --pretend -v`'s USE
@@ -2396,9 +2402,11 @@ def _build_use_expand_display(
     *unchanged* flag -- and any removed-from-IUSE flag -- as flag_str =
     None, so it's omitted: only the changed flags render for a
     Reinstall/Upgrade, the full list for a New (is_new renders
-    everything regardless). reinst_flags is still not modelled -- a
-    documented cut, slightly more visible now that this also feeds -p
-    (see the Rust side's doc comment).
+    everything regardless). `reinst_flags` (real `reinst_flags_map`, the
+    Reinstall's own `_reinstall_for_flags` trigger set) force-shows a
+    flag even at plain -p: the one case it changes is a flag the new
+    ebuild dropped from IUSE that still triggered a --newuse/--changed-use
+    reinstall -- it now appears in the `(-flag%)` removed list at -p.
 
     `forced` (full flag names -- real self.forced_flags = pkg.use.force |
     pkg.use.mask) is any flag the user can't control: its rendered token
@@ -2409,12 +2417,14 @@ def _build_use_expand_display(
     hidden = {v.upper() for v in use_expand_hidden}
     old_use, old_iuse = installed if installed is not None else (None, None)
     forced = forced or set()
+    reinst_flags = reinst_flags or set()
 
     # state: "enabled" / "disabled" / "removed" (rendered in that order).
     def render_flag(bare, full, state):
         is_forced = full in forced
+        reinst = full in reinst_flags
         if state == "removed":
-            if not all_flags:
+            if not all_flags and not reinst:
                 return None
             in_old_use = installed is not None and full in old_use
             return f"(-{bare}%{'*' if in_old_use else ''})"
@@ -2429,7 +2439,7 @@ def _build_use_expand_display(
                     core = f"{bare}%*"
                 elif not in_old_use:
                     core = f"{bare}*"
-                elif all_flags:
+                elif all_flags or reinst:
                     core = bare
                 else:
                     return None
@@ -2437,7 +2447,7 @@ def _build_use_expand_display(
                 core = f"-{bare}" if is_forced else f"-{bare}%"
             elif in_old_use:
                 core = f"-{bare}*"
-            elif all_flags:
+            elif all_flags or reinst:
                 core = f"-{bare}"
             else:
                 return None
@@ -2456,7 +2466,7 @@ def _build_use_expand_display(
 
     for flag, enabled in use_display:
         route(flag, "enabled" if enabled else "disabled")
-    if all_flags and installed is not None:
+    if installed is not None and (all_flags or reinst_flags):
         cur = {f for f, _ in use_display}
         for flag in sorted(
             (f for f in old_iuse if f not in cur), key=_alnum_sort_key
@@ -10622,7 +10632,7 @@ def run(args):
             config,
         )
 
-    def use_suffix(use_display, installed=None, forced=None):
+    def use_suffix(use_display, installed=None, forced=None, reinst_flags=None):
         # "  USE=\"a -b\" VIDEO_CARDS=\"-amdgpu nvidia\"", matching real
         # --pretend's own line format. Real output.py:_display_use
         # groups the flags by USE_EXPAND (plain USE group, then one
@@ -10654,6 +10664,7 @@ def run(args):
             installed,
             forced,
             verbose,
+            reinst_flags,
         )
         if not groups:
             return ""
@@ -10766,6 +10777,10 @@ def run(args):
         root = root_suffix(targets_running_root)
         installed = _installed_use_state(category, package, outcome)
         forced = _forced_flags_for_entry(category, package, outcome)
+        # Real `reinst_flags_map`: a USE-triggered Reinstall's own
+        # `_reinstall_for_flags` set (`outcome[2]`), force-shown in the
+        # USE line even at plain -p.
+        reinst_flags = set(outcome[2]) if outcome[0] == "reinstall" else set()
         prov = provenance if isinstance(provenance, dict) else {}
         # Real output.py:gen_mask_str's -v one-character mask column, now
         # the 7th column of the fixed-width attr_display field (not an
@@ -10843,7 +10858,7 @@ def run(args):
             system, world = classify(version)
             disp_ver = disp_version(version)
             oldbest = oldbest_str()
-            use_str = use_suffix(use_display, installed, forced)
+            use_str = use_suffix(use_display, installed, forced, reinst_flags)
             # Real output.py::verbose_size (verbosity 3 only): verboseadd
             # += localized_size(mysize) after the USE string. Rendered
             # only for a --getbinpkg remote binary (see pretend.rs's

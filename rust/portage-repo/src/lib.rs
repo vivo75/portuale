@@ -4193,6 +4193,7 @@ fn build_use_expand_display(
     installed: Option<&InstalledUseState>,
     forced: &HashSet<String>,
     all_flags: bool,
+    reinst_flags: &HashSet<String>,
 ) -> Vec<(String, String)> {
     let mut expand_vars: Vec<String> = config.use_expand.iter().cloned().collect();
     expand_vars.sort();
@@ -4218,16 +4219,18 @@ fn build_use_expand_display(
     // `_create_use_string` leaves `flag_str = None` (so the flag is
     // omitted) for an *unchanged* flag -- and for a removed-from-IUSE
     // flag -- unless `conf.all_flags` (`verbosity == 3`, i.e. `emerge
-    // -pv`) or `reinst_flag` (not modelled -- see the doc comment).
-    // `reinst_flag` being unmodelled is slightly more visible now that
-    // this path also feeds plain `-p`: a `--newuse`/`--changed-use`
-    // reinstall's own trigger flags still render via the `%*`/`*`/`-%`/
-    // `-*` change markers, but a flag `reinstall_for_flags` would have
-    // force-shown while otherwise unchanged is omitted at `-p`.
+    // -pv`) OR `reinst_flag` (this flag is in the reinstall's own
+    // `_reinstall_for_flags` trigger set -- real `reinst_flags_map`).
+    // The one case this actually changes at plain `-p`: a flag the new
+    // ebuild dropped from IUSE that nonetheless triggered a
+    // `--newuse`/`--changed-use` reinstall now shows in the `(-flag%)`
+    // removed list (its enabled-state / IUSE-presence *change* markers
+    // already carried the still-present trigger flags).
     let render_flag = |bare: &str, full: &str, state: FlagState| -> Option<String> {
         let is_forced = forced.contains(full);
+        let reinst = reinst_flags.contains(full);
         if state == FlagState::Removed {
-            if !all_flags {
+            if !all_flags && !reinst {
                 return None;
             }
             // Real: `yellow("-" + flag) + "%"`, `+ "*"` if it was on,
@@ -4249,9 +4252,10 @@ fn build_use_expand_display(
                         format!("{bare}%*")
                     } else if !in_old_use {
                         format!("{bare}*")
-                    } else if all_flags {
+                    } else if all_flags || reinst {
                         // An unchanged enabled flag: shown plain only
-                        // under `-pv`'s `all_flags`; omitted at `-p`.
+                        // under `-pv`'s `all_flags` (or if it's a
+                        // reinstall trigger); omitted at plain `-p`.
                         bare.to_string()
                     } else {
                         return None;
@@ -4265,8 +4269,9 @@ fn build_use_expand_display(
                     }
                 } else if in_old_use {
                     format!("-{bare}*")
-                } else if all_flags {
-                    // Unchanged disabled flag -- `-pv` only.
+                } else if all_flags || reinst {
+                    // Unchanged disabled flag -- `-pv` only (or a
+                    // reinstall trigger).
                     format!("-{bare}")
                 } else {
                     return None;
@@ -4312,11 +4317,11 @@ fn build_use_expand_display(
         );
     }
     // Real `removed_iuse = set(old_iuse).difference(cur_iuse)` -- flags
-    // the current ebuild dropped from IUSE, shown as `(-flag%)` under
-    // `all_flags` only (`_create_use_string`: the `removed` list is
-    // populated only inside the `if conf.all_flags or reinst_flag`
-    // branch).
-    if let (true, Some(inst)) = (all_flags, installed) {
+    // the current ebuild dropped from IUSE, shown as `(-flag%)` inside
+    // `_create_use_string`'s `if conf.all_flags or reinst_flag` branch.
+    // Route them whenever *either* could apply; `render_flag` drops a
+    // removed flag that isn't a reinstall trigger when `!all_flags`.
+    if let Some(inst) = installed.filter(|_| all_flags || !reinst_flags.is_empty()) {
         let cur: HashSet<&str> = use_flags_display.iter().map(|(f, _)| f.as_str()).collect();
         let mut removed: Vec<&String> = inst
             .old_iuse
@@ -7546,8 +7551,11 @@ pub fn resolve_pretend_graph(
                 &pp,
                 config,
             );
-            let pv_disp = build_use_expand_display(&disp, config, None, &forced, true);
-            let p_disp = build_use_expand_display(&disp, config, None, &forced, false);
+            // The autounmask parent flip re-renders the parent as `New`
+            // (no `installed` diff), so there is no reinstall trigger set.
+            let no_reinst = HashSet::new();
+            let pv_disp = build_use_expand_display(&disp, config, None, &forced, true, &no_reinst);
+            let p_disp = build_use_expand_display(&disp, config, None, &forced, false, &no_reinst);
             if let Some(pe) = entries
                 .iter_mut()
                 .find(|e| e.category == pc && e.package == pp)
@@ -8246,18 +8254,43 @@ pub fn resolve_pretend_graph(
             // pkg.use.mask`): the flags `-pv` wraps in `( … )`.
             let forced =
                 forced_or_masked_flags(iuse, &keywords, &candidate_str, &key.0, &key.1, config);
+            // Real `reinst_flags_map`: the `_reinstall_for_flags` trigger
+            // set (`Reinstall::changed_flags`), force-shown in the USE
+            // line even at plain `-p`. Only a USE-triggered `Reinstall`
+            // carries one; `Upgrade`/`Downgrade`/`New` don't (their
+            // still-present changed flags already render via the
+            // `*`/`%` markers).
+            let reinst_flags: HashSet<String> = match &entries[entry_idx].outcome {
+                PretendOutcome::Reinstall { changed_flags, .. } => {
+                    changed_flags.iter().cloned().collect()
+                }
+                _ => HashSet::new(),
+            };
             // Two renderings of the same flag set: `use_expand_display`
             // is the `-pv` (`all_flags = verbosity == 3`) form -- every
             // flag shown -- and `use_expand_display_p` is the plain `-p`
             // (`all_flags` off) form -- only the *changed* flags for a
-            // Reinstall/Upgrade/Downgrade, the full list for a `New`
-            // (`is_new` renders everything regardless). `pretend.rs`'s
-            // `use_suffix` picks by verbosity. Both are cheap; for a
-            // `New` (no `installed` diff) they're identical.
-            entries[entry_idx].use_expand_display =
-                build_use_expand_display(&display, config, installed.as_ref(), &forced, true);
-            entries[entry_idx].use_expand_display_p =
-                build_use_expand_display(&display, config, installed.as_ref(), &forced, false);
+            // Reinstall/Upgrade/Downgrade (plus its `reinst_flags`), the
+            // full list for a `New` (`is_new` renders everything
+            // regardless). `pretend.rs`'s `use_suffix` picks by
+            // verbosity. Both are cheap; for a `New` (no `installed`
+            // diff) they're identical.
+            entries[entry_idx].use_expand_display = build_use_expand_display(
+                &display,
+                config,
+                installed.as_ref(),
+                &forced,
+                true,
+                &reinst_flags,
+            );
+            entries[entry_idx].use_expand_display_p = build_use_expand_display(
+                &display,
+                config,
+                installed.as_ref(),
+                &forced,
+                false,
+                &reinst_flags,
+            );
             entries[entry_idx].use_flags_display = display;
         }
 
@@ -13052,6 +13085,7 @@ mod tests {
                 None,
                 &HashSet::new(),
                 true,
+                &HashSet::new(),
             ),
             vec![("VIDEO_CARDS".to_string(), "nvidia -amdgpu".to_string())]
         );
@@ -13069,6 +13103,7 @@ mod tests {
                 None,
                 &HashSet::new(),
                 true,
+                &HashSet::new(),
             ),
             vec![
                 ("USE".to_string(), "plainflag".to_string()),
@@ -13076,7 +13111,15 @@ mod tests {
             ]
         );
         // No displayable flags -> no groups at all.
-        assert!(build_use_expand_display(&[], &config, None, &HashSet::new(), true).is_empty());
+        assert!(build_use_expand_display(
+            &[],
+            &config,
+            None,
+            &HashSet::new(),
+            true,
+            &HashSet::new()
+        )
+        .is_empty());
     }
 
     #[test]
@@ -13114,6 +13157,7 @@ mod tests {
                 Some(&installed),
                 &HashSet::new(),
                 true,
+                &HashSet::new(),
             ),
             vec![
                 ("USE".to_string(), "alpha beta* gamma%* -delta%".to_string()),
@@ -13133,6 +13177,7 @@ mod tests {
                 }),
                 &HashSet::new(),
                 true,
+                &HashSet::new(),
             ),
             vec![("USE".to_string(), "alpha".to_string())]
         );
@@ -13152,11 +13197,83 @@ mod tests {
                 }),
                 &HashSet::new(),
                 true,
+                &HashSet::new(),
             ),
             vec![(
                 "USE".to_string(),
                 "keep (-goneoff%) (-goneon%*)".to_string()
             )]
+        );
+    }
+
+    #[test]
+    fn build_use_expand_display_force_shows_reinstall_trigger_flags_at_plain_p() {
+        let config = portage_profile::Config::default();
+        // Installed with IUSE `gone keep`, `gone` enabled. The current
+        // ebuild dropped `gone` from IUSE -> a `--newuse` reinstall whose
+        // trigger set is `{gone}`.
+        let installed = InstalledUseState {
+            old_iuse: HashSet::from(["gone".to_string(), "keep".to_string()]),
+            old_use: HashSet::from(["gone".to_string()]),
+        };
+        let display = [("keep".to_string(), false)];
+        let reinst = HashSet::from(["gone".to_string()]);
+
+        // Plain `-p` (`all_flags = false`): without the trigger set the
+        // line is empty (`keep` unchanged-disabled -> omitted, `gone`
+        // removed -> omitted). With it, the dropped trigger flag shows.
+        assert_eq!(
+            build_use_expand_display(
+                &display,
+                &config,
+                Some(&installed),
+                &HashSet::new(),
+                false,
+                &HashSet::new()
+            ),
+            vec![]
+        );
+        assert_eq!(
+            build_use_expand_display(
+                &display,
+                &config,
+                Some(&installed),
+                &HashSet::new(),
+                false,
+                &reinst
+            ),
+            vec![("USE".to_string(), "(-gone%*)".to_string())]
+        );
+        // `-pv` (`all_flags = true`) is unaffected -- it already showed
+        // every flag regardless of the trigger set.
+        assert_eq!(
+            build_use_expand_display(
+                &display,
+                &config,
+                Some(&installed),
+                &HashSet::new(),
+                true,
+                &HashSet::new()
+            ),
+            build_use_expand_display(
+                &display,
+                &config,
+                Some(&installed),
+                &HashSet::new(),
+                true,
+                &reinst
+            ),
+        );
+        assert_eq!(
+            build_use_expand_display(
+                &display,
+                &config,
+                Some(&installed),
+                &HashSet::new(),
+                true,
+                &reinst
+            ),
+            vec![("USE".to_string(), "-keep (-gone%*)".to_string())]
         );
     }
 
@@ -13187,6 +13304,7 @@ mod tests {
                 None,
                 &forced,
                 true,
+                &HashSet::new(),
             ),
             vec![
                 (
@@ -13211,6 +13329,7 @@ mod tests {
                 }),
                 &HashSet::from(["maskednew".to_string()]),
                 true,
+                &HashSet::new(),
             ),
             vec![("USE".to_string(), "(-maskednew) -plainnew%".to_string())]
         );

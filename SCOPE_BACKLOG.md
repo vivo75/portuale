@@ -278,8 +278,16 @@ Ranked roughly by how self-contained each is.
    `Downgrade` shows only its changed flags at `-p`
    (`GraphEntry::use_expand_display` for `-pv`, `use_expand_display_p`
    for `-p`; Python re-renders at display time). ~30 pinned `-p`
-   assertions updated total. One residual cut: `reinst_flags` still
-   unmodelled (slightly more visible at `-p`). The `g` (remote binary)
+   assertions updated total. **Increment 3 — `reinst_flags` — done
+   2026-08-31**: `build_use_expand_display` gained a `reinst_flags` set
+   (real `reinst_flags_map`, the `Reinstall::changed_flags` /
+   `_reinstall_for_flags` trigger set); the three `all_flags`-gated
+   `return None` branches in `render_flag` now also pass for a trigger
+   flag. Only visible effect at `-p`: a flag the new ebuild dropped from
+   IUSE that still triggered a `--newuse`/`--changed-use` reinstall shows
+   in the `(-flag%)` removed list (new `dev-libs/reinstdropiusepkg`
+   fixture). `_create_use_string` is now fully modelled bar ANSI colour.
+   The `g` (remote binary)
    bracket column **shipped 2026-08-29** with the `--pretend` half of
    `--getbinpkg` (item 6 / item 19). The `-pv` output arc is complete
    bar `--autounmask` message colour (its own future slice). The blocker

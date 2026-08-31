@@ -1,0 +1,7 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: a flag the new ebuild dropped from IUSE still shows at plain -p when it triggered a --newuse/--changed-use reinstall (reinst_flags)
+EAPI=8
+IUSE=keep
+KEYWORDS=amd64
+SLOT=0
+_md5_=0000000000000000000000000000000

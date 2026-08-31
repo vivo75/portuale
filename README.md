@@ -3085,9 +3085,10 @@ PORTING/
   under `all_flags`). The `upgradeusepkg` fixture's own `-v` line goes
   from `USE="added%* -change*"` to `USE="added%* keep -change* (-drop%)"`
   -- `keep` unchanged-on, `(-drop%)` gone from IUSE. `reinst_flags` (the
-  extra per-flag reinstall force) is still not modelled; it only widens
-  what `all_flags` already shows. ANSI color stays the sole remaining
-  `_create_use_string` cut.
+  extra per-flag reinstall force) shipped later as increment 3 of the
+  "USE at plain -p" buildout -- see "the `USE=\"…\"` line shows at plain
+  `-p`" below. ANSI color stays the sole remaining `_create_use_string`
+  cut.
 
   **`emerge --pretend`: real `PkgAttrDisplay` bracket layout + `[old-ver]`
   column (increment 1 of the `-pv` real-`output.py` layout + ANSI-color
@@ -9044,16 +9045,28 @@ removed-from-IUSE flag, whose `(-flag%)` list is `all_flags`-only) when
 `-p` — the Python reference re-renders at display time instead of
 storing both), and `use_suffix` picks by verbosity. So an Upgrade with a
 real USE diff prints e.g. `USE="added%* -change*"` at `-p` where `-pv`
-shows `USE="added%* keep -change* (-drop%)"`. The one visible cut:
-`reinst_flags` (real portage's per-flag "this flag triggered the
-reinstall" force) is still unmodelled — a `--newuse`/`--changed-use`
-reinstall's own trigger flags render via the change markers anyway, but
-a flag `reinstall_for_flags` would have force-shown while otherwise
-unchanged is omitted at `-p`.
+shows `USE="added%* keep -change* (-drop%)"`.
 
-`emerge -pv` output is unchanged by either increment. New `pretend.rs`
-unit test, new dedicated contract test + 3 `CASES` total; both sides
-byte-identical.
+**Increment 3** models `reinst_flags` (real `_create_use_string`'s
+`reinst_flag` / `reinst_flags_map`): a flag is force-shown even when
+otherwise-unchanged if it is in the `Reinstall`'s own
+`_reinstall_for_flags` trigger set (`GraphEntry`'s `Reinstall {
+changed_flags }` — `Upgrade`/`Downgrade`/`New` carry none, their
+still-present changed flags already render via the `*`/`%` markers).
+`build_use_expand_display` / `_build_use_expand_display` gained a
+`reinst_flags` set; the three `all_flags`-gated `return None` branches
+in `render_flag` (unchanged-enabled, unchanged-disabled, removed-from-
+IUSE) now also pass when the flag is a trigger. The one case this
+actually changes at plain `-p`: a flag the new ebuild **dropped from
+IUSE** that nonetheless triggered a `--newuse`/`--changed-use` reinstall
+now appears in the `(-flag%)` removed list at `-p` (new fixture
+`dev-libs/reinstdropiusepkg` — vdb IUSE `gone keep` with `gone` on, the
+current ebuild has only `keep`: `-p` shows `USE="(-gone%*)"`, `-pv` still
+`USE="-keep (-gone%*)"`).
+
+`emerge -pv` output is unchanged by any of the three increments. New
+`pretend.rs` / `build_use_expand_display` unit tests, dedicated contract
+tests + 6 `CASES` total; both sides byte-identical.
 
 ```sh
 FX="$(realpath PORTING/fixtures)"
