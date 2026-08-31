@@ -358,6 +358,31 @@ CASES = [
         0,
     ),
     (
+        "--autounmask-license: a EULA-masked top-level target is fatal by default",
+        ["--pretend", "dev-libs/licensemaskedpkg"],
+        1,
+    ),
+    (
+        "--autounmask-license: --autounmask resolves it + prints the license block",
+        ["--pretend", "--autounmask", "dev-libs/licensemaskedconsumer"],
+        0,
+    ),
+    (
+        "--autounmask-license=y alone enables the license block",
+        ["--pretend", "--autounmask-license=y", "dev-libs/licensemaskedpkg"],
+        0,
+    ),
+    (
+        "--autounmask-license=n over --autounmask suppresses it",
+        ["--pretend", "--autounmask", "--autounmask-license=n", "dev-libs/licensemaskedpkg"],
+        1,
+    ),
+    (
+        "--autounmask-license: change also appears in --json",
+        ["--pretend", "--autounmask", "--json", "dev-libs/licensemaskedconsumer"],
+        0,
+    ),
+    (
         "--usepkg: a binary-only package is invisible without it",
         ["--pretend", "dev-libs/binaryonlypkg"],
         1,
@@ -2457,6 +2482,80 @@ def test_autounmask_keyword_changes_appear_in_json(emerge_binary, fixture_env):
             "dep_chain": [
                 "required by dev-libs/autounmaskdepconsumer-1.0::testrepo",
                 "required by dev-libs/autounmaskdepconsumer (argument)",
+            ],
+        }
+    ]
+
+
+def test_autounmask_license_resolves_a_eula_masked_dependency(emerge_binary, fixture_env):
+    """--autounmask-license (real `_display_autounmask`'s `license_msg`):
+    dev-libs/licensemaskedpkg's LICENSE="SomeEula" is in the fixture's
+    @EULA group, so the default `* -@EULA` ACCEPT_LICENSE masks it, with
+    no package.license unmask. dev-libs/licensemaskedconsumer RDEPENDs on
+    it. `--autounmask` (which defaults `autounmask_license` to y) resolves
+    the graph with the implicit accept applied -- BOTH print as normal New
+    entries -- and the `The following license changes are necessary to
+    proceed:` block on stderr carries the two-line dep chain and the
+    `>=<cpv> <license>` line (real `check_if_latest(pkg)` -> `>=` since
+    1.0 is the only version). Off without `--autounmask`."""
+    off = _run(
+        [str(emerge_binary)], ["--pretend", "dev-libs/licensemaskedconsumer"], fixture_env
+    )
+    # A *dependency's* no-visible-candidate isn't fatal (only a top-level
+    # atom's is), so the consumer still resolves; the dep just isn't there.
+    assert off.returncode == 0
+    assert off.stderr.strip() == (
+        '!!! no visible ebuild for dependency "dev-libs/licensemaskedpkg"'
+    )
+
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask", "dev-libs/licensemaskedconsumer"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == (
+        "[ebuild  N     ] dev-libs/licensemaskedpkg-1.0 \n"
+        "[ebuild  N     ] dev-libs/licensemaskedconsumer-1.0 \n"
+    )
+    assert result.stderr == (
+        "\nThe following license changes are necessary to proceed:\n"
+        ' (see "package.license" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/licensemaskedconsumer-1.0::testrepo\n"
+        "# required by dev-libs/licensemaskedconsumer (argument)\n"
+        ">=dev-libs/licensemaskedpkg-1.0 SomeEula\n"
+    )
+
+    # --autounmask-license=y alone enables it; --autounmask-license=n over
+    # --autounmask suppresses it (dep stays unresolvable).
+    y = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-license=y", "dev-libs/licensemaskedpkg"],
+        fixture_env,
+    )
+    assert y.returncode == 0
+    assert ">=dev-libs/licensemaskedpkg-1.0 SomeEula" in y.stderr
+    n = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask", "--autounmask-license=n", "dev-libs/licensemaskedpkg"],
+        fixture_env,
+    )
+    assert n.returncode == 1
+    assert "license changes are necessary" not in n.stderr
+
+    j = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask", "--json", "dev-libs/licensemaskedconsumer"],
+        fixture_env,
+    )
+    payload = json.loads(j.stdout)
+    assert payload["autounmask_license_changes"] == [
+        {
+            "atom": ">=dev-libs/licensemaskedpkg-1.0",
+            "token": "SomeEula",
+            "dep_chain": [
+                "required by dev-libs/licensemaskedconsumer-1.0::testrepo",
+                "required by dev-libs/licensemaskedconsumer (argument)",
             ],
         }
     ]
@@ -8453,7 +8552,7 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
     assert result.stderr == ""
     assert result.stdout == (
         (
-        '{"entries":[{"category":"dev-libs","package":"newpkg","merge_order":0,"outcome":"new","version":"1.0","new_slot":false,"interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"abi_rebuilds":[]}\n'
+        '{"entries":[{"category":"dev-libs","package":"newpkg","merge_order":0,"outcome":"new","version":"1.0","new_slot":false,"interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"abi_rebuilds":[]}\n'
         )
     )
 
@@ -8467,7 +8566,7 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
     assert result.returncode == 0
     assert result.stdout == (
         (
-        '{"entries":[{"category":"dev-libs","package":"upgradepkg","merge_order":0,"outcome":"upgrade","version":"2.0","from_version":"1.0","interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"abi_rebuilds":[]}\n'
+        '{"entries":[{"category":"dev-libs","package":"upgradepkg","merge_order":0,"outcome":"upgrade","version":"2.0","from_version":"1.0","interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"abi_rebuilds":[]}\n'
         )
     )
 

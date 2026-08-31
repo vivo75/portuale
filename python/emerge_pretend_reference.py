@@ -994,6 +994,64 @@ def _license_struct_has_masked(struct, acceptable):
     return False
 
 
+def _license_struct_masked_names(struct, acceptable):
+    """The list form of `_license_struct_has_masked` -- real
+    `LicenseManager._getMaskedLicenses`'s own return value: every license
+    name not in `acceptable`. For a `||` group, `[]` the moment one
+    alternative is fully clean; otherwise every masked name across every
+    alternative. Order-preserving; the caller sorts + dedups. Mirrors
+    portage-repo/src/lib.rs's tree_masked_license_names."""
+    if not struct:
+        return []
+    if struct[0] == "||":
+        ret = []
+        for element in struct[1:]:
+            if isinstance(element, list):
+                if element:
+                    tmp = _license_struct_masked_names(element, acceptable)
+                    if not tmp:
+                        return []
+                    ret.extend(tmp)
+            elif element in acceptable:
+                return []
+            else:
+                ret.append(element)
+        return ret
+    ret = []
+    for element in struct:
+        if isinstance(element, list):
+            if element:
+                ret.extend(_license_struct_masked_names(element, acceptable))
+        elif element not in acceptable:
+            ret.append(element)
+    return ret
+
+
+def _missing_licenses(candidate, category, package, candidate_str, config):
+    """The exact license names `candidate`'s own LICENSE needs accepting
+    -- real LicenseManager.getMissingLicenses in its list form. Sorted +
+    deduped ("' '.join(sorted(missing_licenses))"). Mirrors
+    portage-repo/src/lib.rs's missing_licenses."""
+    license_str = candidate.get("license", "")
+    if not license_str.strip():
+        return []
+    use_flags = _use_flags_if_conditional(
+        license_str, candidate, category, package, candidate_str, config
+    )
+    accept_tokens = _resolve_accept_tokens(
+        config["accept_license"], config["package_license"], candidate_str, category, package
+    )
+    try:
+        all_mentioned = {
+            t for t in use_reduce(license_str, matchall=True, flat=True) if t != "||"
+        }
+        struct = use_reduce(license_str, uselist=list(use_flags), opconvert=True)
+    except InvalidDependString:
+        return []
+    acceptable = _resolve_acceptable_tokens(accept_tokens, all_mentioned)
+    return sorted(set(_license_struct_masked_names(struct, acceptable)))
+
+
 def _use_flags_if_conditional(value_str, candidate, category, package, candidate_str, config):
     """This candidate's own effective USE, only actually resolved if
     `value_str` (a LICENSE/PROPERTIES/RESTRICT string) contains a "?" at
@@ -1422,6 +1480,79 @@ def _keyword_masked_only(candidate, category, package, config):
         package,
         config["accept_keywords"],
         config["package_accept_keywords"],
+    )
+
+
+def _license_masked_only(candidate, category, package, config):
+    """--autounmask-license's own v1 slice, the LICENSE analogue of
+    _keyword_masked_only: true iff candidate would be is_visible except
+    for its own LICENSE (package.mask, KEYWORDS, PROPERTIES, RESTRICT all
+    pass, only _license_accepted fails). Mirrors portage-repo/src/lib.rs's
+    license_masked_only."""
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}/{candidate['sub_slot']}"
+        f"::{candidate['repo_name']}"
+    )
+    masked = any(
+        _matches_config_entry(m, candidate_str, category, package)
+        for m in config["package_mask"]
+    ) and not any(
+        _matches_config_entry(u, candidate_str, category, package)
+        for u in config["package_unmask"]
+    )
+    if masked:
+        return False
+    if not _keywords_accepted(
+        candidate["keywords"],
+        candidate_str,
+        category,
+        package,
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+    ):
+        return False
+    if not _metadata_key_accepted(
+        candidate.get("properties", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_properties"],
+        config["package_properties"],
+    ):
+        return False
+    if not _metadata_key_accepted(
+        candidate.get("restrict", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_restrict"],
+        config["package_accept_restrict"],
+    ):
+        return False
+    return not _license_accepted(candidate, category, package, candidate_str, config)
+
+
+def _suggested_license_candidate(repos, category, package, config):
+    """The --autounmask-license analogue of _suggested_keyword_candidate:
+    among the candidates masked by LICENSE alone, the highest-versioned
+    one, paired with its space-joined sorted missing-license names. None
+    if none is license-masked-only. Mirrors portage-repo/src/lib.rs's
+    suggested_license_candidate."""
+    candidates = list_candidates(repos, category, package)
+    masked = [c for c in candidates if _license_masked_only(c, category, package, config)]
+    if not masked:
+        return None
+    c = _best_candidate(masked)
+    cs = (
+        f"{category}/{package}-{c['version']}:{c['slot']}/{c['sub_slot']}::{c['repo_name']}"
+    )
+    return (
+        c["version"],
+        " ".join(_missing_licenses(c, category, package, cs, config)),
     )
 
 
@@ -4409,6 +4540,7 @@ def resolve_pretend(
     getbinpkg=False,
     autounmask_keywords=False,
     autounmask_use=False,
+    autounmask_license=False,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -4630,6 +4762,15 @@ def resolve_pretend(
             c
             for c in candidates
             if _keyword_masked_only(c, category, package, config)
+        ]
+    if not visible and autounmask_license:
+        # Real --autounmask-license: a candidate masked by LICENSE alone
+        # becomes visible via the implicit package.license accept. Real
+        # _autounmask_levels tries keyword before license.
+        visible = [
+            c
+            for c in candidates
+            if _license_masked_only(c, category, package, config)
         ]
     if not visible:
         return ("no_visible_candidate",)
@@ -5060,29 +5201,39 @@ def _autounmask_dep_chain(owner, current_atom, top_level, entries):
     return chain
 
 
-def _autounmask_use_atom_form(resolved, all_candidates, category, package, config):
+def _check_if_latest_atom_form(
+    resolved, all_candidates, category, package, config, check_visibility
+):
     """Real _display_autounmask's check_if_latest(pkg,
-    check_visibility=True) (depgraph.py:10649), for a --autounmask USE
-    change's left-hand atom: `>=<cpv>` when `resolved` is the highest
-    *visible* candidate of its cp, `>=<cpv>:<slot>` when highest visible
-    *in its slot*, else `=<cpv>`. Real portage uses `>=` for USE (unlike
-    keywords' `=`, bug #536392). Mirrors portage-repo/src/lib.rs's
-    autounmask_use_atom_form."""
+    check_visibility=...) (depgraph.py:10649), for an autounmask change's
+    left-hand atom: `>=<cpv>` / `>=<cpv>:<slot>` / `=<cpv>`. Real portage
+    uses `>=` for USE AND license changes (unlike keywords' always-`=`,
+    bug #536392). check_visibility=True for USE (a use-masked-only
+    candidate is still is_visible), False for license (every higher build
+    counts). Mirrors portage-repo/src/lib.rs's check_if_latest_atom_form."""
     cpv = f"{category}/{package}-{resolved['version']}"
 
-    def higher_visible(same_slot):
+    def higher(same_slot):
         return any(
             (not same_slot or c["slot"] == resolved["slot"])
             and vercmp(c["version"], resolved["version"]) > 0
-            and is_visible(c, category, package, config)
+            and (not check_visibility or is_visible(c, category, package, config))
             for c in all_candidates
         )
 
-    if not higher_visible(False):
+    if not higher(False):
         return f">={cpv}"
-    if not higher_visible(True):
+    if not higher(True):
         return f">={cpv}:{resolved['slot']}"
     return f"={cpv}"
+
+
+def _autounmask_use_atom_form(resolved, all_candidates, category, package, config):
+    """check_visibility=True form (USE changes) -- see
+    _check_if_latest_atom_form."""
+    return _check_if_latest_atom_form(
+        resolved, all_candidates, category, package, config, True
+    )
 
 
 def _slot_operator_rebuild_entries(root, repos, entries):
@@ -5238,6 +5389,7 @@ def resolve_pretend_graph(
     selective=False,
     autounmask_suggest_keywords=False,
     autounmask_suggest_use=False,
+    autounmask_suggest_license=False,
     usepkg=False,
     usepkgonly=False,
     binpkg_respect_use=False,
@@ -5448,6 +5600,7 @@ def resolve_pretend_graph(
     # autounmask_use_changes.
     autounmask_keyword_changes = []
     autounmask_use_changes = []
+    autounmask_license_changes = []
     # (category, package) -> set of every distinct owner that reached it
     # via a dependency string, accumulated separately from the BFS's own
     # dedup/recursion decisions below (visited_atoms/resolved_slots/
@@ -5513,6 +5666,7 @@ def resolve_pretend_graph(
             getbinpkg,
             autounmask_suggest_keywords,
             autounmask_suggest_use,
+            autounmask_suggest_license,
         )
 
         # Real --autounmask-use PART B *resolution*
@@ -5581,6 +5735,7 @@ def resolve_pretend_graph(
                         getbinpkg,
                         autounmask_suggest_keywords,
                         autounmask_suggest_use,
+                        autounmask_suggest_license,
                     )
                     if _re_outcome[0] != "no_visible_candidate":
                         outcome = _re_outcome
@@ -5700,6 +5855,18 @@ def resolve_pretend_graph(
                         f"\nnote: {category}/{package}-{version} exists but its USE flags "
                         f"don't satisfy this atom; --autounmask-use suggests adding "
                         f'"={category}/{package}-{version} {adjustments}" to package.use'
+                    )
+            # --autounmask-license's own suggestion sub-feature.
+            if autounmask_suggest_license:
+                lic_suggestion = _suggested_license_candidate(
+                    repos, category, package, config
+                )
+                if lic_suggestion is not None:
+                    version, licenses = lic_suggestion
+                    message += (
+                        f"\nnote: {category}/{package}-{version} exists but its LICENSE "
+                        f"is not accepted; --autounmask-license suggests adding "
+                        f'"={category}/{package}-{version} {licenses}" to package.license'
                     )
             raise ResolutionError(message)
 
@@ -5880,6 +6047,29 @@ def resolve_pretend_graph(
                     {
                         "atom": f"={category}/{package}-{version}",
                         "token": _kw,
+                        "dep_chain": _autounmask_dep_chain(
+                            owner, current_atom_str, top_level, entries
+                        ),
+                    }
+                )
+        # Real --autounmask-license: this candidate resolved only because
+        # resolve_pretend was told to accept a LICENSE-alone mask
+        # (_license_masked_only). Record the missing licenses (real
+        # _display_autounmask's license_msg; check_if_latest(pkg) without
+        # check_visibility -> the `>=` / `>=…:slot` / `=` form).
+        if autounmask_suggest_license and _license_masked_only(
+            resolved, category, package, config
+        ):
+            _cs = f"{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}"
+            _missing = _missing_licenses(resolved, category, package, _cs, config)
+            if _missing:
+                _all = list_candidates(repos, category, package)
+                autounmask_license_changes.append(
+                    {
+                        "atom": _check_if_latest_atom_form(
+                            resolved, _all, category, package, config, False
+                        ),
+                        "token": " ".join(_missing),
                         "dep_chain": _autounmask_dep_chain(
                             owner, current_atom_str, top_level, entries
                         ),
@@ -6372,6 +6562,7 @@ def resolve_pretend_graph(
         "pprovided_atoms": pprovided_atoms,
         "autounmask_keyword_changes": autounmask_keyword_changes,
         "autounmask_use_changes": autounmask_use_changes,
+        "autounmask_license_changes": autounmask_license_changes,
         "abi_rebuilds": abi_rebuilds,
     }
 
@@ -7013,6 +7204,7 @@ def _print_json(
     changed_deps_report,
     autounmask_keyword_changes,
     autounmask_use_changes,
+    autounmask_license_changes,
     abi_rebuilds,
     top_level_pkgs,
     verbose,
@@ -7039,6 +7231,9 @@ def _print_json(
     autounmask_use_json = ",".join(
         _autounmask_change_to_json(c) for c in autounmask_use_changes
     )
+    autounmask_license_json = ",".join(
+        _autounmask_change_to_json(c) for c in autounmask_license_changes
+    )
     abi_rebuilds_json = ",".join(
         f'{{"provider":{_json_string(child)},"consumer":{_json_string(parent)}}}'
         for child, parent in abi_rebuilds
@@ -7048,6 +7243,7 @@ def _print_json(
         f'"changed_deps_report":[{changed_deps_report_json}],'
         f'"autounmask_keyword_changes":[{autounmask_kw_json}],'
         f'"autounmask_use_changes":[{autounmask_use_json}],'
+        f'"autounmask_license_changes":[{autounmask_license_json}],'
         f'"abi_rebuilds":[{abi_rebuilds_json}]}}'
     )
 
@@ -9570,6 +9766,7 @@ def run(args):
     autounmask = None
     autounmask_keep_keywords = None
     autounmask_use = None
+    autounmask_license = None
     usepkg = False
     usepkgonly = False
     getbinpkg = False
@@ -10187,6 +10384,42 @@ def run(args):
                     file=sys.stderr,
                 )
                 return 2
+        elif arg == "--autounmask-license":
+            value = args[i + 1] if i + 1 < len(args) else None
+            if value == "y":
+                autounmask_license = True
+                i += 2
+            elif value == "n":
+                autounmask_license = False
+                i += 2
+            elif value is None:
+                print(
+                    'emerge: option "--autounmask-license" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
+            else:
+                print(
+                    f'emerge: option "--autounmask-license": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
+        elif arg.startswith("--autounmask-license="):
+            value = arg[len("--autounmask-license=") :]
+            if value == "y":
+                autounmask_license = True
+                i += 1
+            elif value == "n":
+                autounmask_license = False
+                i += 1
+            else:
+                print(
+                    f'emerge: option "--autounmask-license": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
         elif arg == "--usepkg" or arg == "-k":
             nxt = args[i + 1] if i + 1 < len(args) else None
             if nxt == "y":
@@ -10642,6 +10875,12 @@ def run(args):
     else:
         autounmask_suggest_keywords = autounmask_enabled and autounmask is not None
     autounmask_suggest_use = autounmask_enabled and autounmask_use is not False
+    # Real create_depgraph_params.py: autounmask_license defaults to "y"
+    # only when --autounmask itself is explicitly True, else "n" -- so OFF
+    # by default (unlike USE).
+    autounmask_suggest_license = autounmask_enabled and (
+        autounmask_license if autounmask_license is not None else (autounmask is True)
+    )
 
     # Fold the --getbinpkg family into the --usepkg family (see their
     # parsing): --getbinpkgonly implies binary-only; either getbinpkg
@@ -10717,6 +10956,7 @@ def run(args):
             selective,
             autounmask_suggest_keywords,
             autounmask_suggest_use,
+            autounmask_suggest_license,
             usepkg,
             usepkgonly,
             resolved_binpkg_respect_use,
@@ -10933,6 +11173,7 @@ def run(args):
             result["changed_deps_report"],
             result["autounmask_keyword_changes"],
             result["autounmask_use_changes"],
+            result["autounmask_license_changes"],
             result["abi_rebuilds"],
             top_level_pkgs,
             verbose,
@@ -11353,6 +11594,10 @@ def run(args):
     )
     _print_autounmask_block(
         "USE changes", "package.use", result["autounmask_use_changes"]
+    )
+    # Real _display_autounmask order: keyword, mask, USE, then license.
+    _print_autounmask_block(
+        "license changes", "package.license", result["autounmask_license_changes"]
     )
 
     # Real _show_abi_rebuild_info (depgraph.py:1210), gated on

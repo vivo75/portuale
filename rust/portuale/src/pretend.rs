@@ -1658,6 +1658,7 @@ fn print_json(
     changed_deps_report: &[ChangedDepsReportEntry],
     autounmask_keyword_changes: &[portage_repo::AutounmaskChange],
     autounmask_use_changes: &[portage_repo::AutounmaskChange],
+    autounmask_license_changes: &[portage_repo::AutounmaskChange],
     abi_rebuilds: &[(String, String)],
     top_level_pkgs: &HashSet<(String, String)>,
     verbose: bool,
@@ -1681,6 +1682,10 @@ fn print_json(
         .iter()
         .map(autounmask_change_to_json)
         .collect();
+    let autounmask_license_json: Vec<String> = autounmask_license_changes
+        .iter()
+        .map(autounmask_change_to_json)
+        .collect();
     let abi_rebuilds_json: Vec<String> = abi_rebuilds
         .iter()
         .map(|(child, parent)| {
@@ -1692,12 +1697,13 @@ fn print_json(
         })
         .collect();
     println!(
-        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"abi_rebuilds\":[{}]}}",
+        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"abi_rebuilds\":[{}]}}",
         entries_json.join(","),
         conflicts_json.join(","),
         changed_deps_report_json.join(","),
         autounmask_kw_json.join(","),
         autounmask_use_json.join(","),
+        autounmask_license_json.join(","),
         abi_rebuilds_json.join(",")
     );
 }
@@ -4122,6 +4128,10 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut autounmask: Option<bool> = None;
     let mut autounmask_keep_keywords: Option<bool> = None;
     let mut autounmask_use: Option<bool> = None;
+    // --autounmask-license: real `y_or_n` (REQUIRED value). Real default
+    // `"y" if autounmask is True else "n"` (create_depgraph_params.py) --
+    // so OFF unless `--autounmask` itself is explicit or `=y` is given.
+    let mut autounmask_license: Option<bool> = None;
     // --usepkg/-k, --usepkgonly/-K, --binpkg-respect-use: all three real
     // "true_y_or_n" (bare flag, "=y", or "=n"), same shape --autounmask
     // already has. --binpkg-respect-use's own real default ("auto",
@@ -4833,6 +4843,42 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 }
             }
+        } else if arg == "--autounmask-license" {
+            // Real `y_or_n`, REQUIRED value -- same shape as
+            // `--autounmask-use`.
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--autounmask-license\" requires an argument");
+                return ExitCode::from(2);
+            };
+            match value.as_str() {
+                "y" => {
+                    autounmask_license = Some(true);
+                    i += 2;
+                }
+                "n" => {
+                    autounmask_license = Some(false);
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--autounmask-license\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--autounmask-license=") {
+            match value {
+                "y" => {
+                    autounmask_license = Some(true);
+                    i += 1;
+                }
+                "n" => {
+                    autounmask_license = Some(false);
+                    i += 1;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--autounmask-license\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
         } else if arg == "--usepkg" || arg == "-k" {
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
@@ -5315,15 +5361,15 @@ pub fn run(args: &[String]) -> ExitCode {
         update || newuse || changed_use || changed_deps || changed_slot || noreplace || newrepo,
     );
 
-    // --autounmask/--autounmask-keep-keywords/--autounmask-use: real
-    // create_depgraph_params.py's own default-resolution logic,
-    // simplified for this pilot's own v1 scope (--autounmask-license/
-    // -masks still aren't read at all, matching every real fixture/user
-    // who never touches them getting the exact same outcome this
-    // simplification produces). Real logic: `autounmask` itself defaults
+    // --autounmask/--autounmask-keep-keywords/--autounmask-use/-license:
+    // real create_depgraph_params.py's own default-resolution logic,
+    // simplified for this pilot's own v1 scope (--autounmask-keep-masks
+    // still isn't read, matching every real fixture/user who never
+    // touches it getting the exact same outcome this simplification
+    // produces). Real logic: `autounmask` itself defaults
     // to enabled (only `--autounmask=n` turns the whole feature off --
-    // with `--autounmask-use` now read but `--autounmask-license`
-    // still not, the "is autounmask_use/license itself what makes
+    // with `--autounmask-use`/`-license` now read, the "is
+    // autounmask_use/license itself what makes
     // autounmask default true" branch in real create_depgraph_params.py
     // takes the "yes" arm whenever `--autounmask-use` isn't explicitly
     // "n", which this pilot's own `autounmask_enabled` below still
@@ -5365,6 +5411,13 @@ pub fn run(args: &[String]) -> ExitCode {
             None => autounmask.is_some(),
         };
     let autounmask_suggest_use = autounmask_enabled && autounmask_use != Some(false);
+    // Real `create_depgraph_params.py`: `autounmask_license` defaults to
+    // `"y"` only when `--autounmask` itself is explicitly True, else
+    // `"n"`; `myparams["autounmask_keep_license"] = autounmask_license !=
+    // "y"`. So the license kind is OFF by default (unlike USE) and only
+    // an explicit `--autounmask` or `--autounmask-license=y` enables it.
+    let autounmask_suggest_license =
+        autounmask_enabled && autounmask_license.unwrap_or(autounmask == Some(true));
 
     // Fold the --getbinpkg family into the --usepkg family (see their
     // parsing above): `--getbinpkgonly` implies binary-only; either
@@ -5464,6 +5517,7 @@ pub fn run(args: &[String]) -> ExitCode {
         selective,
         autounmask_suggest_keywords,
         autounmask_suggest_use,
+        autounmask_suggest_license,
         usepkg,
         usepkgonly,
         binpkg_respect_use,
@@ -5527,6 +5581,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &result.changed_deps_report,
             &result.autounmask_keyword_changes,
             &result.autounmask_use_changes,
+            &result.autounmask_license_changes,
             &result.abi_rebuilds,
             &top_level_pkgs,
             verbose,
@@ -5664,6 +5719,12 @@ pub fn run(args: &[String]) -> ExitCode {
         &result.autounmask_keyword_changes,
     );
     print_autounmask_block("USE changes", "package.use", &result.autounmask_use_changes);
+    // Real `_display_autounmask` order: keyword, mask, USE, then license.
+    print_autounmask_block(
+        "license changes",
+        "package.license",
+        &result.autounmask_license_changes,
+    );
 
     // Real `_show_abi_rebuild_info` (`depgraph.py:1210`), gated on
     // `--verbose-slot-rebuilds != "n"` (default on, NOT `--verbose`) and

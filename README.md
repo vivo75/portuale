@@ -8893,10 +8893,59 @@ re-resolves only the *freed dependency*, not the whole graph (a parent
 the list); the parent's own dep chain is its one-level chain (a parent
 that is itself a deep dependency would need real `_get_dep_chain`'s full
 walk); and a non-`New` parent (Upgrade/Reinstall) re-renders its USE
-line as if `New` (no installed-diff markers). `--autounmask-license` is
-the one remaining unstarted `--autounmask*` member.
+line as if `New` (no installed-diff markers). `--autounmask-license`
+follows below (increment 4).
 
 Both sides; 2 contract tests + 2 `CASES`, 2 `portage-repo` unit tests.
+
+### `emerge --pretend`: real `--autounmask-license` (increment 4)
+
+Closes the `--autounmask*` family. Real `_display_autounmask`'s
+`license_msg` (`depgraph.py:10815`): a candidate masked by its `LICENSE`
+**alone** (`license_masked_only` — package.mask, KEYWORDS, PROPERTIES,
+RESTRICT all pass) is treated as visible via an implicit `package.license`
+accept, and the missing license names are reported after the merge list.
+Unlike `--autounmask-use`, `--autounmask-license` is **off by default** —
+real `create_depgraph_params.py`: `autounmask_license` defaults to `"y"`
+only when `--autounmask` itself is explicitly given, else `"n"`.
+
+`resolve_pretend` gained an `autounmask_license` param (its
+`visible.is_empty()` fallback tries `keyword_masked_only` first, then
+`license_masked_only` — real `_autounmask_levels` order);
+`resolve_pretend_graph` gained `autounmask_suggest_license` and a
+`GraphResult::autounmask_license_changes` list. New helpers:
+`missing_licenses` (real `LicenseManager.getMissingLicenses` in list
+form — `_getMaskedLicenses`, incl. the `||`-group "return `[]` if any
+alternative is clean, else every masked name" rule),
+`tree_masked_license_names`, `license_masked_only`,
+`suggested_license_candidate`. The change atom uses real
+`check_if_latest(pkg)` **without** `check_visibility` (unlike USE) — the
+`>=<cpv>` / `>=<cpv>:<slot>` / `=<cpv>` form (`check_if_latest_atom_form`,
+which `autounmask_use_atom_form` now delegates to). `pretend.rs` prints
+the `The following license changes are necessary to proceed:` block
+last (real `_writemsg` order: keyword, mask, USE, license);
+`--json` grows an `autounmask_license_changes` array.
+
+New fixtures: `dev-libs/licensemaskedpkg` (`LICENSE="SomeEula"`, in the
+fixture's `@EULA` group, no `package.license` unmask — the default
+`* -@EULA` `ACCEPT_LICENSE` masks it) + `dev-libs/licensemaskedconsumer`
+(`RDEPEND` on it). `emerge -p --autounmask dev-libs/licensemaskedconsumer`:
+
+```
+[ebuild  N     ] dev-libs/licensemaskedpkg-1.0
+[ebuild  N     ] dev-libs/licensemaskedconsumer-1.0
+
+The following license changes are necessary to proceed:
+ (see "package.license" in the portage(5) man page for more details)
+# required by dev-libs/licensemaskedconsumer-1.0::testrepo
+# required by dev-libs/licensemaskedconsumer (argument)
+>=dev-libs/licensemaskedpkg-1.0 SomeEula
+```
+
+Both sides; 1 contract test + 5 `CASES` + 1 `portage-repo` unit test.
+The only remaining unshipped `--autounmask*` member is
+`--autounmask-keep-masks` (real `package.mask` unmask suggestions) and
+`--autounmask-write` (file-writing — a `PROMPT.md` non-goal).
 
 ### `emerge -pc <atoms> --deselect=n`
 

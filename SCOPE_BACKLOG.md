@@ -102,12 +102,15 @@ See `README.md` for the cited-source grounding of each, and `git log
   (`PROMPT.md` lists a backtracking resolver as out of scope — but it is
   what stands between "resolves the common case" and "resolves what real
   portage resolves".)
-- **`--autounmask-license`.** The last unshipped `_display_autounmask`
-  block. Mirror the keyword/USE increments: `license_masked_only` +
-  `masked_licenses()` (real `_getMaskedLicenses` list form), an
-  `autounmask_suggest_license` gate (off unless `--autounmask` is explicit
-  or `--autounmask-license=y`), `GraphResult::autounmask_license_changes`,
-  the `The following license changes are necessary to proceed:` block.
+- ~~**`--autounmask-license`.**~~ **Shipped 2026-08-31** (autounmask
+  buildout increment 4): `license_masked_only` + `missing_licenses`
+  (real `_getMaskedLicenses` list form), `autounmask_suggest_license`
+  gate (off unless `--autounmask` explicit or `--autounmask-license=y`),
+  `GraphResult::autounmask_license_changes`, the `The following license
+  changes are necessary to proceed:` block, `--json` array. New
+  `dev-libs/licensemasked{pkg,consumer}` fixtures. Only unshipped
+  `--autounmask*` member left is `--autounmask-keep-masks` (`package.mask`
+  unmask suggestions).
 - **`--root-deps` / multi-root, remaining edges.** A top-level `IDEPEND`
   reaches the running root only under `--root-deps` (real: unconditionally);
   `PDEPEND` of a running-root entry stays a target-`ROOT` concern (likely
