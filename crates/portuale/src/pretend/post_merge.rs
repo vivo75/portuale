@@ -4,6 +4,61 @@ use crate::pretend::*;
 use portage_profile::Config;
 use portage_repo::RepoConfig;
 
+/// The values [`show_post_merge_notices`] reads from its caller.
+pub(crate) struct ShowPostMergeNoticesArgs<'a> {
+    pub(crate) opts: &'a EmergeOpts<'a>,
+    pub(crate) entries: &'a Vec<GraphEntry>,
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+    pub(crate) color: Colorizer,
+    pub(crate) repos: &'a [RepoConfig],
+}
+
+/// After a merge: the info-dir update, the preserved-libs and news notices.
+pub(crate) fn show_post_merge_notices(args: ShowPostMergeNoticesArgs<'_>) -> Option<ExitCode> {
+    let ShowPostMergeNoticesArgs {
+        opts,
+        entries,
+        config,
+        root,
+        color,
+        repos,
+    } = args;
+    let &EmergeOpts {
+        buildpkgonly,
+        quiet,
+        verbose,
+        ..
+    } = opts;
+    // `elog` is no longer batched here: Portage runs it per-package inside
+    // the merge, so `process_merge_elog` is called from the merge paths
+    // themselves (see `elog.rs`).
+    if !buildpkgonly {
+        // Regenerate any stale GNU info directory index once the merge
+        // changed the vdb, before the preserved-libs notice below.
+        // Portage: post_emerge.py, post_emerge
+        if !entries.is_empty() {
+            let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
+            if let Err(e) = crate::info_files::post_merge_info_update(root, &color, quiet, noinfo) {
+                eprintln!("emerge: {e}");
+                return Some(ExitCode::from(1));
+            }
+        }
+        // Warn about any library the merge/unmerge just preserved, pointing
+        // at `emerge @preserved-rebuild`, once the merge changed the vdb.
+        // Portage: post_emerge.py, post_emerge
+        crate::preserved_libs::show_preserved_libs_notice(root, &color, quiet, verbose);
+        // Print the GLEP 42 count notice a second time once the merge
+        // changed the vdb. A merge failure prints it too when the vdb
+        // changed; see `merge_failure_news_notice` on the failure arms.
+        // Portage: post_emerge.py, post_emerge
+        if !entries.is_empty() {
+            display_news_notice_if_any(repos, root, config, &color);
+        }
+    }
+    None
+}
+
 /// The values [`record_world_after_merge`] reads from its caller.
 pub(crate) struct RecordWorldAfterMergeArgs<'a> {
     pub(crate) opts: &'a EmergeOpts<'a>,

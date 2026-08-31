@@ -42,6 +42,42 @@ pub(crate) fn still_listed_parents<'a>(
     }
     parents
 }
+/// Arguments of [`run_unmerge_pretend`].
+pub(crate) struct RunUnmergePretendArgs<'a> {
+    pub(crate) targets: &'a [&'a str],
+    /// `"unmerge"`, `"rage-clean"` (both remove exactly the given atoms;
+    /// `--rage-clean` only differs by skipping `CLEAN_DELAY` + prerm/postrm,
+    /// invisible at `--pretend`), `"depclean"`, `"prune"`. Threaded into the
+    /// `Couldn't find ... to <action>` / `removal by <action>` messages.
+    pub(crate) action: &'a str,
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    /// The `repos.conf` repos, for the post-removal GLEP 42 count notice.
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    /// When `true` the per-package blocks render in `targets` order, not
+    /// regrouped by `cat/pn`. Only `--depclean`'s topologically-sorted
+    /// cleanlist sets this; a plain `--unmerge`/`-C` is always unordered.
+    pub(crate) preserve_order: bool,
+    /// `false` for a non-`--pretend` run: the header is suppressed and the
+    /// removal runs after the display. `true` for `-pC` and for the
+    /// `--depclean`/`--prune` preview reuse.
+    pub(crate) pretend: bool,
+    /// `--ask`: prompt before the removal, then run the `CLEAN_DELAY`
+    /// countdown. Always `false` when `pretend` is `true`.
+    pub(crate) ask: bool,
+    /// Which shell backend runs each removed package's
+    /// `pkg_prerm`/`pkg_postrm`. Inert when `pretend` is `true`.
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    /// `PORTAGE_DEBUG=1` for the `pkg_prerm`/`pkg_postrm` phases.
+    /// Inert when `pretend`.
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Suppression of the post-removal info-regen einfo lines, plus the
+    /// resolved-config `FEATURES` read; computed by each caller.
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+}
 
 /// Whether a `FEATURES` token is on in the raw process env. This is the
 /// fallback for the CLI boundaries with no resolved config; every
@@ -59,6 +95,148 @@ pub(crate) fn unmerge_backup_features(config: &portage_profile::Config) -> (bool
     let resolved = config_features_string(config);
     let backup = resolved.split_whitespace().any(|t| t == "unmerge-backup");
     (backup, resolved)
+}
+/// Arguments of [`execute_unmerge`].
+pub(crate) struct ExecuteUnmergeArgs<'a> {
+    pub(crate) removal_list: &'a [(String, String, String)],
+    pub(crate) root: &'a Path,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Suppression of the info-regen einfo lines, plus the resolved-config
+    /// `FEATURES` read; threaded from the caller.
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+    /// The `repos.conf` repos + resolved config, for the post-removal
+    /// GLEP 42 count notice. The vdb-changed gate is structural (callers
+    /// only reach here with a non-empty `removal_list` and no `--pretend`).
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+}
+
+pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
+    let ExecuteUnmergeArgs {
+        removal_list,
+        root,
+        shell,
+        debug,
+        color,
+        quiet,
+        noinfo,
+        repos,
+        config,
+    } = args;
+    let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
+    let mut options = ebuild_merge::MergeOptions::from_env(shell, debug);
+    // `FEATURES=unmerge-orphans` keeps what the resolved `CONFIG_PROTECT`
+    // protects, not the process env's value.
+    options.apply_config_protect(config);
+    // Resolved `FEATURES` for the backup gate and both option sets, as the
+    // merge paths do.
+    // Portage: dbapi/vartree.py, dblink._pre_unmerge_backup
+    let (backup_wanted, resolved_features) = unmerge_backup_features(config);
+    options.set_resolved_features(&resolved_features);
+    // `FEATURES=unmerge-backup` -> a `quickpkg` of each package before it's
+    // removed. `BINPKG_FORMAT` follows the resolved chain; a failed
+    // resolution keeps the old env-only fallback.
+    let unmerge_config =
+        ebuild_phases::resolve_unmerge_config(&portage_repo::config_root_from_env(), root);
+    let backup = backup_wanted.then(|| {
+        package_options_from_env(
+            shell,
+            debug,
+            Some(&resolved_features),
+            unmerge_config.as_ref(),
+        )
+    });
+    let scratch = portage_tmpdir.join("portage").join("_unmerge_src");
+    let total = removal_list.len();
+    for (idx, (category, package, version)) in removal_list.iter().enumerate() {
+        let pf = format!("{package}-{version}");
+        println!(
+            ">>> Unmerging ({} of {}) {}/{}...",
+            color.c("MERGE_LIST_PROGRESS", &(idx + 1).to_string()),
+            color.c("MERGE_LIST_PROGRESS", &total.to_string()),
+            category,
+            pf
+        );
+        if let Err(e) = ebuild_merge::unmerge_one_installed(ebuild_merge::UnmergeOneInstalledArgs {
+            root,
+            category,
+            package,
+            pf: &pf,
+            also_keep: &[],
+            scratch_dir: &scratch,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            backup: backup.as_ref(),
+            is_replacement: false,
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+            deferred_delete: None,
+        }) {
+            // The notice prints when the vdb changed (at least one package
+            // was already removed); a failure on the very first removal
+            // changed nothing and stays silent.
+            // Portage: post_emerge.py, post_emerge
+            if idx > 0 {
+                display_news_notice_if_any(repos, root, config, color);
+            }
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+        if let Err(e) = deselect_from_world(root, category, package) {
+            // The package itself is already removed above, so the notice prints.
+            // Portage: post_emerge.py, post_emerge
+            display_news_notice_if_any(repos, root, config, color);
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    }
+    // Hand each removed package's `pkg_prerm`/`pkg_postrm` elog output to
+    // the `echo`/`save`/`save_summary` modules.
+    // Portage: dblink.py, unmerge
+    let items: Vec<(String, std::path::PathBuf)> = removal_list
+        .iter()
+        .map(|(category, package, version)| {
+            let pf = format!("{package}-{version}");
+            let t_dir = portage_tmpdir
+                .join("portage")
+                .join(category)
+                .join(&pf)
+                .join("temp");
+            (format!("{category}/{pf}"), t_dir)
+        })
+        .collect();
+    crate::elog::process_batch(crate::elog::ProcessBatchArgs {
+        logdir: &crate::elog::logdir(root),
+        root_display: &root.display().to_string(),
+        items: &items,
+        phases: Some(&["prerm", "postrm"]),
+        color,
+        split_elog: resolved_features
+            .split_whitespace()
+            .any(|t| t == "split-elog"),
+    });
+
+    // After the removal, regenerate any stale GNU info directory index,
+    // then warn about any library the removal preserved.
+    // Portage: post_emerge.py, post_emerge
+    if let Err(e) = crate::info_files::post_merge_info_update(root, color, quiet, noinfo) {
+        // Every removal already landed above, so the notice prints.
+        // Portage: post_emerge.py, post_emerge
+        display_news_notice_if_any(repos, root, config, color);
+        eprintln!("emerge: {e}");
+        return ExitCode::from(1);
+    }
+    crate::preserved_libs::show_preserved_libs_notice(root, color, false, false);
+    // The GLEP 42 count notice tail after the uninstall actions.
+    // Portage: post_emerge.py, post_emerge
+    if !removal_list.is_empty() {
+        display_news_notice_if_any(repos, root, config, color);
+    }
+
+    ExitCode::SUCCESS
 }
 
 /// Drop every world atom for the removed package unless some installed

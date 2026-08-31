@@ -188,3 +188,29 @@ pub(crate) fn depclean_unresolved_halt(
     }
     Some(ExitCode::from(1))
 }
+
+/// Arguments of [`run_depclean_pretend`].
+pub(crate) struct RunDepcleanPretendArgs<'a> {
+    pub(crate) targets: &'a [&'a str],
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    /// The `repos.conf` repos, for the post-removal GLEP 42 count notice.
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) verbose: bool,
+    pub(crate) lib_check: bool,
+    /// `--depclean <atoms> --deselect=n` keeps the `world` set as a
+    /// protection root (a world member named as an arg is kept).
+    pub(crate) deselect: bool,
+    /// `false` for a non-`--pretend` run: after the preview the cleanlist
+    /// is really removed, and the stats block reads `Number removed:`
+    /// instead of `Number to remove:`.
+    pub(crate) pretend: bool,
+    pub(crate) ask: bool,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+    /// Suppression of the post-removal info-regen block; computed by the caller.
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+}
