@@ -8764,6 +8764,97 @@ follows below (increment 4).
 
 Both sides; 2 contract tests + 2 `CASES`, 2 `portage-repo` unit tests.
 
+### `emerge --pretend`: real `--autounmask-license` (increment 4)
+
+Closes the `--autounmask*` family. Real `_display_autounmask`'s
+`license_msg` (`depgraph.py:10815`): a candidate masked by its `LICENSE`
+**alone** (`license_masked_only` — package.mask, KEYWORDS, PROPERTIES,
+RESTRICT all pass) is treated as visible via an implicit `package.license`
+accept, and the missing license names are reported after the merge list.
+Unlike `--autounmask-use`, `--autounmask-license` is **off by default** —
+real `create_depgraph_params.py`: `autounmask_license` defaults to `"y"`
+only when `--autounmask` itself is explicitly given, else `"n"`.
+
+`resolve_pretend` gained an `autounmask_license` param (its
+`visible.is_empty()` fallback tries `keyword_masked_only` first, then
+`license_masked_only` — real `_autounmask_levels` order);
+`resolve_pretend_graph` gained `autounmask_suggest_license` and a
+`GraphResult::autounmask_license_changes` list. New helpers:
+`missing_licenses` (real `LicenseManager.getMissingLicenses` in list
+form — `_getMaskedLicenses`, incl. the `||`-group "return `[]` if any
+alternative is clean, else every masked name" rule),
+`tree_masked_license_names`, `license_masked_only`,
+`suggested_license_candidate`. The change atom uses real
+`check_if_latest(pkg)` **without** `check_visibility` (unlike USE) — the
+`>=<cpv>` / `>=<cpv>:<slot>` / `=<cpv>` form (`check_if_latest_atom_form`,
+which `autounmask_use_atom_form` now delegates to). `pretend.rs` prints
+the `The following license changes are necessary to proceed:` block
+last (real `_writemsg` order: keyword, mask, USE, license);
+`--json` grows an `autounmask_license_changes` array.
+
+New fixtures: `dev-libs/licensemaskedpkg` (`LICENSE="SomeEula"`, in the
+fixture's `@EULA` group, no `package.license` unmask — the default
+`* -@EULA` `ACCEPT_LICENSE` masks it) + `dev-libs/licensemaskedconsumer`
+(`RDEPEND` on it). `emerge -p --autounmask dev-libs/licensemaskedconsumer`:
+
+```
+[ebuild  N     ] dev-libs/licensemaskedpkg-1.0
+[ebuild  N     ] dev-libs/licensemaskedconsumer-1.0
+
+The following license changes are necessary to proceed:
+ (see "package.license" in the portage(5) man page for more details)
+# required by dev-libs/licensemaskedconsumer-1.0::testrepo
+# required by dev-libs/licensemaskedconsumer (argument)
+>=dev-libs/licensemaskedpkg-1.0 SomeEula
+```
+
+Both sides; 1 contract test + 5 `CASES` + 1 `portage-repo` unit test.
+
+### `emerge --pretend`: real `--autounmask-keep-masks=n` (increment 5)
+
+**Completes the `--autounmask*` family.** Real `_display_autounmask`'s
+`p_mask_change_msg` (`depgraph.py:10723`): a candidate masked by
+`package.mask` **alone** (`mask_masked_only` — KEYWORDS, LICENSE,
+PROPERTIES, RESTRICT all pass) becomes visible via an implicit
+`package.unmask` entry. Real portage **keeps masks by default** —
+`autounmask_keep_masks` defaults `True`, and even a bare `--autounmask`
+does *not* unmask; only an explicit `--autounmask-keep-masks=n` does
+(real `_autounmask_levels` puts masks at level 4+, "least invasive
+changes first").
+
+`resolve_pretend` gained an `autounmask_masks` param (a third
+`visible.is_empty()` fallback after keyword and license — order among
+the three is irrelevant, a candidate masked by exactly one reason only
+ever matches one filter). `resolve_pretend_graph` gained
+`autounmask_suggest_masks` and `GraphResult::autounmask_mask_changes`;
+each change is a bare `=<cpv>` (no token — a mask unmask has no
+keyword/flag; real `autounmask_unrestricted_atoms` defaults `"n"` so
+always the exact-version form). `pretend.rs` prints `The following mask
+changes are necessary to proceed:` **between** the keyword and USE
+blocks (real `_writemsg` order: keyword, mask, USE, license); `--json`
+grows `autounmask_mask_changes`. **v1 cut**: real's `# <filename>:` +
+masking-comment lines (`getmaskingreason`) — portuale's `package_mask`
+list carries no source-file / comment provenance.
+
+Reuses `dev-libs/hardmaskedpkg` (`package.mask`'d via the fixture repo /
+profile / user chain) + new `dev-libs/maskmaskedconsumer` (`RDEPEND` on
+it). `emerge -p --autounmask-keep-masks=n dev-libs/maskmaskedconsumer`:
+
+```
+[ebuild  N    #] dev-libs/hardmaskedpkg-1.0
+[ebuild  N     ] dev-libs/maskmaskedconsumer-1.0
+
+The following mask changes are necessary to proceed:
+ (see "package.unmask" in the portage(5) man page for more details)
+# required by dev-libs/maskmaskedconsumer-1.0::testrepo
+# required by dev-libs/maskmaskedconsumer (argument)
+=dev-libs/hardmaskedpkg-1.0
+```
+
+Both sides; 1 contract test + 5 `CASES` + 1 `portage-repo` unit test.
+Every `--autounmask*` member is now shipped; only `--autounmask-write`
+(file-writing) remains, a standing `agent-context.md` non-goal.
+
 ### `emerge -pc <atoms> --deselect=n`
 
 Real `action_depclean`: `deselect = myopts.get("--deselect") != "n"`
@@ -9583,6 +9674,29 @@ implemented", ["--depclean"], 2)` / `["-c"]` CASES are gone, and
 removes the non-highest version of a multi-version cp and keeps the
 highest.
 
+### `emerge --deselect` (no `--pretend`): a real `world` / `world_sets` rewrite
+
+The last `requires --pretend` gate is gone. Real `action_deselect`'s own
+`world_set.replace(remaining)` -> `WorldSelectedSet.write`: after the
+same discard-matching (`Atom.intersects`, `@name` exact match against
+`world_sets`), under `--pretend` it still previews (`>>> Would remove
+<x> from "<file>" favorites file...`), but **without** it the verb is
+`Removing` and `run_deselect` rewrites both `<root>/var/lib/portage/world`
+(the discarded atoms dropped) and `<root>/var/lib/portage/world_sets`
+(the discarded `@name`s dropped) — each file sorted, one entry per line,
+comment lines dropped, exactly `WorldSelectedPackagesSet.write` /
+`WorldSelectedSetsSet.write`. Still no `find_repos`/`resolve_config`
+(only the world files + vdb, same as the original `--deselect` slice).
+Not a contract CASE (the Python reference prints `Removing` but has no
+execution machinery, so it doesn't write); `test_deselect_requires_pretend`
+became `test_deselect_without_pretend_is_no_longer_gated`, and the
+`["--deselect", ...]` entry left the cross-impl lockstep list (a real
+Rust write would pollute the shared throwaway ROOT before the Python run
+saw it). Rust-black-box-tested in `test_portuale.py`: `--pretend`
+touches neither file; the real run drops `dev-libs/adrop` + `@dropset`,
+keeps `dev-libs/zkeep` / `dev-libs/slotted:2` / `@keepset`, sorted,
+comment gone.
+
 ### `emerge --config <atom>`: run `pkg_config` for an installed package
 
 Real `action_config` is the emerge-level `pkg_config` runner (the
@@ -9797,5 +9911,55 @@ requires an argument` (exit 2); `--pretend` treats it as a recognized
 no-op. Rust-black-box-tested in `test_portuale.py`: `-b
 --buildpkg-exclude dev-libs/packagepkg` → merged, no `.tbz2`;
 `--buildpkg-exclude dev-libs/other` → `.tbz2` still written.
+
+### Backtracking: a solvable slot conflict is reconciled by re-resolving the whole graph (slice 1)
+
+Real portage's resolver is a retry loop (`_emerge/resolver/backtracking.py`
++ `BacktrackParameters`): `depgraph._resolve` runs the whole graph walk,
+and if `_process_slot_conflicts` finds a slot conflict that *one* version
+could resolve (every parent atom that landed on the slot is jointly
+satisfiable), it records the extra constraints and re-runs the entire
+walk from scratch, up to `--backtrack` (default 10) times. Portuale's
+BFS was single-pass with first-atom-wins, so two dependencies that
+disagreed about a slot always surfaced a `[slot conflict]` line even when
+a lower version would have satisfied both.
+
+`resolve_pretend_graph` now wraps its whole BFS + blocker/`required_by`
+merge in a `'backtrack` loop. Each pass rebuilds `entries` and every
+other accumulator from scratch; only `slot_constraints` (keyed by
+`cat/pkg`, the union of every atom text that targeted a conflicted
+package) and the iteration counter survive between passes. During a pass,
+`slot_want` records every atom text that pulled each `cat/pkg`; after a
+pass, each `SlotConflict` is checked for solvability against the raw
+candidate list (is there one version matching *all* of that package's
+`slot_want` atoms?). A solvable conflict folds the whole atom set into
+`slot_constraints` and `continue`s the loop; `resolve_pretend` grew an
+`extra_constraints: &[String]` parameter (a strict no-op when empty, at
+every ordinary call site) that filters `matched` down to candidates
+satisfying every one of them, so the retry pass picks the reconciled
+version and the conflict is gone. Unsolvable conflicts (no such version),
+and anything still conflicting after `MAX_BACKTRACK = 10` passes, fall
+through unchanged and are reported exactly as before.
+
+Cut for this slice (removed by later slices): only *slot* conflicts drive
+a retry — an unsolvable conflict is not yet masked-and-retried, `--backtrack`
+is a hardcoded constant not a real flag, there is no "backtracking
+exhausted" / "circular dependencies" diagnostic, and the autounmask
+parent-flip re-resolve does not yet feed `extra_constraints`. The
+solvability pre-check ignores keyword/mask visibility, so the rare case
+where the one satisfying version is itself masked resolves to a plain
+`no_visible_candidate` on the retry.
+
+Fixtures: the existing `dev-libs/slotconflictparent` chain
+(`slotconflictnewconsumer` bare RDEPEND + `slotconflictoldconsumer`
+`<dev-libs/slotconflicttarget-2.0`) is now a *solvable* case —
+`slotconflicttarget` reconciles to `1.0` with no conflict line. New
+`dev-libs/slotconflictunsolvable` (`slotconflictnewpin`
+`>=dev-libs/slotconflicttarget-2.0` + `slotconflictoldpin`
+`<dev-libs/slotconflicttarget-2.0`) is genuinely unsolvable and still
+prints the `[slot conflict]` line. Contract-tested both as a shared
+`--pretend` / `--json` case pair and via dedicated pinned-output tests
+(single-parent and two-top-level-atom forms of each); Rust-unit-tested in
+`portage-repo`.
 
 # # required by dev-libs/useflagpkg[-foo] (argument)

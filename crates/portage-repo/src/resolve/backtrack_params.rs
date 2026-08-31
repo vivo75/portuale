@@ -2,6 +2,24 @@
 
 use crate::*;
 
+/// One ranked mask choice for a slot conflict: mask `target`, opposed by
+/// `parents` (pullers whose atom does NOT match the masked version). One
+/// choice becomes one sibling node; DFS explores the last-added first.
+/// `similar` holds missed-update siblings masked in the SAME node.
+/// Portage: depgraph.py, _slot_confict_backtrack + _iter_similar_available.
+pub(crate) struct MaskChoice {
+    pub(crate) target: (String, String, String),
+    pub(crate) parents: Vec<((String, String, String), String)>,
+    pub(crate) similar: Vec<SimilarMask>,
+}
+
+/// One missed-update sibling in a choice's mask group: mask its version
+/// alongside the choice target, opposed by its own non-matching subset.
+pub(crate) struct SimilarMask {
+    pub(crate) target: (String, String, String),
+    pub(crate) parents: Vec<((String, String, String), String)>,
+}
+
 /// The cross-pass accumulators, cloned per search node (hence `Clone`).
 /// `slot_constraints` holds only the solvable-conflict atom sets; every
 /// `!=cpv` negative lives in `runtime_pkg_mask` with its `MaskReason`;
