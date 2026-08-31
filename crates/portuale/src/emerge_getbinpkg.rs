@@ -75,6 +75,12 @@ fn local_index_lists_cpv(
     true
 }
 
+/// Whether `e` is exactly one `binpkg_missing_failure` (same lone-
+/// failure shape as [`is_binpkg_digest_failure`]).
+pub(crate) fn is_binpkg_missing_failure(e: &str) -> bool {
+    !e.contains('\n') && e.ends_with(": non-existent binary package")
+}
+
 /// The on-disk binpkg for `<cat>/<package>-<version>` in `$PKGDIR`: the
 /// single-instance `<cat>/<pf>.{tbz2,gpkg.tar}`, or the multi-instance
 /// `<cat>/<pn>/<pf>-<build_id>.{xpak,gpkg.tar}` (a `<pn>/` subdir plus a
