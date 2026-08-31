@@ -2,6 +2,18 @@
 
 use crate::*;
 
+/// Binds every `:=`/`:S=` atom to the selected slot: a merge-bound
+/// [`GraphEntry`] first, else the highest matching installed version.
+/// An atom no candidate satisfies is left unchanged.
+// Portage: dep/_slot_operator.py, _eval_deps
+pub(crate) fn bind_slot_operator_deps(depstr: &str, entries: &[GraphEntry], root: &Path) -> String {
+    depstr
+        .split_whitespace()
+        .map(|token| bind_slot_operator_token(token, entries, root))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The built `:=` binding for `cat/pkg`: the tree sub-slot of the highest
 /// installed version, or `None` when there is none.
 pub(crate) fn built_equals_binding(
@@ -72,6 +84,69 @@ pub(crate) fn built_equals_shift_unrebuildable(
                     || useoldpkg_atom_matches(pcat, ppkg, pver)
             })
         })
+}
+
+/// One token of [`bind_slot_operator_deps`]: string surgery on the atom's
+/// own slot-dep substring (`:=` / `:2=` / `:2/3=`), which appears exactly
+/// once in a well-formed atom, so `replacen(.., 1)` is safe.
+pub(crate) fn bind_slot_operator_token(token: &str, entries: &[GraphEntry], root: &Path) -> String {
+    let Some(atom) = portage_dep::parse_atom(token) else {
+        return token.to_string();
+    };
+    if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
+        return token.to_string();
+    }
+    let matches = |version: &str, slot: &str, sub_slot: &str| {
+        let candidate = format!(
+            "{}/{}-{version}:{slot}/{sub_slot}",
+            atom.category, atom.package
+        );
+        atom_matches_str(token, &candidate)
+    };
+    let mut best: Option<(String, String, String)> = None;
+    for e in entries {
+        if e.category != atom.category || e.package != atom.package {
+            continue;
+        }
+        let version = match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => version,
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
+            _ => continue,
+        };
+        let (Some(slot), Some(sub_slot)) = (e.slot.as_deref(), e.sub_slot.as_deref()) else {
+            continue;
+        };
+        if !matches(version, slot, sub_slot) {
+            continue;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(v, _, _)| vercmp_ordering(version, v) == Ordering::Greater)
+        {
+            best = Some((version.clone(), slot.to_string(), sub_slot.to_string()));
+        }
+    }
+    let best = best.or_else(|| {
+        installed_candidates(root, &atom.category, &atom.package)
+            .into_iter()
+            .filter(|(version, slot, sub_slot)| matches(version, slot, sub_slot))
+            .max_by(|(a, _, _), (b, _, _)| vercmp_ordering(a, b))
+    });
+    let Some((_, slot, sub_slot)) = best else {
+        return token.to_string();
+    };
+    let old_slotdep = match (&atom.slot, &atom.sub_slot) {
+        (None, _) => ":=".to_string(),
+        (Some(s), None) => format!(":{s}="),
+        (Some(s), Some(ss)) => format!(":{s}/{ss}="),
+    };
+    token.replacen(&old_slotdep, &format!(":{slot}/{sub_slot}="), 1)
+}
+
+/// `match_from_list` against one candidate string. USE deps are not
+/// evaluated here (the candidate carries no USE state).
+pub(crate) fn atom_matches_str(atom: &str, candidate: &str) -> bool {
+    portage_dep::match_from_list(atom, &[candidate]).is_some_and(|m| !m.is_empty())
 }
 
 /// Removes every atom on an installed libc provider from a flattened set.

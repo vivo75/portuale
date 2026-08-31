@@ -340,6 +340,53 @@ fn resolve_blockers_ignores_an_installed_only_match_for_a_nomerge_owner() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// `merge_bound_match` needs the entry's slot and version: an
+/// installed 1.0 beside a slot-moved merge-bound 9.9 leaves the 1.0
+/// row solvable (removed by uninstall).
+#[test]
+fn resolve_blockers_needs_slot_and_version_for_a_merge_bound_match() {
+    let root = dir_165("blocker-merge-bound-match");
+    install_165(&root, "dev-libs", "target-1.0", "0", &[]);
+    let entries = vec![
+        new_165("dev-libs", "owner", "1.0"),
+        entry_165(
+            "dev-libs",
+            "target",
+            PretendOutcome::New {
+                version: "9.9".to_string(),
+            },
+            Some("5"),
+        ),
+    ];
+    let conflicts = resolve_blockers(
+        &root,
+        &[pending_165(Pending165Args {
+            atom: "!!dev-libs/target",
+            strong: true,
+            buildtime: true,
+            target: ("dev-libs", "target"),
+            owner: ("dev-libs", "owner"),
+            owner_version: "1.0",
+            owner_merging: true,
+            owner_installed: false,
+        })],
+        &entries,
+        &HashSet::new(),
+        false,
+    );
+    assert_eq!(conflicts.len(), 2);
+    let row_1_0 = conflicts
+        .iter()
+        .find(|c| c.conflict.matched_version == "1.0")
+        .expect("installed row filed");
+    assert!(!row_1_0.conflict.unsolvable);
+    assert!(matches!(
+        row_1_0.conflict.satisfied_by,
+        Some(BlockerSatisfiedBy::Uninstall { .. })
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The non-merge fallback owner lookup is same-cp: with no owner
 /// entry, another cp's `AlreadyInstalled` row must not stand in.
 #[test]
@@ -400,6 +447,39 @@ struct Filed165Args<'a> {
     target: (&'a str, &'a str, &'a str),
     unsolvable: bool,
     satisfied_by: Option<BlockerSatisfiedBy>,
+}
+
+fn filed_165(args: Filed165Args<'_>) -> FiledBlocker {
+    let Filed165Args {
+        owner,
+        owner_version,
+        atom,
+        strong,
+        target,
+        unsolvable,
+        satisfied_by,
+    } = args;
+    FiledBlocker {
+        owner: (owner.0.to_string(), owner.1.to_string()),
+        owner_version: owner_version.to_string(),
+        conflict: BlockerConflict {
+            atom_str: atom.to_string(),
+            strong,
+            matched_category: target.0.to_string(),
+            matched_package: target.1.to_string(),
+            matched_version: target.2.to_string(),
+            unsolvable,
+            satisfied_by,
+            tree_scheduled_uninstall: false,
+        },
+    }
+}
+
+fn uninstall_165(cpv: &str, anchor: (&str, &str)) -> BlockerSatisfiedBy {
+    BlockerSatisfiedBy::Uninstall {
+        cpv: cpv.to_string(),
+        anchor: (anchor.0.to_string(), anchor.1.to_string()),
+    }
 }
 
 // ---- `enqueue_dependencies` (`--deep` AlreadyInstalled recursion). ----
