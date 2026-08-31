@@ -91,18 +91,21 @@ pub fn run_merge_plan(
     merge_options: &MergeOptions,
     keep_going: bool,
     buildpkg: Option<&crate::ebuild_package::PackageOptions>,
+    buildpkg_exclude: &[String],
 ) -> Result<(), String> {
     crate::emerge_build::run_merge_loop(entries, keep_going, |entry| {
         if entry.source == CandidateSource::Binary {
             merge_one_binary_entry(entry, config, root, pkgdir, portage_tmpdir, merge_options)
         } else {
+            let bp = buildpkg
+                .filter(|_| !crate::emerge_build::entry_matches_any(entry, buildpkg_exclude));
             crate::emerge_build::merge_one_source_entry(
                 entry,
                 repos,
                 root,
                 portage_tmpdir,
                 merge_options,
-                buildpkg,
+                bp,
             )
         }
     })
@@ -686,6 +689,7 @@ mod tests {
             &MergeOptions::default(),
             false,
             None,
+            &[],
         )
         .expect("getbinpkg merge succeeds");
 
@@ -791,6 +795,7 @@ mod tests {
             &MergeOptions::default(),
             false,
             None,
+            &[],
         )
         .expect("getbinpkg merge succeeds");
 
@@ -850,6 +855,7 @@ mod tests {
             &options,
             false,
             None,
+            &[],
         )
         .expect("mixed merge plan succeeds");
 

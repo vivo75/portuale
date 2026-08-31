@@ -539,6 +539,27 @@ def test_emerge_atom_with_buildpkg_writes_a_binpkg_and_still_merges(
     assert not (root / "pkgdir/dev-libs/packagepkg-1.0.tbz2").exists()
     assert (root / "var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS").is_file()
 
+    # --buildpkg-exclude skips the binpkg for a matching entry (still merged);
+    # a non-matching atom leaves the binpkg on.
+    root, env = _fresh_root()
+    r = subprocess.run(
+        [str(emerge_binary), "-b", "--buildpkg-exclude", "dev-libs/packagepkg",
+         "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert not (root / "pkgdir/dev-libs/packagepkg-1.0.tbz2").exists()
+    assert (root / "var/db/pkg/dev-libs/packagepkg-1.0/CONTENTS").is_file()
+
+    root, env = _fresh_root()
+    r = subprocess.run(
+        [str(emerge_binary), "-b", "--buildpkg-exclude", "dev-libs/other",
+         "dev-libs/packagepkg"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert (root / "pkgdir/dev-libs/packagepkg-1.0.tbz2").is_file()
+
 
 def test_emerge_atom_oneshot_does_not_touch_the_world_file(emerge_binary, tmp_path):
     """--oneshot/-1 (real Scheduler._world_atom's own suppression set):

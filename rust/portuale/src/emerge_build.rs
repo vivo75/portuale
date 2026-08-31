@@ -208,9 +208,32 @@ pub fn run_source_merge(
     options: &ebuild_merge::MergeOptions,
     keep_going: bool,
     buildpkg: Option<&ebuild_package::PackageOptions>,
+    buildpkg_exclude: &[String],
 ) -> Result<(), String> {
     run_merge_loop(entries, keep_going, |entry| {
-        merge_one_source_entry(entry, repos, root, portage_tmpdir, options, buildpkg)
+        let bp = buildpkg.filter(|_| !entry_matches_any(entry, buildpkg_exclude));
+        merge_one_source_entry(entry, repos, root, portage_tmpdir, options, bp)
+    })
+}
+
+/// Real `--buildpkg-exclude`'s own `InternalPackageSet.findAtomForPackage`
+/// check: does `entry`'s resolved cpv (+ slot) match any of `atoms`
+/// (each an ordinary package atom)?
+pub(crate) fn entry_matches_any(entry: &GraphEntry, atoms: &[String]) -> bool {
+    if atoms.is_empty() {
+        return false;
+    }
+    let Some(version) = entry_version(&entry.outcome) else {
+        return false;
+    };
+    let slot = entry.slot.as_deref().unwrap_or("0");
+    let sub_slot = entry.sub_slot.as_deref().unwrap_or(slot);
+    let cpv_slot = format!(
+        "{}/{}-{version}:{slot}/{sub_slot}",
+        entry.category, entry.package
+    );
+    atoms.iter().any(|atom| {
+        portage_dep::match_from_list(atom, &[cpv_slot.as_str()]).is_some_and(|m| !m.is_empty())
     })
 }
 
@@ -620,6 +643,7 @@ mod tests {
             &options,
             false,
             None,
+            &[],
         )
         .expect("source merge succeeds");
 
@@ -640,6 +664,51 @@ mod tests {
     }
 
     #[test]
+    fn entry_matches_any_checks_the_resolved_cpv_against_buildpkg_exclude_atoms() {
+        let e = {
+            let mut e = source_entry(
+                "packagepkg",
+                PretendOutcome::New {
+                    version: "1.2".into(),
+                },
+            );
+            e.slot = Some("0".into());
+            e.sub_slot = Some("0".into());
+            e
+        };
+        assert!(!entry_matches_any(&e, &[]));
+        assert!(entry_matches_any(&e, &["dev-libs/packagepkg".to_string()]));
+        assert!(entry_matches_any(
+            &e,
+            &[">=dev-libs/packagepkg-1".to_string()]
+        ));
+        assert!(entry_matches_any(
+            &e,
+            &["dev-libs/packagepkg:0".to_string()]
+        ));
+        assert!(!entry_matches_any(&e, &["dev-libs/other".to_string()]));
+        assert!(!entry_matches_any(
+            &e,
+            &["dev-libs/packagepkg:1".to_string()]
+        ));
+        assert!(!entry_matches_any(
+            &e,
+            &["<dev-libs/packagepkg-1".to_string()]
+        ));
+        // A non-mergeable outcome never matches.
+        let ai = source_entry(
+            "packagepkg",
+            PretendOutcome::AlreadyInstalled {
+                version: "1.2".into(),
+            },
+        );
+        assert!(!entry_matches_any(
+            &ai,
+            &["dev-libs/packagepkg".to_string()]
+        ));
+    }
+
+    #[test]
     fn run_source_merge_rejects_a_binary_entry() {
         // The error is raised before any real execution, so a bogus
         // ROOT/tmpdir that would fail loudly if touched is safe here.
@@ -653,8 +722,8 @@ mod tests {
             },
         );
         binary.source = CandidateSource::Binary;
-        let err =
-            run_source_merge(&[binary], &[], &bogus, &bogus, &options, false, None).unwrap_err();
+        let err = run_source_merge(&[binary], &[], &bogus, &bogus, &options, false, None, &[])
+            .unwrap_err();
         assert!(err.contains("binary package"), "{err}");
     }
 
@@ -764,6 +833,7 @@ mod tests {
             &options,
             false,
             None,
+            &[],
         )
         .expect("1.0 merges");
         run_source_merge(
@@ -780,6 +850,7 @@ mod tests {
             &options,
             false,
             None,
+            &[],
         )
         .expect("2.0 upgrade merges");
 

@@ -7056,7 +7056,7 @@ def _report_option(token):
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
             "--deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, "
-            "--changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --with-test-deps, "
+            "--changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "
             "--noreplace/-n, --selective, and --help/-h are implemented so "
             "far; see PROMPT.md)",
             file=sys.stderr,
@@ -9951,6 +9951,20 @@ def run(args):
             nxt = args[i + 1] if i + 1 < len(args) else None
             i += 2 if nxt in ("y", "n") else 1
         elif arg in ("--buildpkg=y", "--buildpkg=n"):
+            i += 1
+        elif arg == "--buildpkg-exclude":
+            # "action": "append", required space-separated value -- a
+            # recognized no-op for --pretend (only affects a real source
+            # merge on the Rust side). A missing value is still a usage
+            # error, same as --exclude.
+            if i + 1 >= len(args):
+                print(
+                    'emerge: option "--buildpkg-exclude" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
+            i += 2
+        elif arg.startswith("--buildpkg-exclude="):
             i += 1
         elif arg in ("--root-deps", "--root-deps=True", "--root-deps=rdeps"):
             root_deps = True

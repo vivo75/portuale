@@ -1725,7 +1725,7 @@ fn report_option(token: &str) -> ExitCode {
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
              --unmerge/-C, --depclean/-c, --prune/-P, --config, \
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
-             --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --with-test-deps, \
+             --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, \
              --noreplace/-n, --selective, and --help/-h are implemented \
              so far; see PROMPT.md)",
             found.canonical
@@ -3926,6 +3926,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // matters on a real (non-`--pretend`) source merge -- see the
     // `!pretend` block below.
     let mut buildpkg_opt: Option<bool> = None;
+    // --buildpkg-exclude: source entries matching one of these atoms are
+    // merged but not binpkg'd (real `--buildpkg-exclude`).
+    let mut buildpkg_exclude: Vec<String> = Vec::new();
     // --keep-going: real main.py's own `y_or_n` validator, but this
     // pilot's own transcription (`emerge_options::BOOLEAN_OPTIONS`)
     // already narrows it to the bare/`y` form only, the same shape
@@ -4163,6 +4166,20 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 2;
         } else if let Some(value) = arg.strip_prefix("--usepkg-include=") {
             usepkg_include.extend(value.split_whitespace().map(String::from));
+            i += 1;
+        } else if arg == "--buildpkg-exclude" {
+            // Same "action": "append", space-separated-per-occurrence
+            // shape as --exclude. A source entry matching one of these is
+            // merged normally but no binpkg is written for it (real
+            // `--buildpkg-exclude`'s own `InternalPackageSet`).
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--buildpkg-exclude\" requires an argument");
+                return ExitCode::from(2);
+            };
+            buildpkg_exclude.extend(value.split_whitespace().map(String::from));
+            i += 2;
+        } else if let Some(value) = arg.strip_prefix("--buildpkg-exclude=") {
+            buildpkg_exclude.extend(value.split_whitespace().map(String::from));
             i += 1;
         } else if arg == "--json" {
             // NOT a real emerge option at all -- real portage has no
@@ -5592,6 +5609,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &merge_options,
                 keep_going,
                 buildpkg,
+                &buildpkg_exclude,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
@@ -5607,6 +5625,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 &merge_options,
                 keep_going,
                 buildpkg,
+                &buildpkg_exclude,
             ) {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);

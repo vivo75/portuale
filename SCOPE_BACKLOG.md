@@ -513,10 +513,14 @@ Ranked roughly by how self-contained each is.
    `run_merge`/`merge_one_source_entry`/`run_source_merge`/`run_merge_plan`
    `buildpkg: Option<&PackageOptions>` param; `pretend.rs` gates it on
    `--buildpkg[=y|n]`/`-b` OR `FEATURES=buildpkg` (`=n` wins). `--buildpkg`
-   is a `--pretend` no-op on the Python side. **Still open:**
-   `--buildpkg-exclude` (skip building for matching atoms), `FEATURES=
-   buildpkg-live` / `binpkg-multi-instance`, real `EbuildBinpkg` failure
-   semantics under `--keep-going`.
+   is a `--pretend` no-op on the Python side. **`--buildpkg-exclude
+   <atoms>` shipped 2026-08-31**: `emerge_build::entry_matches_any`
+   (real `InternalPackageSet.findAtomForPackage`); `run_source_merge` /
+   `run_merge_plan` filter `buildpkg` to `None` per matching entry;
+   space-separated + repeatable; missing value → exit 2; `--pretend`
+   no-op. **Still open:** `FEATURES=buildpkg-live` /
+   `binpkg-multi-instance`, real `EbuildBinpkg` failure semantics under
+   `--keep-going`.
 
 9. **Fetch: resume support** (`RESUMECOMMAND`'s retry-with-`-c`), **live
    per-mirror `layout.conf` negotiation**, real candidate ordering/

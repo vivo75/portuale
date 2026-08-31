@@ -9771,6 +9771,20 @@ trailer, holds the built file) + a `Packages` entry + the package
 merged; `-b` alone does the same; `--buildpkg=n` over
 `FEATURES=buildpkg` builds no binpkg but still merges.
 
+`--buildpkg-exclude <atoms>` (real `_emerge/main.py`'s own
+space-separated, repeatable option, backed by an `InternalPackageSet`)
+suppresses the binpkg for any resolved entry whose cpv+slot matches one
+of the atoms — the entry is still merged, just not packaged.
+`emerge_build::entry_matches_any` is the transcription of real
+`--buildpkg-exclude`'s own `findAtomForPackage` check (`match_from_list`
+over the resolved `cat/pkg-ver:slot/sub_slot`); `run_source_merge` /
+`run_merge_plan` filter `buildpkg` to `None` per matching entry. A
+missing value is the usual `emerge: option "--buildpkg-exclude"
+requires an argument` (exit 2); `--pretend` treats it as a recognized
+no-op. Rust-black-box-tested in `test_portuale.py`: `-b
+--buildpkg-exclude dev-libs/packagepkg` → merged, no `.tbz2`;
+`--buildpkg-exclude dev-libs/other` → `.tbz2` still written.
+
 ## Running it
 
 Build both Rust binaries:
