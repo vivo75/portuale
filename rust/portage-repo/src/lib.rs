@@ -6493,15 +6493,24 @@ fn topological_merge_order(entries: Vec<GraphEntry>) -> Vec<GraphEntry> {
 /// USE-reduced and `:=`-bound at merge time, see
 /// `ebuild_phases::bind_slot_operator`), not re-reduced.
 ///
+/// Also returns the `(provider-cpv, consumer-cpv)` pairs behind each
+/// rebuild -- real `_compute_abi_rebuild_info`'s `_forced_rebuilds`,
+/// rendered by `_show_abi_rebuild_info` as "The following packages are
+/// causing rebuilds:" (`--verbose-slot-rebuilds`, default on).
+///
 /// v1 cuts (the same "narrow v1, document the cut" pattern as the
 /// `--root-deps` recursion increments): no backtracking -- a rebuild
 /// that would itself shift another package's sub-slot is not chased;
 /// the rebuilt consumer's own `:=` deps aren't re-bound here (the real
 /// rebuild does that); no `--changed-slot` / `--ignore-built-slot-
-/// operator-deps` interaction; the "The following packages are causing
-/// rebuilds:" display block (`_show_abi_rebuild_info`) is not produced.
-fn slot_operator_rebuild_entries(root: &Path, entries: &[GraphEntry]) -> Vec<GraphEntry> {
-    let mut new_slot: HashMap<(String, String), (String, String)> = HashMap::new();
+/// operator-deps` interaction.
+fn slot_operator_rebuild_entries(
+    root: &Path,
+    entries: &[GraphEntry],
+) -> (Vec<GraphEntry>, Vec<(String, String)>) {
+    // cp -> (new version, new slot, new sub-slot) for every entry that
+    // replaces an installed version in that slot.
+    let mut new_slot: HashMap<(String, String), (String, String, String)> = HashMap::new();
     let mut in_graph: HashSet<(String, String)> = HashSet::new();
     for e in entries {
         if !matches!(
@@ -6510,28 +6519,33 @@ fn slot_operator_rebuild_entries(root: &Path, entries: &[GraphEntry]) -> Vec<Gra
         ) {
             in_graph.insert((e.category.clone(), e.package.clone()));
         }
-        if matches!(
-            e.outcome,
-            PretendOutcome::Upgrade { .. }
-                | PretendOutcome::Downgrade { .. }
-                | PretendOutcome::Reinstall { .. }
-        ) {
-            if let (Some(slot), Some(sub_slot)) = (e.slot.clone(), e.sub_slot.clone()) {
-                new_slot.insert((e.category.clone(), e.package.clone()), (slot, sub_slot));
-            }
+        let version = match &e.outcome {
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
+            PretendOutcome::Reinstall { version, .. } => Some(version),
+            _ => None,
+        };
+        if let (Some(version), Some(slot), Some(sub_slot)) =
+            (version, e.slot.clone(), e.sub_slot.clone())
+        {
+            new_slot.insert(
+                (e.category.clone(), e.package.clone()),
+                (version.clone(), slot, sub_slot),
+            );
         }
     }
     if new_slot.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     let mut out: Vec<GraphEntry> = Vec::new();
+    let mut abi_rebuilds: Vec<(String, String)> = Vec::new();
     for pkg in all_installed_packages(root) {
         let cp = (pkg.category.clone(), pkg.package.clone());
         if in_graph.contains(&cp) {
             continue;
         }
-        let triggered = ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
+        let consumer_cpv = pkg.cpv();
+        let mut providers: Vec<String> = ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"]
             .iter()
             .flat_map(|key| {
                 read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key)
@@ -6540,20 +6554,24 @@ fn slot_operator_rebuild_entries(root: &Path, entries: &[GraphEntry]) -> Vec<Gra
                     .collect::<Vec<_>>()
             })
             .filter_map(|tok| portage_dep::parse_atom(&tok))
-            .any(|atom| {
+            .filter_map(|atom| {
                 if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
-                    return false;
+                    return None;
                 }
-                let (Some(a_slot), Some(a_sub)) = (atom.slot.as_deref(), atom.sub_slot.as_deref())
-                else {
-                    return false;
-                };
-                new_slot
-                    .get(&(atom.category.clone(), atom.package.clone()))
-                    .is_some_and(|(n_slot, n_sub)| a_slot == n_slot && a_sub != n_sub)
-            });
-        if !triggered {
+                let (a_slot, a_sub) = (atom.slot.as_deref()?, atom.sub_slot.as_deref()?);
+                let (n_ver, n_slot, n_sub) =
+                    new_slot.get(&(atom.category.clone(), atom.package.clone()))?;
+                (a_slot == n_slot && a_sub != n_sub)
+                    .then(|| format!("{}/{}-{n_ver}", atom.category, atom.package))
+            })
+            .collect();
+        providers.sort();
+        providers.dedup();
+        if providers.is_empty() {
             continue;
+        }
+        for provider_cpv in providers {
+            abi_rebuilds.push((provider_cpv, consumer_cpv.clone()));
         }
 
         let (slot, sub_slot) = read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
@@ -6603,7 +6621,9 @@ fn slot_operator_rebuild_entries(root: &Path, entries: &[GraphEntry]) -> Vec<Gra
         });
     }
     out.sort_by(|a, b| (a.category.as_str(), a.package.as_str()).cmp(&(&b.category, &b.package)));
-    out
+    abi_rebuilds.sort();
+    abi_rebuilds.dedup();
+    (out, abi_rebuilds)
 }
 
 fn topological_merge_order_impl(entries: Vec<GraphEntry>) -> Vec<GraphEntry> {
@@ -6849,6 +6869,15 @@ pub struct GraphResult {
     /// the keyword one. On by default (`autounmask_suggest_use`, unlike
     /// the keyword kind).
     pub autounmask_use_changes: Vec<AutounmaskChange>,
+    /// `(provider-cpv, consumer-cpv)` pairs behind each slot-operator
+    /// auto-rebuild (real `_compute_abi_rebuild_info`'s `_forced_rebuilds`):
+    /// the consumer got a `Reinstall { slot_operator_rebuild: true }`
+    /// entry because the provider's new sub-slot breaks its built
+    /// `:S/SS=` link. Sorted, deduped. The caller (`pretend.rs`) renders
+    /// real `_show_abi_rebuild_info`'s "The following packages are
+    /// causing rebuilds:" block (grouped by provider), unless
+    /// `--verbose-slot-rebuilds=n`.
+    pub abi_rebuilds: Vec<(String, String)>,
 }
 
 /// One real `--autounmask` change (`depgraph.py::_display_autounmask`):
@@ -8665,8 +8694,9 @@ pub fn resolve_pretend_graph(
     // whose built `cat/pkg:S/SS=` dep no longer matches how this run
     // leaves `cat/pkg` in that slot is scheduled for a reinstall. Added
     // before the merge-order sort so it lands in dependency-first order
-    // like every other entry.
-    entries.extend(slot_operator_rebuild_entries(root, &entries));
+    // like every other entry. `abi_rebuilds` feeds `_show_abi_rebuild_info`.
+    let (slot_op_rebuilds, abi_rebuilds) = slot_operator_rebuild_entries(root, &entries);
+    entries.extend(slot_op_rebuilds);
 
     // Real portage's `mylist` is dependency-first (its Scheduler installs
     // a package only after everything it depends on); the pilot's BFS
@@ -8705,6 +8735,7 @@ pub fn resolve_pretend_graph(
         pprovided_atoms,
         autounmask_keyword_changes,
         autounmask_use_changes,
+        abi_rebuilds,
     })
 }
 
@@ -15312,7 +15343,7 @@ mod tests {
             sub_slot: Some("9".into()),
             ..graph_entry("dev-libs", "bar", "2.0")
         };
-        let out = slot_operator_rebuild_entries(&dir, std::slice::from_ref(&bar_upgrade));
+        let (out, abi) = slot_operator_rebuild_entries(&dir, std::slice::from_ref(&bar_upgrade));
         let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
         assert_eq!(
             names,
@@ -15326,9 +15357,17 @@ mod tests {
                 ..
             }
         ));
+        assert_eq!(
+            abi,
+            vec![(
+                "dev-libs/bar-2.0".to_string(),
+                "dev-libs/stale-1.0".to_string()
+            )]
+        );
 
         // Nothing changing `bar` -> no rebuilds.
-        assert!(slot_operator_rebuild_entries(&dir, &[]).is_empty());
+        let (empty_out, empty_abi) = slot_operator_rebuild_entries(&dir, &[]);
+        assert!(empty_out.is_empty() && empty_abi.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 

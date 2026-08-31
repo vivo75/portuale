@@ -489,11 +489,17 @@ Ranked roughly by how self-contained each is.
    leaves `cat/pkg` in that slot becomes a
    `Reinstall { slot_operator_rebuild: true }` (`[ebuild R]`, `--json`
    `slot_operator_rebuild` bool), ordered after the dep. New sixth
-   `PretendOutcome::Reinstall` trigger field. v1 cuts: single-pass (no
-   backtracking), consumer's own `:=` not re-bound, no `--changed-slot`/
-   `--ignore-built-slot-operator-deps` interaction, no "causing rebuilds:"
-   (`_show_abi_rebuild_info`) block. New `dev-libs/slotbind{target,consumer}`
-   fixtures. Cut still: `IUSE_EFFECTIVE`. `FEATURES=verify-sig`
+   `PretendOutcome::Reinstall` trigger field. **Increment 2 shipped
+   2026-08-31**: `_show_abi_rebuild_info`'s "The following packages are
+   causing rebuilds:\n\n  <provider> causes rebuilds for:\n    <consumer>"
+   block (`GraphResult::abi_rebuilds` pairs; `--verbose-slot-rebuilds[=y|n]`
+   wired, default on, NOT `--verbose`-gated; `--json` `abi_rebuilds`
+   array). Also fixed `unresolved_runtime_deps`' sub-slot-less candidate
+   strings (a kept `foo:2/3=` dep falsely read unsatisfied). v1 cuts:
+   single-pass (no backtracking), consumer's own `:=` not re-bound, no
+   `--changed-slot`/`--ignore-built-slot-operator-deps` interaction. New
+   `dev-libs/slotbind{target,consumer,fresh}` fixtures. Cut still:
+   `IUSE_EFFECTIVE`. `FEATURES=verify-sig`
    (GPG) lives here too — it is a `gpkg`/repo-sync concept, **not**
    `SRC_URI` fetch (the earlier backlog mis-scoped it).
 

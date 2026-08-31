@@ -9706,19 +9706,40 @@ every merge-bound entry is known and before the dependency-first sort:
 
 The `PretendOutcome::Reinstall` variant gained a sixth freely-combinable
 trigger field, `slot_operator_rebuild`, though the post-pass only ever
-sets it standalone. **v1 cuts** (same increment discipline as the
-`--root-deps` recursion): no backtracking — a rebuild that would itself
-shift another sub-slot isn't chased; the rebuilt consumer's own `:=`
-deps aren't re-bound here (the real rebuild does that); no
-`--changed-slot` / `--ignore-built-slot-operator-deps` interaction; the
-"The following packages are causing rebuilds:" display block
-(`_show_abi_rebuild_info`) isn't produced. Full contract-suite lockstep
-(new `dev-libs/slotbind{target,consumer}` fixtures — `slotbindtarget-1.0`
-installed at `SLOT="2"`, `-2.0` in the repo at `SLOT="2/9"`,
-`slotbindconsumer`'s vdb `RDEPEND` bound `dev-libs/slotbindtarget:2/2=`):
-`emerge -p dev-libs/slotbindtarget` → the target Upgrade **plus**
-`[ebuild R] dev-libs/slotbindconsumer`, byte-identical between both
-implementations.
+sets it standalone.
+
+**Increment 2 — the "causing rebuilds:" block.** `slot_operator_rebuild_entries`
+also returns the `(provider-cpv, consumer-cpv)` pairs behind each
+rebuild (real `_compute_abi_rebuild_info`'s `_forced_rebuilds`), on a
+new `GraphResult::abi_rebuilds`. `pretend.rs` renders real
+`_show_abi_rebuild_info` (`depgraph.py:1210`) — after the merge
+list / autounmask blocks, before the changed-deps report, on **stdout**:
+
+```
+The following packages are causing rebuilds:
+
+  dev-libs/slotbindtarget-2.0 causes rebuilds for:
+    dev-libs/slotbindconsumer-1.0
+```
+
+Grouped by provider. `--verbose-slot-rebuilds[=y|n]` (real `y_or_n`,
+default `y`, **not** `--verbose`-gated) is wired for the first time;
+only `=n` suppresses the block. `--json` grows an `abi_rebuilds` array
+of `{provider, consumer}` objects (unconditionally, like every `--json`
+field).
+
+**v1 cuts** (same increment discipline as the `--root-deps` recursion):
+no backtracking — a rebuild that would itself shift another sub-slot
+isn't chased; the rebuilt consumer's own `:=` deps aren't re-bound here
+(the real rebuild does that); no `--changed-slot` /
+`--ignore-built-slot-operator-deps` interaction. Full contract-suite
+lockstep (new `dev-libs/slotbind{target,consumer,fresh}` repo fixtures;
+the installed consumer/target live in a test-local vdb — the shared
+fixture's whole vdb feeds every depclean/prune/`-C` test):
+`emerge -p dev-libs/slotbindtarget` → the target Upgrade, `[ebuild R]
+dev-libs/slotbindconsumer`, and the "causing rebuilds:" block,
+byte-identical between both implementations. (`slotbindfresh`, already
+bound to `:2/9=`, is not rebuilt.)
 
 ## Running it
 

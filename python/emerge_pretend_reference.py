@@ -5085,8 +5085,10 @@ def _slot_operator_rebuild_entries(root, repos, entries):
     installed package whose vdb *DEPEND carries a built slot-operator
     atom (cat/pkg:S/SS=) whose bound S/SS no longer matches how this run
     leaves cat/pkg in that same slot is scheduled for a reinstall.
-    Mirrors portage-repo/src/lib.rs's slot_operator_rebuild_entries
-    exactly (including the v1 cuts documented there)."""
+    Returns (new_entries, abi_rebuilds), the latter being the sorted,
+    deduped (provider-cpv, consumer-cpv) pairs real _compute_abi_rebuild_
+    info records for _show_abi_rebuild_info. Mirrors portage-repo/src/
+    lib.rs's slot_operator_rebuild_entries exactly (v1 cuts and all)."""
     new_slot = {}
     in_graph = set()
     for entry in entries:
@@ -5102,15 +5104,17 @@ def _slot_operator_rebuild_entries(root, repos, entries):
             if not matching:
                 continue
             resolved = max(matching, key=lambda c: c["repo_priority"])
-            new_slot[(category, package)] = (resolved["slot"], resolved["sub_slot"])
+            new_slot[(category, package)] = (version, resolved["slot"], resolved["sub_slot"])
     if not new_slot:
-        return []
+        return [], []
 
     out = []
+    abi_rebuilds = []
     for category, package, version, _slot in _all_installed_packages(root):
         if (category, package) in in_graph:
             continue
-        triggered = False
+        consumer_cpv = f"{category}/{package}-{version}"
+        providers = set()
         for key in ("RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"):
             for tok in _read_vdb_string(root, category, package, version, key).split():
                 try:
@@ -5120,13 +5124,12 @@ def _slot_operator_rebuild_entries(root, repos, entries):
                 if atom.slot_operator != "=" or atom.slot is None or atom.sub_slot is None:
                     continue
                 ns = new_slot.get(tuple(atom.cp.split("/", 1)))
-                if ns is not None and atom.slot == ns[0] and atom.sub_slot != ns[1]:
-                    triggered = True
-                    break
-            if triggered:
-                break
-        if not triggered:
+                if ns is not None and atom.slot == ns[1] and atom.sub_slot != ns[2]:
+                    providers.add(f"{atom.cp}-{ns[0]}")
+        if not providers:
             continue
+        for provider_cpv in providers:
+            abi_rebuilds.append((provider_cpv, consumer_cpv))
         slot, sub_slot = _read_vdb_slot(root, category, package, version)
         repo = _read_vdb_string(root, category, package, version, "repository").strip()
         outcome = ("reinstall", version, [], False, False, False, False, True)
@@ -5148,7 +5151,8 @@ def _slot_operator_rebuild_entries(root, repos, entries):
             )
         )
     out.sort(key=lambda e: (e[0], e[1]))
-    return out
+    abi_rebuilds = sorted(set(abi_rebuilds))
+    return out, abi_rebuilds
 
 
 def _topological_merge_order(entries):
@@ -6320,7 +6324,8 @@ def resolve_pretend_graph(
 
     # Real depgraph's slot-operator auto-rebuild -- see
     # portage-repo/src/lib.rs's slot_operator_rebuild_entries.
-    entries.extend(_slot_operator_rebuild_entries(root, repos, entries))
+    slot_op_rebuilds, abi_rebuilds = _slot_operator_rebuild_entries(root, repos, entries)
+    entries.extend(slot_op_rebuilds)
 
     # Real portage's `mylist` is dependency-first (its Scheduler installs
     # a package only after everything it depends on); this BFS builds
@@ -6353,6 +6358,7 @@ def resolve_pretend_graph(
         "pprovided_atoms": pprovided_atoms,
         "autounmask_keyword_changes": autounmask_keyword_changes,
         "autounmask_use_changes": autounmask_use_changes,
+        "abi_rebuilds": abi_rebuilds,
     }
 
 
@@ -6993,6 +6999,7 @@ def _print_json(
     changed_deps_report,
     autounmask_keyword_changes,
     autounmask_use_changes,
+    abi_rebuilds,
     top_level_pkgs,
     verbose,
     running_root=None,
@@ -7018,11 +7025,16 @@ def _print_json(
     autounmask_use_json = ",".join(
         _autounmask_change_to_json(c) for c in autounmask_use_changes
     )
+    abi_rebuilds_json = ",".join(
+        f'{{"provider":{_json_string(child)},"consumer":{_json_string(parent)}}}'
+        for child, parent in abi_rebuilds
+    )
     print(
         f'{{"entries":[{entries_json}],"slot_conflicts":[{conflicts_json}],'
         f'"changed_deps_report":[{changed_deps_report_json}],'
         f'"autounmask_keyword_changes":[{autounmask_kw_json}],'
-        f'"autounmask_use_changes":[{autounmask_use_json}]}}'
+        f'"autounmask_use_changes":[{autounmask_use_json}],'
+        f'"abi_rebuilds":[{abi_rebuilds_json}]}}'
     )
 
 
@@ -7044,7 +7056,7 @@ def _report_option(token):
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
             "--deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, "
-            "--changed-deps-report, --changed-slot, --with-test-deps, "
+            "--changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --with-test-deps, "
             "--noreplace/-n, --selective, and --help/-h are implemented so "
             "far; see PROMPT.md)",
             file=sys.stderr,
@@ -9472,6 +9484,7 @@ def run(args):
     root_deps = False
     with_test_deps = False
     changed_deps_report = False
+    verbose_slot_rebuilds = True
     # --autounmask/--autounmask-keep-keywords: None means "not explicitly
     # given" -- see the on/off default-resolution logic just below where
     # these are actually consumed, mirroring pretend.rs exactly.
@@ -9854,6 +9867,24 @@ def run(args):
             i += 1
         elif arg == "--changed-deps-report=n":
             changed_deps_report = False
+            i += 1
+        elif arg == "--verbose-slot-rebuilds":
+            # Real y_or_n (default "y"), same optional-value shape.
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt == "n":
+                verbose_slot_rebuilds = False
+                i += 2
+            elif nxt == "y":
+                verbose_slot_rebuilds = True
+                i += 2
+            else:
+                verbose_slot_rebuilds = True
+                i += 1
+        elif arg == "--verbose-slot-rebuilds=y":
+            verbose_slot_rebuilds = True
+            i += 1
+        elif arg == "--verbose-slot-rebuilds=n":
+            verbose_slot_rebuilds = False
             i += 1
         elif arg == "--selective":
             # Real "--selective": y_or_n (default_arg_opts), the same
@@ -10787,6 +10818,7 @@ def run(args):
             result["changed_deps_report"],
             result["autounmask_keyword_changes"],
             result["autounmask_use_changes"],
+            result["abi_rebuilds"],
             top_level_pkgs,
             verbose,
             root_deps_running_root,
@@ -11207,6 +11239,21 @@ def run(args):
     _print_autounmask_block(
         "USE changes", "package.use", result["autounmask_use_changes"]
     )
+
+    # Real _show_abi_rebuild_info (depgraph.py:1210), gated on
+    # --verbose-slot-rebuilds != "n" (default on, NOT --verbose), after
+    # the merge list / autounmask blocks and before the changed-deps
+    # report. writemsg_stdout -> stdout. Mirrors pretend.rs.
+    if verbose_slot_rebuilds and result["abi_rebuilds"]:
+        print()
+        print("The following packages are causing rebuilds:")
+        print()
+        provider = None
+        for child, parent in result["abi_rebuilds"]:
+            if child != provider:
+                print(f"  {child} causes rebuilds for:")
+                provider = child
+            print(f"    {parent}")
 
     # --changed-deps-report: real _changed_deps_report's own WARN block,
     # ported verbatim (real portage colorizes it when the terminal

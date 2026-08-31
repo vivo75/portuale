@@ -1846,8 +1846,10 @@ def test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer(
     slotbindtarget-2.0 (SLOT="2/9"), so that built ABI link is stale and
     the consumer is scheduled for a reinstall -- `[ebuild R]`, no reason
     annotation (a slot-operator rebuild, not --newuse/--changed-*), in
-    dependency-first merge order after the target. dev-libs/slotbindfresh
-    is already bound to "2/9=" -> NOT rebuilt."""
+    dependency-first merge order after the target, plus real
+    _show_abi_rebuild_info's "The following packages are causing
+    rebuilds:" block (--verbose-slot-rebuilds, default on).
+    dev-libs/slotbindfresh is already bound to "2/9=" -> NOT rebuilt."""
     env = dict(fixture_env)
     env["ROOT"] = str(_slotbind_root(tmp_path))
     args = ["--pretend", "dev-libs/slotbindtarget"]
@@ -1856,12 +1858,26 @@ def test_slot_operator_rebuild_reinstalls_a_stale_equals_consumer(
     assert result.stdout.splitlines() == [
         "[ebuild     U  ] dev-libs/slotbindtarget-2.0 [1.0]",
         "[ebuild   R    ] dev-libs/slotbindconsumer-1.0 ",
+        "",
+        "The following packages are causing rebuilds:",
+        "",
+        "  dev-libs/slotbindtarget-2.0 causes rebuilds for:",
+        "    dev-libs/slotbindconsumer-1.0",
     ]
-    # Full Rust-vs-Python lockstep, incl. --json's slot_operator_rebuild.
-    python = _run(emerge_pretend_python, args + ["--json"], env)
-    rust = _run([str(emerge_binary)], args + ["--json"], env)
-    assert rust.stdout == python.stdout, (rust.stdout, python.stdout)
-    assert '"slot_operator_rebuild":true' in rust.stdout
+    # Full Rust-vs-Python lockstep, incl. --json (slot_operator_rebuild +
+    # abi_rebuilds), and --verbose-slot-rebuilds=n dropping the block.
+    for extra in (["--json"], ["--verbose-slot-rebuilds=n"]):
+        python = _run(emerge_pretend_python, args + extra, env)
+        rust = _run([str(emerge_binary)], args + extra, env)
+        assert rust.stdout == python.stdout, (extra, rust.stdout, python.stdout)
+    assert '"slot_operator_rebuild":true' in _run(
+        [str(emerge_binary)], args + ["--json"], env
+    ).stdout
+    assert '"abi_rebuilds":[{"provider":"dev-libs/slotbindtarget-2.0","consumer":"dev-libs/slotbindconsumer-1.0"}]' in _run(
+        [str(emerge_binary)], args + ["--json"], env
+    ).stdout
+    no_block = _run([str(emerge_binary)], args + ["--verbose-slot-rebuilds=n"], env)
+    assert "causing rebuilds" not in no_block.stdout
 
 
 def test_use_dep_dependency_atoms_are_resolved_not_dropped(emerge_binary, fixture_env):
@@ -5518,7 +5534,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
     unrecognized = _run(
@@ -8262,7 +8278,7 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
     assert result.stderr == ""
     assert result.stdout == (
         (
-        '{"entries":[{"category":"dev-libs","package":"newpkg","merge_order":0,"outcome":"new","version":"1.0","new_slot":false,"interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[]}\n'
+        '{"entries":[{"category":"dev-libs","package":"newpkg","merge_order":0,"outcome":"new","version":"1.0","new_slot":false,"interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"abi_rebuilds":[]}\n'
         )
     )
 
@@ -8276,7 +8292,7 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
     assert result.returncode == 0
     assert result.stdout == (
         (
-        '{"entries":[{"category":"dev-libs","package":"upgradepkg","merge_order":0,"outcome":"upgrade","version":"2.0","from_version":"1.0","interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[]}\n'
+        '{"entries":[{"category":"dev-libs","package":"upgradepkg","merge_order":0,"outcome":"upgrade","version":"2.0","from_version":"1.0","interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"abi_rebuilds":[]}\n'
         )
     )
 
@@ -8482,7 +8498,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -8496,7 +8512,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--jobs" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
 
 
@@ -8512,7 +8528,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
         'emerge (pilot v1): action "--search" is a real emerge action, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, "
-        "--with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --with-test-deps, "
+        "--with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --with-test-deps, "
         "--noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
     )
     assert result.stderr.strip() == expected

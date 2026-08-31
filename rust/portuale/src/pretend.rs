@@ -1656,6 +1656,7 @@ fn print_json(
     changed_deps_report: &[ChangedDepsReportEntry],
     autounmask_keyword_changes: &[portage_repo::AutounmaskChange],
     autounmask_use_changes: &[portage_repo::AutounmaskChange],
+    abi_rebuilds: &[(String, String)],
     top_level_pkgs: &HashSet<(String, String)>,
     verbose: bool,
     running_root: Option<&Path>,
@@ -1678,13 +1679,24 @@ fn print_json(
         .iter()
         .map(autounmask_change_to_json)
         .collect();
+    let abi_rebuilds_json: Vec<String> = abi_rebuilds
+        .iter()
+        .map(|(child, parent)| {
+            format!(
+                "{{\"provider\":{},\"consumer\":{}}}",
+                json_string(child),
+                json_string(parent)
+            )
+        })
+        .collect();
     println!(
-        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}]}}",
+        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"abi_rebuilds\":[{}]}}",
         entries_json.join(","),
         conflicts_json.join(","),
         changed_deps_report_json.join(","),
         autounmask_kw_json.join(","),
-        autounmask_use_json.join(",")
+        autounmask_use_json.join(","),
+        abi_rebuilds_json.join(",")
     );
 }
 
@@ -1713,7 +1725,7 @@ fn report_option(token: &str) -> ExitCode {
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
              --unmerge/-C, --depclean/-c, --prune/-P, --config, \
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
-             --changed-deps-report, --changed-slot, --with-test-deps, \
+             --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --with-test-deps, \
              --noreplace/-n, --selective, and --help/-h are implemented \
              so far; see PROMPT.md)",
             found.canonical
@@ -3931,6 +3943,10 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut root_deps = false;
     let mut with_test_deps = false;
     let mut changed_deps_report = false;
+    // --verbose-slot-rebuilds: real `y_or_n`, default `"y"` -- NOT gated
+    // on `--verbose`. Only `=n` suppresses the "The following packages
+    // are causing rebuilds:" block (`_show_abi_rebuild_info`).
+    let mut verbose_slot_rebuilds = true;
     // --autounmask/--autounmask-keep-keywords: real "true_y_or_n"
     // (bare flag, "=y", or "=n") for the first, plain required "y"/"n"
     // (no bare form) for the second -- see the on/off default-
@@ -4373,6 +4389,28 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--changed-deps-report=n" {
             changed_deps_report = false;
+            i += 1;
+        } else if arg == "--verbose-slot-rebuilds" {
+            // Real `y_or_n` (default "y"), same optional-value shape.
+            match args.get(i + 1).map(String::as_str) {
+                Some("y") => {
+                    verbose_slot_rebuilds = true;
+                    i += 2;
+                }
+                Some("n") => {
+                    verbose_slot_rebuilds = false;
+                    i += 2;
+                }
+                _ => {
+                    verbose_slot_rebuilds = true;
+                    i += 1;
+                }
+            }
+        } else if arg == "--verbose-slot-rebuilds=y" {
+            verbose_slot_rebuilds = true;
+            i += 1;
+        } else if arg == "--verbose-slot-rebuilds=n" {
+            verbose_slot_rebuilds = false;
             i += 1;
         } else if arg == "--selective" {
             // Real "--selective": y_or_n (default_arg_opts), the same
@@ -5268,6 +5306,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &result.changed_deps_report,
             &result.autounmask_keyword_changes,
             &result.autounmask_use_changes,
+            &result.abi_rebuilds,
             &top_level_pkgs,
             verbose,
             root_deps_running_root.as_deref(),
@@ -5404,6 +5443,26 @@ pub fn run(args: &[String]) -> ExitCode {
         &result.autounmask_keyword_changes,
     );
     print_autounmask_block("USE changes", "package.use", &result.autounmask_use_changes);
+
+    // Real `_show_abi_rebuild_info` (`depgraph.py:1210`), gated on
+    // `--verbose-slot-rebuilds != "n"` (default on, NOT `--verbose`) and
+    // rendered right after the merge list / autounmask blocks, before the
+    // changed-deps report -- `_forced_rebuilds[root][child] = {parents}`,
+    // grouped by the provider whose new sub-slot broke each consumer's
+    // built `:=` link. `writemsg_stdout`, so stdout.
+    if verbose_slot_rebuilds && !result.abi_rebuilds.is_empty() {
+        println!();
+        println!("The following packages are causing rebuilds:");
+        println!();
+        let mut provider: Option<&str> = None;
+        for (child, parent) in &result.abi_rebuilds {
+            if provider != Some(child.as_str()) {
+                println!("  {child} causes rebuilds for:");
+                provider = Some(child.as_str());
+            }
+            println!("    {parent}");
+        }
+    }
 
     // `--changed-deps-report`: real `_changed_deps_report`'s own WARN
     // block, ported verbatim (real portage colorizes it when the
