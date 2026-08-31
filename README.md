@@ -3157,9 +3157,10 @@ PORTING/
   `PKG_MERGE` (darkgreen) otherwise, `PKG_BINARY_MERGE_WORLD` (fuchsia) /
   `PKG_BINARY_MERGE` (purple) for a binary; `system` wins over `world`,
   exactly as real. `check_system_world` is narrowed to what this pilot
-  has: `world` = a favorite (a directly-requested target -- no
-  `--oneshot` here, so a favorite is always world-bound) or a
-  `var/lib/portage/world` atom match; `system` = a `@system`
+  has: `world` = a `var/lib/portage/world` atom match OR a favorite (a
+  directly-requested target) that `create_world_atom` would actually add
+  (not `--oneshot`/`--onlydeps` -- see the "world file" section below --
+  and not an unslotted `@system` member); `system` = a `@system`
   (`config.system_packages`) atom match (slot-qualified `@system` atoms
   match version-only -- a colour-only miss). `PkgAttrDisplay.__str__`'s
   own per-letter colours land too (`green("N")`, `yellow("R")`,
@@ -9362,6 +9363,42 @@ Rust-unit-tested: `run_merge_plan_merges_a_binary_and_a_source_entry_in_one_run`
 pass, the source one's `pkg_preinst`/`pkg_postinst` verified), plus the
 existing remote-download and binary-upgrade tests (renamed from
 `run_getbinpkgonly_*`).
+
+### `emerge <atom>` records the target in the world file (`--oneshot` suppresses)
+
+Real `emerge dev-libs/foo` adds `dev-libs/foo` to
+`<root>/var/lib/portage/world` — the `@world` set `--update`/`--depclean`
+start from. The pilot's merge paths didn't; a package merged by
+`emerge <atom>` would be wrongly removed by a subsequent
+`emerge --depclean`.
+
+After a successful non-`--pretend` merge (`run_source_merge` /
+`run_merge_plan`, but **not** `--buildpkgonly` — real
+`Scheduler._world_atom`'s own suppression set), `update_world_file`
+records each directly-requested **plain** target atom (real
+`Scheduler._world_atom` + `depgraph.saveNomergeFavorites`) — whether it
+merged or was already installed; a *dependency* is never recorded. The
+file is rewritten sorted + deduplicated with the real
+`>>> Recording <atom> in "world" favorites file...` line per addition,
+and (exactly like real `WorldSelectedPackagesSet.write`) comment and
+`@set` lines are not carried forward. **v1 cuts:** the recorded atom is
+`cat/pkg` (+ `::repo` if the arg carried one) — real `create_world_atom`'s
+full slot-atom / system-virtual logic isn't ported, so the pilot's world
+file is `cat/pkg`-granular; an unslotted `@system` member isn't recorded
+(real "unslotted system packages will not be stored in world"); a `@set`
+target isn't added to `world_sets`.
+
+**`--oneshot`/`-1`** — previously rejected as "recognized but not
+implemented" — now: suppresses the world-file write on a real merge
+**and** (at `--pretend`) drops a favorite from `PKG_MERGE_WORLD` colour
+to plain `PKG_MERGE` (real `_DisplayConfig.oneshot` = `--oneshot ||
+--onlydeps`, fed into `check_system_world`). Plain-text `--pretend`
+output is byte-identical with or without `--oneshot` (colour only), so
+the contract CASE just confirms both sides agree; a dedicated
+`--color=y` test pins the `\x1b[32;01m` → `\x1b[32m` flip. The world
+write itself is Rust-black-box-tested in `test_portuale.py` (target
+recorded, dep not, sorted, existing entries kept; `--oneshot` leaves the
+file byte-identical) + an `update_world_file` unit test.
 
 ## Running it
 

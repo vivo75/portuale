@@ -812,6 +812,7 @@ fn print_entry_line(
     indent: &str,
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
+    oneshot: bool,
     verbose: bool,
     alphabetical: bool,
     columns: bool,
@@ -824,15 +825,19 @@ fn print_entry_line(
 ) {
     let onlydeps_suppressed =
         onlydeps && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
-    // Real `Display.check_system_world` (`output.py`), narrowed: `world`
-    // when this package is a directly-requested target (a "favorite" --
-    // this pilot has no `--oneshot`, so a favorite always becomes a world
-    // member) or matches an atom in `var/lib/portage/world`; `system`
-    // when it matches a `@system` atom. Slot-qualified `@system` atoms
-    // are matched version-only (the entry's slot isn't threaded here) --
-    // a cosmetic-only miss, colour only.
+    // Real `Display.check_system_world` (`output.py`): `world` when this
+    // package already matches an atom in `var/lib/portage/world`, OR
+    // when it's a directly-requested target (a "favorite") that
+    // `create_world_atom` would actually add -- i.e. NOT `--oneshot`/
+    // `--onlydeps` (real `_DisplayConfig.oneshot`), and not an unslotted
+    // `@system` member (real "unslotted system packages will not be
+    // stored in world"). `system` = matches a `@system` atom (slot-
+    // qualified `@system` atoms are matched version-only -- a cosmetic-
+    // only miss, colour only). The full `create_world_atom` slot/repo/
+    // virtual logic is a documented cut (see `update_world_file`).
     let binary = entry.source == portage_repo::CandidateSource::Binary;
     let is_favorite = top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
+    let unslotted = entry.slot.as_deref().unwrap_or("0") == "0";
     let classify = |version: &str| -> (bool, bool) {
         let cpv = format!("{}/{}-{version}", entry.category, entry.package);
         let matches_any = |atoms: &[String]| {
@@ -841,7 +846,8 @@ fn print_entry_line(
                 .any(|a| match_from_list(a, &[cpv.as_str()]).is_some_and(|m| !m.is_empty()))
         };
         let system = matches_any(system_atoms);
-        let world = is_favorite || matches_any(world_atoms);
+        let would_add_to_world = is_favorite && !(oneshot || onlydeps) && !(system && unslotted);
+        let world = would_add_to_world || matches_any(world_atoms);
         (system, world)
     };
     // Real `output.py:841-862`'s own `to <root>` annotation for a
@@ -1201,6 +1207,7 @@ fn print_tree(
     entries: &[GraphEntry],
     top_level_pkgs: &HashSet<(String, String)>,
     onlydeps: bool,
+    oneshot: bool,
     unordered_display: bool,
     verbose: bool,
     alphabetical: bool,
@@ -1235,6 +1242,7 @@ fn print_tree(
         children: &'a HashMap<(String, String), Vec<usize>>,
         top_level_pkgs: &'a HashSet<(String, String)>,
         onlydeps: bool,
+        oneshot: bool,
         verbose: bool,
         alphabetical: bool,
         running_root: Option<&'a Path>,
@@ -1263,6 +1271,7 @@ fn print_tree(
             &indent,
             ctx.top_level_pkgs,
             ctx.onlydeps,
+            ctx.oneshot,
             ctx.verbose,
             ctx.alphabetical,
             false,
@@ -1289,6 +1298,7 @@ fn print_tree(
         children: &children,
         top_level_pkgs,
         onlydeps,
+        oneshot,
         verbose,
         alphabetical,
         running_root,
@@ -1313,6 +1323,7 @@ fn print_tree(
                 "",
                 top_level_pkgs,
                 onlydeps,
+                oneshot,
                 verbose,
                 alphabetical,
                 false,
@@ -1825,6 +1836,89 @@ fn read_world_atoms(root: &Path) -> Result<Vec<String>, String> {
         .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('@'))
         .map(String::from)
         .collect())
+}
+
+/// Real `Scheduler._world_atom` + `depgraph.saveNomergeFavorites`: after
+/// a successful non-`--pretend` `emerge <atom>`, each directly-requested
+/// **plain** target atom (not a dependency, not a `@set`) is recorded in
+/// `<root>/var/lib/portage/world` -- whether it merged or was already
+/// installed. `--oneshot`/`--onlydeps` suppress this entirely (real
+/// `_world_atom`'s own early-return set). The recorded atom is the
+/// argument's own `cat/pkg` (plus `::repo` when the arg carried one) --
+/// real `create_world_atom`'s full slot-atom / system-virtual logic is a
+/// documented v1 cut, so the pilot's world file is `cat/pkg`-granular.
+/// An unslotted `@system` member is not recorded (real "unslotted system
+/// packages will not be stored in world"). Already-present atoms are
+/// left alone; when anything is added the file is rewritten sorted +
+/// deduplicated (real `WorldSelectedPackagesSet.write`). Prints the real
+/// `>>> Recording <atom> in "world" favorites file...` line per addition.
+fn update_world_file(
+    root: &Path,
+    target_atoms: &[&str],
+    entries: &[GraphEntry],
+    system_atoms: &[String],
+    oneshot: bool,
+    onlydeps: bool,
+) -> Result<(), String> {
+    if oneshot || onlydeps {
+        return Ok(());
+    }
+    let mut current = read_world_atoms(root)?;
+    let before: std::collections::HashSet<String> = current.iter().cloned().collect();
+    let mut added = false;
+
+    for raw in target_atoms {
+        if raw.starts_with('@') {
+            // A `@set` target belongs in `world_sets`, not `world` --
+            // a v1 cut (see `read_world_sets`).
+            continue;
+        }
+        let Some(atom) = parse_atom(raw) else {
+            continue;
+        };
+        // The resolved entry for this cp (a top-level `NoVisibleCandidate`
+        // aborts the whole resolve before we get here, so it's present).
+        let Some(entry) = entries
+            .iter()
+            .find(|e| e.category == atom.category && e.package == atom.package)
+        else {
+            continue;
+        };
+        // Real "unslotted system packages will not be stored in world".
+        let cpv_any = format!("{}/{}-0", atom.category, atom.package);
+        let in_system = system_atoms
+            .iter()
+            .any(|a| match_from_list(a, &[cpv_any.as_str()]).is_some_and(|m| !m.is_empty()));
+        let unslotted = entry.slot.as_deref().unwrap_or("0") == "0";
+        if in_system && unslotted && atom.repo.is_none() {
+            continue;
+        }
+
+        let mut world_atom = format!("{}/{}", atom.category, atom.package);
+        if let Some(repo) = &atom.repo {
+            world_atom.push_str("::");
+            world_atom.push_str(repo);
+        }
+        if before.contains(&world_atom) {
+            continue;
+        }
+        println!(">>> Recording {world_atom} in \"world\" favorites file...");
+        current.push(world_atom);
+        added = true;
+    }
+
+    if added {
+        current.sort();
+        current.dedup();
+        let path = root.join("var/lib/portage/world");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let mut body = current.join("\n");
+        body.push('\n');
+        std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// Reads `<root>/var/lib/portage/world_sets` (real portage's own
@@ -3375,6 +3469,10 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut changed_use = false;
     let mut nodeps = false;
     let mut onlydeps = false;
+    // --oneshot/-1: don't record the target in the world file on a real
+    // merge, and (at --pretend) don't colour it as a would-be world
+    // member -- real `Scheduler._world_atom` / `_DisplayConfig.oneshot`.
+    let mut oneshot = false;
     // --tree/-t and --unordered-display: display-only, entirely
     // independent of resolution itself (real portage's own equivalent,
     // output_helpers.py's _tree_display, lives in the display layer too,
@@ -3521,6 +3619,9 @@ pub fn run(args: &[String]) -> ExitCode {
             i += 1;
         } else if arg == "--onlydeps" || arg == "-o" {
             onlydeps = true;
+            i += 1;
+        } else if arg == "--oneshot" || arg == "-1" {
+            oneshot = true;
             i += 1;
         } else if arg == "--tree" || arg == "-t" {
             tree = true;
@@ -4271,6 +4372,7 @@ pub fn run(args: &[String]) -> ExitCode {
                     'U' => changed_use = true,
                     'O' => nodeps = true,
                     'o' => onlydeps = true,
+                    '1' => oneshot = true,
                     't' => tree = true,
                     'u' => update = true,
                     'n' => noreplace = true,
@@ -4814,6 +4916,7 @@ pub fn run(args: &[String]) -> ExitCode {
             entries,
             &top_level_pkgs,
             onlydeps,
+            oneshot,
             unordered_display,
             verbose,
             alphabetical,
@@ -4830,6 +4933,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 "",
                 &top_level_pkgs,
                 onlydeps,
+                oneshot,
                 verbose,
                 alphabetical,
                 columns,
@@ -5058,6 +5162,20 @@ pub fn run(args: &[String]) -> ExitCode {
                 return ExitCode::from(1);
             }
         }
+
+        // Real `Scheduler._world_atom` / `saveNomergeFavorites`: record
+        // each directly-requested plain target in the world file. Real's
+        // own suppression set includes `--buildpkgonly` (which builds but
+        // never merges, so a package that isn't installed can't be a
+        // world member yet); `--oneshot`/`--onlydeps` are handled inside.
+        if !buildpkgonly {
+            if let Err(e) =
+                update_world_file(&root, &atom_args, entries, system_atoms, oneshot, onlydeps)
+            {
+                eprintln!("emerge: {e}");
+                return ExitCode::from(1);
+            }
+        }
     }
 
     ExitCode::SUCCESS
@@ -5069,6 +5187,71 @@ mod tests {
 
     fn fixtures_root() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    fn world_entry(category: &str, package: &str, slot: &str) -> GraphEntry {
+        let mut e = entry_with_use(
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            "",
+            "",
+        );
+        e.category = category.into();
+        e.package = package.into();
+        e.slot = Some(slot.into());
+        e
+    }
+
+    #[test]
+    fn update_world_file_records_a_new_target_and_skips_deps_and_oneshot() {
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-world-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(root.join("var/lib/portage/world"), "dev-libs/existing\n").unwrap();
+
+        let entries = vec![
+            world_entry("dev-libs", "wanted", "0"),
+            world_entry("dev-libs", "adep", "0"),
+        ];
+        // `adep` isn't a requested atom -> not recorded; `wanted` is.
+        update_world_file(&root, &["dev-libs/wanted"], &entries, &[], false, false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
+            "dev-libs/existing\ndev-libs/wanted\n"
+        );
+
+        // A second run is idempotent, and `--oneshot` writes nothing.
+        update_world_file(&root, &["dev-libs/wanted"], &entries, &[], false, false).unwrap();
+        update_world_file(&root, &["dev-libs/wanted2"], &entries, &[], true, false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
+            "dev-libs/existing\ndev-libs/wanted\n"
+        );
+
+        // An unslotted `@system` member is never recorded.
+        std::fs::write(root.join("var/lib/portage/world"), "").unwrap();
+        update_world_file(
+            &root,
+            &["dev-libs/wanted"],
+            &entries,
+            &["dev-libs/wanted".to_string()],
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
+            ""
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

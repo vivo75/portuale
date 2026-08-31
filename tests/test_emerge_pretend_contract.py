@@ -1208,6 +1208,16 @@ CASES = [
         0,
     ),
     (
+        "--oneshot: a favorite is no longer world-coloured (PKG_MERGE, not PKG_MERGE_WORLD)",
+        ["--pretend", "--color=y", "--oneshot", "--update", "dev-libs/upgradepkg"],
+        0,
+    ),
+    (
+        "--oneshot short alias -1, bundled with -p; plain text is identical",
+        ["-p1", "dev-libs/newpkg"],
+        0,
+    ),
+    (
         "--color=y -pv: coloured USE_EXPAND line + green N",
         ["--pretend", "-v", "--color=y", "dev-libs/useexpandpkg"],
         0,
@@ -3643,6 +3653,22 @@ def test_color_y_renders_real_ansi_bracket_line(emerge_binary, emerge_pretend_py
     assert rup.stdout == (
         f"[\x1b[32;01mebuild{R}     \x1b[36;01mU{R}  ] "
         f"\x1b[32;01mdev-libs/upgradepkg-2.0{R} \x1b[34;01m[1.0]{R}\n"
+    )
+
+    # --oneshot: the same favorite drops to PKG_MERGE (plain green
+    # `\x1b[32m`) -- real `_DisplayConfig.oneshot` / `check_system_world`:
+    # a --oneshot target won't be added to world, so it isn't coloured as
+    # a would-be world member.
+    one_args = ["--pretend", "--color=y", "--oneshot", "--update", "dev-libs/upgradepkg"]
+    rone = _run([str(emerge_binary)], one_args, fixture_env)
+    assert rone.stdout == _run(emerge_pretend_python, one_args, fixture_env).stdout
+    assert rone.stdout == (
+        f"[\x1b[32mebuild{R}     \x1b[36;01mU{R}  ] "
+        f"\x1b[32mdev-libs/upgradepkg-2.0{R} \x1b[34;01m[1.0]{R}\n"
+    )
+    # ...and the plain-text output is byte-identical with or without it.
+    assert _run([str(emerge_binary)], ["-p1", "--update", "dev-libs/upgradepkg"], fixture_env).stdout == (
+        _run([str(emerge_binary)], ["--pretend", "--update", "dev-libs/upgradepkg"], fixture_env).stdout
     )
 
     # The -v mask column is coloured (WARN ~).

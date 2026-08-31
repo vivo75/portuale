@@ -6503,7 +6503,7 @@ def _parse_atom(atom_str):
 # real emerge flag this pilot doesn't implement yet produces a clear
 # "recognized, but not implemented" message -- distinct from a
 # genuinely unknown/misspelled flag. Only --pretend/-p, --verbose/-v,
-# --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o,
+# --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, --oneshot/-1,
 # --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --with-bdeps,
 # --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot,
 # --with-test-deps, --noreplace/-n, --selective, and --help/-h are
@@ -6538,7 +6538,6 @@ _BOOLEAN_OPTIONS = [
     ("--newrepo", None),
     ("--nobindeps", None),
     ("--nospinner", None),
-    ("--oneshot", "-1"),
     ("--quiet-repo-display", None),
     ("--quiet-unmerge-warn", None),
     ("--resume", "-r"),
@@ -9328,6 +9327,10 @@ def run(args):
     changed_use = False
     nodeps = False
     onlydeps = False
+    # --oneshot/-1: don't colour a favorite as a would-be world member
+    # (real _DisplayConfig.oneshot). This reference is --pretend-only, so
+    # the world-file-write half of real --oneshot never applies here.
+    oneshot = False
     # --tree/-t and --unordered-display: display-only, entirely
     # independent of resolution itself. See print_tree's own docstring
     # for the full pilot-specific design this needed.
@@ -9425,6 +9428,9 @@ def run(args):
             i += 1
         elif arg in ("--onlydeps", "-o"):
             onlydeps = True
+            i += 1
+        elif arg in ("--oneshot", "-1"):
+            oneshot = True
             i += 1
         elif arg in ("--tree", "-t"):
             tree = True
@@ -10088,6 +10094,8 @@ def run(args):
                     nodeps = True
                 elif c == "o":
                     onlydeps = True
+                elif c == "1":
+                    oneshot = True
                 elif c == "t":
                     tree = True
                 elif c == "u":
@@ -10742,18 +10750,27 @@ def run(args):
         # "[ebuild", regardless of outcome. Mirrors pretend.rs exactly.
         bracket = "binary" if source == "binary" else "ebuild"
         # Real Display.check_system_world, narrowed (see pretend.rs's own
-        # print_entry_line): world = a directly-requested target (a
-        # favorite -- this pilot has no --oneshot) or a var/lib/portage/
-        # world match; system = a @system atom match. Slot-qualified
-        # @system atoms match version-only (cosmetic-only miss, colour
-        # only).
+        # print_entry_line): world = already a var/lib/portage/world
+        # match, OR a directly-requested target (a favorite) that
+        # create_world_atom would actually add -- NOT --oneshot/--onlydeps
+        # (real _DisplayConfig.oneshot), and not an unslotted @system
+        # member. system = a @system atom match (slot-qualified @system
+        # atoms match version-only -- cosmetic-only miss, colour only).
         binary = source == "binary"
         is_favorite = (category, package) in top_level_pkgs
+        unslotted = (_slot or "0") == "0"
 
         def classify(version):
             cpv = f"{category}/{package}-{version}"
             system = any(_match_atom_str(a, cpv) for a in color_system_atoms)
-            world = is_favorite or any(_match_atom_str(a, cpv) for a in color_world_atoms)
+            would_add_to_world = (
+                is_favorite
+                and not (oneshot or onlydeps)
+                and not (system and unslotted)
+            )
+            world = would_add_to_world or any(
+                _match_atom_str(a, cpv) for a in color_world_atoms
+            )
             return system, world
         # Real output.py:841-862's own "to <root>" annotation for a
         # running-root build entry -- "" for every ordinary entry (see

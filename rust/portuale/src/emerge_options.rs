@@ -224,7 +224,8 @@ pub struct Lookup {
 /// Real boolean (no-argument) options, from `main.py`'s `options` list
 /// plus its two `longopt_aliases` entries (`--cols`, `--skip-first`) --
 /// `--pretend`/`-p`, `--verbose`/`-v`, `--newuse`/`-N`,
-/// `--changed-use`/`-U`, `--nodeps`/`-O`, `--onlydeps`/`-o`, and
+/// `--changed-use`/`-U`, `--nodeps`/`-O`, `--onlydeps`/`-o`,
+/// `--oneshot`/`-1`, and
 /// `--update`/`-u` are all deliberately excluded, since they're
 /// implemented and handled directly by the caller, not through this "not
 /// implemented" table.
@@ -244,7 +245,6 @@ pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--newrepo", None),
     ("--nobindeps", None),
     ("--nospinner", None),
-    ("--oneshot", Some("-1")),
     ("--quiet-repo-display", None),
     ("--quiet-unmerge-warn", None),
     ("--resume", Some("-r")),
@@ -489,6 +489,15 @@ mod tests {
         // implemented" table.
         assert!(lookup("--onlydeps").is_none());
         assert!(lookup("-o").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_oneshot_itself() {
+        // --oneshot/-1 is implemented now (suppresses the world-file
+        // write on a real merge, and the world colour at --pretend) --
+        // handled directly by the caller, not this "not implemented" table.
+        assert!(lookup("--oneshot").is_none());
+        assert!(lookup("-1").is_none());
     }
 
     #[test]
