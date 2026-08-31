@@ -303,6 +303,69 @@ fn mk_at(root: &std::path::Path, name: &str, key: &str, dep: &str) {
     std::fs::write(d.join(key), format!("{dep}\n")).unwrap();
 }
 
+/// ABI probe harness: installed `abicons-1` recording `app-misc/abiprov:0/1=`,
+/// tree `abiprov-1`/`abiprov-2` + consumer (live `:=`) + forcer. `with_consumer`
+/// controls whether the consumer's same-version ebuild is visible in the tree.
+fn abi_probe_harness(with_consumer: bool) -> (std::path::PathBuf, Vec<RepoConfig>) {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let base = TempDir::new("portage-repo-abi-probe").keep();
+    for (name, slot, rdepend) in [
+        ("abiprov-1", "0/1", ""),
+        ("abicons-1", "0", "app-misc/abiprov:0/1="),
+    ] {
+        let d = base.join("var/db/pkg/app-misc").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "app-misc\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    }
+    let repo = base.join("repo");
+    let write_pkg = |pkg: &str, pv: &str, slot: &str, rdepend: &str| {
+        let dir = repo.join("app-misc").join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body =
+            format!("EAPI=8\nDESCRIPTION=\"214 abi\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+        if !rdepend.is_empty() {
+            writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=214 abi\nEAPI=8\n".to_string();
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache/app-misc");
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    };
+    write_pkg("abiprov", "1", "0/1", "");
+    write_pkg("abiprov", "2", "0/2", "");
+    if with_consumer {
+        write_pkg("abicons", "1", "0", "app-misc/abiprov:=");
+    }
+    write_pkg("abiforce", "1", "0", ">=app-misc/abiprov-2");
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo.clone(),
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    (base, repos)
+}
+
 fn abi_probe_entries(consumer_outcome: PretendOutcome) -> Vec<GraphEntry> {
     let provider = |version: &str, sub: &str| GraphEntry {
         outcome: PretendOutcome::New {
@@ -398,6 +461,16 @@ struct Run161Args<'a> {
     with_bdeps: bool,
 }
 
+/// Arguments of [`slotundo_vdb`].
+struct SlotundoVdbArgs<'a> {
+    dir: &'a Path,
+    name: &'a str,
+    version: &'a str,
+    slot: &'a str,
+    rdepend: &'a str,
+    installed_use: &'a str,
+}
+
 /// A walked rebuild entry: `Reinstall { slot_operator_rebuild: true }`
 /// at the installed version, with the given resolved USE display.
 fn slotundo_rebuild_entry(
@@ -444,6 +517,10 @@ fn slotundo_provider_entry() -> GraphEntry {
         sub_slot: Some("2".into()),
         ..graph_entry("dev-libs", "souprov", "2.0")
     }
+}
+
+fn slotundo_temp_dir(tag: &str) -> std::path::PathBuf {
+    TempDir::new(&format!("portage-repo-{tag}")).keep()
 }
 
 /// Arguments of [`euf_flat`].
