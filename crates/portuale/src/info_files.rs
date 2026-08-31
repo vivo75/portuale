@@ -336,3 +336,40 @@ pub fn chk_updated_info_files(args: ChkUpdatedInfoFilesArgs<'_>) -> Result<InfoR
     }
     Ok(report)
 }
+
+/// `post_emerge`'s info block: `infodirs` re-read after `env-update` (here
+/// `env_update::info_dir_values`), skipped when `"noinfo"` is in `FEATURES`,
+/// then the memo written back only when the regen changed it. The
+/// vdb-changed / `--pretend` / vdb-lock gates live with the callers: every
+/// call site is a post-merge sequence after a successful non-pretend
+/// merge/unmerge, and a merge that succeeded already proved the vdb writable.
+pub fn post_merge_info_update(
+    root: &Path,
+    color: &Colorizer,
+    quiet: bool,
+    noinfo: bool,
+) -> Result<InfoReport, String> {
+    if noinfo {
+        return Ok(InfoReport::default());
+    }
+    let infodirs = crate::env_update::info_dir_values(root);
+    let mut prev_mtimes = crate::mtimedb::read_info_mtimes(root);
+    let before = prev_mtimes.clone();
+    // Production sinks: locked stdout/stderr.
+    let mut out = std::io::stdout().lock();
+    let mut err = std::io::stderr().lock();
+    let report = chk_updated_info_files(ChkUpdatedInfoFilesArgs {
+        root,
+        infodirs: &infodirs,
+        prev_mtimes: &mut prev_mtimes,
+        quiet,
+        color,
+        install_info: INSTALL_INFO,
+        out: &mut out,
+        err: &mut err,
+    })?;
+    if prev_mtimes != before {
+        crate::mtimedb::write_info_mtimes(root, &prev_mtimes)?;
+    }
+    Ok(report)
+}

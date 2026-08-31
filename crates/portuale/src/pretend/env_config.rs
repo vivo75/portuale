@@ -2,6 +2,83 @@
 
 use crate::pretend::*;
 
+/// `emerge -C` without `--pretend` removes each selected package, then
+/// deselects it from the world file (`--ask`/countdown handled by the caller).
+/// Portage: _emerge/unmerge.py, unmerge
+///
+/// `BINPKG_COMPRESS`/`BINPKG_COMPRESS_FLAGS[_<NAME>]`/`PORTAGE_BZIP2_COMMAND`/
+/// `PKGDIR`/`BINPKG_FORMAT` via the resolved chain (calling env over files),
+/// falling back to `make.globals` defaults. The gpkg pair reads files-only;
+/// `PORTAGE_BZIP2_COMMAND` and `PKGDIR` keep the full chain for both formats.
+/// Portage: _config/special_env_vars.py, environ_filter; bin/gpkg-helper.py
+///
+/// `resolved_features`/`config`: `None` keeps the process-env fallback (reached
+/// only when a caller could resolve no chain -- with no files the env stands).
+pub(crate) fn package_options_from_env(
+    shell: ebuild_phases::ShellBackend,
+    debug: bool,
+    resolved_features: Option<&str>,
+    config: Option<&portage_profile::Config>,
+) -> ebuild_package::PackageOptions {
+    let feature_on = |token: &str| match resolved_features {
+        Some(f) => f.split_whitespace().any(|t| t == token),
+        None => feature_enabled(token),
+    };
+    let d = ebuild_package::PackageOptions::default();
+    // The two lookup chains: full env-over-files, and files-only for gpkg.
+    let chain = |key: &str| match config {
+        Some(c) => portage_profile::env_over_config_scalar(c, key),
+        // Config-less arm: calling env only, else `make.globals`' default.
+        None => portage_profile::config_env_var(key),
+    };
+    let files = |key: &str| match config {
+        Some(c) => c.other_vars.get(key).cloned(),
+        None => None,
+    };
+    let binpkg_format = ebuild_package::resolve_binpkg_format(chain);
+    // `xpak` uses the full chain, `gpkg` the files-only one (both env-only when
+    // config-less). Portage: doebuild.py; bin/gpkg-helper.py
+    let (binpkg_compress, binpkg_compress_flags) = if binpkg_format == "gpkg" && config.is_some() {
+        let compress = ebuild_package::resolve_binpkg_compress(files);
+        let flags = ebuild_package::resolve_binpkg_compress_flags(files, &compress);
+        (compress, flags)
+    } else {
+        let compress = ebuild_package::resolve_binpkg_compress(chain);
+        let flags = ebuild_package::resolve_binpkg_compress_flags(chain, &compress);
+        (compress, flags)
+    };
+    ebuild_package::PackageOptions {
+        debug,
+        pkgdir: ebuild_package::resolve_pkgdir(chain),
+        distdir: std::env::var_os("DISTDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| d.distdir.clone()),
+        shell,
+        binpkg_compress,
+        binpkg_compress_flags,
+        portage_bzip2_command: ebuild_package::resolve_portage_bzip2_command(chain),
+        binpkg_format,
+        config_root: portage_repo::config_root_from_env(),
+        // Default-on token: enabled unless explicitly negated (see
+        // `PackageOptions::buildpkg_live`).
+        buildpkg_live: match resolved_features {
+            Some(f) => f.split_whitespace().any(|t| t == "buildpkg-live"),
+            None => !feature_enabled("-buildpkg-live"),
+        },
+        // Deliberately defaults off here (Portage default is on; see
+        // `PackageOptions::binpkg_multi_instance`). Explicit opt-in.
+        binpkg_multi_instance: feature_on("binpkg-multi-instance"),
+        binpkg_signing: feature_on("binpkg-signing"),
+        binpkg_gpg_signing_base_command: std::env::var("BINPKG_GPG_SIGNING_BASE_COMMAND")
+            .unwrap_or_default(),
+        binpkg_gpg_signing_digest: std::env::var("BINPKG_GPG_SIGNING_DIGEST").unwrap_or_default(),
+        binpkg_gpg_signing_gpg_home: std::env::var("BINPKG_GPG_SIGNING_GPG_HOME")
+            .unwrap_or_default(),
+        binpkg_gpg_signing_key: std::env::var("BINPKG_GPG_SIGNING_KEY").unwrap_or_default(),
+        pkgindex_header: config.map(portage_profile::pkgindex_header),
+    }
+}
+
 /// `INSTALL_MASK` folded with the `no{man,info,doc}` tokens; non-empty process env
 /// wins, else the resolved config. Empty-blanking-the-config is an unhandled corner.
 /// Portage: bin/misc-functions.sh, preinst_mask
@@ -28,6 +105,11 @@ pub(crate) fn config_features_opt(config: &portage_profile::Config) -> Option<Ve
 
 pub(crate) fn config_features_list(config: &portage_profile::Config) -> Vec<String> {
     config_features_opt(config).unwrap_or_default()
+}
+
+/// Resolved merge-time `FEATURES`, space-joined; shared with the remote server.
+pub(crate) fn config_features_string(config: &portage_profile::Config) -> String {
+    config_features_list(config).join(" ")
 }
 
 /// Resolved merge-time `PORTAGE_BZIP2_COMMAND`; shared with the remote server.

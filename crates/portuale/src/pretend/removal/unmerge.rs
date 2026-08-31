@@ -51,6 +51,15 @@ pub(crate) fn feature_enabled(token: &str) -> bool {
         .map(|f| f.split_whitespace().any(|t| t == token))
         .unwrap_or(false)
 }
+/// The resolved `FEATURES` driving `emerge -C`, plus its `unmerge-backup`
+/// gate: the folded config value already stacks the calling env, so a
+/// `make.conf`-only token still backs up.
+/// Portage: dbapi/vartree.py, dblink._pre_unmerge_backup
+pub(crate) fn unmerge_backup_features(config: &portage_profile::Config) -> (bool, String) {
+    let resolved = config_features_string(config);
+    let backup = resolved.split_whitespace().any(|t| t == "unmerge-backup");
+    (backup, resolved)
+}
 
 /// Drop every world atom for the removed package unless some installed
 /// version still satisfies it; all other atoms are kept untouched. The file

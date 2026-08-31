@@ -31,6 +31,7 @@ mod mtimedb;
 mod needed_elf;
 mod portage_lock;
 mod portageq;
+mod preserved_libs;
 mod pretend;
 mod privileges;
 mod regen;
