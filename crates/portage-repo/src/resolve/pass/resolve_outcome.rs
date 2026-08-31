@@ -14,3 +14,42 @@ pub(crate) struct ResolveQueueAtomArgs<'a> {
     pub(crate) atom_text: &'a str,
     pub(crate) running: bool,
 }
+
+/// One `resolve_pretend` call against the pass-constant constraints.
+///
+/// Shared by the initial outcome and the forced-upgrade flip, which pass each
+/// sibling's own running flag while the single resolve uses the popped item's.
+pub(crate) fn resolve_queue_atom(args: ResolveQueueAtomArgs<'_>) -> Result<PretendOutcome, Error> {
+    let ResolveQueueAtomArgs {
+        ctx,
+        config,
+        bp,
+        depth,
+        union_constraints,
+        key,
+        atom_text,
+        running,
+    } = args;
+    let empty_constraints: Vec<String> = Vec::new();
+    let extra_constraints = union_constraints.get(key).unwrap_or(&empty_constraints);
+    let select_root: &Path = if running {
+        ctx.cross_root()
+            .expect("running-root atom without a cross root")
+    } else {
+        ctx.root
+    };
+    resolve_pretend(
+        &SelectSource {
+            repos: &ctx.repos,
+            root: select_root,
+            config,
+            local_binpkg: &ctx.local_binpkg,
+        },
+        atom_text,
+        &SelectOptions {
+            is_top_level: depth == 0,
+            extra_constraints,
+            ..ctx.select_options(bp)
+        },
+    )
+}

@@ -18,3 +18,17 @@ pub(crate) fn overlay_use_want(
         .copied()
         .or_else(|| committed.get(key).and_then(|b| b.get(flag)).copied())
 }
+
+/// Arguments of [`arg_pinned_installed_reuse`].
+pub(crate) struct ArgPinnedInstalledReuseArgs<'a> {
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) bp: &'a BacktrackParams,
+    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
+    pub(crate) cache: &'a mut HashMap<(String, String), Vec<(String, String)>>,
+    pub(crate) atom_root: &'a Path,
+    pub(crate) key: &'a (String, String),
+    pub(crate) current_atom: &'a str,
+    pub(crate) atom: &'a portage_dep::Atom,
+    pub(crate) fresh_version: &'a str,
+}
