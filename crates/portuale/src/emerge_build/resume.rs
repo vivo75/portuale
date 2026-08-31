@@ -151,3 +151,15 @@ pub(crate) fn resume_entry(args: ResumeEntryArgs<'_>) -> GraphEntry {
         deps: Vec::new(),
     }
 }
+
+/// Portage's `PORTAGE_LOG_FILE` resolution: `${T}/build.log` (`${T}` gains
+/// the `.gz` suffix under `compress-build-logs`). Takes the resolved
+/// `FEATURES` when the caller resolved a config, else the raw process env.
+/// Also used by the binary-merge digest-failure path.
+pub(crate) fn resolved_features(options: &ebuild_merge::MergeOptions) -> String {
+    if options.features.is_empty() {
+        std::env::var("FEATURES").unwrap_or_default()
+    } else {
+        options.features.clone()
+    }
+}

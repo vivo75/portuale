@@ -153,6 +153,20 @@ impl StatusDisplay {
         }
     }
 
+    /// A display for unit tests: non-background, no Jobs lines, so
+    /// `status` prints exactly `"\n{line}\n"` under test capture.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        StatusDisplay::new(
+            StatusMode {
+                background: false,
+                show_jobs: false,
+            },
+            1,
+            crate::color::Colorizer::new(false),
+        )
+    }
+
     /// The leading blank unless in background mode, the `>>> ` line itself,
     /// then the current `>>> Jobs:` status again when the display is live.
     /// (The tty `\r`-redraw half is not ported.)
