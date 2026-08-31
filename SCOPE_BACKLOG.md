@@ -164,6 +164,17 @@ Ranked roughly by how self-contained each is.
   is a Rust binary with no Python interpreter of its own to protect.
   The literal vdb-path argument (`emerge -C /var/db/pkg/cat/pkg-ver`,
   `unmerge.py:137-182` -- `resolve_vdb_path_arg`) **shipped 2026-08-28**.
+- **`emerge --config <atom>`** (real `action_config`) **shipped
+  2026-08-31**: `pretend.rs::run_config_action` -- exactly one atom,
+  vdb-matched like `--unmerge`; 0 -> `No packages found.` exit 0, >1 ->
+  `The following packages available:` exit 1, 1 -> `Configuring pkg...`
+  + `pkg_config` from the vdb-saved env
+  (`ebuild_merge::run_vdb_saved_env_phase`, factored out of
+  `unmerge_one_installed`) + a best-effort builddir clean. Ignores
+  `--pretend`. v1 cuts: `--ask` interactive picker/prompt, `elog`. New
+  `dev-libs/emergeconfigpkg` fixture. **Still open:** `emerge --info`
+  (real `action_info` -- the big config/env dump), `emerge --search`/
+  `-s`, `--regen`, `--sync`, `--metadata`, `--check-news`, `--clean`.
 
 ### A. Small, self-contained dry-run/config slices
 

@@ -2516,25 +2516,22 @@ pub(crate) fn unmerge_one_installed(
     };
 
     let run_hook = |phase: &str| -> Result<i32, String> {
-        let env = vdb_dir.join("environment.bz2");
-        let ebuild = vdb_dir.join(format!("{pf}.ebuild"));
         let defined = std::fs::read_to_string(vdb_dir.join("DEFINED_PHASES")).unwrap_or_default();
-        if !env.is_file() || !ebuild.is_file() || !defined.split_whitespace().any(|d| d == phase) {
+        if !vdb_dir.join("environment.bz2").is_file()
+            || !vdb_dir.join(format!("{pf}.ebuild")).is_file()
+            || !defined.split_whitespace().any(|d| d == phase)
+        {
             return Ok(0);
         }
-        let src_dir = scratch_dir.join(category).join(package);
-        std::fs::create_dir_all(&src_dir).map_err(|e| format!("{}: {e}", src_dir.display()))?;
-        let dst = src_dir.join(format!("{pf}.ebuild"));
-        std::fs::copy(&ebuild, &dst).map_err(|e| format!("{}: {e}", ebuild.display()))?;
-        crate::ebuild_phases::run_phase_from_saved_env(
-            &dst,
-            &env,
-            phase,
+        run_vdb_saved_env_phase(
             root,
+            category,
+            package,
+            pf,
+            phase,
+            scratch_dir,
             portage_tmpdir,
-            options.debug,
-            &options.config_root,
-            options.shell,
+            options,
         )
     };
 
@@ -2556,6 +2553,54 @@ pub(crate) fn unmerge_one_installed(
     }
     crate::ebuild_unmerge::delete_vdb_dir(root, category, pf)?;
     Ok(())
+}
+
+/// Run one phase for an already-installed `<category>/<pf>` straight from
+/// its own vdb-stored `environment.bz2` + `<pf>.ebuild`, copied into
+/// `scratch_dir` as `<cat>/<pn>/<pf>.ebuild` so `compute_environment`'s
+/// `<cat>/<pn>/<pf>.ebuild` path parse works (the vdb layout is
+/// `<cat>/<pf>/<pf>.ebuild`). Errors if the vdb entry carries no saved
+/// environment or ebuild (a package installed before the pilot started
+/// keeping them). Unlike `unmerge_one_installed`'s own internal hook
+/// runner this does **not** gate on `DEFINED_PHASES` -- the caller
+/// decides (real `emerge --config` runs `pkg_config` unconditionally,
+/// real `doebuild(ebuildpath, "config", ...)`). Shared by
+/// `unmerge_one_installed`'s `pkg_prerm`/`pkg_postrm` and
+/// `pretend.rs::run_config_action`'s `pkg_config`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_vdb_saved_env_phase(
+    root: &Path,
+    category: &str,
+    package: &str,
+    pf: &str,
+    phase: &str,
+    scratch_dir: &Path,
+    portage_tmpdir: &Path,
+    options: &MergeOptions,
+) -> Result<i32, String> {
+    let vdb_dir = root.join("var/db/pkg").join(category).join(pf);
+    let env = vdb_dir.join("environment.bz2");
+    let ebuild = vdb_dir.join(format!("{pf}.ebuild"));
+    if !env.is_file() || !ebuild.is_file() {
+        return Err(format!(
+            "{}: no saved build environment (installed before the pilot kept one?)",
+            vdb_dir.display()
+        ));
+    }
+    let src_dir = scratch_dir.join(category).join(package);
+    std::fs::create_dir_all(&src_dir).map_err(|e| format!("{}: {e}", src_dir.display()))?;
+    let dst = src_dir.join(format!("{pf}.ebuild"));
+    std::fs::copy(&ebuild, &dst).map_err(|e| format!("{}: {e}", ebuild.display()))?;
+    crate::ebuild_phases::run_phase_from_saved_env(
+        &dst,
+        &env,
+        phase,
+        root,
+        portage_tmpdir,
+        options.debug,
+        &options.config_root,
+        options.shell,
+    )
 }
 
 /// Merge an already-downloaded binary package (`.tbz2` xpak or

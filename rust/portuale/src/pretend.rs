@@ -1708,7 +1708,7 @@ fn report_option(token: &str) -> ExitCode {
              implemented in this pilot (only --pretend/-p, --verbose/-v, \
              --newuse/-N, --changed-use/-U, --nodeps/-O, --onlydeps/-o, \
              --update/-u, --deep/-D, --exclude/-X, --deselect/-W, \
-             --unmerge/-C, --depclean/-c, --prune/-P, \
+             --unmerge/-C, --depclean/-c, --prune/-P, --config, \
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
              --changed-deps-report, --changed-slot, --with-test-deps, \
              --noreplace/-n, --selective, and --help/-h are implemented \
@@ -3644,6 +3644,137 @@ fn run_depclean_pretend(
     unmerge_rc
 }
 
+/// Real `_emerge/actions.py::action_config` (`emerge --config <atom>`):
+/// run `pkg_config` for a single installed package. Exactly one atom
+/// (real `if len(myfiles) != 1`), matched against the vdb the same way
+/// `--unmerge` matches (bare name → null-category vdb lookup, ambiguous
+/// is a hard error; `cat/pkg` via `installed_candidates` +
+/// `match_from_list`). Zero matches → `No packages found.` exit 0; more
+/// than one → `The following packages available:` list + exit 1; exactly
+/// one → `Configuring pkg...` then `pkg_config` from that version's own
+/// vdb-stored `environment.bz2` + `<pf>.ebuild`
+/// (`ebuild_merge::run_vdb_saved_env_phase`, ungated -- real
+/// `doebuild(ebuildpath, "config", ...)` runs it unconditionally), then
+/// a best-effort builddir clean on success (real `doebuild(..., "clean")`).
+///
+/// **v1 cuts:** `--ask` (the interactive package picker / "Ready to
+/// configure?" prompt) -- the pilot is non-interactive, matching real
+/// portage's own non-`--ask` branch; `elog` processing.
+fn run_config_action(atom_args: &[&str], root: &Path, color: &Colorizer) -> ExitCode {
+    if atom_args.len() != 1 {
+        // Real `action_config`: `print(red("!!! ...\n"))` -- stdout, with
+        // the string's own trailing newline plus `print`'s.
+        println!(
+            "{}",
+            color.c(
+                "red",
+                "!!! config can only take a single package atom at this time\n"
+            )
+        );
+        return ExitCode::from(1);
+    }
+    let raw = atom_args[0];
+
+    let matches: Vec<(String, String, String)> = if !raw.contains('/') {
+        let mut found: Vec<(String, String, String)> = Vec::new();
+        for (cat, pkg, version, _slot) in installed_cp_versions(root) {
+            if pkg == *raw {
+                found.push((cat, pkg, version));
+            }
+        }
+        let cats: HashSet<&String> = found.iter().map(|(c, _, _)| c).collect();
+        if cats.len() > 1 {
+            eprintln!("\n!!! The short package name \"{raw}\" is ambiguous. Please specify");
+            eprintln!("!!! one of the following fully-qualified package names instead:\n");
+            let mut names: Vec<String> =
+                cats.into_iter().map(|c| format!("    {c}/{raw}")).collect();
+            names.sort();
+            for n in names {
+                println!("{n}");
+            }
+            return ExitCode::from(1);
+        }
+        found
+    } else {
+        let Some(atom) = parse_atom(raw) else {
+            eprintln!("!!! '{raw}' is not a valid package atom.");
+            eprintln!("!!! Please check ebuild(5) for full details.");
+            eprintln!("!!! (Did you specify a version but forget to prefix with '='?)");
+            return ExitCode::from(1);
+        };
+        portage_repo::installed_candidates(root, &atom.category, &atom.package)
+            .into_iter()
+            .filter(|(version, slot, sub_slot)| {
+                let cs = format!(
+                    "{}/{}-{version}:{slot}/{sub_slot}",
+                    atom.category, atom.package
+                );
+                match_from_list(raw, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+            })
+            .map(|(version, _slot, _sub)| (atom.category.clone(), atom.package.clone(), version))
+            .collect()
+    };
+
+    println!();
+    if matches.is_empty() {
+        println!("No packages found.\n");
+        return ExitCode::SUCCESS;
+    }
+    if matches.len() > 1 {
+        println!("The following packages available:");
+        let mut cpvs: Vec<String> = matches
+            .iter()
+            .map(|(c, p, v)| format!("{c}/{p}-{v}"))
+            .collect();
+        cpvs.sort();
+        for cpv in &cpvs {
+            println!("* {cpv}");
+        }
+        println!("\nPlease use a specific atom or the --ask option.");
+        return ExitCode::from(1);
+    }
+
+    let (category, package, version) = &matches[0];
+    let pf = format!("{package}-{version}");
+    println!();
+    println!("Configuring pkg...");
+    println!();
+
+    let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+    let options =
+        ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+    let scratch = portage_tmpdir.join("portage").join("_config_src");
+    let rc = match ebuild_merge::run_vdb_saved_env_phase(
+        root,
+        category,
+        package,
+        &pf,
+        "config",
+        &scratch,
+        &portage_tmpdir,
+        &options,
+    ) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    // Real `action_config`: `doebuild(ebuildpath, "clean", ...)` on
+    // success -- drop the per-package builddir.
+    if rc == 0 {
+        let _ = std::fs::remove_dir_all(portage_tmpdir.join("portage").join(category).join(&pf));
+    }
+    println!();
+    if rc == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(rc.clamp(0, 255) as u8)
+    }
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     if wants_help(args) {
         print_help();
@@ -3711,6 +3842,9 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut depclean = false;
     // --prune/-P: a standalone action (see run_prune_pretend).
     let mut prune = false;
+    // --config: a standalone action (see run_config_action). Ignores
+    // --pretend entirely -- real `action_config` never checks it.
+    let mut config_action = false;
     let mut with_bdeps = true;
     let mut with_bdeps_given = false;
     let mut with_bdeps_auto = true;
@@ -4046,6 +4180,13 @@ pub fn run(args: &[String]) -> ExitCode {
             // `action_depclean` as `--depclean` -- dispatched to
             // `run_prune_pretend` below. Plain boolean.
             prune = true;
+            i += 1;
+        } else if arg == "--config" {
+            // Real `main.py`: `--config` is a standalone ACTION
+            // (`myaction = "config"`, `action_config`) -- run `pkg_config`
+            // for one installed package. No short alias. Dispatched to
+            // `run_config_action` below.
+            config_action = true;
             i += 1;
         } else if arg == "--with-bdeps" {
             // Real "argument_options" with `"choices": ("y", "n")` --
@@ -4650,7 +4791,7 @@ pub fn run(args: &[String]) -> ExitCode {
         return run_deselect(&atom_args, &root_from_env());
     }
 
-    if atom_args.is_empty() && !unmerge && !depclean && !prune {
+    if atom_args.is_empty() && !unmerge && !depclean && !prune && !config_action {
         eprintln!("emerge (pilot v1): expected a package atom, e.g. `emerge --pretend cat/pkg`");
         return ExitCode::from(2);
     }
@@ -4731,6 +4872,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // so every action path (the standalone cleanup actions below and the
     // ordinary resolve-graph path) shares one `Colorizer`.
     let color = Colorizer::new(color::resolve_havecolor(color_opt));
+
+    // `--config <atom>`: a standalone action -- run `pkg_config` for one
+    // installed package (real `action_config`). Needs nothing from the
+    // resolved `config`; ignores `--pretend`.
+    if config_action {
+        return run_config_action(&atom_args, &root, &color);
+    }
 
     // `--unmerge`/`-C`: a standalone action -- resolved config in hand
     // (its `@system` target support and system-profile check both need

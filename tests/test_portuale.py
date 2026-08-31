@@ -742,6 +742,65 @@ def test_emerge_prune_without_pretend_really_removes_lower_versions(emerge_binar
     assert (root / "var/lib/binpkgrmpkg.log").read_text() == "prerm-1.0\npostrm-1.0\n"
 
 
+def test_emerge_config_runs_pkg_config_from_the_vdb(emerge_binary, tmp_path):
+    """`emerge --config <atom>` (real `action_config`): resolve the single
+    installed match, print `Configuring pkg...`, run its `pkg_config` from
+    the vdb-stored environment.bz2 + <pf>.ebuild. `dev-libs/emergeconfigpkg`'s
+    pkg_config writes `${EROOT}/var/lib/emergeconfigpkg.configured`."""
+    root = tmp_path / "root"
+    (root / "var/lib").mkdir(parents=True)
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "portage-tmpdir")
+
+    ebuild = str(
+        Path(FIXTURES_ROOT)
+        / "repo/dev-libs/emergeconfigpkg/emergeconfigpkg-1.0.ebuild"
+    )
+    link = tmp_path / "ebuild"
+    link.symlink_to(Path(emerge_binary).resolve())
+    r = subprocess.run(
+        [str(link), ebuild, "merge"], capture_output=True, text=True, check=False, env=env
+    )
+    assert r.returncode == 0, r.stderr
+    assert (root / "var/db/pkg/dev-libs/emergeconfigpkg-1.0/environment.bz2").is_file()
+
+    result = subprocess.run(
+        [str(emerge_binary), "--config", "dev-libs/emergeconfigpkg"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Configuring pkg..." in result.stdout
+    assert (root / "var/lib/emergeconfigpkg.configured").read_text() == "configured 1.0\n"
+
+
+def test_emerge_config_rejects_multiple_atoms_and_reports_missing(emerge_binary, tmp_path):
+    """Real `action_config`: `len(myfiles) != 1` -> the red one-liner,
+    exit 1; a valid atom matching nothing installed -> `No packages
+    found.` exit 0."""
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(tmp_path / "root")
+
+    multi = subprocess.run(
+        [str(emerge_binary), "--config", "dev-libs/a", "dev-libs/b"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert multi.returncode == 1
+    assert "config can only take a single package atom" in multi.stdout
+
+    missing = subprocess.run(
+        [str(emerge_binary), "--config", "dev-libs/nonexistent"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert missing.returncode == 0
+    assert "No packages found." in missing.stdout
+
+
 def test_ebuild_install_really_fetches_via_the_already_verified_skip_path(
     ebuild_binary, tmp_path
 ):

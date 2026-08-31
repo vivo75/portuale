@@ -9572,6 +9572,43 @@ implemented", ["--depclean"], 2)` / `["-c"]` CASES are gone, and
 removes the non-highest version of a multi-version cp and keeps the
 highest.
 
+### `emerge --config <atom>`: run `pkg_config` for an installed package
+
+Real `action_config` is the emerge-level `pkg_config` runner (the
+counterpart to `ebuild <file> config`, which the pilot already had).
+`run_config_action` ports it:
+
+- exactly one atom (real `if len(myfiles) != 1` → `!!! config can only
+  take a single package atom at this time`, exit 1)
+- matched against the vdb the same way `--unmerge` matches — a bare name
+  gets its category from the vdb (ambiguous is a hard error), `cat/pkg`
+  via `installed_candidates` + `match_from_list` (real
+  `vartree.dbapi.match`)
+- zero matches → `No packages found.` exit 0; more than one →
+  `The following packages available:` + `* <cpv>` list + exit 1;
+  exactly one → `Configuring pkg...`, then `pkg_config` from *that
+  version's own* vdb-stored `environment.bz2` + `<pf>.ebuild`
+
+`ebuild_merge::run_vdb_saved_env_phase` (new — factored out of
+`unmerge_one_installed`'s prerm/postrm hook runner, minus its
+`DEFINED_PHASES` gate since real `doebuild(ebuildpath, "config", …)`
+runs `pkg_config` unconditionally) does the copy-into-scratch +
+`run_phase_from_saved_env`; a best-effort builddir removal follows on
+success (real `doebuild(…, "clean")`). `--config` is dispatched as a
+standalone action that ignores `--pretend` entirely (real `action_config`
+never checks it) and needs nothing from the resolved config.
+
+**v1 cuts:** `--ask` (the interactive package picker and the "Ready to
+configure?" prompt) — the pilot's non-interactive stance, matching real
+portage's own non-`--ask` branch; `elog` processing. Not in the contract
+CASES (the Python reference returns 0 for this action — no
+ebuild-execution machinery). `--config` was added to the "implemented so
+far" list in the recognized-but-unimplemented message. Rust-black-box
+-tested in `test_portuale.py`: a merged `dev-libs/emergeconfigpkg` (new
+fixture, `pkg_config` writes `${EROOT}/var/lib/emergeconfigpkg.configured`)
+→ `emerge --config` writes the marker; the multi-atom and no-match paths
+hit their respective messages/exit codes.
+
 ## Running it
 
 Build both Rust binaries:

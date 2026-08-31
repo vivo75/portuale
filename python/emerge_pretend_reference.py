@@ -6960,7 +6960,7 @@ def _report_option(token):
             "but is not implemented in this pilot (only --pretend/-p, "
             "--verbose/-v, --newuse/-N, --changed-use/-U, --nodeps/-O, "
             "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, "
-            "--deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --with-bdeps, --with-bdeps-auto, --changed-deps, "
+            "--deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, "
             "--changed-deps-report, --changed-slot, --with-test-deps, "
             "--noreplace/-n, --selective, and --help/-h are implemented so "
             "far; see PROMPT.md)",
@@ -9362,6 +9362,7 @@ def run(args):
     unmerge = False
     depclean = False
     prune = False
+    config_action = False
     with_bdeps = True
     with_bdeps_given = False
     with_bdeps_auto = True
@@ -9635,6 +9636,13 @@ def run(args):
             # through the same action_depclean as --depclean, dispatched
             # to _run_prune_pretend below. Mirrors pretend.rs.
             prune = True
+            i += 1
+        elif arg == "--config":
+            # Real main.py: --config is a standalone ACTION (action_config
+            # -- run pkg_config for one installed package). Ignores
+            # --pretend. This reference has no ebuild-execution machinery,
+            # so run() returns 0 for it (see below). Mirrors pretend.rs.
+            config_action = True
             i += 1
         elif arg == "--with-bdeps":
             # Real "argument_options" with "choices": ("y", "n") --
@@ -10180,6 +10188,12 @@ def run(args):
     # this reference has no ebuild-execution machinery, so -- like every
     # other non-`--pretend` path -- it just returns 0 below. Only
     # --deselect still has a `--pretend`-only gate here.
+
+    # --config <atom>: a real action (real action_config runs pkg_config
+    # from the vdb). Ignores --pretend entirely. No ebuild-execution
+    # machinery here -> nothing to do.
+    if config_action:
+        return 0
 
     # Every real, non-dry-run `emerge` execution path -- `--buildpkgonly`
     # (build a binary package), `--getbinpkgonly` (download + merge remote
