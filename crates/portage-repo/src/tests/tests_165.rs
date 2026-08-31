@@ -95,6 +95,41 @@ fn new_165(cat: &str, pkg: &str, ver: &str) -> GraphEntry {
         Some("0"),
     )
 }
+
+fn ipkg_165(cat: &str, pkg: &str, ver: &str, slot: &str) -> InstalledPackage {
+    InstalledPackage {
+        category: cat.to_string(),
+        package: pkg.to_string(),
+        version: ver.to_string(),
+        slot: slot.to_string(),
+    }
+}
+
+/// A cross-category edge orders too.
+#[test]
+fn topological_removal_order_follows_a_cross_category_edge() {
+    let root = dir_165("order-cross");
+    let d = root.join("var/db/pkg/dev-libs").join("aa-1.0");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("SLOT"), "0\n").unwrap();
+    std::fs::write(d.join("RDEPEND"), "sys-libs/bb\n").unwrap();
+    let e = root.join("var/db/pkg/sys-libs").join("bb-1.0");
+    std::fs::create_dir_all(&e).unwrap();
+    std::fs::write(e.join("SLOT"), "0\n").unwrap();
+    let (ordered, out) = topological_removal_order(
+        &root,
+        vec![
+            ipkg_165("sys-libs", "bb", "1.0", "0"),
+            ipkg_165("dev-libs", "aa", "1.0", "0"),
+        ],
+    );
+    assert!(ordered);
+    assert_eq!(
+        out.iter().map(|p| p.cpv()).collect::<Vec<_>>(),
+        vec!["dev-libs/aa-1.0", "sys-libs/bb-1.0"]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
 /// Arguments of [`pending_165`].
 struct Pending165Args<'a> {
     atom: &'a str,
