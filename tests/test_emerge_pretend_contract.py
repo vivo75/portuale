@@ -5620,7 +5620,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "   -u, --update    upgrade to a newer visible version even if the installed one satisfies the atom\n"
         "   -D, --deep[=N]  also recurse into an already-installed package's own dependencies (optionally, only N levels deep)\n"
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)\n"
-        "   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)\n"
+        "   -W, --deselect  a standalone action: remove matching ATOMS from the world / world_sets favorites files (--pretend previews)\n"
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies\n"
         '       --with-bdeps-auto y|n  changes the *default* --with-bdeps value (only when --with-bdeps itself isn\'t given) -- n makes it default to n instead of the real "auto" (y here)\n'
         "       --changed-deps[=y|n]  reinstall an already-installed package whose own vdb-recorded dependencies differ from the current ebuild's\n"
@@ -7201,21 +7201,20 @@ def test_deselect_with_no_targets_at_all_reports_no_match(emerge_binary, fixture
     assert result.stdout == '>>> No matching atoms found in "world" favorites file...\n'
 
 
-def test_deselect_requires_pretend(emerge_binary, fixture_env, tmp_path):
-    """This pilot's whole CLI is dry-run-only regardless of the flag --
-    --deselect is no exception, and hits the exact same "only --pretend
-    is implemented" error real action_deselect's own (unreachable here)
-    file-writing branch would otherwise need."""
+def test_deselect_without_pretend_is_no_longer_gated(emerge_binary, fixture_env, tmp_path):
+    """`emerge --deselect` WITHOUT `--pretend` really rewrites the world /
+    world_sets files now (run_deselect, real `world_set.replace`). Not a
+    Rust-vs-Python contract case: the reference has no execution machinery
+    (it prints `Removing` but doesn't write). The real write is covered in
+    test_portuale.py. Here we only assert the old `requires --pretend`
+    exit-2 gate is gone, using a non-matching atom so nothing changes."""
     result = _run(
         [str(emerge_binary)],
-        ["--deselect", "dev-libs/foo"],
+        ["--deselect", "dev-libs/nonexistent"],
         _deselect_env(fixture_env, tmp_path),
     )
-    assert result.returncode == 2
-    assert (
-        result.stderr.strip()
-        == "emerge (pilot v1): --deselect requires --pretend (see PROMPT.md)"
-    )
+    assert result.returncode == 0
+    assert "requires --pretend" not in result.stderr
 
 
 def test_deselect_short_alias_and_bundling(emerge_binary, fixture_env, tmp_path):
@@ -7262,7 +7261,6 @@ def test_deselect_matches_between_implementations(
         ["--pretend", "--deselect", "@nosuchset"],
         ["--pretend", "--deselect", "dev-libs/foo", "@myselectedset"],
         ["--pretend", "--deselect"],
-        ["--deselect", "dev-libs/foo"],
         ["--pretend", "--deselect", "dev-libs/qux"],
         ["--pretend", "--deselect", "qux"],
         ["--pretend", "--deselect", "dev-libs/notinworld"],

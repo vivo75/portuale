@@ -827,6 +827,48 @@ def test_emerge_unmerge_with_pretend_still_only_previews(emerge_binary, tmp_path
     assert (root / "usr/share/binpkgrmpkg/payload-1.0.txt").is_file()
 
 
+def test_emerge_deselect_without_pretend_rewrites_world_and_world_sets(
+    emerge_binary, tmp_path
+):
+    """`emerge --deselect` WITHOUT `--pretend` is a real write now (real
+    action_deselect's `world_set.replace(remaining)`): the matching atoms
+    leave var/lib/portage/world and matching @sets leave world_sets, both
+    files rewritten sorted with comment lines dropped; `--pretend` still
+    only previews."""
+    wl = tmp_path / "var" / "lib" / "portage"
+    wl.mkdir(parents=True)
+    (wl / "world").write_text(
+        "# my favorites\ndev-libs/zkeep\ndev-libs/adrop\ndev-libs/slotted:2\n"
+    )
+    (wl / "world_sets").write_text("@keepset\n@dropset\n")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(tmp_path)
+
+    # --pretend leaves both files untouched.
+    before_world = (wl / "world").read_text()
+    before_sets = (wl / "world_sets").read_text()
+    p = subprocess.run(
+        [str(emerge_binary), "--pretend", "--deselect", "dev-libs/adrop", "@dropset"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert p.returncode == 0, p.stderr
+    assert '>>> Would remove @dropset from "world_sets" favorites file...' in p.stdout
+    assert (wl / "world").read_text() == before_world
+    assert (wl / "world_sets").read_text() == before_sets
+
+    # The real thing: rewrites both, sorted, comment dropped.
+    r = subprocess.run(
+        [str(emerge_binary), "--deselect", "dev-libs/adrop", "@dropset"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert '>>> Removing dev-libs/adrop from "world" favorites file...' in r.stdout
+    assert '>>> Removing @dropset from "world_sets" favorites file...' in r.stdout
+    assert (wl / "world").read_text() == "dev-libs/slotted:2\ndev-libs/zkeep\n"
+    assert (wl / "world_sets").read_text() == "@keepset\n"
+
+
 def _seed_binpkgrmpkg(emerge_binary, root, env, version):
     """Merge dev-libs/binpkgrmpkg-<version> into `root` via a direct
     `ebuild <file> merge` (full vdb entry: CONTENTS, environment.bz2,

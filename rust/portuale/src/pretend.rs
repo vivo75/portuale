@@ -69,8 +69,10 @@
 // ACTION (`if myaction is None and myoptions.deselect is True: myaction
 // = "deselect"`, the same shape as `--depclean`/`--sync`), dispatched
 // here to `run_deselect` before any of the ordinary target-atom/resolve
-// machinery even runs. It reports (never writes, requires --pretend,
-// same "never merges" invariant as everything else in this pilot) which
+// machinery even runs. It previews under `--pretend`, and without it
+// really rewrites the `world` / `world_sets` files (same "never merges"
+// invariant, but the world files themselves are user config the pilot
+// does edit -- like `-C`/`--depclean`/`--prune`). It reports which
 // world-file atoms each given target would cause real `action_deselect`
 // (lib/_emerge/actions.py) to discard: every target is expanded against
 // the vdb (a bare package name -- no `/` -- via real portage's own
@@ -1775,7 +1777,7 @@ fn print_help() {
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)"
     );
     println!(
-        "   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)"
+        "   -W, --deselect  a standalone action: remove matching ATOMS from the world / world_sets favorites files (--pretend previews)"
     );
     println!(
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies"
@@ -2178,15 +2180,15 @@ fn collect_installed_sets(
 }
 
 /// `emerge --deselect <atom-or-bare-name> [...]`: real `action_deselect`
-/// (`lib/_emerge/actions.py`), ported for `--pretend` mode only -- this
-/// pilot's whole CLI requires `--pretend` (see the "only --pretend is
-/// implemented" check in `run`, checked *before* this is ever reached),
-/// so real `action_deselect`'s own non-pretend branch (which actually
-/// writes `var/lib/portage/world`) is never reachable here; only its
-/// "Would remove ..." reporting path is ported. Needs no repo/config
-/// resolution at all -- only the world file and the vdb -- so this
-/// doesn't call `find_repos`/`resolve_config` either, unlike every
-/// other real feature in this pilot.
+/// (`lib/_emerge/actions.py`). Under `--pretend` this previews (`Would
+/// remove ...`); **without** it, after the same preview (`Removing ...`),
+/// `run_deselect` rewrites both `var/lib/portage/world` and
+/// `var/lib/portage/world_sets` with the discarded entries dropped, each
+/// file sorted + one entry per line + comments dropped -- real
+/// `world_set.replace(remaining)` -> `WorldSelectedSet.write`. Needs no
+/// repo/config resolution at all -- only the world files and the vdb --
+/// so this doesn't call `find_repos`/`resolve_config` either, unlike
+/// every other real feature in this pilot.
 ///
 /// For each target in `targets`: a bare package name (no `/` at all) is
 /// expanded via real portage's own "null category" mechanism -- scan the
@@ -2264,7 +2266,7 @@ fn collect_installed_sets(
 /// Real `action_deselect` always returns `os.EX_OK` on every reachable
 /// path here (found matches, no matches, even no targets at all) --
 /// ported the same way, unconditionally `ExitCode::SUCCESS`.
-fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
+fn run_deselect(targets: &[&str], root: &Path, pretend: bool) -> ExitCode {
     let world_atoms = match read_world_atoms(root) {
         Ok(atoms) => atoms,
         Err(e) => {
@@ -2358,10 +2360,62 @@ fn run_deselect(targets: &[&str], root: &Path) -> ExitCode {
 
     if discard.is_empty() {
         println!(">>> No matching atoms found in \"world\" favorites file...");
-    } else {
-        discard.sort_by(|a, b| a.0.cmp(&b.0));
-        for (entry, filename) in discard {
-            println!(">>> Would remove {entry} from \"{filename}\" favorites file...");
+        return ExitCode::SUCCESS;
+    }
+    discard.sort_by(|a, b| a.0.cmp(&b.0));
+    // Real `action_deselect`: `Would remove` under `--pretend`, `Removing`
+    // when it actually writes.
+    let verb = if pretend { "Would remove" } else { "Removing" };
+    for (entry, filename) in &discard {
+        println!(">>> {verb} {entry} from \"{filename}\" favorites file...");
+    }
+
+    if !pretend {
+        // Real `world_set.replace(remaining)` -> `WorldSelectedSet.write`:
+        // both files are rewritten, atoms/`@name`s each sorted, one per
+        // line, comment lines dropped (exactly `WorldSelectedPackagesSet.
+        // write` / `WorldSelectedSetsSet.write`).
+        let drop_world: HashSet<&str> = discard
+            .iter()
+            .filter(|(_, f)| *f == "world")
+            .map(|(e, _)| e.as_str())
+            .collect();
+        let drop_sets: HashSet<&str> = discard
+            .iter()
+            .filter(|(_, f)| *f == "world_sets")
+            .map(|(e, _)| e.as_str())
+            .collect();
+
+        let mut remaining_world: Vec<String> = world_atoms
+            .into_iter()
+            .filter(|a| !drop_world.contains(a.as_str()))
+            .collect();
+        remaining_world.sort();
+        remaining_world.dedup();
+
+        let mut remaining_sets: Vec<String> = world_sets
+            .into_iter()
+            .map(|n| format!("@{n}"))
+            .filter(|s| !drop_sets.contains(s.as_str()))
+            .collect();
+        remaining_sets.sort();
+        remaining_sets.dedup();
+
+        let portage_dir = root.join("var/lib/portage");
+        if let Err(e) = std::fs::create_dir_all(&portage_dir) {
+            eprintln!("emerge: {}: {e}", portage_dir.display());
+            return ExitCode::from(1);
+        }
+        for (name, lines) in [("world", &remaining_world), ("world_sets", &remaining_sets)] {
+            let mut body = lines.join("\n");
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            let path = portage_dir.join(name);
+            if let Err(e) = std::fs::write(&path, body) {
+                eprintln!("emerge: {}: {e}", path.display());
+                return ExitCode::from(1);
+            }
         }
     }
     ExitCode::SUCCESS
@@ -5013,24 +5067,13 @@ pub fn run(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    // `--deselect` is checked first, before the general gate below: it's
-    // a real action in its own right that always requires `--pretend`
-    // (real `action_deselect`'s own file-writing branch is unreachable
-    // here), regardless of whether `--buildpkgonly` also happens to be
-    // given -- `--buildpkgonly` unlocking real building is not the same
-    // thing as unlocking `--deselect`.
-    if deselect && !pretend {
-        eprintln!("emerge (pilot v1): --deselect requires --pretend (see PROMPT.md)");
-        return ExitCode::from(2);
-    }
-
-    // `--unmerge`/`-C`, `--depclean`/`-c` and `--prune`/`-P` WITHOUT
-    // `--pretend` are all real removals now -- `run_unmerge_pretend` /
-    // `run_depclean_pretend` / `run_prune_pretend` / the `--nodeps`
-    // variant each take the real `pretend` flag and run `execute_unmerge`
-    // after the display when it's `false`. Only `--deselect` still has a
-    // `--pretend`-only gate (its `run_deselect` never writes the world
-    // file at all -- a documented v1 cut).
+    // `--unmerge`/`-C`, `--depclean`/`-c`, `--prune`/`-P` and now
+    // `--deselect`/`-W` WITHOUT `--pretend` are all real writes:
+    // `run_unmerge_pretend` / `run_depclean_pretend` / `run_prune_pretend`
+    // / the `--nodeps` variant each run `execute_unmerge` after the
+    // display when `pretend` is `false`, and `run_deselect` rewrites the
+    // `world` / `world_sets` files (real `action_deselect`'s own
+    // `world_set.replace(remaining)`). No `requires --pretend` gate left.
 
     // Real non-dry-run execution paths this pilot implements for `emerge`
     // itself: `--buildpkgonly` (builds a binary package, never merges --
@@ -5045,7 +5088,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // modifier on it (real `action_depclean`'s `deselect` -- see
     // `run_depclean_pretend`).
     if deselect && !depclean && !prune && !unmerge {
-        return run_deselect(&atom_args, &root_from_env());
+        return run_deselect(&atom_args, &root_from_env(), pretend);
     }
 
     if atom_args.is_empty() && !unmerge && !depclean && !prune && !config_action {

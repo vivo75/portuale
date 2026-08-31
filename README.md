@@ -9661,8 +9661,7 @@ the *same* `unmerge()` `-C` calls. So this slice is mostly wiring:
   branch directly.
 
 The `--unmerge`/`--depclean`/`--prune` `requires --pretend` gates are
-all gone now (only `--deselect` keeps one — its `run_deselect` never
-writes the world file at all, a separate v1 cut). **v1 cuts** carry
+all gone now (see `--deselect` below for the last one). **v1 cuts** carry
 over from `-C`: no `CLEAN_DELAY` countdown, no `--ask`, no
 `FEATURES=unmerge-backup`; slot-operator rebuild edges on the cleanlist
 still unmodelled. Not in the contract CASES (the Python reference
@@ -9674,6 +9673,29 @@ implemented", ["--depclean"], 2)` / `["-c"]` CASES are gone, and
 (`Number removed: 1`, hooks ran, files + vdb gone); `emerge --prune`
 removes the non-highest version of a multi-version cp and keeps the
 highest.
+
+### `emerge --deselect` (no `--pretend`): a real `world` / `world_sets` rewrite
+
+The last `requires --pretend` gate is gone. Real `action_deselect`'s own
+`world_set.replace(remaining)` -> `WorldSelectedSet.write`: after the
+same discard-matching (`Atom.intersects`, `@name` exact match against
+`world_sets`), under `--pretend` it still previews (`>>> Would remove
+<x> from "<file>" favorites file...`), but **without** it the verb is
+`Removing` and `run_deselect` rewrites both `<root>/var/lib/portage/world`
+(the discarded atoms dropped) and `<root>/var/lib/portage/world_sets`
+(the discarded `@name`s dropped) — each file sorted, one entry per line,
+comment lines dropped, exactly `WorldSelectedPackagesSet.write` /
+`WorldSelectedSetsSet.write`. Still no `find_repos`/`resolve_config`
+(only the world files + vdb, same as the original `--deselect` slice).
+Not a contract CASE (the Python reference prints `Removing` but has no
+execution machinery, so it doesn't write); `test_deselect_requires_pretend`
+became `test_deselect_without_pretend_is_no_longer_gated`, and the
+`["--deselect", ...]` entry left the cross-impl lockstep list (a real
+Rust write would pollute the shared throwaway ROOT before the Python run
+saw it). Rust-black-box-tested in `test_portuale.py`: `--pretend`
+touches neither file; the real run drops `dev-libs/adrop` + `@dropset`,
+keeps `dev-libs/zkeep` / `dev-libs/slotted:2` / `@keepset`, sorted,
+comment gone.
 
 ### `emerge --config <atom>`: run `pkg_config` for an installed package
 

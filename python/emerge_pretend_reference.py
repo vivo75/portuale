@@ -7114,7 +7114,7 @@ def _print_help():
         "   -X, --exclude ATOMS  leave any matching already-installed package as-is, and never install a matching new one (repeatable, space-separated)"
     )
     print(
-        '   -W, --deselect  a standalone action: report which world favorites ATOMS would remove (never writes; requires --pretend)'
+        '   -W, --deselect  a standalone action: remove matching ATOMS from the world / world_sets favorites files (--pretend previews)'
     )
     print(
         "       --with-bdeps y|n  include (y, the default) or skip (n) DEPEND/BDEPEND when --deep walks an already-installed package's own dependencies"
@@ -7362,10 +7362,14 @@ def _still_listed_parents(root, installed_sets, cat, pkg, version):
     return parents
 
 
-def _run_deselect(targets, root):
+def _run_deselect(targets, root, pretend):
     """Ports real action_deselect (lib/_emerge/actions.py, lines
     1740-1835) exactly: needs no repo/config resolution at all, only the
-    world file and the vdb.
+    world file and the vdb. Under --pretend the line verb is `Would
+    remove`; without it real portage prints `Removing` and rewrites the
+    world / world_sets files -- this reference has no execution machinery,
+    so it prints `Removing` but does not write (the real write is
+    Rust-only, covered in test_portuale.py, same as -C/--depclean/--prune).
 
     A bare package name (no "/") is expanded via real portage's own
     "null category" mechanism -- scan the world file for a same-named
@@ -7479,8 +7483,9 @@ def _run_deselect(targets, root):
     if not discard:
         print('>>> No matching atoms found in "world" favorites file...')
     else:
+        verb = "Would remove" if pretend else "Removing"
         for entry, filename in sorted(discard):
-            print(f'>>> Would remove {entry} from "{filename}" favorites file...')
+            print(f'>>> {verb} {entry} from "{filename}" favorites file...')
     return 0
 
 
@@ -10395,24 +10400,21 @@ def run(args):
     # when `columns` is True.
     columnwidth = _columnwidth_from_env()
 
-    # `--deselect` is checked first, before the general gate below: it's
-    # a real action in its own right that always requires `--pretend`
-    # (real `action_deselect`'s own file-writing branch is unreachable
-    # here), regardless of whether `--buildpkgonly` also happens to be
-    # given -- `--buildpkgonly` unlocking real building is not the same
-    # thing as unlocking `--deselect`.
-    if deselect and not pretend:
-        print(
-            "emerge (pilot v1): --deselect requires --pretend (see PROMPT.md)",
-            file=sys.stderr,
-        )
-        return 2
-
-    # --unmerge/-C, --depclean/-c and --prune/-P WITHOUT --pretend are all
-    # real removals on the Rust side now (pretend.rs's execute_unmerge);
-    # this reference has no ebuild-execution machinery, so -- like every
-    # other non-`--pretend` path -- it just returns 0 below. Only
-    # --deselect still has a `--pretend`-only gate here.
+    # --unmerge/-C, --depclean/-c, --prune/-P and --deselect/-W WITHOUT
+    # --pretend are all real writes on the Rust side now (pretend.rs's
+    # execute_unmerge / run_deselect's world-file rewrite); this reference
+    # has no ebuild-execution machinery, so it just returns 0 below --
+    # except --deselect, which is a pure display action and is dispatched
+    # here (before the `not pretend` return) so the reference still shows
+    # what real portage would remove, just with the `Removing` verb and no
+    # actual file write.
+    #
+    # Real main.py: --deselect is a standalone action only when
+    # `myaction is None` -- --depclean/--prune/--unmerge set their own
+    # action first, and --deselect=y|n is then just a modifier (real
+    # action_depclean's `deselect`).
+    if deselect and not depclean and not prune and not unmerge:
+        return _run_deselect(atom_args, _root(), pretend)
 
     # --config <atom>: a real action (real action_config runs pkg_config
     # from the vdb). Ignores --pretend entirely. No ebuild-execution
@@ -10432,13 +10434,6 @@ def run(args):
     # never via the shared contract CASES.
     if not pretend:
         return 0
-
-    # Real main.py: --deselect is a standalone action only when
-    # `myaction is None` -- --depclean/--prune/--unmerge set their own
-    # action first, and --deselect=y|n is then just a modifier (real
-    # action_depclean's `deselect`).
-    if deselect and not depclean and not prune and not unmerge:
-        return _run_deselect(atom_args, _root())
 
     if not atom_args and not unmerge and not depclean and not prune:
         print(

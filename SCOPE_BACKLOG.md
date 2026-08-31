@@ -190,6 +190,16 @@ Ranked roughly by how self-contained each is.
   `dev-libs/emergeconfigpkg` fixture. **Still open:** `emerge --info`
   (real `action_info` -- the big config/env dump), `emerge --search`/
   `-s`, `--regen`, `--sync`, `--metadata`, `--check-news`, `--clean`.
+- **`emerge --deselect` (non-`--pretend`) real write** (real
+  `action_deselect`'s `world_set.replace(remaining)`) **shipped
+  2026-08-31**: after the same discard-matching, `run_deselect` (gained a
+  `pretend: bool`) rewrites both `var/lib/portage/world` and `world_sets`
+  with the matched atoms / `@name`s dropped -- sorted, one per line,
+  comments dropped (real `WorldSelectedPackagesSet.write` /
+  `WorldSelectedSetsSet.write`); verb is `Removing` vs `Would remove`.
+  This was the **last** `requires --pretend` gate -- all gone now. v1
+  cuts: `--ask` prompt. Rust-only + black-box (the reference prints
+  `Removing` but has no execution machinery).
 
 ### A. Small, self-contained dry-run/config slices
 
