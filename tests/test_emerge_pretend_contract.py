@@ -711,7 +711,9 @@ CASES = [
     ("@world combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@world"], 0),
     ("@system expands to the fixture profile chain's own packages files", ["--pretend", "@system"], 0),
     ("@system combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@system"], 0),
-    ("@some-other-set as a top-level atom: not implemented, clear invalid-atom error", ["--pretend", "@some-other-set"], 1),
+    ("a user-defined set given directly expands to its members", ["--pretend", "@nestedtestset"], 0),
+    ("a user-defined set combined with an explicit atom too", ["--pretend", "dev-libs/samepkg", "@nestedtestset"], 0),
+    ("an unknown @set name is a real error", ["--pretend", "@some-other-set"], 1),
     (
         "--newuse reinstalls a package whose USE changed since it was installed",
         ["--pretend", "--newuse", "dev-libs/reinstallpkg"],
@@ -5715,6 +5717,35 @@ def test_world_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     ]
 
 
+def test_custom_set_as_a_top_level_target_expands_to_its_members(
+    emerge_binary, fixture_env
+):
+    """`emerge @nestedtestset` (a user-defined set given directly, not via
+    @world) expands through the same resolve_custom_set machinery the
+    --unmerge/--depclean/--deselect paths use: dev-libs/nestedsetpkg
+    (installed -> [ebuild R], non-selective) + dev-libs/innernestedsetpkg
+    (from the nested @innernestedset reference; the cycle back to
+    @nestedtestset contributes nothing). Also works alongside an explicit
+    atom, expanding in place."""
+    result = _run([str(emerge_binary)], ["--pretend", "@nestedtestset"], fixture_env)
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "[ebuild   R    ] dev-libs/nestedsetpkg-1.0 ",
+        "[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ",
+    ]
+    combined = _run(
+        [str(emerge_binary)],
+        ["--pretend", "dev-libs/samepkg", "@nestedtestset"],
+        fixture_env,
+    )
+    assert combined.returncode == 0
+    assert combined.stdout.splitlines() == [
+        "[ebuild   R    ] dev-libs/samepkg-1.0 ",
+        "[ebuild   R    ] dev-libs/nestedsetpkg-1.0 ",
+        "[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 ",
+    ]
+
+
 def test_world_missing_file_expands_to_nothing_not_an_error(
     emerge_binary, fixture_env, tmp_path
 ):
@@ -5734,7 +5765,7 @@ def test_world_missing_file_expands_to_nothing_not_an_error(
     assert (
         result.stderr.strip()
         == "emerge (pilot v1): no package atoms to resolve (the target list, "
-        "after expanding any @world/@system, is empty)"
+        "after expanding any @world/@system/@<set>, is empty)"
     )
 
 
@@ -7202,18 +7233,17 @@ def test_system_combines_with_an_explicit_atom(emerge_binary, fixture_env):
     ]
 
 
-def test_some_other_set_as_a_top_level_atom_is_not_implemented(emerge_binary, fixture_env):
-    """Only the literal tokens "@world" and "@system" trigger set
-    expansion -- any other "@"-prefixed top-level target (a nested set
-    reference real portage's own world file/packages files can contain,
-    but this pilot doesn't resolve -- see read_world_atoms's and
-    resolve_config's own doc comments) falls through to the ordinary
-    atom-parsing path and gets a clear "invalid atom" error, not a
-    silent no-op."""
+def test_unknown_set_name_as_a_top_level_atom_is_a_real_error(emerge_binary, fixture_env):
+    """`@world`/`@system` expand to their own atom lists; any other
+    `@name` is a user-defined file-based set, resolved via
+    etc/portage/sets/<name> (real StaticFileSet). A `@name` with no
+    matching set file is a real, immediate configuration error (real
+    PackageSetNotFound), not a silent no-op -- same error the
+    world_sets code path already produces for an unresolvable name."""
     result = _run([str(emerge_binary)], ["--pretend", "@some-other-set"], fixture_env)
     assert result.returncode == 1
     assert result.stdout == ""
-    assert result.stderr.strip() == 'emerge: invalid atom "@some-other-set"'
+    assert result.stderr.strip() == "emerge: set 'some-other-set' not found"
 
 
 def test_newuse_reinstalls_a_package_whose_use_changed(emerge_binary, fixture_env):

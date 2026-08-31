@@ -10474,10 +10474,10 @@ def run(args):
     # place, at whichever position they appear -- see _read_world_atoms's
     # own docstring for the world file's own scope, _read_world_sets's
     # for the world_sets file's own nested-@set half of real @world's
-    # union, and resolve_config's own docstring for @system's. Only
-    # these two literal tokens trigger expansion -- any other
-    # "@"-prefixed token falls through to the ordinary atom-parsing path
-    # below and gets a clear "invalid atom" error, not a silent no-op.
+    # union, and resolve_config's own docstring for @system's. Any other
+    # "@name" token is a user-defined (file-based) package set, expanded
+    # recursively via _resolve_custom_set -- the same machinery the
+    # --unmerge/--depclean/--deselect paths already use.
     try:
         expanded_atoms = []
         for atom_arg in atom_args:
@@ -10489,6 +10489,10 @@ def run(args):
                     )
             elif atom_arg == "@system":
                 expanded_atoms.extend(config["system_packages"])
+            elif atom_arg.startswith("@"):
+                expanded_atoms.extend(
+                    _resolve_custom_set(_config_root(), atom_arg[1:], set())
+                )
             else:
                 expanded_atoms.append(atom_arg)
     except ResolutionError as e:
@@ -10499,7 +10503,7 @@ def run(args):
     if not atom_args:
         print(
             "emerge (pilot v1): no package atoms to resolve (the target list, "
-            "after expanding any @world/@system, is empty)",
+            "after expanding any @world/@system/@<set>, is empty)",
             file=sys.stderr,
         )
         return 2

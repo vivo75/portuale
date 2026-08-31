@@ -640,6 +640,49 @@ def test_emerge_slotted_atom_is_recorded_slot_qualified_in_world(emerge_binary, 
     assert "dev-libs/packagepkg:0" not in world
 
 
+def test_emerge_custom_set_is_recorded_in_world_sets(emerge_binary, tmp_path):
+    """Real depgraph.saveNomergeFavorites's @set half: `emerge @name` for
+    a user-defined set records `@name` in var/lib/portage/world_sets (NOT
+    the plain world file -- its member packages aren't directly-named
+    atoms). `--oneshot` suppresses it, same as the world file."""
+    import shutil
+
+    def _root(n):
+        root = tmp_path / f"root{n}"
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+        env["PORTAGE_TMPDIR"] = str(tmp_path / f"portage-tmpdir{n}")
+        return root, env
+
+    root, env = _root(0)
+    world_before = (root / "var/lib/portage/world").read_text()
+    r = subprocess.run(
+        [str(emerge_binary), "@innernestedset"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert '>>> Recording @innernestedset in "world_sets" favorites file...' in r.stdout
+    world_sets = (root / "var/lib/portage/world_sets").read_text().split()
+    assert "@innernestedset" in world_sets
+    assert world_sets == sorted(world_sets)
+    # The set's member packages are NOT added to the plain world file.
+    assert (root / "var/lib/portage/world").read_text() == world_before
+
+    # --oneshot: still merges, but records nothing in world_sets.
+    root, env = _root(1)
+    ws_before = (root / "var/lib/portage/world_sets").read_bytes()
+    r = subprocess.run(
+        [str(emerge_binary), "--oneshot", "@innernestedset"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "Recording" not in r.stdout
+    assert (root / "var/lib/portage/world_sets").read_bytes() == ws_before
+
+
 def test_emerge_atom_upgrade_replaces_the_installed_version(emerge_binary, tmp_path):
     """`emerge <atom>` handles an Upgrade too now: merge the new version,
     then unmerge the replaced same-slot version (real

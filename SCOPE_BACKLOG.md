@@ -555,17 +555,18 @@ Ranked roughly by how self-contained each is.
    `dev-libs/fetchrestrictpkg` fixture. Remaining
    items named as cuts in `fetch.rs:28-48`.
 
-9b. **`emerge @set` build support.** The `--pretend`/build path
-    (`pretend.rs:~5096`) only expands the two literal tokens `@world` /
-    `@system`; a user-defined `@customset` token errors with `invalid
-    atom`. The unmerge/depclean/deselect paths already expand arbitrary
-    `@name` via `resolve_custom_set` (recursive, cycle-guarded), so the
-    machinery exists — it just isn't wired into the build path. Once it
-    is, `saveNomergeFavorites`'s `@set` → `var/lib/portage/world_sets`
-    recording (real `depgraph.py:11360-11400`, the
-    `>>> Recording @name in "world_sets" favorites file...` line) is the
-    natural follow-on (the per-package world-atom slot half shipped
-    2026-08-31 — see Part 1 item 21).
+9b. ~~**`emerge @set` build support.**~~ **Shipped 2026-08-31.** The
+    `--pretend`/build path (`pretend.rs`) now expands any non-built-in
+    `@name` through the same recursive, cycle-guarded `resolve_custom_set`
+    the unmerge/depclean/deselect paths use (`@name` with no set file →
+    `emerge: set 'name' not found`). `saveNomergeFavorites`'s `@set` →
+    `var/lib/portage/world_sets` recording landed with it
+    (`update_world_sets_file`, real `depgraph.py:11360-11400`, the
+    `>>> Recording @name in "world_sets" favorites file...` line; same
+    suppression set as the world file). v1 cuts: real's `world_candidate`
+    gate (moot — the pilot only knows `@world`/`@system` as built-ins),
+    the `--ask` prompt. Mirrored in `emerge_pretend_reference.py` for
+    `--pretend`; Rust-only for the non-pretend `world_sets` write.
 
 ### D. Config-resolution `USE_ORDER` depth
 

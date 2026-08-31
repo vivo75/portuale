@@ -9435,6 +9435,38 @@ file byte-identical; a `:slot` arg for `dualslotpkg` records
 `dev-libs/dualslotpkg:1`, a bare / unslotted arg doesn't) + two
 `update_world_file` unit tests.
 
+### `emerge @set`: a user-defined package set as a build target
+
+The `--pretend`/build path recognised only the two literal tokens
+`@world` / `@system`; any other `@name` fell through to `parse_atom` and
+died `invalid atom "@name"`. Now every other `@name` is treated as a
+user-defined, file-based package set — expanded recursively (cycle-
+guarded) through the exact `resolve_custom_set` the
+`--unmerge`/`--depclean`/`--deselect` paths already used (real
+`StaticFileSet` / `SetConfig.getSetAtoms`), in place at whatever position
+the arg appears. A `@name` with no `etc/portage/sets/<name>` file is a
+real, immediate `emerge: set 'name' not found` (real `PackageSetNotFound`),
+the same error the `world_sets` reader already produced.
+
+After a successful non-`--pretend` merge, `update_world_sets_file` (real
+`depgraph.saveNomergeFavorites`'s `@set` half) records each directly-given
+set arg as `@name` in `<root>/var/lib/portage/world_sets` — the file
+`@world` unions with the plain world file. Same suppression set as the
+world file (`--oneshot`/`--onlydeps`; `--buildpkgonly` gated at the call
+site), same sorted+deduped rewrite dropping comment / non-`@` lines, the
+real `>>> Recording @name in "world_sets" favorites file...` line per
+add. The set's *member packages* are not added to the plain `world` file
+(they aren't directly-named atoms). **v1 cuts:** real's `world_candidate`
+gate (built-ins like `@security` aren't world candidates — moot here,
+the pilot only knows `@world`/`@system` as built-ins and everything else
+reaching the recorder resolved via a real set file); the `--ask` prompt.
+
+Contract-tested (`@nestedtestset` alone and alongside an explicit atom,
+`@some-other-set` → error; + 3 CASES) and Rust-black-box-tested
+(`test_emerge_custom_set_is_recorded_in_world_sets`: `@innernestedset`
+recorded, members not in `world`, `--oneshot` records nothing) + an
+`update_world_sets_file` unit test.
+
 ### `emerge --getbinpkgonly`/`--getbinpkg`: collision-protect / blocker exclusion / preserve-libs parity
 
 `merge_binpkg` was the one merge path still lighter than the source

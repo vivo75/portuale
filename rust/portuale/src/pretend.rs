@@ -1964,8 +1964,63 @@ fn update_world_file(
     Ok(())
 }
 
+/// Real `depgraph.saveNomergeFavorites`'s own `@set` half: after a
+/// successful non-`--pretend` `emerge @name`, each directly-given
+/// user-defined set arg is recorded as `@name` in
+/// `<root>/var/lib/portage/world_sets` (real `WorldSelectedSetsSet`).
+/// `@world`/`@system` are never routed here (they resolve without a set
+/// file, so they never land in `set_names`). Same suppression set as the
+/// world file itself (`--oneshot`/`--onlydeps`; `--buildpkgonly` is
+/// gated at the call site). Already-present names are left alone; on any
+/// add the file is rewritten sorted + deduplicated (comment / non-`@`
+/// lines dropped, exactly like `WorldSelectedSetsSet.write`). Prints the
+/// real `>>> Recording @name in "world_sets" favorites file...` line per
+/// addition. v1 cut: the real `world_candidate` gate (built-in sets like
+/// `@security` aren't world candidates) -- the pilot only knows
+/// `@world`/`@system` as built-ins, and everything reaching here already
+/// resolved via a real set file, so it's a user set by construction.
+fn update_world_sets_file(
+    root: &Path,
+    set_names: &[String],
+    oneshot: bool,
+    onlydeps: bool,
+) -> Result<(), String> {
+    if oneshot || onlydeps || set_names.is_empty() {
+        return Ok(());
+    }
+    let mut current: Vec<String> = read_world_sets(root)?
+        .into_iter()
+        .map(|n| format!("@{n}"))
+        .collect();
+    let before: std::collections::HashSet<String> = current.iter().cloned().collect();
+    let mut added = false;
+    for name in set_names {
+        let line = format!("@{name}");
+        if before.contains(&line) {
+            continue;
+        }
+        println!(">>> Recording {line} in \"world_sets\" favorites file...");
+        current.push(line);
+        added = true;
+    }
+    if added {
+        current.sort();
+        current.dedup();
+        let path = root.join("var/lib/portage/world_sets");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let mut body = current.join("\n");
+        body.push('\n');
+        std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// Reads `<root>/var/lib/portage/world_sets` (real portage's own
 /// `WORLD_SETS_FILE` -- `lib/portage/const.py`), a file genuinely
+/// SEPARATE from the world file above, listing every `@name` set
+/// reference the user has directly selected (e.g. via a prior `emerge
 /// SEPARATE from the world file above, listing every `@name` set
 /// reference the user has directly selected (e.g. via a prior `emerge
 /// --noreplace @some-set`) -- real `WorldSelectedSetsSet`, whose own
@@ -5117,10 +5172,17 @@ pub fn run(args: &[String]) -> ExitCode {
     // doc comment for the world file's own scope, read_world_sets's for
     // the world_sets file's own nested-@set half of real @world's union,
     // and portage-profile's `system_packages` doc comment for @system's.
-    // Only these two literal tokens trigger expansion -- any other
-    // "@"-prefixed token falls through to the ordinary atom-parsing path
-    // below and gets a clear "invalid atom" error, not a silent no-op.
+    // Any other `@name` token is a user-defined (file-based) package set
+    // -- expanded recursively via `resolve_custom_set` (real
+    // `StaticFileSet` / `SetConfig.getSetAtoms`), the same machinery the
+    // `--unmerge`/`--depclean`/`--deselect` paths already use; a `@name`
+    // with no matching set file is a fatal "set 'name' not found".
     let mut expanded_atoms: Vec<String> = Vec::new();
+    // The user-given `@name` set args (leading `@` stripped) that are
+    // world candidates -- i.e. resolved via a set FILE, not `@world`/
+    // `@system`. Recorded in `world_sets` after a successful
+    // non-`--pretend` merge (real `depgraph.saveNomergeFavorites`).
+    let mut selected_set_args: Vec<String> = Vec::new();
     for atom_str in &atom_args {
         if *atom_str == "@world" {
             match read_world_atoms(&root) {
@@ -5149,6 +5211,18 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         } else if *atom_str == "@system" {
             expanded_atoms.extend(config.system_packages.iter().cloned());
+        } else if let Some(name) = atom_str.strip_prefix('@') {
+            let mut seen = HashSet::new();
+            match resolve_custom_set(&config_root, name, &mut seen) {
+                Ok(atoms) => {
+                    expanded_atoms.extend(atoms);
+                    selected_set_args.push(name.to_string());
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::from(1);
+                }
+            }
         } else {
             expanded_atoms.push((*atom_str).to_string());
         }
@@ -5157,7 +5231,7 @@ pub fn run(args: &[String]) -> ExitCode {
     if expanded_atoms.is_empty() {
         eprintln!(
             "emerge (pilot v1): no package atoms to resolve (the target list, after \
-             expanding any @world/@system, is empty)"
+             expanding any @world/@system/@<set>, is empty)"
         );
         return ExitCode::from(2);
     }
@@ -5708,6 +5782,13 @@ pub fn run(args: &[String]) -> ExitCode {
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }
+            // Real `saveNomergeFavorites`'s `@set` half: a directly-given
+            // `@name` set arg is recorded in `world_sets` (same
+            // suppression set as the world file).
+            if let Err(e) = update_world_sets_file(&root, &selected_set_args, oneshot, onlydeps) {
+                eprintln!("emerge: {e}");
+                return ExitCode::from(1);
+            }
         }
     }
 
@@ -5881,6 +5962,44 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
             "dev-libs/packagepkg\n"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn update_world_sets_file_records_a_new_set_and_skips_oneshot() {
+        let tmp = std::env::temp_dir().join(format!(
+            "portuale-worldsets-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(
+            root.join("var/lib/portage/world_sets"),
+            "# a comment\n@existing\n",
+        )
+        .unwrap();
+
+        // A new set is appended; the comment line is dropped on rewrite,
+        // `@existing` is kept, output sorted.
+        update_world_sets_file(&root, &["fresh".to_string()], false, false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/portage/world_sets")).unwrap(),
+            "@existing\n@fresh\n"
+        );
+
+        // Idempotent, and `--oneshot` / `--onlydeps` write nothing.
+        update_world_sets_file(&root, &["fresh".to_string()], false, false).unwrap();
+        update_world_sets_file(&root, &["another".to_string()], true, false).unwrap();
+        update_world_sets_file(&root, &["another".to_string()], false, true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/portage/world_sets")).unwrap(),
+            "@existing\n@fresh\n"
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
