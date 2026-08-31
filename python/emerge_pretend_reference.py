@@ -8478,35 +8478,48 @@ def _topological_removal_order(root, cleanlist, slot_of):
     flattened against the depender's vdb USE), then topologically sort so
     each package is unmerged before the ones it depends on. Returns
     (ordered, cleanlist); ordered is False (and the input order kept) only
-    when the digraph has no edges. Mirrors portage-repo/src/lib.rs's
-    topological_removal_order -- see its docstring for the deliberate
-    scope cuts (slot-operator-built priority, the cycle-breaking single
-    pop)."""
+    when the digraph has no edges.
+
+    Each edge carries its key's UnmergeDepPriority (higher = harder):
+    IDEPEND 0, RDEPEND -2 (-> -1 when the atom is slot_operator_built,
+    real runtime_slot_op, bug 916135), PDEPEND -3, DEPEND/BDEPEND -4;
+    highest wins for a repeated (i, j). True roots (nothing left depends
+    on them) are emitted all at once, cpv-descending; a genuine cycle
+    falls back to real portage's ignore_priority_range scan
+    ([-4, -3, -2, -1, 0]) and pops just ONE node (cpv-max) whose every
+    remaining incoming edge is <= ignore_priority. Mirrors
+    portage-repo/src/lib.rs's topological_removal_order."""
     n = len(cleanlist)
     if n < 2:
         return False, cleanlist
     cand = [f"{c}/{p}-{v}:{slot_of[(c, p, v)]}" for (c, p, v) in cleanlist]
     deps = [set() for _ in range(n)]
+    edge_prio = {}
     for i, (c, p, v) in enumerate(cleanlist):
         use_flags = _read_vdb_flag_set(root, c, p, v, "USE")
-        atoms = set()
         for dep_key in ("DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"):
             depstr = _read_vdb_string(root, c, p, v, dep_key)
             if not depstr.strip():
                 continue
-            a = _flat_dep_atoms(depstr, use_flags)
-            if a is not None:
-                atoms |= a
-        for atom_str in atoms:
-            parsed = _parse_atom(atom_str)
-            if parsed is None:
+            atoms = _flat_dep_atoms(depstr, use_flags)
+            if atoms is None:
                 continue
-            acat, apkg = parsed.cp.split("/", 1)
-            for j, (jc, jp, _jv) in enumerate(cleanlist):
-                if i == j or jc != acat or jp != apkg:
+            base_prio = {"IDEPEND": 0, "RDEPEND": -2, "PDEPEND": -3}.get(dep_key, -4)
+            for atom_str in atoms:
+                parsed = _parse_atom(atom_str)
+                if parsed is None:
                     continue
-                if match_from_list(atom_str, [cand[j]]):
-                    deps[i].add(j)
+                acat, apkg = parsed.cp.split("/", 1)
+                slot_op_built = (
+                    parsed.slot_operator == "=" and parsed.sub_slot is not None
+                )
+                prio = -1 if (dep_key == "RDEPEND" and slot_op_built) else base_prio
+                for j, (jc, jp, _jv) in enumerate(cleanlist):
+                    if i == j or jc != acat or jp != apkg:
+                        continue
+                    if match_from_list(atom_str, [cand[j]]):
+                        deps[i].add(j)
+                        edge_prio[(i, j)] = max(edge_prio.get((i, j), prio), prio)
     if not any(deps):
         return False, cleanlist
 
@@ -8518,25 +8531,42 @@ def _topological_removal_order(root, cleanlist, slot_of):
         c, p, v = cleanlist[idx]
         return (c, p, vk(v))
 
+    rev = [[] for _ in range(n)]
     indeg = [0] * n
-    for d in deps:
+    for i, d in enumerate(deps):
         for j in d:
             indeg[j] += 1
+            rev[j].append(i)
     done = [False] * n
     result = []
+
+    def remove(k):
+        done[k] = True
+        for j in deps[k]:
+            if not done[j]:
+                indeg[j] -= 1
+        result.append(cleanlist[k])
+
     while len(result) < n:
         ready = [k for k in range(n) if not done[k] and indeg[k] == 0]
-        if not ready:
-            rest = sorted((k for k in range(n) if not done[k]), key=cpv_key)
-            result.extend(cleanlist[k] for k in rest)
+        if ready:
+            ready.sort(key=cpv_key, reverse=True)
+            for k in ready:
+                remove(k)
+            continue
+        # Genuine cycle -- real ignore_priority_range scan. Pop ONE.
+        for ignore in (-4, -3, -2, -1, 0):
+            pool = [
+                k
+                for k in range(n)
+                if not done[k]
+                and all(edge_prio[(i, k)] <= ignore for i in rev[k] if not done[i])
+            ]
+            if not pool:
+                continue
+            pool.sort(key=cpv_key, reverse=True)
+            remove(pool[0])
             break
-        ready.sort(key=cpv_key, reverse=True)
-        for k in ready:
-            done[k] = True
-            for j in deps[k]:
-                if not done[j]:
-                    indeg[j] -= 1
-            result.append(cleanlist[k])
     return True, result
 
 

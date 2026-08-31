@@ -103,8 +103,11 @@ Ranked roughly by how self-contained each is.
   2026-08-27**. The **topological removal-order sort**
   (`topological_removal_order`, real `actions.py:1591-1731` -- each
   package unmerged before the ones it depends on; `run_unmerge_pretend`
-  gained a `preserve_order` flag) **shipped 2026-08-27** too, bar the
-  slot-operator-built priority bump and the cycle-breaking single pop.
+  gained a `preserve_order` flag) **shipped 2026-08-27** too; the
+  slot-operator-built priority bump (`runtime_slot_op` -> -1, bug 916135)
+  and the cycle-breaking single-node pop (real `ignore_priority_range`
+  scan `[-4..0]`, pop the cpv-max node whose every remaining incoming
+  edge is `<= ignore_priority`) **shipped 2026-08-31**.
   The **`--verbose` reverse-dependency display** (real `show_parents`,
   `create_cleanlist:1324`/`1331` -- `<cpv> pulled in by: <parent>
   requires <atom>` for every kept package; `DepcleanResult.kept_parents`

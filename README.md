@@ -912,11 +912,30 @@ PORTING/
   proves the blocks come out `[mmid, zztop, aabase]`, the reverse of
   alphabetical. The `All selected packages:` line stays sorted in both
   implementations (real portage iterates a `set` there -- not a
-  meaningful order to reproduce). **Deliberately out of scope**: the
-  slot-operator-built-dep priority bump (bug 916135's `dev-libs/B:0/0=`)
-  and the priority-ignoring single-node pop that breaks a genuine
-  dependency cycle -- a cleanlist that still holds a cycle here is
-  emitted last, in cpv order.
+  meaningful order to reproduce).
+
+  **Cycle-break single-node pop + slot-operator priority (2026-08-31).**
+  The remaining `topological_removal_order` cuts are closed. Every edge
+  now carries its `*DEPEND` key's `UnmergeDepPriority` (real
+  `actions.py:1608-1622` + `UnmergeDepPriority.__int__`, higher = harder):
+  `IDEPEND` 0, `RDEPEND` -2 (bumped to **-1** when the atom is
+  `slot_operator_built` -- `foo/bar:2/2=`, real `runtime_slot_op`, bug
+  916135), `PDEPEND` -3, `DEPEND`/`BDEPEND` -4; the highest wins for a
+  repeated `(i, j)`. True roots are still emitted all at once, cpv
+  descending. When there are none -- a genuine dependency cycle -- the
+  code now runs real portage's `ignore_priority_range` scan
+  (`[-4, -3, -2, -1, 0]`, `actions.py:1713-1727`): it finds the packages
+  whose every *remaining* incoming edge is `<= ignore_priority` and pops
+  just **one** (the cpv-max), so the fewest ordering edges possible are
+  dropped to break the cycle; `ignore_priority == 0` always yields a
+  node, so the loop terminates. New fixture `_depclean_cycle_root`:
+  `cyclicdepa` DEPENDs `cyclicdepb` (-4) and `cyclicdepb` RDEPENDs
+  `cyclicdepa` (-2), so the buildtime edge into `cyclicdepb` is dropped
+  first and the order comes out `[cyclicdepb, cyclicdepa]` (not the old
+  cpv-ascending dump). `--prune` gets this for free (shares
+  `topological_removal_order`). Real `node_refcounts` pre-sort isn't
+  reproduced -- every batch is re-sorted by cpv anyway, so it has no
+  observable effect.
 
   **`emerge -pc --verbose`: the reverse-dependency display.** Real
   `create_cleanlist` (`actions.py:1324`/`1331`) calls `show_parents(pkg)`

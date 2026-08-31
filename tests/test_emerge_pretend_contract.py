@@ -6480,6 +6480,56 @@ def test_depclean_removal_order_matches_between_implementations(
     assert rust.stderr == python.stderr
 
 
+def _depclean_cycle_root(tmp_path):
+    """An orphan cleanlist whose members form a genuine dependency cycle,
+    so real _calc_depclean's `ignore_priority_range` fallback
+    (actions.py:1713-1727) kicks in: with no true root, it ignores the
+    lowest edge-priority level and pops ONE node (cpv-max) to break the
+    cycle. dev-libs/cyclicdepa DEPENDs dev-libs/cyclicdepb (buildtime,
+    priority -4) and dev-libs/cyclicdepb RDEPENDs dev-libs/cyclicdepa
+    (runtime, -2). At ignore_priority -4 only cyclicdepb qualifies (its
+    single incoming edge is the -4 one) -> popped first, then cyclicdepa
+    falls out as a plain root: [cyclicdepb, cyclicdepa]. dev-libs/keeper
+    is world-listed so the world isn't empty."""
+    portage_dir = tmp_path / "var" / "lib" / "portage"
+    portage_dir.mkdir(parents=True)
+    (portage_dir / "world").write_text("dev-libs/keeper\n")
+
+    def install(package, rdepend="", depend=""):
+        d = tmp_path / "var" / "db" / "pkg" / "dev-libs" / f"{package}-1.0"
+        d.mkdir(parents=True)
+        (d / "CATEGORY").write_text("dev-libs\n")
+        (d / "SLOT").write_text("0\n")
+        if rdepend:
+            (d / "RDEPEND").write_text(rdepend + "\n")
+        if depend:
+            (d / "DEPEND").write_text(depend + "\n")
+
+    install("cyclicdepa", depend="dev-libs/cyclicdepb")
+    install("cyclicdepb", rdepend="dev-libs/cyclicdepa")
+    install("keeper")
+    return tmp_path
+
+
+def test_depclean_breaks_a_dependency_cycle_by_popping_one_node(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    env = dict(fixture_env)
+    env["ROOT"] = str(_depclean_cycle_root(tmp_path))
+    args = ["--pretend", "--depclean"]
+    result = _run([str(emerge_binary)], args, env)
+    assert result.returncode == 0
+    blocks = [
+        ln.strip() for ln in result.stdout.splitlines() if ln.startswith(" dev-libs/")
+    ]
+    # The -4 (DEPEND) edge into cyclicdepb is dropped first; the -2
+    # (RDEPEND) edge into cyclicdepa is preserved as long as possible.
+    assert blocks == ["dev-libs/cyclicdepb", "dev-libs/cyclicdepa"]
+    python = _run(emerge_pretend_python, args, env)
+    assert result.stdout == python.stdout
+    assert result.stderr == python.stderr
+
+
 def _prune_root(tmp_path):
     """A ROOT for --prune: dev-libs/{aa,zz,mm} are each installed at
     multiple versions; dev-libs/single at one. dev-libs/keeper (world)

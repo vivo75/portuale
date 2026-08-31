@@ -3348,15 +3348,33 @@ pub struct DepcleanResult {
 /// left depends on it) is emitted at once, sorted by cpv descending
 /// (real `nodes.sort(reverse=True)`), then removed.
 ///
-/// **Deliberately out of scope** (real `actions.py:1604-1614` +
-/// `1709-1729`): the slot-operator-built-dep priority bump
-/// (`buildtime_slot_op`/`runtime_slot_op`, for cases like bug 916135's
-/// `dev-libs/B:0/0=`) and the priority-ignoring single-node pop that
-/// resolves a genuine dependency cycle. A cleanlist that still contains
-/// a cycle here is emitted last, in cpv order, with `ordered` still
-/// `true`. `flat_dep_atoms` also keeps every `||` branch (real
-/// `_select_atoms` resolves to one), so a disjunctive dep can add a few
-/// extra ordering edges -- the conservative direction.
+/// Each edge carries the `UnmergeDepPriority` of the `*DEPEND` key that
+/// created it (real `actions.py:1608-1622` + `UnmergeDepPriority.__int__`,
+/// higher = harder): `IDEPEND` 0, `RDEPEND` -2 (bumped to **-1** when the
+/// atom is `slot_operator_built` -- `foo/bar:2/2=`, real
+/// `runtime_slot_op`, bug 916135), `PDEPEND` -3, `DEPEND`/`BDEPEND` -4.
+/// A `DEPEND`/`BDEPEND` slot-op edge stays -4 (real `__int__` never
+/// bumps `buildtime_slot_op`). When one `(i, j)` edge is produced by
+/// more than one key, the highest priority wins (real `digraph`'s own
+/// sorted `priorities[-1]`).
+///
+/// The topological pop mirrors real `actions.py:1713-1727`: while any
+/// package still has an un-removed depender, take the current true roots
+/// (nothing left depends on them) and emit **all** of them at once,
+/// cpv-descending. Only when there are none -- a genuine dependency
+/// cycle -- fall back to real portage's `ignore_priority_range` scan
+/// (`[-4, -3, -2, -1, 0]`): find the packages whose every remaining
+/// incoming edge is `<= ignore_priority`, and pop just **one** of them
+/// (the cpv-max), so the fewest ordering edges possible are dropped to
+/// break the cycle. `ignore_priority == 0` always yields at least one
+/// node, so the loop always terminates.
+///
+/// Still narrower than real `actions.py` in one spot: `flat_dep_atoms`
+/// keeps every `||` branch (real `_select_atoms` resolves to one), so a
+/// disjunctive dep can add a few extra ordering edges -- the
+/// conservative direction. Real's `node_refcounts` pre-sort has no
+/// observable effect (every batch is re-sorted by cpv anyway), so it
+/// isn't reproduced.
 fn topological_removal_order(
     root: &Path,
     cleanlist: Vec<InstalledPackage>,
@@ -3371,32 +3389,50 @@ fn topological_removal_order(
         .collect();
     // `deps[i]` = indices `j` such that `cleanlist[i]` depends on
     // `cleanlist[j]`, i.e. `i` must be unmerged before `j`.
+    // `edge_prio[(i, j)]` = the highest `UnmergeDepPriority` seen for it.
     let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut edge_prio: HashMap<(usize, usize), i32> = HashMap::new();
     for (i, p) in cleanlist.iter().enumerate() {
         let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
-        let mut atoms: HashSet<String> = HashSet::new();
         for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
             let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
             if depstr.trim().is_empty() {
                 continue;
             }
-            if let Some(a) = flat_dep_atoms(&depstr, &use_flags) {
-                atoms.extend(a);
-            }
-        }
-        for atom_str in &atoms {
-            let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
                 continue;
             };
-            for (j, q) in cleanlist.iter().enumerate() {
-                if i == j || q.category != atom.category || q.package != atom.package {
+            let base_prio = match dep_key {
+                "IDEPEND" => 0,
+                "RDEPEND" => -2,
+                "PDEPEND" => -3,
+                _ => -4, // DEPEND / BDEPEND
+            };
+            for atom_str in &atoms {
+                let Some(atom) = portage_dep::parse_atom(atom_str) else {
                     continue;
-                }
-                if portage_dep::match_from_list(atom_str, &[cand_strs[j].as_str()])
-                    .is_some_and(|m| !m.is_empty())
-                    && !deps[i].contains(&j)
-                {
-                    deps[i].push(j);
+                };
+                // Real `Atom.slot_operator_built`: `:=` with a sub-slot.
+                let slot_op_built = atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+                    && atom.sub_slot.is_some();
+                let prio = if dep_key == "RDEPEND" && slot_op_built {
+                    -1
+                } else {
+                    base_prio
+                };
+                for (j, q) in cleanlist.iter().enumerate() {
+                    if i == j || q.category != atom.category || q.package != atom.package {
+                        continue;
+                    }
+                    if portage_dep::match_from_list(atom_str, &[cand_strs[j].as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                    {
+                        if !deps[i].contains(&j) {
+                            deps[i].push(j);
+                        }
+                        let e = edge_prio.entry((i, j)).or_insert(i32::MIN);
+                        *e = (*e).max(prio);
+                    }
                 }
             }
         }
@@ -3405,10 +3441,13 @@ fn topological_removal_order(
         return (false, cleanlist);
     }
 
+    // `rev[j]` = the dependers `i` of `j` (its incoming edges).
+    let mut rev: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut indeg = vec![0usize; n];
-    for d in &deps {
+    for (i, d) in deps.iter().enumerate() {
         for &j in d {
             indeg[j] += 1;
+            rev[j].push(i);
         }
     }
     let cpv_cmp = |a: &InstalledPackage, b: &InstalledPackage| {
@@ -3419,18 +3458,8 @@ fn topological_removal_order(
     };
     let mut done = vec![false; n];
     let mut result: Vec<InstalledPackage> = Vec::with_capacity(n);
-    while result.len() < n {
-        let mut ready: Vec<usize> = (0..n).filter(|&k| !done[k] && indeg[k] == 0).collect();
-        if ready.is_empty() {
-            // Leftover cycle -- out of scope; emit in cpv order.
-            let mut rest: Vec<usize> = (0..n).filter(|&k| !done[k]).collect();
-            rest.sort_by(|&a, &b| cpv_cmp(&cleanlist[a], &cleanlist[b]));
-            result.extend(rest.into_iter().map(|k| cleanlist[k].clone()));
-            break;
-        }
-        // Real `nodes.sort(reverse=True)`: cpv descending.
-        ready.sort_by(|&a, &b| cpv_cmp(&cleanlist[b], &cleanlist[a]));
-        for k in ready {
+    let remove =
+        |k: usize, done: &mut [bool], indeg: &mut [usize], result: &mut Vec<InstalledPackage>| {
             done[k] = true;
             for &j in &deps[k] {
                 if !done[j] {
@@ -3438,6 +3467,40 @@ fn topological_removal_order(
                 }
             }
             result.push(cleanlist[k].clone());
+        };
+    while result.len() < n {
+        let mut ready: Vec<usize> = (0..n).filter(|&k| !done[k] && indeg[k] == 0).collect();
+        if !ready.is_empty() {
+            // Real `nodes.sort(reverse=True)`: cpv descending; emit all.
+            ready.sort_by(|&a, &b| cpv_cmp(&cleanlist[b], &cleanlist[a]));
+            for k in ready {
+                remove(k, &mut done, &mut indeg, &mut result);
+            }
+            continue;
+        }
+        // Genuine cycle -- real `ignore_priority_range` scan. Pop ONE.
+        let mut popped = false;
+        for ignore in [-4i32, -3, -2, -1, 0] {
+            let mut cand: Vec<usize> = (0..n)
+                .filter(|&k| {
+                    !done[k]
+                        && rev[k]
+                            .iter()
+                            .filter(|&&i| !done[i])
+                            .all(|&i| edge_prio[&(i, k)] <= ignore)
+                })
+                .collect();
+            if cand.is_empty() {
+                continue;
+            }
+            cand.sort_by(|&a, &b| cpv_cmp(&cleanlist[b], &cleanlist[a]));
+            remove(cand[0], &mut done, &mut indeg, &mut result);
+            popped = true;
+            break;
+        }
+        debug_assert!(popped, "ignore_priority == 0 must always yield a node");
+        if !popped {
+            break;
         }
     }
     (true, result)
@@ -11448,6 +11511,86 @@ mod tests {
 
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&root2).ok();
+    }
+
+    #[test]
+    fn topological_removal_order_breaks_a_cycle_by_priority_and_pops_one() {
+        // A 2-node cycle: `hi` DEPENDs `lo` (buildtime, priority -4) and
+        // `lo` RDEPENDs `hi` (runtime, -2). No true root. Real portage's
+        // `ignore_priority_range` scan tries -4 first: only `lo` has all
+        // its remaining incoming edges <= -4 (the single edge hi->lo),
+        // so `lo` is popped; `hi` then falls out as a plain root.
+        let root = masters_test_root("depclean-cycle");
+        let mk = |name: &str, key: &str, dep: &str| {
+            let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+            std::fs::write(d.join("SLOT"), "0\n").unwrap();
+            std::fs::write(d.join(key), format!("{dep}\n")).unwrap();
+        };
+        mk("hi", "DEPEND", "dev-libs/lo");
+        mk("lo", "RDEPEND", "dev-libs/hi");
+
+        let (ordered, out) = topological_removal_order(
+            &root,
+            vec![
+                InstalledPackage {
+                    category: "dev-libs".into(),
+                    package: "hi".into(),
+                    version: "1.0".into(),
+                    slot: "0".into(),
+                },
+                InstalledPackage {
+                    category: "dev-libs".into(),
+                    package: "lo".into(),
+                    version: "1.0".into(),
+                    slot: "0".into(),
+                },
+            ],
+        );
+        assert!(ordered);
+        assert_eq!(
+            out.iter().map(|p| p.package.clone()).collect::<Vec<_>>(),
+            vec!["lo".to_string(), "hi".to_string()]
+        );
+
+        // Mutual RDEPEND (both edges -2): -4/-3 yield nothing, -2 makes
+        // both eligible -> the cpv-max node (`zz`) is popped first.
+        let root2 = masters_test_root("depclean-cycle-rr");
+        mk_at(&root2, "zz", "RDEPEND", "dev-libs/yy");
+        mk_at(&root2, "yy", "RDEPEND", "dev-libs/zz");
+        let (_o, out2) = topological_removal_order(
+            &root2,
+            vec![
+                InstalledPackage {
+                    category: "dev-libs".into(),
+                    package: "zz".into(),
+                    version: "1.0".into(),
+                    slot: "0".into(),
+                },
+                InstalledPackage {
+                    category: "dev-libs".into(),
+                    package: "yy".into(),
+                    version: "1.0".into(),
+                    slot: "0".into(),
+                },
+            ],
+        );
+        assert_eq!(
+            out2.iter().map(|p| p.package.clone()).collect::<Vec<_>>(),
+            vec!["zz".to_string(), "yy".to_string()]
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&root2).ok();
+    }
+
+    fn mk_at(root: &std::path::Path, name: &str, key: &str, dep: &str) {
+        let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        std::fs::write(d.join(key), format!("{dep}\n")).unwrap();
     }
 
     #[test]
