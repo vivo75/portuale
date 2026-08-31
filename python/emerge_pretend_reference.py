@@ -1483,6 +1483,74 @@ def _keyword_masked_only(candidate, category, package, config):
     )
 
 
+def _mask_masked_only(candidate, category, package, config):
+    """--autounmask-keep-masks=n's own v1 slice, the package.mask analogue
+    of _keyword_masked_only: true iff candidate matches a package.mask
+    entry (and no package.unmask) but every *other* is_visible check
+    (KEYWORDS, LICENSE, PROPERTIES, RESTRICT) passes. Mirrors
+    portage-repo/src/lib.rs's mask_masked_only. v1 cut: real's
+    `# <filename>:` + masking-comment lines (no source provenance)."""
+    candidate_str = (
+        f"{category}/{package}-{candidate['version']}:{candidate['slot']}/{candidate['sub_slot']}"
+        f"::{candidate['repo_name']}"
+    )
+    masked = any(
+        _matches_config_entry(m, candidate_str, category, package)
+        for m in config["package_mask"]
+    ) and not any(
+        _matches_config_entry(u, candidate_str, category, package)
+        for u in config["package_unmask"]
+    )
+    if not masked:
+        return False
+    if not _keywords_accepted(
+        candidate["keywords"],
+        candidate_str,
+        category,
+        package,
+        config["accept_keywords"],
+        config["package_accept_keywords"],
+    ):
+        return False
+    if not _license_accepted(candidate, category, package, candidate_str, config):
+        return False
+    if not _metadata_key_accepted(
+        candidate.get("properties", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_properties"],
+        config["package_properties"],
+    ):
+        return False
+    return _metadata_key_accepted(
+        candidate.get("restrict", ""),
+        candidate,
+        category,
+        package,
+        candidate_str,
+        config,
+        config["accept_restrict"],
+        config["package_accept_restrict"],
+    )
+
+
+def _suggested_mask_candidate(repos, category, package, config):
+    """The best --autounmask-keep-masks=n candidate: the highest-versioned
+    candidate masked by package.mask alone, as its version string. Mirrors
+    portage-repo/src/lib.rs's suggested_mask_candidate."""
+    masked = [
+        c
+        for c in list_candidates(repos, category, package)
+        if _mask_masked_only(c, category, package, config)
+    ]
+    if not masked:
+        return None
+    return _best_candidate(masked)["version"]
+
+
 def _license_masked_only(candidate, category, package, config):
     """--autounmask-license's own v1 slice, the LICENSE analogue of
     _keyword_masked_only: true iff candidate would be is_visible except
@@ -4541,6 +4609,7 @@ def resolve_pretend(
     autounmask_keywords=False,
     autounmask_use=False,
     autounmask_license=False,
+    autounmask_masks=False,
 ):
     """The single-atom v1 resolution decision: find the best visible
     candidate matching `atom_str` (any atom portage-dep's v1 grammar
@@ -4765,12 +4834,22 @@ def resolve_pretend(
         ]
     if not visible and autounmask_license:
         # Real --autounmask-license: a candidate masked by LICENSE alone
-        # becomes visible via the implicit package.license accept. Real
-        # _autounmask_levels tries keyword before license.
+        # becomes visible via the implicit package.license accept. Order
+        # among the three *_masked_only fallbacks is irrelevant (each
+        # requires the other reasons to pass).
         visible = [
             c
             for c in candidates
             if _license_masked_only(c, category, package, config)
+        ]
+    if not visible and autounmask_masks:
+        # Real --autounmask-keep-masks=n: a candidate masked by
+        # package.mask alone becomes visible via the implicit
+        # package.unmask entry.
+        visible = [
+            c
+            for c in candidates
+            if _mask_masked_only(c, category, package, config)
         ]
     if not visible:
         return ("no_visible_candidate",)
@@ -5390,6 +5469,7 @@ def resolve_pretend_graph(
     autounmask_suggest_keywords=False,
     autounmask_suggest_use=False,
     autounmask_suggest_license=False,
+    autounmask_suggest_masks=False,
     usepkg=False,
     usepkgonly=False,
     binpkg_respect_use=False,
@@ -5601,6 +5681,7 @@ def resolve_pretend_graph(
     autounmask_keyword_changes = []
     autounmask_use_changes = []
     autounmask_license_changes = []
+    autounmask_mask_changes = []
     # (category, package) -> set of every distinct owner that reached it
     # via a dependency string, accumulated separately from the BFS's own
     # dedup/recursion decisions below (visited_atoms/resolved_slots/
@@ -5667,6 +5748,7 @@ def resolve_pretend_graph(
             autounmask_suggest_keywords,
             autounmask_suggest_use,
             autounmask_suggest_license,
+            autounmask_suggest_masks,
         )
 
         # Real --autounmask-use PART B *resolution*
@@ -5736,6 +5818,7 @@ def resolve_pretend_graph(
                         autounmask_suggest_keywords,
                         autounmask_suggest_use,
                         autounmask_suggest_license,
+                        autounmask_suggest_masks,
                     )
                     if _re_outcome[0] != "no_visible_candidate":
                         outcome = _re_outcome
@@ -5867,6 +5950,15 @@ def resolve_pretend_graph(
                         f"\nnote: {category}/{package}-{version} exists but its LICENSE "
                         f"is not accepted; --autounmask-license suggests adding "
                         f'"={category}/{package}-{version} {licenses}" to package.license'
+                    )
+            # --autounmask-keep-masks=n's own suggestion sub-feature.
+            if autounmask_suggest_masks:
+                mask_version = _suggested_mask_candidate(repos, category, package, config)
+                if mask_version is not None:
+                    message += (
+                        f"\nnote: {category}/{package}-{mask_version} exists but is "
+                        f"package.mask'd; --autounmask-keep-masks=n suggests adding "
+                        f'"={category}/{package}-{mask_version}" to package.unmask'
                     )
             raise ResolutionError(message)
 
@@ -6075,6 +6167,22 @@ def resolve_pretend_graph(
                         ),
                     }
                 )
+        # Real --autounmask-keep-masks=n: this candidate resolved only
+        # because resolve_pretend was told to accept a package.mask-alone
+        # mask (_mask_masked_only). Record `=<cpv>` (real p_mask_change_msg;
+        # no token, always the exact-version form).
+        if autounmask_suggest_masks and _mask_masked_only(
+            resolved, category, package, config
+        ):
+            autounmask_mask_changes.append(
+                {
+                    "atom": f"={category}/{package}-{version}",
+                    "token": "",
+                    "dep_chain": _autounmask_dep_chain(
+                        owner, current_atom_str, top_level, entries
+                    ),
+                }
+            )
         # Real output.py::_get_installed_best's own new_slot flag (the
         # "S" bracket column, PkgAttrDisplay.new_slot): a "new" entry
         # whose category/package is installed in some *other* slot (the
@@ -6563,6 +6671,7 @@ def resolve_pretend_graph(
         "autounmask_keyword_changes": autounmask_keyword_changes,
         "autounmask_use_changes": autounmask_use_changes,
         "autounmask_license_changes": autounmask_license_changes,
+        "autounmask_mask_changes": autounmask_mask_changes,
         "abi_rebuilds": abi_rebuilds,
     }
 
@@ -7205,6 +7314,7 @@ def _print_json(
     autounmask_keyword_changes,
     autounmask_use_changes,
     autounmask_license_changes,
+    autounmask_mask_changes,
     abi_rebuilds,
     top_level_pkgs,
     verbose,
@@ -7234,6 +7344,9 @@ def _print_json(
     autounmask_license_json = ",".join(
         _autounmask_change_to_json(c) for c in autounmask_license_changes
     )
+    autounmask_mask_json = ",".join(
+        _autounmask_change_to_json(c) for c in autounmask_mask_changes
+    )
     abi_rebuilds_json = ",".join(
         f'{{"provider":{_json_string(child)},"consumer":{_json_string(parent)}}}'
         for child, parent in abi_rebuilds
@@ -7244,6 +7357,7 @@ def _print_json(
         f'"autounmask_keyword_changes":[{autounmask_kw_json}],'
         f'"autounmask_use_changes":[{autounmask_use_json}],'
         f'"autounmask_license_changes":[{autounmask_license_json}],'
+        f'"autounmask_mask_changes":[{autounmask_mask_json}],'
         f'"abi_rebuilds":[{abi_rebuilds_json}]}}'
     )
 
@@ -9767,6 +9881,7 @@ def run(args):
     autounmask_keep_keywords = None
     autounmask_use = None
     autounmask_license = None
+    autounmask_keep_masks = None
     usepkg = False
     usepkgonly = False
     getbinpkg = False
@@ -10420,6 +10535,42 @@ def run(args):
                     file=sys.stderr,
                 )
                 return 2
+        elif arg == "--autounmask-keep-masks":
+            value = args[i + 1] if i + 1 < len(args) else None
+            if value == "y":
+                autounmask_keep_masks = True
+                i += 2
+            elif value == "n":
+                autounmask_keep_masks = False
+                i += 2
+            elif value is None:
+                print(
+                    'emerge: option "--autounmask-keep-masks" requires an argument',
+                    file=sys.stderr,
+                )
+                return 2
+            else:
+                print(
+                    f'emerge: option "--autounmask-keep-masks": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
+        elif arg.startswith("--autounmask-keep-masks="):
+            value = arg[len("--autounmask-keep-masks=") :]
+            if value == "y":
+                autounmask_keep_masks = True
+                i += 1
+            elif value == "n":
+                autounmask_keep_masks = False
+                i += 1
+            else:
+                print(
+                    f'emerge: option "--autounmask-keep-masks": invalid choice: "{value}" '
+                    '(choose from "y", "n")',
+                    file=sys.stderr,
+                )
+                return 2
         elif arg == "--usepkg" or arg == "-k":
             nxt = args[i + 1] if i + 1 < len(args) else None
             if nxt == "y":
@@ -10881,6 +11032,9 @@ def run(args):
     autounmask_suggest_license = autounmask_enabled and (
         autounmask_license if autounmask_license is not None else (autounmask is True)
     )
+    # Real create_depgraph_params.py: masks stay masked unless
+    # --autounmask-keep-masks=n is given explicitly.
+    autounmask_suggest_masks = autounmask_enabled and autounmask_keep_masks is False
 
     # Fold the --getbinpkg family into the --usepkg family (see their
     # parsing): --getbinpkgonly implies binary-only; either getbinpkg
@@ -10957,6 +11111,7 @@ def run(args):
             autounmask_suggest_keywords,
             autounmask_suggest_use,
             autounmask_suggest_license,
+            autounmask_suggest_masks,
             usepkg,
             usepkgonly,
             resolved_binpkg_respect_use,
@@ -11174,6 +11329,7 @@ def run(args):
             result["autounmask_keyword_changes"],
             result["autounmask_use_changes"],
             result["autounmask_license_changes"],
+            result["autounmask_mask_changes"],
             result["abi_rebuilds"],
             top_level_pkgs,
             verbose,
@@ -11582,20 +11738,25 @@ def run(args):
         for change in changes:
             for line in change["dep_chain"]:
                 print(f"# {line}", file=sys.stderr)
-            print(
-                color.c("INFORM", f'{change["atom"]} {change["token"]}'),
-                file=sys.stderr,
+            atom_line = (
+                change["atom"]
+                if not change["token"]
+                else f'{change["atom"]} {change["token"]}'
             )
+            print(color.c("INFORM", atom_line), file=sys.stderr)
 
+    # Real _display_autounmask _writemsg order: keyword, mask, USE, license.
     _print_autounmask_block(
         "keyword changes",
         "package.accept_keywords",
         result["autounmask_keyword_changes"],
     )
     _print_autounmask_block(
+        "mask changes", "package.unmask", result["autounmask_mask_changes"]
+    )
+    _print_autounmask_block(
         "USE changes", "package.use", result["autounmask_use_changes"]
     )
-    # Real _display_autounmask order: keyword, mask, USE, then license.
     _print_autounmask_block(
         "license changes", "package.license", result["autounmask_license_changes"]
     )

@@ -383,6 +383,31 @@ CASES = [
         0,
     ),
     (
+        "--autounmask-keep-masks: a package.mask'd top-level target is fatal by default",
+        ["--pretend", "dev-libs/hardmaskedpkg"],
+        1,
+    ),
+    (
+        "--autounmask-keep-masks=n resolves a package.mask'd target + prints the mask block",
+        ["--pretend", "--autounmask-keep-masks=n", "dev-libs/hardmaskedpkg"],
+        0,
+    ),
+    (
+        "--autounmask-keep-masks=n on a package.mask'd dependency",
+        ["--pretend", "--autounmask-keep-masks=n", "dev-libs/maskmaskedconsumer"],
+        0,
+    ),
+    (
+        "--autounmask alone does NOT unmask package.mask (masks kept by default)",
+        ["--pretend", "--autounmask", "dev-libs/hardmaskedpkg"],
+        1,
+    ),
+    (
+        "--autounmask-keep-masks: change also appears in --json",
+        ["--pretend", "--autounmask-keep-masks=n", "--json", "dev-libs/maskmaskedconsumer"],
+        0,
+    ),
+    (
         "--usepkg: a binary-only package is invisible without it",
         ["--pretend", "dev-libs/binaryonlypkg"],
         1,
@@ -2556,6 +2581,65 @@ def test_autounmask_license_resolves_a_eula_masked_dependency(emerge_binary, fix
             "dep_chain": [
                 "required by dev-libs/licensemaskedconsumer-1.0::testrepo",
                 "required by dev-libs/licensemaskedconsumer (argument)",
+            ],
+        }
+    ]
+
+
+def test_autounmask_keep_masks_n_unmasks_a_package_mask(emerge_binary, fixture_env):
+    """--autounmask-keep-masks=n (real `_display_autounmask`'s
+    `p_mask_change_msg`): dev-libs/hardmaskedpkg is package.mask'd (via
+    the fixture repo/profile/user package.mask chain), everything else
+    visible. Real portage KEEPS masks by default -- even `--autounmask`
+    alone doesn't unmask -- so only `--autounmask-keep-masks=n` resolves
+    it. The `The following mask changes are necessary to proceed:` block
+    has the `#required by` dep chain + a bare `=<cpv>` line (no token --
+    a mask unmask has no keyword/flag). The `[ebuild N #]` bracket marker
+    reflects the still-`package.mask`'d state."""
+    assert (
+        _run([str(emerge_binary)], ["--pretend", "dev-libs/hardmaskedpkg"], fixture_env).returncode
+        == 1
+    )
+    assert (
+        _run(
+            [str(emerge_binary)],
+            ["--pretend", "--autounmask", "dev-libs/hardmaskedpkg"],
+            fixture_env,
+        ).returncode
+        == 1
+    )
+
+    result = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-keep-masks=n", "dev-libs/maskmaskedconsumer"],
+        fixture_env,
+    )
+    assert result.returncode == 0
+    assert result.stdout == (
+        "[ebuild  N    #] dev-libs/hardmaskedpkg-1.0 \n"
+        "[ebuild  N     ] dev-libs/maskmaskedconsumer-1.0 \n"
+    )
+    assert result.stderr == (
+        "\nThe following mask changes are necessary to proceed:\n"
+        ' (see "package.unmask" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/maskmaskedconsumer-1.0::testrepo\n"
+        "# required by dev-libs/maskmaskedconsumer (argument)\n"
+        "=dev-libs/hardmaskedpkg-1.0\n"
+    )
+
+    j = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask-keep-masks=n", "--json", "dev-libs/maskmaskedconsumer"],
+        fixture_env,
+    )
+    payload = json.loads(j.stdout)
+    assert payload["autounmask_mask_changes"] == [
+        {
+            "atom": "=dev-libs/hardmaskedpkg-1.0",
+            "token": "",
+            "dep_chain": [
+                "required by dev-libs/maskmaskedconsumer-1.0::testrepo",
+                "required by dev-libs/maskmaskedconsumer (argument)",
             ],
         }
     ]
@@ -8552,7 +8636,7 @@ def test_json_is_not_a_real_emerge_option(emerge_binary, fixture_env):
     assert result.stderr == ""
     assert result.stdout == (
         (
-        '{"entries":[{"category":"dev-libs","package":"newpkg","merge_order":0,"outcome":"new","version":"1.0","new_slot":false,"interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"abi_rebuilds":[]}\n'
+        '{"entries":[{"category":"dev-libs","package":"newpkg","merge_order":0,"outcome":"new","version":"1.0","new_slot":false,"interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"autounmask_mask_changes":[],"abi_rebuilds":[]}\n'
         )
     )
 
@@ -8566,7 +8650,7 @@ def test_json_upgrade_includes_from_version(emerge_binary, fixture_env):
     assert result.returncode == 0
     assert result.stdout == (
         (
-        '{"entries":[{"category":"dev-libs","package":"upgradepkg","merge_order":0,"outcome":"upgrade","version":"2.0","from_version":"1.0","interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"abi_rebuilds":[]}\n'
+        '{"entries":[{"category":"dev-libs","package":"upgradepkg","merge_order":0,"outcome":"upgrade","version":"2.0","from_version":"1.0","interactive":false,"fetch_restrict":false,"fetch_restrict_satisfied":false,"slot":"0","source":"ebuild","provenance":{"mask_entry":null,"unmask_entry":null,"keyword_entry":null},"requested":true,"required_by":[],"builds_against_running_root":null,"blockers":[]}],"slot_conflicts":[],"changed_deps_report":[],"autounmask_keyword_changes":[],"autounmask_use_changes":[],"autounmask_license_changes":[],"autounmask_mask_changes":[],"abi_rebuilds":[]}\n'
         )
     )
 

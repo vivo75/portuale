@@ -2171,6 +2171,92 @@ fn keyword_masked_only(
     )
 }
 
+/// `--autounmask-keep-masks=n`'s own v1 slice, the `package.mask`
+/// analogue of `keyword_masked_only`: true iff `candidate` matches a
+/// `package.mask` entry (and no `package.unmask`) but every *other*
+/// `is_visible` check (KEYWORDS, LICENSE, PROPERTIES, RESTRICT) passes.
+/// Real portage keeps masks by default (`autounmask_keep_masks` defaults
+/// `True`); only `--autounmask-keep-masks=n` unmasks -- and even then
+/// this pilot's v1 doesn't reproduce real's `# <filename>:` + masking-
+/// comment lines (the pilot's `package_mask` list carries no source-file
+/// / comment provenance), only the `#required by` dep chain + `=<cpv>`.
+fn mask_masked_only(
+    candidate: &Candidate,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    let candidate_str = format!(
+        "{category}/{package}-{}:{}/{}::{}",
+        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    let masked = config
+        .package_mask
+        .iter()
+        .any(|m| matches_config_entry(m, &candidate_str, category, package))
+        && !config
+            .package_unmask
+            .iter()
+            .any(|u| matches_config_entry(u, &candidate_str, category, package));
+    if !masked {
+        return false;
+    }
+    if !keywords_accepted(
+        &candidate.keywords,
+        &candidate_str,
+        category,
+        package,
+        &config.accept_keywords,
+        &config.package_accept_keywords,
+    ) {
+        return false;
+    }
+    if !license_accepted(candidate, category, package, &candidate_str, config) {
+        return false;
+    }
+    if !metadata_key_accepted(
+        &candidate.properties,
+        candidate,
+        category,
+        package,
+        &candidate_str,
+        config,
+        &config.accept_properties,
+        &config.package_properties,
+    ) {
+        return false;
+    }
+    metadata_key_accepted(
+        &candidate.restrict,
+        candidate,
+        category,
+        package,
+        &candidate_str,
+        config,
+        &config.accept_restrict,
+        &config.package_accept_restrict,
+    )
+}
+
+/// The best `--autounmask-keep-masks=n` candidate for `category/package`,
+/// if any: the highest-versioned candidate masked by `package.mask`
+/// alone (`mask_masked_only`), as its version string.
+fn suggested_mask_candidate(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> Option<String> {
+    list_candidates(repos, category, package)
+        .ok()?
+        .iter()
+        .filter(|c| mask_masked_only(c, category, package, config))
+        .max_by(|a, b| {
+            vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+        })
+        .map(|c| c.version.clone())
+}
+
 /// `--autounmask-license`'s own v1 slice, the LICENSE analogue of
 /// `keyword_masked_only`: true iff `candidate` would be `is_visible`
 /// except for its own `LICENSE` -- every other `is_visible` check
@@ -5606,6 +5692,7 @@ fn resolve_root_deps_build_entries(
         false,
         false,
         false,
+        false,
     ) else {
         return Vec::new();
     };
@@ -5952,6 +6039,14 @@ pub fn resolve_pretend(
     // caller records the missing licenses for the `The following license
     // changes are necessary to proceed:` block.
     autounmask_license: bool,
+    // Real `--autounmask-keep-masks=n` (`resolve_pretend_graph`'s
+    // `autounmask_suggest_masks`; real keeps masks by DEFAULT, only `=n`
+    // unmasks): when set, a candidate masked by `package.mask` *alone*
+    // (`mask_masked_only`) is treated as visible -- real portage's
+    // implicit `package.unmask` entry. The caller records the `=<cpv>`
+    // for the `The following mask changes are necessary to proceed:`
+    // block.
+    autounmask_masks: bool,
 ) -> Result<PretendOutcome, String> {
     // Real `create_depgraph_params.py:179`: `--emptytree` does
     // `myparams.pop("selective", None)`.
@@ -6071,11 +6166,22 @@ pub fn resolve_pretend(
     if visible.is_empty() && autounmask_license {
         // Real `--autounmask-license`: a candidate masked by `LICENSE`
         // alone becomes visible via the implicit `package.license`
-        // accept. Real `_autounmask_levels` tries the keyword level
-        // before the license level, so this is checked second.
+        // accept. Order among these three `*_masked_only` fallbacks is
+        // irrelevant -- a candidate masked by exactly one of
+        // KEYWORDS / LICENSE / package.mask can only ever match one
+        // filter (each requires the other reasons to pass).
         visible = candidates
             .iter()
             .filter(|c| license_masked_only(c, &atom.category, &atom.package, config))
+            .collect();
+    }
+    if visible.is_empty() && autounmask_masks {
+        // Real `--autounmask-keep-masks=n`: a candidate masked by
+        // `package.mask` alone becomes visible via the implicit
+        // `package.unmask` entry.
+        visible = candidates
+            .iter()
+            .filter(|c| mask_masked_only(c, &atom.category, &atom.package, config))
             .collect();
     }
     if visible.is_empty() {
@@ -7155,6 +7261,17 @@ pub struct GraphResult {
     /// license changes are necessary to proceed:` block, last. Off unless
     /// `--autounmask` is explicit or `--autounmask-license=y`.
     pub autounmask_license_changes: Vec<AutounmaskChange>,
+    /// Real `--autounmask-keep-masks=n` changes (real `_display_autounmask`'s
+    /// `p_mask_change_msg`): one per entry that only became visible because
+    /// `autounmask_suggest_masks` let `resolve_pretend` accept a
+    /// `package.mask`-alone mask. `token` is empty (a mask unmask has no
+    /// keyword/flag); `atom` is always `=<cpv>` (like keywords, real
+    /// `autounmask_unrestricted_atoms` defaults `"n"`). Printed as the
+    /// `The following mask changes are necessary to proceed:` block,
+    /// between keyword and USE. Off unless `--autounmask-keep-masks=n`.
+    /// v1 cut: real's `# <filename>:` + masking-comment lines (no
+    /// source-file provenance on the pilot's `package_mask` list).
+    pub autounmask_mask_changes: Vec<AutounmaskChange>,
     /// `(provider-cpv, consumer-cpv)` pairs behind each slot-operator
     /// auto-rebuild (real `_compute_abi_rebuild_info`'s `_forced_rebuilds`):
     /// the consumer got a `Reinstall { slot_operator_rebuild: true }`
@@ -7718,6 +7835,7 @@ pub fn resolve_pretend_graph(
     autounmask_suggest_keywords: bool,
     autounmask_suggest_use: bool,
     autounmask_suggest_license: bool,
+    autounmask_suggest_masks: bool,
     usepkg: bool,
     usepkgonly: bool,
     binpkg_respect_use: bool,
@@ -7858,6 +7976,7 @@ pub fn resolve_pretend_graph(
     let mut autounmask_keyword_changes: Vec<AutounmaskChange> = Vec::new();
     let mut autounmask_use_changes: Vec<AutounmaskChange> = Vec::new();
     let mut autounmask_license_changes: Vec<AutounmaskChange> = Vec::new();
+    let mut autounmask_mask_changes: Vec<AutounmaskChange> = Vec::new();
     let pprovided_refs: Vec<&str> = config.package_provided.iter().map(String::as_str).collect();
     // (category, package) -> every distinct owner that reached it via a
     // dependency string, accumulated separately from the BFS's own
@@ -7931,6 +8050,7 @@ pub fn resolve_pretend_graph(
             autounmask_suggest_keywords,
             autounmask_suggest_use,
             autounmask_suggest_license,
+            autounmask_suggest_masks,
         )?;
 
         // Real `--autounmask-use` PART B *resolution* (`_apply_parent_use_changes`
@@ -8012,6 +8132,7 @@ pub fn resolve_pretend_graph(
                 autounmask_suggest_keywords,
                 autounmask_suggest_use,
                 autounmask_suggest_license,
+                autounmask_suggest_masks,
             )?;
             if matches!(re_outcome, PretendOutcome::NoVisibleCandidate) {
                 break 'parent_flip (current_atom, atom);
@@ -8192,6 +8313,19 @@ pub fn resolve_pretend_graph(
                         "\nnote: {}/{}-{version} exists but its LICENSE is not accepted; \
                          --autounmask-license suggests adding \"={}/{}-{version} {licenses}\" \
                          to package.license",
+                        atom.category, atom.package, atom.category, atom.package,
+                    ));
+                }
+            }
+            // `--autounmask-keep-masks=n`'s own suggestion sub-feature.
+            if autounmask_suggest_masks {
+                if let Some(version) =
+                    suggested_mask_candidate(&repos, &atom.category, &atom.package, config)
+                {
+                    message.push_str(&format!(
+                        "\nnote: {}/{}-{version} exists but is package.mask'd; \
+                         --autounmask-keep-masks=n suggests adding \"={}/{}-{version}\" \
+                         to package.unmask",
                         atom.category, atom.package, atom.category, atom.package,
                     ));
                 }
@@ -8454,6 +8588,18 @@ pub fn resolve_pretend_graph(
                     dep_chain: autounmask_dep_chain(&owner, &current_atom, &top_level, &entries),
                 });
             }
+        }
+        // Real `--autounmask-keep-masks=n`: this candidate resolved only
+        // because `resolve_pretend` was told to accept a `package.mask`-
+        // alone mask (`mask_masked_only`). Record `=<cpv>` (real
+        // `p_mask_change_msg`; `autounmask_unrestricted_atoms` `"n"` ->
+        // always the exact-version form; no token).
+        if autounmask_suggest_masks && mask_masked_only(resolved, &key.0, &key.1, config) {
+            autounmask_mask_changes.push(AutounmaskChange {
+                atom: format!("={}/{}-{version}", key.0, key.1),
+                token: String::new(),
+                dep_chain: autounmask_dep_chain(&owner, &current_atom, &top_level, &entries),
+            });
         }
         // Real `_get_installed_best`'s `new_slot`: a `New` entry whose
         // `category/package` is installed in some *other* slot (the
@@ -9096,6 +9242,7 @@ pub fn resolve_pretend_graph(
         autounmask_keyword_changes,
         autounmask_use_changes,
         autounmask_license_changes,
+        autounmask_mask_changes,
         abi_rebuilds,
     })
 }
@@ -9678,6 +9825,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9710,6 +9858,7 @@ mod tests {
             None,
             false,
             /* empty: */ true,
+            false,
             false,
             false,
             false,
@@ -9805,6 +9954,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9845,6 +9995,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -9879,6 +10030,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -9975,6 +10127,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -10058,6 +10211,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -10242,6 +10396,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -10288,6 +10443,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -10327,6 +10483,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -10440,6 +10597,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -10618,6 +10776,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -10758,6 +10917,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
     }
@@ -10816,6 +10976,7 @@ mod tests {
             false,
             None,
             true,
+            false,
             false,
             false,
             false,
@@ -10933,6 +11094,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::AlreadyInstalled {
@@ -11000,6 +11162,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         )
         .expect("resolve_pretend must succeed");
         assert_eq!(
@@ -11038,6 +11201,7 @@ mod tests {
             &[],
             false,
             None,
+            false,
             false,
             false,
             false,
@@ -11090,6 +11254,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -11249,6 +11414,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             )
             .expect("resolve_pretend must succeed"),
             PretendOutcome::New {
@@ -11277,6 +11443,7 @@ mod tests {
                 &[],
                 false,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -12326,6 +12493,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -12365,6 +12533,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -12418,6 +12587,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -12463,6 +12633,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -12537,6 +12708,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -12577,6 +12749,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -12732,6 +12905,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -12869,6 +13043,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -13034,6 +13209,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -13109,6 +13285,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -13200,6 +13377,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -13259,6 +13437,7 @@ mod tests {
                 false,
                 false,
                 true,
+                false,
                 false,
                 false,
                 false,
@@ -13334,6 +13513,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -13392,6 +13572,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -13440,6 +13621,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -13743,6 +13925,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -14078,6 +14261,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -14199,6 +14383,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -14384,6 +14569,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -14592,6 +14778,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -14640,6 +14827,7 @@ mod tests {
             true,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -14759,6 +14947,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -14805,6 +14994,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -14865,6 +15055,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -14913,6 +15104,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -15191,6 +15383,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -15251,6 +15444,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -15346,6 +15540,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &[],
             &[],
             false,
@@ -15418,6 +15613,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -15533,6 +15729,31 @@ mod tests {
     }
 
     #[test]
+    fn autounmask_keep_masks_n_unmasks_a_package_mask() {
+        // `dev-libs/maskmaskedconsumer` RDEPENDs the package.mask'd
+        // `dev-libs/hardmaskedpkg`. `graph_result_autounmask` has
+        // `autounmask_suggest_masks` on, so the dependency resolves and
+        // the `=<cpv>` mask change is recorded (empty token).
+        let result = graph_result_autounmask("dev-libs/maskmaskedconsumer");
+        let dep = result
+            .entries
+            .iter()
+            .find(|e| e.package == "hardmaskedpkg")
+            .expect("the package.mask'd dependency is a real graph entry now");
+        assert!(matches!(dep.outcome, PretendOutcome::New { .. }));
+        assert_eq!(result.autounmask_mask_changes.len(), 1);
+        let change = &result.autounmask_mask_changes[0];
+        assert_eq!(change.atom, "=dev-libs/hardmaskedpkg-1.0");
+        assert_eq!(change.token, "");
+
+        // Off by default: no autounmask -> dep stays NoVisibleCandidate.
+        let plain = graph_result_real("dev-libs/maskmaskedconsumer");
+        assert!(plain.autounmask_mask_changes.is_empty());
+        assert!(plain.entries.iter().any(|e| e.package == "hardmaskedpkg"
+            && matches!(e.outcome, PretendOutcome::NoVisibleCandidate)));
+    }
+
+    #[test]
     fn required_use_referencing_an_implicit_arch_list_flag_is_valid() {
         // dev-libs/archiuseimplicitpkg's own IUSE is empty and its own
         // REQUIRED_USE is "!x86" -- "x86" is never declared by this
@@ -15584,6 +15805,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,
@@ -15642,6 +15864,7 @@ mod tests {
             true,
             true,
             true,
+            true,
             false,
             false,
             false,
@@ -15691,6 +15914,7 @@ mod tests {
             false,
             true,
             true,
+            false,
             false,
             false,
             false,
@@ -15996,6 +16220,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
                 &[],
                 &[],
                 false,
@@ -16076,6 +16301,7 @@ mod tests {
             Deep::NotRequested,
             &[],
             true,
+            false,
             false,
             false,
             false,
@@ -16174,6 +16400,7 @@ mod tests {
             false,
             false,
             true,
+            false,
             false,
             false,
             false,

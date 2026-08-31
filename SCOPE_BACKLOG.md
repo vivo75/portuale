@@ -102,15 +102,19 @@ See `README.md` for the cited-source grounding of each, and `git log
   (`PROMPT.md` lists a backtracking resolver as out of scope — but it is
   what stands between "resolves the common case" and "resolves what real
   portage resolves".)
-- ~~**`--autounmask-license`.**~~ **Shipped 2026-08-31** (autounmask
-  buildout increment 4): `license_masked_only` + `missing_licenses`
-  (real `_getMaskedLicenses` list form), `autounmask_suggest_license`
-  gate (off unless `--autounmask` explicit or `--autounmask-license=y`),
-  `GraphResult::autounmask_license_changes`, the `The following license
-  changes are necessary to proceed:` block, `--json` array. New
-  `dev-libs/licensemasked{pkg,consumer}` fixtures. Only unshipped
-  `--autounmask*` member left is `--autounmask-keep-masks` (`package.mask`
-  unmask suggestions).
+- ~~**`--autounmask-license` / `--autounmask-keep-masks=n`.**~~ **Shipped
+  2026-08-31** (autounmask buildout increments 4 + 5): `license_masked_only`
+  / `mask_masked_only` (+ `missing_licenses` = real `_getMaskedLicenses`
+  list form), `autounmask_suggest_license` / `autounmask_suggest_masks`
+  gates (license off unless `--autounmask` explicit or `=y`; masks off
+  unless `--autounmask-keep-masks=n` — real KEEPS masks by default),
+  `GraphResult::autounmask_license_changes` / `autounmask_mask_changes`,
+  the `The following {license,mask} changes are necessary to proceed:`
+  blocks (real `_writemsg` order: keyword, mask, USE, license), `--json`
+  arrays. New `dev-libs/licensemasked{pkg,consumer}` +
+  `dev-libs/maskmaskedconsumer` fixtures. **The whole `--autounmask*`
+  family is shipped now** — only `--autounmask-write` (file-writing)
+  remains, a `PROMPT.md` non-goal.
 - **`--root-deps` / multi-root, remaining edges.** A top-level `IDEPEND`
   reaches the running root only under `--root-deps` (real: unconditionally);
   `PDEPEND` of a running-root entry stays a target-`ROOT` concern (likely

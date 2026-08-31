@@ -8943,9 +8943,51 @@ The following license changes are necessary to proceed:
 ```
 
 Both sides; 1 contract test + 5 `CASES` + 1 `portage-repo` unit test.
-The only remaining unshipped `--autounmask*` member is
-`--autounmask-keep-masks` (real `package.mask` unmask suggestions) and
-`--autounmask-write` (file-writing — a `PROMPT.md` non-goal).
+
+### `emerge --pretend`: real `--autounmask-keep-masks=n` (increment 5)
+
+**Completes the `--autounmask*` family.** Real `_display_autounmask`'s
+`p_mask_change_msg` (`depgraph.py:10723`): a candidate masked by
+`package.mask` **alone** (`mask_masked_only` — KEYWORDS, LICENSE,
+PROPERTIES, RESTRICT all pass) becomes visible via an implicit
+`package.unmask` entry. Real portage **keeps masks by default** —
+`autounmask_keep_masks` defaults `True`, and even a bare `--autounmask`
+does *not* unmask; only an explicit `--autounmask-keep-masks=n` does
+(real `_autounmask_levels` puts masks at level 4+, "least invasive
+changes first").
+
+`resolve_pretend` gained an `autounmask_masks` param (a third
+`visible.is_empty()` fallback after keyword and license — order among
+the three is irrelevant, a candidate masked by exactly one reason only
+ever matches one filter). `resolve_pretend_graph` gained
+`autounmask_suggest_masks` and `GraphResult::autounmask_mask_changes`;
+each change is a bare `=<cpv>` (no token — a mask unmask has no
+keyword/flag; real `autounmask_unrestricted_atoms` defaults `"n"` so
+always the exact-version form). `pretend.rs` prints `The following mask
+changes are necessary to proceed:` **between** the keyword and USE
+blocks (real `_writemsg` order: keyword, mask, USE, license); `--json`
+grows `autounmask_mask_changes`. **v1 cut**: real's `# <filename>:` +
+masking-comment lines (`getmaskingreason`) — the pilot's `package_mask`
+list carries no source-file / comment provenance.
+
+Reuses `dev-libs/hardmaskedpkg` (`package.mask`'d via the fixture repo /
+profile / user chain) + new `dev-libs/maskmaskedconsumer` (`RDEPEND` on
+it). `emerge -p --autounmask-keep-masks=n dev-libs/maskmaskedconsumer`:
+
+```
+[ebuild  N    #] dev-libs/hardmaskedpkg-1.0
+[ebuild  N     ] dev-libs/maskmaskedconsumer-1.0
+
+The following mask changes are necessary to proceed:
+ (see "package.unmask" in the portage(5) man page for more details)
+# required by dev-libs/maskmaskedconsumer-1.0::testrepo
+# required by dev-libs/maskmaskedconsumer (argument)
+=dev-libs/hardmaskedpkg-1.0
+```
+
+Both sides; 1 contract test + 5 `CASES` + 1 `portage-repo` unit test.
+Every `--autounmask*` member is now shipped; only `--autounmask-write`
+(file-writing) remains, a standing `PROMPT.md` non-goal.
 
 ### `emerge -pc <atoms> --deselect=n`
 

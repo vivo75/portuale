@@ -1659,6 +1659,7 @@ fn print_json(
     autounmask_keyword_changes: &[portage_repo::AutounmaskChange],
     autounmask_use_changes: &[portage_repo::AutounmaskChange],
     autounmask_license_changes: &[portage_repo::AutounmaskChange],
+    autounmask_mask_changes: &[portage_repo::AutounmaskChange],
     abi_rebuilds: &[(String, String)],
     top_level_pkgs: &HashSet<(String, String)>,
     verbose: bool,
@@ -1686,6 +1687,10 @@ fn print_json(
         .iter()
         .map(autounmask_change_to_json)
         .collect();
+    let autounmask_mask_json: Vec<String> = autounmask_mask_changes
+        .iter()
+        .map(autounmask_change_to_json)
+        .collect();
     let abi_rebuilds_json: Vec<String> = abi_rebuilds
         .iter()
         .map(|(child, parent)| {
@@ -1697,13 +1702,14 @@ fn print_json(
         })
         .collect();
     println!(
-        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"abi_rebuilds\":[{}]}}",
+        "{{\"entries\":[{}],\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"autounmask_mask_changes\":[{}],\"abi_rebuilds\":[{}]}}",
         entries_json.join(","),
         conflicts_json.join(","),
         changed_deps_report_json.join(","),
         autounmask_kw_json.join(","),
         autounmask_use_json.join(","),
         autounmask_license_json.join(","),
+        autounmask_mask_json.join(","),
         abi_rebuilds_json.join(",")
     );
 }
@@ -4132,6 +4138,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // `"y" if autounmask is True else "n"` (create_depgraph_params.py) --
     // so OFF unless `--autounmask` itself is explicit or `=y` is given.
     let mut autounmask_license: Option<bool> = None;
+    // --autounmask-keep-masks: real `y_or_n`. Real KEEPS masks by default
+    // (`autounmask_keep_masks` defaults `True`); only `=n` unmasks.
+    let mut autounmask_keep_masks: Option<bool> = None;
     // --usepkg/-k, --usepkgonly/-K, --binpkg-respect-use: all three real
     // "true_y_or_n" (bare flag, "=y", or "=n"), same shape --autounmask
     // already has. --binpkg-respect-use's own real default ("auto",
@@ -4879,6 +4888,40 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::from(2);
                 }
             }
+        } else if arg == "--autounmask-keep-masks" {
+            let Some(value) = args.get(i + 1) else {
+                eprintln!("emerge: option \"--autounmask-keep-masks\" requires an argument");
+                return ExitCode::from(2);
+            };
+            match value.as_str() {
+                "y" => {
+                    autounmask_keep_masks = Some(true);
+                    i += 2;
+                }
+                "n" => {
+                    autounmask_keep_masks = Some(false);
+                    i += 2;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if let Some(value) = arg.strip_prefix("--autounmask-keep-masks=") {
+            match value {
+                "y" => {
+                    autounmask_keep_masks = Some(true);
+                    i += 1;
+                }
+                "n" => {
+                    autounmask_keep_masks = Some(false);
+                    i += 1;
+                }
+                _ => {
+                    eprintln!("emerge: option \"--autounmask-keep-masks\": invalid choice: {value:?} (choose from \"y\", \"n\")");
+                    return ExitCode::from(2);
+                }
+            }
         } else if arg == "--usepkg" || arg == "-k" {
             match args.get(i + 1).map(String::as_str) {
                 Some("y") => {
@@ -5418,6 +5461,10 @@ pub fn run(args: &[String]) -> ExitCode {
     // an explicit `--autounmask` or `--autounmask-license=y` enables it.
     let autounmask_suggest_license =
         autounmask_enabled && autounmask_license.unwrap_or(autounmask == Some(true));
+    // Real `create_depgraph_params.py`: `myparams["autounmask_keep_masks"]
+    // = autounmask_keep_masks not in (None, "n")` -- masks stay masked
+    // unless `--autounmask-keep-masks=n` is given explicitly.
+    let autounmask_suggest_masks = autounmask_enabled && autounmask_keep_masks == Some(false);
 
     // Fold the --getbinpkg family into the --usepkg family (see their
     // parsing above): `--getbinpkgonly` implies binary-only; either
@@ -5518,6 +5565,7 @@ pub fn run(args: &[String]) -> ExitCode {
         autounmask_suggest_keywords,
         autounmask_suggest_use,
         autounmask_suggest_license,
+        autounmask_suggest_masks,
         usepkg,
         usepkgonly,
         binpkg_respect_use,
@@ -5582,6 +5630,7 @@ pub fn run(args: &[String]) -> ExitCode {
             &result.autounmask_keyword_changes,
             &result.autounmask_use_changes,
             &result.autounmask_license_changes,
+            &result.autounmask_mask_changes,
             &result.abi_rebuilds,
             &top_level_pkgs,
             verbose,
@@ -5704,22 +5753,28 @@ pub fn run(args: &[String]) -> ExitCode {
                 for line in &change.dep_chain {
                     eprintln!("# {line}");
                 }
-                eprintln!(
-                    "{}",
-                    color.c("INFORM", &format!("{} {}", change.atom, change.token))
-                );
+                let line = if change.token.is_empty() {
+                    change.atom.clone()
+                } else {
+                    format!("{} {}", change.atom, change.token)
+                };
+                eprintln!("{}", color.c("INFORM", &line));
             }
         };
-    // Real `_display_autounmask` order: keyword block, then (mask,) then
-    // USE. The `atom` field already carries its own op prefix (`=` for
-    // keywords, `>=`/`>=…:slot`/`=` for USE).
+    // Real `_display_autounmask` `_writemsg` order: keyword, mask, USE,
+    // license. The `atom` field already carries its own op prefix (`=`
+    // for keywords/masks, `>=`/`>=…:slot`/`=` for USE/license).
     print_autounmask_block(
         "keyword changes",
         "package.accept_keywords",
         &result.autounmask_keyword_changes,
     );
+    print_autounmask_block(
+        "mask changes",
+        "package.unmask",
+        &result.autounmask_mask_changes,
+    );
     print_autounmask_block("USE changes", "package.use", &result.autounmask_use_changes);
-    // Real `_display_autounmask` order: keyword, mask, USE, then license.
     print_autounmask_block(
         "license changes",
         "package.license",
