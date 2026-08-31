@@ -9,6 +9,45 @@ use mrg_director::{MergeKind, MergeUnit};
 use portage_repo::{CandidateSource, GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
 
+/// One resolved [`GraphEntry`] as a director [`MergeUnit`]. `None` for
+/// `AlreadyInstalled` (a silent no-op) and `NoVisibleCandidate` (nothing to
+/// merge; the caller reports it).
+pub fn merge_unit_for_entry(
+    entry: &GraphEntry,
+    root: &Path,
+    progress: mrg_director::MergeProgress,
+) -> Option<MergeUnit> {
+    let version = match &entry.outcome {
+        // A blocker-removal task is not a merge unit.
+        PretendOutcome::AlreadyInstalled { .. }
+        | PretendOutcome::NoVisibleCandidate
+        | PretendOutcome::Uninstall { .. } => {
+            return None;
+        }
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            version.clone()
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+    };
+    let kind = match entry.source {
+        CandidateSource::Binary => MergeKind::Binary,
+        CandidateSource::Ebuild => MergeKind::Source,
+    };
+    Some(MergeUnit {
+        cpv: format!("{}/{}-{version}", entry.category, entry.package),
+        kind,
+        repo: entry.repo_name.clone(),
+        root: root.to_path_buf(),
+        replaces_same_slot: None,
+        remote_binary: entry.remote_binary,
+        build_id: entry.build_id.clone(),
+        slot: entry.slot.clone(),
+        sub_slot: entry.sub_slot.clone(),
+        use_flags: entry.use_flags_display.clone(),
+        progress,
+    })
+}
+
 /// Rebuild the [`GraphEntry`] a merge function needs from a [`MergeUnit`].
 /// The outcome is always `New { version }`: the merge functions only read
 /// the version out of it, and display-only fields are never consulted

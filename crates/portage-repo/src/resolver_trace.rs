@@ -76,6 +76,18 @@ pub(crate) fn max_priority(prios: &[DepPriority]) -> DepPriority {
         .unwrap_or_default()
 }
 
+/// Whether a `GraphEntry` is a nomerge node (installed, no-visible-candidate,
+/// or removal): never selected as a merge.
+// Portage: depgraph.py, pkg.operation == "nomerge"
+pub(crate) fn is_nomerge(e: &GraphEntry) -> bool {
+    matches!(
+        e.outcome,
+        PretendOutcome::AlreadyInstalled { .. }
+            | PretendOutcome::NoVisibleCandidate
+            | PretendOutcome::Uninstall { .. }
+    )
+}
+
 /// One `Parent Dep:` narration row, collected during the walk where the child
 /// instance an atom actually resolved to is known.
 // Portage: _emerge/depgraph.py, _add_parent_atom

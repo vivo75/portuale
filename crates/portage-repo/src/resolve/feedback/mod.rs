@@ -2,6 +2,8 @@
 
 use crate::*;
 use std::ops::ControlFlow;
+mod solvable_slot_conflicts;
+pub(crate) use solvable_slot_conflicts::*;
 
 /// Why one `cat/pkg` version is masked on retry. Readers see the union across
 /// reasons; the backtracker consumes them. Portage: backtracking.py, `runtime_pkg_mask`.
