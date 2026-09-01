@@ -10404,6 +10404,54 @@ committed `fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar` was rebuilt
 with a real `Manifest`; `blake2` / `sha2` are new **dev**-dependencies
 (already vendored via `portage-fetch`) so the tests hash real bytes.
 
+### Config depth: `package.use` gets its real `USE_ORDER` layering
+
+Real `config.py`'s `USE_ORDER` is
+`env:pkg:conf:defaults:pkginternal:features:repo:env.d`; `regenerate()`
+walks it reversed, so per-package USE resolution is one continuous
+incremental pass over `repo` → `pkginternal` → `defaults` → `conf` →
+`pkg`. The pilot used to flatten all three `package.use` sources (repo /
+profile / user) into **one** list applied last — making repo-level
+`package.use` (real: the *weakest* USE layer) and profile-level
+`package.use` (real: below `make.conf`) both override things they
+shouldn't.
+
+Now each source has its own `Config` field at its own real position, and
+`portage-repo::effective_use_flags` (mirrored in the Python reference)
+does the real walk:
+
+- `Config::package_use_repo` — every configured repo's own
+  `profiles/package.use` (overlays `::repo`-scoped), applied **before**
+  the ebuild's own `IUSE` `+`/`-` defaults. Weakest layer modeled.
+- `Config::use_tokens` — every profile level's own `make.defaults` USE
+  (chain order), then
+- `Config::package_use` — every profile level's own `package.use` (as
+  one group — a narrow simplification of real per-level interleaving),
+  then
+- `Config::conf_use_tokens` — `make.conf` USE plus the `USE_EXPAND`
+  folded values (split out of `use_tokens`), then
+- `Config::package_use_user` — the user-level `/etc/portage/package.use`.
+  Strongest layer before the final `use.force`/`use.mask` step.
+
+Still documented cuts: the `env` (`$USE`, `/etc/portage/env`,
+`package.env`), `features` (`FEATURES`-implied USE), and `env.d` layers,
+and repo `make.defaults` USE (real `_repo_make_defaults`, folded into
+`configdict["repo"]` alongside repo `package.use`).
+
+Two new fixtures prove the ordering: `dev-libs/repouseweakpkg`
+(repo-level `package.use` enables `repoweakflag`, the profile
+`make.defaults` disables it → `USE="-repoweakflag"`, its gated dep not
+pulled) and `dev-libs/profileuseweakpkg` (profile-level `package.use`
+enables `profweakflag`, `make.conf` disables it → `USE="-profweakflag"`).
+
+```sh
+cd PORTING/rust && cargo build --release && cd ../..
+ln -s "$PWD/PORTING/rust/target/release/portuale" /tmp/emerge
+PORTAGE_CONFIGROOT="$PWD/PORTING/fixtures" ROOT="$PWD/PORTING/fixtures" \
+    /tmp/emerge --pretend -v dev-libs/repouseweakpkg
+# [ebuild  N     ] dev-libs/repouseweakpkg-1.0::testrepo  USE="-repoweakflag"
+```
+
 ## Running it
 
 Build both Rust binaries:

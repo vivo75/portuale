@@ -1,3 +1,8 @@
 # repo-level package.use: enables a flag for anyone building against
 # this repo, stacked alongside the profile-chain and user-level sources.
 dev-libs/repouseenablepkg repouseflag
+
+# "Config depth" slice: repoweakflag is enabled here but disabled by the
+# profile make.defaults -- proving repo package.use (real configdict[repo])
+# is weaker than the profile defaults layer.
+dev-libs/repouseweakpkg repoweakflag

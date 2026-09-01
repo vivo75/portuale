@@ -1869,7 +1869,10 @@ fn blocked_installed_packages(
         let use_flags = portage_repo::effective_use_flags(
             iuse,
             &config.use_tokens,
+            &config.conf_use_tokens,
+            &config.package_use_repo,
             &config.package_use,
+            &config.package_use_user,
             &config.package_use_force,
             &config.package_use_mask,
             &config.use_force,

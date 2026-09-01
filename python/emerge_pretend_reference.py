@@ -22,7 +22,8 @@ resolve_config) come from a real profile chain + make.conf + package.*,
 not a hardcoded stand-in -- mirroring PORTING/rust/portage-profile/src/lib.rs
 exactly (own implementation, not a wrapper around real config.py; see that
 crate's doc comment for the full algorithm and its documented scope cuts:
-only the `defaults`/`conf` USE_ORDER layers, `masters` (layout.conf repo
+the `repo`/`pkginternal`/`defaults`/`conf`/`pkg` USE_ORDER layers are
+modeled (`env`/`features`/`env.d` are not), `masters` (layout.conf repo
 inheritance) still unimplemented, and the real config.py quirk where
 `${VAR}` substitution excludes USE across profile levels). Matching a candidate
 against a package.mask/.unmask/.accept_keywords/.use entry reuses the real
@@ -1064,7 +1065,10 @@ def _use_flags_if_conditional(value_str, candidate, category, package, candidate
     return effective_use_flags(
         candidate["iuse"],
         config["use_tokens"],
+        config["conf_use_tokens"],
+        config["package_use_repo"],
         config["package_use"],
+        config["package_use_user"],
         config["package_use_force"],
         config["package_use_mask"],
         config["use_force"],
@@ -1706,11 +1710,19 @@ def _flag_is_settable(candidate, category, package, flag, desired, config):
     )
     synthetic_token = flag if desired else f"-{flag}"
     synthetic_atom = f"={category}/{package}-{candidate['version']}"
-    package_use = [*config["package_use"], (synthetic_atom, [synthetic_token])]
+    # The synthetic entry stands in for a hypothetical *user* package.use
+    # line, so it joins the "pkg" layer (strongest).
+    package_use_user = [
+        *config["package_use_user"],
+        (synthetic_atom, [synthetic_token]),
+    ]
     use_flags = effective_use_flags(
         iuse,
         config["use_tokens"],
-        package_use,
+        config["conf_use_tokens"],
+        config["package_use_repo"],
+        config["package_use"],
+        package_use_user,
         config["package_use_force"],
         config["package_use_mask"],
         config["use_force"],
@@ -2166,7 +2178,10 @@ def _is_stable(keywords, candidate_str, category, package, accept_keywords, pack
 def effective_use_flags(
     iuse,
     use_tokens,
+    conf_use_tokens,
+    package_use_repo,
     package_use,
+    package_use_user,
     package_use_force,
     package_use_mask,
     use_force,
@@ -2182,15 +2197,36 @@ def effective_use_flags(
     category,
     package,
 ):
-    """The USE flags in effect for one specific package: `iuse`'s own
-    +flag/-flag default markers (real "pkginternal", see below) seeded
-    first, then `use_tokens` (the *ordered raw* USE= value strings from
-    every profile level's own make.defaults plus make.conf, replayed via
-    _apply_incremental directly -- not a pre-flattened set unioned on
-    top, see the `iuse`'s own defaults paragraph below for why that
-    distinction matters) with every matching package.use entry's tokens
-    layered on top after that, in file order, via the same incremental
-    -flag/flag/+flag semantics USE itself uses (see _apply_incremental),
+    """The USE flags in effect for one specific package -- one continuous
+    incremental walk over the real USE_ORDER layers this pilot models,
+    low priority to high (real config.py::regenerate() over the reversed
+    uvlist; USE_ORDER default
+    "env:pkg:conf:defaults:pkginternal:features:repo:env.d"). The "Config
+    depth" slice (SCOPE_BACKLOG Part 2.C) split the earlier flat model
+    ("IUSE seed, then use_tokens, then one flat package.use list") so
+    each package.use source sits at its own real position:
+
+      1. repo -- every configured repo's own profiles/package.use
+         (package_use_repo), applied *before* the IUSE defaults. Weakest
+         layer modeled. (Real portage also folds repo make.defaults USE
+         in here; not modeled.)
+      2. pkginternal -- iuse's own +flag/-flag default markers (see the
+         paragraph below for the grounding).
+      3. defaults -- every profile level's own make.defaults USE
+         (use_tokens, chain order), then every profile level's own
+         package.use (package_use, as one group).
+      4. conf -- make.conf USE, then the USE_EXPAND folded values
+         (conf_use_tokens).
+      5. pkg -- the user-level /etc/portage/package.use
+         (package_use_user). Strongest layer before the final
+         use.force/use.mask step.
+
+    Every layer is replayed via _apply_incremental directly -- not a
+    pre-flattened set unioned on top (see the `iuse` paragraph below).
+    env/features/env.d are documented cuts. Applied per package,
+    mirroring portage-repo/src/lib.rs's effective_use_flags exactly.
+
+    After the walk:
     THEN package.use.force/package.use.mask layered on top of that (force
     winning first, then mask -- see _specificity_ordered_flags for how a
     conflict between multiple matching mask/force entries is resolved),
@@ -2222,29 +2258,31 @@ def effective_use_flags(
     by reading config.py's own self.uvlist construction (`for x in
     self["USE_ORDER"].split(":"): ...; self.uvlist.reverse()`):
     incremental application walks uvlist in *reversed* USE_ORDER, so
-    pkginternal (position 5 of 8) is applied well *before* defaults
-    (profile), conf (make.conf), and pkg (package.use) -- real portage's
-    own actual precedence has every one of those three able to override
-    an IUSE default; only env/env.d (real per-invocation/stacked-profile-
-    env overrides, positions 8 and 1) sit even lower/higher than this
-    pilot models at all. Ported here as the seed use_flags starts from,
-    with use_tokens (defaults/conf) replayed directly on top via
-    _apply_incremental -- NOT a plain set union of the already-flattened
-    use_flags. An earlier version of this pilot did union a flattened
-    base here, which meant base could only ever *add* a flag, never
-    explicitly cancel an IUSE +default the way real defaults/conf
-    genuinely can (real regenerate() runs one continuous incremental walk
-    across the whole reversed uvlist -- pkginternal then defaults then
-    conf then pkg -- so a -flag token in defaults/conf really does cancel
-    an earlier pkginternal +flag, exactly like any other incremental
-    variable). Replaying the ordered raw tokens instead of the flattened
-    set closes that gap: resolve_config exposes both use_flags (the
-    flattened result, still used elsewhere for e.g. --newuse comparisons)
-    and use_tokens (the ordered raw values that produced it). The
-    dominant real-world case -- an ebuild author sets a sensible IUSE
-    default, and nothing else ever mentions the flag at all -- was
-    already correct either way; this closes the narrower case where a
-    profile or make.conf genuinely does mention it.
+    pkginternal (position 5 of 8) is applied after repo but well *before*
+    defaults (profile), conf (make.conf), and pkg (package.use) -- real
+    portage's own actual precedence has every one of those three able to
+    override an IUSE default; only env/env.d (real per-invocation/
+    stacked-profile-env overrides, positions 8 and 1) sit even lower/
+    higher than this pilot models at all. Applied here at that same
+    relative position (step 2 of the walk above), with the repo
+    package.use applied first (step 1) and every later layer replayed
+    directly on top via _apply_incremental -- NOT a plain set union of
+    the already-flattened use_flags. An earlier version of this pilot did
+    union a flattened base here, which meant base could only ever *add* a
+    flag, never explicitly cancel an IUSE +default the way real
+    defaults/conf genuinely can (real regenerate() runs one continuous
+    incremental walk across the whole reversed uvlist -- repo then
+    pkginternal then defaults then conf then pkg -- so a -flag token in
+    defaults/conf really does cancel an earlier pkginternal +flag,
+    exactly like any other incremental variable). Replaying the ordered
+    raw tokens instead of the flattened set closes that gap:
+    resolve_config exposes both use_flags (the flattened result, still
+    used elsewhere for e.g. --newuse comparisons) and the per-layer token
+    lists / package.use keys that produced it. The dominant real-world
+    case -- an ebuild author sets a sensible IUSE default, and nothing
+    else ever mentions the flag at all -- was already correct either
+    way; this closes the narrower case where a profile, make.conf, or a
+    wrongly-layered repo/user package.use genuinely does mention it.
 
     use_force/use_mask (global use.force/use.mask): applied at the exact
     same position package_use_force/package_use_mask already are (below),
@@ -2260,16 +2298,37 @@ def effective_use_flags(
     # default) is a real, deliberate no-op here, matching real config.py's
     # own "if x.startswith('+'): ... elif x.startswith('-'): ..." (no
     # else branch at all).
+    use_flags = set()
+
+    def _apply_matching(entries):
+        for entry, tokens in entries:
+            if _matches_config_entry(entry, candidate_str, category, package):
+                _apply_incremental(" ".join(tokens), use_flags)
+
+    # repo (real configdict["repo"]): before the IUSE defaults.
+    _apply_matching(package_use_repo)
+
+    # pkginternal: only a token with an explicit "+"/"-" marker
+    # contributes anything at all.
     iuse_defaults = " ".join(
         tok for tok in iuse.split() if tok.startswith("+") or tok.startswith("-")
     )
-    use_flags = set()
     _apply_incremental(iuse_defaults, use_flags)
+
+    # defaults (real configdict["defaults"]): profile make.defaults USE,
+    # then profile package.use (as one group -- see resolve_config).
     for token in use_tokens:
         _apply_incremental(token, use_flags)
-    for entry, tokens in package_use:
-        if _matches_config_entry(entry, candidate_str, category, package):
-            _apply_incremental(" ".join(tokens), use_flags)
+    _apply_matching(package_use)
+
+    # conf (real configdict["conf"]): make.conf USE, then the USE_EXPAND
+    # folded values.
+    for token in conf_use_tokens:
+        _apply_incremental(token, use_flags)
+
+    # pkg (real configdict["pkg"]): user-level /etc/portage/package.use --
+    # strongest before the final use.force/use.mask step below.
+    _apply_matching(package_use_user)
 
     # _* wildcard USE_EXPAND expansion (real config.py setcpv ~2242):
     # once package.use has been applied, a "k_*" flag still in the set
@@ -2450,7 +2509,10 @@ def _reinstall_flags_for_use_change(root, category, package, candidate, config, 
     cur_use = effective_use_flags(
         metadata["IUSE"],
         config["use_tokens"],
+        config["conf_use_tokens"],
+        config["package_use_repo"],
         config["package_use"],
+        config["package_use_user"],
         config["package_use_force"],
         config["package_use_mask"],
         config["use_force"],
@@ -3009,7 +3071,10 @@ def _candidate_iuse_and_use(candidate, category, package, config):
     use_flags = effective_use_flags(
         metadata.get("IUSE", ""),
         config["use_tokens"],
+        config["conf_use_tokens"],
+        config["package_use_repo"],
         config["package_use"],
+        config["package_use_user"],
         config["package_use_force"],
         config["package_use_mask"],
         config["use_force"],
@@ -3312,7 +3377,7 @@ def _process_make_conf_file(
     config_root,
     scalars,
     use_flags,
-    use_tokens,
+    conf_use_tokens,
     accept_keywords,
     use_expand,
     use_expand_unprefixed,
@@ -3345,7 +3410,7 @@ def _process_make_conf_file(
                 config_root,
                 scalars,
                 use_flags,
-                use_tokens,
+                conf_use_tokens,
                 accept_keywords,
                 use_expand,
                 use_expand_unprefixed,
@@ -3362,7 +3427,7 @@ def _process_make_conf_file(
         value = _substitute(raw_value, scalars)
         if key == "USE":
             _apply_incremental(value, use_flags)
-            use_tokens.append(value)
+            conf_use_tokens.append(value)
         elif key == "ACCEPT_KEYWORDS":
             _apply_incremental(value, accept_keywords)
         elif key == "USE_EXPAND":
@@ -3394,9 +3459,11 @@ def resolve_config(
     implementation (not a wrapper around real config.py), mirroring
     portage-profile/src/lib.rs's resolve_config exactly -- see that
     crate's doc comment for the full algorithm and its documented scope
-    cuts. Returns a dict with keys "use_flags", "accept_keywords",
+    cuts. Returns a dict with keys "use_flags", "use_tokens",
+    "conf_use_tokens", "accept_keywords",
     "package_mask", "package_unmask", "package_accept_keywords",
-    "package_use", "system_packages", "package_provided", "use_force",
+    "package_use_repo", "package_use", "package_use_user",
+    "system_packages", "package_provided", "use_force",
     "use_mask", "package_use_force", "package_use_mask", "use_expand",
     "use_expand_unprefixed", "use_expand_implicit", "iuse_implicit",
     "iuse_effective", "use_stable_force",
@@ -3459,6 +3526,7 @@ def resolve_config(
     "<repo_location>/profiles/some/path"."""
     use_flags = set()
     use_tokens = []
+    conf_use_tokens = []
     accept_keywords = set()
     use_expand = set()
     use_expand_unprefixed = set()
@@ -3516,7 +3584,7 @@ def resolve_config(
             config_root,
             scalars,
             use_flags,
-            use_tokens,
+            conf_use_tokens,
             accept_keywords,
             use_expand,
             use_expand_unprefixed,
@@ -3564,7 +3632,7 @@ def resolve_config(
                 prefixed_tokens.append(f"{prefix}_{tok}")
         prefixed = " ".join(prefixed_tokens)
         _apply_incremental(prefixed, use_flags)
-        use_tokens.append(prefixed)
+        conf_use_tokens.append(prefixed)
 
     # USE_EXPAND_UNPREFIXED: real config.py's own companion to
     # USE_EXPAND -- the exact same mechanism, except the value is folded
@@ -3579,7 +3647,7 @@ def resolve_config(
         if value is None:
             continue
         _apply_incremental(value, use_flags)
-        use_tokens.append(value)
+        conf_use_tokens.append(value)
 
     # Real EAPI 5+ IUSE_EFFECTIVE (config.py::_calc_iuse_effective) --
     # iuse_implicit, plus every USE_EXPAND_VALUES_<v> value for each
@@ -3716,47 +3784,40 @@ def resolve_config(
         )
     )
 
-    # package.use: repo-level, then every profile level's own package.use
-    # (in chain order), then user-level -- same file-location convention
-    # package.mask/package.accept_keywords both already use, and purely
-    # additive like package.accept_keywords. Mirrors
-    # portage-profile/src/lib.rs's resolve_config exactly, including the
-    # same deliberate, confirmed-with-the-user simplification (a flat
-    # concatenation, not real portage's own repo/defaults/pkg USE_ORDER
-    # layering -- see that crate's own doc comment for the full
-    # reasoning).
-    # Repo-level/profile-level lines are parsed separately from
-    # user-level ones (rather than one concatenated pass, like every
-    # other package.use.* file here) only because of the
-    # USE_EXPAND-prefix shorthand's own real user-only restriction --
-    # see _parse_package_use_lines's own docstring.
-    #
-    # Every overlay's own package.use (real UseManager.py's own
-    # _parse_repository_files_to_dict_of_dicts, confirmed to iterate
-    # repositories.repos_with_profiles() -- every configured repo, not
-    # just main) gets folded into the same flat list too, ::repo-scoped
-    # via _scope_repo_package_use_lines so an overlay's own entry can
-    # never apply to a same-named package elsewhere -- the same
-    # "package.mask, widened" precedent package.mask/.unmask itself
-    # already established. The main repo's own package.use is
-    # deliberately left unscoped: real portage's own masters-chain
-    # lookup (repos = masters + [pkg.repo]) always includes the main
-    # repo, since every overlay here implicitly masters it (no explicit
-    # "masters =" support yet) -- so the main repo's own entries apply
-    # everywhere, exactly like package.mask's own unscoped main-repo
-    # lines do.
-    repo_and_profile_use_lines = _read_config_lines(
+    # package.use: three real sources, each into its own config key at
+    # its own real USE_ORDER position (the "Config depth" slice,
+    # SCOPE_BACKLOG Part 2.C) -- see effective_use_flags for the
+    # per-package walk. Mirrors portage-profile/src/lib.rs's
+    # resolve_config exactly:
+    #   - repo-level (every configured repo's profiles/package.use;
+    #     overlays ::repo-scoped via _scope_repo_package_use_lines, main
+    #     unscoped since it implicitly masters every overlay) ->
+    #     package_use_repo, real configdict["repo"]. Applied *before* the
+    #     ebuild's own IUSE +/- defaults -- the weakest layer modeled.
+    #   - every profile level's own package.use (chain order) ->
+    #     package_use, real configdict["defaults"]. Applied after the
+    #     profile make.defaults USE tokens, before make.conf.
+    #   - user-level /etc/portage/package.use -> package_use_user, real
+    #     configdict["pkg"]. Applied after make.conf; the strongest layer
+    #     before the final use.force/use.mask step. This is the only
+    #     source that gets the USE_EXPAND-prefix shorthand (real
+    #     user-only extended_syntax) -- see _parse_package_use_lines.
+    # Still simplified: repo make.defaults USE (real _repo_make_defaults)
+    # is not modeled, and profile package.use is applied as one group
+    # after all profile make.defaults rather than interleaved per level.
+    repo_use_lines = _read_config_lines(
         os.path.join(main_repo_location, "profiles", "package.use")
     )
     for repo_name, repo_location in overlay_repos:
         overlay_use_lines = _read_config_lines(
             os.path.join(repo_location, "profiles", "package.use")
         )
-        repo_and_profile_use_lines.extend(
+        repo_use_lines.extend(
             _scope_repo_package_use_lines(overlay_use_lines, repo_name)
         )
+    profile_use_lines = []
     for level in chain:
-        repo_and_profile_use_lines.extend(
+        profile_use_lines.extend(
             _read_config_lines(os.path.join(level, "package.use"))
         )
     user_use_lines = _read_config_lines(
@@ -3980,13 +4041,15 @@ def resolve_config(
     return {
         "use_flags": use_flags,
         "use_tokens": use_tokens,
+        "conf_use_tokens": conf_use_tokens,
         "accept_keywords": accept_keywords,
         "package_mask": _stack_mask_lines(mask_sources),
         "package_unmask": _stack_mask_lines(unmask_sources),
         "package_accept_keywords": package_accept_keywords,
-        "package_use": (
-            _parse_package_use_lines(repo_and_profile_use_lines)
-            + _parse_package_use_lines(user_use_lines, use_expand_shorthand=True)
+        "package_use_repo": _parse_package_use_lines(repo_use_lines),
+        "package_use": _parse_package_use_lines(profile_use_lines),
+        "package_use_user": _parse_package_use_lines(
+            user_use_lines, use_expand_shorthand=True
         ),
         "system_packages": system_packages,
         "package_provided": package_provided,
@@ -4995,7 +5058,10 @@ def resolve_pretend(
             would_select = effective_use_flags(
                 c["iuse"],
                 config["use_tokens"],
+                config["conf_use_tokens"],
+                config["package_use_repo"],
                 config["package_use"],
+                config["package_use_user"],
                 config["package_use_force"],
                 config["package_use_mask"],
                 config["use_force"],
@@ -6419,7 +6485,10 @@ def resolve_pretend_graph(
             use_flags = effective_use_flags(
                 metadata.get("IUSE", ""),
                 config["use_tokens"],
+                config["conf_use_tokens"],
+                config["package_use_repo"],
                 config["package_use"],
+                config["package_use_user"],
                 config["package_use_force"],
                 config["package_use_mask"],
                 config["use_force"],
@@ -7052,7 +7121,10 @@ def _enqueue_dependencies(
     use_flags = effective_use_flags(
         metadata.get("IUSE", ""),
         config["use_tokens"],
+        config["conf_use_tokens"],
+        config["package_use_repo"],
         config["package_use"],
+        config["package_use_user"],
         config["package_use_force"],
         config["package_use_mask"],
         config["use_force"],

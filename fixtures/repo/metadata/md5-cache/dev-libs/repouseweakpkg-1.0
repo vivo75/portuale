@@ -1,0 +1,8 @@
+DEFINED_PHASES=-
+DESCRIPTION=fixture package: repo-level profiles/package.use enables repoweakflag, but the profile make.defaults disables it -- real configdict[repo] is weaker than configdict[defaults], so the flag ends up OFF
+EAPI=8
+IUSE=repoweakflag
+KEYWORDS=amd64
+RDEPEND=repoweakflag? ( dev-libs/newpkg )
+SLOT=0
+_md5_=0000000000000000000000000000000

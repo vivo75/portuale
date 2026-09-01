@@ -211,12 +211,19 @@ single-pass BFS can't grow into these incrementally:
 
 ### C. Config resolution depth
 
-- **`package.use` full per-level `USE_ORDER`.** Repo-level `package.use`
-  belongs in `configdict["repo"]`, profile-level in `configdict["defaults"]`
-  (each merged with that level's own `make.defaults` USE); the pilot
-  flattens all three into one incremental list. The `env`, `pkginternal`,
-  `features`, and `env.d` `USE_ORDER` layers are absent entirely. The flat
-  `Config` model has no per-layer structure — a genuinely large refactor.
+- **`package.use` per-level `USE_ORDER` layering.** *(Shipped
+  2026-09-01: the three `package.use` sources now land in their own
+  `Config` fields at their own real positions — `package_use_repo`
+  before the IUSE `pkginternal` seed, `package_use` (profile) in the
+  `defaults` layer before `make.conf`, `package_use_user` in the `pkg`
+  layer after it; `use_tokens` split into profile `make.defaults` +
+  `conf_use_tokens`. `effective_use_flags` does the real reversed-
+  `USE_ORDER` walk `repo → pkginternal → defaults → conf → pkg`.)*
+  Still open: the `env` (`$USE` / `/etc/portage/env` / `package.env`),
+  `features`, and `env.d` layers; repo `make.defaults` USE folded into
+  `configdict["repo"]`; profile `package.use` interleaved per profile
+  level with that level's `make.defaults` (the pilot applies it as one
+  group).
 
 ### D. Sandbox / build isolation
 
@@ -343,10 +350,11 @@ by a few large items rather than a long tail of small ones:
    `resume_backup` rotation, the elog `save`/`mail` modules,
    `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a hard fail.
 
-3. **Config-resolution depth (Part 2.C).** The `USE_ORDER` layering is
-   partial. Most real profiles resolve identically, but a config that
-   leans on `env`/`pkginternal`/per-level `package.use` interleaving will
-   diverge.
+3. **Config-resolution depth (Part 2.C).** *The `package.use` per-level
+   `USE_ORDER` layering shipped 2026-09-01 (`repo`/`pkginternal`/
+   `defaults`/`conf`/`pkg` all modeled).* Remaining: the `env`
+   (`$USE` / `package.env`), `features`, and `env.d` layers — a config
+   that leans on those still diverges.
 
 4. **Sandbox enforcement (Part 2.D).** The pilot trusts ebuilds; real
    portage confines them. Not a correctness gap for well-behaved packages,

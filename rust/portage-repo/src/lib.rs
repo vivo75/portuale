@@ -997,21 +997,38 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
     }
 }
 
-/// The USE flags in effect for one specific package: `iuse`'s own
-/// `+flag`/`-flag` default markers (real `pkginternal`, see below) seeded
-/// first, then `use_tokens` (`portage_profile::Config::use_tokens`, the
-/// *ordered raw* `USE=` value strings from every profile level's own
-/// `make.defaults` plus `make.conf`, replayed via `apply_incremental`
-/// directly -- not a pre-flattened set unioned on top, see the
-/// `iuse`'s own defaults paragraph below for why that distinction
-/// matters) with every matching `package.use` entry's tokens layered on
-/// top after that, in file order, via the same incremental
-/// `-flag`/`flag`/`+flag` semantics `USE` itself uses (see
-/// `portage_profile::apply_incremental`). Unlike `is_visible`'s
-/// mask/keywords checks (which only ever add to an accepted set), this
-/// can both add and remove flags, and does so per package -- a
-/// `package.use` entry never affects any other package's own
-/// resolution.
+/// The USE flags in effect for one specific package -- one continuous
+/// incremental walk over the real `USE_ORDER` layers this pilot models,
+/// low priority to high (real `config.py::regenerate()` over the
+/// reversed `uvlist`; `USE_ORDER` default
+/// `env:pkg:conf:defaults:pkginternal:features:repo:env.d`). The "Config
+/// depth" slice (SCOPE_BACKLOG Part 2.C) split the earlier flat model
+/// ("IUSE seed, then `use_tokens`, then one flat `package.use` list") so
+/// each `package.use` source sits at its own real position. The walk,
+/// weakest layer first:
+///
+/// - `repo` -- every configured repo's own `profiles/package.use`
+///   (`Config::package_use_repo`), applied *before* the IUSE defaults.
+///   The weakest layer this pilot models. (Real portage also folds repo
+///   `make.defaults` USE in here; not modeled.)
+/// - `pkginternal` -- `iuse`'s own `+flag`/`-flag` default markers (see
+///   the paragraph below for the grounding).
+/// - `defaults` -- every profile level's own `make.defaults` USE
+///   (`Config::use_tokens`, chain order), then every profile level's own
+///   `package.use` (`Config::package_use`, as one group).
+/// - `conf` -- `make.conf` USE, then the `USE_EXPAND` folded values
+///   (`Config::conf_use_tokens`).
+/// - `pkg` -- the user-level `/etc/portage/package.use`
+///   (`Config::package_use_user`). The strongest layer before the final
+///   `use.force`/`use.mask` step.
+///
+/// Every layer is replayed via `apply_incremental` directly -- not a
+/// pre-flattened set unioned on top (see the `iuse` paragraph below for
+/// why that distinction matters). `env`/`features`/`env.d` are
+/// documented cuts. Unlike `is_visible`'s mask/keywords checks (which
+/// only ever add to an accepted set), this can both add and remove
+/// flags, and does so per package -- a `package.use` entry never affects
+/// any other package's own resolution.
 ///
 /// **`iuse`'s own defaults**: found and grounded by comparing this
 /// pilot's own output against the real, installed system `emerge` on a
@@ -1031,32 +1048,34 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 /// confirmed by reading `config.py`'s own `self.uvlist` construction
 /// (`for x in self["USE_ORDER"].split(":"): ...; self.uvlist.reverse()`):
 /// incremental application walks `uvlist` in *reversed* `USE_ORDER`, so
-/// `pkginternal` (position 5 of 8) is applied well *before* `defaults`
-/// (profile), `conf` (`make.conf`), and `pkg` (`package.use`) -- real
-/// portage's own actual precedence has every one of those three able to
-/// override an IUSE default; only `env`/`env.d` (real per-invocation/
-/// stacked-profile-env overrides, positions 8 and 1) sit even lower/
-/// higher than this pilot models at all. Ported here as the seed
-/// `use_flags` starts from, with `use_tokens` (`defaults`/`conf`)
-/// replayed directly on top via `apply_incremental` -- **not** a plain
-/// set union of the already-flattened `use_flags`. An earlier version of
+/// `pkginternal` (position 5 of 8) is applied after `repo` but well
+/// *before* `defaults` (profile), `conf` (`make.conf`), and `pkg`
+/// (`package.use`) -- real portage's own actual precedence has every one
+/// of those three able to override an IUSE default; only `env`/`env.d`
+/// (real per-invocation/stacked-profile-env overrides at the far ends of
+/// `USE_ORDER`) sit even lower/higher than this pilot models at all.
+/// Applied here at that same relative position (the `pkginternal` step
+/// of the walk above), with the `repo` `package.use` applied first and
+/// every later layer replayed directly on top via `apply_incremental` --
+/// **not** a plain set union of the already-flattened `use_flags`. An
+/// earlier version of
 /// this pilot *did* union a flattened `base` here, which meant `base`
 /// could only ever *add* a flag, never explicitly cancel an IUSE
 /// `+default` the way real `defaults`/`conf` genuinely can (real
 /// `regenerate()` runs one continuous incremental walk across the whole
-/// reversed `uvlist` -- `pkginternal` then `defaults` then `conf` then
-/// `pkg` -- so a `-flag` token in `defaults`/`conf` really does cancel
-/// an earlier `pkginternal` `+flag`, exactly like any other incremental
-/// variable). Replaying the *ordered raw tokens* instead of the
-/// flattened set closes that gap: `portage_profile::resolve_config`
+/// reversed `uvlist` -- `repo` then `pkginternal` then `defaults` then
+/// `conf` then `pkg` -- so a `-flag` token in `defaults`/`conf` really
+/// does cancel an earlier `pkginternal` `+flag`, exactly like any other
+/// incremental variable). Replaying the *ordered raw tokens* instead of
+/// the flattened set closes that gap: `portage_profile::resolve_config`
 /// exposes both `use_flags` (the flattened result, still used elsewhere
-/// for e.g. `--newuse` comparisons) and `use_tokens` (the ordered raw
-/// values that produced it) -- see `Config::use_tokens`'s own doc
-/// comment for the full grounding. The dominant real-world case -- an
-/// ebuild author sets a sensible IUSE default, and nothing else ever
-/// mentions the flag at all -- was already correct either way; this
-/// closes the narrower case where a profile or `make.conf` genuinely
-/// does mention it.
+/// for e.g. `--newuse` comparisons) and the per-layer token lists /
+/// `package.use` fields that produced it -- see `Config::use_tokens`'s
+/// own doc comment for the full grounding. The dominant real-world case
+/// -- an ebuild author sets a sensible IUSE default, and nothing else
+/// ever mentions the flag at all -- was already correct either way; this
+/// closes the narrower case where a profile, `make.conf`, or a
+/// wrongly-layered repo/user `package.use` genuinely does mention it.
 ///
 /// `use_stable_force`/`use_stable_mask`/`package_use_stable_force`/
 /// `package_use_stable_mask` (`keywords`/`candidate_str` decide, via
@@ -1078,7 +1097,10 @@ fn matches_config_entry(entry: &str, candidate_str: &str, category: &str, packag
 pub fn effective_use_flags(
     iuse: &str,
     use_tokens: &[String],
+    conf_use_tokens: &[String],
+    package_use_repo: &[(String, Vec<String>)],
     package_use: &[(String, Vec<String>)],
+    package_use_user: &[(String, Vec<String>)],
     package_use_force: &[(String, Vec<String>)],
     package_use_mask: &[(String, Vec<String>)],
     use_force: &HashSet<String>,
@@ -1094,7 +1116,28 @@ pub fn effective_use_flags(
     category: &str,
     package: &str,
 ) -> HashSet<String> {
-    // real pkginternal: only a token with an explicit "+"/"-" marker
+    // The per-package `USE_ORDER` walk, low priority -> high (real
+    // `regenerate()` over the reversed `uvlist`; see this function's own
+    // doc comment for the full grounding). This pilot models, in order:
+    //   repo -> pkginternal -> defaults -> conf -> pkg
+    // then the final `use.force`/`use.mask` step. `env`/`features`/`env.d`
+    // are documented cuts (see `portage_profile`'s module doc comment).
+    let mut use_flags: HashSet<String> = HashSet::new();
+
+    // `repo` (real `configdict["repo"]`): every configured repo's own
+    // `profiles/package.use`, applied *before* the ebuild's own IUSE
+    // defaults -- the weakest layer this pilot models. (Real portage also
+    // folds repo `make.defaults` USE in here; not modeled.)
+    let apply_matching = |flags: &mut HashSet<String>, entries: &[(String, Vec<String>)]| {
+        for (entry, tokens) in entries {
+            if matches_config_entry(entry, candidate_str, category, package) {
+                portage_profile::apply_incremental(&tokens.join(" "), flags);
+            }
+        }
+    };
+    apply_matching(&mut use_flags, package_use_repo);
+
+    // `pkginternal`: only a token with an explicit "+"/"-" marker
     // contributes anything at all -- a markerless IUSE token (no
     // declared default) is a real, deliberate no-op here, matching real
     // config.py's own `if x.startswith("+"): ... elif x.startswith("-"):
@@ -1104,16 +1147,28 @@ pub fn effective_use_flags(
         .filter(|tok| tok.starts_with('+') || tok.starts_with('-'))
         .collect::<Vec<_>>()
         .join(" ");
-    let mut use_flags: HashSet<String> = HashSet::new();
     portage_profile::apply_incremental(&iuse_defaults, &mut use_flags);
+
+    // `defaults` (real `configdict["defaults"]`): every profile level's
+    // own `make.defaults` USE (chain order), then every profile level's
+    // own `package.use` (applied as one group -- see
+    // `portage_profile::Config::package_use`'s own doc comment for that
+    // narrow simplification vs. real per-level interleaving).
     for token in use_tokens {
         portage_profile::apply_incremental(token, &mut use_flags);
     }
-    for (entry, tokens) in package_use {
-        if matches_config_entry(entry, candidate_str, category, package) {
-            portage_profile::apply_incremental(&tokens.join(" "), &mut use_flags);
-        }
+    apply_matching(&mut use_flags, package_use);
+
+    // `conf` (real `configdict["conf"]`): `make.conf` USE, then the
+    // `USE_EXPAND`/`USE_EXPAND_UNPREFIXED` folded values.
+    for token in conf_use_tokens {
+        portage_profile::apply_incremental(token, &mut use_flags);
     }
+
+    // `pkg` (real `configdict["pkg"]`): the user-level
+    // `/etc/portage/package.use` -- the strongest layer before the final
+    // `use.force`/`use.mask` step below.
+    apply_matching(&mut use_flags, package_use_user);
 
     // `_*` wildcard USE_EXPAND expansion (real `config.py` `setcpv`
     // ~2242): once `package.use` has been applied, a `k_*` flag still in
@@ -1651,7 +1706,10 @@ fn use_flags_if_conditional(
     effective_use_flags(
         &candidate.iuse,
         &config.use_tokens,
+        &config.conf_use_tokens,
+        &config.package_use_repo,
         &config.package_use,
+        &config.package_use_user,
         &config.package_use_force,
         &config.package_use_mask,
         &config.use_force,
@@ -2472,12 +2530,17 @@ fn flag_is_settable(
     // expects an atom on the left, a candidate string on the right, not
     // a fully-qualified candidate string used as both).
     let synthetic_atom = format!("={category}/{package}-{}", candidate.version);
-    let mut package_use = config.package_use.clone();
-    package_use.push((synthetic_atom, vec![synthetic_token]));
+    // The synthetic entry stands in for a hypothetical *user*
+    // `package.use` line, so it joins the `pkg` layer (strongest).
+    let mut package_use_user = config.package_use_user.clone();
+    package_use_user.push((synthetic_atom, vec![synthetic_token]));
     let use_flags = effective_use_flags(
         iuse,
         &config.use_tokens,
-        &package_use,
+        &config.conf_use_tokens,
+        &config.package_use_repo,
+        &config.package_use,
+        &package_use_user,
         &config.package_use_force,
         &config.package_use_mask,
         &config.use_force,
@@ -5136,7 +5199,10 @@ fn candidate_iuse_and_use(
     let use_flags = effective_use_flags(
         metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
         &config.use_tokens,
+        &config.conf_use_tokens,
+        &config.package_use_repo,
         &config.package_use,
+        &config.package_use_user,
         &config.package_use_force,
         &config.package_use_mask,
         &config.use_force,
@@ -6336,7 +6402,10 @@ pub fn resolve_pretend(
                 let would_select = effective_use_flags(
                     &candidate.iuse,
                     &config.use_tokens,
+                    &config.conf_use_tokens,
+                    &config.package_use_repo,
                     &config.package_use,
+                    &config.package_use_user,
                     &config.package_use_force,
                     &config.package_use_mask,
                     &config.use_force,
@@ -8973,7 +9042,10 @@ pub fn resolve_pretend_graph(
             let mut use_flags = effective_use_flags(
                 metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
                 &config.use_tokens,
+                &config.conf_use_tokens,
+                &config.package_use_repo,
                 &config.package_use,
+                &config.package_use_user,
                 &config.package_use_force,
                 &config.package_use_mask,
                 &config.use_force,
@@ -9781,7 +9853,10 @@ fn enqueue_dependencies(
     let use_flags = effective_use_flags(
         metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
         &config.use_tokens,
+        &config.conf_use_tokens,
+        &config.package_use_repo,
         &config.package_use,
+        &config.package_use_user,
         &config.package_use_force,
         &config.package_use_mask,
         &config.use_force,
@@ -15261,7 +15336,7 @@ mod tests {
         // config.py strips them from PORTAGE_USE). Exercised directly
         // with the fixture's own `linguas_*` package.use entry against
         // wildexpandpkg's declared IUSE.
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "linguas_en linguas_de",
             &[],
             &[(
@@ -17198,6 +17273,56 @@ mod tests {
         assert!(entries.iter().all(|e| e.blockers.is_empty()));
     }
 
+    /// Test shim for the pre-"Config depth" positional `effective_use_flags`
+    /// signature (single flat `package_use` list, no `conf_use_tokens` /
+    /// repo / user split). Tests that predate the split and don't care
+    /// about per-layer `package.use` ordering keep calling this; the
+    /// `package_use` arg lands in the profile (`defaults`) tier. Tests
+    /// that exercise the split call `effective_use_flags` directly.
+    #[allow(clippy::too_many_arguments)]
+    fn euf_flat(
+        iuse: &str,
+        use_tokens: &[String],
+        package_use: &[(String, Vec<String>)],
+        package_use_force: &[(String, Vec<String>)],
+        package_use_mask: &[(String, Vec<String>)],
+        use_force: &HashSet<String>,
+        use_mask: &HashSet<String>,
+        use_stable_force: &HashSet<String>,
+        use_stable_mask: &HashSet<String>,
+        package_use_stable_force: &[(String, Vec<String>)],
+        package_use_stable_mask: &[(String, Vec<String>)],
+        keywords: &[String],
+        accept_keywords: &HashSet<String>,
+        package_accept_keywords: &[(String, Vec<String>)],
+        candidate_str: &str,
+        category: &str,
+        package: &str,
+    ) -> HashSet<String> {
+        effective_use_flags(
+            iuse,
+            use_tokens,
+            &[],
+            &[],
+            package_use,
+            &[],
+            package_use_force,
+            package_use_mask,
+            use_force,
+            use_mask,
+            use_stable_force,
+            use_stable_mask,
+            package_use_stable_force,
+            package_use_stable_mask,
+            keywords,
+            accept_keywords,
+            package_accept_keywords,
+            candidate_str,
+            category,
+            package,
+        )
+    }
+
     fn candidate(version: &str, keywords: &[&str]) -> Candidate {
         Candidate {
             version: version.to_string(),
@@ -17854,7 +17979,7 @@ mod tests {
 
     #[test]
     fn effective_use_flags_applies_a_plus_iuse_default_when_nothing_else_says_otherwise() {
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "+foo -bar baz",
             &[],
             &[],
@@ -17884,7 +18009,7 @@ mod tests {
         // `use_tokens` mentioning an entirely different flag doesn't
         // suppress "+foo"'s own default -- the additive half.
         let base = ["other".to_string()].to_vec();
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "+foo",
             &base,
             &[],
@@ -17922,7 +18047,7 @@ mod tests {
         // apply_incremental, not unioned as a pre-flattened set, so the
         // "-foo" genuinely reaches back and cancels IUSE's own "+foo".
         let use_tokens = vec!["foo".to_string(), "-foo bar".to_string()];
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "+foo",
             &use_tokens,
             &[],
@@ -17947,7 +18072,7 @@ mod tests {
     #[test]
     fn effective_use_flags_lets_package_use_override_a_plus_iuse_default() {
         let package_use = vec![("dev-libs/pkg".to_string(), vec!["-foo".to_string()])];
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "+foo",
             &[],
             &package_use,
@@ -17969,6 +18094,109 @@ mod tests {
         assert!(use_flags.is_empty());
     }
 
+    /// "Config depth" slice: `package.use` from each of the three real
+    /// sources lands at its own `USE_ORDER` position. `euf` names the
+    /// full split signature; the args after `iuse` are
+    /// `use_tokens` (profile make.defaults), `conf_use_tokens` (make.conf),
+    /// `package_use_repo`, `package_use` (profile), `package_use_user`.
+    #[allow(clippy::too_many_arguments)]
+    fn euf_layers(
+        iuse: &str,
+        use_tokens: &[String],
+        conf_use_tokens: &[String],
+        package_use_repo: &[(String, Vec<String>)],
+        package_use: &[(String, Vec<String>)],
+        package_use_user: &[(String, Vec<String>)],
+    ) -> HashSet<String> {
+        effective_use_flags(
+            iuse,
+            use_tokens,
+            conf_use_tokens,
+            package_use_repo,
+            package_use,
+            package_use_user,
+            &[],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[],
+            &[],
+            &["amd64".to_string()],
+            &HashSet::from(["amd64".to_string()]),
+            &[],
+            "dev-libs/pkg-1.0:0/0::testrepo",
+            "dev-libs",
+            "pkg",
+        )
+    }
+
+    fn pu(flag: &str) -> Vec<(String, Vec<String>)> {
+        vec![("dev-libs/pkg".to_string(), vec![flag.to_string()])]
+    }
+
+    #[test]
+    fn effective_use_flags_repo_package_use_is_weaker_than_an_iuse_default() {
+        // real `configdict["repo"]` is applied BEFORE `pkginternal`, so
+        // an ebuild's own explicit IUSE default overrides a repo-level
+        // `package.use` -- the divergence the old flat model had (it
+        // applied every `package.use` source last, strongest).
+        let a = euf_layers("-foo", &[], &[], &pu("foo"), &[], &[]);
+        assert!(
+            !a.contains("foo"),
+            "IUSE `-foo` cancels repo package.use `foo`"
+        );
+        let b = euf_layers("+foo", &[], &[], &pu("-foo"), &[], &[]);
+        assert!(
+            b.contains("foo"),
+            "IUSE `+foo` overrides repo package.use `-foo`"
+        );
+        // ...but a repo `package.use` still takes effect on a flag the
+        // ebuild's IUSE leaves undecided (no `+`/`-` marker).
+        let c = euf_layers("foo", &[], &[], &pu("foo"), &[], &[]);
+        assert!(
+            c.contains("foo"),
+            "repo package.use decides an unmarked IUSE flag"
+        );
+    }
+
+    #[test]
+    fn effective_use_flags_profile_package_use_loses_to_make_conf() {
+        // profile `package.use` is real `configdict["defaults"]` --
+        // applied BEFORE `conf`. So `make.conf USE="-foo"` wins over a
+        // profile `package.use` line enabling `foo` (the old flat model
+        // applied profile `package.use` after make.conf, so `foo` won).
+        let flags = euf_layers("foo", &[], &["-foo".to_string()], &[], &pu("foo"), &[]);
+        assert!(
+            !flags.contains("foo"),
+            "make.conf -foo beats profile package.use"
+        );
+    }
+
+    #[test]
+    fn effective_use_flags_user_package_use_wins_over_make_conf() {
+        // user `/etc/portage/package.use` is real `configdict["pkg"]` --
+        // applied AFTER `conf`, the strongest layer before force/mask.
+        let flags = euf_layers("foo", &[], &["foo".to_string()], &[], &[], &pu("-foo"));
+        assert!(
+            !flags.contains("foo"),
+            "user package.use -foo beats make.conf foo"
+        );
+    }
+
+    #[test]
+    fn effective_use_flags_layer_precedence_is_repo_then_profile_then_user() {
+        // All three sources touch `foo`; the walk order repo -> profile
+        // -> user means the user entry is the last word.
+        let flags = euf_layers("foo", &[], &[], &pu("-foo"), &pu("-foo"), &pu("foo"));
+        assert!(flags.contains("foo"));
+        // ...and with the user entry disabling, it stays off regardless
+        // of repo/profile enabling it.
+        let flags = euf_layers("foo", &[], &[], &pu("foo"), &pu("foo"), &pu("-foo"));
+        assert!(!flags.contains("foo"));
+    }
+
     #[test]
     fn effective_use_flags_layers_a_matching_package_use_entry_on_top_of_base() {
         let base = ["foo".to_string()].to_vec();
@@ -17976,7 +18204,7 @@ mod tests {
             "dev-libs/bar".to_string(),
             vec!["baz".to_string(), "-foo".to_string()],
         )];
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "",
             &base,
             &package_use,
@@ -18002,7 +18230,7 @@ mod tests {
     fn effective_use_flags_does_not_affect_a_non_matching_package() {
         let base = ["foo".to_string()].to_vec();
         let package_use = vec![("dev-libs/bar".to_string(), vec!["baz".to_string()])];
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "",
             &base,
             &package_use,
@@ -18028,7 +18256,7 @@ mod tests {
     fn effective_use_flags_matches_a_wildcard_package_use_entry() {
         let base: Vec<String> = Vec::new();
         let package_use = vec![("*/bar".to_string(), vec!["baz".to_string()])];
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "",
             &base,
             &package_use,
@@ -18055,7 +18283,7 @@ mod tests {
         let base: Vec<String> = Vec::new();
         let package_use_force = vec![("dev-libs/bar".to_string(), vec!["forceflag".to_string()])];
         let package_use_mask = vec![("dev-libs/bar".to_string(), vec!["maskflag".to_string()])];
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "",
             &base,
             &[],
@@ -18086,7 +18314,7 @@ mod tests {
         let base: Vec<String> = Vec::new();
         let package_use_force = vec![("dev-libs/bar".to_string(), vec!["bothflag".to_string()])];
         let package_use_mask = vec![("dev-libs/bar".to_string(), vec!["bothflag".to_string()])];
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "",
             &base,
             &[],
@@ -18119,7 +18347,7 @@ mod tests {
         // early, letting package.use incorrectly win.
         let use_force = HashSet::from(["forceflag".to_string()]);
         let package_use = vec![("dev-libs/bar".to_string(), vec!["-forceflag".to_string()])];
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "",
             &[],
             &package_use,
@@ -18149,7 +18377,7 @@ mod tests {
         // entry trying to turn it on.
         let use_mask = HashSet::from(["maskflag".to_string()]);
         let package_use = vec![("dev-libs/bar".to_string(), vec!["maskflag".to_string()])];
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "",
             &[],
             &package_use,
@@ -18190,7 +18418,7 @@ mod tests {
             vec!["pkgstablemask".to_string()],
         )];
         let accept_keywords = HashSet::from(["amd64".to_string()]);
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "",
             &base,
             &[],
@@ -18227,7 +18455,7 @@ mod tests {
         let base: Vec<String> = Vec::new();
         let use_stable_force = HashSet::from(["globalstableforce".to_string()]);
         let accept_keywords = HashSet::from(["~amd64".to_string()]);
-        let use_flags = effective_use_flags(
+        let use_flags = euf_flat(
             "",
             &base,
             &[],

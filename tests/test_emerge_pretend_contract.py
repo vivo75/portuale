@@ -708,6 +708,8 @@ CASES = [
     ("package.use: entry disables a flag that is on globally", ["--pretend", "dev-libs/packageusedisablepkg"], 0),
     ("package.use: repo-level entry enables a flag not on globally", ["--pretend", "dev-libs/repouseenablepkg"], 0),
     ("package.use: profile-level entry enables a flag not on globally", ["--pretend", "dev-libs/profileuseenablepkg"], 0),
+    ("package.use depth: repo-level entry loses to the profile make.defaults", ["--pretend", "-v", "dev-libs/repouseweakpkg"], 0),
+    ("package.use depth: profile-level entry loses to make.conf", ["--pretend", "-v", "dev-libs/profileuseweakpkg"], 0),
     ("blocker: strong (!!) blocker matches an installed package", ["--pretend", "dev-libs/blockerpkg"], 0),
     ("blocker: weak (!) blocker matches another new package in the graph", ["--pretend", "dev-libs/graphblockerparent"], 0),
     ("blocker: -v widens the [blocks B ] bracket by the mask column", ["--pretend", "-v", "dev-libs/blockerpkg"], 0),
@@ -4182,6 +4184,46 @@ def test_profile_level_package_use_enables_a_flag_and_pulls_in_a_dependency(
                                              '[ebuild  N     ] dev-libs/newpkg-1.0 ',
                                              '[ebuild  N     ] dev-libs/profileuseenablepkg-1.0  USE="profileuseflag"',
                                          ]
+
+
+def test_repo_level_package_use_loses_to_the_profile_defaults_layer(
+    emerge_binary, fixture_env
+):
+    """"Config depth" slice: repo-level package.use is real
+    configdict["repo"], applied BEFORE the profile make.defaults USE
+    (configdict["defaults"]). PORTING/fixtures/repo/profiles/package.use
+    enables "repoweakflag" for dev-libs/repouseweakpkg, but the leaf
+    profile's own make.defaults carries "-repoweakflag" -- so the flag
+    ends up OFF and its repoweakflag?-gated dependency is NOT pulled.
+    (The old flat model applied every package.use source last/strongest,
+    which would have left it ON.)"""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/repouseweakpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/repouseweakpkg-1.0::testrepo  USE="-repoweakflag"',
+        '',
+        'Total: 1 package (1 new), Size of downloads: 0 KiB',
+    ]
+
+
+def test_profile_level_package_use_loses_to_make_conf(emerge_binary, fixture_env):
+    """"Config depth" slice: profile-level package.use is real
+    configdict["defaults"], applied BEFORE make.conf (configdict["conf"]).
+    The leaf profile's own package.use enables "profweakflag" for
+    dev-libs/profileuseweakpkg, but make.conf carries "-profweakflag" --
+    so the flag ends up OFF and its profweakflag?-gated dependency is NOT
+    pulled."""
+    result = _run(
+        [str(emerge_binary)], ["--pretend", "-v", "dev-libs/profileuseweakpkg"], fixture_env
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '[ebuild  N     ] dev-libs/profileuseweakpkg-1.0::testrepo  USE="-profweakflag"',
+        '',
+        'Total: 1 package (1 new), Size of downloads: 0 KiB',
+    ]
 
 
 def test_package_use_mask_and_force_with_atom_specificity_ordering(emerge_binary, fixture_env):

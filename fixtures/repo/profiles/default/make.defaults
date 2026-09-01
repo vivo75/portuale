@@ -10,4 +10,9 @@
 # use_tokens (the ordered raw USE= values) are replayed on top of a
 # package's own IUSE-defaults seed, not just union-ed as an already-
 # flattened set that could only ever add.
-USE="-bar baz -cancelme"
+# "-repoweakflag": the "Config depth" slice's repo-vs-defaults ordering
+# check -- dev-libs/repouseweakpkg's repo-level package.use enables it,
+# and this profile-level make.defaults (real configdict[defaults], a
+# stronger USE_ORDER layer than configdict[repo]) must win, leaving it
+# OFF.
+USE="-bar baz -cancelme -repoweakflag"

@@ -1,3 +1,8 @@
 # profile-level package.use: enables a flag for anyone inheriting this
 # leaf profile, stacked alongside the repo-level and user-level sources.
 dev-libs/profileuseenablepkg profileuseflag
+
+# "Config depth" slice: profweakflag is enabled here but disabled by
+# make.conf -- proving profile package.use (real configdict[defaults])
+# is weaker than the conf layer.
+dev-libs/profileuseweakpkg profweakflag

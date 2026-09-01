@@ -32,9 +32,16 @@
 //     nvidia` lines) used to be listed here too -- see the dedicated
 //     `USE_EXPAND` bullet further below for the follow-up that closed
 //     both.
-//   - Only the `defaults` (profile) and `conf` (make.conf) layers of real
-//     config.py's `USE_ORDER` are implemented -- no `env`, `pkginternal`,
-//     `features`, `repo`, `env.d`, or per-package (`pkg`) layers.
+//   - Real config.py's `USE_ORDER` is
+//     `env:pkg:conf:defaults:pkginternal:features:repo:env.d`. This pilot
+//     now models `repo` (repo-level `package.use` only, not repo
+//     `make.defaults`), `pkginternal` (the ebuild's own IUSE `+`/`-`
+//     defaults), `defaults` (profile `make.defaults` + profile
+//     `package.use`), `conf` (make.conf), and `pkg` (user
+//     `package.use`) -- see `Config::package_use{,_repo,_user}` and
+//     `portage-repo::effective_use_flags`. Still absent: `env` (the
+//     `$USE` env var, `/etc/portage/env`, `package.env`), `features`
+//     (`FEATURES`-implied USE), and `env.d`.
 //   - No line continuation / multi-line quoted values, and no trailing
 //     `# comment` after a real assignment (a `#` is only recognized as a
 //     comment when it starts the (trimmed) line). Real make.defaults/
@@ -76,36 +83,42 @@
 //     gets the identical substitution too (baked in at load time,
 //     `self.pkeywordsdict`), not just the profile-level one
 //     (`getPKeywords`'s own read-time substitution).
-//   - `package.use` is stacked from all three real sources -- repo-level
-//     (`<main_repo_location>/profiles/package.use`), every profile
-//     level's own `package.use` (in chain order), and user-level -- the
-//     same file-location convention `package.mask` and
-//     `package.accept_keywords` both already use (confirmed by reading
-//     `UseManager.__init__`), concatenated and parsed once, purely
-//     additive like `package.accept_keywords` (no `-atom` removal
-//     exists for this file at all -- see `parse_package_use_lines`).
-//     This is a deliberate, confirmed-with-the-user simplification, not
-//     a full port of real portage's own mechanism: real repo-level
-//     `package.use` lands in a distinct `configdict["repo"]` USE_ORDER
-//     layer and profile-level in `configdict["defaults"]` (merged
-//     per-level with that level's own `make.defaults` USE), both part of
-//     the full `USE_ORDER` precedence sequence this pilot only partially
-//     implements (see the "Only the `defaults`... layers of real
-//     config.py's `USE_ORDER`" bullet above) -- but since this pilot's
-//     own per-package application (see below) already flattens
-//     `package.use` into one incremental list regardless of source,
-//     extending that flat model from one source to three doesn't add a
-//     *new* simplification, it just applies the pre-existing one more
-//     widely, the same reasoning that applied to `package.mask` and
-//     `package.accept_keywords` before it. `package.use` entries are
-//     applied per package (not globally): a matching entry's tokens are
-//     layered on top of the base `use_flags` set with the same
-//     incremental semantics as `USE` itself (see `apply_incremental`),
-//     scoped to only the one package being resolved/recursed into -- see
-//     `portage-repo`'s `resolve_pretend_graph` for where that
-//     per-package application happens (it needs the candidate's SLOT to
-//     match slotted `package.use` entries, which only exists at that
-//     later, repo-aware layer).
+//   - `package.use` is stacked from all three real sources, and -- as of
+//     the "Config depth" slice (SCOPE_BACKLOG Part 2.C) -- each source
+//     now lands in its own `Config` field at its own real `USE_ORDER`
+//     position, instead of the earlier flat "one incremental list
+//     regardless of source" model:
+//       * repo-level (`<repo>/profiles/package.use`, every configured
+//         repo, overlays `::repo`-scoped via
+//         `scope_repo_package_use_lines`) -> `Config::package_use_repo`,
+//         real `configdict["repo"]` -- applied *before* the ebuild's own
+//         IUSE `+`/`-` defaults, the weakest USE layer this pilot models.
+//       * every profile level's own `package.use` (chain order) ->
+//         `Config::package_use`, real `configdict["defaults"]` -- applied
+//         after the profile `make.defaults` USE tokens, *before*
+//         `make.conf`. (Real portage interleaves each level's
+//         `package.use` right after that same level's `make.defaults`;
+//         this pilot applies all profile `package.use` as one group after
+//         all profile `make.defaults` -- a narrow simplification that
+//         only matters when a child profile's `make.defaults` and a
+//         parent profile's package-specific `package.use` disagree, which
+//         essentially never happens.)
+//       * user-level (`/etc/portage/package.use`) ->
+//         `Config::package_use_user`, real `configdict["pkg"]` -- applied
+//         after `make.conf`, the strongest USE layer before the final
+//         `use.force`/`use.mask` step.
+//     Still not modeled: the `env`/`features`/`env.d` `USE_ORDER` layers,
+//     and repo-level `make.defaults` USE (real `_repo_make_defaults`,
+//     folded into `configdict["repo"]` alongside repo `package.use`).
+//     Each source is still purely additive within itself (no `-atom`
+//     removal exists for this file -- see `parse_package_use_lines`), and
+//     still applied per package (not globally): a matching entry's tokens
+//     are layered on with the same incremental semantics as `USE` itself
+//     (see `apply_incremental`), scoped to the one package being
+//     resolved -- see `portage-repo::effective_use_flags` for the full
+//     per-package `USE_ORDER` walk and `resolve_pretend_graph` for where
+//     it is driven (it needs the candidate's SLOT to match slotted
+//     entries, which only exists at that later, repo-aware layer).
 //   - `packages` (`@system`'s real source -- `PackagesSystemSet` in
 //     `lib/portage/_sets/profiles.py`) IS now read: every profile level's
 //     own `<level>/packages` file, in chain order, stacked with the
@@ -268,27 +281,43 @@ use std::sync::OnceLock;
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     pub use_flags: HashSet<String>,
-    /// The raw `USE=` value strings that *produced* `use_flags`, in real
-    /// accumulation order: every profile level's own `make.defaults`
-    /// (chain order), then `make.conf` (plus any `source`d files), then
-    /// every `USE_EXPAND` variable's own value (already `varname_`-
-    /// prefixed), then every `USE_EXPAND_UNPREFIXED` variable's own raw
-    /// value -- exactly the sequence of `apply_incremental` calls that
-    /// built `use_flags` itself, just not yet collapsed into a flat set.
-    /// `portage-repo`'s own `effective_use_flags` replays this directly
-    /// (via `apply_incremental`) on top of a package's own IUSE-defaults
-    /// seed, instead of union-ing the already-flattened `use_flags` on
-    /// top of it -- a flat union can only ever *add* a flag, so it could
-    /// never let `defaults`/`conf` explicitly *cancel* an IUSE `+default`
-    /// the way real portage's own single continuous incremental walk
-    /// (`pkginternal` -> `defaults` -> `conf` -> ...) does. See
-    /// `effective_use_flags`'s own doc comment for the full grounding.
-    /// **Consistency note**: `resolve_config` always keeps this and
-    /// `use_flags` in sync (both grow from the same calls); a `Config`
-    /// literal built by hand (as several test modules do) must set both
-    /// together too, or `effective_use_flags` will silently see an empty
-    /// (or stale) `use_tokens` regardless of what `use_flags` says.
+    /// The raw `USE=` value strings from every profile level's own
+    /// `make.defaults` (chain order) -- real `configdict["defaults"]`'s
+    /// own `make_defaults_use`, the `defaults` USE_ORDER layer, *not yet*
+    /// collapsed into a flat set. `portage-repo`'s own
+    /// `effective_use_flags` replays this directly (via
+    /// `apply_incremental`) on top of a package's own IUSE-defaults
+    /// (`pkginternal`) seed, instead of union-ing the already-flattened
+    /// `use_flags` on top of it -- a flat union can only ever *add* a
+    /// flag, so it could never let `defaults`/`conf` explicitly *cancel*
+    /// an IUSE `+default` the way real portage's own single continuous
+    /// incremental walk (`repo` -> `pkginternal` -> `defaults` -> `conf`
+    /// -> `pkg`) does. See `effective_use_flags`'s own doc comment for
+    /// the full grounding.
+    ///
+    /// Historically this field also held the `make.conf` + `USE_EXPAND`
+    /// values; the "Config depth" slice split those into
+    /// [`Config::conf_use_tokens`] so profile-level `package.use`
+    /// ([`Config::package_use`]) can be applied at its real `USE_ORDER`
+    /// position *between* the two (after `defaults`, before `conf`).
+    ///
+    /// **Consistency note**: `resolve_config` always keeps this,
+    /// `conf_use_tokens`, and `use_flags` in sync (all grow from the same
+    /// calls); a `Config` literal built by hand (as several test modules
+    /// do) must set them together too, or `effective_use_flags` will
+    /// silently see an empty (or stale) token list regardless of what
+    /// `use_flags` says.
     pub use_tokens: Vec<String>,
+    /// The raw `USE=` value strings from `make.conf` (plus any `source`d
+    /// files), then every `USE_EXPAND` variable's own value (already
+    /// `varname_`-prefixed), then every `USE_EXPAND_UNPREFIXED`
+    /// variable's own raw value -- real `configdict["conf"]` plus the
+    /// `USE_EXPAND` folding real `regenerate()` does last. Replayed by
+    /// `effective_use_flags` immediately after [`Config::use_tokens`] and
+    /// the profile-level `package.use`, immediately before the user-level
+    /// `package.use`. Split out of `use_tokens` by the "Config depth"
+    /// slice -- see that field's own doc comment.
+    pub conf_use_tokens: Vec<String>,
     pub accept_keywords: HashSet<String>,
     /// Raw atom or bounded-wildcard-atom strings (see
     /// `portage_dep::parse_wildcard_atom`) from `package.mask`, with
@@ -300,10 +329,32 @@ pub struct Config {
     /// from `package.accept_keywords`. A `"**"` keyword token means
     /// "accept any keyword" for matching packages.
     pub package_accept_keywords: Vec<(String, Vec<String>)>,
-    /// (atom-or-wildcard string, raw USE tokens) pairs from `package.use`.
+    /// (atom-or-wildcard string, raw USE tokens) pairs from **every
+    /// configured repo's own** `profiles/package.use` -- real
+    /// `configdict["repo"]` (`_repo_puse_dict`). Overlay entries are
+    /// `::repo`-scoped (`scope_repo_package_use_lines`); the main repo's
+    /// stay unscoped (it implicitly masters every overlay). Applied by
+    /// `effective_use_flags` *first*, before the ebuild's own IUSE
+    /// `+`/`-` defaults -- the weakest USE layer this pilot models.
     /// Tokens use the same `-flag`/`flag`/`+flag` incremental syntax as
     /// `USE` itself -- see `apply_incremental`.
+    pub package_use_repo: Vec<(String, Vec<String>)>,
+    /// (atom-or-wildcard string, raw USE tokens) pairs from every
+    /// **profile** level's own `package.use` (chain order) -- real
+    /// `configdict["defaults"]` (`_pkgprofileuse`). Applied by
+    /// `effective_use_flags` after the profile `make.defaults` tokens
+    /// ([`Config::use_tokens`]), before `make.conf`
+    /// ([`Config::conf_use_tokens`]).
     pub package_use: Vec<(String, Vec<String>)>,
+    /// (atom-or-wildcard string, raw USE tokens) pairs from the
+    /// user-level `/etc/portage/package.use` -- real `configdict["pkg"]`
+    /// (`_pusedict` / `getPUSE`). Applied by `effective_use_flags` after
+    /// `make.conf`, the strongest USE layer before the final
+    /// `use.force`/`use.mask` step. This is the only one of the three
+    /// `package.use` sources that gets the `USE_EXPAND`-prefix shorthand
+    /// (`VIDEO_CARDS: nvidia` lines) -- real portage's own user-only
+    /// `extended_syntax`; see `parse_package_use_lines`.
+    pub package_use_user: Vec<(String, Vec<String>)>,
     /// `@system`'s real atom source: every profile level's own `packages`
     /// file, stacked in chain order and filtered to `*`-prefixed lines
     /// (the `*` stripped) -- see the module doc comment's `packages`
@@ -973,7 +1024,7 @@ fn process_make_conf_file(
         match key {
             "USE" => {
                 apply_incremental(&value, &mut config.use_flags);
-                config.use_tokens.push(value.clone());
+                config.conf_use_tokens.push(value.clone());
             }
             "ACCEPT_KEYWORDS" => apply_incremental(&value, &mut config.accept_keywords),
             "USE_EXPAND" => apply_incremental(&value, &mut config.use_expand),
@@ -1540,7 +1591,7 @@ pub fn resolve_config(
             .collect::<Vec<_>>()
             .join(" ");
         apply_incremental(&prefixed, &mut config.use_flags);
-        config.use_tokens.push(prefixed);
+        config.conf_use_tokens.push(prefixed);
     }
 
     // USE_EXPAND_UNPREFIXED: real config.py's own companion to
@@ -1561,7 +1612,7 @@ pub fn resolve_config(
             continue;
         };
         apply_incremental(value, &mut config.use_flags);
-        config.use_tokens.push(value.clone());
+        config.conf_use_tokens.push(value.clone());
     }
 
     // Real EAPI 5+ `IUSE_EFFECTIVE` (`config.py::_calc_iuse_effective`) --
@@ -1776,57 +1827,46 @@ pub fn resolve_config(
         }
     }
 
-    // package.use: repo-level (<main_repo_location>/profiles/package.use),
-    // then every profile level's own package.use (in chain order), then
-    // user-level -- same file-location convention package.mask and
-    // package.accept_keywords both already use (confirmed by reading
-    // UseManager.__init__'s _parse_repository_files_to_dict_of_dicts/
-    // _parse_profile_files_to_tuple_of_dicts calls), and purely additive
-    // like package.accept_keywords (see parse_package_use_lines). This is
-    // a deliberate, confirmed-with-the-user simplification, not a full
-    // port of real portage's own package.use handling: real repo-level
-    // package.use lands in a distinct configdict["repo"] USE_ORDER layer
-    // and profile-level in configdict["defaults"] (merged per-level with
-    // that level's own make.defaults USE), while this pilot's existing
-    // per-package application (see portage-repo's effective_use_flags)
-    // already flattens everything into one incremental list regardless
-    // of source -- extending that flat model to three sources instead of
-    // one doesn't add a new simplification, it just applies the
-    // pre-existing one more widely. Repo-level/profile-level lines are
-    // parsed separately from user-level ones (rather than one
-    // concatenated pass, like every other package.use.* file here) only
-    // because of the USE_EXPAND-prefix shorthand's own real user-only
-    // restriction -- see parse_package_use_lines's own doc comment.
-    //
-    // Every overlay's own package.use (real UseManager.py's own
-    // _parse_repository_files_to_dict_of_dicts, confirmed to iterate
-    // repositories.repos_with_profiles() -- every configured repo, not
-    // just main) gets folded into the same flat list too, `::repo`-scoped
-    // via scope_repo_package_use_lines so an overlay's own entry can
-    // never apply to a same-named package elsewhere -- the same
-    // "package.mask, widened" precedent package.mask/.unmask itself
-    // already established (see that pair's own doc comment on overlay
-    // masters). The main repo's own package.use is deliberately left
-    // unscoped: real portage's own masters-chain lookup (`repos =
-    // masters + [pkg.repo]`) always includes the main repo, since every
-    // overlay here implicitly masters it (no explicit `masters =`
-    // support yet) -- so the main repo's own entries apply everywhere,
-    // exactly like package.mask's own unscoped main-repo lines do.
-    let mut repo_and_profile_use_lines: Vec<String> =
+    // package.use: three real sources, each into its own field at its own
+    // real USE_ORDER position (the "Config depth" slice, SCOPE_BACKLOG
+    // Part 2.C -- see the module doc comment's `package.use` bullet and
+    // `portage-repo::effective_use_flags` for the per-package walk):
+    //   - repo-level (`<repo>/profiles/package.use`, every configured
+    //     repo -- real UseManager._parse_repository_files_to_dict_of_dicts
+    //     iterates repositories.repos_with_profiles()) -> package_use_repo,
+    //     real configdict["repo"]. Overlay lines are `::repo`-scoped via
+    //     scope_repo_package_use_lines (the same "package.mask, widened"
+    //     precedent); the main repo's stay unscoped, since real portage's
+    //     own masters-chain lookup (`repos = masters + [pkg.repo]`) always
+    //     includes it (every overlay here implicitly masters main, no
+    //     explicit `masters =` support yet).
+    //   - every profile level's own package.use (chain order) ->
+    //     package_use (real configdict["defaults"], _pkgprofileuse).
+    //   - user-level `/etc/portage/package.use` -> package_use_user (real
+    //     configdict["pkg"], _pusedict / getPUSE).
+    // Each source is parsed independently (rather than one concatenated
+    // pass) so only the user-level one gets the USE_EXPAND-prefix
+    // shorthand's real user-only `extended_syntax` -- see
+    // parse_package_use_lines. Still purely additive within each source
+    // (no `-atom` removal for this file). Still a simplification: repo
+    // `make.defaults` USE (real _repo_make_defaults, folded into
+    // configdict["repo"] alongside repo package.use) is not modeled, and
+    // profile package.use is applied as one group after all profile
+    // make.defaults rather than interleaved per level.
+    let mut repo_use_lines: Vec<String> =
         read_config_lines(&main_repo_location.join("profiles/package.use"))?;
     for (repo_name, repo_location) in overlay_repos {
         let overlay_use_lines = read_config_lines(&repo_location.join("profiles/package.use"))?;
-        repo_and_profile_use_lines
-            .extend(scope_repo_package_use_lines(&overlay_use_lines, repo_name));
+        repo_use_lines.extend(scope_repo_package_use_lines(&overlay_use_lines, repo_name));
     }
+    let mut profile_use_lines: Vec<String> = Vec::new();
     for level in &chain {
-        repo_and_profile_use_lines.extend(read_config_lines(&level.join("package.use"))?);
+        profile_use_lines.extend(read_config_lines(&level.join("package.use"))?);
     }
     let user_use_lines = read_config_lines(&config_root.join("etc/portage/package.use"))?;
-    config.package_use = parse_package_use_lines(&repo_and_profile_use_lines, false);
-    config
-        .package_use
-        .extend(parse_package_use_lines(&user_use_lines, true));
+    config.package_use_repo = parse_package_use_lines(&repo_use_lines, false);
+    config.package_use = parse_package_use_lines(&profile_use_lines, false);
+    config.package_use_user = parse_package_use_lines(&user_use_lines, true);
 
     // package.use.mask/package.use.force: repo-level (every repo, not
     // just main -- see the package.use bullet just above for the same
@@ -3047,7 +3087,7 @@ sync-uri = file:///srv/pkgs
         )
         .expect("config must resolve");
         assert_eq!(
-            config.package_use,
+            config.package_use_repo,
             vec![("dev-libs/a::overlay".to_string(), vec!["flag".to_string()])]
         );
     }
@@ -3339,11 +3379,13 @@ sync-uri = file:///srv/pkgs
     fn use_tokens_capture_the_ordered_raw_use_values_that_produced_use_flags() {
         // base: make.defaults sets USE="foo". leaf (its own parent ->
         // base): make.defaults sets USE="-foo bar". make.conf: USE="baz".
-        // use_flags ends up {bar, baz} either way -- but use_tokens
+        // use_flags ends up {bar, baz} either way -- but the token lists
         // must retain each raw contribution *separately*, in real
-        // accumulation order (profile chain, then make.conf), so
-        // replaying them via apply_incremental from an empty set
-        // reproduces use_flags exactly. This is what lets
+        // accumulation order: `use_tokens` = the profile chain
+        // (`defaults` layer), `conf_use_tokens` = make.conf (`conf`
+        // layer, split out by the "Config depth" slice). Replaying
+        // use_tokens then conf_use_tokens via apply_incremental from an
+        // empty set reproduces use_flags exactly. This is what lets
         // portage-repo's own effective_use_flags replay them on top of
         // a *different* seed (a package's own IUSE defaults) instead of
         // just union-ing the pre-flattened use_flags on top, which could
@@ -3372,10 +3414,11 @@ sync-uri = file:///srv/pkgs
             .expect("config must resolve");
         assert_eq!(
             config.use_tokens,
-            vec!["foo".to_string(), "-foo bar".to_string(), "baz".to_string()]
+            vec!["foo".to_string(), "-foo bar".to_string()]
         );
+        assert_eq!(config.conf_use_tokens, vec!["baz".to_string()]);
         let mut replayed = HashSet::new();
-        for token in &config.use_tokens {
+        for token in config.use_tokens.iter().chain(&config.conf_use_tokens) {
             apply_incremental(token, &mut replayed);
         }
         assert_eq!(replayed, config.use_flags);
@@ -3648,12 +3691,13 @@ sync-uri = file:///srv/pkgs
     }
 
     #[test]
-    fn package_use_stacks_repo_then_profile_chain_then_user() {
+    fn package_use_splits_repo_profile_and_user_into_their_own_fields() {
         // Repo-level entry for "a", profile-level entry for "b",
-        // user-level entry for "c" -- all three must appear, in that
-        // order, proving no repo/profile-level source is silently
-        // dropped and no `-atom` removal happens anywhere (package.use
-        // is purely additive, unlike package.mask).
+        // user-level entry for "c" -- each lands in its own `Config`
+        // field at its own real USE_ORDER position (the "Config depth"
+        // slice), proving no source is silently dropped and no `-atom`
+        // removal happens anywhere (package.use is purely additive,
+        // unlike package.mask).
         let root = std::env::temp_dir().join("portage-profile-test-package-use-stack");
         let repo = root.join("repo");
         let repo_profiles = repo.join("profiles");
@@ -3675,12 +3719,16 @@ sync-uri = file:///srv/pkgs
         let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
+            config.package_use_repo,
+            vec![("dev-libs/a".to_string(), vec!["flaga".to_string()])]
+        );
+        assert_eq!(
             config.package_use,
-            vec![
-                ("dev-libs/a".to_string(), vec!["flaga".to_string()]),
-                ("dev-libs/b".to_string(), vec!["flagb".to_string()]),
-                ("dev-libs/c".to_string(), vec!["flagc".to_string()]),
-            ]
+            vec![("dev-libs/b".to_string(), vec!["flagb".to_string()])]
+        );
+        assert_eq!(
+            config.package_use_user,
+            vec![("dev-libs/c".to_string(), vec!["flagc".to_string()])]
         );
     }
 
@@ -3705,7 +3753,7 @@ sync-uri = file:///srv/pkgs
         let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
-            config.package_use,
+            config.package_use_user,
             vec![(
                 "dev-libs/a".to_string(),
                 vec![
@@ -3736,7 +3784,7 @@ sync-uri = file:///srv/pkgs
         let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
-            config.package_use,
+            config.package_use_user,
             vec![
                 (
                     "dev-libs/a".to_string(),
@@ -3768,7 +3816,7 @@ sync-uri = file:///srv/pkgs
         let config = resolve_config(&root, &repo, &[], &[], "testrepo", &HashMap::new())
             .expect("config must resolve");
         assert_eq!(
-            config.package_use,
+            config.package_use_repo,
             vec![(
                 "dev-libs/a".to_string(),
                 vec!["VIDEO_CARDS:".to_string(), "nvidia".to_string()]
@@ -3948,7 +3996,7 @@ sync-uri = file:///srv/pkgs
         )
         .expect("config with package.use must resolve");
         assert_eq!(
-            config.package_use,
+            config.package_use_user,
             vec![
                 (
                     "dev-libs/foo".to_string(),
