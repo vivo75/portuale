@@ -327,6 +327,57 @@ not just read this list. What's actually left, grouped by area:
 > #2 (rewrite brush-hostile `bin/*.sh`), …).
 > Re-derived 2026-08-27; keep it in sync alongside this file when a
 > slice closes one of its entries. Recently closed from it:
+> **Standalone `emerge` actions buildout (Part 2.F, in progress
+> 2026-09-01)**: user asked to "implement all missing flags (--info,
+> --search, --regen, --metadata, --check-news, --clean ...)"; scoped via
+> AskUserQuestion to "the standalone-actions batch + --regen/--metadata"
+> (`--sync` stays a non-goal, modifier flags after). **Shipped so far:
+> `--list-sets`** (`run_list_sets` / `_run_list_sets` — parse
+> `cnf/sets/portage.conf` `[section]` headers minus the `multiset`
+> generator + `/etc/portage/sets/` files) and **`--search` / `-s` /
+> `--searchdesc` / `-S`** (`run_search` / `_run_search` — substring
+> match over `portage_repo::all_cp` + set names, real `search.output()`
+> shape, `-v` block; v1 cuts: fuzzy/regex/index, `--usepkg`, full mask
+> filter); **`--check-news`** (`run_check_news` / `_run_check_news` —
+> count valid+relevant+unread GLEP 42 items per repo; v1 cuts: no
+> `.unread`/`.skip` persistence, `Display-If-Installed` only; fixture
+> news items in `fixtures/repo/metadata/news/`); **`--clean`**
+> (`run_clean_pretend` -> `run_prune_nodeps_or_clean` +
+> `portage_repo::clean_selection` — keep newest per slot, no portage
+> self-skip) and **`--rage-clean`** (fast `--unmerge`;
+> `run_unmerge_pretend` gained an `action` label); **`--info`**
+> (`run_info` / `_run_info` — deterministic `Repositories:` + binrepos +
+> `Installed sets:` + sorted `VAR="value"` dump; `Config` gained
+> `other_vars` = the make.conf/profile scalar map; big cut: the
+> host-state half — version header, uname, tool-version probes,
+> `info_pkgs`, timestamps). Next: `--regen`/`--metadata` (source each
+> ebuild's `depend` phase, write `metadata/md5-cache`). New
+> `portage_repo::all_cp` / `clean_selection`, `Config::other_vars`.
+> `--read-news` stays recognized-unimplemented.
+> `test_real_action_not_implemented_message_says_action_not_option` now
+> uses `--sync` as its example (was `--search`).
+> **Sandbox / build isolation — Part 2.D substantially complete
+> (2026-09-01)**: for the six real `src_*` phases
+> (`SANDBOXED_SRC_PHASES`), `run_one_phase` builds a wrapped bash
+> subprocess (`Isolation` / `phase_isolation` / `sandbox_wrapped_command`),
+> forcing the `Bash` backend:
+> `unshare <flags> --map-root-user -- sh -c '<config>; exec "$@"' _
+> [sandbox] bash bin/ebuild.sh <phase>`. `FEATURES=sandbox`/`usersandbox`
+> → `sandbox` binary (real `spawn_sandbox`; `SANDBOX_LOG=${T}/sandbox.log`
+> + `SANDBOX_DISABLED=0` so `bin/ebuild.sh` does its own `SANDBOX_ON=1`/
+> `addwrite`; non-zero-exits on a write outside the tree — and the
+> `misc-functions.sh` calls are wrapped too, `sandbox-misc.log`).
+> `network-sandbox` → `unshare --net` + `ip link set lo up`;
+> `ipc-sandbox` → `--ipc`; `mount-sandbox` → `--mount` + `mount
+> --make-rslave /`; `pid-sandbox` → `--pid --fork --mount-proc`. All
+> compose; `unshare` combo validated once + cached; one-shot-warning
+> degrade. New fixtures `dev-libs/netsandboxpkg` (records
+> `/proc/self/ns/{net,ipc,mnt,pid}` + proc count) / `dev-libs/fssandboxpkg`.
+> `Environment` gained `portage_tmpdir`. Cuts: `RESTRICT`/`PROPERTIES`
+> exemptions; `AI_ADDRCONFIG` loopback addresses; SELinux; `userpriv` /
+> `fakeroot`. Non-isolation `FEATURES` (`ccache`/`distcc`/`splitdebug`/
+> `nostrip`/…) still unmodelled — a scoped `FEATURES` passthrough is a
+> separate slice.
 > **`package.use` per-level `USE_ORDER` layering (Config depth, Part
 > 2.C, 2026-09-01)**: the three `package.use` sources split into
 > `Config::{package_use_repo, package_use, package_use_user}` at their
