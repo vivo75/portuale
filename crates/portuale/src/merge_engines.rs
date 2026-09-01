@@ -92,6 +92,129 @@ fn rebuild_entry(unit: &MergeUnit, source: CandidateSource) -> Option<GraphEntry
     })
 }
 
+/// The source-build `MergeEngine` (`emerge_build::merge_one_source_entry`).
+pub struct SourceEngine<'a> {
+    /// Every repo the merge may read the ebuild from (for
+    /// `locate_candidate`).
+    pub repos: &'a [RepoConfig],
+    /// The `${ROOT}` the engine merges into.
+    pub root: &'a Path,
+    /// `PORTAGE_TMPDIR`-adjacent build root.
+    pub portage_tmpdir: &'a Path,
+    /// Merge options (build env, sandbox, `package.env` atoms).
+    pub options: &'a crate::ebuild_merge::MergeOptions,
+    /// `--buildpkg` packaging, when the entry wants it.
+    pub buildpkg: Option<&'a crate::ebuild_package::PackageOptions>,
+    /// `--buildpkg-exclude` atoms.
+    pub buildpkg_exclude: &'a [String],
+    /// The run's status display for the `Emerging`/`Installing`/`Completed` lines.
+    pub display: &'a crate::emerge_build::StatusDisplay,
+}
+
+impl SourceEngine<'_> {
+    /// Merge one resolved entry from source. `progress` is the entry's own
+    /// snapshot for the status lines.
+    pub fn merge_entry(
+        &self,
+        entry: &GraphEntry,
+        progress: mrg_director::MergeProgress,
+    ) -> Result<(), String> {
+        let bp = self.buildpkg.filter(|opts| {
+            crate::emerge_build::entry_buildpkg_wanted(
+                entry,
+                self.repos,
+                self.buildpkg_exclude,
+                opts.buildpkg_live,
+            )
+        });
+        crate::emerge_build::merge_one_source_entry(crate::emerge_build::MergeOneSourceEntryArgs {
+            entry,
+            repos: self.repos,
+            root: self.root,
+            portage_tmpdir: self.portage_tmpdir,
+            options: self.options,
+            buildpkg: bp,
+            progress,
+            display: self.display,
+        })
+    }
+}
+
+impl MergeEngine for SourceEngine<'_> {
+    fn execute(&self, unit: &MergeUnit, _ctx: &MergeContext) -> MergeOutcome {
+        if unit.kind != MergeKind::Source {
+            return MergeOutcome::Failed(format!(
+                "SourceEngine cannot merge binary unit {}",
+                unit.cpv
+            ));
+        }
+        match rebuild_entry(unit, CandidateSource::Ebuild) {
+            Some(entry) => match self.merge_entry(&entry, unit.progress) {
+                Ok(()) => MergeOutcome::Merged,
+                Err(e) => MergeOutcome::Failed(e),
+            },
+            None => MergeOutcome::Failed(format!("{}: cannot parse merge unit cpv", unit.cpv)),
+        }
+    }
+}
+
+/// The binary-unpack `MergeEngine` (`emerge_getbinpkg::merge_one_binary_entry`).
+pub struct BinaryEngine<'a> {
+    /// The resolved binhost configuration (remote fetch + `Packages`).
+    pub config: &'a portage_profile::Config,
+    /// The `${ROOT}` the engine merges into.
+    pub root: &'a Path,
+    /// The local `$PKGDIR` store.
+    pub pkgdir: &'a Path,
+    /// `PORTAGE_TMPDIR`-adjacent build root.
+    pub portage_tmpdir: &'a Path,
+    /// Merge options.
+    pub options: &'a crate::ebuild_merge::MergeOptions,
+    /// The run's status display for the `Emerging binary`/`Installing`/`Completed` lines.
+    pub display: &'a crate::emerge_build::StatusDisplay,
+}
+
+impl BinaryEngine<'_> {
+    /// Merge one resolved binary entry. `progress` is the entry's own
+    /// snapshot for the status lines.
+    pub fn merge_entry(
+        &self,
+        entry: &GraphEntry,
+        progress: mrg_director::MergeProgress,
+    ) -> Result<(), String> {
+        crate::emerge_getbinpkg::merge_one_binary_entry(
+            crate::emerge_getbinpkg::MergeOneBinaryEntryArgs {
+                entry,
+                config: self.config,
+                root: self.root,
+                pkgdir: self.pkgdir,
+                portage_tmpdir: self.portage_tmpdir,
+                merge_options: self.options,
+                progress,
+                display: self.display,
+            },
+        )
+    }
+}
+
+impl MergeEngine for BinaryEngine<'_> {
+    fn execute(&self, unit: &MergeUnit, _ctx: &MergeContext) -> MergeOutcome {
+        if unit.kind != MergeKind::Binary {
+            return MergeOutcome::Failed(format!(
+                "BinaryEngine cannot merge source unit {}",
+                unit.cpv
+            ));
+        }
+        match rebuild_entry(unit, CandidateSource::Binary) {
+            Some(entry) => match self.merge_entry(&entry, unit.progress) {
+                Ok(()) => MergeOutcome::Merged,
+                Err(e) => MergeOutcome::Failed(e),
+            },
+            None => MergeOutcome::Failed(format!("{}: cannot parse merge unit cpv", unit.cpv)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

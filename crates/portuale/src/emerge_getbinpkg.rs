@@ -55,6 +55,224 @@ pub(crate) struct MergeOneBinaryEntryArgs<'a> {
     pub(crate) display: &'a crate::emerge_build::StatusDisplay,
 }
 
+/// One `Binary` entry of the merge loop: `AlreadyInstalled` is a silent no-op;
+/// `New`/`Upgrade`/`Downgrade`/`Reinstall` are fetched (remote) or located
+/// (`$PKGDIR`) and merged (a replaced same-slot version is unmerged itself).
+pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Result<(), String> {
+    let MergeOneBinaryEntryArgs {
+        entry,
+        config,
+        root,
+        pkgdir,
+        portage_tmpdir,
+        merge_options,
+        progress,
+        display,
+    } = args;
+    let cp = format!("{}/{}", entry.category, entry.package);
+    let version = match &entry.outcome {
+        // A removal installs no binary.
+        PretendOutcome::AlreadyInstalled { .. } | PretendOutcome::Uninstall { .. } => return Ok(()),
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            version.clone()
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+        PretendOutcome::NoVisibleCandidate => {
+            return Err(format!("no binary package available for {cp}"));
+        }
+    };
+
+    // The per-package `Emerging binary (N of M) cpv::repo` line: the `>>> Merging
+    // binary package ...` line's shape.
+    let color = crate::emerge_build::progress_color();
+    display.status(&crate::emerge_build::emerging_line(
+        entry, &version, progress, root, &color,
+    ));
+
+    let local = resolve_local_binpkg(
+        pkgdir,
+        &entry.category,
+        &entry.package,
+        &version,
+        entry.build_id.as_deref(),
+    );
+    // A `$PKGDIR` file on disk wins; otherwise only a *remote* entry may fetch
+    // from a binhost. A resumed or fresh local entry with no file is an error,
+    // not a refetch. A repo-fetched binary uses that repo's own signature
+    // policy; a local `$PKGDIR` file keeps `merge_options.gpg_verify`.
+    let mut fetched_verify = None;
+    let binpkg_path = match local {
+        Some(path) => path,
+        None if entry.remote_binary => {
+            // The remote `Packages` lookup goes through the director's `BinpkgIndex`
+            // seam, which scans the configured binrepos in order; the record travels
+            // with the owning binrepo's name, recovering `sync-uri` and policy below.
+            let local_index = portage_repo::BinaryIndex::from_pkgdir(pkgdir);
+            let remote = mrg_director::RemoteBinhostIndex {
+                config,
+                root,
+                local: &local_index,
+            };
+            let (binrepo_name, record) = remote
+                .metadata_with_source_instance(
+                    &entry.category,
+                    &entry.package,
+                    &version,
+                    entry.build_id.as_deref(),
+                )
+                .ok_or_else(|| {
+                    format!(
+                        "{cp}-{version}: no binpkg file under {} and not in any binhost `Packages` index",
+                        pkgdir.display()
+                    )
+                })?;
+            let binrepo = config
+                .binrepos
+                .iter()
+                .find(|b| b.name == binrepo_name)
+                .ok_or_else(|| {
+                    format!("{cp}-{version}: binhost record names unknown repo {binrepo_name:?}")
+                })?;
+            let path = download_and_verify(DownloadAndVerifyArgs {
+                sync_uri: &binrepo.sync_uri,
+                record: &record,
+                category: &entry.category,
+                package: &entry.package,
+                version: &version,
+                pkgdir,
+            })?;
+            let features = if merge_options.features.is_empty() {
+                std::env::var("FEATURES").unwrap_or_default()
+            } else {
+                merge_options.features.clone()
+            };
+            fetched_verify = Some(crate::binpkg::GpgVerify::from_binrepo(
+                binrepo.verify_signature,
+                &features,
+            ));
+            path
+        }
+        None => {
+            // The `>>> Emerging binary` line already printed, so what remains is
+            // the verifier's own output -- to stdout AND the package `build.log` --
+            // plus the `>>> Failed to emerge ...` tail. The log holds exactly this
+            // block. The branch condition is whether the local index still lists
+            // the cpv.
+            // Portage: _emerge/BinpkgVerifier.py, _start
+            let cpv = format!("{cp}-{version}");
+            let block = missing_binpkg_block(
+                &cpv,
+                local_index_lists_cpv(
+                    pkgdir,
+                    &entry.category,
+                    &entry.package,
+                    &version,
+                    entry.build_id.as_deref(),
+                ),
+            );
+            let log_path = crate::emerge_build::build_log_path(
+                portage_tmpdir,
+                &entry.category,
+                &entry.package,
+                &version,
+                &crate::emerge_build::resolved_features(merge_options),
+            );
+            let log_ready = log_path
+                .parent()
+                .is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
+                && std::fs::write(&log_path, block.as_bytes()).is_ok()
+                && std::fs::metadata(&log_path).is_ok_and(|st| st.len() > 0);
+            print!("{block}");
+            print!(
+                "{}",
+                failed_pkg_msg(&cpv, root, log_ready.then_some(log_path.as_path()))
+            );
+            return Err(binpkg_missing_failure(&cpv));
+        }
+    };
+
+    // A local binpkg the `<pkgdir>/Packages` index vouches for is verified at
+    // merge -- size first, then every digest the record carries -- against the
+    // index's own values. A mismatch prints the `!!! Digest verification
+    // failed:` block to stdout AND the package `build.log`, renames the file
+    // to `._checksum_failure_.<rand>`, and fails the package with the `>>>
+    // Failed to emerge ...` tail. A binpkg no record vouches for skips this
+    // (nothing to verify against); remote downloads were already checked
+    // against the remote record, so only a purely local binpkg is re-checked
+    // here. The returned error is a silent sentinel the CLI boundary drops
+    // (exit 1, no resume notice, no `emerge:` line).
+    if !entry.remote_binary
+        && let Some(record) = local_index_record(LocalIndexRecordArgs {
+            pkgdir,
+            category: &entry.category,
+            package: &entry.package,
+            version: &version,
+            build_id: entry.build_id.as_deref(),
+            binpkg_path: &binpkg_path,
+        })
+        && let Err(mismatch) = crate::binpkg::verify_binpkg_against_index(&binpkg_path, &record)
+    {
+        let cpv = format!("{}/{}-{version}", entry.category, entry.package);
+        let renamed = crate::binpkg::checksum_failure_rename(&binpkg_path)
+            .unwrap_or_else(|| binpkg_path.clone());
+        let block = crate::binpkg::digest_failure_block(&binpkg_path, &mismatch, &renamed);
+        // The log holds exactly this block: the block is appended to the fresh
+        // `PORTAGE_LOG_FILE`, the same `${PORTAGE_BUILDDIR}/temp/build.log`.
+        let log_path = crate::emerge_build::build_log_path(
+            portage_tmpdir,
+            &entry.category,
+            &entry.package,
+            &version,
+            &crate::emerge_build::resolved_features(merge_options),
+        );
+        // Only a log that exists and is non-empty is reported (`, Log file:`
+        // suffix), exactly like Portage with no located log.
+        let log_ready = log_path
+            .parent()
+            .is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
+            && std::fs::write(&log_path, block.as_bytes()).is_ok()
+            && std::fs::metadata(&log_path).is_ok_and(|st| st.len() > 0);
+        print!("{block}");
+        print!(
+            "{}",
+            failed_pkg_msg(&cpv, root, log_ready.then_some(log_path.as_path()))
+        );
+        return Err(binpkg_digest_failure(&cpv));
+    }
+
+    // The per-package line between locating/fetching above and the vdb merge
+    // below.
+    display.status(&crate::emerge_build::installing_line(
+        entry, &version, progress, root, &color,
+    ));
+    // A binary merge is a package task too: refresh the protect lists its
+    // `dblink` reads.
+    let reloaded_protect = crate::emerge_build::reloaded_config_protect(merge_options);
+    let mut entry_options;
+    let merge_options = if fetched_verify.is_some() || reloaded_protect.is_some() {
+        entry_options = merge_options.clone();
+        if let Some(gpg) = fetched_verify {
+            entry_options.gpg_verify = gpg;
+        }
+        if let Some((protect, mask)) = reloaded_protect {
+            entry_options.config_protect = protect;
+            entry_options.config_protect_mask = mask;
+        }
+        &entry_options
+    } else {
+        merge_options
+    };
+    let status = ebuild_merge::merge_binpkg(&binpkg_path, root, portage_tmpdir, merge_options)?;
+    if status != 0 {
+        return Err(format!("{cp}-{version}: binpkg merge failed ({status})"));
+    }
+    // The per-package `Completed (N of M) cpv::repo` line.
+    display.status(&crate::emerge_build::completed_line(
+        entry, &version, progress, root, &color,
+    ));
+    Ok(())
+}
+
 /// `>>> Failed to emerge <cpv>[ for <root>][, Log file:]` plus, when the
 /// non-empty build log is found, `>>>  '<log>'`. Each message writes its own
 /// leading blank line first; the log line's extra space is Portage's own
@@ -151,6 +369,48 @@ struct LocalIndexRecordArgs<'a> {
     version: &'a str,
     build_id: Option<&'a str>,
     binpkg_path: &'a Path,
+}
+
+/// The `<pkgdir>/Packages` stanza vouching for a local binpkg merge: the one
+/// whose `CPV` matches, narrowed by `BUILD_ID`, else by the located file's
+/// basename (a moved file still verifies against its own record). `None` when
+/// no stanza vouches. A record without `SIZE` still returns here: "verifies
+/// nothing" lives in `verify_binpkg_against_index`, not the lookup.
+// Portage: lib/portage/dbapi/bintree.py, _get_digests
+fn local_index_record(
+    args: LocalIndexRecordArgs<'_>,
+) -> Option<std::collections::HashMap<String, String>> {
+    let LocalIndexRecordArgs {
+        pkgdir,
+        category,
+        package,
+        version,
+        build_id,
+        binpkg_path,
+    } = args;
+    let cpv = format!("{category}/{package}-{version}");
+    let basename = binpkg_path.file_name()?.to_str()?;
+    let mut candidates: Vec<std::collections::HashMap<String, String>> =
+        portage_repo::read_packages_index(pkgdir)
+            .into_iter()
+            .filter(|e| e.get("CPV").is_some_and(|c| c == &cpv))
+            .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    if candidates.len() > 1
+        && let Some(want) = build_id.filter(|s| !s.is_empty())
+    {
+        candidates.retain(|e| e.get("BUILD_ID").is_some_and(|b| b == want));
+    }
+    if candidates.len() > 1 {
+        candidates.retain(|e| {
+            e.get("PATH")
+                .and_then(|p| Path::new(p).file_name()?.to_str())
+                .is_some_and(|b| b == basename)
+        });
+    }
+    candidates.into_iter().next()
 }
 
 /// The on-disk binpkg for `<cat>/<package>-<version>` in `$PKGDIR`: the
