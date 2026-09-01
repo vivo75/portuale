@@ -18,27 +18,24 @@ portage-versions = { path = "../portage-versions" }
 # "Real ebuild phase execution" section): a deliberate, accepted dynamic
 # dependency (this pilot's own "near-zero dependencies" discipline is
 # explicitly waived here, see that doc's own "bash-execution-backend
-# question" writeup) -- pinned to an exact commit on a fork
-# (vivo75/brush). See PORTING/BRUSH_FORK.md for the full tracking record.
-# In short:
+# question" writeup) -- pinned by exact commit to real upstream
+# `reubeno/brush` `main`. The fork (`vivo75/brush`) is gone as of
+# 2026-09-01: its two fixes are both resolved here.
 #   - brace-less function bodies (`name() [[ ... ]]`, used 60 times by
-#     bin/eapi.sh): MERGED upstream as reubeno/brush#1274 (18851e7,
-#     2026-08-20). This pin (`879d963`) is the fork's own pre-merge copy
-#     of exactly that change on top of upstream `main` -- functionally
-#     identical to post-#1274 upstream.
-#   - pipeline function-stage deadlock (a function used as a non-last
-#     pipeline stage ran inline, deadlocking once it wrote > ~64KiB to
-#     stdout before returning): OPEN upstream as reubeno/brush#1276. **No
-#     longer load-bearing for this tree** -- `bin/phase-functions.sh` was
-#     rewritten (brush strategy #2, 2026-09-01) so `__save_ebuild_env`
-#     and `__filter_readonly_variables` stage through a temp file instead
-#     of a pipe, and are never a pipeline stage. The full `portuale`
-#     suite (incl. the `install_does_not_deadlock...` regression) is
-#     green against this pin, which does *not* carry the #1276 patch.
-#   Remaining cleanup (SCOPE_BACKLOG §G): bump to real upstream
-#   `reubeno/brush` `main` after a compat sweep, and drop the fork.
-brush-core = { git = "https://github.com/vivo75/brush", rev = "879d963458a3ee84124d839f922e19552881ae2c" }
-brush-builtins = { git = "https://github.com/vivo75/brush", rev = "879d963458a3ee84124d839f922e19552881ae2c" }
+#     bin/eapi.sh): MERGED upstream as reubeno/brush#1274 (18851e7),
+#     an ancestor of this pin.
+#   - pipeline function-stage deadlock (a function as a non-last pipeline
+#     stage ran inline, deadlocking once it wrote > ~64KiB before
+#     returning): still OPEN upstream as reubeno/brush#1276, but **not
+#     load-bearing here** -- `bin/phase-functions.sh` was rewritten
+#     (brush strategy #2) so `__save_ebuild_env` /
+#     `__filter_readonly_variables` stage through a temp file and are
+#     never a pipeline stage. `install_does_not_deadlock...` (portuale)
+#     is the guard.
+# See PORTING/BRUSH_PIN.md for the tracking record and the periodic
+# re-pin checklist (bump the rev to a newer `main`, re-run the suite).
+brush-core = { git = "https://github.com/reubeno/brush", rev = "a04b09dc4a3f5beaa78899c4100734cf0f8f4472" }
+brush-builtins = { git = "https://github.com/reubeno/brush", rev = "a04b09dc4a3f5beaa78899c4100734cf0f8f4472" }
 # "rt-multi-thread", not just "rt": a single-threaded runtime deadlocks
 # partway through a real multi-phase run (confirmed empirically -- see
 # ebuild_phases::run_commands's own doc comment) -- brush-core's own

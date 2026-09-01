@@ -319,10 +319,13 @@ dev/test context — see also the `chown` note below).
   to `879d963` (just the upstream-merged #1274), full `portuale` suite
   green — incl. the `install_does_not_deadlock…` regression, which hangs
   the deadline against `879d963` *without* the script rewrite. See
-  `BRUSH_FORK.md` and README's "brush strategy #2".
-- The actual bump to upstream `brush` — now a plain "track upstream"
-  move (#1276 no longer load-bearing): pin to `reubeno/brush` `main`
-  at/after `18851e7` and drop the fork. See `BRUSH_FORK.md`'s checklist.
+  `BRUSH_PIN.md` and README's "brush strategy #2".
+- ~~The actual bump to upstream `brush`~~ **Done 2026-09-01** — pinned
+  to real `reubeno/brush` `main` (`a04b09dc`, at/after the #1274 merge
+  `18851e7`); the `vivo75/brush` fork is gone. Whole workspace + pytest
+  green; `install_does_not_deadlock…` completes in ~1s (no #1276 patch
+  needed at all now). Only remaining Section G item: periodic re-pin to
+  keep up with upstream `main` — see `BRUSH_PIN.md`'s checklist.
 
 ### H. Misc / cosmetic
 

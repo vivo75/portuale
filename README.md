@@ -4640,19 +4640,18 @@ via `ebuild <file> install` (`portuale/src/ebuild.rs`, previously a pure
 dry-run stub).
 
 **Bash-execution backend**: an embedded [`brush`](https://github.com/reubeno/brush)
-shell (`brush_core::Shell`), pinned by exact commit (`879d963`) to the
-fork `vivo75/brush`. Its one real fix — the brace-less
+shell (`brush_core::Shell`), pinned by exact commit to **real upstream
+`reubeno/brush` `main`** (`a04b09dc`). No fork: the `vivo75/brush` fork
+existed for two fixes and both are resolved — the brace-less
 function-definition form `name() [[ ... ]]` (used 60 times by
-`bin/eapi.sh`) — is **merged upstream** as
+`bin/eapi.sh`) is **merged upstream** as
 [reubeno/brush#1274](https://github.com/reubeno/brush/pull/1274)
-(`18851e7`, 2026-08-20); the pin is the fork's own pre-merge copy of
-exactly that, so it's functionally plain upstream. The separate pipeline
-function-stage deadlock (open upstream as
-[reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276)) used to
-force the pin one commit higher, onto a fork-only patch — no longer,
-since **brush strategy #2** (below) rewrote the offending
-`bin/phase-functions.sh` construct instead. Full tracking record and the
-re-pin checklist live in **`PORTING/BRUSH_FORK.md`**. A deliberate,
+(`18851e7`, an ancestor of the pin), and the separate pipeline
+function-stage deadlock ([reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276),
+still open upstream) is no longer load-bearing because **brush strategy
+#2** (below) rewrote the offending `bin/phase-functions.sh` construct
+instead. Full tracking record and the periodic re-pin checklist live in
+**`PORTING/BRUSH_PIN.md`**. A deliberate,
 accepted departure from this pilot's own near-zero-dependencies
 discipline elsewhere -- the alternative (shelling out to the system's
 real bash) was rejected earlier for tension with the "runs on even the
@@ -5751,7 +5750,7 @@ triggered this; the multilib family (dozens of functions,
 Fixed in the pinned `vivo75/brush` fork (`brush-core/src/commands.rs`),
 and submitted upstream as
 [reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276) (open,
-no review yet; see `PORTING/BRUSH_FORK.md`). The fix splits
+no review yet; see `PORTING/BRUSH_PIN.md`). The fix splits
 `execute_via_function` the same way `execute_via_builtin`
 already was: an owned-shell path that spawns the function's body as a
 background task (`tokio::task::spawn_blocking` + `rt.block_on`,
@@ -5771,12 +5770,13 @@ buffer before the next stage is spawned") reproduces the original
 hang under the suite's own 15s per-test timeout.
 
 **Update (2026-09-01):** the pin no longer carries this brush-side fix
-— `brush strategy #2` (see the "brush strategy #2" section near the end)
-rewrote the three `bin/phase-functions.sh` sites so `__save_ebuild_env`
-is never a pipeline stage, and the pin dropped to `879d963` (upstream
-#1274 only). The `bigeclasspkg` regression fixture below is the guard;
-it hangs against `879d963` only when `bin/phase-functions.sh` is
-reverted to the pipe form.
+at all — `brush strategy #2` (see the "brush strategy #2" section near
+the end) rewrote the three `bin/phase-functions.sh` sites so
+`__save_ebuild_env` is never a pipeline stage, and the pin moved to real
+upstream `reubeno/brush` `main` (`a04b09dc`), no fork. The
+`bigeclasspkg` regression fixture below is the guard; it hangs the
+deadline (confirmed against an unpatched-for-#1276 brush) only when
+`bin/phase-functions.sh` is reverted to the pipe form.
 
 Proven via a new `dev-libs/eclasspkg` fixture with a real (if fixture-
 only) `eclass/pilotcheck.eclass` defining one real function,
@@ -10767,13 +10767,19 @@ already forks there). The `bzip2` case (`environment.bz2` for
 `PORTAGE_UPDATE_ENV`) reads the filtered scratch file as a plain
 `bzip2 -c < scratch > out`.
 
-With that, the pin drops from `c78ea429` (which carried #1276) to
-`879d963` (only the upstream-merged #1274). **Proof it's real**: the
-whole `portuale` suite is green against `879d963` — including
+With that, the fork-only patch (`c78ea429`, which carried #1276) is no
+longer needed at all. **Proof it's real**: the whole `portuale` suite is
+green against `879d963` (the fork's pre-merge copy of upstream #1274,
+*without* #1276) — including
 `install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer`
 (the `bigeclasspkg` fixture defines ~400 functions specifically to blow
 past the pipe buffer), which *hangs the 120 s deadline* against
 `879d963` when `bin/phase-functions.sh` is reverted to the pipe form.
+
+That let the pin **drop the fork entirely** and move to real upstream
+`reubeno/brush` `main` (`a04b09dc`, at/after the `18851e7` #1274 merge)
+— see `PORTING/BRUSH_PIN.md`. Same suite, same guard test, green against
+real upstream: `install_does_not_deadlock…` completes in ~1 s.
 
 ```sh
 cd PORTING/rust && cargo build --release && cd ../..
