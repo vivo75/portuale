@@ -32,15 +32,24 @@ pinned_at = "2026-09-01"
 # it, never a merge -- see `git log --grep prepare.for.portage` for the
 # upstream "prepare for release" commits that mark each tag).
 #
-# `vendored_paths`: files copied from this ref into PORTING/ so `portuale`
-# can run them with no Portage installed (the rest is still read from the
-# surrounding checkout / a future gitignored 3rdparty/portage). Re-sync
-# on each `commit` bump: copy the upstream file over PORTING/<path>, then
-# re-apply the local change noted in that file's own header. portuale's
+# `vendored_paths`: files/trees copied from this ref into PORTING/ so
+# `portuale` can run them with no Portage installed. `portuale`'s
 # `ebuild_phases::bin_dir()` overlays PORTING/bin/ on top of the
-# checkout's bin/, vendored file wins.
+# checkout's bin/ (vendored file wins); with no checkout it's PORTING/bin/
+# alone. Re-sync on each `commit` bump: copy the upstream files over, then
+# re-apply the one local change (brush strategy #2 in phase-functions.sh's
+# header) -- `diff -r <checkout>/bin PORTING/bin` should then be empty bar
+# phase-functions.sh + PORTING/bin/README.md. See PORTING/bin/README.md.
+#
+# The full bash phase runtime is vendored: ebuild.sh + its whole source
+# closure, every ebuild-helpers/ script, estrip/ecompress, the
+# *-qa-check.d/ sets, and the stdlib-only filter-bash-environment.py.
+# NOT vendored: the .py helpers that `import portage` (doins.py,
+# dohtml.py, install.py, xpak-helper.py, gpkg-helper.py, chmod-lite.py,
+# xattr-helper.py) -- they need lib/portage and still come from a
+# checkout. A phase that calls one (e.g. `doins`) fails without a checkout.
 vendored_paths = [
-    "PORTING/bin/phase-functions.sh",  # local: brush strategy #2 (__save_and_filter_ebuild_env)
+    "PORTING/bin/",  # tree; phase-functions.sh carries brush strategy #2
 ]
 
 [brush]

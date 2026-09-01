@@ -4657,6 +4657,17 @@ discipline elsewhere -- the alternative (shelling out to the system's
 real bash) was rejected earlier for tension with the "runs on even the
 most minimal Linux system" hard goal.
 
+The bash it drives is **vendored** into `PORTING/bin/` (a verbatim copy
+of upstream Portage's `bin/` runtime -- `ebuild.sh` and its whole source
+closure, every `ebuild-helpers/` script, `estrip`/`ecompress`, the
+`*-qa-check.d/` sets, `filter-bash-environment.py`), so a real phase run
+needs no Portage installed and no Portage checkout. `phase-functions.sh`
+carries one local change (brush strategy #2). The only pieces still read
+from a surrounding checkout are the `.py` helpers that `import portage`
+(`doins.py`, `xpak-helper.py`, …) -- `ebuild_phases::bin_dir()` overlays
+`PORTING/bin/` on the checkout's `bin/` when one exists. See
+`PORTING/bin/README.md` and `PORTING/3rdparty/repos.toml`.
+
 **What's real, what's Rust**: `portuale/src/ebuild_phases.rs` computes
 the environment `doebuild_environment()` would (`CATEGORY`/`PN`/`PV`/
 `PR`/`PVR`/`P`/`PF`, the real `${PORTAGE_TMPDIR}/portage/${CATEGORY}/

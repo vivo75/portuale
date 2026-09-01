@@ -527,17 +527,25 @@ pub(crate) fn repo_root() -> PathBuf {
 
 /// The directory `PORTAGE_BIN_PATH` points at for real phase execution.
 ///
-/// Files vendored into `PORTING/bin/` (tracked, so `emerge` works on a
-/// host with no Portage installed and no Portage checkout -- the whole
-/// point of `portuale`) take precedence; anything not vendored yet falls
-/// back to the surrounding Portage checkout's own `bin/`. Once the full
-/// `bin/ebuild.sh` runtime closure is vendored, the fallback is unused
-/// and this is just `PORTING/bin`.
+/// `PORTING/bin/` is a tracked, vendored copy of upstream Portage's own
+/// `bin/` runtime -- all the `.sh` (`ebuild.sh` and its whole source
+/// closure), every `ebuild-helpers/` script, `estrip`/`ecompress`, the
+/// `*-qa-check.d/` sets and the stdlib-only `filter-bash-environment.py`
+/// -- so `emerge` runs on a host with no Portage installed. Only the
+/// `.py` helpers that `import portage` (`doins.py`, `xpak-helper.py`,
+/// `gpkg-helper.py`, `dohtml.py`, `chmod-lite`, `xattr-helper.py`) are
+/// not vendored; they need `lib/portage` and are still read from a
+/// surrounding Portage checkout when one exists.
 ///
-/// Resolved once per process. When a fallback is actually needed it's a
-/// symlink overlay in a temp dir (`bin/ebuild.sh` only ever uses
+/// So: when there IS a checkout, `PORTAGE_BIN_PATH` is a symlink overlay
+/// -- vendored `PORTING/bin/` entries win, the not-yet-vendored `.py`
+/// helpers fall through to `<checkout>/bin/`. With NO checkout it's
+/// `PORTING/bin/` directly (the `.py`-helper phases then degrade the
+/// same way a missing binary already does).
+///
+/// Resolved once per process. `bin/ebuild.sh` only ever uses
 /// `${PORTAGE_BIN_PATH}` as a literal string prefix for `source`, never
-/// `realpath`s it, so a symlinked entry resolves to the vendored file).
+/// `realpath`s it, so a symlinked entry resolves to the vendored file.
 pub(crate) fn bin_dir() -> &'static Path {
     use std::sync::OnceLock;
     static DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -545,9 +553,7 @@ pub(crate) fn bin_dir() -> &'static Path {
         let root = repo_root();
         let vendored = root.join("PORTING/bin");
         let checkout = root.join("bin");
-        // Nothing to fall back to, or the whole closure is vendored
-        // (`ebuild.sh` is the last file that would land): use it directly.
-        if !checkout.is_dir() || vendored.join("ebuild.sh").is_file() {
+        if !checkout.is_dir() {
             return vendored;
         }
         let overlay = std::env::temp_dir().join(format!("portuale-bin.{}", std::process::id()));
@@ -556,7 +562,7 @@ pub(crate) fn bin_dir() -> &'static Path {
             Err(e) => {
                 eprintln!(
                     "portuale: PORTING/bin overlay setup failed ({e}); \
-                     falling back to {} (local bin/ changes not applied)",
+                     falling back to {} (vendored bin/ changes not applied)",
                     checkout.display()
                 );
                 checkout
