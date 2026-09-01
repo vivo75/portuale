@@ -22,3 +22,29 @@ fn config_bzip2_command_prefers_the_placed_config() {
     };
     assert_eq!(config_bzip2_command(&empty), "bzip2");
 }
+
+#[test]
+fn root_deps_running_root_is_none_only_when_flag_off_and_roots_coincide() {
+    use std::path::{Path, PathBuf};
+    let slash = || PathBuf::from("/");
+    let stage = || PathBuf::from("/mnt/stage3");
+
+    assert_eq!(
+        resolve_root_deps_running_root(false, Path::new("/"), slash()),
+        None
+    );
+    // Cross-root without the flag routes to the running root (Portage BDEPEND/IDEPEND behavior).
+    assert_eq!(
+        resolve_root_deps_running_root(false, Path::new("/mnt/stage3"), slash()),
+        Some(slash())
+    );
+    // `--root-deps` forces it even when the roots coincide.
+    assert_eq!(
+        resolve_root_deps_running_root(true, Path::new("/"), slash()),
+        Some(slash())
+    );
+    assert_eq!(
+        resolve_root_deps_running_root(true, Path::new("/"), stage()),
+        Some(stage())
+    );
+}

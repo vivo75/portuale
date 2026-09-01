@@ -5741,6 +5741,101 @@ directly.
 > `brush`" / "`emerge` doesn't expose `--shell` yet" details are now
 > superseded.
 
+### `--shell` default is now `bash`; `emerge --shell bash|brush`
+
+Real-world testing (`emerge -v app-portage/eix` against an actual Gentoo
+tree) surfaced a hard blocker in the embedded `brush` backend:
+brush's `declare -f` function serializer corrupts any function body
+containing a **redirected here-document**. Given
+`toolchain-funcs.eclass`'s `_tc-has-openmp` --
+
+```bash
+_tc-has-openmp() {
+	cat <<-EOF > "${base}.c"
+	#include <omp.h>
+	EOF
+}
+```
+
+-- bash's `declare -f` round-trips it exactly; brush emits the redirect
+*after* the heredoc body as `> base "${}.c"` (the `${base}` parameter
+name dropped entirely) and re-indents the `<<-` body with spaces so its
+`EOF` terminator no longer matches. `__save_ebuild_env` runs `declare
+-f` on every in-scope function between phases, so the written
+`${T}/environment` becomes unparseable and the next phase's `source
+"${T}/environment" || die` aborts the build -- for essentially every
+package that compiles C/C++.
+
+So `ShellBackend`'s `#[default]` moved from `Brush` to `Bash` (the real
+`bash <ebuild.sh> <phase>` subprocess), which has no such problem. This
+trades the zero-dependency embedded-shell fit (hard goal 3) for a `bash`
+runtime dependency during real phase execution -- an accepted change
+(the phase runtime already shells out to real helper binaries anyway).
+`brush` stays fully available: `ebuild --shell brush` (existing flag,
+default just flipped) and a **new portuale-only `emerge --shell bash|brush`**
+flag (special-cased in `pretend.rs`'s parse loop like `--json`, mirrored
+in `emerge_pretend_reference.py` for CLI-surface parity, inert under
+`--pretend`). `emerge`'s flag threads into the real build/merge path
+(`emerge <atom>` / `--getbinpkg` / `--buildpkgonly` / `--resume`); when
+this landed the removal-hook (`prerm`/`postrm`) and `pkg_config` paths
+still stayed on the default (that gap closed in "`emerge --shell` reaches
+the removal-hook and `--config` paths" below). The brush `declare -f` bug
+is tracked in [`brush-pin.md`](../docs/brush-pin.md) for an upstream report.
+
+### `PORTAGE_PYM_PATH` is now set, so eclass `has_version` works
+
+Immediately after the `bash` default landed, `emerge -v app-portage/eix`
+got as far as `src_prepare` and died in `autotools.eclass` --
+`autotools_env_setup`'s automake probe (`best_version sys-devel/automake`)
+returned nothing. Root cause: the vendored `bin/` helper scripts that
+`import portage` -- `portageq-wrapper`, `ebuild-pyhelper` (and its
+`chmod-lite`/`doins`/`ebuild-ipc` symlinks), `save-ebuild-env.sh` -- each
+begin with `cd "${PORTAGE_PYM_PATH}" || exit 1`, and portuale left
+`PORTAGE_PYM_PATH` unset (originally so `bin/ebuild.sh`'s own cwd choice
+would take its `${PORTAGE_BUILDDIR}/empty` branch). So every `portageq`
+call an eclass made aborted before running, and the mysterious
+`error: a value is required for '[TARGET_DIR]'` / `env: '': No such
+file` noise was a `.py` helper failing the same way.
+
+`phase_env_vars` now sets `PORTAGE_PYM_PATH` to `<portage-checkout>/lib`
+whenever that directory exists (with no checkout the `.py` helpers can't
+run regardless). `bin/ebuild.sh` still prefers `${PORTAGE_BUILDDIR}/
+empty` (created first), so the "safe cwd for bug #469338" branch it was
+left unset for is unaffected -- verified: whole `portuale` suite + pytest
+green.
+
+**Result:** `emerge -v app-portage/eix` now completes a full, real merge
+end to end against an actual `~amd64` Gentoo tree -- fetch → `pretend →
+setup → unpack → prepare → configure → compile → test → install` (real
+`eautoreconf`, `./configure`, `make`, `make install`) → vdb merge. The
+46 MB `/usr/bin/eix` lands, the `eix-diff` symlink with it, a real vdb
+entry (`CONTENTS`/`COUNTER`/`DEFINED_PHASES`/`BDEPEND`/…) is written, and
+real portage's own `qlist -I` / `equery` agree it is installed.
+
+### `INHERITED` is exported, killing the spurious "inherited illegally" QA notice
+
+The eix merge above still printed `* QA Notice: Eclass '…' inherited
+illegally in … <phase>` for each of its seven eclasses, on both the
+`pretend` and `setup` phases. Real portage never emits this here.
+
+`bin/ebuild.sh`'s own `inherit()` (line 268) warns when an `inherit`
+runs outside `depend` for an eclass not in `${INHERITED}
+${__INHERITED_QA_CACHE}`. Real portage sets `INHERITED` in the phase env
+(`porttree.py:872`: `" ".join(_eclasses_)`), and `bin/ebuild.sh`
+snapshots it into `__INHERITED_QA_CACHE` right before it `unset`s
+`INHERITED` and re-`source`s the ebuild for a non-`depend` phase -- so
+the re-run `inherit` calls find every eclass already known. Portuale
+never set `INHERITED`, so every re-source warned.
+
+`compute_environment` now reads the eclass list from the ebuild's own
+repo `metadata/md5-cache` entry (`_eclasses_=<name>\t<md5>…`, or the
+plain `INHERITED=` older/fixture form) and `phase_env_vars` exports
+`INHERITED` into every phase -- matching real portage exactly. `emerge
+-v app-portage/eix` and `ebuild <file> <phase>` now run clean on both
+the `bash` and `brush` backends. Absent for a standalone ebuild outside
+any repo (no md5-cache), the same tolerance the `EAPI`/`SRC_URI` reads
+already take.
+
 ### Real `mirror://` resolution: `profiles/thirdpartymirrors` + `GENTOO_MIRRORS`
 
 The fetch slice's own documented gap -- a `mirror://<name>/<path>`
@@ -7173,6 +7268,57 @@ a complete no-op** — its `ignore_depend_deps` branch sits inside
 last residual — portuale routed `BDEPEND`/`IDEPEND` to `/` only under
 `--root-deps` — was closed 2026-09-02, see "`BDEPEND`/`IDEPEND` route to
 the running root unconditionally" below.
+
+### `BDEPEND`/`IDEPEND` route to the running root unconditionally
+
+Real EAPI-7+ `depgraph.py` resolves `edepend["BDEPEND"]` / `["IDEPEND"]`
+(and, for a native build, `["DEPEND"]` — `ESYSROOT` collapses to `BROOT`
+with nothing cross-compiling) against `_running_root.root` = `/` for
+**every** package, flag or no flag. Portuale previously only did this
+under `--root-deps`, leaving one residual: a genuine cross-root build
+(`ROOT` != the running root, i.e. populating a stage3 / chroot) resolved
+build-time deps against the target `ROOT` instead of the build host.
+
+`pretend.rs` now computes its `root_deps_running_root` as
+`resolve_root_deps_running_root(root_deps, &target_root, running_root)` =
+`Some(running_root)` whenever `--root-deps` is set **or**
+`running_root != target_root`. When the two roots coincide — every
+ordinary `ROOT=/` invocation — it stays `None`: a strict no-op, so
+nothing about the common path changes. `--root-deps` remains the only
+trigger when `ROOT` *is* the running root (its real debugging purpose).
+Mirrored in `emerge_pretend_reference.py`.
+
+The determinism concern that kept it flag-gated — an unconditional
+running-root lookup consults the real host's `/var/db/pkg` — is handled
+at the test boundary: the shared `fixture_env` now pins
+`PORTAGE_RUNNING_ROOT` to the fixture `ROOT`, so the whole contract suite
+runs with the roots coinciding (feature inert) unless a test explicitly
+opts into a cross-root scenario. New contract test
+`test_bdepend_routes_to_the_running_root_for_a_cross_root_build_without_root_deps`
+(empty tmp `ROOT`, `PORTAGE_RUNNING_ROOT` at the fixture tree whose
+seeded vdb has `dev-libs/rootdepsprovider`: the unresolvable `BDEPEND` is
+silently dropped, no `--root-deps`); `test_root_deps_top_level_idepend_
+resolves_against_the_running_root` rewritten to cover cross-root with and
+without the flag plus the coinciding-roots no-op; one Rust unit test on
+`resolve_root_deps_running_root`.
+
+```sh
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
+
+# Cross-root build, NO --root-deps: topideplib (an IDEPEND of topidepapp)
+# already resolves against the running root.
+PORTAGE_CONFIGROOT="$FX" ROOT="$(mktemp -d)" PORTAGE_RUNNING_ROOT="/" \
+    rust/target/release/portuale emerge --pretend dev-libs/topidepapp
+# [ebuild  N] dev-libs/topideplib-1.0 to /
+# [ebuild  N] dev-libs/topidepapp-1.0
+
+# Roots coincide: strict no-op, plain ROOT-targeted entry.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge --pretend dev-libs/topidepapp
+# [ebuild  N] dev-libs/topideplib-1.0
+# [ebuild  N] dev-libs/topidepapp-1.0
+```
 
 ### Real `ebuild <file> qmerge`
 
@@ -10861,5 +11007,57 @@ wc -l < "${PORTAGE_TMPDIR}"/portage/dev-libs/bigeclasspkg-1.0/temp/environment
 Real ebuilds/eclasses in the wild could still pipe a `pkg_*` function
 into something — that would still want #1276 upstream (or its own
 strategy-#2 rewrite). This closed the portage-tree side only.
+
+### `emerge --shell` reaches the removal-hook and `--config` paths
+
+When `emerge --shell bash|brush` first shipped (see "`--shell` default is
+now `bash`" above) it only threaded into the real build/merge path
+(`emerge <atom>` / `--getbinpkg` / `--buildpkgonly` / `--resume`). Every
+*other* real (non-`--pretend`) phase chain `emerge` can drive still
+hardcoded `ShellBackend::default()` into `MergeOptions::from_env(...)`:
+
+- the **removal hooks** — `pkg_prerm`/`pkg_postrm` run by
+  `ebuild_merge::unmerge_one_installed` for each package removed by
+  `emerge -C`/`--unmerge`, `--depclean`/`-c`, `--prune`/`-P`, `--clean`,
+  and `--rage-clean` (via `execute_unmerge` → `run_unmerge_pretend` and
+  the shared `run_prune_nodeps_or_clean`), plus the
+  `FEATURES=unmerge-backup` `quickpkg` (`bin/misc-functions.sh
+  __dyn_package`);
+- `emerge --config <atom>` — the real `pkg_config` phase
+  (`action_config` → `doebuild(ebuildpath, "config", ...)`), run by
+  `run_config_action` → `ebuild_merge::run_vdb_saved_env_phase`.
+
+The portuale-only `--shell` value parsed in `pretend.rs`'s loop is now
+threaded down every one of those call chains — `run_unmerge_pretend`,
+`run_depclean_pretend`, `run_prune_pretend`, `run_prune_nodeps_pretend`,
+`run_clean_pretend`, `run_prune_nodeps_or_clean`, `execute_unmerge`,
+`package_options_from_env`, and `run_config_action` each gained a
+`shell: ebuild_phases::ShellBackend` parameter — so a single
+`--shell brush` (or `--shell bash`) selects the backend for the whole
+invocation, not just its build half. Nothing about `--pretend` changes
+(still nothing executes), and `emerge_pretend_reference.py` needs no
+functional change (it only models `--pretend`, where `--shell` stays
+parsed-and-discarded) — the reference's comment + help text were updated
+for accuracy only.
+
+`test_emerge_unmerge_shell_flag_reaches_prerm_postrm` and
+`test_emerge_config_shell_flag_selects_the_pkg_config_backend`
+(`tests/test_portuale.py`) run `dev-libs/binpkgrmpkg`'s
+`pkg_prerm`/`pkg_postrm` and `dev-libs/emergeconfigpkg`'s `pkg_config`
+under **both** backends via the compiled binary, asserting an identical
+real result each way (the removal log's `prerm-1.0\npostrm-1.0`; the
+`emergeconfigpkg.configured` marker). Live-verified:
+
+```sh
+cd rust && cargo build --release && cd ..
+export PORTAGE_CONFIGROOT="$PWD/fixtures"
+export ROOT="$(mktemp -d)" PORTAGE_TMPDIR="$(mktemp -d)"
+mkdir -p "$ROOT/var/lib"
+ln -s "$PWD/rust/target/release/portuale" /tmp/pbin/ebuild  # multicall by argv[0]
+/tmp/pbin/ebuild --shell brush \
+    fixtures/repo/dev-libs/emergeconfigpkg/emergeconfigpkg-1.0.ebuild merge
+rust/target/release/portuale emerge --config --shell brush dev-libs/emergeconfigpkg
+cat "$ROOT/var/lib/emergeconfigpkg.configured"   # -> configured 1.0
+```
 
 # # required by dev-libs/useflagpkg[-foo] (argument)

@@ -2,6 +2,19 @@
 
 use crate::pretend::*;
 
+/// Which running root, if any, `BDEPEND`/`IDEPEND` (and, for a native build,
+/// `DEPEND`) resolve against instead of the target `ROOT`: always the running
+/// root `/` at EAPI 7+, observable only for a genuine cross-root build.
+/// `--root-deps` forces the same on top (and folds these keys into `RDEPEND`).
+/// Portage: depgraph.py, depend_root selection
+pub(crate) fn resolve_root_deps_running_root(
+    root_deps: bool,
+    target_root: &Path,
+    running_root: std::path::PathBuf,
+) -> Option<std::path::PathBuf> {
+    (root_deps || running_root != target_root).then_some(running_root)
+}
+
 /// `emerge -C` without `--pretend` removes each selected package, then
 /// deselects it from the world file (`--ask`/countdown handled by the caller).
 /// Portage: _emerge/unmerge.py, unmerge
