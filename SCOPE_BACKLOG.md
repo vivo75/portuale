@@ -227,9 +227,18 @@ single-pass BFS can't grow into these incrementally:
 
 ### D. Sandbox / build isolation
 
-- **No `SANDBOX` / `network-sandbox` / `usersandbox` enforcement.** `brush`
-  runs the real `bin/*.sh`, but a misbehaving ebuild that writes outside
-  `${D}` or hits the network during `src_compile` is not stopped.
+- **`FEATURES=network-sandbox`** *(shipped 2026-09-01, first increment)*:
+  the six real `src_*` phases run inside a fresh network namespace
+  (`unshare --net --map-root-user`, `lo` up) so a build can't reach the
+  internet — `run_one_phase`/`run_one_phase_bash`, forces the `Bash`
+  backend for those phases. Cuts: `RESTRICT=network-sandbox` /
+  `PROPERTIES=live`/`test_network` exemptions, the `AI_ADDRCONFIG`
+  loopback addresses.
+- **No `FEATURES=sandbox` (LD_PRELOAD filesystem confinement) /
+  `usersandbox` / `ipc-sandbox` / `mount-sandbox` / `pid-sandbox`.**
+  `brush` runs the real `bin/*.sh`, but a misbehaving ebuild that writes
+  outside `${D}` is not stopped (the `sys-apps/sandbox` binary + the
+  `SANDBOX_LOG` violation check are a separate increment).
 - **No `userpriv` / `FEATURES=userpriv usersandbox`** privilege drop
   (single-user dev/test context — see also the `chown` note below).
 - Various `FEATURES` unmodelled: `ccache`, `distcc`, `splitdebug`,
@@ -356,9 +365,12 @@ by a few large items rather than a long tail of small ones:
    (`$USE` / `package.env`), `features`, and `env.d` layers — a config
    that leans on those still diverges.
 
-4. **Sandbox enforcement (Part 2.D).** The pilot trusts ebuilds; real
-   portage confines them. Not a correctness gap for well-behaved packages,
-   a real one for hostile or buggy ones.
+4. **Sandbox enforcement (Part 2.D).** *`FEATURES=network-sandbox`
+   shipped 2026-09-01 (`src_*` phases in a fresh net namespace).*
+   Remaining: `FEATURES=sandbox` (the `sys-apps/sandbox` LD_PRELOAD
+   filesystem confinement + `SANDBOX_LOG` check), `userpriv`, `fakeroot`,
+   `ipc`/`mount`/`pid`-sandbox. The pilot still trusts an ebuild not to
+   write outside `${D}`.
 
 5. **Breadth of actions and flags (Parts 2.E/F).** `--info`, `--search`,
    `--sync`, news, GLSA, dozens of modifier flags — individually small,

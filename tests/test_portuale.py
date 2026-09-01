@@ -1694,3 +1694,110 @@ def test_ebuild_shell_requires_a_value(ebuild_binary):
     )
     assert result.returncode == 2
     assert result.stderr.strip() == "ebuild: option '--shell' requires a value"
+
+
+def _unshare_net_usable() -> bool:
+    """Whether `unshare --net --map-root-user` works in this environment
+    (the same check `ebuild_phases::unshare_net_usable` caches)."""
+    try:
+        return (
+            subprocess.run(
+                ["unshare", "--net", "--map-root-user", "--", "true"],
+                capture_output=True,
+            ).returncode
+            == 0
+        )
+    except FileNotFoundError:
+        return False
+
+
+def _netsandbox_probe(portage_tmpdir: Path) -> dict[str, str]:
+    text = (
+        portage_tmpdir
+        / "portage/dev-libs/netsandboxpkg-1.0/image/usr/share/netsandboxpkg/netsandbox-probe"
+    ).read_text()
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" in line and not line.startswith(("bash:", " ")):
+            k, _, v = line.partition("=")
+            out.setdefault(k, v)
+    return out
+
+
+def test_ebuild_network_sandbox_gives_src_phases_a_fresh_network_namespace(
+    ebuild_binary, tmp_path
+):
+    """FEATURES=network-sandbox (SCOPE_BACKLOG Part 2.D): the six real
+    `src_*` phases run inside a fresh network namespace via
+    `unshare --net --map-root-user` (real portage's own
+    `unshare(CLONE_NEWNET)`). `dev-libs/netsandboxpkg`'s src_compile
+    records `readlink /proc/self/ns/net`, its visible interfaces (from
+    the per-netns `/proc/net/dev`), and an outbound-connect result. Run
+    twice -- with and without the feature -- and compare: the feature
+    must put the phase in a *different* netns whose only interface is
+    `lo` and where a non-loopback connect is unreachable."""
+    if not _unshare_net_usable():
+        pytest.skip("unprivileged network-namespace unshare unavailable here")
+
+    ebuild_path = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/netsandboxpkg/netsandboxpkg-1.0.ebuild"
+    )
+
+    base_env = dict(os.environ)
+    base_env["ROOT"] = str(tmp_path / "root")
+
+    plain_env = dict(base_env)
+    plain_env["FEATURES"] = ""
+    plain_env["PORTAGE_TMPDIR"] = str(tmp_path / "plain")
+    plain = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        env=plain_env,
+    )
+    assert plain.returncode == 0, plain.stderr
+    plain_probe = _netsandbox_probe(tmp_path / "plain")
+
+    sb_env = dict(base_env)
+    sb_env["FEATURES"] = "network-sandbox"
+    sb_env["PORTAGE_TMPDIR"] = str(tmp_path / "sandboxed")
+    sandboxed = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        env=sb_env,
+    )
+    assert sandboxed.returncode == 0, sandboxed.stderr
+    sb_probe = _netsandbox_probe(tmp_path / "sandboxed")
+
+    # The sandboxed src_compile ran in its own network namespace...
+    assert sb_probe["netns"] != plain_probe["netns"], (plain_probe, sb_probe)
+    # ...with only loopback...
+    assert sb_probe["ifaces"] == "lo", sb_probe
+    # ...and no route off it.
+    assert "Network is unreachable" in sb_probe["connect"], sb_probe
+
+
+def test_ebuild_without_network_sandbox_shares_the_host_network_namespace(
+    ebuild_binary, tmp_path
+):
+    """Regression guard: with no FEATURES=network-sandbox, src_compile
+    runs in the host network namespace exactly as before -- same netns as
+    the portuale process, more than just `lo` visible (unless the host
+    itself only has `lo`, hence the tolerant interface check)."""
+    ebuild_path = str(
+        Path(FIXTURES_ROOT) / "repo/dev-libs/netsandboxpkg/netsandboxpkg-1.0.ebuild"
+    )
+    env = dict(os.environ)
+    env["FEATURES"] = ""
+    env["ROOT"] = str(tmp_path / "root")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+    result = subprocess.run(
+        [str(ebuild_binary), ebuild_path, "install"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    probe = _netsandbox_probe(tmp_path / "pt")
+    assert probe["netns"] == os.readlink("/proc/self/ns/net")

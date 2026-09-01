@@ -10452,6 +10452,41 @@ PORTAGE_CONFIGROOT="$PWD/PORTING/fixtures" ROOT="$PWD/PORTING/fixtures" \
 # [ebuild  N     ] dev-libs/repouseweakpkg-1.0::testrepo  USE="-repoweakflag"
 ```
 
+### `FEATURES=network-sandbox`: `src_*` phases lose network access
+
+Real portage's `FEATURES=network-sandbox` puts a build's `src_*` phases
+in a fresh network namespace (`unshare(CLONE_NEWNET)` in
+`portage.process._exec`) so an ebuild can't reach the internet during
+`src_compile` — the "misbehaving ebuild hits the network" case from
+SCOPE_BACKLOG Part 2.D. The pilot now models this: when `network-sandbox`
+is in `FEATURES`, the six real `src_*` phases
+(`unpack`/`prepare`/`configure`/`compile`/`test`/`install` — real
+`_doebuild_spawn`'s own network-unshared set) run as
+`unshare --net --map-root-user -- … bash <bin_dir>/ebuild.sh <phase>`,
+with `lo` brought up inside. This forces the `Bash` backend for those
+phases (an in-process `Brush` interpreter can't be put in its own
+namespace) and — unlike real portage, which only unshares as root — uses
+`--map-root-user` so it works from the pilot's normal non-root context.
+If unprivileged user namespaces are unavailable, the wrapper is skipped
+with a one-shot warning, matching real portage's own non-fatal "Unable
+to unshare" degrade.
+
+Documented cuts in this first increment: `RESTRICT=network-sandbox` /
+`PROPERTIES=live` (unpack) / `PROPERTIES=test_network` (test) exemptions
+aren't honoured (the phase env here has no USE-reduced
+`RESTRICT`/`PROPERTIES`); the `10.0.0.1/8` + `fd::1/8` loopback
+addresses real `_configure_loopback_interface` adds for the glibc
+`AI_ADDRCONFIG` workaround (bug #690758) are skipped; the sibling
+`FEATURES=sandbox` (LD_PRELOAD `sys-apps/sandbox` filesystem
+confinement), `ipc-sandbox`, `mount-sandbox`, `pid-sandbox`, `userpriv`,
+and `fakeroot` are untouched.
+
+`dev-libs/netsandboxpkg`'s `src_compile` records its own
+`/proc/self/ns/net`, its visible interfaces, and an outbound-connect
+result; running `ebuild <file> install` twice (with and without the
+feature) shows a different netns, `lo` only, and "Network is
+unreachable" when the feature is on.
+
 ## Running it
 
 Build both Rust binaries:
