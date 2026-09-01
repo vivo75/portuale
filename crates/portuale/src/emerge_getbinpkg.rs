@@ -43,6 +43,18 @@ pub struct RunMergePlanArgs<'a> {
     pub mode: crate::emerge_build::StatusMode,
 }
 
+/// Arguments of [`merge_one_binary_entry`].
+pub(crate) struct MergeOneBinaryEntryArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+    pub(crate) pkgdir: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) merge_options: &'a MergeOptions,
+    pub(crate) progress: mrg_director::MergeProgress,
+    pub(crate) display: &'a crate::emerge_build::StatusDisplay,
+}
+
 /// `>>> Failed to emerge <cpv>[ for <root>][, Log file:]` plus, when the
 /// non-empty build log is found, `>>>  '<log>'`. Each message writes its own
 /// leading blank line first; the log line's extra space is Portage's own
@@ -129,6 +141,16 @@ pub(crate) fn binpkg_missing_failure(cpv: &str) -> String {
 /// failure shape as [`is_binpkg_digest_failure`]).
 pub(crate) fn is_binpkg_missing_failure(e: &str) -> bool {
     !e.contains('\n') && e.ends_with(": non-existent binary package")
+}
+
+/// Arguments of [`local_index_record`].
+struct LocalIndexRecordArgs<'a> {
+    pkgdir: &'a Path,
+    category: &'a str,
+    package: &'a str,
+    version: &'a str,
+    build_id: Option<&'a str>,
+    binpkg_path: &'a Path,
 }
 
 /// The on-disk binpkg for `<cat>/<package>-<version>` in `$PKGDIR`: the

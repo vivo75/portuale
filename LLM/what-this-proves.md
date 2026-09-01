@@ -10064,4 +10064,74 @@ via a `_assert_slot_collision_block` helper (rather than pinning the
 whole paragraph in every test) + `--backtrack=30`/`=0` hint-gate CASES;
 a new `portage-repo` unit test asserts the per-instance parent data.
 
+### `emerge -jN` / `--jobs=N` / `--load-average`: a real parallel build scheduler
+
+`emerge <atom>` (source, no `--pretend`) gained real `_emerge/Scheduler.py`
+job scheduling. `run_source_merge` now takes a `jobs` count; `jobs > 1`
+routes to `run_build_scheduler` instead of the strictly-serial
+`run_merge_loop`:
+
+- `merge_one_source_entry` (build **and** merge, atomic) is split into
+  `build_one_source_entry` (real `EbuildBuild` + `EbuildBinpkg` — the
+  `install` phase chain + any `--buildpkg` binpkg, no vdb write) and
+  `merge_one_built_entry` (real `EbuildMerge` — reuses `run_qmerge`, which
+  checks the same `${PORTAGE_BUILDDIR}/.installed` marker the `install`
+  phase leaves and runs `merge_after_install`, same-slot replace
+  included).
+- The scheduler builds the forward-dependency DAG from each
+  `GraphEntry.required_by`, keeps `AlreadyInstalled` / `Binary` entries as
+  "already merged", and dispatches a package's build (in a
+  `std::thread::scope` worker) only once every dependency it has is
+  merged. Up to `jobs` builds run concurrently (`usize::MAX` for a bare
+  `--jobs`/`-j`, capped to the build-set size); **the vdb merge step is
+  always serialized** — done on the main thread as each build's result
+  arrives over an `mpsc` channel — matching real portage, which merges one
+  package at a time to avoid `collision-protect` / `CONTENTS` races.
+- `--keep-going` is preserved: a failed build (or merge) records the
+  failure and drops every transitive dependent via
+  `scheduler_skip_dependents` (real `Scheduler._calc_resume_list`); the
+  run still exits non-zero listing what failed and what was skipped.
+
+`--jobs[=N]` / `-j[N]` parses like `--deep` (optional integer next token,
+`=`/attached-`-jN` forms, bare = unlimited). Only the plain source
+`emerge <atom>` path uses it — `--buildpkgonly` and the binary-merge
+paths stay serial (nothing to build in parallel). No Python-reference
+change: the contract suite never executes builds.
+
+`--load-average=LA` / `-l LA` (real `main.py` `type=float`) is honoured
+too: `run_build_scheduler` will not start an *additional* build (it always
+allows the first, so it can never deadlock) while the system 1-minute
+load average (`system_loadavg_1min`, Linux `/proc/loadavg`; `0.0` = no
+throttle anywhere it can't be read) is above `LA`.
+
+**Build-log capture + the job-status line.** Each parallel build's phase
+output goes to `${T}/build.log` (real `PORTAGE_LOG_FILE`;
+`PORTAGE_LOGDIR` unset → `${PORTAGE_BUILDDIR}/temp/build.log`) instead of
+the terminal — real portage's `--quiet-build`, on by default under
+`--jobs`. `run_commands` grew a `run_commands_logged` sibling that
+threads an `Option<&Path>` through the whole phase chain
+(`run_one_phase{,_bash,_brush}`, `run_misc_functions{,_bash,_brush}`);
+the `bash` backend redirects at the OS level (`Command::stdout/stderr`),
+the `brush` backend via the shell's persistent open files. A *captured*
+scheduler build is forced onto the real `bash` backend (real portage
+builds with real bash regardless), where the redirect is complete.
+After each merge the scheduler prints `>>> Jobs: X of Y complete` (real
+`Scheduler.JobStatusDisplay`); on a build failure the last 40 lines of
+that package's `build.log` are folded into the error report. The
+parsable **stdout** is now clean under `-j >1` — every line is a
+portuale-emitted `>>>` / `[ebuild …]` line.
+
+KNOWN CUTS (documented in `emerge_build.rs`): the serialized *merge*
+step's `pkg_pre/postinst` hooks still run through `brush` uncaptured, so
+some pre-existing phase-execution noise (`chgrp: … Operation not
+permitted`, etc.) stays on stderr (not interleaved, present in serial
+builds too); `--quiet-build[=y|n]` isn't a real flag yet (capture is
+`-j >1`-only, serial `-j1` is unchanged); each `run_commands` still spins
+up its own tokio runtime; a non-`--keep-going` failure returns
+immediately but waits for already-running builds (`thread::scope` join)
+rather than killing them. New `dev-libs/sched*` fixtures; three black-box
+`test_portuale.py` tests (parallel dispatch order + clean stdout + Jobs
+line + build.log, `--load-average`, `--keep-going` skip + failure-log
+tail) and four `portuale` unit tests.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)

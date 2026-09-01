@@ -244,6 +244,31 @@ pub(crate) fn merge_one_built_entry(args: MergeOneBuiltEntryArgs<'_>) -> Result<
     Ok(())
 }
 
+/// Marks every (transitive) dependent of `idx` as skipped.
+// Portage: Scheduler.py, _calc_resume_list
+pub(crate) fn scheduler_skip_dependents(
+    idx: usize,
+    entries: &[GraphEntry],
+    cp_to_idx: &std::collections::HashMap<(String, String), usize>,
+    skip: &mut std::collections::HashSet<usize>,
+    skipped: &mut Vec<String>,
+) {
+    let mut queue = vec![idx];
+    while let Some(x) = queue.pop() {
+        for r_cp in &entries[x].required_by {
+            if let Some(&r_idx) = cp_to_idx.get(r_cp)
+                && skip.insert(r_idx)
+            {
+                skipped.push(format!(
+                    "{}/{}",
+                    entries[r_idx].category, entries[r_idx].package
+                ));
+                queue.push(r_idx);
+            }
+        }
+    }
+}
+
 /// Runs up to `jobs` package *builds* concurrently, dispatching a build
 /// only once every dependency in the merge set is already merged, and
 /// serializing the vdb merge step. `jobs == usize::MAX` (a bare `--jobs`)
@@ -256,4 +281,217 @@ pub(crate) fn system_loadavg_1min() -> f64 {
         .ok()
         .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok()))
         .unwrap_or(0.0)
+}
+
+/// Arguments of [`run_build_scheduler`].
+pub(crate) struct RunBuildSchedulerArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a ebuild_merge::MergeOptions,
+    pub(crate) keep_going: bool,
+    pub(crate) buildpkg: Option<&'a ebuild_package::PackageOptions>,
+    pub(crate) buildpkg_exclude: &'a [String],
+    /// The `-jN` dispatch policy: a capped or uncapped scheduler is one
+    /// caller-side value, never a loop change here.
+    pub(crate) policy: &'a dyn mrg_director::SchedulerPolicy,
+    /// The run's status display.
+    pub(crate) display: &'a StatusDisplay,
+}
+
+/// Known cuts: each build's phase output goes to its own `${T}/build.log`
+/// (captured), and a non-`--keep-going` failure stops scheduling new work
+/// and kills still-running builds.
+pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(), String> {
+    let RunBuildSchedulerArgs {
+        entries,
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        keep_going,
+        buildpkg,
+        buildpkg_exclude,
+        policy,
+        display,
+    } = args;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::mpsc;
+
+    let n = entries.len();
+    let cp_to_idx: HashMap<(String, String), usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| ((e.category.clone(), e.package.clone()), i))
+        .collect();
+
+    // idx -> the indices (present in this graph) it depends on,
+    // reconstructed from the reverse `required_by` edges.
+    let mut deps: Vec<HashSet<usize>> = vec![HashSet::new(); n];
+    for (d_idx, d) in entries.iter().enumerate() {
+        for r_cp in &d.required_by {
+            if let Some(&r_idx) = cp_to_idx.get(r_cp) {
+                deps[r_idx].insert(d_idx);
+            }
+        }
+    }
+
+    // Entries that need no build count as already merged, so their
+    // dependents become dispatchable immediately.
+    let mut merged: HashSet<usize> = (0..n)
+        .filter(|&i| !scheduler_needs_build(&entries[i]))
+        .collect();
+    let mut started: HashSet<usize> = HashSet::new();
+    let mut skip: HashSet<usize> = HashSet::new();
+    let mut failures: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    // One registry for this call only, shared with the worker threads it
+    // spawns (never process-wide, so another test thread's subprocess is
+    // unreachable from here).
+    let registry = ebuild_phases::new_scheduler_registry();
+    // Every build/merge half below prints its entry's own snapshot.
+    let progress = merge_progress_map(entries);
+
+    std::thread::scope(|scope| -> Result<(), String> {
+        let (tx, rx) = mpsc::channel::<(usize, Result<PathBuf, String>)>();
+        let mut in_flight = 0usize;
+        loop {
+            // `max_jobs` caps concurrency, then `should_start` gates one more
+            // build on the live load average. The first build is never
+            // gated, so the DAG cannot deadlock.
+            while in_flight < policy.max_jobs() {
+                if !policy.should_start(in_flight, system_loadavg_1min()) {
+                    break;
+                }
+                let next = (0..n).find(|&i| {
+                    scheduler_needs_build(&entries[i])
+                        && !started.contains(&i)
+                        && !skip.contains(&i)
+                        && !merged.contains(&i)
+                        && deps[i].iter().all(|d| merged.contains(d))
+                });
+                let Some(idx) = next else { break };
+                started.insert(idx);
+                in_flight += 1;
+                // The `>>> Jobs:` line prints at dispatch, before the
+                // worker's `>>> Emerging` line.
+                display.job_started();
+                // The worker closure is `move` and cannot borrow the map.
+                let entry_progress = progress[idx];
+                let tx = tx.clone();
+                let bp = buildpkg.filter(|opts| {
+                    entry_buildpkg_wanted(
+                        &entries[idx],
+                        repos,
+                        buildpkg_exclude,
+                        opts.buildpkg_live,
+                    )
+                });
+                let entry = &entries[idx];
+                let registry = registry.clone();
+                scope.spawn(move || {
+                    // Registers every subprocess this worker spawns into
+                    // `registry` for the closure's own lifetime.
+                    let _guard = ebuild_phases::scope_scheduler_registry(registry);
+                    let r = build_one_source_entry(
+                        BuildOneSourceEntryArgs { entry, repos, root, portage_tmpdir, options, buildpkg: bp, capture_log: // Each build's output goes to its own
+                        // `${T}/build.log` so parallel builds don't
+                        // interleave on the terminal.
+                        true, progress: entry_progress, display },
+                    );
+                    let _ = tx.send((idx, r));
+                });
+            }
+
+            if in_flight == 0 {
+                break;
+            }
+
+            let (idx, build_result) = rx
+                .recv()
+                .map_err(|e| format!("scheduler channel closed unexpectedly: {e}"))?;
+            in_flight -= 1;
+
+            let failure = match build_result {
+                Ok(path) => {
+                    // The build slot is free before the serialized merge
+                    // starts.
+                    display.build_finished();
+                    let entry = &entries[idx];
+                    let entry_progress = progress[idx];
+                    let err = merge_one_built_entry(MergeOneBuiltEntryArgs {
+                        entry,
+                        repos,
+                        ebuild_path: &path,
+                        root,
+                        portage_tmpdir,
+                        options,
+                        progress: entry_progress,
+                        display,
+                    })
+                    .err();
+                    if err.is_some() {
+                        // The build slot is already free, so only the
+                        // `failed` event fires here.
+                        display.job_failed();
+                    }
+                    err
+                }
+                Err(e) => {
+                    display.job_failed();
+                    display.build_finished();
+                    Some(e)
+                }
+            };
+
+            match failure {
+                None => {
+                    merged.insert(idx);
+                    // Each successful merge leaves the saved resume list
+                    // (removal by value, so completion order is fine).
+                    if let Some(cpv) = resume_cpv(&entries[idx]) {
+                        crate::mtimedb::remove_merged_entry(root, &cpv);
+                    }
+                    display.merge_finished();
+                }
+                Some(e) => {
+                    if !keep_going {
+                        // Without `--keep-going` no new work is scheduled and
+                        // still-running builds are killed, not waited out.
+                        ebuild_phases::kill_registered_children(&registry);
+                        return Err(e);
+                    }
+                    failures.push(e);
+                    scheduler_skip_dependents(idx, entries, &cp_to_idx, &mut skip, &mut skipped);
+                }
+            }
+        }
+        Ok(())
+    })?;
+
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let mut msg = format!(
+        "{} package(s) failed to merge (--keep-going):\n{}",
+        failures.len(),
+        failures
+            .iter()
+            .map(|f| format!("  {f}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    if !skipped.is_empty() {
+        msg.push_str(&format!(
+            "\n{} dependent package(s) not merged:\n{}",
+            skipped.len(),
+            skipped
+                .iter()
+                .map(|s| format!("  {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    Err(msg)
 }
