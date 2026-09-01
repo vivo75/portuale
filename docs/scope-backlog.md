@@ -332,10 +332,19 @@ dev/test context — see also the `chown` note below).
   default is now `Bash` (real `bash` subprocess); `brush` stays available
   via `--shell brush` on both `emerge` and `ebuild`. See `brush-pin.md`,
   "`declare -f` mangles a function with a redirected here-document".
-- **Still open:** minimize + report the `declare -f` heredoc bug
-  upstream; periodic re-pin to keep up with upstream `main` (see
-  `brush-pin.md`'s checklist); `emerge --shell` does not yet reach the
-  `prerm`/`postrm` or `pkg_config` paths (they use the `bash` default).
+- ~~**`PORTAGE_PYM_PATH` unset broke eclass `has_version`/`best_version`**~~
+  **Fixed 2026-09-01** — `phase_env_vars` sets it to `<checkout>/lib`; the
+  `bin/` `import portage` helper shims (`portageq-wrapper`,
+  `ebuild-pyhelper`, `save-ebuild-env.sh`) no longer abort on their
+  `cd "${PORTAGE_PYM_PATH}" || exit 1`. `emerge -v app-portage/eix` now
+  completes a full real merge against a live `~amd64` tree.
+- **Still open (shell backend):** minimize + report the `declare -f`
+  heredoc bug upstream; periodic re-pin to keep up with upstream `main`
+  (see `brush-pin.md`'s checklist); `emerge --shell` does not yet reach
+  the `prerm`/`postrm` or `pkg_config` paths (they use the `bash`
+  default); the cosmetic `* QA Notice: Eclass '…' inherited illegally in
+  … <phase>` noise from `misc-functions.sh`'s `inherit()` check firing
+  on the re-sourced env across the fresh-shell-per-phase boundary.
 
 ### H. Misc / cosmetic
 

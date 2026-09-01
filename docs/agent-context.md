@@ -275,6 +275,10 @@ fetch (including `mirror://`/`custommirrors` resolution and real
 `FEATURES=distlocks` file locking) via real `wget`; real eclass
 `inherit()` support; `ebuild --shell bash|brush` and `emerge --shell
 bash|brush` (pilot-only flags) pick the execution backend explicitly.
+As of 2026-09-01 `emerge -v app-portage/eix` completes a full real merge
+against a live `~amd64` tree (real `eautoreconf`/`./configure`/`make`/
+`make install` → vdb entry; `qlist -I` agrees) — see `what-this-proves.md`,
+"`PORTAGE_PYM_PATH` is now set".
 
 **Backtracking (resolver retry loop)** — the `--autounmask*` family is
 fully shipped, and as of 2026-09-01 **slice 1 of real backtracking**:

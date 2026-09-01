@@ -5791,11 +5791,41 @@ in `emerge_pretend_reference.py` for CLI-surface parity, inert under
 removal-hook (`prerm`/`postrm`) and `pkg_config` paths stay on the
 default, matching how they already hardcode `debug = false`. The brush
 `declare -f` bug is tracked in [`brush-pin.md`](brush-pin.md) for an
-upstream report. With `bash`, `emerge -v app-portage/eix` now runs the
-full `pretend → setup → unpack → prepare` chain (it currently fails
-later, in `prepare`, on an unrelated `PORTAGE_PYM_PATH`-unset issue that
-breaks the `portageq`/`chmod-lite` helper shims -- its own separate
-slice).
+upstream report.
+
+### `PORTAGE_PYM_PATH` is now set, so eclass `has_version` works
+
+Immediately after the `bash` default landed, `emerge -v app-portage/eix`
+got as far as `src_prepare` and died in `autotools.eclass` --
+`autotools_env_setup`'s automake probe (`best_version sys-devel/automake`)
+returned nothing. Root cause: the vendored `bin/` helper scripts that
+`import portage` -- `portageq-wrapper`, `ebuild-pyhelper` (and its
+`chmod-lite`/`doins`/`ebuild-ipc` symlinks), `save-ebuild-env.sh` -- each
+begin with `cd "${PORTAGE_PYM_PATH}" || exit 1`, and this pilot left
+`PORTAGE_PYM_PATH` unset (originally so `bin/ebuild.sh`'s own cwd choice
+would take its `${PORTAGE_BUILDDIR}/empty` branch). So every `portageq`
+call an eclass made aborted before running, and the mysterious
+`error: a value is required for '[TARGET_DIR]'` / `env: '': No such
+file` noise was a `.py` helper failing the same way.
+
+`phase_env_vars` now sets `PORTAGE_PYM_PATH` to `<portage-checkout>/lib`
+whenever that directory exists (with no checkout the `.py` helpers can't
+run regardless). `bin/ebuild.sh` still prefers `${PORTAGE_BUILDDIR}/
+empty` (created first), so the "safe cwd for bug #469338" branch it was
+left unset for is unaffected -- verified: whole `portuale` suite + pytest
+green.
+
+**Result:** `emerge -v app-portage/eix` now completes a full, real merge
+end to end against an actual `~amd64` Gentoo tree -- fetch → `pretend →
+setup → unpack → prepare → configure → compile → test → install` (real
+`eautoreconf`, `./configure`, `make`, `make install`) → vdb merge. The
+46 MB `/usr/bin/eix` lands, the `eix-diff` symlink with it, a real vdb
+entry (`CONTENTS`/`COUNTER`/`DEFINED_PHASES`/`BDEPEND`/…) is written, and
+real portage's own `qlist -I` / `equery` agree it is installed. Residual
+noise (`* QA Notice: Eclass '…' inherited illegally in … <phase>` from
+`misc-functions.sh`'s `inherit()` check firing on the re-sourced
+environment across the fresh-shell-per-phase boundary) is cosmetic and
+does not affect the merge.
 
 ### Real `mirror://` resolution: `profiles/thirdpartymirrors` + `GENTOO_MIRRORS`
 

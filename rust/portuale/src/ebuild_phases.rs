@@ -130,18 +130,16 @@
 //       works non-root -- an unavailable user namespace degrades with a
 //       warning (real "Unable to unshare").
 //   - `PORTAGE_PYM_PATH` (real portage's own Python-package import path)
-//     is left unset -- `create_directories` pre-creates
-//     `${PORTAGE_BUILDDIR}/empty` specifically so that real
+//     is set to `<checkout>/lib` when the portage checkout exists (see
+//     `phase_env_vars`'s own comment). It was originally left unset --
+//     `create_directories` pre-creates `${PORTAGE_BUILDDIR}/empty` so
 //     `bin/ebuild.sh`'s own "safe cwd" logic (EAPI 8's own comment:
-//     "requires us to use an empty directory here") takes that branch
-//     instead of falling back to `cd "${PORTAGE_PYM_PATH}" || die`,
-//     which would otherwise `die` immediately on every single phase
-//     (confirmed empirically). `__save_ebuild_env`'s own
-//     environment.bz2-writing path (used by `pkg_preinst`/`pkg_postinst`
-//     hooks this slice doesn't reach) still separately fails non-fatally
-//     when it tries to `cd "${PORTAGE_PYM_PATH}"` with no `|| die` guard
-//     -- observed as harmless `TARGET_DIR`/`chgrp` warning noise on
-//     every phase, not something that stops a phase from completing.
+//     "requires us to use an empty directory here") takes *that* branch
+//     rather than `cd "${PORTAGE_PYM_PATH}" || die`, and it still does --
+//     but the `bin/` helper scripts that `import portage`
+//     (`portageq-wrapper`, `ebuild-pyhelper`, `save-ebuild-env.sh`) each
+//     `cd "${PORTAGE_PYM_PATH}" || exit 1` unconditionally, so with it
+//     unset every `has_version`/`best_version` an eclass runs failed.
 //   - `__source_all_bashrcs` (real per-profile/package bashrc hook
 //     support, `/etc/portage/bashrc` and friends) is left unimplemented
 //     -- also observed as a non-fatal "command not found" warning, not a
@@ -1395,6 +1393,29 @@ fn phase_env_vars(
         ),
         ("EBUILD_PHASE".to_string(), ebuild_phase_value.to_string()),
     ];
+
+    // Real portage's `PORTAGE_PYM_PATH`: the `lib/` dir of the portage
+    // checkout, where the `portage` python package lives. The vendored
+    // `bin/` helper scripts that import portage -- `portageq-wrapper`,
+    // `ebuild-pyhelper` (and its `chmod-lite`/`doins`/`ebuild-ipc`/…
+    // symlinks), `save-ebuild-env.sh` -- each begin with
+    // `cd "${PORTAGE_PYM_PATH}" || exit 1`, so leaving it unset makes
+    // every one of them abort, which breaks eclass `has_version` /
+    // `best_version` (they shell out to `portageq`) for any real ebuild
+    // (e.g. `autotools.eclass`'s automake probe). `bin/ebuild.sh`'s own
+    // cwd choice still prefers `${PORTAGE_BUILDDIR}/empty` (pre-created
+    // by `create_directories`), so setting this does not regress the
+    // "safe cwd for bug #469338" branch it was originally left unset for.
+    // Only set when the checkout (hence a real `lib/portage`) exists --
+    // with no checkout the `.py` helpers can't run regardless.
+    let pym_path = portage_checkout().join("lib");
+    if pym_path.join("portage").is_dir() {
+        vars.push((
+            "PORTAGE_PYM_PATH".to_string(),
+            pym_path.display().to_string(),
+        ));
+    }
+
     vars.extend(extra_env.iter().cloned());
     vars
 }

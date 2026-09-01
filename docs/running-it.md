@@ -1750,6 +1750,20 @@ cat "${PORTAGE_TMPDIR}"/portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/h
 # hello from phasepkg
 ```
 
+Full real merge against a live Gentoo tree (needs root, a
+`3rdparty/portage/` checkout, and the real toolchain installed):
+
+```sh
+cd rust && cargo build --release && cd ../..
+ln -sf "$(realpath rust/target/release/portuale)" rust/target/release/emerge
+sudo rust/target/release/portuale emerge -v app-portage/eix
+# fetch -> pretend -> setup -> unpack -> prepare -> configure -> compile
+# -> test -> install -> vdb merge
+# >>> app-portage/eix-0.36.9 merged.
+eix --version            # 0.36.9
+qlist -I app-portage/eix # app-portage/eix
+```
+
 Real `mirror://` resolution (see "What this proves" above for the full
 writeup): a real `mirror://debian/...` `SRC_URI` entry on the real
 system's own `gentoo` repo checkout, previously unfetchable:
