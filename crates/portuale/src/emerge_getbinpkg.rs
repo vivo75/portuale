@@ -43,6 +43,107 @@ pub struct RunMergePlanArgs<'a> {
     pub mode: crate::emerge_build::StatusMode,
 }
 
+/// Merge every resolved entry (already in dependency-first merge order),
+/// dispatching per entry on `entry.source` (Portage's "prefer a binary, fall
+/// back to source" is the resolver's job, stamped on each `GraphEntry`):
+/// a `Binary` entry is downloaded (if remote) and merged; anything else is
+/// built+merged from source; `AlreadyInstalled` is a silent no-op.
+/// `--getbinpkgonly` (binary-only resolve) never yields a non-`Binary` entry.
+pub fn run_merge_plan(args: RunMergePlanArgs<'_>) -> Result<(), String> {
+    let RunMergePlanArgs {
+        entries,
+        config,
+        repos,
+        root,
+        pkgdir,
+        portage_tmpdir,
+        merge_options,
+        keep_going,
+        buildpkg,
+        buildpkg_exclude,
+        mode,
+    } = args;
+    // A source build always runs ebuild phases, so a binary that cannot find
+    // the vendored runtime fails before anything is fetched. Binary merges are
+    // not gated here (a hookless gpkg never spawns a shell).
+    if entries.iter().any(|e| {
+        e.source != portage_repo::CandidateSource::Binary
+            && !matches!(
+                e.outcome,
+                portage_repo::PretendOutcome::AlreadyInstalled { .. }
+                    | portage_repo::PretendOutcome::NoVisibleCandidate
+            )
+    }) {
+        crate::ebuild_phases::require_phase_runtime()?;
+    }
+    // Every entry below prints its own snapshot of these counters.
+    let progress = crate::emerge_build::merge_progress_map(entries);
+    // One display per merge run.
+    let total_builds = entries
+        .iter()
+        .filter(|e| {
+            e.source == portage_repo::CandidateSource::Binary
+                || crate::emerge_build::entry_counts_toward_progress(e)
+        })
+        .count();
+    let display = crate::emerge_build::StatusDisplay::new(
+        mode,
+        total_builds,
+        crate::emerge_build::progress_color(),
+    );
+    crate::emerge_build::run_merge_loop(entries, keep_going, root, |idx, entry| {
+        // Derive the entry's `MergeUnit` and dispatch on its kind through the
+        // source/binary engines. An entry with nothing to merge stays a silent
+        // no-op, exactly the merge functions' own early return.
+        let entry_progress = progress[idx];
+        let Some(unit) = crate::merge_engines::merge_unit_for_entry(entry, root, entry_progress)
+        else {
+            return Ok(());
+        };
+        let ctx = mrg_director::MergeContext {
+            root: root.to_path_buf(),
+            builddir: portage_tmpdir.to_path_buf(),
+            jobs: 1,
+            keep_going,
+        };
+        let outcome = match unit.kind {
+            mrg_director::MergeKind::Source => {
+                let bp = buildpkg.filter(|opts| {
+                    crate::emerge_build::entry_buildpkg_wanted(
+                        entry,
+                        repos,
+                        buildpkg_exclude,
+                        opts.buildpkg_live,
+                    )
+                });
+                crate::merge_engines::SourceEngine {
+                    repos,
+                    root,
+                    portage_tmpdir,
+                    options: merge_options,
+                    buildpkg: bp,
+                    buildpkg_exclude,
+                    display: &display,
+                }
+                .execute(&unit, &ctx)
+            }
+            mrg_director::MergeKind::Binary => crate::merge_engines::BinaryEngine {
+                config,
+                root,
+                pkgdir,
+                portage_tmpdir,
+                options: merge_options,
+                display: &display,
+            }
+            .execute(&unit, &ctx),
+        };
+        match outcome {
+            mrg_director::MergeOutcome::Merged | mrg_director::MergeOutcome::Skipped(_) => Ok(()),
+            mrg_director::MergeOutcome::Failed(e) => Err(e),
+        }
+    })
+}
+
 /// Arguments of [`merge_one_binary_entry`].
 pub(crate) struct MergeOneBinaryEntryArgs<'a> {
     pub(crate) entry: &'a GraphEntry,
@@ -297,6 +398,13 @@ pub(crate) fn failed_pkg_msg(cpv: &str, root: &Path, log_path: Option<&Path>) ->
 /// printed: the CLI boundary exits 1 with no resume notice and no `emerge:` line.
 pub(crate) fn binpkg_digest_failure(cpv: &str) -> String {
     format!("{cpv}: binpkg digest verification failed")
+}
+
+/// Whether `e` is exactly one `binpkg_digest_failure`. A `--keep-going`
+/// combined message embeds the same text among newlines and must keep
+/// the normal tail, so only a lone single-line failure matches.
+pub(crate) fn is_binpkg_digest_failure(e: &str) -> bool {
+    !e.contains('\n') && e.ends_with(": binpkg digest verification failed")
 }
 
 /// The missing-file block as one unit (each line `\n`-terminated, no

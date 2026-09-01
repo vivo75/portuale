@@ -295,6 +295,19 @@ fn s2_conflict(rows: Vec<S2Row<'_>>) -> SlotConflict {
     }
 }
 
+fn s2_entries(versions: Vec<&str>) -> Vec<GraphEntry> {
+    versions
+        .into_iter()
+        .map(|v| {
+            let mut e = graph_entry("dev-libs", "slotconflicttarget", v);
+            e.outcome = PretendOutcome::New {
+                version: v.to_string(),
+            };
+            e
+        })
+        .collect()
+}
+
 /// Arguments of [`s2_input`].
 struct S2InputArgs<'a> {
     conflicts: &'a [SlotConflict],

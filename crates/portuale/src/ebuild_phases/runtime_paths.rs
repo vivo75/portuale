@@ -225,6 +225,12 @@ pub(crate) fn register_cleanup(dir: PathBuf) {
     });
 }
 
+/// Fails with [`bin_dir`]'s message when the runtime is missing — before anything
+/// is shipped, fetched or written, never half-way through a plan.
+pub(crate) fn require_phase_runtime() -> Result<(), String> {
+    bin_dir().map(|_| ())
+}
+
 /// Removes an overlay dir, ignoring every failure (never worth failing a phase or
 /// process exit over). Factored out so the idempotency contract is unit-pinned.
 pub(crate) fn remove_bin_overlay_dir(dir: &Path) {

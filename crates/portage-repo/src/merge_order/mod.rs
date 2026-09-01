@@ -20,6 +20,7 @@ mod debug;
 mod installed_closure;
 mod prelude;
 mod priority;
+mod replay;
 
 #[cfg(test)]
 mod tests;
@@ -29,6 +30,7 @@ pub(crate) use debug::*;
 pub use installed_closure::*;
 pub(crate) use prelude::*;
 pub use priority::*;
+pub(crate) use replay::*;
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
 

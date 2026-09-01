@@ -39,6 +39,9 @@ pub struct ResumeOpts {
     pub onlydeps: bool,
 }
 
+/// `(favorites, mergelist, myopts)` from `mtimedb["resume"]`.
+pub type ResumeList = (Vec<String>, Vec<ResumeCpv>, ResumeOpts);
+
 /// One resume section's data (`resume` and `resume_backup` share the shape).
 #[derive(Clone)]
 struct Section {
@@ -372,6 +375,18 @@ pub fn rotate_resume_to_backup(root: &Path) {
     let _ = write_sections(root, None, Some(&resume), Some(&read_info_mtimes(root)));
 }
 
+/// Reads back `(favorites, mergelist-cpvs, myopts)` from `mtimedb["resume"]`,
+/// or `None` when there's nothing to resume. When `resume` is absent but
+/// `resume_backup` is present, the backup is promoted to `resume`.
+pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
+    if let Some(s) = read_section(root, "resume") {
+        return Some((s.favorites, s.mergelist, s.opts));
+    }
+    let backup = read_section(root, "resume_backup")?;
+    let _ = write_sections(root, Some(&backup), None, Some(&read_info_mtimes(root)));
+    Some((backup.favorites, backup.mergelist, backup.opts))
+}
+
 /// `cat/pkg-1.2.3-r1` -> `("cat/pkg", "1.2.3-r1")`. Splits at the last `-`
 /// whose following char is a digit.
 fn split_cpv(cpv: &str) -> Option<(&str, &str)> {
@@ -382,4 +397,14 @@ fn split_cpv(cpv: &str) -> Option<(&str, &str)> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_util::TempDir;
+
+    fn tmproot() -> std::path::PathBuf {
+        TempDir::new("mtimedb_test").keep()
+    }
 }
