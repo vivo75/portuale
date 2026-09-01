@@ -18,19 +18,19 @@ description = "Upstream Gentoo Portage. This repository IS a fork of it -- PORTI
 url = "https://github.com/gentoo/portage"
 remote = "gentoo"
 kind = "upstream-fork-base"
-ref = "refs/tags/portage-3.0.82.1"
-commit = "574643a856be48a9e20e0e396e7f1e3be3d78a99"
-pinned_at = "2026-08-24"
-# A newer upstream tag exists but the `rust` branch has not been rebased
-# onto it yet -- `git describe --tags --match 'portage-*'` on `rust`
-# currently resolves to `portage-3.0.82.1-<N>-g<sha>`, and NEWS/
-# meson.build in the working tree still read "3.0.82.1", not "3.0.82.2".
-# Keep `ref`/`commit`/`pinned_at` as the actual current base; update
-# `next_upstream_ref` as newer tags land, and move it into `ref` only
-# once the rebase actually happens (a new upstream tag is always
-# imported by rebasing PORTING/'s commits on top of it, never a merge).
-next_upstream_ref = "refs/tags/portage-3.0.82.2"
-next_upstream_commit = "bc5b19cf17b83e2f5f6069cea8d060d7932f1f95"
+ref = "refs/tags/portage-3.0.82.2"
+# `commit` is the tag's *underlying commit*, not the annotated tag
+# object -- `git rev-parse refs/tags/<ref>` returns the tag object;
+# `git rev-parse refs/tags/<ref>^{commit}` (or `git log -1 <ref>`)
+# returns this. `git merge-base --is-ancestor <this commit> rust` and
+# `git describe --tags --match 'portage-*'` on `rust` (reads
+# `portage-3.0.82.2-<n>-g<sha>`) are how to re-verify this entry.
+commit = "1d95fc2c552a2c7d347e54093fa0e5b172a57004"
+pinned_at = "2026-09-01"
+# Update this whenever `rust` is rebased onto a newer upstream tag (a
+# new tag is always imported by rebasing PORTING/'s commits on top of
+# it, never a merge -- see `git log --grep prepare.for.portage` for the
+# upstream "prepare for release" commits that mark each tag).
 
 [brush]
 description = "Rust-native bash interpreter (brush-core + brush-builtins), embedded in portuale as the real ebuild phase execution backend (bin/*.sh phases run through it, not a shelled-out system bash)."
