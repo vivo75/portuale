@@ -2,6 +2,14 @@
 
 use crate::pretend::*;
 
+/// Portage's `--ask` TTY gate (`sys.stdin.isatty()`).
+/// Portage: _emerge/actions.py
+pub(crate) fn stdin_is_tty() -> bool {
+    // SAFETY: `isatty` is a pure syscall on a well-known, always-valid
+    // fd (0); no pointers involved.
+    unsafe { libc::isatty(libc::STDIN_FILENO) != 0 }
+}
+
 /// The default `responses=["Yes", "No"]` case: prints the bold `<question>`
 /// once, then loops on the bracketed choices until one prefix-matches "Yes"
 /// or "No" (bare Enter matches "Yes"). Returns `true` for "Yes", `false`

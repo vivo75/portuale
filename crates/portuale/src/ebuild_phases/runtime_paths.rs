@@ -51,6 +51,17 @@ pub(crate) fn pythonpath_value(checkout: &Path) -> Option<String> {
     }
 }
 
+/// Portage's `cnf/sets/portage.conf`: the checkout's file when present, else the
+/// compiled-in copy, so a relocated binary lists the same sets instead of none.
+pub(crate) fn package_sets_conf() -> Option<String> {
+    std::fs::read_to_string(portage_checkout().join("cnf/sets/portage.conf"))
+        .ok()
+        .or_else(|| {
+            crate::embedded_runtime::file("cnf/sets/portage.conf")
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+        })
+}
+
 /// The dir `PORTAGE_BIN_PATH` points at: the tracked vendored `bin/` (unmodified
 /// upstream scripts plus portuale-owned shims), or — in oracle mode only — a symlink
 /// overlay with vendored entries winning over `<checkout>/bin/`. `ebuild.sh` uses it

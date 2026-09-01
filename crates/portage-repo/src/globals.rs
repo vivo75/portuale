@@ -48,3 +48,13 @@ pub(crate) static USE_EBUILD_VISIBILITY: AtomicBool = AtomicBool::new(false);
 pub(crate) fn use_ebuild_visibility() -> bool {
     USE_EBUILD_VISIBILITY.load(AtomicOrdering::Relaxed)
 }
+
+/// `--debug`: emit the per-package resolver trace plus the graph dump (see
+/// `resolver_trace`). Process-global, set once by the CLI on the `--pretend` path.
+// Portage: main.py, depgraph.py
+pub(crate) static RESOLVER_DEBUG: AtomicBool = AtomicBool::new(false);
+
+/// Set by `pretend.rs` from `--debug`/`-d` on the `--pretend` path.
+pub fn set_resolver_debug(enabled: bool) {
+    RESOLVER_DEBUG.store(enabled, AtomicOrdering::Relaxed);
+}

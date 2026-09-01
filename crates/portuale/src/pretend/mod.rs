@@ -74,6 +74,8 @@ pub(crate) use resume::*;
 pub(crate) use search::*;
 pub(crate) use world::*;
 
+use crate::difflib;
+
 use crate::ebuild_merge;
 
 use crate::ebuild_package;

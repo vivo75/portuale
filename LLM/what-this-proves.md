@@ -10399,4 +10399,10 @@ are unavailable. `dev-libs/netsandboxpkg`'s `src_compile` records
 `readlink /proc/self/ns/{net,ipc,mnt,pid}` and the visible process count
 so a test can prove each namespace was actually unshared.
 
+### `emerge --list-sets` and `emerge --search` / `-s`
+
+The first slice of scope-backlog.md Part 2.F (the standalone `emerge`
+actions). Both are read-only queries, mirrored byte-for-byte in the
+Python reference and contract-tested.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)

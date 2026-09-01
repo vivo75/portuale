@@ -8,6 +8,7 @@
 
 mod binpkg;
 mod color;
+mod difflib;
 mod ebuild;
 mod ebuild_merge;
 mod ebuild_options;
