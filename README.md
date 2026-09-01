@@ -10593,6 +10593,20 @@ Python reference and contract-tested.
   preview is byte-identical to `--unmerge`'s). `run_unmerge_pretend`
   gained an `action` label so the `Couldn't find … to <action>` /
   `removal by <action>` messages name the right one.
+- **`--info`** (real `action_info`), **narrowed to its deterministic
+  config/repository block**: the `Repositories:` list
+  (`repo.info_string()` — name, location, masters, priority, aliases),
+  `Binary Repositories:`, `Installed sets:`, then the sorted
+  `VAR="value"` dump (`ACCEPT_KEYWORDS`, `ACCEPT_LICENSE`, `CFLAGS`,
+  `CHOST`, `USE` + `USE_EXPAND` vars, …) and the `Unset:` line. `Config`
+  gained an `other_vars` field (the final make.conf/profile scalar map)
+  for the non-USE variables. **Large, deliberate cut:** real `--info`'s
+  output is dominated by *host state* a fixture-driven test can't
+  verify — the `Portage <ver> (python …, <profile>, <chost>, <gcc>,
+  <libc>, <kernel>)` header, `System uname`, `KiB Mem`, the
+  `sh:`/`gcc:`/`ld:`/`ccache`/`distcc` version probes, the `info_pkgs`
+  version table, repository timestamps. None of that is reproduced;
+  `FEATURES` reflects only `make.conf` (no `make.globals` defaults).
 
 ## Running it
 

@@ -9229,6 +9229,26 @@ def test_clean_and_rage_clean_pretend_match_rust_and_python(
     assert rust.returncode == py.returncode
 
 
+def test_info_prints_the_deterministic_config_block(
+    emerge_binary, emerge_pretend_python, fixture_env
+):
+    """emerge --info (real action_info), narrowed to its deterministic
+    config/repository block: the `Repositories:` list, `Binary
+    Repositories:`, `Installed sets:`, the sorted VAR="value" dump, the
+    `Unset:` line. The host-state half of real --info (Portage version
+    header, uname/mem, tool version probes, info_pkgs, timestamps) is a
+    documented cut. Rust == Python."""
+    rust = _run([str(emerge_binary)], ["--info"], fixture_env)
+    py = _run(emerge_pretend_python, ["--info"], fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stdout.startswith("Repositories:\n")
+    assert "\ntestrepo\n    location: " in rust.stdout
+    assert "\nBinary Repositories:\n" in rust.stdout
+    assert '\nACCEPT_KEYWORDS="amd64"\n' in rust.stdout
+    assert "\nUnset:  " in rust.stdout
+
+
 def test_check_news_reports_none_when_all_items_are_read(
     emerge_binary, emerge_pretend_python, fixture_env, tmp_path
 ):

@@ -4539,6 +4539,157 @@ fn news_item_relevant(text: &str, root: &Path) -> bool {
     })
 }
 
+/// Real `emerge --info` (`_emerge/actions.py::action_info`), **narrowed
+/// to its deterministic config/repository block**: the `Repositories:`
+/// list (real `repo.info_string()`), `Binary Repositories:`, `Installed
+/// sets:`, then the sorted `VAR="value"` dump (real `myvars`) and the
+/// `Unset:` line.
+///
+/// **Large, deliberate cut:** real `action_info`'s output is dominated by
+/// *host state* a fixture-driven test can't verify -- the
+/// `Portage <ver> (python …, <profile>, <chost>, <gcc>, <libc>,
+/// <kernel>)` header, `System uname`, `KiB Mem`, the
+/// `sh:`/`gcc:`/`ld:`/`binutils`/`ccache`/`distcc` version probes, the
+/// `info_pkgs` version table, repository timestamps / head commits. None
+/// of that is reproduced. Also cut: the per-package "settings that vary"
+/// block real `--info <atom>` prints, and `_hide_url_passwd`. `FEATURES`
+/// reflects only `make.conf` (the pilot parses no `make.globals`
+/// defaults).
+fn run_info(config: &portage_profile::Config, repos: &[portage_repo::RepoConfig], root: &Path) {
+    // Repositories.
+    println!("Repositories:\n");
+    let name_of: std::collections::HashMap<&Path, &str> = repos
+        .iter()
+        .map(|r| (r.location.as_path(), r.name.as_str()))
+        .collect();
+    for repo in repos {
+        println!("{}", repo.name);
+        println!("    location: {}", repo.location.display());
+        if !repo.masters.is_empty() {
+            let ms: Vec<&str> = repo
+                .masters
+                .iter()
+                .filter_map(|m| name_of.get(m.as_path()).copied())
+                .collect();
+            if !ms.is_empty() {
+                println!("    masters: {}", ms.join(" "));
+            }
+        }
+        println!("    priority: {}", repo.priority);
+        if !repo.aliases.is_empty() {
+            println!("    aliases: {}", repo.aliases.join(" "));
+        }
+        println!();
+    }
+
+    // Binary Repositories.
+    if !config.binrepos.is_empty() {
+        println!("Binary Repositories:\n");
+        for br in config.binrepos.iter().rev() {
+            if br.name.is_empty() {
+                continue;
+            }
+            println!("{}", br.name);
+            println!("    sync-uri: {}", br.sync_uri);
+            println!("    priority: {}", br.priority);
+            println!();
+        }
+    }
+
+    // Installed sets (real `root_config.sets["selected"].getNonAtoms()`
+    // -> the `@name` entries of `world_sets`).
+    let mut sets: Vec<String> = read_world_sets(root)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| format!("@{s}"))
+        .collect();
+    sets.sort();
+    if !sets.is_empty() {
+        println!("Installed sets: {}", sets.join(", "));
+    }
+
+    // The variable dump (real `myvars`, minus the deprecated/skipped
+    // ones), sorted, `VAR="value"` -- or `Unset:` when the pilot's
+    // config carries no value.
+    let use_expand: Vec<String> = {
+        let mut v: Vec<String> = config.use_expand.iter().cloned().collect();
+        v.sort();
+        v
+    };
+    let mut unset: Vec<&str> = Vec::new();
+    for &k in &[
+        "ACCEPT_KEYWORDS",
+        "ACCEPT_LICENSE",
+        "CFLAGS",
+        "CHOST",
+        "CONFIG_PROTECT",
+        "CONFIG_PROTECT_MASK",
+        "CXXFLAGS",
+        "DISTDIR",
+        "EMERGE_DEFAULT_OPTS",
+        "ENV_UNSET",
+        "FEATURES",
+        "GENTOO_MIRRORS",
+        "PKGDIR",
+        "PORTAGE_BINHOST",
+        "PORTAGE_BUNZIP2_COMMAND",
+        "PORTAGE_BZIP2_COMMAND",
+        "PORTAGE_TMPDIR",
+        "USE",
+    ] {
+        let value: Option<String> = match k {
+            "ACCEPT_KEYWORDS" => {
+                let mut kw: Vec<&String> = config.accept_keywords.iter().collect();
+                kw.sort();
+                (!kw.is_empty())
+                    .then(|| kw.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" "))
+            }
+            "ACCEPT_LICENSE" => {
+                (!config.accept_license.is_empty()).then(|| config.accept_license.join(" "))
+            }
+            "USE" => {
+                let mut flags: Vec<&String> = config
+                    .use_flags
+                    .iter()
+                    .filter(|f| {
+                        !use_expand
+                            .iter()
+                            .any(|v| f.starts_with(&format!("{}_", v.to_lowercase())))
+                    })
+                    .collect();
+                flags.sort();
+                Some(
+                    flags
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                )
+            }
+            _ => config.other_vars.get(k).cloned(),
+        };
+        match value {
+            Some(v) if k == "PORTAGE_BZIP2_COMMAND" && v == "bzip2" => {}
+            Some(v) if k == "USE" => {
+                let mut line = format!("USE=\"{v}\"");
+                for var in &use_expand {
+                    if let Some(val) = config.other_vars.get(var) {
+                        line.push_str(&format!(" {var}=\"{val}\""));
+                    }
+                }
+                println!("{line}");
+            }
+            Some(v) => println!("{k}=\"{v}\""),
+            None => unset.push(k),
+        }
+    }
+    if !unset.is_empty() {
+        println!("Unset:  {}", unset.join(", "));
+    }
+    println!();
+    println!();
+}
+
 /// Real `_emerge/actions.py::action_config` (`emerge --config <atom>`):
 /// run `pkg_config` for a single installed package. Exactly one atom
 /// (real `if len(myfiles) != 1`), matched against the vdb the same way
@@ -4769,6 +4920,8 @@ pub fn run(args: &[String]) -> ExitCode {
     // version per slot. See run_clean_pretend / run_unmerge_pretend.
     let mut clean_action = false;
     let mut rage_clean = false;
+    // --info: a standalone read-only query action (see run_info).
+    let mut info_action = false;
     let mut with_bdeps = true;
     let mut with_bdeps_given = false;
     let mut with_bdeps_auto = true;
@@ -5541,6 +5694,11 @@ pub fn run(args: &[String]) -> ExitCode {
             // prerm/postrm).
             rage_clean = true;
             i += 1;
+        } else if arg == "--info" {
+            // Real `main.py`: `--info` is a standalone ACTION
+            // (`action_info`). No short alias.
+            info_action = true;
+            i += 1;
         } else if arg == "--skipfirst" || arg == "--skip-first" {
             skipfirst = true;
             i += 1;
@@ -6090,6 +6248,7 @@ pub fn run(args: &[String]) -> ExitCode {
         && !check_news
         && !clean_action
         && !rage_clean
+        && !info_action
     {
         eprintln!("emerge (pilot v1): expected a package atom, e.g. `emerge --pretend cat/pkg`");
         return ExitCode::from(2);
@@ -6212,6 +6371,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // `actions.py`'s `count_unread_news` block).
     if check_news {
         return run_check_news(&repos, &root, false, &color);
+    }
+
+    // `--info`: a standalone read-only query action (real
+    // `action_info`), narrowed to its deterministic config block.
+    if info_action {
+        run_info(&config, &repos, &root);
+        return ExitCode::SUCCESS;
     }
 
     // `--clean`: a standalone removal action -- keep only the newest

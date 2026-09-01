@@ -640,6 +640,13 @@ pub struct Config {
     /// real portage caches it as `Packages`; this pilot recomputes each
     /// run, so `--pretend` still writes nothing.
     pub scanned_binpkgs: Option<Vec<std::collections::HashMap<String, String>>>,
+    /// Every non-USE/ACCEPT_KEYWORDS variable's final scalar value
+    /// (last-level-wins across the profile chain + `make.conf`), e.g.
+    /// `CHOST`, `CFLAGS`, `GENTOO_MIRRORS`, `CONFIG_PROTECT`,
+    /// `PORTAGE_TMPDIR`. This is the `scalars` map `resolve_config`
+    /// already builds for `${VAR}` substitution, exposed for
+    /// `emerge --info`'s own variable dump.
+    pub other_vars: HashMap<String, String>,
 }
 
 /// One `--getbinpkg` binary-package repository (real
@@ -2085,6 +2092,8 @@ pub fn resolve_config(
             .map(String::as_str)
             .unwrap_or(""),
     );
+
+    config.other_vars = scalars;
 
     Ok(config)
 }

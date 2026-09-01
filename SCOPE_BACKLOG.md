@@ -292,9 +292,11 @@ dev/test context — see also the `chown` note below).
   (real `count_unread_news` / `display_news_notifications` — v1 cuts:
   no `.unread`/`.skip` persistence, `Display-If-Installed` only);
   `--clean` (real `unmerge` `unmerge_action="clean"` — keep newest per
-  slot) and `--rage-clean` (fast `--unmerge`).*
-  Remaining: `--info` (`action_info` — the big config/env dump),
-  `--regen` (metadata cache), `--metadata`.
+  slot), `--rage-clean` (fast `--unmerge`), `--info` (real `action_info`
+  — narrowed to the deterministic `Repositories:` + `VAR="value"` block;
+  the host-state half — version header, uname/mem, tool-version probes,
+  `info_pkgs`, timestamps — is a documented cut).*
+  Remaining: `--regen` (metadata cache), `--metadata`.
   `--read-news` stays a recognized-unimplemented option (it's a
   post-merge display toggle, not an action). `--sync` (repo network
   syncing) stays a non-goal.

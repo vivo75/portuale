@@ -4087,6 +4087,10 @@ def resolve_config(
             _read_text_opt(os.path.join(config_root, "etc/portage/binrepos.conf")),
             scalars.get("PORTAGE_BINHOST", ""),
         ),
+        # Every non-USE/ACCEPT_KEYWORDS variable's final scalar value --
+        # the `scalars` map, exposed for `emerge --info`. Mirrors
+        # portage-profile/src/lib.rs's Config::other_vars.
+        "other_vars": dict(scalars),
     }
 
 
@@ -8333,6 +8337,95 @@ def _run_check_news(repos, root, quiet, color):
     return 0
 
 
+def _run_info(config, repos, root):
+    """Real `emerge --info` (action_info), narrowed to its deterministic
+    config/repository block. Mirrors pretend.rs's run_info -- see its
+    docstring for the large host-state cut (Portage version header,
+    uname/mem, version probes, info_pkgs, timestamps)."""
+    print("Repositories:\n")
+    name_of = {r["location"]: r["name"] for r in repos}
+    for repo in repos:
+        print(repo["name"])
+        print(f"    location: {repo['location']}")
+        if repo["masters"]:
+            ms = [name_of[m] for m in repo["masters"] if m in name_of]
+            if ms:
+                print(f"    masters: {' '.join(ms)}")
+        print(f"    priority: {repo['priority']}")
+        if repo.get("aliases"):
+            print(f"    aliases: {' '.join(repo['aliases'])}")
+        print()
+
+    binrepos = config.get("binrepos", [])
+    if binrepos:
+        print("Binary Repositories:\n")
+        for br in reversed(binrepos):
+            if not br["name"]:
+                continue
+            print(br["name"])
+            print(f"    sync-uri: {br['sync_uri']}")
+            print(f"    priority: {br['priority']}")
+            print()
+
+    sets = sorted(f"@{s}" for s in _read_world_sets(root))
+    if sets:
+        print(f"Installed sets: {', '.join(sets)}")
+
+    use_expand = sorted(config["use_expand"])
+    unset = []
+    for k in [
+        "ACCEPT_KEYWORDS",
+        "ACCEPT_LICENSE",
+        "CFLAGS",
+        "CHOST",
+        "CONFIG_PROTECT",
+        "CONFIG_PROTECT_MASK",
+        "CXXFLAGS",
+        "DISTDIR",
+        "EMERGE_DEFAULT_OPTS",
+        "ENV_UNSET",
+        "FEATURES",
+        "GENTOO_MIRRORS",
+        "PKGDIR",
+        "PORTAGE_BINHOST",
+        "PORTAGE_BUNZIP2_COMMAND",
+        "PORTAGE_BZIP2_COMMAND",
+        "PORTAGE_TMPDIR",
+        "USE",
+    ]:
+        if k == "ACCEPT_KEYWORDS":
+            v = " ".join(sorted(config["accept_keywords"])) or None
+        elif k == "ACCEPT_LICENSE":
+            v = " ".join(config["accept_license"]) or None
+        elif k == "USE":
+            prefixes = tuple(f"{ve.lower()}_" for ve in use_expand)
+            flags = sorted(
+                f for f in config["use_flags"] if not f.startswith(prefixes)
+            )
+            v = " ".join(flags)
+        else:
+            v = config["other_vars"].get(k)
+
+        if v is None:
+            unset.append(k)
+        elif k == "PORTAGE_BZIP2_COMMAND" and v == "bzip2":
+            pass
+        elif k == "USE":
+            line = f'USE="{v}"'
+            for ve in use_expand:
+                val = config["other_vars"].get(ve)
+                if val:
+                    line += f' {ve}="{val}"'
+            print(line)
+        else:
+            print(f'{k}="{v}"')
+    if unset:
+        print(f"Unset:  {', '.join(unset)}")
+    print()
+    print()
+    return 0
+
+
 def _run_deselect(targets, root, pretend):
     """Ports real action_deselect (lib/_emerge/actions.py, lines
     1740-1835) exactly: needs no repo/config resolution at all, only the
@@ -10565,6 +10658,7 @@ def run(args):
     check_news = False
     clean_action = False
     rage_clean = False
+    info_action = False
     with_bdeps = True
     with_bdeps_given = False
     with_bdeps_auto = True
@@ -10897,6 +10991,9 @@ def run(args):
             i += 1
         elif arg == "--rage-clean":
             rage_clean = True
+            i += 1
+        elif arg == "--info":
+            info_action = True
             i += 1
         elif arg == "--with-bdeps":
             # Real "argument_options" with "choices": ("y", "n") --
@@ -11600,6 +11697,22 @@ def run(args):
             False,
             _Colorizer(_resolve_havecolor(color_opt)),
         )
+    if info_action:
+        _repos = find_repos(_config_root())
+        _main = next(r for r in _repos if r["is_main"])
+        _info_config = resolve_config(
+            _config_root(),
+            _main["location"],
+            [(r["name"], r["location"]) for r in _repos if not r["is_main"]],
+            [
+                (a, r["location"])
+                for r in _repos
+                for a in r.get("aliases", [])
+            ],
+            _main["name"],
+            {r["name"]: r["masters"] for r in _repos},
+        )
+        return _run_info(_info_config, _repos, _root())
 
     # --config <atom>: a real action (real action_config runs pkg_config
     # from the vdb). Ignores --pretend entirely. No ebuild-execution
@@ -11627,6 +11740,7 @@ def run(args):
         and not prune
         and not clean_action
         and not rage_clean
+        and not info_action
     ):
         print(
             "emerge (pilot v1): expected a package atom, e.g. "
