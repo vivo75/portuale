@@ -919,6 +919,45 @@ def test_emerge_unmerge_without_pretend_really_removes_and_deselects(
     assert (root / "var/lib/portage/world").read_text() == "dev-libs/keepme\n"
 
 
+def test_emerge_elog_echo_prints_a_message_summary(emerge_binary, tmp_path):
+    """Real `elog_process` / `mod_echo` (default-on via `make.globals`
+    `PORTAGE_ELOG_SYSTEM`): after the merge, the `elog`/`ewarn` messages an
+    ebuild emitted (routed to `${T}/logging/<phase>` by
+    `bin/isolated-functions.sh`) are echoed as a
+    `* Messages for package <cpv>:` block, filtered by
+    `PORTAGE_ELOG_CLASSES` (default `log warn error` -- so `einfo` is
+    NOT echoed). `PORTAGE_ELOG_SYSTEM=` disables it."""
+    import shutil
+
+    def _emerge(env_extra):
+        root = tmp_path / f"root{len(env_extra)}_{sum(len(v) for v in env_extra.values())}"
+        shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+        env = dict(os.environ)
+        env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+        env["ROOT"] = str(root)
+        env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+        env["PORTAGE_TMPDIR"] = str(root / "pt")
+        env.update(env_extra)
+        return subprocess.run(
+            [str(emerge_binary), "dev-libs/elogmsgpkg"],
+            capture_output=True, text=True, check=False, env=env,
+        )
+
+    r = _emerge({})
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
+    assert " * Messages for package dev-libs/elogmsgpkg-1.0 merged to " in out
+    assert " * this package needs manual configuration" in out  # elog (LOG)
+    assert " * see /usr/share/doc for details" in out            # elog (LOG)
+    assert " * a deprecated feature is still enabled" in out      # ewarn (WARN)
+    # einfo is INFO-class -> not in the default `log warn error` set.
+    assert "purely informational note" not in out
+
+    r = _emerge({"PORTAGE_ELOG_SYSTEM": ""})
+    assert r.returncode == 0
+    assert "Messages for package" not in r.stdout
+
+
 def test_emerge_applies_portage_niceness_and_ionice(emerge_binary, fixture_env):
     """Real `_emerge/actions.py::apply_priorities` (via `run_action`):
     `PORTAGE_NICENESS` -> `renice -n <n> <pid>`, `PORTAGE_IONICE_COMMAND`

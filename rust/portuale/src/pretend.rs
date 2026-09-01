@@ -6322,6 +6322,40 @@ pub fn run(args: &[String]) -> ExitCode {
                 return ExitCode::from(1);
             }
         }
+
+        // Real `elog_process` / `mod_echo.finalize` (an atexit handler, so
+        // it runs after everything else): the `* Messages for package
+        // <cpv>:` summary for every package that was merged and had
+        // `elog`/`ewarn`/`eerror` output. The pilot never cleans the
+        // builddir, so re-scan each merged entry's `${T}/logging/` here.
+        if !buildpkgonly && crate::elog::echo_enabled() {
+            let root_str = root.display().to_string();
+            let mut packages = Vec::new();
+            for entry in entries {
+                let version =
+                    match &entry.outcome {
+                        PretendOutcome::New { version }
+                        | PretendOutcome::Reinstall { version, .. } => version.clone(),
+                        PretendOutcome::Upgrade { to, .. }
+                        | PretendOutcome::Downgrade { to, .. } => to.clone(),
+                        _ => continue,
+                    };
+                let t_dir = portage_tmpdir
+                    .join("portage")
+                    .join(&entry.category)
+                    .join(format!("{}-{version}", entry.package))
+                    .join("temp");
+                let messages = crate::elog::collect(&t_dir);
+                if !messages.is_empty() {
+                    packages.push(crate::elog::ElogPackage {
+                        cpv: format!("{}/{}-{version}", entry.category, entry.package),
+                        root: root_str.clone(),
+                        messages,
+                    });
+                }
+            }
+            crate::elog::echo_summary(&packages, &color);
+        }
     }
 
     ExitCode::SUCCESS

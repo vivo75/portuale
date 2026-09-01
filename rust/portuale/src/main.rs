@@ -21,6 +21,7 @@ mod ebuild_options;
 mod ebuild_package;
 mod ebuild_phases;
 mod ebuild_unmerge;
+mod elog;
 mod emerge_build;
 mod emerge_getbinpkg;
 mod emerge_options;

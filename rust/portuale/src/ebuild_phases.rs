@@ -457,6 +457,10 @@ fn create_directories(env: &Environment) -> Result<(), String> {
         // so that fallback path, which this pilot can't satisfy, is
         // never reached at all.
         env.portage_builddir.join("empty"),
+        // Real `prepare_build_dirs` creates `${T}/logging`;
+        // `bin/isolated-functions.sh::__elog_base` silently drops every
+        // `elog`/`ewarn`/`eerror` message if the dir doesn't exist.
+        env.t().join("logging"),
     ] {
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }

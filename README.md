@@ -10288,6 +10288,27 @@ run continues; an absent ionice tool is silent. v1 cuts:
 `PORTAGE_SCHEDULING_POLICY` (`chrt`) is not applied; `PORTAGE_IONICE_COMMAND`
 has no shell quoting (real `shlex.split`).
 
+### `elog` — the `echo` message summary
+
+`create_directories` now makes `${T}/logging` (real `prepare_build_dirs`)
+— `bin/isolated-functions.sh::__elog_base` silently drops every `elog` /
+`ewarn` / `eerror` message if that dir is missing. The new `elog` module
+is the pilot's `mod_echo` (default-on via `make.globals`'s
+`PORTAGE_ELOG_SYSTEM="save_summary:log,warn,error,qa echo"`): after the
+merge loop, `run()` re-scans each merged entry's `${T}/logging/<phase>`
+files (`<TYPE> <msg>` lines), filters them by `PORTAGE_ELOG_CLASSES`
+(default `log warn error` — so `einfo` / `eqawarn` are not echoed), and
+`elog::echo_summary` prints a `* Messages for package <cpv>:` block per
+package (all levels to stdout, ` * ` prefix coloured per level — real
+`EOutput.e{info,log,warn,error,qawarn}`). `PORTAGE_ELOG_SYSTEM` (env)
+without an `echo` token disables it; an `echo:levels` token overrides the
+class filter.
+
+v1 cuts: only the `echo` module (`save` / `save_summary` / `mail*` write
+files or send mail — deferred); binpkg-merge and `-C`/unmerge `pkg_*`
+elog output isn't collected yet; `PORTAGE_ELOG_CLASSES` is env-only (no
+`make.conf`).
+
 ## Running it
 
 Build both Rust binaries:

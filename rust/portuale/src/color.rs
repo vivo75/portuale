@@ -43,6 +43,12 @@ fn style(key: &str) -> &'static str {
         "BAD" => "red",
         "WARN" => "yellow",
         "GOOD" => "green",
+        // Real `output.py:128-135`'s `EOutput` `e*` prefixes -- the elog
+        // `echo` module (`elog::echo_summary`).
+        "ERR" => "red",
+        "INFO" => "darkgreen",
+        "LOG" => "green",
+        "QAWARN" => "brown",
         "PKG_MERGE" => "darkgreen",
         "PKG_MERGE_SYSTEM" => "darkgreen",
         "PKG_MERGE_WORLD" => "green",

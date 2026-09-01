@@ -195,8 +195,12 @@ single-pass BFS can't grow into these incrementally:
   the `CLEAN_DELAY` countdown runs before every real removal
   (`clean_delay_countdown`). Remaining: `--ask` for `--config` /
   `--deselect`; TTY gating; prompt colour; re-prompt on a bad answer.
-- **`elog` / `PORTAGE_ELOG_*`.** Build-log post-processing (save / mail /
-  echo summary) is not modelled.
+- **`elog` / `PORTAGE_ELOG_*`.** *Shipped 2026-09-01:* the `echo` module
+  (`elog::echo_summary` — the `* Messages for package <cpv>:` block, real
+  `mod_echo`; default-on, filtered by `PORTAGE_ELOG_CLASSES`);
+  `create_directories` makes `${T}/logging` so `elog`/`ewarn` reach it.
+  Remaining: `save` / `save_summary` (file-writing, `PORTAGE_LOGDIR`);
+  `mail*`; binpkg-merge / unmerge `pkg_*` elog collection.
 - **`PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND`.** *Shipped
   2026-09-01:* `apply_portage_scheduling_policy` (real
   `actions.py::apply_priorities`) renices/ionices this process at startup.
@@ -323,8 +327,9 @@ by a few large items rather than a long tail of small ones:
 2. **The Scheduler (Part 2.B).** *`emerge -jN` parallel builds +
    `--load-average` + build-log capture + the `>>> Jobs:` line + `--ask`
    / `CLEAN_DELAY` + `PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND` shipped
-   2026-09-01.* Still missing: `--resume`/`--skipfirst` (mtimedb state),
-   `elog` / `PORTAGE_ELOG_*`.
+   + `elog` `echo` module shipped 2026-09-01.* Still missing:
+   `--resume`/`--skipfirst` (mtimedb state); the elog `save`/`mail`
+   modules.
 
 3. **Config-resolution depth (Part 2.C).** The `USE_ORDER` layering is
    partial. Most real profiles resolve identically, but a config that
