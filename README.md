@@ -10130,6 +10130,53 @@ line is reported unchanged. Contract-tested as a CASE pair + a dedicated
 pinned-output test (with `--backtrack=0`); two `portage-repo` unit tests
 (the mask win, and the revert).
 
+### Backtracking: the real slot-collision notice + `--backtrack=30` hint (slice 4)
+
+The pilot's compact `[slot conflict] … resolved to …, which does not
+satisfy "…"` line is replaced by a simplified transcription of real
+`depgraph._show_slot_collision_notice` → `slot_conflict_handler.
+get_conflict()` (`lib/_emerge/resolver/slot_collision.py`):
+
+```
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/bttarget:0
+
+  (dev-libs/bttarget-2.0:0/0::testrepo, ebuild scheduled for merge) pulled in by
+    >=dev-libs/bttarget-2.0 required by (dev-libs/btconsumer-2.0:0/0::testrepo, ebuild scheduled for merge)
+
+  (dev-libs/bttarget-1.0:0/0::testrepo, ebuild scheduled for merge) pulled in by
+    <dev-libs/bttarget-2.0 required by (dev-libs/btpin-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. …
+```
+
+`SlotConflict` grew an `instances: Vec<SlotConflictInstance>` — every
+version of `cat/pkg:slot` pulled into the graph, each with the
+`(parent_cpv, atom)` pairs that pulled it. It's assembled by
+`build_slot_conflict` from `slot_pullers` (slice 3, now carrying the atom
+text and top-level "Argument" pullers): instance A is the version already
+in the graph, instance B is what the atom that triggered detection
+resolved to, and each puller is filed under whichever instance its atom
+matches (under A when it matches both — a bare atom pulled the resolved
+one). `--json` `slot_conflicts[]` gains the `instances` array.
+
+The advisory paragraph ends with real portage's "You may want to try a
+larger value of the `--backtrack` option, such as `--backtrack=30`" hint,
+gated the real way (`depgraph.py:1750-1753`): shown unless `--backtrack`
+is `>= 30` or `0`.
+
+Cut (documented, the fixtures don't exercise them): real
+`get_conflict()`'s `collision_reasons` grouping / best-atom selection,
+`pkg_use_display`, `--verbose-conflicts` USE markers, "omitted N similar
+parents", operator colorization; and the block prints to stdout (after
+the merge list) like the pilot's old line, not stderr. Contract-tested
+via a `_assert_slot_collision_block` helper (rather than pinning the
+whole paragraph in every test) + `--backtrack=30`/`=0` hint-gate CASES;
+a new `portage-repo` unit test asserts the per-instance parent data.
+
 ## Running it
 
 Build both Rust binaries:

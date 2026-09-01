@@ -734,6 +734,7 @@ CASES = [
     ("slot conflict: unsolvable, survives backtracking and is reported", ["--pretend", "dev-libs/slotconflictunsolvable"], 0),
     ("slot conflict: unsolvable, resolved by masking a puller version", ["--pretend", "dev-libs/btparent"], 0),
     ("slot conflict: --backtrack=0 also disables the runtime_pkg_mask trial", ["--pretend", "--backtrack=0", "dev-libs/btparent"], 0),
+    ("slot conflict: --backtrack=30 suppresses the try-a-larger-value hint", ["--pretend", "--backtrack=30", "dev-libs/slotconflictunsolvable"], 0),
     ("slot conflict: different slots of the same package coexist", ["--pretend", "dev-libs/multislotparent"], 0),
     ("virtual: resolved directly", ["--pretend", "virtual/texteditor"], 0),
     ("virtual: resolved as a dependency", ["--pretend", "dev-libs/virtualconsumerpkg"], 0),
@@ -1337,6 +1338,34 @@ def _run(cmd: list[str], args: list[str], env: dict[str, str]) -> subprocess.Com
     return subprocess.run(
         [*cmd, *args], capture_output=True, text=True, env=env, check=False
     )
+
+
+_SLOT_COLLISION_PREAMBLE = (
+    "!!! Multiple package instances within a single package slot have been pulled"
+)
+
+
+def _assert_slot_collision_block(stdout, slot_atom, instances, backtrack_hint=True):
+    """`instances` is a list of (cpv, [(parent_cpv_or_None, atom), ...]).
+    Checks the slice-4 `!!! Multiple package instances ...` block rather
+    than pinning the whole multi-line paragraph in every test."""
+    assert _SLOT_COLLISION_PREAMBLE in stdout
+    assert f"\n{slot_atom}\n" in stdout
+    for cpv, parents in instances:
+        assert f"  ({cpv}, ebuild scheduled for merge) pulled in by\n" in stdout
+        for parent_cpv, atom in parents:
+            if parent_cpv is None:
+                assert f"    {atom} (Argument)\n" in stdout
+            else:
+                assert (
+                    f"    {atom} required by ({parent_cpv}, ebuild scheduled for merge)\n"
+                    in stdout
+                )
+    assert (
+        "It may be possible to solve this problem by using package.mask to" in stdout
+    )
+    hint = "such as --backtrack=30" in stdout
+    assert hint == backtrack_hint
 
 
 @pytest.mark.parametrize("description,args,expected_exit", CASES)
@@ -5164,13 +5193,6 @@ def test_backtrack_zero_disables_slot_conflict_reconciliation(emerge_binary, fix
     off, so the otherwise-solvable dev-libs/slotconflictparent conflict is
     reported instead of reconciled -- the pre-backtracking behavior, on
     demand. `--backtrack=1` is enough to reconcile a one-step conflict."""
-    reported = [
-        '[ebuild  N     ] dev-libs/slotconflicttarget-2.0 ',
-        '[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 ',
-        '[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 ',
-        '[ebuild  N     ] dev-libs/slotconflictparent-1.0 ',
-        '[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"',
-    ]
     reconciled = [
         '[ebuild  N     ] dev-libs/slotconflicttarget-1.0 ',
         '[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 ',
@@ -5183,7 +5205,23 @@ def test_backtrack_zero_disables_slot_conflict_reconciliation(emerge_binary, fix
         fixture_env,
     )
     assert r0.returncode == 0
-    assert r0.stdout.splitlines() == reported
+    assert r0.stdout.splitlines()[:4] == [
+        '[ebuild  N     ] dev-libs/slotconflicttarget-2.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictnewconsumer-1.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictoldconsumer-1.0 ',
+        '[ebuild  N     ] dev-libs/slotconflictparent-1.0 ',
+    ]
+    _assert_slot_collision_block(
+        r0.stdout,
+        "dev-libs/slotconflicttarget:0",
+        [
+            (
+                "dev-libs/slotconflicttarget-1.0:0/0::testrepo",
+                [("dev-libs/slotconflictoldconsumer-1.0:0/0::testrepo", "<dev-libs/slotconflicttarget-2.0")],
+            ),
+        ],
+        backtrack_hint=False,
+    )
 
     r1 = _run(
         [str(emerge_binary)],
@@ -5220,13 +5258,27 @@ def test_unsolvable_slot_conflict_resolved_by_masking_a_puller_version(
         fixture_env,
     )
     assert r0.returncode == 0
-    assert r0.stdout.splitlines() == [
+    assert r0.stdout.splitlines()[:4] == [
         '[ebuild  N     ] dev-libs/bttarget-2.0 ',
         '[ebuild  N     ] dev-libs/btconsumer-2.0 ',
         '[ebuild  N     ] dev-libs/btpin-1.0 ',
         '[ebuild  N     ] dev-libs/btparent-1.0 ',
-        '[slot conflict] dev-libs/bttarget:0 resolved to dev-libs/bttarget-2.0, which does not satisfy "<dev-libs/bttarget-2.0"',
     ]
+    _assert_slot_collision_block(
+        r0.stdout,
+        "dev-libs/bttarget:0",
+        [
+            (
+                "dev-libs/bttarget-2.0:0/0::testrepo",
+                [("dev-libs/btconsumer-2.0:0/0::testrepo", ">=dev-libs/bttarget-2.0")],
+            ),
+            (
+                "dev-libs/bttarget-1.0:0/0::testrepo",
+                [("dev-libs/btpin-1.0:0/0::testrepo", "<dev-libs/bttarget-2.0")],
+            ),
+        ],
+        backtrack_hint=False,
+    )
 
 
 def test_unsolvable_slot_conflict_survives_backtracking_and_is_reported(
@@ -5236,20 +5288,33 @@ def test_unsolvable_slot_conflict_survives_backtracking_and_is_reported(
     ">=dev-libs/slotconflicttarget-2.0", resolves 2.0 first) and
     slotconflictoldpin (RDEPEND "<dev-libs/slotconflicttarget-2.0"). No
     single version of slotconflicttarget satisfies both, so the
-    backtracking solvability pre-check fails, no retry is attempted, and
-    the [slot conflict] line is printed exactly as before -- purely
+    backtracking solvability pre-check fails, the runtime_pkg_mask trial
+    is reverted, and the slot-collision block is reported -- purely
     informational, exit code unchanged."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/slotconflictunsolvable"], fixture_env
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == [
+    assert result.stdout.splitlines()[:4] == [
         '[ebuild  N     ] dev-libs/slotconflicttarget-2.0 ',
         '[ebuild  N     ] dev-libs/slotconflictnewpin-1.0 ',
         '[ebuild  N     ] dev-libs/slotconflictoldpin-1.0 ',
         '[ebuild  N     ] dev-libs/slotconflictunsolvable-1.0 ',
-        '[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"',
     ]
+    _assert_slot_collision_block(
+        result.stdout,
+        "dev-libs/slotconflicttarget:0",
+        [
+            (
+                "dev-libs/slotconflicttarget-2.0:0/0::testrepo",
+                [("dev-libs/slotconflictnewpin-1.0:0/0::testrepo", ">=dev-libs/slotconflicttarget-2.0")],
+            ),
+            (
+                "dev-libs/slotconflicttarget-1.0:0/0::testrepo",
+                [("dev-libs/slotconflictoldpin-1.0:0/0::testrepo", "<dev-libs/slotconflicttarget-2.0")],
+            ),
+        ],
+    )
 
 
 def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_binary, fixture_env):
@@ -5265,7 +5330,7 @@ def test_different_slots_of_the_same_package_coexist_without_conflict(emerge_bin
         '[ebuild  N     ] dev-libs/multislotpkg-2.0 ',
         '[ebuild  N     ] dev-libs/multislotparent-1.0 ',
     ]
-    assert "[slot conflict]" not in result.stdout
+    assert _SLOT_COLLISION_PREAMBLE not in result.stdout
 
     # --tree: *both* slots nest under the parent that pulled them in.
     # (Regression: a destructive required_by merge used to hand the owner
@@ -5500,19 +5565,32 @@ def test_multiple_top_level_atoms_report_an_unsolvable_slot_conflict_between_tar
     """dev-libs/slotconflictnewpin (">=dev-libs/slotconflicttarget-2.0")
     and dev-libs/slotconflictoldpin ("<dev-libs/slotconflicttarget-2.0")
     as two top-level atoms: no common satisfying version, so backtracking
-    leaves the [slot conflict] line in place."""
+    leaves the slot-collision block in place."""
     result = _run(
         [str(emerge_binary)],
         ["--pretend", "dev-libs/slotconflictnewpin", "dev-libs/slotconflictoldpin"],
         fixture_env,
     )
     assert result.returncode == 0
-    assert result.stdout.splitlines() == [
+    assert result.stdout.splitlines()[:3] == [
         '[ebuild  N     ] dev-libs/slotconflicttarget-2.0 ',
         '[ebuild  N     ] dev-libs/slotconflictnewpin-1.0 ',
         '[ebuild  N     ] dev-libs/slotconflictoldpin-1.0 ',
-        '[slot conflict] dev-libs/slotconflicttarget:0 resolved to dev-libs/slotconflicttarget-2.0, which does not satisfy "<dev-libs/slotconflicttarget-2.0"',
     ]
+    _assert_slot_collision_block(
+        result.stdout,
+        "dev-libs/slotconflicttarget:0",
+        [
+            (
+                "dev-libs/slotconflicttarget-2.0:0/0::testrepo",
+                [("dev-libs/slotconflictnewpin-1.0:0/0::testrepo", ">=dev-libs/slotconflicttarget-2.0")],
+            ),
+            (
+                "dev-libs/slotconflicttarget-1.0:0/0::testrepo",
+                [("dev-libs/slotconflictoldpin-1.0:0/0::testrepo", "<dev-libs/slotconflicttarget-2.0")],
+            ),
+        ],
+    )
 
 
 def test_multiple_top_level_atoms_dedupe_a_literal_duplicate(emerge_binary, fixture_env):

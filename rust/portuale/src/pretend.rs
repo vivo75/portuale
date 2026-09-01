@@ -1618,13 +1618,38 @@ fn entry_to_json(
 }
 
 fn slot_conflict_to_json(c: &SlotConflict) -> String {
+    let instances: Vec<String> = c
+        .instances
+        .iter()
+        .map(|inst| {
+            let parents: Vec<String> = inst
+                .parents
+                .iter()
+                .map(|(cpv, atom)| {
+                    format!(
+                        "{{\"parent\":{},\"atom\":{}}}",
+                        json_string(cpv),
+                        json_string(atom)
+                    )
+                })
+                .collect();
+            format!(
+                "{{\"version\":{},\"sub_slot\":{},\"repo_name\":{},\"parents\":[{}]}}",
+                json_string(&inst.version),
+                json_string(&inst.sub_slot),
+                json_string(&inst.repo_name),
+                parents.join(",")
+            )
+        })
+        .collect();
     format!(
-        "{{\"category\":{},\"package\":{},\"slot\":{},\"resolved_version\":{},\"conflicting_atom\":{}}}",
+        "{{\"category\":{},\"package\":{},\"slot\":{},\"resolved_version\":{},\"conflicting_atom\":{},\"instances\":[{}]}}",
         json_string(&c.category),
         json_string(&c.package),
         json_string(&c.slot),
         json_string(&c.resolved_version),
-        json_string(&c.conflicting_atom)
+        json_string(&c.conflicting_atom),
+        instances.join(",")
     )
 }
 
@@ -5750,20 +5775,63 @@ pub fn run(args: &[String]) -> ExitCode {
         );
     }
 
-    // Purely informational, same as blockers -- see resolve_pretend_graph's
-    // doc comment: v1 neither refuses nor changes the exit code for a slot
-    // conflict.
-    for c in &result.slot_conflicts {
-        println!(
-            "[slot conflict] {}/{}:{} resolved to {}/{}-{}, which does not satisfy \"{}\"",
-            c.category,
-            c.package,
-            c.slot,
-            c.category,
-            c.package,
-            c.resolved_version,
-            c.conflicting_atom
-        );
+    // Real `depgraph._show_slot_collision_notice` -> `slot_conflict_handler.
+    // get_conflict()` (`lib/_emerge/resolver/slot_collision.py`): the
+    // `!!! Multiple package instances within a single package slot ...`
+    // block, then the advisory paragraph. Simplified transcription -- the
+    // preamble, per-instance `(<cpv>, ebuild scheduled for merge) pulled
+    // in by` + `<atom> required by (<parent>)` / `<atom> (Argument)`
+    // lines, and the advisory (with the `--backtrack=30` hint gated the
+    // real way: shown unless `--backtrack` is >=30 or 0). Cut (documented,
+    // fixtures don't exercise them): `collision_reasons` grouping /
+    // best-atom selection, `pkg_use_display`, `--verbose-conflicts` USE
+    // markers, "omitted N similar parents", operator colorization.
+    // Purely informational -- v1 neither refuses nor changes the exit code.
+    if !result.slot_conflicts.is_empty() {
+        println!();
+        println!("!!! Multiple package instances within a single package slot have been pulled");
+        println!("!!! into the dependency graph, resulting in a slot conflict:");
+        for c in &result.slot_conflicts {
+            println!();
+            println!("{}/{}:{}", c.category, c.package, c.slot);
+            for inst in &c.instances {
+                println!();
+                println!(
+                    "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) pulled in by",
+                    c.category, c.package, inst.version, c.slot, inst.sub_slot, inst.repo_name
+                );
+                for (parent_cpv, atom) in &inst.parents {
+                    if parent_cpv.is_empty() {
+                        println!("    {atom} (Argument)");
+                    } else {
+                        println!(
+                            "    {atom} required by ({parent_cpv}, ebuild scheduled for merge)"
+                        );
+                    }
+                }
+            }
+        }
+        println!();
+        for line in [
+            "It may be possible to solve this problem by using package.mask to",
+            "prevent one of those packages from being selected. However, it is also",
+            "possible that conflicting dependencies exist such that they are",
+            "impossible to satisfy simultaneously.  If such a conflict exists in",
+            "the dependencies of two different packages, then those packages can",
+        ] {
+            println!("{line}");
+        }
+        if backtrack_max > 0 && backtrack_max < 30 {
+            println!("not be installed simultaneously. You may want to try a larger value of");
+            println!("the --backtrack option, such as --backtrack=30, in order to see if");
+            println!("that will solve this conflict automatically.");
+        } else {
+            println!("not be installed simultaneously.");
+        }
+        println!();
+        println!("For more information, see MASKED PACKAGES section in the emerge man");
+        println!("page or refer to the Gentoo Handbook.");
+        println!();
     }
 
     // Real `depgraph.py::_display_autounmask` (`:10625`), the

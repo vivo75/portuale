@@ -4356,6 +4356,73 @@ def _resolved_version_meta_and_use(repos, category, package, version, config):
     return (metadata, use_flags)
 
 
+def _slot_conflict_meta(repos, category, package, version):
+    """(sub_slot, repo_name, slot) of category/package's own `version` --
+    the highest-repo_priority candidate carrying that exact version. All
+    empty strings if the version is no longer in any repo. Slice 4's
+    slot-collision block. Mirrors portage-repo/src/lib.rs's
+    slot_conflict_meta exactly."""
+    cands = [c for c in list_candidates(repos, category, package) if c["version"] == version]
+    if not cands:
+        return ("", "", "")
+    c = max(cands, key=lambda c: c["repo_priority"])
+    return (c["sub_slot"], c["repo_name"], c["slot"])
+
+
+def _build_slot_conflict(
+    repos, category, package, slot, existing_version, current_atom, current_version, slot_pullers
+):
+    """Assembles a slot_conflicts entry (real slot_collision_handler's
+    (pkg, parent_atoms) per slot_atom): instance A is `existing_version`
+    (already in the graph), instance B is `current_version`. Each
+    slot_pullers entry for cat/pkg is filed under whichever instance its
+    atom matches (under A when it matches both). Mirrors
+    portage-repo/src/lib.rs's build_slot_conflict exactly."""
+    a_sub, a_repo, _ = _slot_conflict_meta(repos, category, package, existing_version)
+    b_sub, b_repo, _ = _slot_conflict_meta(repos, category, package, current_version)
+    a_match = f"{category}/{package}-{existing_version}:{slot}"
+    b_match = f"{category}/{package}-{current_version}:{slot}"
+
+    def _puller_cpv(pc, pp, pv):
+        if not pc:
+            return ""
+        psub, prepo, pslot = _slot_conflict_meta(repos, pc, pp, pv)
+        return f"{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}"
+
+    parents_a = []
+    parents_b = []
+    for pc, pp, pv, atom in slot_pullers.get((category, package), []):
+        hits_a = bool(match_from_list(atom, [a_match]))
+        hits_b = bool(match_from_list(atom, [b_match]))
+        entry = [_puller_cpv(pc, pp, pv), atom]
+        if hits_a:
+            if entry not in parents_a:
+                parents_a.append(entry)
+        elif hits_b and entry not in parents_b:
+            parents_b.append(entry)
+    return {
+        "category": category,
+        "package": package,
+        "slot": slot,
+        "resolved_version": existing_version,
+        "conflicting_atom": current_atom,
+        "instances": [
+            {
+                "version": existing_version,
+                "sub_slot": a_sub,
+                "repo_name": a_repo,
+                "parents": parents_a,
+            },
+            {
+                "version": current_version,
+                "sub_slot": b_sub,
+                "repo_name": b_repo,
+                "parents": parents_b,
+            },
+        ],
+    }
+
+
 def _resolve_root_deps_build_entries(repos, running_root, atom_str, config, owner, seen):
     """Real "recursively pull in and build new packages against the
     running root" (--root-deps, depgraph.py:4207-4271). Resolves atom_str
@@ -5788,6 +5855,10 @@ def resolve_pretend_graph(
             # pulling `cat/pkg` (real `_select_pkg_highest_available` sees
             # the whole atom set for a package, not just the first).
             slot_want.setdefault(key, []).append(current_atom_str)
+            # Backtracking slice 4: a top-level atom targeting this cat/pkg
+            # is an "Argument" puller for the slot-collision block.
+            if owner is None:
+                slot_pullers.setdefault(key, []).append(("", "", "", current_atom_str))
 
             # Backtracking: if an earlier attempt hit a *solvable* slot
             # conflict on this `cat/pkg`, every parent atom that targeted it
@@ -6180,13 +6251,16 @@ def resolve_pretend_graph(
                 satisfied = bool(match_from_list(current_atom_str, [existing_str]))
                 if not satisfied:
                     slot_conflicts.append(
-                        {
-                            "category": category,
-                            "package": package,
-                            "slot": slot,
-                            "resolved_version": existing_version,
-                            "conflicting_atom": current_atom_str,
-                        }
+                        _build_slot_conflict(
+                            repos,
+                            category,
+                            package,
+                            slot,
+                            existing_version,
+                            current_atom_str,
+                            version,
+                            slot_pullers,
+                        )
                     )
                 continue
             entry_idx = len(entries)
@@ -6616,13 +6690,14 @@ def resolve_pretend_graph(
                             repos, root_deps_running_root, atom_str, config, key, root_deps_build_seen
                         )
                     )
-            # Backtracking (slice 3): record this package as a puller of
-            # every non-blocker cat/pkg its dependency string names.
+            # Backtracking (slices 3/4): record this package as a puller of
+            # every non-blocker cat/pkg its dependency string names,
+            # keeping the atom text for slice 4's `pulled in by` lines.
             for tok in flat_deps:
                 dep_atom = _parse_atom(tok)
                 if dep_atom is not None and not dep_atom.blocker:
                     dc, dp = dep_atom.cp.split("/", 1)
-                    slot_pullers.setdefault((dc, dp), []).append((key[0], key[1], version))
+                    slot_pullers.setdefault((dc, dp), []).append((key[0], key[1], version, tok))
             _enqueue_flat_deps(flat_deps, key, version, depth, use_flags, queue, pending_blockers)
 
             # --with-test-deps: additive on top of the normal deps just
@@ -6813,8 +6888,8 @@ def resolve_pretend_graph(
                     (_cp, f'!={_sc["category"]}/{_sc["package"]}-{_sc["resolved_version"]}')
                 )
                 _seen = set()
-                for _pc, _pp, _pv in slot_pullers.get(_cp, []):
-                    if (_pc, _pp, _pv) in _seen:
+                for _pc, _pp, _pv, _atom in slot_pullers.get(_cp, []):
+                    if not _pc or (_pc, _pp, _pv) in _seen:
                         continue
                     _seen.add((_pc, _pp, _pv))
                     _lower = any(
@@ -7497,10 +7572,23 @@ def _entry_to_json(category, package, merge_order, outcome, blockers, slot, use_
 
 
 def _slot_conflict_to_json(c):
+    instances = ",".join(
+        (
+            f'{{"version":{_json_string(inst["version"])},'
+            f'"sub_slot":{_json_string(inst["sub_slot"])},'
+            f'"repo_name":{_json_string(inst["repo_name"])},"parents":['
+            + ",".join(
+                f'{{"parent":{_json_string(p[0])},"atom":{_json_string(p[1])}}}'
+                for p in inst["parents"]
+            )
+            + "]}"
+        )
+        for inst in c["instances"]
+    )
     return (
         f'{{"category":{_json_string(c["category"])},"package":{_json_string(c["package"])},'
         f'"slot":{_json_string(c["slot"])},"resolved_version":{_json_string(c["resolved_version"])},'
-        f'"conflicting_atom":{_json_string(c["conflicting_atom"])}}}'
+        f'"conflicting_atom":{_json_string(c["conflicting_atom"])},"instances":[{instances}]}}'
     )
 
 
@@ -11941,15 +12029,60 @@ def run(args):
         print()
         print(_package_counters_summary(entries, top_level_pkgs, onlydeps, color))
 
-    # Purely informational, same as blockers -- see resolve_pretend_graph's
-    # doc comment: v1 neither refuses nor changes the exit code for a slot
-    # conflict.
-    for c in result["slot_conflicts"]:
+    # Real depgraph._show_slot_collision_notice -> slot_conflict_handler.
+    # get_conflict() (lib/_emerge/resolver/slot_collision.py): the
+    # "!!! Multiple package instances within a single package slot ..."
+    # block, then the advisory paragraph. Simplified transcription -- the
+    # preamble, per-instance "(<cpv>, ebuild scheduled for merge) pulled in
+    # by" + "<atom> required by (<parent>)" / "<atom> (Argument)" lines,
+    # and the advisory (with the --backtrack=30 hint gated the real way:
+    # shown unless --backtrack is >=30 or 0). Cut (documented, fixtures
+    # don't exercise them): collision_reasons grouping / best-atom
+    # selection, pkg_use_display, --verbose-conflicts USE markers, "omitted
+    # N similar parents", operator colorization. Purely informational -- v1
+    # neither refuses nor changes the exit code. Mirrors pretend.rs.
+    if result["slot_conflicts"]:
+        print()
         print(
-            f"[slot conflict] {c['category']}/{c['package']}:{c['slot']} resolved to "
-            f"{c['category']}/{c['package']}-{c['resolved_version']}, which does not "
-            f'satisfy "{c["conflicting_atom"]}"'
+            "!!! Multiple package instances within a single package slot have been pulled"
         )
+        print("!!! into the dependency graph, resulting in a slot conflict:")
+        for c in result["slot_conflicts"]:
+            print()
+            print(f"{c['category']}/{c['package']}:{c['slot']}")
+            for inst in c["instances"]:
+                print()
+                print(
+                    f"  ({c['category']}/{c['package']}-{inst['version']}:{c['slot']}"
+                    f"/{inst['sub_slot']}::{inst['repo_name']}, ebuild scheduled for merge)"
+                    " pulled in by"
+                )
+                for parent_cpv, atom in inst["parents"]:
+                    if not parent_cpv:
+                        print(f"    {atom} (Argument)")
+                    else:
+                        print(
+                            f"    {atom} required by ({parent_cpv}, ebuild scheduled for merge)"
+                        )
+        print()
+        for line in (
+            "It may be possible to solve this problem by using package.mask to",
+            "prevent one of those packages from being selected. However, it is also",
+            "possible that conflicting dependencies exist such that they are",
+            "impossible to satisfy simultaneously.  If such a conflict exists in",
+            "the dependencies of two different packages, then those packages can",
+        ):
+            print(line)
+        if 0 < backtrack_max < 30:
+            print("not be installed simultaneously. You may want to try a larger value of")
+            print("the --backtrack option, such as --backtrack=30, in order to see if")
+            print("that will solve this conflict automatically.")
+        else:
+            print("not be installed simultaneously.")
+        print()
+        print("For more information, see MASKED PACKAGES section in the emerge man")
+        print("page or refer to the Gentoo Handbook.")
+        print()
 
     # Real depgraph.py::_display_autounmask (:10625): --autounmask
     # applied keyword / USE changes to make the graph resolve, so they

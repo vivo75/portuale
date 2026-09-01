@@ -7225,6 +7225,118 @@ pub struct SlotConflict {
     pub resolved_version: String,
     /// The atom text that does NOT accept `resolved_version`.
     pub conflicting_atom: String,
+    /// Every distinct version of `category/package:slot` pulled into the
+    /// graph (>= 2), each with the parents that pulled it -- real
+    /// `slot_collision_handler`'s per-`slot_atom` `(pkg, parent_atoms)`
+    /// data, used to render the `!!! Multiple package instances ...`
+    /// block. `instances[0]` is always `resolved_version`.
+    pub instances: Vec<SlotConflictInstance>,
+}
+
+/// One version of a slot-conflicted `category/package:slot`, plus the
+/// parents that pulled it in. See `SlotConflict`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotConflictInstance {
+    pub version: String,
+    pub sub_slot: String,
+    pub repo_name: String,
+    /// `(parent_cpv, atom)` -- `parent_cpv` is
+    /// `cat/pkg-ver:slot/sub_slot::repo` for a dependency, or empty for a
+    /// top-level atom (rendered `<atom> (Argument)`).
+    pub parents: Vec<(String, String)>,
+}
+
+/// `(sub_slot, repo_name, slot)` of `cat/pkg`'s own `version` -- the
+/// highest-`repo_priority` candidate carrying that exact version, the
+/// same re-lookup `slot_changed` / `deps_changed` already do. All-empty
+/// if the version is no longer in any repo. Slice 4's slot-collision
+/// block uses it to print the real `(<cpv>:<slot>/<sub>::<repo>, ...)`
+/// form for every conflicting instance and every parent.
+fn slot_conflict_meta(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    version: &str,
+) -> (String, String, String) {
+    match list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| {
+            cs.into_iter()
+                .filter(|c| c.version == version)
+                .max_by_key(|c| c.repo_priority)
+        }) {
+        Some(c) => (c.sub_slot, c.repo_name, c.slot),
+        None => (String::new(), String::new(), String::new()),
+    }
+}
+
+/// Assembles a `SlotConflict` (real `slot_collision_handler`'s
+/// `(pkg, parent_atoms)` per `slot_atom`): instance A is `existing_version`
+/// (already in the graph), instance B is `current_version` (what the
+/// atom that triggered detection resolved to). Each `slot_pullers` entry
+/// for `cat/pkg` is filed under whichever instance its atom matches
+/// (under A when it matches both -- a bare atom pulled the resolved one).
+#[allow(clippy::too_many_arguments)]
+fn build_slot_conflict(
+    repos: &[RepoConfig],
+    category: &str,
+    package: &str,
+    slot: &str,
+    existing_version: &str,
+    current_atom: &str,
+    current_version: &str,
+    slot_pullers: &SlotPullers,
+) -> SlotConflict {
+    let (a_sub, a_repo, _) = slot_conflict_meta(repos, category, package, existing_version);
+    let (b_sub, b_repo, _) = slot_conflict_meta(repos, category, package, current_version);
+    let a_match = format!("{category}/{package}-{existing_version}:{slot}");
+    let b_match = format!("{category}/{package}-{current_version}:{slot}");
+    let puller_cpv = |pc: &str, pp: &str, pv: &str| -> String {
+        if pc.is_empty() {
+            return String::new();
+        }
+        let (psub, prepo, pslot) = slot_conflict_meta(repos, pc, pp, pv);
+        format!("{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}")
+    };
+    let mut parents_a: Vec<(String, String)> = Vec::new();
+    let mut parents_b: Vec<(String, String)> = Vec::new();
+    if let Some(pullers) = slot_pullers.get(&(category.to_string(), package.to_string())) {
+        for (pc, pp, pv, atom) in pullers {
+            let hits_a = portage_dep::match_from_list(atom, &[a_match.as_str()])
+                .is_some_and(|m| !m.is_empty());
+            let hits_b = portage_dep::match_from_list(atom, &[b_match.as_str()])
+                .is_some_and(|m| !m.is_empty());
+            let entry = (puller_cpv(pc, pp, pv), atom.clone());
+            if hits_a {
+                if !parents_a.contains(&entry) {
+                    parents_a.push(entry);
+                }
+            } else if hits_b && !parents_b.contains(&entry) {
+                parents_b.push(entry);
+            }
+        }
+    }
+    SlotConflict {
+        category: category.to_string(),
+        package: package.to_string(),
+        slot: slot.to_string(),
+        resolved_version: existing_version.to_string(),
+        conflicting_atom: current_atom.to_string(),
+        instances: vec![
+            SlotConflictInstance {
+                version: existing_version.to_string(),
+                sub_slot: a_sub,
+                repo_name: a_repo,
+                parents: parents_a,
+            },
+            SlotConflictInstance {
+                version: current_version.to_string(),
+                sub_slot: b_sub,
+                repo_name: b_repo,
+                parents: parents_b,
+            },
+        ],
+    }
 }
 
 /// `--changed-deps-report`: an installed package, still in the graph at
@@ -7508,10 +7620,13 @@ impl Deep {
 /// it in the queued atom text itself.
 type QueueItem = (String, u32, Option<(String, String)>, Option<String>);
 
-/// Backtracking slice 3: `(cat, pkg)` targeted by a dependency string ->
-/// the `(cat, pkg, version)` of every package that pulled it in this
-/// pass. See `resolve_pretend_graph`'s `slot_pullers`.
-type SlotPullers = HashMap<(String, String), Vec<(String, String, String)>>;
+/// Backtracking: `(cat, pkg)` targeted by an atom -> every puller this
+/// pass, as `(parent_cat, parent_pkg, parent_version, atom_text)`. A
+/// top-level atom is recorded with empty parent fields. Slice 3 uses the
+/// `(parent, version)` part to pick a mask target; slice 4 uses the atom
+/// text to render the `pulled in by` lines. See
+/// `resolve_pretend_graph`'s `slot_pullers`.
+type SlotPullers = HashMap<(String, String), Vec<(String, String, String, String)>>;
 
 /// Queues every atom in `flat_deps` (a `use_reduce_flat`/
 /// `use_reduce_flat_subset` result) onto `queue` at `depth + 1`, owned by
@@ -8132,6 +8247,17 @@ pub fn resolve_pretend_graph(
                 .entry(key.clone())
                 .or_default()
                 .push(current_atom.clone());
+            // Backtracking slice 4: a top-level atom targeting this
+            // `cat/pkg` is an "Argument" puller for the slot-collision
+            // block (real `slot_collision_handler`'s `(Argument)` line).
+            if owner.is_none() {
+                slot_pullers.entry(key.clone()).or_default().push((
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    current_atom.clone(),
+                ));
+            }
 
             // Backtracking: if an earlier attempt hit a *solvable* slot
             // conflict on this `cat/pkg`, every parent atom that targeted it is
@@ -8667,13 +8793,16 @@ pub fn resolve_pretend_graph(
                     portage_dep::match_from_list(&current_atom, &[existing_str.as_str()])
                         .is_some_and(|m| !m.is_empty());
                 if !satisfied {
-                    slot_conflicts.push(SlotConflict {
-                        category: key.0,
-                        package: key.1,
-                        slot,
-                        resolved_version: existing_version,
-                        conflicting_atom: current_atom,
-                    });
+                    slot_conflicts.push(build_slot_conflict(
+                        &repos,
+                        &key.0,
+                        &key.1,
+                        &slot,
+                        &existing_version,
+                        &current_atom,
+                        &version,
+                        &slot_pullers,
+                    ));
                 }
                 continue;
             }
@@ -9251,8 +9380,9 @@ pub fn resolve_pretend_graph(
                     ));
                 }
             }
-            // Backtracking (slice 3): record this package as a puller of
+            // Backtracking (slices 3/4): record this package as a puller of
             // every non-blocker `cat/pkg` its dependency string names,
+            // keeping the atom text for slice 4's `pulled in by` lines,
             // before `flat_deps` is consumed below.
             for tok in &flat_deps {
                 if let Some(dep_atom) = portage_dep::parse_atom(tok) {
@@ -9260,7 +9390,7 @@ pub fn resolve_pretend_graph(
                         slot_pullers
                             .entry((dep_atom.category.clone(), dep_atom.package.clone()))
                             .or_default()
-                            .push((key.0.clone(), key.1.clone(), version.clone()));
+                            .push((key.0.clone(), key.1.clone(), version.clone(), tok.clone()));
                     }
                 }
             }
@@ -9469,7 +9599,10 @@ pub fn resolve_pretend_graph(
                 ));
                 if let Some(pullers) = slot_pullers.get(&cp) {
                     let mut seen: HashSet<(String, String, String)> = HashSet::new();
-                    for (pc, pp, pv) in pullers {
+                    for (pc, pp, pv, _atom) in pullers {
+                        if pc.is_empty() {
+                            continue;
+                        }
                         if !seen.insert((pc.clone(), pp.clone(), pv.clone())) {
                             continue;
                         }
@@ -11866,15 +11999,13 @@ mod tests {
         // `--backtrack=0`): the retry loop never runs, so the conflict is
         // reported exactly as it was before backtracking existed.
         let result = graph_result_real_backtrack("dev-libs/slotconflictparent", 0);
-        assert_eq!(
-            result.slot_conflicts,
-            vec![SlotConflict {
-                category: "dev-libs".to_string(),
-                package: "slotconflicttarget".to_string(),
-                slot: "0".to_string(),
-                resolved_version: "2.0".to_string(),
-                conflicting_atom: "<dev-libs/slotconflicttarget-2.0".to_string(),
-            }]
+        assert_one_conflict(
+            &result,
+            "dev-libs",
+            "slotconflicttarget",
+            "0",
+            "2.0",
+            "<dev-libs/slotconflicttarget-2.0",
         );
         // A single retry is enough to reconcile this one-step conflict.
         let one = graph_result_real_backtrack("dev-libs/slotconflictparent", 1);
@@ -11915,15 +12046,13 @@ mod tests {
         // NoVisibleCandidate -- strictly worse. Slice 3 must revert the
         // trial and report the original slot conflict unchanged.
         let result = graph_result_real("dev-libs/slotconflictunsolvable");
-        assert_eq!(
-            result.slot_conflicts,
-            vec![SlotConflict {
-                category: "dev-libs".to_string(),
-                package: "slotconflicttarget".to_string(),
-                slot: "0".to_string(),
-                resolved_version: "2.0".to_string(),
-                conflicting_atom: "<dev-libs/slotconflicttarget-2.0".to_string(),
-            }]
+        assert_one_conflict(
+            &result,
+            "dev-libs",
+            "slotconflicttarget",
+            "0",
+            "2.0",
+            "<dev-libs/slotconflicttarget-2.0",
         );
         assert!(
             !result
@@ -11931,6 +12060,38 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate)),
             "the reverted graph must not carry the trial's NoVisibleCandidate"
+        );
+    }
+
+    #[test]
+    fn fixture_slot_conflict_carries_per_instance_pulled_in_by_data() {
+        // Slice 4: the SlotConflict names every conflicting version of
+        // slotconflicttarget:0 and, per version, the (parent cpv, atom)
+        // that pulled it -- real slot_collision_handler's per-slot_atom
+        // (pkg, parent_atoms).
+        let result = graph_result_real("dev-libs/slotconflictunsolvable");
+        assert_eq!(result.slot_conflicts.len(), 1);
+        let c = &result.slot_conflicts[0];
+        assert_eq!(
+            c.instances
+                .iter()
+                .map(|i| i.version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2.0", "1.0"]
+        );
+        assert_eq!(
+            c.instances[0].parents,
+            vec![(
+                "dev-libs/slotconflictnewpin-1.0:0/0::testrepo".to_string(),
+                ">=dev-libs/slotconflicttarget-2.0".to_string()
+            )]
+        );
+        assert_eq!(
+            c.instances[1].parents,
+            vec![(
+                "dev-libs/slotconflictoldpin-1.0:0/0::testrepo".to_string(),
+                "<dev-libs/slotconflicttarget-2.0".to_string()
+            )]
         );
     }
 
@@ -11943,15 +12104,13 @@ mod tests {
         // so the backtracking solvability pre-check fails, no retry is
         // attempted, and the SlotConflict is reported exactly as before.
         let result = graph_result_real("dev-libs/slotconflictunsolvable");
-        assert_eq!(
-            result.slot_conflicts,
-            vec![SlotConflict {
-                category: "dev-libs".to_string(),
-                package: "slotconflicttarget".to_string(),
-                slot: "0".to_string(),
-                resolved_version: "2.0".to_string(),
-                conflicting_atom: "<dev-libs/slotconflicttarget-2.0".to_string(),
-            }]
+        assert_one_conflict(
+            &result,
+            "dev-libs",
+            "slotconflicttarget",
+            "0",
+            "2.0",
+            "<dev-libs/slotconflicttarget-2.0",
         );
     }
 
@@ -16241,6 +16400,33 @@ mod tests {
 
     fn graph_result_real(atom_str: &str) -> GraphResult {
         graph_result_real_backtrack(atom_str, 10)
+    }
+
+    #[track_caller]
+    fn assert_one_conflict(
+        result: &GraphResult,
+        category: &str,
+        package: &str,
+        slot: &str,
+        resolved_version: &str,
+        conflicting_atom: &str,
+    ) {
+        assert_eq!(
+            result.slot_conflicts.len(),
+            1,
+            "expected exactly one slot conflict"
+        );
+        let c = &result.slot_conflicts[0];
+        assert_eq!(
+            (
+                c.category.as_str(),
+                c.package.as_str(),
+                c.slot.as_str(),
+                c.resolved_version.as_str(),
+                c.conflicting_atom.as_str()
+            ),
+            (category, package, slot, resolved_version, conflicting_atom)
+        );
     }
 
     fn graph_result_real_backtrack(atom_str: &str, backtrack_max: u32) -> GraphResult {

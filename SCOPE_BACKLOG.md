@@ -98,14 +98,15 @@ Every *forward-pass* resolver feature is shipped (the `--autounmask*`
 family completed 2026-08-31). What remains is architectural — a
 single-pass BFS can't grow into these incrementally:
 
-- **Backtracking.** *Slice 1 shipped 2026-09-01.* `resolve_pretend_graph`
-  is now a `'backtrack` retry loop (real `_emerge/resolver/backtracking.py`
-  shape): each pass rebuilds `entries` from scratch, only `slot_constraints`
-  (keyed by `cat/pkg`) + the iteration counter survive. A **solvable slot
-  conflict** — one version satisfies every atom that landed on the slot —
-  folds those atoms into `slot_constraints` (fed to `resolve_pretend`'s new
-  `extra_constraints` param) and re-runs the whole walk, up to
-  `MAX_BACKTRACK = 10`. Remaining slices:
+- **Backtracking.** *Slices 1–4 shipped 2026-09-01.*
+  `resolve_pretend_graph` is now a `'backtrack` retry loop (real
+  `_emerge/resolver/backtracking.py` shape): each pass rebuilds `entries`
+  from scratch, only `slot_constraints` (keyed by `cat/pkg`) + the
+  iteration counter survive. A **solvable slot conflict** — one version
+  satisfies every atom that landed on the slot — folds those atoms into
+  `slot_constraints` (fed to `resolve_pretend`'s `extra_constraints`
+  param) and re-runs the whole walk, up to `backtrack_max`. The slices:
+  - **Slice 1:** the retry loop + solvable slot-conflict reconciliation.
   - **Slice 2 shipped 2026-09-01:** real `--backtrack=COUNT` flag
     (`backtrack_max` param, default 10, `=0` disables — replaces slice 1's
     `MAX_BACKTRACK` constant).
@@ -114,16 +115,22 @@ single-pass BFS can't grow into these incrementally:
     `slot_pullers` tracking, a trial-and-revert state machine — mask the
     conflicted version + puller-parent versions with a lower alternative,
     keep only if every conflict clears with no new `NoVisibleCandidate`).
-  - **Slice 4:** diagnostics ("backtracking … exhausted" /
-    "circular dependencies prevent backtracking") + the real
-    `_show_slot_collision_notice` block (enrich `SlotConflict` to carry
-    every conflicting instance + its parent atoms), autounmask levels
-    tried in sequence inside the loop, autounmask parent-flip re-resolve
-    feeding `extra_constraints`, and the `resolve_graph_once` helper
-    extraction (drop slice 1's `loop {}` reindent).
-  Still weeks for full parity; `PROMPT.md` lists a backtracking resolver
-  as out of scope for v1, but slices 1–4 close the gap between "resolves
-  the common case" and "resolves what real portage resolves".
+  - **Slice 4 shipped 2026-09-01:** the real `_show_slot_collision_notice`
+    block (`SlotConflict.instances` — every conflicting version + its
+    `(parent_cpv, atom)` pullers, via `build_slot_conflict`), the real
+    advisory paragraph + `--backtrack=30` hint gated the real way.
+  - **Deferred (backlog):** "backtracking exhausted" / "circular
+    dependencies prevent backtracking" diagnostics; autounmask levels
+    tried in sequence inside the loop; autounmask parent-flip re-resolve
+    feeding `extra_constraints`; the `resolve_graph_once` helper
+    extraction (drop slice 1's `loop {}` reindent); real
+    `get_conflict()`'s `collision_reasons` grouping / best-atom
+    selection / `--verbose-conflicts` USE markers / stderr stream.
+  `PROMPT.md` lists a backtracking resolver as out of scope for v1;
+  slices 1–4 nonetheless take it from "detects and reports conflicts" to
+  "reconciles solvable conflicts, masks unsolvable ones, and reports the
+  rest with real portage's own notice". The deferred items above are
+  refinements, not the core mechanism.
 - ~~**`--autounmask-license` / `--autounmask-keep-masks=n`.**~~ **Shipped
   2026-08-31** (autounmask buildout increments 4 + 5): `license_masked_only`
   / `mask_masked_only` (+ `missing_licenses` = real `_getMaskedLicenses`
@@ -286,15 +293,16 @@ It is **not** a drop-in replacement, and the distance to one is dominated
 by a few large items rather than a long tail of small ones:
 
 1. **Backtracking resolver (Part 2.A).** Real portage re-tries the graph
-   through slot / USE / mask / autounmask conflicts. *Slice 1 (2026-09-01)*
-   turned `resolve_pretend_graph` into a real retry loop and reconciles a
-   **solvable slot conflict** (one version satisfies every parent atom) by
-   re-resolving the whole graph. Slices 2–4 remain: clean pass extraction,
-   unsolvable-conflict masking + real `--backtrack=N`, and diagnostics /
-   autounmask-in-loop. Any upgrade that requires portage to juggle
-   slot-operator rebuilds, `||` preferences, and USE changes together still
-   hits this wall until slices 3–4 land. **This is the gap that most
-   defines "not yet a clone."**
+   through slot / USE / mask / autounmask conflicts. *Slices 1–4
+   (2026-09-01)* turned `resolve_pretend_graph` into a real retry loop:
+   it reconciles a **solvable slot conflict** (one version satisfies every
+   parent atom), masks a version to resolve an **unsolvable** one via real
+   `runtime_pkg_mask` (trial-and-revert), exposes the real `--backtrack`
+   flag, and reports the rest with real portage's own `!!! Multiple
+   package instances …` notice. What's still not covered: USE/keyword
+   autounmask levels tried *inside* the loop, and `||`-preference /
+   slot-operator-rebuild feedback driving a retry. An upgrade that needs
+   portage to juggle all of those together still exceeds the pilot.
 
 2. **The Scheduler (Part 2.B).** No `--jobs`, no `--resume`, no `--ask`,
    no `elog`. Serial builds in merge order work; a real `emerge -uDN
