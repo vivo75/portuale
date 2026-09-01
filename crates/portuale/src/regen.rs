@@ -81,6 +81,18 @@ fn run_work_item(
         debug,
     })
 }
+
+/// Arguments of [`run_parallel`].
+struct RunParallelArgs<'a> {
+    work: &'a [RegenWorkItem],
+    pass_indices: &'a [usize],
+    root: &'a Path,
+    config_root: &'a Path,
+    portage_tmpdir: &'a Path,
+    debug: bool,
+    jobs: usize,
+    load_average: Option<f64>,
+}
 /// Arguments of [`regen_one`].
 struct RegenOneArgs<'a> {
     ebuild_path: &'a Path,

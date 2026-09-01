@@ -673,6 +673,81 @@ mod tests {
         }
     }
 
+    #[test]
+    fn merge_one_binary_entry_merges_a_multi_instance_local_gpkg() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+        // The fixture gpkg, placed in the multi-instance layout.
+        std::fs::create_dir_all(pkgdir.join("dev-libs/gpkgreadpkg")).unwrap();
+        std::fs::copy(
+            fixtures_root().join("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"),
+            pkgdir.join("dev-libs/gpkgreadpkg/gpkgreadpkg-1.0-1.gpkg.tar"),
+        )
+        .unwrap();
+
+        let mut entry = graph_entry("gpkgreadpkg", CandidateSource::Binary, "1.0");
+        entry.build_id = Some("1".into());
+
+        merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &Config::default(),
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("pt"),
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
+        .expect("multi-instance local gpkg merges");
+
+        assert!(
+            root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0/CONTENTS")
+                .is_file()
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_one_binary_entry_reports_fetching_failed_without_an_index_stanza() {
+        // Portage's other ENOENT arm -- the cpv is NOT in the index, so the text
+        // is `!!! Fetching Binary failed` instead of the stale-index pair. Same
+        // stdout + `build.log` + tail and the same silent sentinel.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+
+        let pt = tmp.join("pt");
+        let entry = graph_entry("packagepkg", CandidateSource::Binary, "1.0");
+        let err = merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &Config::default(),
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &pt,
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
+        .expect_err("a stanza-less missing binary must fail at merge");
+        assert_eq!(
+            err, "dev-libs/packagepkg-1.0: non-existent binary package",
+            "{err}"
+        );
+        assert!(is_binpkg_missing_failure(&err));
+        let log = pt.join("portage/dev-libs/packagepkg-1.0/temp/build.log");
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        assert_eq!(
+            logged, "!!! Fetching Binary failed for 'dev-libs/packagepkg-1.0'\n",
+            "build.log holds real's fetching-failed line: {log:?}"
+        );
+        assert!(!root.join("var/db/pkg/dev-libs/packagepkg-1.0").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// A writable copy of the committed GnuPG test keyring (see `binpkg.rs`).
     /// `gpg` refuses a homedir it doesn't own, so the tree itself is never used.
     fn test_gpg_home() -> std::path::PathBuf {

@@ -1490,6 +1490,113 @@ fn parse_build_opts<'a>(
     }
 }
 
+/// Parallelism and test-dep flags. Returns whether the token was consumed.
+fn parse_jobs_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    if arg == "--jobs" || arg == "-j" {
+        // Optional integer next token, like `--deep`; bare means unlimited.
+        match args.get(*idx + 1).map(|s| s.parse::<usize>()) {
+            Some(Ok(n)) => {
+                opts.jobs = jobs_count(n);
+                *idx += 2;
+            }
+            _ => {
+                opts.jobs = usize::MAX;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("--jobs=") {
+        match value.parse::<usize>() {
+            Ok(n) => {
+                opts.jobs = jobs_count(n);
+                *idx += 1;
+            }
+            Err(_) => {
+                eprintln!("emerge: invalid --jobs parameter: {value:?}");
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("-j") {
+        match value.parse::<usize>() {
+            Ok(n) => {
+                opts.jobs = jobs_count(n);
+                *idx += 1;
+            }
+            Err(_) => {
+                eprintln!("emerge: invalid -j parameter: {value:?}");
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if arg == "--load-average" || arg == "-l" {
+        // A required value (unlike `--jobs`' optional one): missing or
+        // non-numeric is a usage error.
+        match args.get(*idx + 1).map(|s| s.parse::<f64>()) {
+            Some(Ok(la)) if la > 0.0 => {
+                opts.load_average = Some(la);
+                *idx += 2;
+            }
+            _ => {
+                eprintln!("emerge: option \"--load-average\" requires a positive number");
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if let Some(value) = arg
+        .strip_prefix("--load-average=")
+        .or_else(|| arg.strip_prefix("-l"))
+    {
+        match value.parse::<f64>() {
+            Ok(la) if la > 0.0 => {
+                opts.load_average = Some(la);
+                *idx += 1;
+            }
+            _ => {
+                eprintln!("emerge: invalid --load-average parameter: {value:?}");
+                return Err(ExitCode::from(2));
+            }
+        }
+        Ok(true)
+    } else if arg == "--root-deps" || arg == "--root-deps=True" || arg == "--root-deps=rdeps" {
+        opts.root_deps = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--with-test-deps" {
+        // Same shape as `--changed-deps`.
+        match args.get(*idx + 1).map(String::as_str) {
+            Some("y") => {
+                opts.with_test_deps = true;
+                *idx += 2;
+            }
+            Some("n") => {
+                opts.with_test_deps = false;
+                *idx += 2;
+            }
+            _ => {
+                opts.with_test_deps = true;
+                *idx += 1;
+            }
+        }
+        Ok(true)
+    } else if arg == "--with-test-deps=y" || arg == "--with-test-deps=True" {
+        opts.with_test_deps = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--with-test-deps=n" {
+        opts.with_test_deps = false;
+        *idx += 1;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 /// Autounmask driver flags. Returns whether the token was consumed.
 fn parse_autounmask_opts<'a>(
     opts: &mut EmergeOpts<'a>,
