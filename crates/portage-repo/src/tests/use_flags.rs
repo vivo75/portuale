@@ -143,6 +143,110 @@ fn effective_use_flags_lets_package_use_override_a_plus_iuse_default() {
 }
 
 #[test]
+fn effective_use_flags_repo_package_use_is_weaker_than_an_iuse_default() {
+    // Portage applies `repo` before `pkginternal`, so an ebuild IUSE
+    // default overrides repo `package.use`.
+    let a = euf_layers(EufLayersArgs {
+        iuse: "-foo",
+        use_tokens: &[],
+        conf_use_tokens: &[],
+        package_use_repo: &pu("foo"),
+        package_use: &[],
+        package_use_user: &[],
+    });
+    assert!(
+        !a.contains("foo"),
+        "IUSE `-foo` cancels repo package.use `foo`"
+    );
+    let b = euf_layers(EufLayersArgs {
+        iuse: "+foo",
+        use_tokens: &[],
+        conf_use_tokens: &[],
+        package_use_repo: &pu("-foo"),
+        package_use: &[],
+        package_use_user: &[],
+    });
+    assert!(
+        b.contains("foo"),
+        "IUSE `+foo` overrides repo package.use `-foo`"
+    );
+    // ...but a repo `package.use` still takes effect on a flag the
+    // ebuild's IUSE leaves undecided (no `+`/`-` marker).
+    let c = euf_layers(EufLayersArgs {
+        iuse: "foo",
+        use_tokens: &[],
+        conf_use_tokens: &[],
+        package_use_repo: &pu("foo"),
+        package_use: &[],
+        package_use_user: &[],
+    });
+    assert!(
+        c.contains("foo"),
+        "repo package.use decides an unmarked IUSE flag"
+    );
+}
+
+#[test]
+fn effective_use_flags_profile_package_use_loses_to_make_conf() {
+    // Profile `package.use` sits below `conf`, so make.conf wins.
+    let flags = euf_layers(EufLayersArgs {
+        iuse: "foo",
+        use_tokens: &[],
+        conf_use_tokens: &["-foo".to_string()],
+        package_use_repo: &[],
+        package_use: &pu("foo"),
+        package_use_user: &[],
+    });
+    assert!(
+        !flags.contains("foo"),
+        "make.conf -foo beats profile package.use"
+    );
+}
+
+#[test]
+fn effective_use_flags_user_package_use_wins_over_make_conf() {
+    // User package.use sits above `conf`.
+    let flags = euf_layers(EufLayersArgs {
+        iuse: "foo",
+        use_tokens: &[],
+        conf_use_tokens: &["foo".to_string()],
+        package_use_repo: &[],
+        package_use: &[],
+        package_use_user: &pu("-foo"),
+    });
+    assert!(
+        !flags.contains("foo"),
+        "user package.use -foo beats make.conf foo"
+    );
+}
+
+#[test]
+fn effective_use_flags_layer_precedence_is_repo_then_profile_then_user() {
+    // All three sources touch `foo`; the walk order repo -> profile
+    // -> user means the user entry is the last word.
+    let flags = euf_layers(EufLayersArgs {
+        iuse: "foo",
+        use_tokens: &[],
+        conf_use_tokens: &[],
+        package_use_repo: &pu("-foo"),
+        package_use: &pu("-foo"),
+        package_use_user: &pu("foo"),
+    });
+    assert!(flags.contains("foo"));
+    // ...and with the user entry disabling, it stays off regardless
+    // of repo/profile enabling it.
+    let flags = euf_layers(EufLayersArgs {
+        iuse: "foo",
+        use_tokens: &[],
+        conf_use_tokens: &[],
+        package_use_repo: &pu("foo"),
+        package_use: &pu("foo"),
+        package_use_user: &pu("-foo"),
+    });
+    assert!(!flags.contains("foo"));
+}
+
+#[test]
 fn effective_use_flags_layers_a_matching_package_use_entry_on_top_of_base() {
     let base = ["foo".to_string()].to_vec();
     let package_use = vec![(

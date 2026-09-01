@@ -1288,6 +1288,52 @@ mod tests_164 {
     }
 }
 
+/// Arguments of [`euf_layers`].
+struct EufLayersArgs<'a> {
+    iuse: &'a str,
+    use_tokens: &'a [String],
+    conf_use_tokens: &'a [String],
+    package_use_repo: &'a [(String, Vec<String>)],
+    package_use: &'a [(String, Vec<String>)],
+    package_use_user: &'a [(String, Vec<String>)],
+}
+
+/// "Config depth" slice: `package.use` from each of the three config sources
+/// lands at its own `USE_ORDER` position.
+fn euf_layers(args: EufLayersArgs<'_>) -> HashSet<String> {
+    let EufLayersArgs {
+        iuse,
+        use_tokens,
+        conf_use_tokens,
+        package_use_repo,
+        package_use,
+        package_use_user,
+    } = args;
+    let cfg = portage_profile::Config {
+        use_tokens: use_tokens.to_vec(),
+        conf_use_tokens: conf_use_tokens.to_vec(),
+        package_use_repo: package_use_repo.to_vec(),
+        package_use: package_use.to_vec(),
+        package_use_user: package_use_user.to_vec(),
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        ..Default::default()
+    };
+    effective_use_flags(EffectiveUseFlagsArgs {
+        config: &cfg,
+        iuse,
+        keywords: &["amd64".to_string()],
+        candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+    })
+    .as_ref()
+    .clone()
+}
+
+fn pu(flag: &str) -> Vec<(String, Vec<String>)> {
+    vec![("dev-libs/pkg".to_string(), vec![flag.to_string()])]
+}
+
 fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {
     GraphEntry {
         discovery: 0,
