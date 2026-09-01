@@ -1,4 +1,4 @@
-// Real merge/filesystem mutation (task #55, `PORTING/PROMPT-next.md`'s own
+// Real merge/filesystem mutation (task #55, `PROMPT-next.md`'s own
 // "Real merge/install/filesystem mutation" section): after running the
 // real `install` phase chain (task #54's own `ebuild_phases` module),
 // really run `pkg_preinst`, copy `${D}`'s own regular files, directories,
@@ -5310,7 +5310,7 @@ mod tests {
     /// Real `mypkglist = others_in_slot + blockers`: `mergeblockerpkg`'s own
     /// real `RDEPEND="!dev-libs/mergeblockedbypkg"` -- flattened via real
     /// config/USE resolution rooted at `config_root` (the real
-    /// `PORTING/fixtures` tree, which has its own real `repos.conf`) --
+    /// `fixtures` tree, which has its own real `repos.conf`) --
     /// matches the already-installed `mergeblockedbypkg`, so the collision on
     /// `/usr/share/mergeblockertest/shared.txt` is excluded even with
     /// `collision_protect: true`, and `mergeblockerpkg` takes over the file.

@@ -1,10 +1,10 @@
 """Black-box test for the emerge/ebuild portuale skeleton (see
-PORTING/PROMPT.md, "emerge/ebuild binary shape"). Tests the real compiled
+PROMPT.md, "emerge/ebuild binary shape"). Tests the real compiled
 CLI via symlinks in a PATH, exactly as it would be invoked in practice --
 not by importing anything from the binary.
 
 Also covers `ebuild`'s CLI-surface-recognition follow-up (see
-PORTING/rust/portuale/src/ebuild.rs/ebuild_options.rs): real ebuild
+rust/portuale/src/ebuild.rs/ebuild_options.rs): real ebuild
 options (bin/ebuild's own argparse setup) and real ebuild commands
 (doebuild()'s own validcommands list) are recognized and accepted as a
 still-a-no-op dry-run stub, while genuinely invalid input (an

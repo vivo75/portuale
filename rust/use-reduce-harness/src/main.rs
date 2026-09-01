@@ -1,6 +1,6 @@
 // Neutral CLI test-harness binary for the use_reduce(flat=True) pilot
-// (see PORTING/PROMPT.md and portage-use-reduce/src/lib.rs's doc comment). Same
-// argv/output contract as PORTING/python/use_reduce_harness.py.
+// (see PROMPT.md and portage-use-reduce/src/lib.rs's doc comment). Same
+// argv/output contract as python/use_reduce_harness.py.
 //
 // Usage:
 //   use-reduce-harness reduce <mode> <uselist> <token...>

@@ -1,6 +1,6 @@
 """CI performance-regression gate (see PROMPT.md: "benchmark suite must show
 Rust ahead of Python and must not regress over time"). Opt-in via
-PORTING_RUN_BENCHMARK=1 so the default `pytest PORTING/tests` run (the
+PORTUALE_RUN_BENCHMARK=1 so the default `pytest tests` run (the
 correctness contract suite) stays fast; CI should set the env var to
 actually enforce the gate.
 """
@@ -15,8 +15,8 @@ import pytest
 BENCH_SCRIPT = Path(__file__).resolve().parents[1] / "bench" / "run_benchmark.py"
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("PORTING_RUN_BENCHMARK") != "1",
-    reason="opt-in: set PORTING_RUN_BENCHMARK=1 to run the timing regression gate",
+    os.environ.get("PORTUALE_RUN_BENCHMARK") != "1",
+    reason="opt-in: set PORTUALE_RUN_BENCHMARK=1 to run the timing regression gate",
 )
 
 

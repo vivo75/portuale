@@ -1,5 +1,5 @@
 """Black-box contract suite for the `emerge --pretend` pilot slice (see
-PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the full
+PROMPT.md and rust/portage-repo/src/lib.rs for the full
 scope writeup, including the dependency-recursion follow-up in
 resolve_pretend_graph, the profile/make.conf -> real USE/ACCEPT_KEYWORDS
 follow-up in portage-profile, the package.mask/.unmask/.accept_keywords/
@@ -16,7 +16,7 @@ of a generic "unsupported option" one). Drives the real compiled
 `emerge` binary (portuale, dispatched via a real symlink
 -- not a neutral harness, since emerge is an actual product surface per
 PROMPT.md's testing decision) and the Python reference implementation
-identically, against the synthetic fixture tree at PORTING/fixtures
+identically, against the synthetic fixture tree at fixtures
 (whose repos.conf/make.profile/make.conf/package.mask/package.unmask/
 package.accept_keywords/package.use now drive real config resolution,
 not hardcoded values, and whose repos.conf now defines a second,
@@ -2912,7 +2912,7 @@ def test_usepkgonly_defaults_binpkg_respect_use_off(emerge_binary, fixture_env):
 
 def _binscan_configroot(tmp_path, fixtures_root, binpkg_files):
     """An ad-hoc PORTAGE_CONFIGROOT whose `PKGDIR` points at a directory
-    that holds `binpkg_files` (copied from PORTING/fixtures) but NO
+    that holds `binpkg_files` (copied from fixtures) but NO
     `Packages` index -- so `--usepkg`/`--usepkgonly` must fall back to
     the real `bintree._populate_local` `$PKGDIR` directory scan."""
     cfg = tmp_path / "cfg"
@@ -2994,7 +2994,7 @@ def test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages_index(
 def test_pkgdir_scan_is_skipped_when_a_packages_index_is_present(
     emerge_binary, fixture_env
 ):
-    """Regression guard: the committed PORTING/fixtures/pkgdir HAS both a
+    """Regression guard: the committed fixtures/pkgdir HAS both a
     `Packages` index AND the two loose binpkg fixture files. The scan
     must NOT run there -- `--usepkg` resolution stays driven by the
     `Packages` index alone (`dev-libs/binaryonlypkg` is only in the
@@ -3245,7 +3245,7 @@ def test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable(
 
 def test_real_use_flags_from_profile_gate_a_dependency(emerge_binary, fixture_env):
     """Pins the profile/make.conf -> real USE follow-up end to end: the
-    fixture's profile chain + make.conf (see PORTING/fixtures/repo/profiles
+    fixture's profile chain + make.conf (see fixtures/repo/profiles
     and portage-profile's own contract test) resolves "foo" enabled and
     "missingflag" disabled, so useflagpkg's `foo? ( dev-libs/newpkg )`
     dependency must be pulled in and its
@@ -3261,7 +3261,7 @@ def test_real_use_flags_from_profile_gate_a_dependency(emerge_binary, fixture_en
 
 
 def test_use_expand_variable_drives_a_dependency(emerge_binary, fixture_env):
-    """PORTING/fixtures/repo/profiles/base/make.defaults declares
+    """fixtures/repo/profiles/base/make.defaults declares
     USE_EXPAND="VIDEO_CARDS" and VIDEO_CARDS="nvidia" -- real config.py's
     own USE_EXPAND mechanism (PMS 7.3.4) expands that into the pseudo-USE
     flag "video_cards_nvidia", added to the global USE set exactly like
@@ -3284,7 +3284,7 @@ def test_use_expand_variable_drives_a_dependency(emerge_binary, fixture_env):
 
 
 def test_package_use_expand_prefix_shorthand_drives_a_dependency(emerge_binary, fixture_env):
-    """PORTING/fixtures/etc/portage/package.use has "dev-libs/
+    """fixtures/etc/portage/package.use has "dev-libs/
     packageuseexpandpkg PYTHON_TARGETS: python3_12" -- real
     UseManager._parse_user_files_to_extatomdict's own shorthand syntax
     (PMS-adjacent, user-level package.use only -- see
@@ -3307,7 +3307,7 @@ def test_package_use_expand_prefix_shorthand_drives_a_dependency(emerge_binary, 
 
 
 def test_use_expand_unprefixed_variable_drives_a_dependency(emerge_binary, fixture_env):
-    """PORTING/fixtures/repo/profiles/arch/amd64/make.defaults declares
+    """fixtures/repo/profiles/arch/amd64/make.defaults declares
     USE_EXPAND_UNPREFIXED="ARCH" and ARCH="amd64" -- real config.py's own
     USE_EXPAND_UNPREFIXED mechanism (the same one that makes "amd64"
     exist as a real USE flag in actual Gentoo at all) contributes the
@@ -3514,7 +3514,7 @@ def test_pv_marks_use_changes_against_the_installed_version(
 def test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
-    """PORTING/fixtures/repo/profiles/base/make.defaults declares
+    """fixtures/repo/profiles/base/make.defaults declares
     USE_EXPAND_IMPLICIT="ELIBC", USE_EXPAND_VALUES_ELIBC="glibc musl",
     ELIBC="glibc" -- real config.py's _calc_iuse_effective: elibc_glibc /
     elibc_musl become valid *implicit* IUSE for every package (EAPI 5+
@@ -3555,7 +3555,7 @@ def test_use_stable_force_and_package_use_stable_mask_apply_when_stable(
     portage-repo's own is_stable check is True. use.stable.force (global,
     profiles/base/use.stable.force) forces "stableforceflag" on, pulling
     in its own RDEPEND; package.use.stable.mask (repo-level) masks
-    "maskflag" back off even though PORTING/fixtures/etc/portage/
+    "maskflag" back off even though fixtures/etc/portage/
     package.use enables it first -- proving package.use.stable.mask wins
     over package.use, but only for a genuinely stable candidate."""
     result = _run(
@@ -3615,7 +3615,7 @@ def test_package_unmask_cancels_a_matching_package_mask(emerge_binary, fixture_e
 def test_package_mask_minus_atom_removal_leaves_candidate_unaffected(
     emerge_binary, fixture_env
 ):
-    """PORTING/fixtures/etc/portage/package.mask masks dev-libs/samepkg and
+    """fixtures/etc/portage/package.mask masks dev-libs/samepkg and
     then immediately un-masks it again via "-dev-libs/samepkg" within the
     same file -- it must resolve completely normally (visible, matched),
     proving -atom removal actually took effect rather than the mask
@@ -3632,7 +3632,7 @@ def test_license_eula_style_group_is_masked_by_the_real_default_accept_license(
 ):
     """Neither the fixture profile chain nor make.conf sets
     ACCEPT_LICENSE at all -- real portage's own "* -@EULA" default
-    applies, and PORTING/fixtures/repo/profiles/base/license_groups
+    applies, and fixtures/repo/profiles/base/license_groups
     defines EULA="SomeEula", so dev-libs/eulapkg's own
     LICENSE="SomeEula" is masked, same "no ebuilds to satisfy" outcome
     package.mask already produces."""
@@ -3660,7 +3660,7 @@ def test_license_any_of_group_is_visible_via_the_accepted_alternative(
 def test_license_package_license_unmasks_an_otherwise_eula_masked_package(
     emerge_binary, fixture_env
 ):
-    """PORTING/fixtures/etc/portage/package.license accepts SomeEula for
+    """fixtures/etc/portage/package.license accepts SomeEula for
     dev-libs/packagelicensepkg specifically, despite the same global
     "* -@EULA" default that masks dev-libs/eulapkg above."""
     result = _run(
@@ -3676,9 +3676,9 @@ def test_an_overlay_own_license_groups_stacks_with_the_main_repo(
     """Real LicenseManager reads license_groups from
     LocationsManager.profile_locations -- the `profiles/` directory of
     the main repo AND every overlay (LocationsManager.py:432), NOT the
-    profile-chain levels. PORTING/fixtures/overlay/profiles/license_groups
+    profile-chain levels. fixtures/overlay/profiles/license_groups
     extends EULA with "CrossRepoNonfree" on top of the main repo's own
-    PORTING/fixtures/repo/profiles/license_groups "SomeEula" member,
+    fixtures/repo/profiles/license_groups "SomeEula" member,
     proving the two stack (main first, then overlay) rather than one
     replacing the other. dev-libs/crossrepolicensepkg's own
     LICENSE="CrossRepoNonfree" is therefore masked by the real default
@@ -3700,7 +3700,7 @@ def test_license_use_conditional_visible_when_flag_off_masked_when_forced_on(
     """dev-libs/uselicensepkg's own LICENSE="GPL-2 nonfreeflag? (
     SomeEula )" -- visible with nonfreeflag off (the default); its
     sibling dev-libs/uselicensepkgforced has the identical LICENSE, but
-    PORTING/fixtures/etc/portage/package.use forces nonfreeflag on for
+    fixtures/etc/portage/package.use forces nonfreeflag on for
     it specifically, activating the conditional and masking it via the
     same real default that masks dev-libs/eulapkg."""
     off = _run([str(emerge_binary)], ["--pretend", "dev-libs/uselicensepkg"], fixture_env)
@@ -3729,7 +3729,7 @@ def test_properties_default_star_accepts_a_declared_property(emerge_binary, fixt
 
 
 def test_package_properties_narrows_acceptance_for_one_package(emerge_binary, fixture_env):
-    """PORTING/fixtures/etc/portage/package.properties revokes
+    """fixtures/etc/portage/package.properties revokes
     "interactive" for dev-libs/interactivepkg specifically ("-interactive"
     layered on top of the permissive global "*" default still narrows
     that one package's own effective accept set), despite the same real
@@ -3744,7 +3744,7 @@ def test_package_properties_narrows_acceptance_for_one_package(emerge_binary, fi
 
 
 def test_package_accept_restrict_narrows_acceptance_for_one_package(emerge_binary, fixture_env):
-    """PORTING/fixtures/etc/portage/package.accept_restrict revokes
+    """fixtures/etc/portage/package.accept_restrict revokes
     "bindist" for dev-libs/restrictedpkg specifically -- same "-token
     narrows despite a permissive global default" mechanism as
     package.properties above, just for RESTRICT instead of PROPERTIES."""
@@ -3758,7 +3758,7 @@ def test_package_accept_restrict_narrows_acceptance_for_one_package(emerge_binar
 
 
 def test_repo_level_package_mask_hides_a_package(emerge_binary, fixture_env):
-    """PORTING/fixtures/repo/profiles/package.mask (the main repo's own
+    """fixtures/repo/profiles/package.mask (the main repo's own
     repo-level mask -- real portage's most common real-world masking
     source, e.g. security/arch masks) hides dev-libs/repomaskedpkg with
     no matching unmask anywhere, same "no ebuilds to satisfy" outcome a
@@ -3773,7 +3773,7 @@ def test_repo_level_package_mask_hides_a_package(emerge_binary, fixture_env):
 
 
 def test_profile_level_package_mask_hides_a_package(emerge_binary, fixture_env):
-    """PORTING/fixtures/repo/profiles/base/package.mask (a package.mask
+    """fixtures/repo/profiles/base/package.mask (a package.mask
     file at one level of the profile inheritance chain, not the repo
     root or /etc/portage) hides dev-libs/profilemaskedpkg -- proving
     per-profile-level package.mask is actually read, not just the
@@ -3790,7 +3790,7 @@ def test_profile_level_package_mask_hides_a_package(emerge_binary, fixture_env):
 def test_profile_level_package_unmask_cancels_a_repo_level_mask(emerge_binary, fixture_env):
     """dev-libs/repomaskedthenprofileunmaskedpkg is masked by the
     repo-level profiles/package.mask, then unmasked by
-    PORTING/fixtures/repo/profiles/default/package.unmask -- a
+    fixtures/repo/profiles/default/package.unmask -- a
     profile-level package.unmask entry cancelling a mask from an
     earlier-stacked source (the repo level), proving the three sources
     are genuinely stacked together, not checked independently."""
@@ -3807,7 +3807,7 @@ def test_profile_level_package_unmask_cancels_a_repo_level_mask(emerge_binary, f
 
 def test_user_level_minus_atom_removes_a_repo_level_mask_entry(emerge_binary, fixture_env):
     """dev-libs/repomaskedthenuserremovedpkg is masked by the repo-level
-    profiles/package.mask; PORTING/fixtures/etc/portage/package.mask's
+    profiles/package.mask; fixtures/etc/portage/package.mask's
     own "-dev-libs/repomaskedthenuserremovedpkg" line removes that entry
     even though it didn't add it -- proving -atom removal now applies
     across the whole combined [repo, profile chain, user] stack (real
@@ -3825,7 +3825,7 @@ def test_user_level_minus_atom_removes_a_repo_level_mask_entry(emerge_binary, fi
 
 def test_package_accept_keywords_wildcard_extends_visibility(emerge_binary, fixture_env):
     """dev-libs/wildcardkeywordpkg is only ~amd64 (not globally accepted),
-    but PORTING/fixtures/etc/portage/package.accept_keywords has a
+    but fixtures/etc/portage/package.accept_keywords has a
     "*/wildcardkeywordpkg ~amd64" entry that makes it visible."""
     result = _run(
         [str(emerge_binary)], ["--pretend", "dev-libs/wildcardkeywordpkg"], fixture_env
@@ -3849,7 +3849,7 @@ def test_package_accept_keywords_negation_revokes_a_globally_accepted_keyword(
     emerge_binary, fixture_env
 ):
     """dev-libs/keywordrevokedpkg is stable amd64 (globally accepted),
-    but PORTING/fixtures/etc/portage/package.accept_keywords has a
+    but fixtures/etc/portage/package.accept_keywords has a
     "dev-libs/keywordrevokedpkg -amd64" entry that revokes it
     specifically -- real KeywordsManager._getEgroups folds "-token"
     removals over the combined global+package keyword list, not just
@@ -3867,7 +3867,7 @@ def test_package_accept_keywords_negation_revokes_a_globally_accepted_keyword(
 def test_package_accept_keywords_star_accepts_any_stable_keyword(emerge_binary, fixture_env):
     """dev-libs/starkeywordpkg is KEYWORDS="arm64" -- not globally
     accepted, and not otherwise mentioned anywhere -- but
-    PORTING/fixtures/etc/portage/package.accept_keywords has a
+    fixtures/etc/portage/package.accept_keywords has a
     "dev-libs/starkeywordpkg *" entry, real portage's own "accept any
     stable keyword" wildcard (distinct from "**", which additionally
     accepts an empty KEYWORDS)."""
@@ -4092,7 +4092,7 @@ def test_package_accept_keywords_profile_level_entry_extends_visibility(
 ):
     """dev-libs/profileacceptkeywordspkg is only ~amd64, made visible not
     by the user-level package.accept_keywords fixture (which has no entry
-    for it) but by PORTING/fixtures/repo/profiles/arch/amd64's own
+    for it) but by fixtures/repo/profiles/arch/amd64's own
     package.accept_keywords -- proving package.accept_keywords is now
     stacked from the profile chain too, not just user-level, mirroring
     real KeywordsManager.getPKeywords (which has no repo-level source for
@@ -4117,7 +4117,7 @@ def test_unrelated_masked_by_keywords_package_is_still_hidden(emerge_binary, fix
 def test_package_use_wildcard_entry_enables_a_flag_and_pulls_in_a_dependency(
     emerge_binary, fixture_env
 ):
-    """PORTING/fixtures/etc/portage/package.use has a
+    """fixtures/etc/portage/package.use has a
     "*/packageuseenablepkg pkguseflag" entry: "pkguseflag" isn't enabled by
     the profile chain or make.conf, so this proves package.use (not just
     the global USE set) reaches use_reduce."""
@@ -4134,7 +4134,7 @@ def test_package_use_wildcard_entry_enables_a_flag_and_pulls_in_a_dependency(
 def test_package_use_entry_disables_a_globally_enabled_flag_for_one_package(
     emerge_binary, fixture_env
 ):
-    """PORTING/fixtures/etc/portage/package.use has a
+    """fixtures/etc/portage/package.use has a
     "dev-libs/packageusedisablepkg -foo" entry: "foo" IS enabled globally
     by the fixture profile chain (dev-libs/useflagpkg's own foo?-gated
     dependency IS pulled in, per test_real_use_flags_from_profile_gate_a_dependency),
@@ -4153,7 +4153,7 @@ def test_package_use_entry_disables_a_globally_enabled_flag_for_one_package(
 def test_repo_level_package_use_enables_a_flag_and_pulls_in_a_dependency(
     emerge_binary, fixture_env
 ):
-    """PORTING/fixtures/repo/profiles/package.use (the main repo's own
+    """fixtures/repo/profiles/package.use (the main repo's own
     repo-level package.use) has a "dev-libs/repouseenablepkg
     repouseflag" entry -- "repouseflag" is off everywhere else, so its
     own repouseflag?-gated dependency is pulled in only because this
@@ -4172,7 +4172,7 @@ def test_repo_level_package_use_enables_a_flag_and_pulls_in_a_dependency(
 def test_profile_level_package_use_enables_a_flag_and_pulls_in_a_dependency(
     emerge_binary, fixture_env
 ):
-    """PORTING/fixtures/repo/profiles/default/package.use (the leaf
+    """fixtures/repo/profiles/default/package.use (the leaf
     profile's own package.use) has a "dev-libs/profileuseenablepkg
     profileuseflag" entry -- same proof as the repo-level case above, for
     the profile-chain source instead."""
@@ -4191,7 +4191,7 @@ def test_repo_level_package_use_loses_to_the_profile_defaults_layer(
 ):
     """"Config depth" slice: repo-level package.use is real
     configdict["repo"], applied BEFORE the profile make.defaults USE
-    (configdict["defaults"]). PORTING/fixtures/repo/profiles/package.use
+    (configdict["defaults"]). fixtures/repo/profiles/package.use
     enables "repoweakflag" for dev-libs/repouseweakpkg, but the leaf
     profile's own make.defaults carries "-repoweakflag" -- so the flag
     ends up OFF and its repoweakflag?-gated dependency is NOT pulled.
@@ -4344,7 +4344,7 @@ def test_unrelated_package_reports_no_blockers(emerge_binary, fixture_env):
 
 def test_overlay_only_package_is_found(emerge_binary, fixture_env):
     """dev-libs/overlayonlypkg exists only in the fixture's overlay repo
-    (see PORTING/fixtures/etc/portage/repos.conf), not the main repo --
+    (see fixtures/etc/portage/repos.conf), not the main repo --
     proving the overlay is actually searched, not just present in
     repos.conf."""
     result = _run([str(emerge_binary)], ["--pretend", "dev-libs/overlayonlypkg"], fixture_env)
@@ -5460,7 +5460,7 @@ def test_fetch_restrict_bracket_column(emerge_binary, fixture_env):
     fetch_restrict_satisfied if `not getfetchsizes(only_restricted=True)`
     -- every SRC_URI distfile already in DISTDIR at its Manifest size.
     __str__ renders green `f` (satisfied) / red `F` (missing), after the
-    S column. fixture_env points DISTDIR at PORTING/fixtures/distfiles/,
+    S column. fixture_env points DISTDIR at fixtures/distfiles/,
     which holds frs-1.0.tar.gz (matching frs's Manifest) but not
     frm-1.0.tar.gz."""
     ok = _run(
@@ -6086,7 +6086,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "Every other real emerge option/action is recognized by name (see "
         "lib/_emerge/main.py) but not implemented -- using one reports which "
         "option or action it is, instead of a generic error.\n"
-        "See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.\n"
+        "See README.md and PROMPT.md for this pilot's current scope.\n"
     )
 
 
@@ -6113,7 +6113,7 @@ def test_help_wins_unconditionally_regardless_of_other_flags_or_position(
 
 
 def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixture_env):
-    """PORTING/fixtures/var/lib/portage/world (real portage's own
+    """fixtures/var/lib/portage/world (real portage's own
     WORLD_FILE, <ROOT>/var/lib/portage/world) lists dev-libs/newpkg and
     dev-libs/withdeps (which itself recurses into newpkg again -- deduped
     -- and upgradepkg), plus a "@some-nested-set-reference" line that
@@ -6123,8 +6123,8 @@ def test_world_expands_to_the_fixture_world_files_own_atoms(emerge_binary, fixtu
     live in the separate world_sets file, exercised below in this same
     test) -- proving @world expansion feeds the exact same multi-atom/
     recursion machinery every other invocation already uses, not a
-    separate code path. PORTING/fixtures/var/lib/portage/world_sets
-    lists "@nestedtestset" (PORTING/fixtures/etc/portage/sets/
+    separate code path. fixtures/var/lib/portage/world_sets
+    lists "@nestedtestset" (fixtures/etc/portage/sets/
     nestedtestset), which itself contributes dev-libs/nestedsetpkg
     directly (installed since the `-pC` set-protection slice, so it
     shows as "already installed; nothing to do" here rather than
@@ -6285,7 +6285,7 @@ def _deselect_root(tmp_path):
     """A minimal, self-contained ROOT with its own world file and vdb --
     real action_deselect (lib/_emerge/actions.py) only ever touches the
     world file and vardb, never repos/config at all, so --deselect's own
-    tests stay fully isolated from the shared PORTING/fixtures tree
+    tests stay fully isolated from the shared fixtures tree
     (avoiding any ripple effect on its own @world-dependent tests, which
     an added world-file entry there would otherwise cause) rather than
     reusing it. "dev-libs/foo" (world, no slot) and "dev-libs/bar:1"
@@ -7730,9 +7730,9 @@ def test_deselect_matches_between_implementations(
 def test_system_expands_to_the_fixture_profile_chains_own_packages_files(
     emerge_binary, fixture_env
 ):
-    """PORTING/fixtures/repo/profiles/base/packages contributes
+    """fixtures/repo/profiles/base/packages contributes
     dev-libs/newpkg (plus a non-"*"-prefixed "hint" line that must never
-    contribute an atom of its own), and PORTING/fixtures/repo/profiles/
+    contribute an atom of its own), and fixtures/repo/profiles/
     default/packages (the leaf) contributes dev-libs/withdeps -- proving
     @system stacks across multiple profile levels (not just the leaf,
     real PackagesSystemSet's own behavior) and that its expanded atoms
@@ -7787,7 +7787,7 @@ def test_unknown_set_name_as_a_top_level_atom_is_a_real_error(emerge_binary, fix
 
 
 def test_newuse_reinstalls_a_package_whose_use_changed(emerge_binary, fixture_env):
-    """PORTING/fixtures/var/db/pkg/dev-libs/reinstallpkg-1.0 is installed
+    """fixtures/var/db/pkg/dev-libs/reinstallpkg-1.0 is installed
     with IUSE="foo" but an empty vdb USE file (foo was off at merge
     time); the fixture profile chain enables "foo" globally now, so
     --newuse must report a Reinstall for the changed "foo" flag -- and,
@@ -7867,7 +7867,7 @@ def test_newuse_is_a_noop_when_use_has_not_changed(emerge_binary, fixture_env):
 def test_newuse_forced_flags_suppresses_a_spurious_reinstall(emerge_binary, fixture_env):
     """dev-libs/usemaskreinstallpkg is installed with an empty vdb IUSE,
     but its own ebuild now declares IUSE="masked_newly_added_flag" -- a
-    flag PORTING/fixtures/repo/profiles/base/use.mask masks off, so it
+    flag fixtures/repo/profiles/base/use.mask masks off, so it
     was never enabled either before or after. Real depgraph.py's own
     "flags -= forced_flags" line exists exactly to stop a newly-declared,
     permanently-masked (or forced) IUSE flag from spuriously triggering a
@@ -9160,7 +9160,7 @@ def test_list_sets_prints_the_defined_set_names(emerge_binary, emerge_pretend_py
     lines = rust.stdout.splitlines()
     assert lines == sorted(lines)
     assert "world" in lines and "system" in lines and "selected" in lines
-    # user sets from PORTING/fixtures/etc/portage/sets/
+    # user sets from fixtures/etc/portage/sets/
     assert "dualslotset" in lines
     # the [usersets] multiset generator section is NOT a set name
     assert "usersets" not in lines

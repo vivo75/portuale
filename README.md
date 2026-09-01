@@ -51,8 +51,14 @@ which accepted anything at all without looking at it.
 
 ## Layout
 
+(Historical -- some entries below have moved on; `git ls-files` is
+authoritative. Since the standalone-repo split, the tree below is the
+repo root, upstream Portage lives in the gitignored `3rdparty/portage/`
+checkout, and `bin/` is the vendored Portage phase runtime -- see
+`bin/README.md` and `3rdparty/repos.toml`.)
+
 ```
-PORTING/
+<repo root>/
   PROMPT.md                    planning prompt this pilot implements
   rust/                        Rust workspace
     portage-versions/          shared lib: port of lib/portage/versions.py (vercmp, ververify)
@@ -114,7 +120,7 @@ PORTING/
     test_atom_contract.py       asserts identical output, Python vs. Rust
     test_use_reduce_contract.py asserts identical output, Python vs. Rust
     test_emerge_pretend_contract.py  real emerge binary vs. the Python
-                                 reference, against PORTING/fixtures
+                                 reference, against fixtures
     test_portuale.py            tests the compiled dispatch binary via symlinks
     test_benchmark_gate.py      opt-in wrapper around run_benchmark.py for CI
     test_musl_smoke.py          opt-in wrapper around musl/smoke_test.sh for CI
@@ -332,7 +338,7 @@ PORTING/
   `rust/portage-repo/src/lib.rs`).
   Config/target roots come from the real `PORTAGE_CONFIGROOT`/`ROOT`
   environment variables (portage's own mechanism, not a pilot invention --
-  see `lib/portage/const.py`), which is what lets `PORTING/fixtures` be
+  see `lib/portage/const.py`), which is what lets `fixtures` be
   used hermetically in tests instead of the real system tree. Output is a
   documented, simplified subset of real `--pretend` formatting
   (`[ebuild  N    ] cat/pkg-1.2.3`, `[ebuild     U ] cat/pkg-2.0 [1.0]`,
@@ -633,7 +639,7 @@ PORTING/
   `depend`/`fetch`/`fetchall`/`cleanrm`/`help`). Unlike `emerge`, where
   a recognized-but-unimplemented flag is fatal, `ebuild`'s pre-existing
   behavior was to accept *anything at all* as a silent no-op -- and
-  `PORTING/tests/test_portuale.py`'s own dispatch-proof tests (`ebuild
+  `tests/test_portuale.py`'s own dispatch-proof tests (`ebuild
   foo-1.0.ebuild merge`, asserting success) depend on that continuing to
   work. So the split here is different: a real option/command (even
   though none of them do anything) still succeeds, still prints the
@@ -1417,7 +1423,7 @@ PORTING/
   expansion at all, once real `action_deselect` was read directly rather
   than assumed to reuse `@world`'s own machinery. New fixture packages
   `nestedsetpkg`/`innernestedsetpkg` (reached only via
-  `PORTING/fixtures/var/lib/portage/world_sets`'s own `@nestedtestset`,
+  `fixtures/var/lib/portage/world_sets`'s own `@nestedtestset`,
   whose own `etc/portage/sets/nestedtestset` nests a further
   `@innernestedset` reference, which itself references back to
   `@nestedtestset` to exercise the cycle guard) prove the whole path end
@@ -1454,7 +1460,7 @@ PORTING/
   `@name` discard from the same run are interleaved into one sorted
   list, not printed as two separate "world" then "world_sets" blocks.
   The `_deselect_root` test fixture (isolated from the shared
-  `PORTING/fixtures` tree, same reasoning `--deselect`'s own original
+  `fixtures` tree, same reasoning `--deselect`'s own original
   slice already established) gained its own `world_sets` file,
   `@myselectedset` (matchable) alongside `@anotherselectedset` (present
   but never targeted, proving only an actually-requested name is ever
@@ -1524,7 +1530,7 @@ PORTING/
   (`dev-libs/qux`, world-listed but never installed) flipped and a
   matching bare-name case (`qux`) added, four new slot-interaction tests
   covering both the unslotted and slotted target forms, and three new
-  version/operator tests (`PORTING/fixtures`-independent `_deselect_root`
+  version/operator tests (`fixtures`-independent `_deselect_root`
   entries) exercising the narrow-`intersects()` behavior directly: an
   exact-version target matches, a different version doesn't, and even
   the *same* version under a different operator (`>=dev-libs/vers-1.0`
@@ -1921,9 +1927,9 @@ PORTING/
   directories are in the chain, an overlay's own `profiles/`/
   `license_groups` becomes reachable automatically the moment a `parent`
   file actually names it -- no separate code path needed beyond the
-  chain-resolution fix itself. `PORTING/fixtures/repo/profiles/default/
+  chain-resolution fix itself. `fixtures/repo/profiles/default/
   parent` gained a third entry, `overlay:crossrepo-parent`, pointing at
-  a new `PORTING/fixtures/overlay/profiles/crossrepo-parent/
+  a new `fixtures/overlay/profiles/crossrepo-parent/
   license_groups` that *extends* the main repo's own `EULA` group with
   one more member (`CrossRepoNonfree`, alongside the existing
   `SomeEula`) -- proving the two stack rather than one replacing the
@@ -2123,7 +2129,7 @@ PORTING/
   most of which this pilot doesn't implement -- reproducing it here
   would be actively misleading); it's a short, honest, pilot-specific
   summary of what's actually implemented, ending with a pointer to
-  `PORTING/README.md`/`PORTING/PROMPT.md` for the rest.
+  `README.md`/`PROMPT.md` for the rest.
 
   **`package.use` repo+profile stacking**: the follow-up deliberately
   left out of the `package.accept_keywords` slice above, now closing the
@@ -2974,7 +2980,7 @@ PORTING/
   lines (no shorthand) and user-level lines (shorthand enabled) --
   concatenated together afterward, rather than adding a new pilot-wide
   simplification. `dev-libs/packageuseexpandpkg`, gated by a
-  `PORTING/fixtures/etc/portage/package.use` entry reading
+  `fixtures/etc/portage/package.use` entry reading
   `dev-libs/packageuseexpandpkg PYTHON_TARGETS: python3_12`, proves the
   shorthand expansion drives real dependency resolution end to end, not
   just token substitution in isolation -- and, since the shorthand
@@ -3425,7 +3431,7 @@ PORTING/
   `portage-fetch`, not real `use_reduce` -- same "two independent
   implementations" discipline). New fixtures
   `dev-libs/fetchrestrictsatisfiedpkg` / `fetchrestrictmissingpkg` (both
-  `RESTRICT="fetch"`) + a committed `PORTING/fixtures/distfiles/`
+  `RESTRICT="fetch"`) + a committed `fixtures/distfiles/`
   (holding only the first's distfile at its `Manifest` size), wired into
   the test `fixture_env`'s `DISTDIR`. (The `, Size of downloads` /
   `Fetch Restriction:` parts of the `-pv` `Total:` line landed in the
@@ -3765,11 +3771,11 @@ PORTING/
   depth-0-only gate: even with `--with-test-deps`, resolving
   `withtestdepconsumer` reaches `withtestdeppkg` at depth 1, so
   `testonlydep` still doesn't appear).
-- **`PORTING/tests`**: an example of the jointly-owned contract suite
+- **`tests`**: an example of the jointly-owned contract suite
   described in `PROMPT.md` under "Ownership" -- it imports nothing from
   either implementation, driving both purely as subprocesses, so it stays
   valid regardless of how either side's internals evolve.
-- **`PORTING/bench`**: the performance-regression gate from `PROMPT.md`
+- **`bench`**: the performance-regression gate from `PROMPT.md`
   hard goal 2 ("Rust must be measurably faster... tracked over time in CI
   as a regression gate"). `run_benchmark.py` feeds an identical batch of
   operations to both harnesses' `batch` subcommand (many ops per process,
@@ -3785,11 +3791,11 @@ PORTING/
   `--dataset synthetic` to use seeded-random version strings instead. As of
   the last `--update-baseline` run, Rust is **~6x faster** than Python on
   the real snapshot.
-- **`PORTING/musl`**: the minimal-Linux gate from `PROMPT.md` hard goal 3
+- **`musl`**: the minimal-Linux gate from `PROMPT.md` hard goal 3
   and "Test/benchmark harness architecture" ("Rust CI also gates on a musl
   static build smoke-tested inside a minimal (scratch/busybox-level)
-  container"). `Containerfile`'s build context is `PORTING/` (not just
-  `PORTING/rust`) so `PORTING/fixtures` can be copied into the image too.
+  container"). `Containerfile`'s build context is the repo root (not just
+  `rust`) so `fixtures` can be copied into the image too.
   It cross-builds the binaries against musl (Alpine's own `rust`/`cargo`
   packages target musl natively, so no rustup/target-add is needed) with
   `relocation-model=static` forced via `rust/.cargo/config.toml` -- the
@@ -3842,7 +3848,7 @@ than full Package objects (no package-db/depgraph model exists yet in
 this pilot), which mirrors a fallback path the real `match_from_list`
 already supports.
 
-`PORTING/fixtures` is a small synthetic repo (not the vendored real tree
+`fixtures` is a small synthetic repo (not the vendored real tree
 used for benchmarking): `repos.conf`, a handful of ebuilds + matching
 md5-cache entries, a fake vdb, and now a full profile chain + make.conf,
 covering new-install, upgrade, already-installed, not-visible
@@ -3873,7 +3879,7 @@ actually enable. `repos.conf`'s repos both use relative `location`s
 portable across checkouts -- real `repos.conf` files always use absolute
 paths; see the comment in `portage-repo/src/lib.rs`.
 
-`PORTING/fixtures/etc/portage/package.mask`, `package.unmask`, and
+`fixtures/etc/portage/package.mask`, `package.unmask`, and
 `package.accept_keywords` exercise the mask/unmask/accept_keywords slice:
 `hardmaskedpkg` (masked, never unmasked, so it stays hidden),
 `maskedandunmaskedpkg` (masked, then unmasked, so it's visible again),
@@ -3883,9 +3889,9 @@ line within `package.mask` itself, proving `-atom` removal works, not just
 `*/wildcardkeywordpkg ~amd64` wildcard entry), and `livekeywordpkg` (no
 `KEYWORDS` at all, like a live/9999 ebuild, made visible by a `**` entry).
 
-`PORTING/fixtures/repo/profiles/package.mask` (repo-level),
-`PORTING/fixtures/repo/profiles/base/package.mask` (one profile level's
-own mask), and `PORTING/fixtures/repo/profiles/default/package.unmask`
+`fixtures/repo/profiles/package.mask` (repo-level),
+`fixtures/repo/profiles/base/package.mask` (one profile level's
+own mask), and `fixtures/repo/profiles/default/package.unmask`
 (the leaf profile's own unmask) exercise full 3-source stacking:
 `repomaskedpkg` (masked only by the repo-level file, stays hidden),
 `profilemaskedpkg` (masked only by the `base` profile level's own file,
@@ -3901,7 +3907,7 @@ reaching all the way from the user's own file back to an entry a
 different, earlier source added, the specific thing that wasn't
 possible before this slice).
 
-`PORTING/fixtures/repo/profiles/arch/amd64/package.accept_keywords` (a
+`fixtures/repo/profiles/arch/amd64/package.accept_keywords` (a
 third, previously-untouched profile level, complementing `base`'s own
 `package.mask` and `default`'s own `package.unmask`) exercises
 `package.accept_keywords` profile-chain stacking:
@@ -3909,7 +3915,7 @@ third, previously-untouched profile level, complementing `base`'s own
 user-level `package.accept_keywords` fixture -- which has no entry for
 it at all -- but by this profile-level one).
 
-`PORTING/fixtures/etc/portage/package.use` exercises the per-package USE
+`fixtures/etc/portage/package.use` exercises the per-package USE
 slice: `packageuseenablepkg` (its `pkguseflag?`-gated dependency is only
 pulled in because a `*/packageuseenablepkg pkguseflag` wildcard entry
 enables a flag that's off everywhere else) and `packageusedisablepkg`
@@ -3919,8 +3925,8 @@ enabled globally by the fixture profile chain -- same as
 a `dev-libs/packageusedisablepkg -foo` entry disables it for this one
 package only).
 
-`PORTING/fixtures/repo/profiles/package.use` (repo-level) and
-`PORTING/fixtures/repo/profiles/default/package.use` (the leaf profile's
+`fixtures/repo/profiles/package.use` (repo-level) and
+`fixtures/repo/profiles/default/package.use` (the leaf profile's
 own) exercise `package.use` repo+profile stacking: `repouseenablepkg`
 and `profileuseenablepkg` (each with its own `IUSE`-declared flag,
 off everywhere else, pulling in `newpkg` via its own `?`-gated RDEPEND
@@ -3943,14 +3949,14 @@ entry, reported on stderr, not silently dropped or accepted.
 `IUSE="foo bar"`/`REQUIRED_USE="foo? ( bar )"`, `foo` enabled globally by
 the fixture profile chain either way) exercise REQUIRED_USE: a
 `dev-libs/requireduseokpkg bar` entry in
-`PORTING/fixtures/etc/portage/package.use` forces `bar` on for the first
+`fixtures/etc/portage/package.use` forces `bar` on for the first
 package only, genuinely satisfying its own conditional group, while the
 second has nothing forcing `bar` on at all, genuinely violating it.
 `dev-libs/requiredusebadparentpkg` (RDEPEND
 `dev-libs/requiredusebadpkg`) proves the resulting fatal abort applies
 the same way when the violation is reached only as a dependency.
 
-`PORTING/fixtures/repo/profiles/base/make.defaults`'s own
+`fixtures/repo/profiles/base/make.defaults`'s own
 `USE_EXPAND="VIDEO_CARDS"`/`VIDEO_CARDS="nvidia"` lines exercise
 `USE_EXPAND`: `dev-libs/useexpandpkg` (`IUSE="video_cards_nvidia
 video_cards_amdgpu"`) RDEPENDs on `dev-libs/newpkg` only when
@@ -3959,7 +3965,7 @@ never-reached `dev-libs/hiddendep` when `video_cards_amdgpu` (declared
 nowhere at all) is -- proving the expansion feeds real dependency
 resolution, not just `-v`'s own USE display.
 
-`PORTING/fixtures/etc/portage/package.use`'s own
+`fixtures/etc/portage/package.use`'s own
 `dev-libs/packageuseexpandpkg PYTHON_TARGETS: python3_12` entry
 exercises `package.use`'s own `USE_EXPAND`-prefix shorthand:
 `dev-libs/packageuseexpandpkg` (`IUSE="python_targets_python3_12"`)
@@ -3970,8 +3976,8 @@ written out in full.
 `dev-libs/stableusepkg` (`KEYWORDS="amd64"`) and `dev-libs/unstableusepkg`
 (`KEYWORDS="~amd64"`, visible only via its own
 `package.accept_keywords` entry) exercise `use.stable.mask`/`.force`/
-`package.use.stable.mask`/`.force`: `PORTING/fixtures/repo/profiles/base/
-use.stable.force` (`stableforceflag`) and `PORTING/fixtures/repo/
+`package.use.stable.mask`/`.force`: `fixtures/repo/profiles/base/
+use.stable.force` (`stableforceflag`) and `fixtures/repo/
 profiles/package.use.stable.mask` (`dev-libs/stableusepkg maskflag`)
 both apply only to the genuinely-stable `stableusepkg` (real
 `KeywordsManager.isStable`'s own "would masking every keyword make this
@@ -3979,7 +3985,7 @@ invisible" check) -- `unstableusepkg` shares the identical `IUSE`/
 RDEPEND and the identical `package.use`-enabled `maskflag`, but gets
 neither the force nor the mask.
 
-`PORTING/fixtures/var/lib/portage/world` (real portage's own `WORLD_FILE`
+`fixtures/var/lib/portage/world` (real portage's own `WORLD_FILE`
 location, `ROOT`-relative) exercises `@world` expansion: it lists
 `dev-libs/newpkg` directly, `dev-libs/withdeps` (which recurses into
 `newpkg` again -- deduped -- and `dev-libs/upgradepkg` via its own
@@ -3989,19 +3995,19 @@ line proving a `@`-prefixed line in the world *file* itself is silently
 skipped rather than mishandled (real portage's own `WorldSelectedPackagesSet`
 validator would reject it too).
 
-`PORTING/fixtures/var/lib/portage/world_sets` (real `WORLD_SETS_FILE`,
+`fixtures/var/lib/portage/world_sets` (real `WORLD_SETS_FILE`,
 the genuinely separate file real `@world` also unions in) lists
 `@nestedtestset`, resolved against
-`PORTING/fixtures/etc/portage/sets/nestedtestset` -- a plain atom
+`fixtures/etc/portage/sets/nestedtestset` -- a plain atom
 (`dev-libs/nestedsetpkg`) plus a further nested `@innernestedset`
-reference (`PORTING/fixtures/etc/portage/sets/innernestedset`), which
+reference (`fixtures/etc/portage/sets/innernestedset`), which
 itself contributes `dev-libs/innernestedsetpkg` and references back to
 `@nestedtestset`, exercising the cycle guard (contributes nothing
 further, doesn't loop or error).
 
-`PORTING/fixtures/repo/profiles/base/packages` (`*dev-libs/newpkg`, plus
+`fixtures/repo/profiles/base/packages` (`*dev-libs/newpkg`, plus
 a non-`*`-prefixed `dev-libs/hintonly` hint line that must never
-contribute an atom) and `PORTING/fixtures/repo/profiles/default/packages`
+contribute an atom) and `fixtures/repo/profiles/default/packages`
 (the leaf profile's own, `*dev-libs/withdeps`) exercise `@system`
 expansion: proving it stacks across multiple profile levels, not just
 the leaf, and that its expanded atoms feed the same recursion machinery
@@ -4010,7 +4016,7 @@ and `upgradepkg`.
 
 `dev-libs/reinstallpkg` exercises `--newuse` reinstall detection:
 installed at `1.0` with `IUSE="foo"` declared but an empty vdb `USE` file
-(`PORTING/fixtures/var/db/pkg/dev-libs/reinstallpkg-1.0/USE` -- `foo` was
+(`fixtures/var/db/pkg/dev-libs/reinstallpkg-1.0/USE` -- `foo` was
 off at merge time), while the fixture profile chain enables `foo`
 globally now, so `--newuse` must report a Reinstall for the changed
 `foo` flag; its `RDEPEND="dev-libs/newpkg"` proves a Reinstall entry is
@@ -4020,7 +4026,7 @@ AlreadyInstalled is. `dev-libs/samepkg` (already used elsewhere, no
 AlreadyInstalled, proving it doesn't force a reinstall of every
 already-installed package, just ones with an actual USE mismatch.
 
-`PORTING/fixtures/repo/profiles/base/use.mask` (`masked_newly_added_flag`,
+`fixtures/repo/profiles/base/use.mask` (`masked_newly_added_flag`,
 a name no other fixture package's `IUSE` declares, so it has zero effect
 elsewhere) exercises `--newuse`'s `forced_flags` subtraction:
 `dev-libs/usemaskreinstallpkg` is installed with an empty vdb `IUSE`,
@@ -4040,11 +4046,11 @@ on both sides, only its enablement differs) still triggers both.
 
 `dev-libs/pkgusemaskforcepkg` (`IUSE="forceflag maskflag specflag"`)
 exercises `package.use.mask`/`package.use.force` plus atom-specificity
-ordering, across three config files: `PORTING/fixtures/repo/profiles/
+ordering, across three config files: `fixtures/repo/profiles/
 package.use.force` (repo-level, a bare wildcard entry force-enabling
-`forceflag`), `PORTING/fixtures/repo/profiles/base/package.use.mask`
+`forceflag`), `fixtures/repo/profiles/base/package.use.mask`
 (profile-level, a bare atom masking both `maskflag` and `specflag`),
-and `PORTING/fixtures/repo/profiles/default/package.use.mask` (the leaf
+and `fixtures/repo/profiles/default/package.use.mask` (the leaf
 profile's own, a more specific exact-version atom that un-masks
 `specflag` again) -- see the `package.use.mask`/`package.use.force`
 paragraph above for why the leaf profile's more-specific entry wins
@@ -4060,7 +4066,7 @@ graph; `weakblockerpkg`'s own RDEPEND is `"!dev-libs/blockerpartnerpkg"`,
 a weak blocker that can only be matched against the graph's own
 New/Upgrade set, since `blockerpartnerpkg` isn't installed anywhere).
 
-`PORTING/fixtures/overlay` is a second repo, registered in
+`fixtures/overlay` is a second repo, registered in
 `repos.conf` alongside the main one with an explicit `priority = 10`
 (the main repo's own priority is left unset, so it defaults to real
 portage's own `-1000`), exercising the overlays slice: `overlayonlypkg`
@@ -4086,7 +4092,7 @@ the overlay, masked purely via inheriting the main repo's own
 then unmasked by the overlay's own `package.unmask`). The main repo's
 own `profiles/default/parent` also has a third entry,
 `overlay:crossrepo-parent`, real cross-repo profile parent syntax
-reaching into `PORTING/fixtures/overlay/profiles/crossrepo-parent/
+reaching into `fixtures/overlay/profiles/crossrepo-parent/
 license_groups` (extending `EULA` with one more member,
 `CrossRepoNonfree`, alongside the main repo's own `SomeEula`) --
 `dev-libs/crossrepolicensepkg` (`LICENSE="CrossRepoNonfree"`) is masked
@@ -4119,7 +4125,7 @@ authority for parsing "pn-pv" ebuild filenames into package/version pairs
 -- not a hand-rolled parser. To refresh it against a newer tree:
 
 ```sh
-python3 PORTING/bench/extract_snapshot.py /path/to/a/gentoo/tree
+python3 bench/extract_snapshot.py /path/to/a/gentoo/tree
 ```
 
 `--usepkg`/`--usepkgonly`/`--binpkg-respect-use` add a second candidate
@@ -4632,7 +4638,7 @@ concept at all).
 
 A genuinely different kind of slice from everything above: not a new
 `emerge --pretend` flag, but the first working piece of the *next major
-phase* this pilot's own `PORTING/PROMPT-next.md` had investigated but
+phase* this pilot's own `PROMPT-next.md` had investigated but
 never started in code -- running real ebuild phase functions
 (`pkg_setup`, `src_unpack`, `src_prepare`, `src_configure`, `src_compile`,
 `src_test`, `src_install`) and landing real files under a real `${D}`,
@@ -4651,13 +4657,13 @@ function-stage deadlock ([reubeno/brush#1276](https://github.com/reubeno/brush/p
 still open upstream) is no longer load-bearing because **brush strategy
 #2** (below) rewrote the offending `bin/phase-functions.sh` construct
 instead. Full tracking record and the periodic re-pin checklist live in
-**`PORTING/BRUSH_PIN.md`**. A deliberate,
+**`BRUSH_PIN.md`**. A deliberate,
 accepted departure from this pilot's own near-zero-dependencies
 discipline elsewhere -- the alternative (shelling out to the system's
 real bash) was rejected earlier for tension with the "runs on even the
 most minimal Linux system" hard goal.
 
-The bash it drives is **vendored** into `PORTING/bin/` (a verbatim copy
+The bash it drives is **vendored** into `bin/` (a verbatim copy
 of upstream Portage's `bin/` runtime -- `ebuild.sh` and its whole source
 closure, every `ebuild-helpers/` script, `estrip`/`ecompress`, the
 `*-qa-check.d/` sets, `filter-bash-environment.py`), so a real phase run
@@ -4665,8 +4671,8 @@ needs no Portage installed and no Portage checkout. `phase-functions.sh`
 carries one local change (brush strategy #2). The only pieces still read
 from a surrounding checkout are the `.py` helpers that `import portage`
 (`doins.py`, `xpak-helper.py`, …) -- `ebuild_phases::bin_dir()` overlays
-`PORTING/bin/` on the checkout's `bin/` when one exists. See
-`PORTING/bin/README.md` and `PORTING/3rdparty/repos.toml`.
+`bin/` on the checkout's `bin/` when one exists. See
+`bin/README.md` and `3rdparty/repos.toml`.
 
 **What's real, what's Rust**: `portuale/src/ebuild_phases.rs` computes
 the environment `doebuild_environment()` would (`CATEGORY`/`PN`/`PV`/
@@ -4868,13 +4874,13 @@ automatic replace; the runnable example is updated to match.
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-BIN=PORTING/rust/target/release/portuale
+BIN=rust/target/release/portuale
 
-$BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild merge
-$BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild merge
+$BIN ebuild fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild merge
+$BIN ebuild fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild merge
 # merging 2.0 replaces 1.0 in place (real treewalk() merge-then-unmerge)
 ls "$ROOT"/usr/share/othersinslotpkg/
 # only-in-v2.txt  shared.txt -- only-in-v1.txt is already gone, shared.txt survives
@@ -4883,7 +4889,7 @@ cat "$ROOT"/usr/share/othersinslotpkg/shared.txt
 ls "$ROOT"/var/db/pkg/dev-libs/
 # othersinslotpkg-2.0 -- 1.0's vdb entry was dropped by the replace
 
-$BIN ebuild PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild unmerge
+$BIN ebuild fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild unmerge
 ls "$ROOT"/usr/share/
 # ls: cannot access '.../usr/share/': No such file or directory -- no owner left, so it's really gone now
 ```
@@ -4997,8 +5003,8 @@ export CONFIG_PROTECT=/usr/share/mergepkg
 mkdir -p "${ROOT}"/usr/share/mergepkg
 echo "the admin's own regular file" > "${ROOT}"/usr/share/mergepkg/hello-link.txt
 
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
 
 cat "${ROOT}"/usr/share/mergepkg/hello-link.txt
 # the admin's own regular file -- untouched
@@ -5055,11 +5061,11 @@ fixture pair purely as a convenient same-slot upgrade whose own
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export CONFIG_PROTECT=/usr/share/othersinslotpkg
-V1=PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild
-V2=PORTING/fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild
+V1=fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-1.0.ebuild
+V2=fixtures/repo/dev-libs/othersinslotpkg/othersinslotpkg-2.0.ebuild
 
-PORTING/rust/target/release/portuale ebuild "$V1" merge
-PORTING/rust/target/release/portuale ebuild "$V2" merge
+rust/target/release/portuale ebuild "$V1" merge
+rust/target/release/portuale ebuild "$V2" merge
 cat "${ROOT}"/usr/share/othersinslotpkg/shared.txt
 # shared, from 2.0 -- applied directly, no ._cfgNNNN_ sibling at all,
 # since it was never modified since 1.0 installed it.
@@ -5114,12 +5120,12 @@ that path. Live-verified against the compiled binary too, reusing the
 existing `dev-libs/configpkg` fixture:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export CONFIG_PROTECT=/etc
-BIN=PORTING/rust/target/release/portuale
-PKG=PORTING/fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild
+BIN=rust/target/release/portuale
+PKG=fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild
 
 "$BIN" ebuild "$PKG" merge
 echo "user's own edits" > "${ROOT}"/etc/configpkg.conf
@@ -5200,13 +5206,13 @@ not just overwriting files in place).
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/collisionpkg-a/collisionpkg-a-1.0.ebuild merge
-FEATURES="collision-protect" PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/collisionpkg-a/collisionpkg-a-1.0.ebuild merge
+FEATURES="collision-protect" rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
 # ebuild: This package will overwrite one or more files that may belong to other packages:
 # dev-libs/collisionpkg-a-1.0:
 #         /usr/share/collisiontest/shared.txt
@@ -5707,7 +5713,7 @@ EOF
 
 export PORTAGE_CONFIGROOT="$CFGROOT"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
+rust/target/release/portuale ebuild \
     "${OVERLAY}/dev-libs/overlaypkg/overlaypkg-1.0.ebuild" install
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/overlaypkg-1.0/temp/eclass-marker.txt
 # hello from mastershared.eclass -- found via the overlay's own masters
@@ -5761,7 +5767,7 @@ triggered this; the multilib family (dozens of functions,
 Fixed in the pinned `vivo75/brush` fork (`brush-core/src/commands.rs`),
 and submitted upstream as
 [reubeno/brush#1276](https://github.com/reubeno/brush/pull/1276) (open,
-no review yet; see `PORTING/BRUSH_PIN.md`). The fix splits
+no review yet; see `BRUSH_PIN.md`). The fix splits
 `execute_via_function` the same way `execute_via_builtin`
 already was: an owned-shell path that spawns the function's body as a
 background task (`tokio::task::spawn_blocking` + `rt.block_on`,
@@ -5783,12 +5789,12 @@ hang under the suite's own 15s per-test timeout.
 **Update (2026-09-01):** the pin no longer carries this brush-side fix
 at all — `brush strategy #2` (see the "brush strategy #2" section near
 the end) rewrote the three sites so `__save_ebuild_env` is never a
-pipeline stage, in a vendored `PORTING/bin/phase-functions.sh` (the
+pipeline stage, in a vendored `bin/phase-functions.sh` (the
 upstream file stays pristine), and the pin moved to real upstream
 `reubeno/brush` `main` (`a04b09dc`), no fork. The `bigeclasspkg`
 regression fixture below is the guard; it hangs the deadline (confirmed
 against an unpatched-for-#1276 brush) only when
-`PORTING/bin/phase-functions.sh` is reverted to the pipe form.
+`bin/phase-functions.sh` is reverted to the pipe form.
 
 Proven via a new `dev-libs/eclasspkg` fixture with a real (if fixture-
 only) `eclass/pilotcheck.eclass` defining one real function,
@@ -5992,11 +5998,11 @@ registry still list the path.
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/preservepkg-old/preservepkg-old-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/preservepkg-old/preservepkg-old-1.0.ebuild merge
 mkdir -p "${ROOT}/var/lib/portage"
 cat > "${ROOT}/var/lib/portage/preserved_libs_registry" <<'EOF'
 {
@@ -6009,8 +6015,8 @@ cat > "${ROOT}/var/lib/portage/preserved_libs_registry" <<'EOF'
 	]
 }
 EOF
-FEATURES="collision-protect" PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/preservepkg-new/preservepkg-new-1.0.ebuild merge
+FEATURES="collision-protect" rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/preservepkg-new/preservepkg-new-1.0.ebuild merge
 echo "exit: $?"
 # exit: 0 -- no collision-protect abort, even though the destination
 # path was already claimed by another package's own vdb CONTENTS
@@ -6076,8 +6082,8 @@ dynamically-linked ELF binary):
 ```sh
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/elfpkg/elfpkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/elfpkg/elfpkg-1.0.ebuild merge
 cat "${ROOT}"/var/db/pkg/dev-libs/elfpkg-1.0/NEEDED.ELF.2
 # X86_64;/usr/bin/true;;;libc.so.6
 ```
@@ -6304,13 +6310,13 @@ unmerge`'s own empty-`CONTENTS` short-circuit.
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-BIN=PORTING/rust/target/release/portuale
-"$BIN" ebuild PORTING/fixtures/repo/dev-libs/libpreservetest/libpreservetest-1.0.ebuild merge
-"$BIN" ebuild PORTING/fixtures/repo/dev-libs/consumepreservetest/consumepreservetest-1.0.ebuild merge
-"$BIN" ebuild PORTING/fixtures/repo/dev-libs/libpreservetest/libpreservetest-1.0.ebuild unmerge
+BIN=rust/target/release/portuale
+"$BIN" ebuild fixtures/repo/dev-libs/libpreservetest/libpreservetest-1.0.ebuild merge
+"$BIN" ebuild fixtures/repo/dev-libs/consumepreservetest/consumepreservetest-1.0.ebuild merge
+"$BIN" ebuild fixtures/repo/dev-libs/libpreservetest/libpreservetest-1.0.ebuild unmerge
 ls "${ROOT}"/usr/lib/
 # libpreservetest.so.1 -- still there, preserved, even though its own
 # package was just unmerged
@@ -6381,11 +6387,11 @@ collision-exclusion fixture pair with a hand-seeded `NEEDED.ELF.2`
 (since neither fixture installs a real ELF binary of its own):
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-BIN=PORTING/rust/target/release/portuale
-FIX=PORTING/fixtures/repo/dev-libs
+BIN=rust/target/release/portuale
+FIX=fixtures/repo/dev-libs
 
 "$BIN" ebuild "$FIX/preservepkg-old/preservepkg-old-1.0.ebuild" merge
 VDB="${ROOT}/var/db/pkg/dev-libs/preservepkg-old-1.0"
@@ -6491,11 +6497,11 @@ this pilot already uses, which works correctly.)
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/envupdatepkg/envupdatepkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/envupdatepkg/envupdatepkg-1.0.ebuild merge
 cat "${ROOT}"/etc/ld.so.conf
 # /usr/lib/envupdatetest (plus the autogenerated header)
 cat "${ROOT}"/etc/profile.env
@@ -6509,8 +6515,8 @@ export ROOT="$(mktemp -d)"
 mkdir -p "${ROOT}/sbin"
 printf '#!/bin/sh\necho "$@" > "$3/ldconfig-was-invoked"\n' > "${ROOT}/sbin/ldconfig"
 chmod +x "${ROOT}/sbin/ldconfig"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/envupdatepkg/envupdatepkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/envupdatepkg/envupdatepkg-1.0.ebuild merge
 cat "${ROOT}"/ldconfig-was-invoked
 # -X -r /tmp/tmp.XXXXXXXXXX
 ```
@@ -6563,15 +6569,15 @@ actually distinguishes this feature's own behavior from
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/collisionpkg-a/collisionpkg-a-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/collisionpkg-a/collisionpkg-a-1.0.ebuild merge
 # FEATURES="protect-owned" is explicit here for clarity, but is now the
 # real default anyway -- omitting it entirely aborts the same way.
-FEATURES="protect-owned" PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
+FEATURES="protect-owned" rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
 # ebuild: This package will overwrite one or more files that may belong to other packages:
 # dev-libs/collisionpkg-a-1.0:
 #         /usr/share/collisiontest/shared.txt
@@ -6581,8 +6587,8 @@ FEATURES="protect-owned" PORTING/rust/target/release/portuale ebuild \
 export ROOT="$(mktemp -d)"
 mkdir -p "${ROOT}/usr/share/collisiontest"
 echo "a stray, unowned file" > "${ROOT}/usr/share/collisiontest/shared.txt"
-FEATURES="protect-owned" PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
+FEATURES="protect-owned" rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/collisionpkg-c/collisionpkg-c-1.0.ebuild merge
 cat "${ROOT}"/usr/share/collisiontest/shared.txt
 # hello from collisionpkg-c -- no abort, since no owner was ever identified
 ```
@@ -6650,7 +6656,7 @@ mergeblockedbypkg"`) and `dev-libs/mergeblockedbypkg`, both installing
 the same file -- proven via two new tests: with `MergeOptions::
 default()`'s own inert `config_root`, the collision is an ordinary
 `collision-protect` abort (the fixture pair's own "genuinely collides"
-baseline); with `config_root` pointed at the real `PORTING/fixtures`
+baseline); with `config_root` pointed at the real `fixtures`
 tree (a real `repos.conf` of its own), the real blocker atom excludes
 it and `mergeblockerpkg` takes over the file even with `collision_
 protect: true`.
@@ -6658,17 +6664,17 @@ protect: true`.
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergeblockedbypkg/mergeblockedbypkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergeblockedbypkg/mergeblockedbypkg-1.0.ebuild merge
 
 # Baseline: config resolution unavailable (a deliberately empty/
 # nonexistent PORTAGE_CONFIGROOT) -- an ordinary collision-protect abort
 PORTAGE_CONFIGROOT="/tmp/definitely-empty-configroot-$$" \
-FEATURES="collision-protect" PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergeblockerpkg/mergeblockerpkg-1.0.ebuild merge
+FEATURES="collision-protect" rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergeblockerpkg/mergeblockerpkg-1.0.ebuild merge
 # ebuild: This package will overwrite one or more files that may belong to other packages:
 # dev-libs/mergeblockedbypkg-1.0:
 #         /usr/share/mergeblockertest/shared.txt
@@ -6676,9 +6682,9 @@ FEATURES="collision-protect" PORTING/rust/target/release/portuale ebuild \
 
 # With real config resolution: mergeblockerpkg's own real RDEPEND
 # blocks mergeblockedbypkg, so the collision is excluded
-PORTAGE_CONFIGROOT="$(realpath PORTING/fixtures)" \
-FEATURES="collision-protect" PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergeblockerpkg/mergeblockerpkg-1.0.ebuild merge
+PORTAGE_CONFIGROOT="$(realpath fixtures)" \
+FEATURES="collision-protect" rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergeblockerpkg/mergeblockerpkg-1.0.ebuild merge
 cat "${ROOT}"/usr/share/mergeblockertest/shared.txt
 # hello from mergeblockerpkg -- no abort, the blocked package's file was simply taken over
 ```
@@ -6753,11 +6759,11 @@ end-to-end merge in this unprivileged dev/test environment.
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-BIN=PORTING/rust/target/release/portuale
-PKG=PORTING/fixtures/repo/dev-libs/fifopkg/fifopkg-1.0.ebuild
+BIN=rust/target/release/portuale
+PKG=fixtures/repo/dev-libs/fifopkg/fifopkg-1.0.ebuild
 
 "$BIN" ebuild "$PKG" merge
 ls -la "${ROOT}"/usr/lib/fifopkg/
@@ -6853,7 +6859,7 @@ and that section's own doc comment for exactly what's still left.
 New fixture `dev-libs/rootdepspkg` (`BDEPEND="dev-libs/rootdepsprovider"`,
 no ebuild for `rootdepsprovider` anywhere in the fixture repo tree at
 all) plus a hand-seeded vdb-only entry (`rootdepsprovider-1.0`, no
-ebuild, just `SLOT`/`CATEGORY` files) under `PORTING/fixtures/var/db/pkg`
+ebuild, just `SLOT`/`CATEGORY` files) under `fixtures/var/db/pkg`
 itself -- reused directly as the running root in tests, since ordinary
 dependency resolution never consults a root's own vdb at all, only the
 ebuild repo tree, so this is a valid, real proof the new running-root
@@ -6872,13 +6878,13 @@ non-fatal `NoVisibleCandidate` dependency entry) and with-`--root-deps`
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 
 # Without --root-deps: rootdepsprovider has no ebuild anywhere in the
 # fixture repo tree, so it's reported as an unresolvable dependency
 # (not fatal -- it's a dependency, not the top-level atom).
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTING/rust/target/release/portuale \
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" rust/target/release/portuale \
     emerge --pretend dev-libs/rootdepspkg
 # [ebuild  N] dev-libs/rootdepspkg-1.0
 # !!! no visible ebuild for dependency "dev-libs/rootdepsprovider"
@@ -6887,7 +6893,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTING/rust/target/release/portuale \
 # override) at a running root where rootdepsprovider genuinely is
 # installed: no more unresolved-dependency report.
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rootdepspkg
 # [ebuild  N] dev-libs/rootdepspkg-1.0
 
@@ -6896,7 +6902,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
 # ebuild anywhere in the fixture repo tree, so without --root-deps
 # *both* branches are reported (this pilot's own pre-existing "leave an
 # unresolved || group's branches all in flat_deps" fallback).
-PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTING/rust/target/release/portuale \
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" rust/target/release/portuale \
     emerge --pretend dev-libs/rootdepsorpkg
 # [ebuild  N] dev-libs/rootdepsorpkg-1.0
 # !!! no visible ebuild for dependency "dev-libs/rootdepsnonexistent"
@@ -6905,7 +6911,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTING/rust/target/release/portuale \
 # With --root-deps: the closure now selects the running-root-satisfied
 # branch specifically, so neither is reported at all.
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rootdepsorpkg
 # [ebuild  N] dev-libs/rootdepsorpkg-1.0
 ```
@@ -6996,13 +7002,13 @@ proving byte-for-byte Rust/Python parity for the new fixture in both
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rootdepsbuildpkg
 # [ebuild  N] dev-libs/rootdepsbuildpkg-1.0
-# [ebuild  N] dev-libs/rootdepsbuildtool-1.0 to /home/.../PORTING/fixtures
+# [ebuild  N] dev-libs/rootdepsbuildtool-1.0 to /home/.../fixtures
 # -- rootdepsbuildtool is a real, separate graph entry (targets_running_
 # root: true internally); its own " to <running root>" marker was added
 # in the follow-up slice below.
@@ -7062,26 +7068,26 @@ the `--root-deps` case is visually distinguished from the fallback).
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 
 # Default running root (/): real portage's own common case, "to /".
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rootdepsbuildpkg
 # [ebuild  N] dev-libs/rootdepsbuildpkg-1.0
 # [ebuild  N] dev-libs/rootdepsbuildtool-1.0 to /
 
 # --json: a "builds_against_running_root" field, null for the ordinary entry.
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps --json \
+    rust/target/release/portuale emerge --pretend --root-deps --json \
     dev-libs/rootdepsbuildpkg
 # ...{"package":"rootdepsbuildpkg",...,"builds_against_running_root":null,...}
 # ...{"package":"rootdepsbuildtool",...,"builds_against_running_root":"/",...}
 
 # --tree: the marker survives the indent.
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps --tree \
+    rust/target/release/portuale emerge --pretend --root-deps --tree \
     dev-libs/rootdepsbuildpkg
 # [ebuild  N] dev-libs/rootdepsbuildpkg-1.0
 # [ebuild  N]   dev-libs/rootdepsbuildtool-1.0 to /
@@ -7158,12 +7164,12 @@ dependency.
 Running it:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 
 # Recursion through BDEPEND (rdrtooldep) and RDEPEND (rdrlib):
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rdrapp
 # [ebuild  N] dev-libs/rdrapp-1.0
 # [ebuild  N] dev-libs/rdrtool-1.0 to /
@@ -7172,7 +7178,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
 
 # --tree nests each entry under its immediate requester:
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps --tree \
+    rust/target/release/portuale emerge --pretend --root-deps --tree \
     dev-libs/rdrapp
 # [ebuild  N] dev-libs/rdrapp-1.0
 # [ebuild  N]   dev-libs/rdrtool-1.0 to /
@@ -7181,7 +7187,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
 
 # A mutual BDEPEND cycle terminates, each node once:
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rdrcyc
 # [ebuild  N] dev-libs/rdrcyc-1.0
 # [ebuild  N] dev-libs/rdrcyca-1.0 to /
@@ -7189,7 +7195,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
 
 # An unbuildable build dep is surfaced, not swallowed (exit 0 -- it's a dep):
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rdrmiss
 # [ebuild  N] dev-libs/rdrmiss-1.0
 # [ebuild  N] dev-libs/rdrmisstool-1.0 to /
@@ -7218,10 +7224,10 @@ Follow-up, now landed (see the next section): a *top-level* package's
 own `IDEPEND` also resolves against the running root under `--root-deps`.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/rdriapp
 # [ebuild  N] dev-libs/rdriapp-1.0
 # [ebuild  N] dev-libs/rdritool-1.0 to /
@@ -7261,19 +7267,19 @@ mirrored in `emerge_pretend_reference.py` (`_root_deps_satisfied_atoms`'s
 `dep_keys` parameter, both call sites).
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 
 # Without --root-deps: topideplib is an ordinary ROOT-targeted entry.
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
-    PORTING/rust/target/release/portuale emerge --pretend \
+    rust/target/release/portuale emerge --pretend \
     dev-libs/topidepapp
 # [ebuild  N] dev-libs/topidepapp-1.0
 # [ebuild  N] dev-libs/topideplib-1.0
 
 # With --root-deps: the top-level package's own IDEPEND goes to the running root.
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="/" \
-    PORTING/rust/target/release/portuale emerge --pretend --root-deps \
+    rust/target/release/portuale emerge --pretend --root-deps \
     dev-libs/topidepapp
 # [ebuild  N] dev-libs/topidepapp-1.0
 # [ebuild  N] dev-libs/topideplib-1.0 to /
@@ -7319,19 +7325,19 @@ helper -- real `merge()`'s own body, collision detection through
 did.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
 
 # Without a prior install: real doebuild()'s own ordinary "forgot a
 # step" message, exit 1 -- not a crash.
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild qmerge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild qmerge
 # ebuild: mydo=qmerge, but the install phase has not been run
 
 # install, then qmerge -- no install phase re-run, straight to merge().
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild install qmerge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild install qmerge
 cat "${ROOT}"/usr/share/mergepkg/hello.txt
 # hello from mergepkg
 ls "${ROOT}"/var/db/pkg/dev-libs/mergepkg-1.0/
@@ -7407,15 +7413,15 @@ env-var-sourced CLI-boundary defaults exactly.
 export CONFIG_PROTECT=/etc
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
 echo "hand-modified content" > "${ROOT}"/usr/share/mergepkg/hello.txt
 
 # Real default (unmerge-orphans is a real make.globals default FEATURES
 # token, see this file's own "FEATURES=distlocks" section below): the
 # locally-modified file is deleted anyway.
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
 test -e "${ROOT}"/usr/share/mergepkg/hello.txt && echo "still there" || echo "gone"
 # gone
 
@@ -7425,12 +7431,12 @@ test -e "${ROOT}"/usr/share/mergepkg/hello.txt && echo "still there" || echo "go
 # list rather than a +/- delta against the real default set, so setting
 # FEATURES at all to anything other than the literal token
 # "unmerge-orphans" already reads as off here): survives this time.
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
 echo "hand-modified content" > "${ROOT}"/usr/share/mergepkg/hello.txt
 export FEATURES=some-other-token
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
 cat "${ROOT}"/usr/share/mergepkg/hello.txt
 # hand-modified content
 unset FEATURES
@@ -7472,8 +7478,8 @@ for the `infodirs_inodes` half).
 ```sh
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
 
 # A real install-info leftover index, untracked by CONTENTS, in a
 # directory that is NOT literally named "info".
@@ -7484,8 +7490,8 @@ echo -n "" > "${ROOT}"/usr/share/mergepkg/dir
 mkdir -p "${ROOT}"/etc/env.d
 echo 'INFOPATH="/usr/share/mergepkg"' > "${ROOT}"/etc/env.d/50-fixture
 
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
 test -e "${ROOT}"/usr/share/mergepkg && echo "still there" || echo "gone"
 # gone -- the inode-match trigger fired even though the directory isn't
 # named "info", so the leftover index no longer blocks its removal.
@@ -7518,8 +7524,8 @@ end via `run_unmerge`
 ```sh
 export ROOT="$(mktemp -d)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
 
 # A real _conf_mem_file: one entry for a path this package actually
 # owns and is about to remove, one entry for an unrelated path.
@@ -7529,8 +7535,8 @@ cat > "${ROOT}"/var/lib/portage/config <<CONF
 /etc/unrelated.conf cafebabe
 CONF
 
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
 cat "${ROOT}"/var/lib/portage/config
 # /etc/unrelated.conf cafebabe
 # -- the removed package's own now-stale entry is gone, the unrelated
@@ -7561,16 +7567,16 @@ don't share with `unmerge`) and `pretend` (already part of the
 command.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild config info
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild config info
 ls "${PORTAGE_TMPDIR}"/portage/dev-libs/standalonephasepkg-1.0/temp/ | grep pkg-
 # pkg-config-ran
 # pkg-info-ran
 
 # Still a dry-run stub, unlike config/info now:
-PORTING/rust/target/release/portuale ebuild foo-1.0.ebuild clean
+rust/target/release/portuale ebuild foo-1.0.ebuild clean
 # ebuild (pilot stub): dry-run only, no phase execution yet ...
 ```
 
@@ -7592,8 +7598,8 @@ here either, purely a CLI-routing addition.
 
 ```sh
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild prerm postrm
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/standalonephasepkg/standalonephasepkg-1.0.ebuild prerm postrm
 ls "${PORTAGE_TMPDIR}"/portage/dev-libs/standalonephasepkg-1.0/temp/ | grep pkg-
 # pkg-postrm-ran
 # pkg-prerm-ran
@@ -7633,25 +7639,25 @@ of the produced `.tbz2` directly (`28 b5 2f fd` for real zstd, `fd 37 7a
 `_compression_re`), not just that the file exists.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export PKGDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
 xxd "${PKGDIR}"/dev-libs/packagepkg-1.0.tbz2 | head -1
 # 00000000: 28b5 2ffd ...   <- real zstd magic bytes, the new default
 
 export PKGDIR="$(mktemp -d)"
 export BINPKG_COMPRESS=xz
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
 xxd "${PKGDIR}"/dev-libs/packagepkg-1.0.tbz2 | head -1
 # 00000000: fd37 7a58 5a00 ...   <- real xz magic bytes
 
 export PKGDIR="$(mktemp -d)"
 export BINPKG_COMPRESS=made-up-codec
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
 # * ERROR: dev-libs/packagepkg-1.0:: failed (package phase):
 # *   PORTAGE_COMPRESSION_COMMAND is unset
 unset BINPKG_COMPRESS
@@ -7785,12 +7791,12 @@ for either term. Removed from the backlog rather than left to mislead a
 future "scope the next slice" round.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export DISTDIR="$(mktemp -d)"
 echo "hello from verifiedfetchpkg" > "${DISTDIR}/verifiedfetchpkg-1.0.tar.gz"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild install
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild install
 ls -a "${DISTDIR}"
 # .  ..  .verifiedfetchpkg-1.0.tar.gz.portage_lockfile  verifiedfetchpkg-1.0.tar.gz
 ```
@@ -7826,22 +7832,22 @@ own conditional-evaluation cases. Rust-only (real fetch, no `--pretend`
 mirror).
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"; export DISTDIR="$(mktemp -d)"
 
 # dev-libs/restrictmirrorpkg has RESTRICT="mirror" and its distfile
 # pre-verified in DISTDIR -> the skip-fetch path, install succeeds
 printf 'hello from restrictmirrorpkg\n' > "${DISTDIR}/restrictmirrorpkg-1.0.tar.gz"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/restrictmirrorpkg/restrictmirrorpkg-1.0.ebuild install
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/restrictmirrorpkg/restrictmirrorpkg-1.0.ebuild install
 # ... exits 0
 
 # remove it: the fetch is attempted, and ONLY the (unreachable) primary
 # SRC_URI is tried -- no GENTOO_MIRRORS fallback line, because
 # RESTRICT=mirror bars it
 rm "${DISTDIR}/restrictmirrorpkg-1.0.tar.gz"
-GENTOO_MIRRORS="https://distfiles.gentoo.org" PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/restrictmirrorpkg/restrictmirrorpkg-1.0.ebuild install
+GENTOO_MIRRORS="https://distfiles.gentoo.org" rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/restrictmirrorpkg/restrictmirrorpkg-1.0.ebuild install
 # ebuild: restrictmirrorpkg-1.0.tar.gz: every candidate failed:
 # wget failed to fetch "https://example.invalid/payload.bin" (exit status: 4)
 # ... exits 1  (a non-restricted package would also have tried
@@ -7978,15 +7984,15 @@ every failure at the end," with none of real portage's own mergelist
 machinery needed to make that safe.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-export PORTAGE_CONFIGROOT="$(pwd)/PORTING/fixtures"
-export ROOT="$(pwd)/PORTING/fixtures"
+cd rust && cargo build --release && cd ../..
+export PORTAGE_CONFIGROOT="$(pwd)/fixtures"
+export ROOT="$(pwd)/fixtures"
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export PKGDIR="$(mktemp -d)"
 
 # Without --keep-going: stops at fetchpkg (no Manifest entry), never
 # even attempts packagepkg.
-PORTING/rust/target/release/portuale emerge --buildpkgonly \
+rust/target/release/portuale emerge --buildpkgonly \
     dev-libs/fetchpkg dev-libs/packagepkg
 ls "${PKGDIR}/dev-libs" 2>&1
 # ls: cannot access '.../dev-libs': No such file or directory
@@ -7994,7 +8000,7 @@ ls "${PKGDIR}/dev-libs" 2>&1
 # With --keep-going: fetchpkg still fails, but packagepkg gets built
 # anyway.
 export PKGDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale emerge --buildpkgonly --keep-going \
+rust/target/release/portuale emerge --buildpkgonly --keep-going \
     dev-libs/fetchpkg dev-libs/packagepkg
 # emerge: 1 package(s) failed to build (--keep-going):
 # dev-libs/fetchpkg-1.0: fetchpkg-1.0.tar.gz: no Manifest entry, ...
@@ -8065,18 +8071,18 @@ wildcard expansion (`linguas_*`), which needs a specific package's own
 `IUSE`.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge --pretend dev-libs/implicitiusepkg
+    rust/target/release/portuale emerge --pretend dev-libs/implicitiusepkg
 # [ebuild  N] dev-libs/implicitiusepkg-1.0
 # [ebuild  N] dev-libs/implicitiuseprov-1.0
 #   -- implicitiuseprov[elibc_glibc] resolves, though implicitiuseprov
 #      never lists elibc_glibc in its own IUSE
 
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge --pretend dev-libs/implicitiusepkgmusl
+    rust/target/release/portuale emerge --pretend dev-libs/implicitiusepkgmusl
 # [ebuild  N] dev-libs/implicitiusepkgmusl-1.0
 # !!! no visible ebuild for dependency "dev-libs/implicitiuseprov"
 #   -- elibc_musl is valid implicit IUSE but not enabled (ELIBC="glibc")
@@ -8118,10 +8124,10 @@ unit tests, one parametrized contract case, one dedicated pinned-output
 contract test; mirrored in `emerge_pretend_reference.py`.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge --pretend -v dev-libs/wildexpandpkg
+    rust/target/release/portuale emerge --pretend -v dev-libs/wildexpandpkg
 # [ebuild  N] dev-libs/wildexpandpkg-1.0  USE="linguas_de -linguas_en"
 # [ebuild  N] dev-libs/wildexpanddep-1.0
 #   -- linguas_* expanded to the two declared linguas_* IUSE flags;
@@ -8167,7 +8173,7 @@ Real portage's EAPI-conditional `profile-formats` *default* when the
 key is absent (`portage-1`/`portage-1-compat`) is not modeled -- absent
 simply means "no `portage-2`".
 
-`PORTING/fixtures/repo/metadata/layout.conf` gains `profile-formats =
+`fixtures/repo/metadata/layout.conf` gains `profile-formats =
 portage-2` (its `profiles/default/parent`'s own `overlay:crossrepo-parent`
 line -- shipped by an earlier slice -- keeps working). New overlay
 `layoutmasteroverlay` (repos.conf section, **no** `masters` key) has a
@@ -8182,10 +8188,10 @@ contract case, and a dedicated contract test; mirrored in
 `emerge_pretend_reference.py`.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge --pretend dev-libs/layoutmasterpkg
+    rust/target/release/portuale emerge --pretend dev-libs/layoutmasterpkg
 # emerge: there are no ebuilds to satisfy "dev-libs/layoutmasterpkg".
 #   -- layoutmasteroverlay masters `overlay` via its own layout.conf, so
 #      overlay's package.mask entry for layoutmasterpkg applies
@@ -8230,10 +8236,10 @@ contract test for the drop + warning; mirrored in
 `emerge_pretend_reference.py`.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge --pretend \
+    rust/target/release/portuale emerge --pretend \
     "dev-libs/repnamepkg::repnamefromfile"
 # [ebuild  N    ] dev-libs/repnamepkg-1.0
 #   -- resolves by the profiles/repo_name name, not the [repnamesection]
@@ -8292,16 +8298,16 @@ for byte-for-byte comparison against a real system tree, where
 toolchains, external kernel sources, …).
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge --pretend dev-libs/needsprovided
+    rust/target/release/portuale emerge --pretend dev-libs/needsprovided
 # [ebuild  N    ] dev-libs/needsprovided-1.0
 # [ebuild  N    ] dev-libs/newpkg-1.0
 #   -- needsprovided RDEPENDs dev-libs/providedpkg too, but that's in
 #      package.provided, so the dep is silently dropped
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge --pretend dev-libs/providedpkg
+    rust/target/release/portuale emerge --pretend dev-libs/providedpkg
 #   (stdout empty; to stderr:)
 # WARNING: A requested package will not be merged because it is listed in
 # package.provided:
@@ -8354,14 +8360,14 @@ biggest remaining `emerge -pv` fidelity gap for byte-for-byte comparison
 against real portage.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-FX="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge -pv dev-libs/subslotconsumer
+    rust/target/release/portuale emerge -pv dev-libs/subslotconsumer
 # [ebuild  N     ] dev-libs/subslotconsumer-1.0::testrepo
 # [ebuild  N     ] dev-libs/subslotpkg-1.0:0/2::testrepo   <- :0/2 shown (SLOT="0/2")
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
-    PORTING/rust/target/release/portuale emerge -pv --update dev-libs/upgradepkg
+    rust/target/release/portuale emerge -pv --update dev-libs/upgradepkg
 # [ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo]
 ```
 
@@ -8416,10 +8422,10 @@ links `libdclib.so.1` with no package dep on its orphan provider
 `LinkageMapELF`).
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 # dcconsumer links libdclib.so.1 but nothing depends on dclib as a package
-PORTING/rust/target/release/portuale emerge -pc            # keeps dclib, warns
-PORTING/rust/target/release/portuale emerge -pc --depclean-lib-check=n  # removes it
+rust/target/release/portuale emerge -pc            # keeps dclib, warns
+rust/target/release/portuale emerge -pc --depclean-lib-check=n  # removes it
 ```
 
 ### `emerge -pc` / `-pP`: the "dependencies could not be resolved" safety halt
@@ -8503,8 +8509,8 @@ eligibility (real depgraph treats a binhost package like a `$PKGDIR`
 one), with `getbinpkg` additionally switching on remote-index loading, so
 `--usepkg` alone still never reaches a binhost.
 
-New fixtures: `PORTING/fixtures/etc/portage/binrepos.conf` (one
-`file://` `[testbinhost]`) + `PORTING/fixtures/binhost/Packages`
+New fixtures: `fixtures/etc/portage/binrepos.conf` (one
+`file://` `[testbinhost]`) + `fixtures/binhost/Packages`
 (`dev-libs/remotebinpkg-1.0`, and `dev-libs/remotebinslotpkg-1.0` with
 `SLOT=2/1`) -- both binhost-only, no ebuild, no `$PKGDIR` entry. 12
 contract `CASES` + 2 dedicated pinned-output contract tests + 3
@@ -8617,7 +8623,7 @@ a binpkg's integrity — a separately-scoped follow-up. The `gpkg-1`
 version-marker presence check is still enforced (real
 `_get_inner_tarinfo`'s `InvalidBinaryPackageFormat` guard).
 
-New fixture `PORTING/fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar` —
+New fixture `fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar` —
 a real, hand-built container (`tar` + `zstd`, real member layout). 3
 `portuale` unit tests; also verified by hand against a real-world
 `/var/cache/binpkgs/*.gpkg.tar` (with `.sig` members, `environment.bz2`,
@@ -8636,7 +8642,7 @@ be32(datalen)` records into `<data>`; every metadata key is one record.
 `CONTENTS` is never present in a *binary* package's own xpak (real
 `xpak()` skips it — it's a merge-time artifact). Codec-agnostic (the
 trailer is raw whatever compressed the tarball). New committed fixture
-`PORTING/fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2` — a genuine
+`fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2` — a genuine
 `.tbz2` built once by the pilot's own `ebuild <file> package` (real
 `xpak-helper.py recompose` → real `xpak.py`) rather than rebuilt
 per-test (the read side needs no reproducible bytes, and driving the
@@ -8697,7 +8703,7 @@ The Python mirror scans too (`_scan_pkgdir` — `portage.xpak.tbz2` for
 `portage.gpkg` would reject a `Manifest`-less container). New contract
 test builds an ad-hoc `$PKGDIR` with no `Packages` holding both fixture
 binpkgs and resolves each under `--usepkgonly`, Rust ≡ Python; a
-regression test confirms the committed `PORTING/fixtures/pkgdir` (which
+regression test confirms the committed `fixtures/pkgdir` (which
 has a `Packages` *and* the two loose fixture files) still resolves via
 the index alone. 3 more `portuale` + 1 `portage-repo` unit tests.
 
@@ -9086,7 +9092,7 @@ of its own to protect. 2 contract `CASES` + 1 pinned test + 2
 `pretend.rs` unit tests; both sides.
 
 ```sh
-FX="$(realpath PORTING/fixtures)"
+FX="$(realpath fixtures)"
 # slot 1 (1.0): slot 2 (2.0, higher) still matches the bare
 # dev-libs/dualslotpkg atom in @dualslotset -> no warning
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pC 'dev-libs/dualslotpkg:1' | grep -c 'still listed'
@@ -9134,7 +9140,7 @@ the `USE="…"` line for a **changed** flag set or a new package
 display on `-v`.
 
 ```sh
-FX="$(realpath PORTING/fixtures)"
+FX="$(realpath fixtures)"
 # plain -p: the 7th (mask) column is a bare space for an ordinary pkg...
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/newpkg
 # [ebuild  N     ] dev-libs/newpkg-1.0
@@ -9184,7 +9190,7 @@ throughout); new `portage-repo` unit test, new dedicated contract test +
 `emerge --pretend` on a real tree.
 
 ```sh
-FX="$(realpath PORTING/fixtures)"
+FX="$(realpath fixtures)"
 # dev-libs/diamond -> shared-a, shared-b -> common: the shared leaf first,
 # its two consumers next, the requested root last.
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/diamond
@@ -9254,7 +9260,7 @@ current ebuild has only `keep`: `-p` shows `USE="(-gone%*)"`, `-pv` still
 tests + 6 `CASES` total; both sides byte-identical.
 
 ```sh
-FX="$(realpath PORTING/fixtures)"
+FX="$(realpath fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -p dev-libs/useflagpkg
 # [ebuild  N     ] dev-libs/newpkg-1.0            <- empty IUSE, no USE line
 # [ebuild  N     ] dev-libs/useflagpkg-1.0  USE="foo -missingflag"
@@ -10467,9 +10473,9 @@ pulled) and `dev-libs/profileuseweakpkg` (profile-level `package.use`
 enables `profweakflag`, `make.conf` disables it → `USE="-profweakflag"`).
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-ln -s "$PWD/PORTING/rust/target/release/portuale" /tmp/emerge
-PORTAGE_CONFIGROOT="$PWD/PORTING/fixtures" ROOT="$PWD/PORTING/fixtures" \
+cd rust && cargo build --release && cd ../..
+ln -s "$PWD/rust/target/release/portuale" /tmp/emerge
+PORTAGE_CONFIGROOT="$PWD/fixtures" ROOT="$PWD/fixtures" \
     /tmp/emerge --pretend -v dev-libs/repouseweakpkg
 # [ebuild  N     ] dev-libs/repouseweakpkg-1.0::testrepo  USE="-repoweakflag"
 ```
@@ -10779,10 +10785,10 @@ already forks there). The `bzip2` case (`environment.bz2` for
 `PORTAGE_UPDATE_ENV`) reads the filtered scratch file as a plain
 `bzip2 -c < scratch > out`.
 
-The change lives in a **vendored** copy, `PORTING/bin/phase-functions.sh`
+The change lives in a **vendored** copy, `bin/phase-functions.sh`
 (tracked — `portuale` must ship the phase runtime so `emerge` works with
-no Portage installed; see `PORTING/3rdparty/repos.toml`'s
-`vendored_paths`). `ebuild_phases::bin_dir()` overlays `PORTING/bin/`
+no Portage installed; see `3rdparty/repos.toml`'s
+`vendored_paths`). `ebuild_phases::bin_dir()` overlays `bin/`
 over the surrounding checkout's `bin/`, the vendored file winning; the
 upstream `bin/phase-functions.sh` stays pristine.
 
@@ -10793,19 +10799,19 @@ green against `879d963` (the fork's pre-merge copy of upstream #1274,
 `install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer`
 (the `bigeclasspkg` fixture defines ~400 functions specifically to blow
 past the pipe buffer), which *hangs the 120 s deadline* against
-`879d963` when `PORTING/bin/phase-functions.sh` is reverted to the pipe
+`879d963` when `bin/phase-functions.sh` is reverted to the pipe
 form.
 
 That let the pin **drop the fork entirely** and move to real upstream
 `reubeno/brush` `main` (`a04b09dc`, at/after the `18851e7` #1274 merge)
-— see `PORTING/BRUSH_PIN.md`. Same suite, same guard test, green against
+— see `BRUSH_PIN.md`. Same suite, same guard test, green against
 real upstream: `install_does_not_deadlock…` completes in ~1 s.
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild install
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild install
 # real phase output, then exit 0 -- promptly, not after a hang
 wc -l < "${PORTAGE_TMPDIR}"/portage/dev-libs/bigeclasspkg-1.0/temp/environment
 # a few thousand lines -- the filtered saved environment
@@ -10822,64 +10828,64 @@ strategy-#2 rewrite). This closed the portage-tree side only.
 Build both Rust binaries:
 
 ```sh
-cd PORTING/rust && cargo build --release
+cd rust && cargo build --release
 ```
 
 Try the harnesses directly:
 
 ```sh
 # Python
-python3 PORTING/python/versions_harness.py vercmp 1.0-r1 1.0
+python3 python/versions_harness.py vercmp 1.0-r1 1.0
 
 # Rust
-PORTING/rust/target/release/versions-harness vercmp 1.0-r1 1.0
+rust/target/release/versions-harness vercmp 1.0-r1 1.0
 
 # batch mode (benchmark-oriented: many ops, one process)
-printf 'vercmp 1.0 1.0\nververify 1.0_pre2\n' | PORTING/rust/target/release/versions-harness batch
+printf 'vercmp 1.0 1.0\nververify 1.0_pre2\n' | rust/target/release/versions-harness batch
 ```
 
 Try the atom-matching harness:
 
 ```sh
 # Python
-python3 PORTING/python/atom_harness.py parse ">=dev-libs/foo-1.2.3-r1:2"
+python3 python/atom_harness.py parse ">=dev-libs/foo-1.2.3-r1:2"
 
 # Rust
-PORTING/rust/target/release/atom-harness parse ">=dev-libs/foo-1.2.3-r1:2"
+rust/target/release/atom-harness parse ">=dev-libs/foo-1.2.3-r1:2"
 
 # match_from_list-equivalent: prints the matching candidates, comma-joined
-PORTING/rust/target/release/atom-harness match ">=dev-libs/foo-1.2.3" \
+rust/target/release/atom-harness match ">=dev-libs/foo-1.2.3" \
     dev-libs/foo-1.0 dev-libs/foo-2.0
 
 # slot operators: ":=" (no explicit slot) matches regardless of slot,
 # ":slot=" filters to that slot exactly like a plain ":slot" atom would
-PORTING/rust/target/release/atom-harness match "dev-libs/foo:=" \
+rust/target/release/atom-harness match "dev-libs/foo:=" \
     dev-libs/foo-1.0:0 dev-libs/foo-2.0:1
 # dev-libs/foo-1.0:0,dev-libs/foo-2.0:1
-PORTING/rust/target/release/atom-harness match "dev-libs/foo:1=" \
+rust/target/release/atom-harness match "dev-libs/foo:1=" \
     dev-libs/foo-1.0:0 dev-libs/foo-2.0:1
 # dev-libs/foo-2.0:1
 
 # USE deps: parsed, but never enforced by matching -- "[bar]" and
 # "[-bar]" return the identical match set, same as real match_from_list
 # already does for these same plain-string candidates
-PORTING/rust/target/release/atom-harness match "dev-libs/foo[bar]" \
+rust/target/release/atom-harness match "dev-libs/foo[bar]" \
     dev-libs/foo-1.0 dev-libs/foo-2.0
 # dev-libs/foo-1.0,dev-libs/foo-2.0
-PORTING/rust/target/release/atom-harness match "dev-libs/foo[-bar]" \
+rust/target/release/atom-harness match "dev-libs/foo[-bar]" \
     dev-libs/foo-1.0 dev-libs/foo-2.0
 # dev-libs/foo-1.0,dev-libs/foo-2.0
 
 # "=*" glob version operator: component-boundary aware, not a naive
 # string prefix -- "1*" matches "1.2" (real boundary: ".") but not "10"
 # (both digits, no real boundary -- bug 560466)
-PORTING/rust/target/release/atom-harness match "=dev-libs/foo-1*" \
+rust/target/release/atom-harness match "=dev-libs/foo-1*" \
     dev-libs/foo-1.2 dev-libs/foo-10
 # dev-libs/foo-1.2
 
 # "::reponame" repo constraint: rejects a candidate only if it carries a
 # KNOWN, different repo -- the repo-less candidate always passes too
-PORTING/rust/target/release/atom-harness match "dev-libs/foo::gentoo" \
+rust/target/release/atom-harness match "dev-libs/foo::gentoo" \
     dev-libs/foo-1.0 dev-libs/foo-1.0::gentoo dev-libs/foo-1.0::other
 # dev-libs/foo-1.0,dev-libs/foo-1.0::gentoo
 ```
@@ -10888,25 +10894,25 @@ Try the use_reduce harness:
 
 ```sh
 # Python
-python3 PORTING/python/use_reduce_harness.py reduce normal bar \
+python3 python/use_reduce_harness.py reduce normal bar \
     dev-libs/foo bar? "(" dev-libs/baz ")" "!bar?" "(" dev-libs/qux ")"
 
 # Rust
-PORTING/rust/target/release/use-reduce-harness reduce normal bar \
+rust/target/release/use-reduce-harness reduce normal bar \
     dev-libs/foo bar? "(" dev-libs/baz ")" "!bar?" "(" dev-libs/qux ")"
 
 # REQUIRED_USE ("^^ ( a b )", exactly-one-of, with only "a" enabled --
 # satisfied): Python then Rust, same output either way
-python3 PORTING/python/required_use_harness.py check a a,b "^^" "(" a b ")"
-PORTING/rust/target/release/required-use-harness check a a,b "^^" "(" a b ")"
+python3 python/required_use_harness.py check a a,b "^^" "(" a b ")"
+rust/target/release/required-use-harness check a a,b "^^" "(" a b ")"
 # true
 ```
 
 Try `emerge --pretend` against the fixture tree:
 
 ```sh
-ln -sf "$(realpath PORTING/rust/target/release/portuale)" /tmp/emerge
-FX="$(realpath PORTING/fixtures)"
+ln -sf "$(realpath rust/target/release/portuale)" /tmp/emerge
+FX="$(realpath fixtures)"
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/newpkg              # -> [ebuild  N    ] ...
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --update dev-libs/upgradepkg # -> [ebuild     U ] ...
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/samepkg             # -> already installed
@@ -10932,7 +10938,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend --color y dev-libs/dia
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" NO_COLOR=1 /tmp/emerge --pretend --color y dev-libs/diamond | cat -v
 #   -- still coloured: an explicit --color y wins over NO_COLOR
 
-# dependency recursion: diamond dependency, deduped (see PORTING/fixtures)
+# dependency recursion: diamond dependency, deduped (see fixtures)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/diamond
 # [ebuild  N    ] dev-libs/diamond-1.0
 # [ebuild  N    ] dev-libs/shared-a-1.0
@@ -11273,7 +11279,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/bareacceptkey
 
 # package.accept_keywords is now also stacked from the profile chain, not
 # just /etc/portage -- this package has no user-level entry at all, only
-# a profile-level one (see PORTING/fixtures/repo/profiles/arch/amd64)
+# a profile-level one (see fixtures/repo/profiles/arch/amd64)
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/profileacceptkeywordspkg
 # [ebuild  N    ] dev-libs/profileacceptkeywordspkg-1.0
 
@@ -11322,7 +11328,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/blockerorderp
 # [blocks B     ] dev-libs/samepkg ("dev-libs/samepkg" is hard blocking dev-libs/blockerorderpkg-1.0)
 
 # overlays: a package that exists only in the overlay repo (see
-# PORTING/fixtures/etc/portage/repos.conf) is found
+# fixtures/etc/portage/repos.conf) is found
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge --pretend dev-libs/overlayonlypkg
 # [ebuild  N    ] dev-libs/overlayonlypkg-1.0
 
@@ -11809,7 +11815,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 /tmp/emerge --help
 # emerge (pilot v1): command-line interface to the Rust porting pilot
 # ...
-# See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.
+# See README.md and PROMPT.md for this pilot's current scope.
 /tmp/emerge --jobs --help          # --help wins even combined with other flags
 /tmp/emerge -ph                    # ...and even bundled with other short flags
 
@@ -11830,7 +11836,7 @@ PORTAGE_CONFIGROOT="$FX" ROOT="$FX" /tmp/emerge -pv dev-libs/useflagpkg
 
 # or against the Python reference implementation directly
 PORTAGE_CONFIGROOT="$FX" ROOT="$FX" \
-    python3 PORTING/python/emerge_pretend_reference.py --pretend dev-libs/newpkg
+    python3 python/emerge_pretend_reference.py --pretend dev-libs/newpkg
 
 # --deselect/-W is a standalone action, not a --pretend modifier -- it
 # needs no repos.conf/profile at all, only ROOT's own world file and
@@ -12147,7 +12153,7 @@ execution -- but it now recognizes real ebuild syntax; see
 ebuild.rs/ebuild_options.rs):
 
 ```sh
-ln -sf "$(realpath PORTING/rust/target/release/portuale)" /tmp/ebuild
+ln -sf "$(realpath rust/target/release/portuale)" /tmp/ebuild
 
 # a real, valid ebuild command -- still just a no-op stub
 /tmp/ebuild foo-1.0.ebuild merge
@@ -12190,27 +12196,27 @@ Run the contract suite (builds the Rust binaries itself; requires `cargo`
 on `PATH`):
 
 ```sh
-python3 -m pytest PORTING/tests -v
+python3 -m pytest tests -v
 ```
 
 Run the benchmark / regression gate:
 
 ```sh
 # report speedup, no gating (uses the vendored real Gentoo tree snapshot)
-python3 PORTING/bench/run_benchmark.py --ops 200000
+python3 bench/run_benchmark.py --ops 200000
 
 # fall back to synthetic seeded-random version strings instead
-python3 PORTING/bench/run_benchmark.py --ops 200000 --dataset synthetic
+python3 bench/run_benchmark.py --ops 200000 --dataset synthetic
 
 # CI-style: fail if speedup regressed vs. the recorded baseline
-python3 PORTING/bench/run_benchmark.py --check-baseline
+python3 bench/run_benchmark.py --check-baseline
 
 # record a new baseline after an intentional, reviewed perf change
-python3 PORTING/bench/run_benchmark.py --update-baseline
+python3 bench/run_benchmark.py --update-baseline
 
 # same gate, wrapped as a pytest for CI (skipped by default -- see
-# PORTING/tests/test_benchmark_gate.py)
-PORTING_RUN_BENCHMARK=1 python3 -m pytest PORTING/tests/test_benchmark_gate.py -v
+# tests/test_benchmark_gate.py)
+PORTUALE_RUN_BENCHMARK=1 python3 -m pytest tests/test_benchmark_gate.py -v
 ```
 
 Run the musl static-build smoke test (requires `podman` or `docker`; builds
@@ -12218,24 +12224,24 @@ a container image, so it needs network access for the Alpine base layer
 and `apk add rust cargo` the first time):
 
 ```sh
-bash PORTING/musl/smoke_test.sh
+bash musl/smoke_test.sh
 
 # same gate, wrapped as a pytest for CI (skipped by default -- see
-# PORTING/tests/test_musl_smoke.py)
-PORTING_RUN_MUSL_SMOKE=1 python3 -m pytest PORTING/tests/test_musl_smoke.py -v -s
+# tests/test_musl_smoke.py)
+PORTUALE_RUN_MUSL_SMOKE=1 python3 -m pytest tests/test_musl_smoke.py -v -s
 ```
 
 Real ebuild phase execution (task #54 -- see "What this proves" above for
 the full writeup): `ebuild <file> install` runs the real `pretend` through
 `install` phase sequence via an embedded `brush` shell, landing real files
-under a real `${D}`. Uses `PORTING/fixtures/repo/dev-libs/phasepkg`, whose
+under a real `${D}`. Uses `fixtures/repo/dev-libs/phasepkg`, whose
 own `src_install` calls real `insinto`/`doins`:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild install
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild install
 # (real phase output, including some known-nonfatal noise -- see
 # ebuild_phases.rs's own "KNOWN, DOCUMENTED GAPS" -- then:)
 #  * Final size of build directory: 0 KiB
@@ -12248,17 +12254,17 @@ Real merge/filesystem mutation (task #55 -- see "What this proves" above
 for the full writeup): `ebuild <file> merge` runs the same real `install`
 chain, then really runs `pkg_preinst`, really copies `${D}` into a real
 `${ROOT}` and writes a real vdb entry, then really runs `pkg_postinst`.
-Uses `PORTING/fixtures/repo/dev-libs/mergepkg`, whose own `src_install`
+Uses `fixtures/repo/dev-libs/mergepkg`, whose own `src_install`
 calls real `insinto`/`doins`/`dosym`, and whose own `pkg_preinst`/
 `pkg_postinst` each drop a marker file under `${T}` proving the real
 ordering (preinst before the merge is visible, postinst only after):
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export ROOT="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild merge
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0)
 cat "${ROOT}"/usr/share/mergepkg/hello.txt
@@ -12284,8 +12290,8 @@ Real package removal: `ebuild <file> unmerge` (see "What this proves"
 above for the full writeup) really deletes what `merge` just installed:
 
 ```sh
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/mergepkg/mergepkg-1.0.ebuild unmerge
 # (real prerm/postrm phase output, then exit 0)
 test -e "${ROOT}"/usr/share/mergepkg && echo "still there" || echo "gone"
 # gone
@@ -12297,14 +12303,14 @@ test -e "${ROOT}"/var/db/pkg/dev-libs && echo "still there" || echo "gone"
 
 Real `CONFIG_PROTECT` (see "What this proves" above for the full
 writeup): a locally-edited `/etc` file survives a merge. Uses
-`PORTING/fixtures/repo/dev-libs/configpkg`, whose own `src_install`
+`fixtures/repo/dev-libs/configpkg`, whose own `src_install`
 installs a *new* `/etc/configpkg.conf`:
 
 ```sh
 mkdir -p "${ROOT}"/etc
 echo "admin's own edits" > "${ROOT}"/etc/configpkg.conf
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild merge
 cat "${ROOT}"/etc/configpkg.conf
 # admin's own edits          <- untouched
 cat "${ROOT}"/etc/._cfg0000_configpkg.conf
@@ -12323,7 +12329,7 @@ Real symlink `CONFIG_PROTECT`, `NOCONFMEM`, and `new_protect_filename`'s
 own file-reuse logic (see "What this proves" above for the full writeup):
 a locally-repointed `/etc` symlink survives a merge exactly like a
 regular file does, and `NOCONFMEM` changes the real, visible outcome of a
-repeat merge. Uses `PORTING/fixtures/repo/dev-libs/configsympkg`, whose
+repeat merge. Uses `fixtures/repo/dev-libs/configsympkg`, whose
 own `src_install` installs a *new* `/etc/configsympkg.conf` symlink
 pointing at `new-target`:
 
@@ -12331,8 +12337,8 @@ pointing at `new-target`:
 export CONFIG_PROTECT=/etc
 mkdir -p "${ROOT}"/etc
 ln -sfn admins-own-target "${ROOT}"/etc/configsympkg.conf
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/configsympkg/configsympkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/configsympkg/configsympkg-1.0.ebuild merge
 readlink "${ROOT}"/etc/configsympkg.conf
 # admins-own-target          <- untouched
 readlink "${ROOT}"/etc/._cfg0000_configsympkg.conf
@@ -12347,8 +12353,8 @@ second numbered file, but whether the logical path stays protected:
 
 ```sh
 # Without NOCONFMEM: the already-offered update applies directly.
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild merge
 cat "${ROOT}"/etc/configpkg.conf
 # new content from configpkg  <- overwritten, no ._cfg0001_ spawned
 
@@ -12357,8 +12363,8 @@ cat "${ROOT}"/etc/configpkg.conf
 # than spawning a ._cfg0001_ with identical content.
 export NOCONFMEM=1
 echo "admin's own edits" > "${ROOT}"/etc/configpkg.conf
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild merge
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/configpkg/configpkg-1.0.ebuild merge
 cat "${ROOT}"/etc/configpkg.conf
 # admin's own edits           <- protected again, not overwritten
 cat "${ROOT}"/etc/._cfg0000_configpkg.conf
@@ -12369,14 +12375,14 @@ unset NOCONFMEM
 `--debug` (task #56 -- see "What this proves" above for the full
 writeup): really exports `PORTAGE_DEBUG=1`, so real `bin/ebuild.sh`'s own
 `set -x` guard fires -- real bash xtrace, not simulated. Uses
-`PORTING/fixtures/repo/dev-libs/debugpkg`, whose own `src_install` writes
+`fixtures/repo/dev-libs/debugpkg`, whose own `src_install` writes
 the `PORTAGE_DEBUG` value it actually observed to `${T}/portage-debug-value.txt`:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/debugpkg/debugpkg-1.0.ebuild install --debug
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/debugpkg/debugpkg-1.0.ebuild install --debug
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, PLUS real bash xtrace not present without --debug, e.g.:)
 # ++ local needle=--allow-extra-vars
@@ -12394,16 +12400,16 @@ Real `ebuild <file> package`/binpkg building (see "What this proves"
 above for the full writeup): runs the real `install` chain, then really
 invokes `bin/misc-functions.sh`'s own `__dyn_package`, producing a
 genuine XPAK `.tbz2` and a real `Packages` index entry. Uses
-`PORTING/fixtures/repo/dev-libs/packagepkg` (`RDEPEND="dev-libs/samepkg"`,
+`fixtures/repo/dev-libs/packagepkg` (`RDEPEND="dev-libs/samepkg"`,
 so its own metadata round-trip is visible in the index):
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export ROOT="$(mktemp -d)"
 export PKGDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/packagepkg/packagepkg-1.0.ebuild install package
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0)
 file "${PKGDIR}"/dev-libs/packagepkg-1.0.tbz2
@@ -12425,12 +12431,12 @@ already has an installed vdb entry under the fixture `ROOT`, so
 `--buildpkgonly`'s own real depgraph gate has nothing to object to:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
-export PORTAGE_CONFIGROOT="$(realpath PORTING/fixtures)"
-export ROOT="$(realpath PORTING/fixtures)"
+cd rust && cargo build --release && cd ../..
+export PORTAGE_CONFIGROOT="$(realpath fixtures)"
+export ROOT="$(realpath fixtures)"
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export PKGDIR="$(mktemp -d)"
-ln -sf "$(realpath PORTING/rust/target/release/portuale)" /tmp/emerge
+ln -sf "$(realpath rust/target/release/portuale)" /tmp/emerge
 /tmp/emerge --buildpkgonly dev-libs/packagepkg
 # [ebuild  N    ] dev-libs/packagepkg-1.0
 # >>> Building binary for dev-libs/packagepkg-1.0...
@@ -12485,12 +12491,12 @@ fixture's own checked-in `Manifest`) fires the real already-verified
 skip-fetch path, so this example needs no live network access at all:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export DISTDIR="$(mktemp -d)"
 printf 'hello from verifiedfetchpkg\n' > "${DISTDIR}"/verifiedfetchpkg-1.0.tar.gz
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild install
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/verifiedfetchpkg/verifiedfetchpkg-1.0.ebuild install
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0 -- no network access, since the
 # pre-seeded file already matches the fixture's own real Manifest digests)
@@ -12502,16 +12508,16 @@ cat "${PORTAGE_TMPDIR}"/portage/dev-libs/verifiedfetchpkg-1.0/temp/fetch-vars.tx
 # distfile absent, install fails fast (no network) with a
 # "place it in DISTDIR by hand" pointer:
 export PORTAGE_TMPDIR="$(mktemp -d)"; export DISTDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/fetchrestrictpkg/fetchrestrictpkg-1.0.ebuild install
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/fetchrestrictpkg/fetchrestrictpkg-1.0.ebuild install
 # ebuild: fetchrestrictpkg-1.0.tar.gz: no working candidate mirror for
 #   "https://example.invalid/frp-payload.bin" (RESTRICT=fetch bars
 #   downloading it -- place a verified copy in <DISTDIR> by hand ...)
 # ... exit 1
 # With the file placed by hand (and Manifest-verified), it installs:
 printf 'fetchrestrictpkg fixture distfile\n' > "${DISTDIR}"/fetchrestrictpkg-1.0.tar.gz
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/fetchrestrictpkg/fetchrestrictpkg-1.0.ebuild install
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/fetchrestrictpkg/fetchrestrictpkg-1.0.ebuild install
 # ... exit 0
 ```
 
@@ -12520,10 +12526,10 @@ full writeup): `dev-libs/eclasspkg` really `inherit`s a real (if
 fixture-only) eclass and calls a real function it defines:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/eclasspkg/eclasspkg-1.0.ebuild install
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/eclasspkg/eclasspkg-1.0.ebuild install
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0)
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/eclasspkg-1.0/temp/eclass-marker.txt
@@ -12538,10 +12544,10 @@ pipe exceeds the OS pipe buffer) and used to hang here indefinitely
 before the fix:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
-    PORTING/fixtures/repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild install
+rust/target/release/portuale ebuild \
+    fixtures/repo/dev-libs/bigeclasspkg/bigeclasspkg-1.0.ebuild install
 # (real phase output, including the same known-nonfatal noise as the
 # task #54 example, then exit 0 -- promptly, not after a hang)
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/bigeclasspkg-1.0/temp/bigfixture-marker.txt
@@ -12554,10 +12560,10 @@ already uses, run via a real `bash` subprocess instead of the default
 embedded brush shell:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild --shell bash \
-    PORTING/fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild install
+rust/target/release/portuale ebuild --shell bash \
+    fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild install
 # (real phase output, then exit 0)
 cat "${PORTAGE_TMPDIR}"/portage/dev-libs/phasepkg-1.0/image/usr/share/phasepkg/hello.txt
 # hello from phasepkg
@@ -12568,10 +12574,10 @@ writeup): a real `mirror://debian/...` `SRC_URI` entry on the real
 system's own `gentoo` repo checkout, previously unfetchable:
 
 ```sh
-cd PORTING/rust && cargo build --release && cd ../..
+cd rust && cargo build --release && cd ../..
 export PORTAGE_TMPDIR="$(mktemp -d)"
 export DISTDIR="$(mktemp -d)"
-PORTING/rust/target/release/portuale ebuild \
+rust/target/release/portuale ebuild \
     /.gentoo/repos/gentoo/app-arch/unzip/unzip-6.0_p31.ebuild unpack
 # (real phase output, then exit 0)
 ls "${DISTDIR}"

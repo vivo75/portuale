@@ -4,14 +4,14 @@
 # same mechanism a real installation uses, see portuale/src/main.rs) against
 # the REAL system's own `/usr/bin/emerge`, on the REAL live ROOT/
 # PORTAGE_CONFIGROOT (whatever this machine actually has installed) rather
-# than the synthetic PORTING/fixtures tree every other test in this repo
+# than the synthetic fixtures tree every other test in this repo
 # uses.
 #
 # This is NOT a correctness gate and is NOT run in CI: real-world trees
 # exercise plenty of real emerge behavior this pilot deliberately hasn't
 # built yet (no --getbinpkg/binhost support, no default non-"-v" USE
 # display, no combined U+D display column, no --autounmask-use, no explicit
-# repos.conf masters=, etc. -- see PORTING/README.md's own "What this
+# repos.conf masters=, etc. -- see README.md's own "What this
 # proves" section for the maintained list of what's actually in scope).
 # Divergence here is expected and informative, not a bug report -- the
 # point is to see how far real-world data agrees with the pilot's own core
@@ -21,7 +21,7 @@
 # formatting.
 #
 # Usage:
-#   PORTING/scripts/real_world_spotcheck.sh [atom ...]
+#   scripts/real_world_spotcheck.sh [atom ...]
 #
 # With no arguments, checks a small, diverse default set of real packages
 # (drawn from whatever's actually installed on this machine at the time
@@ -38,8 +38,8 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PORTING_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-RUST_DIR="${PORTING_DIR}/rust"
+REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+RUST_DIR="${REPO_DIR}/rust"
 PILOT_BIN="${RUST_DIR}/target/release/portuale"
 
 REAL_EMERGE="$(command -v emerge || true)"
@@ -112,7 +112,7 @@ for atom in "${ATOMS[@]}"; do
         echo "=> MATCH (bracket lines identical after normalization)"
         agree=$((agree + 1))
     else
-        echo "=> TEXT DIFFERS -- compare the two blocks above by eye; a differing bracket word or missing USE string is usually a known scope gap (see PORTING/README.md), not a bug"
+        echo "=> TEXT DIFFERS -- compare the two blocks above by eye; a differing bracket word or missing USE string is usually a known scope gap (see README.md), not a bug"
         differ=$((differ + 1))
     fi
     echo

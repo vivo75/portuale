@@ -1,7 +1,7 @@
 // Neutral CLI test-harness binary for the atom-matching pilot (see
-// PORTING/PROMPT.md and PORTING/rust/portage-dep/src/lib.rs for the v1
+// PROMPT.md and rust/portage-dep/src/lib.rs for the v1
 // grammar this implements). Same argv/output contract as
-// PORTING/python/atom_harness.py.
+// python/atom_harness.py.
 //
 // Usage:
 //   atom-harness parse <atom>              -> tab-separated fields, or "INVALID"

@@ -12,7 +12,7 @@ Summary:
    - The resulting Rust executable must run on even the most minimal Linux OS.
    - `emerge` and `ebuild` executables must be part of the *first* porting effort (not deferred), and MAY be implemented as a single executable whose behavior varies depending on how it is invoked (multicall/busybox-style pattern).
    - Ebuilds depend on bash, and the bash version used MUST be greater than 5.0.0.
-   - Finally, the user asked to write a consolidated, improved prompt at `./PORTING/PROMPT.md` — a prompt intended for an LLM that, if used fresh, would arrive at the same strategic results as this conversation did ("redo from scratch what we did until now"), condensing and improving on the discussion.
+   - Finally, the user asked to write a consolidated, improved prompt at `./PROMPT.md` — a prompt intended for an LLM that, if used fresh, would arrive at the same strategic results as this conversation did ("redo from scratch what we did until now"), condensing and improving on the discussion.
    No actual code porting/implementation has been requested or performed yet — the work so far is entirely strategic planning plus writing one planning document.
 
 2. Key Technical Concepts:
@@ -85,7 +85,7 @@ Summary:
      - Finding: absolute minimum is bash 4.4 (`dependent="Portage"`), rising to 5.0 or 5.3 depending on the ebuild's declared EAPI (via `___eapi_bash_5_0` / `___eapi_bash_5_3` helper checks), using `BASH_COMPAT` to emulate older behavior on a newer bash binary. This confirmed the user's stated ">=5.0.0" constraint is a tightening/simplification relative to the current variable floor, not a pre-existing hard-coded value.
      - Related reference found via grep but not opened: `/home/vivo/repo/portage/bin/save-ebuild-env.sh:190` (calls `__check_bash_version`).
 
-   - `/home/vivo/repo/portage/PORTING/PROMPT.md` (created via Write tool)
+   - `/home/vivo/repo/portage/PROMPT.md` (created via Write tool)
      - This is the deliverable requested in the final user message: a self-contained prompt document consolidating the entire conversation's goals, constraints, and decisions, intended to let a fresh LLM session regenerate the same strategic plan without repeating the full discovery Q&A.
      - Full content written:
        ```markdown
@@ -242,7 +242,7 @@ Summary:
        find such a conflict, or find a genuinely open decision not covered above,
        ask before proceeding rather than assuming.
        ```
-     - Tool confirmed: "File created successfully at: /home/vivo/repo/portage/PORTING/PROMPT.md (file state is current in your context — no need to Read it back)."
+     - Tool confirmed: "File created successfully at: /home/vivo/repo/portage/PROMPT.md (file state is current in your context — no need to Read it back)."
 
 4. Errors and fixes:
    - No errors were encountered. All tool calls (Bash grep, Bash ls, Read, Write, AskUserQuestion) succeeded on first attempt. No corrections or re-attempts were needed.
@@ -261,7 +261,7 @@ Summary:
    - "befor proceeding further add two explicit goals: 1) the rust implementation should be faster than the python one 2) the resulting executable should be able to run in even the most minimal linux os"
    - "one more thing: emerge and ebuild executable should be part of the first porting. They MAY be a single executable which vary it's behaviour depending on how it is invoked"
    - "one more information ebuilds depend on bash and bash version MUST be greater than 5.0.0"
-   - "write in ./PORTING/PROMPT.md a prompt for an LLM that would reach similar results - recap, condense and make better what we did until now - the prompt could be used to redo from scratch what we did until now"
+   - "write in ./PROMPT.md a prompt for an LLM that would reach similar results - recap, condense and make better what we did until now - the prompt could be used to redo from scratch what we did until now"
    - (Current turn) A system-reminder-wrapped instruction directing that this response must be TEXT ONLY (no tool calls) and must produce a structured `<analysis>`/`<summary>` recap of the conversation for compaction purposes.
 
    Additionally, explicit decisions were made by the user via AskUserQuestion tool responses (not free-text chat, but substantive stated intent that must be preserved):
@@ -275,13 +275,13 @@ Summary:
    - Bash version check fidelity: "Mirror Python's EAPI-variable floor"
 
 7. Pending Tasks:
-   - None explicitly requested beyond what has been completed. The last explicit task ("write in ./PORTING/PROMPT.md a prompt...") has been completed and the file written successfully. No further action was requested by the user before the compaction/summary instruction arrived.
+   - None explicitly requested beyond what has been completed. The last explicit task ("write in ./PROMPT.md a prompt...") has been completed and the file written successfully. No further action was requested by the user before the compaction/summary instruction arrived.
 
 8. Current Work:
-   Immediately prior to this summary request, I completed writing `/home/vivo/repo/portage/PORTING/PROMPT.md` via the Write tool, containing the full consolidated prompt document described in detail in Section 3 above. This fulfilled the user's request: "write in ./PORTING/PROMPT.md a prompt for an LLM that would reach similar results - recap, condense and make better what we did until now - the prompt could be used to redo from scratch what we did until now." Before writing, I verified the target directory existed and was empty via `ls -la /home/vivo/repo/portage/PORTING` (Bash tool), confirming it was safe to create the new file there without overwriting anything. The Write tool call succeeded and the harness confirmed the file state was current, meaning no re-read was necessary. No response/summary text had yet been given back to the user acknowledging completion of this file-write when the conversation was interrupted by the current system-level compaction request — the very next turn in the transcript is the instruction to produce this summary.
+   Immediately prior to this summary request, I completed writing `/home/vivo/repo/portage/PROMPT.md` via the Write tool, containing the full consolidated prompt document described in detail in Section 3 above. This fulfilled the user's request: "write in ./PROMPT.md a prompt for an LLM that would reach similar results - recap, condense and make better what we did until now - the prompt could be used to redo from scratch what we did until now." Before writing, I verified the target directory existed and was empty via `ls -la /home/vivo/repo/portage/PORTING` (Bash tool), confirming it was safe to create the new file there without overwriting anything. The Write tool call succeeded and the harness confirmed the file state was current, meaning no re-read was necessary. No response/summary text had yet been given back to the user acknowledging completion of this file-write when the conversation was interrupted by the current system-level compaction request — the very next turn in the transcript is the instruction to produce this summary.
 
 9. Optional Next Step:
-   No further action was in progress beyond the completed file write, and the user has not yet given a new instruction following the PROMPT.md creation (the conversation was interrupted by the compaction/summary request itself). Per instructions not to pursue tangential or unconfirmed next steps, the appropriate next step once conversation resumes is simply to briefly confirm to the user that `./PORTING/PROMPT.md` was created successfully and summarize its contents/purpose in a short message (since no user-facing confirmation text was sent before the summary interrupt), then await further direction — for example, whether the user wants to review/adjust the prompt file, or proceed to actual scaffolding work (e.g., the `portage.versions` pilot harness) as previously discussed but not yet started. No implementation work should begin without explicit confirmation, consistent with the entire conversation having been strategic/planning discussion only up to this point.
+   No further action was in progress beyond the completed file write, and the user has not yet given a new instruction following the PROMPT.md creation (the conversation was interrupted by the compaction/summary request itself). Per instructions not to pursue tangential or unconfirmed next steps, the appropriate next step once conversation resumes is simply to briefly confirm to the user that `./PROMPT.md` was created successfully and summarize its contents/purpose in a short message (since no user-facing confirmation text was sent before the summary interrupt), then await further direction — for example, whether the user wants to review/adjust the prompt file, or proceed to actual scaffolding work (e.g., the `portage.versions` pilot harness) as previously discussed but not yet started. No implementation work should begin without explicit confirmation, consistent with the entire conversation having been strategic/planning discussion only up to this point.
 
 If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /home/vivo/.claude/projects/-home-vivo-repo-portage/844ee6c8-f160-4599-804e-6daa0c64c897.jsonl
 Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.

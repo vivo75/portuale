@@ -1,6 +1,6 @@
 // Rust port of a deliberately narrowed subset of `portage.dep.Atom` and
 // `portage.dep.match_from_list` (lib/portage/dep/__init__.py) -- the
-// "atom matching" pilot slice from PORTING/PROMPT.md's depgraph/config
+// "atom matching" pilot slice from PROMPT.md's depgraph/config
 // resolution follow-up work.
 //
 // KNOWN, DOCUMENTED SCOPE CUT vs. the real grammar (PMS chapter 8):
@@ -10,7 +10,7 @@
 // slot-operator support itself is EAPI 5+, but since nothing here is
 // EAPI-parametrized in the first place, it's just always recognized, the
 // same way every other EAPI-gated feature already ported is). The Python
-// harness (PORTING/python/atom_harness.py) explicitly rejects atoms
+// harness (python/atom_harness.py) explicitly rejects atoms
 // using any of the still-excluded features as INVALID, so both sides
 // agree on the same input language rather than Rust silently accepting a
 // narrower one. (A separate, bounded wildcard-atom API is further down

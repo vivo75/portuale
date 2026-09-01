@@ -1,5 +1,5 @@
 """Black-box contract suite for the use_reduce(flat=True) pilot (see
-PORTING/PROMPT.md and PORTING/rust/use-reduce-harness/src/use_reduce.rs).
+PROMPT.md and rust/use-reduce-harness/src/use_reduce.rs).
 Drives the Python harness (a thin wrapper around the real
 portage.dep.use_reduce) and the Rust harness identically via subprocess,
 and asserts their outputs are byte-for-byte the same.

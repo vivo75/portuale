@@ -1,5 +1,5 @@
 # Forces a fully static, non-PIE musl binary (no dynamic section at all,
-# not even the musl dynamic loader) -- see PORTING/musl/README.md and
+# not even the musl dynamic loader) -- see musl/README.md and
 # PROMPT.md hard goal 3 ("must run on even the most minimal Linux OS").
 # `+crt-static` alone still leaves a PT_INTERP entry pointing at
 # ld-musl-*.so.1 on some musl targets; `relocation-model=static` drops it.

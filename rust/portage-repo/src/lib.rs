@@ -1,6 +1,6 @@
 // Repo/metadata/vdb access for the single-atom `emerge --pretend` pilot
-// slice (see PORTING/PROMPT.md's depgraph/config-resolution follow-up
-// work, and PORTING/README.md for the full scope writeup).
+// slice (see PROMPT.md's depgraph/config-resolution follow-up
+// work, and README.md for the full scope writeup).
 //
 // Overlays: every `[reponame]` section in `repos.conf` with a `location`
 // (not just `[DEFAULT] main-repo`) is now a candidate source -- see
@@ -630,7 +630,7 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, String> {
         let location = PathBuf::from(location);
         // Real repos.conf always uses absolute locations; relative ones
         // are a pilot/testing convenience so the fixture tree under
-        // PORTING/fixtures can be committed without a machine-specific
+        // fixtures can be committed without a machine-specific
         // absolute path baked in.
         let location = if location.is_absolute() {
             location
@@ -9878,7 +9878,7 @@ pub fn resolve_pretend_graph(
             // atom came from (this pilot's own single-unified-graph
             // architecture merges them into one combined string before
             // flattening at all -- the same documented limitation
-            // `PORTING/PROMPT-next.md`'s own `--root-deps` backlog entry
+            // `PROMPT-next.md`'s own `--root-deps` backlog entry
             // names for the bigger, still-unattempted "recursive second-root
             // graph" gap), so an `RDEPEND`/`PDEPEND`/`IDEPEND` `||` group
             // gets this same permissive check too -- harmless in practice
@@ -10520,7 +10520,7 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures")
             .canonicalize()
-            .expect("PORTING/fixtures must exist")
+            .expect("fixtures must exist")
     }
 
     /// These unit tests exercise portage-repo's own resolution logic in
@@ -10528,7 +10528,7 @@ mod tests {
     /// (that's portage-profile's job, tested separately) -- so visibility
     /// is pinned to a fixed "amd64"-only, no-overrides config here,
     /// matching what the fixture's real profile chain also happens to
-    /// resolve to (see PORTING/fixtures/repo/profiles and
+    /// resolve to (see fixtures/repo/profiles and
     /// test_emerge_pretend_contract.py for the end-to-end version of
     /// this). Constructed directly (not via portage_profile::resolve_config)
     /// so these tests don't depend on real file parsing at all.
@@ -11587,7 +11587,7 @@ mod tests {
         // dev-libs/usemaskreinstallpkg is installed with an empty vdb
         // IUSE, but its own ebuild now declares
         // IUSE="masked_newly_added_flag" -- a flag
-        // PORTING/fixtures/repo/profiles/base/use.mask masks off, so
+        // fixtures/repo/profiles/base/use.mask masks off, so
         // it's never enabled either before or after. Without
         // reinstall_flags_for_use_change's own "flags -= forced_flags"
         // step (real depgraph.py's own line, ported exactly), this
@@ -12406,7 +12406,7 @@ mod tests {
     #[test]
     fn fixture_overlay_only_package_is_found() {
         // dev-libs/overlayonlypkg exists only in the fixture's overlay
-        // repo (see PORTING/fixtures/etc/portage/repos.conf), not the
+        // repo (see fixtures/etc/portage/repos.conf), not the
         // main repo -- proving the overlay is actually searched, not
         // just present in repos.conf.
         assert_eq!(
@@ -14182,7 +14182,7 @@ mod tests {
     #[test]
     fn running_root_satisfies_atom_checks_the_given_roots_own_real_vdb() {
         // rootdepsprovider-1.0 exists only as a hand-seeded vdb entry
-        // under PORTING/fixtures (no ebuild anywhere in the fixture
+        // under fixtures (no ebuild anywhere in the fixture
         // repo tree at all) -- see this crate's own doc comment on
         // `running_root_satisfies_atom` for why this is deliberately
         // generic on which root it's pointed at.
@@ -15731,7 +15731,7 @@ mod tests {
     /// test_accept_keywords()/empty-USE sets every other test in this file
     /// uses, proving real USE flags -- not just a hardcoded empty set --
     /// actually reach use_reduce and change dependency resolution.
-    /// PORTING/fixtures/repo/profiles resolves "foo" enabled and
+    /// fixtures/repo/profiles resolves "foo" enabled and
     /// "missingflag" disabled (see portage-profile's own fixture test),
     /// so useflagpkg's `foo? ( dev-libs/newpkg )` must be pulled in and
     /// its `missingflag? ( dev-libs/hiddendep )` must not be.

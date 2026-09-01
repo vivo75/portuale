@@ -1,5 +1,5 @@
 // Portuale: a multicall-style binary proving the emerge/ebuild dispatch
-// mechanism described in PORTING/PROMPT.md ("emerge/ebuild binary
+// mechanism described in PROMPT.md ("emerge/ebuild binary
 // shape"): a single static binary that behaves differently depending on
 // how it is invoked, busybox-style. Real dispatch installs this binary
 // once and creates `emerge` / `ebuild` symlinks (or hardlinks) pointing

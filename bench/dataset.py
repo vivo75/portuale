@@ -1,7 +1,7 @@
 """Benchmark datasets for the versions-comparison pilot.
 
 Two generators, both producing harness "batch" input lines (see
-PORTING/PROMPT.md, "Test/benchmark harness architecture"):
+PROMPT.md, "Test/benchmark harness architecture"):
 
 - `generate_snapshot_lines`: the default. Draws from a real, vendored
   Gentoo tree snapshot (gentoo_snapshot.json, produced by

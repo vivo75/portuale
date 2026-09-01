@@ -1,4 +1,4 @@
-# `PORTING/TEST/` — real-tree validation for the PORTING pilot
+# `TEST/` — real-tree validation for portuale
 
 Scaffolding for running `portuale` (and the real `emerge`) against a real
 Gentoo tree, inside the `localhost/test-portuale:latest` container image.
@@ -9,14 +9,14 @@ From the repo root:
 
 ```sh
 podman run --rm \
-  -v ./PORTING/TEST/scripts:/TEST/scripts \
-  -v ./PORTING/TEST/logs:/TEST/logs \
-  -v "$PWD/PORTING/rust/target/release:/usr/local/bin" \
+  -v ./TEST/scripts:/TEST/scripts \
+  -v ./TEST/logs:/TEST/logs \
+  -v "$PWD/rust/target/release:/usr/local/bin" \
   localhost/test-portuale
 ```
 
 The container's own mount points stay `/TEST/scripts` and `/TEST/logs`;
-only the host side is under `PORTING/`.
+only the host side lives in this repo.
 
 - `/TEST/scripts` — executables run in **lexicographic order** by the
   container's `/init`. Add probes here as `NN-name.sh` (must be `chmod +x`).
@@ -30,7 +30,7 @@ Inside the container you are `root` (user namespaces; uid 1000 outside).
 
 ## Scripts
 
-- `00-install-portage.sh` — the image ships **stable** portage, but `PORTING/`
+- `00-install-portage.sh` — the image ships **stable** portage, but portuale
   is ported against `~amd64 =sys-apps/portage-3.0.82.2`. This installs that
   first so every later script's real `emerge` matches the version whose
   source `portuale` mirrors. Must stay lexicographically first.

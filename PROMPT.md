@@ -134,7 +134,7 @@ When it is tackled later:
   shared submodule) — neither team may unilaterally narrow it to make
   their side pass.
 
-## First execution step — DONE, see PORTING/README.md for current state
+## First execution step — DONE, see README.md for current state
 
 The original plan here was to pilot the whole pipeline end-to-end on the
 smallest meaningful slice (`portage.versions`, a minimal `emerge`/`ebuild`
@@ -151,7 +151,7 @@ resolution, real profile/make.conf-derived USE/ACCEPT_KEYWORDS,
 package.mask/.unmask/.accept_keywords/.use, blockers, overlays, slot
 conflicts, multiple/versioned/slotted top-level atoms, `-v`'s USE display,
 and full CLI-surface recognition for both `emerge` and `ebuild`, among
-other slices. **`PORTING/README.md`'s "What this proves" section is the
+other slices. **`README.md`'s "What this proves" section is the
 living, incrementally-updated record of everything actually shipped** —
 read that, not this section, for current state. This section is kept for
 historical context (why the pilot started where it did), not as a
@@ -163,7 +163,7 @@ Treat the "Context" through "Ownership" sections above as settled
 decisions, not a menu — they're the goals and hard constraints, and
 should still hold regardless of how much has been built since. For
 what to actually *do* next, don't scaffold the (already-completed) first
-execution step above — read `PORTING/README.md` for what exists and
+execution step above — read `README.md` for what exists and
 `git log` for how work has been landing (one small, fully-shipped,
 documented-and-tested "slice" at a time), and scope the next slice from
 there. If something in this document conflicts with current reality (e.g.

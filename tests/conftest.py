@@ -116,16 +116,16 @@ def _no_clean_delay(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def fixtures_root() -> Path:
-    """PORTING/fixtures/, for tests that copy a committed fixture file
+    """fixtures/, for tests that copy a committed fixture file
     (e.g. a real `.tbz2`/`.gpkg.tar`) into an ad-hoc tree."""
     return FIXTURES_ROOT
 
 
 @pytest.fixture
 def fixture_env() -> dict[str, str]:
-    """PORTAGE_CONFIGROOT/ROOT pointed at PORTING/fixtures, the synthetic
+    """PORTAGE_CONFIGROOT/ROOT pointed at fixtures, the synthetic
     repo+vdb tree the emerge --pretend pilot slice is tested against.
-    DISTDIR points at the committed PORTING/fixtures/distfiles/ so the
+    DISTDIR points at the committed fixtures/distfiles/ so the
     `f`/`F` fetch-restrict bracket column has a deterministic on-disk
     state to check against."""
     env = dict(os.environ)

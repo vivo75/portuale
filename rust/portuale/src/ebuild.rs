@@ -111,7 +111,7 @@ fn print_help() {
          recognized and accepted, still as a no-op. --shell is this pilot's own \
          flag, not a real bin/ebuild option at all."
     );
-    println!("See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.");
+    println!("See README.md and PROMPT.md for this pilot's current scope.");
 }
 
 pub fn run(args: &[String]) -> ExitCode {

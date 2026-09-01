@@ -3,7 +3,7 @@
 
 Drives each harness's `batch` subcommand -- a single process handling many
 operations read from stdin -- specifically to avoid fork/exec overhead
-dominating the measurement (see PORTING/PROMPT.md, "Test/benchmark harness
+dominating the measurement (see PROMPT.md, "Test/benchmark harness
 architecture"). By default the workload is drawn from a real, vendored
 Gentoo tree snapshot (dataset.py / gentoo_snapshot.json, produced by
 extract_snapshot.py), per PROMPT.md's benchmark-data decision; pass
@@ -13,9 +13,9 @@ faster than Python (PROMPT.md hard goal 2), or if given --check-baseline,
 if speedup has regressed vs. a recorded baseline.
 
 Example:
-    python3 PORTING/bench/run_benchmark.py --ops 200000
-    python3 PORTING/bench/run_benchmark.py --update-baseline
-    python3 PORTING/bench/run_benchmark.py --check-baseline
+    python3 bench/run_benchmark.py --ops 200000
+    python3 bench/run_benchmark.py --update-baseline
+    python3 bench/run_benchmark.py --check-baseline
 """
 
 import argparse
@@ -140,7 +140,7 @@ def main() -> int:
     if python_output != rust_output:
         print(
             "error: harness outputs differ -- refusing to report a benchmark for "
-            "implementations that disagree; run the contract suite (PORTING/tests) "
+            "implementations that disagree; run the contract suite (tests) "
             "to find the mismatch first",
             file=sys.stderr,
         )

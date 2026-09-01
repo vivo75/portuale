@@ -1,6 +1,6 @@
 // Neutral CLI test-harness binary for the versions-comparison pilot (see
-// PORTING/PROMPT.md, "Test/benchmark harness architecture"). Exposes the
-// same argv/output contract as PORTING/python/versions_harness.py so a
+// PROMPT.md, "Test/benchmark harness architecture"). Exposes the
+// same argv/output contract as python/versions_harness.py so a
 // black-box test suite can drive both implementations identically.
 //
 // Usage:

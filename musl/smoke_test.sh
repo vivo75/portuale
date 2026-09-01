@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# musl static-build smoke test (see PORTING/PROMPT.md: "Rust CI also gates
+# musl static-build smoke test (see PROMPT.md: "Rust CI also gates
 # on a musl static build smoke-tested inside a minimal (scratch/busybox-
 # level) container").
 #
@@ -16,7 +16,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PORTING_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONTAINERFILE="${SCRIPT_DIR}/Containerfile"
 TAG="${MUSL_SMOKE_TAG:-portage-rust-musl-smoke:pilot}"
 
@@ -45,8 +45,8 @@ check() {
     fi
 }
 
-echo "Building ${IMAGE} with ${ENGINE} (context: ${PORTING_DIR})"
-"${ENGINE}" build --no-cache -f "${CONTAINERFILE}" -t "${TAG}" "${PORTING_DIR}"
+echo "Building ${IMAGE} with ${ENGINE} (context: ${REPO_DIR})"
+"${ENGINE}" build --no-cache -f "${CONTAINERFILE}" -t "${TAG}" "${REPO_DIR}"
 
 # versions-harness (default ENTRYPOINT): correctness spot check.
 actual=$("${ENGINE}" run --rm "${IMAGE}" vercmp 1.0-r1 1.0)
@@ -54,7 +54,7 @@ check "versions-harness vercmp via default entrypoint" \
     test "${actual}" = "1"
 
 # emerge --pretend against the fixture tree copied into the image at
-# /fixtures (see PORTING/fixtures and PORTING/rust/portage-repo): proves
+# /fixtures (see fixtures and rust/portage-repo): proves
 # the real emerge --pretend pilot slice, not just dispatch, works in a
 # statically-linked, nothing-but-the-binaries container.
 actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
@@ -71,7 +71,7 @@ check "emerge --pretend resolves a dependency graph inside the scratch container
     test "${actual}" = "$(printf '[ebuild  N] dev-libs/diamond-1.0\n[ebuild  N] dev-libs/shared-a-1.0\n[ebuild  N] dev-libs/shared-b-1.0\n[ebuild  N] dev-libs/common-1.0')"
 
 # emerge --pretend against the real profile chain + make.conf (see
-# PORTING/fixtures/repo/profiles): the multi-parent chain, its
+# fixtures/repo/profiles): the multi-parent chain, its
 # make.profile symlink, and make.conf's `source /etc/make.local` must all
 # survive the COPY into the scratch image and resolve real USE flags,
 # which is what gates dev-libs/useflagpkg's dependency on dev-libs/newpkg.
@@ -82,7 +82,7 @@ check "emerge --pretend resolves real profile-derived USE flags inside the scrat
     test "${actual}" = "$(printf '[ebuild  N] dev-libs/useflagpkg-1.0\n[ebuild  N] dev-libs/newpkg-1.0')"
 
 # emerge --pretend against package.mask/package.unmask (see
-# PORTING/fixtures/etc/portage/): a masked package stays hidden, and a
+# fixtures/etc/portage/): a masked package stays hidden, and a
 # masked-then-unmasked one is visible, inside the minimal container.
 if "${ENGINE}" run --rm --entrypoint /bin/emerge \
     -e PORTAGE_CONFIGROOT=/fixtures -e ROOT=/fixtures \
@@ -100,7 +100,7 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend respects package.unmask inside the scratch container" \
     test "${actual}" = "[ebuild  N] dev-libs/maskedandunmaskedpkg-1.0"
 
-# emerge --pretend against package.use (see PORTING/fixtures/etc/portage/):
+# emerge --pretend against package.use (see fixtures/etc/portage/):
 # per-package USE overrides, not just the global profile-derived set, must
 # survive the COPY into the scratch image.
 actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
@@ -115,7 +115,7 @@ actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \
 check "emerge --pretend applies a package.use-disabled flag inside the scratch container" \
     test "${actual}" = "[ebuild  N] dev-libs/packageusedisablepkg-1.0"
 
-# emerge --pretend against blockers (see PORTING/fixtures/etc/portage/ and
+# emerge --pretend against blockers (see fixtures/etc/portage/ and
 # the dev-libs/blockerpkg*/weakblockerpkg/graphblockerparent fixture
 # packages): a strong blocker matching an installed package, and a weak
 # blocker matching another package this same run would also newly merge.
@@ -132,8 +132,8 @@ check "emerge --pretend reports a weak blocker against an in-graph package insid
     test "${actual}" = "$(printf '[ebuild  N] dev-libs/graphblockerparent-1.0\n[ebuild  N] dev-libs/blockerpartnerpkg-1.0\n[ebuild  N] dev-libs/weakblockerpkg-1.0\n[blocks] dev-libs/weakblockerpkg-1.0 soft blocks dev-libs/blockerpartnerpkg-1.0 ("!dev-libs/blockerpartnerpkg")')"
 
 # emerge --pretend against the overlay repo (see
-# PORTING/fixtures/etc/portage/repos.conf, which registers a second,
-# higher-priority repo alongside the main one, and PORTING/fixtures/overlay):
+# fixtures/etc/portage/repos.conf, which registers a second,
+# higher-priority repo alongside the main one, and fixtures/overlay):
 # an overlay-only package is found, and a same-version tie across both
 # repos is broken toward the higher-priority overlay copy.
 actual=$("${ENGINE}" run --rm --entrypoint /bin/emerge \

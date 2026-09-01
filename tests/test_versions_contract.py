@@ -1,5 +1,5 @@
 """Black-box contract suite for the versions-comparison pilot (see
-PORTING/PROMPT.md). Drives the Python harness (a thin wrapper around the
+PROMPT.md). Drives the Python harness (a thin wrapper around the
 real `portage.versions`) and the Rust harness identically via subprocess,
 and asserts their outputs are byte-for-byte the same. Neither harness's
 internals are imported directly -- this is deliberately implementation-

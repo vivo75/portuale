@@ -5,7 +5,7 @@
 
 # ---------------------------------------------------------------------------
 # VENDORED from upstream Portage's bin/phase-functions.sh -- see the [portage]
-# entry in PORTING/3rdparty/repos.toml for the exact ref this was copied from.
+# entry in 3rdparty/repos.toml for the exact ref this was copied from.
 # portuale drives this file directly for real ebuild phase execution, so it
 # has to ship with the pilot (the point is to `emerge` on a host with no
 # Portage installed). Re-sync from upstream by copying the file over and
@@ -15,7 +15,7 @@
 # __save_ebuild_env | __filter_readonly_variables through a ${T} temp file so
 # neither shell function is a pipeline stage -- a shell that runs a non-last
 # function pipeline stage inline deadlocks once it writes past the OS pipe
-# buffer. See PORTING/README.md's "brush strategy #2" section.
+# buffer. See README.md's "brush strategy #2" section.
 # ---------------------------------------------------------------------------
 
 # Hardcoded bash lists are needed for backward compatibility with

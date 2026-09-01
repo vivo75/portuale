@@ -1,5 +1,5 @@
 // `emerge --pretend <category/package>`: the v1 slice (see
-// PORTING/rust/portage-repo/src/lib.rs for the full scope writeup --
+// rust/portage-repo/src/lib.rs for the full scope writeup --
 // candidates come from every repos.conf repo, main + overlays). USE/
 // ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use come from
 // the real profile chain + make.conf + package.* (see portage-profile's
@@ -206,7 +206,7 @@
 // this pilot doesn't implement -- reproducing it here would be actively
 // misleading) -- it's a short, honest, pilot-specific summary of what
 // this pilot actually supports, ending with a pointer to
-// PORTING/README.md and PORTING/PROMPT.md for the rest.
+// README.md and PROMPT.md for the rest.
 
 use crate::color::{self, Colorizer};
 use crate::ebuild_merge;
@@ -1886,7 +1886,7 @@ fn print_help() {
          lib/_emerge/main.py) but not implemented -- using one reports which \
          option or action it is, instead of a generic error."
     );
-    println!("See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.");
+    println!("See README.md and PROMPT.md for this pilot's current scope.");
 }
 
 /// Reads `<root>/var/lib/portage/world` (real portage's own `WORLD_FILE`

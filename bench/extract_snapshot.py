@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Vendors a real Gentoo tree snapshot for the benchmark dataset, per
-PORTING/PROMPT.md ("Benchmark data: a real, vendored Gentoo tree snapshot
+PROMPT.md ("Benchmark data: a real, vendored Gentoo tree snapshot
 (not purely synthetic stress data)").
 
 Walks a local ebuild repository (e.g. /.gentoo/repos/gentoo -- a full
@@ -13,8 +13,8 @@ benchmark dataset doesn't depend on this path existing at CI/benchmark
 time -- only at (occasional, manual) re-vendoring time.
 
 Usage:
-    python3 PORTING/bench/extract_snapshot.py /.gentoo/repos/gentoo
-    python3 PORTING/bench/extract_snapshot.py /.gentoo/repos/gentoo --out other.json
+    python3 bench/extract_snapshot.py /.gentoo/repos/gentoo
+    python3 bench/extract_snapshot.py /.gentoo/repos/gentoo --out other.json
 """
 
 import argparse

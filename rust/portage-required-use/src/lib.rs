@@ -1,7 +1,7 @@
 // Rust port of real `portage.dep.check_required_use`
 // (`lib/portage/dep/__init__.py`, `is_active`/`is_satisfied` plus the
 // tokenizer/group-tree builder around them) -- the REQUIRED_USE
-// (PMS 7.3.4/8.2) pilot slice from PORTING/PROMPT.md's follow-up work.
+// (PMS 7.3.4/8.2) pilot slice from PROMPT.md's follow-up work.
 //
 // PMS 8.2's own grammar for REQUIRED_USE (a "specification style
 // variable"): a leaf is `flag` or `!flag`; a group is either a bare

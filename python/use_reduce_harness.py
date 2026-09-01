@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Neutral CLI test-harness binary (Python side) for the
-use_reduce(flat=True) pilot -- see PORTING/PROMPT.md and
-PORTING/rust/use-reduce-harness/src/use_reduce.rs for what is and isn't
+use_reduce(flat=True) pilot -- see PROMPT.md and
+rust/use-reduce-harness/src/use_reduce.rs for what is and isn't
 ported. Wraps the real portage.dep.use_reduce rather than reimplementing
 it, always called with flat=True and no masklist/excludeall/is_src_uri/
 opconvert/subset/token_class -- see the Rust side's doc comment for why

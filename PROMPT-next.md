@@ -1,6 +1,6 @@
 # Prompt: Continue the Python-to-Rust Portage pilot
 
-This is `PORTING/PROMPT-next.md`, the single entry point for (re)deriving
+This is `PROMPT-next.md`, the single entry point for (re)deriving
 where this effort stands and what to do next, without repeating the
 discovery conversations that produced it. It merges: the original
 porting-strategy prompt (goals, hard constraints, architectural
@@ -26,7 +26,7 @@ baseline — branches that only apply to EAPI 0/1/2/3/4/6 are dead code and
 can be ignored rather than faithfully ported. (This pilot's own `portage-*`
 crates go further, as a deliberate simplification confirmed with the user:
 no EAPI parametrization at all within the 5+ floor — every EAPI in that
-range is treated identically. See `PORTING/README.md` for the many places
+range is treated identically. See `README.md` for the many places
 this precedent is invoked.)
 
 ## Team structure
@@ -88,7 +88,7 @@ Ship `emerge` and `ebuild` as **one multicall binary** (busybox-style),
 dispatching behavior based on `argv[0]` via symlinks/hardlinks pointing at
 a single executable. This is both a good minimal-Linux fit (one static
 binary, no duplicated code) and drop-in compatible with tooling that
-invokes `emerge`/`ebuild` by name directly. **Shipped**: `PORTING/rust/portuale`.
+invokes `emerge`/`ebuild` by name directly. **Shipped**: `rust/portuale`.
 
 ## Test/benchmark harness architecture
 
@@ -107,7 +107,7 @@ invokes `emerge`/`ebuild` by name directly. **Shipped**: `PORTING/rust/portuale`
     invocation) to avoid fork/exec overhead dominating the measurement.
 - Benchmark data: a **real, vendored Gentoo tree snapshot** (not purely
   synthetic stress data) — realistic scale and distribution of versions/
-  atoms/deps. `PORTING/bench/extract_snapshot.py` refreshes
+  atoms/deps. `bench/extract_snapshot.py` refreshes
   `gentoo_snapshot.json` against a live tree using real
   `portage.versions.pkgsplit` as the authority.
 - CI gates on both: correctness suite must pass on both implementations;
@@ -124,7 +124,7 @@ invokes `emerge`/`ebuild` by name directly. **Shipped**: `PORTING/rust/portuale`
   shared submodule) — neither team may unilaterally narrow it to make
   their side pass.
 
-## Current state (read `PORTING/README.md` for the authoritative, living detail)
+## Current state (read `README.md` for the authoritative, living detail)
 
 As of commit `f1ae9287d` (branch `rust`), both major phases of this pilot
 are live — re-verify against `git log`/`README.md` before trusting this
@@ -293,13 +293,13 @@ a simplified transcription of real `_show_slot_collision_notice` →
 instances …` block (`SlotConflict.instances` = every conflicting version
 + its `(parent_cpv, atom)` pullers, via `build_slot_conflict`) + the
 advisory paragraph with the `--backtrack=30` hint gated the real way.
-Deferred (see `PORTING/SCOPE_BACKLOG.md` Part 2.A): "backtracking
+Deferred (see `SCOPE_BACKLOG.md` Part 2.A): "backtracking
 exhausted" / "circular dependencies" diagnostics, autounmask levels tried
 in sequence inside the loop, the `resolve_graph_once` helper extraction
 (drop slice 1's `loop {}` reindent), and real `get_conflict()`'s
 `collision_reasons` grouping / `--verbose-conflicts` markers / stderr.
 
-`PORTING/README.md`'s "What this proves" section is the incrementally-
+`README.md`'s "What this proves" section is the incrementally-
 updated record of every shipped slice, each grounded in cited real Python
 source — read that, not this list, for current detail, and `git log` for
 how work has actually been landing (one small, fully-shipped, documented-
@@ -321,7 +321,7 @@ entry below for exactly what's left). Re-verify against
 next slice" round should always re-ground candidates in current code,
 not just read this list. What's actually left, grouped by area:
 
-> See also `PORTING/SCOPE_BACKLOG.md` — a wider inventory of real portage
+> See also `SCOPE_BACKLOG.md` — a wider inventory of real portage
 > behavior not yet ported to *either* side (config-resolution `USE_ORDER`
 > `env`/`features`/`env.d` layers, `RESTRICT=primaryuri`, brush strategy
 > #2 (rewrite brush-hostile `bin/*.sh`), …).
@@ -969,19 +969,19 @@ not just read this list. What's actually left, grouped by area:
   couldn't reach.
 - brush strategy #3 (formalize the forked `brush` dependency, track
   fork-vs-upstream-merged fixes) — **done 2026-08-27**: see
-  `PORTING/BRUSH_FORK.md` (#1274 merged upstream, #1276 open and the sole
+  `BRUSH_PIN.md` (#1274 merged upstream, #1276 open and the sole
   fork-only fix, ancestry of the pin, re-pin checklist). brush strategy
   #2 (rewrite this repo's own `bin/*.sh` to avoid brush-hostile
   constructs) still open.
 
-### `PORTING/helpers/` reference material
+### `helpers/` reference material
 
-- `PORTING/helpers/devmanual/` — a full local checkout of the Gentoo
+- `helpers/devmanual/` — a full local checkout of the Gentoo
   devmanual (`function-reference/`, `tools-reference/`, and per-phase
   `ebuild-writing/functions/*/text.xml` docs). Useful any time real
   ebuild-helper (`doins`, `dodir`, `insinto`, etc.) or phase-ordering
   semantics need grounding.
-- `PORTING/helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`
+- `helpers/emerge_-1v_--debug_--getbinpkgonly__sys-fs--fuse.log`
   — a real `emerge --getbinpkgonly` debug trace. The remote binpkg
   download + merge (and the `--getbinpkg` mixed source+binary merge)
   shipped 2026-08-31 (see the "Binary packages / fetch" backlog entry
@@ -994,7 +994,7 @@ This used to be "the next major phase after dry-run" — it's fully live
 now. `ebuild <file> install` runs the real `pretend → setup → unpack →
 prepare → configure → compile → test → install` chain via an embedded
 `brush` shell driving real, unmodified `bin/*.sh`
-(`PORTING/rust/portuale/src/ebuild_phases.rs`). `ebuild <file> merge`
+(`rust/portuale/src/ebuild_phases.rs`). `ebuild <file> merge`
 copies `${D}` into `${ROOT}`, writes a real vdb entry, and runs real
 `pkg_preinst`/`pkg_postinst` (`ebuild_merge.rs`). `ebuild <file> unmerge`
 is `merge`'s natural complement (`ebuild_unmerge.rs`), without which
@@ -1116,7 +1116,7 @@ ebuilds/eclasses from the actual `gentoo` tree — `app-arch/unzip`,
 end.
 
 Each of these has its own dedicated, cited-source "What this proves"
-section in `PORTING/README.md` — read that for the real Python source
+section in `README.md` — read that for the real Python source
 grounding, the v1 scope cuts, and a runnable example per feature; this
 file only tracks what's still *missing* (see "Open backlog" above).
 
@@ -1133,7 +1133,7 @@ useful orientation even though both are now shipped):
    `pkg_preinst`/`pkg_postinst` (if defined) → `pkg_prerm`/`pkg_postrm`
    (already-installed only) → `pkg_config` (user-requested only) →
    `pkg_info` (always). This calling-order table is documented per-
-   function in `PORTING/helpers/devmanual/ebuild-writing/functions/`.
+   function in `helpers/devmanual/ebuild-writing/functions/`.
    The devmanual also has `function-reference/` and `tools-reference/`
    covering the ebuild-helper commands (`doins`, `dodir`, `insinto`,
    etc.) used inside those phases.
@@ -1198,7 +1198,7 @@ upstream `main`. Only these two constructs have been proven fixed — real
 ebuilds/eclasses in the wild almost certainly exercise other bash
 constructs not yet tried against brush; this was targeted spike-and-fix
 work, not an exhaustive compatibility sweep. **Full fork-tracking record:
-`PORTING/BRUSH_FORK.md`.**
+`BRUSH_PIN.md`.**
 
 ### Candidate strategies (complementary, not mutually exclusive)
 
@@ -1212,7 +1212,7 @@ work, not an exhaustive compatibility sweep. **Full fork-tracking record:
    open (see "Open backlog" above). Low-risk, immediately effective for
    this repo's own tree, doesn't preempt real-world ebuilds/eclasses.
 3. **Maintain a local brush fork with our fixes until upstream merges** —
-   the tracking doc now exists: **`PORTING/BRUSH_FORK.md`** (which fixes
+   the tracking doc now exists: **`BRUSH_PIN.md`** (which fixes
    are upstream-merged vs fork-only, the ancestry of the pinned rev, and
    a re-pin checklist). `vivo75/brush` is still pinned by exact commit in
    `portuale/Cargo.toml`; #1274 merged upstream, #1276 (the deadlock fix)
@@ -1256,17 +1256,17 @@ The user drives this pilot by literally saying **"next slice"** (or
    the host's own `/`, which would have made every fixture test
    host-dependent; resolved by scoping the real behavior as new,
    strictly opt-in machinery instead).
-4. **Implement in both language sides in lockstep**: `PORTING/rust/...`
-   and `PORTING/python/emerge_pretend_reference.py` must stay
+4. **Implement in both language sides in lockstep**: `rust/...`
+   and `python/emerge_pretend_reference.py` must stay
    behaviorally identical, verified *empirically* — run both directly
-   against `PORTING/fixtures` and diff the output — not just by trusting
+   against `fixtures` and diff the output — not just by trusting
    the pytest suite to catch a divergence. (Real-execution-only features
    — `merge`/`unmerge`/`package`/`fetch`/real phase execution — have no
    Python mirror at all, since they're real filesystem mutation, not
    part of the dry-run/pretend contract; only their CLI-recognition
    surface needs mirroring for the contract suite to still match.)
-5. **Add fixtures by hand** under `PORTING/fixtures/repo/...` (or
-   `PORTING/fixtures/overlay/...`, or `PORTING/fixtures/var/db/pkg/...`
+5. **Add fixtures by hand** under `fixtures/repo/...` (or
+   `fixtures/overlay/...`, or `fixtures/var/db/pkg/...`
    for vdb-only entries) plus matching `metadata/md5-cache/...` entries
    when a slice needs new test data. No generator script for the
    ebuild-tree fixtures. Before spending fixture-authoring effort on a
@@ -1279,14 +1279,14 @@ The user drives this pilot by literally saying **"next slice"** (or
    tree first) — a silent overwrite of a pre-existing fixture has broken
    an unrelated test before.
 6. **Add both a parametrized `CASES` entry** in
-   `PORTING/tests/test_emerge_pretend_contract.py` **and at least one
+   `tests/test_emerge_pretend_contract.py` **and at least one
    dedicated pinned-output test function** (exact stdout/stderr/exit-code
    assertions) for dry-run features, plus a matching Rust unit test in
    the relevant crate's own `#[cfg(test)]` module. Real-execution
    features get Rust unit tests (often fixture-driven, real end-to-end
    merge/unmerge/etc.) instead, since they have no Python side to
    contract-test against.
-7. **Update `PORTING/README.md`**: append a new paragraph to the "What
+7. **Update `README.md`**: append a new paragraph to the "What
    this proves" narrative (never rewrite prior slices' own paragraphs —
    they're a historical record) and add a runnable example to "Running
    it", *live-verified* against the actual built binaries, not written
@@ -1299,7 +1299,7 @@ The user drives this pilot by literally saying **"next slice"** (or
 8. **Run the full verification pass** before considering a slice done:
    `cargo fmt --check`, `cargo clippy --release --all-targets` (zero
    warnings, not just zero errors), `cargo test --release` (whole
-   workspace), and `python3 -m pytest PORTING/tests -q` (whole suite,
+   workspace), and `python3 -m pytest tests -q` (whole suite,
    not just the new cases).
 9. **Only `git commit`/`git push` when explicitly asked** — these are
    separate, later requests each time, never implied by finishing a
@@ -1321,7 +1321,7 @@ log`, and the actual source, not copied from an earlier version of this
 file) but are still just a snapshot — re-verify against current
 `README.md`/`git log`/the task list before assuming any of it still
 holds, and for the bash-backend investigation specifically, check the
-live `reubeno/brush` PR/crate state against `PORTING/BRUSH_FORK.md` (as
+live `reubeno/brush` PR/crate state against `BRUSH_PIN.md` (as
 of 2026-08-27: #1274 merged, #1276 open; a new release may exist, new
 incompatibilities may have been found). If
 something here conflicts with current reality, or a genuinely open

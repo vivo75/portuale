@@ -1,4 +1,4 @@
-// Real ebuild phase execution (task #54, PORTING/PROMPT-next.md's own
+// Real ebuild phase execution (task #54, PROMPT-next.md's own
 // "Real ebuild phase execution" section) -- the first slice: proving real
 // phase functions run and real files land under a real `${D}`, without
 // touching the vdb/CONTENTS/merge machinery at all (task #55, a
@@ -2386,7 +2386,7 @@ mod tests {
     }
 
     /// End-to-end proof: a real `install` run against the real fixture
-    /// ebuild (`PORTING/fixtures/repo/dev-libs/phasepkg`, whose own
+    /// ebuild (`fixtures/repo/dev-libs/phasepkg`, whose own
     /// `src_install` calls real `insinto`/`doins`) actually lands a real
     /// file under a real `${D}`, via the real, unmodified `bin/*.sh`
     /// this module drives -- not a mock of any kind. A fresh, uniquely

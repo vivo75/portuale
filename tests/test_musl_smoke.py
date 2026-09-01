@@ -1,6 +1,6 @@
 """musl static-build smoke test, wrapped as a CI gate (see PROMPT.md: "Rust
 CI also gates on a musl static build smoke-tested inside a minimal
-(scratch/busybox-level) container"). Opt-in via PORTING_RUN_MUSL_SMOKE=1,
+(scratch/busybox-level) container"). Opt-in via PORTUALE_RUN_MUSL_SMOKE=1,
 same pattern as test_benchmark_gate.py -- it needs podman or docker and
 takes tens of seconds, so it stays out of the default fast contract-suite
 run; CI should set the env var to actually enforce the gate.
@@ -16,8 +16,8 @@ import pytest
 SMOKE_SCRIPT = Path(__file__).resolve().parents[1] / "musl" / "smoke_test.sh"
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("PORTING_RUN_MUSL_SMOKE") != "1",
-    reason="opt-in: set PORTING_RUN_MUSL_SMOKE=1 to run the musl container smoke test",
+    os.environ.get("PORTUALE_RUN_MUSL_SMOKE") != "1",
+    reason="opt-in: set PORTUALE_RUN_MUSL_SMOKE=1 to run the musl container smoke test",
 )
 
 

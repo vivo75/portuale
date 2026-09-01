@@ -9,7 +9,7 @@
 // implemented (see pretend.rs); every table here exists purely for
 // recognition, not
 // behavior. Mirrored exactly in
-// PORTING/python/emerge_pretend_reference.py's own copy of these same
+// python/emerge_pretend_reference.py's own copy of these same
 // three tables, so both sides report identical text for identical input
 // (verified by the shared contract suite). `--deep`/`-D`,
 // `--exclude`/`-X`, `--deselect`/`-W`, `--with-bdeps`,
