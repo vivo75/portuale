@@ -351,8 +351,11 @@ not just read this list. What's actually left, grouped by area:
 > generator + `/etc/portage/sets/` files) and **`--search` / `-s` /
 > `--searchdesc` / `-S`** (`run_search` / `_run_search` — substring
 > match over `portage_repo::all_cp` + set names, real `search.output()`
-> shape, `-v` block; v1 cuts: fuzzy/regex/index, `--usepkg`, full mask
-> filter); **`--check-news`** (`run_check_news` / `_run_check_news` —
+> shape, `-v` block; v1 cuts: index, `--usepkg`, full mask filter —
+> **`--fuzzy-search` / `--regex-search-auto` / `--search-similarity`
+> shipped 2026-09-02**, `--search` is fuzzy + regex-auto by default now,
+> new `portuale/src/difflib.rs` `SequenceMatcher.ratio()` port);
+> **`--check-news`** (`run_check_news` / `_run_check_news` —
 > count valid+relevant+unread GLEP 42 items per repo; v1 cuts: no
 > `.unread`/`.skip` persistence, `Display-If-Installed` only; fixture
 > news items in `fixtures/repo/metadata/news/`); **`--clean`**

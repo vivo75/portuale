@@ -209,6 +209,7 @@
 // README.md and docs/agent-context.md for the rest.
 
 use crate::color::{self, Colorizer};
+use crate::difflib;
 use crate::ebuild_merge;
 use crate::ebuild_package;
 use crate::ebuild_phases;
@@ -4335,19 +4336,32 @@ fn defined_set_names(config_root: &Path) -> Vec<String> {
 /// `Description` / `License` block under `-v`), and the
 /// `[ Applications found : N ]` footer.
 ///
-/// **v1 cuts:** real portage's default fuzzy matching
-/// (`--fuzzy-search`, `difflib.SequenceMatcher`); regex search
-/// (`--regex-search-auto` / a `%`-prefixed key); the search index
-/// (`--search-index`); `--usepkg` binary-package results; the
-/// `bestmatch-visible` mask/keyword filter (the highest version is used,
-/// flagged `[ Masked ]` only when its `KEYWORDS` carry no stable/testing
-/// token for the profile arch); `Size of files`.
+/// `--fuzzy-search` (default on): a hit also lands when `difflib::ratio`
+/// (a faithful `difflib.SequenceMatcher.ratio()` port) between the key
+/// and a package/set name reaches `search_similarity`% (default 80) --
+/// real `search.py`'s `fuzzy_search_part`. For a `cat/pkg` key the two
+/// halves are scored independently and both must pass (real portage's
+/// `part_matchers` split). `--regex-search-auto` (default on): a key
+/// containing a regex metacharacter (`^ $ * [ ] { } | ?` or `.+`) that
+/// compiles is matched as a case-insensitive regex instead of a literal
+/// substring (fuzzy is then off, matching real `search.py`); a leading
+/// `%` forces regex mode.
+///
+/// **v1 cuts:** the search index (`--search-index`); `--usepkg`
+/// binary-package results; the `bestmatch-visible` mask/keyword filter
+/// (the highest version is used, flagged `[ Masked ]` only when its
+/// `KEYWORDS` carry no stable/testing token for the profile arch);
+/// `Size of files`.
+#[allow(clippy::too_many_arguments)]
 fn run_search(
     terms: &[&str],
     repos: &[portage_repo::RepoConfig],
     root: &Path,
     searchdesc: bool,
     verbose: bool,
+    fuzzy: bool,
+    regex_auto: bool,
+    search_similarity: f64,
     color: &Colorizer,
 ) -> ExitCode {
     if terms.is_empty() {
@@ -4359,18 +4373,63 @@ fn run_search(
     let set_names = defined_set_names(&config_root_from_env());
 
     for term in terms {
+        let forced_regex = term.starts_with('%');
         let key = term.trim_start_matches('%');
         let match_category = key.contains('/');
+        let cutoff = search_similarity / 100.0;
+
+        // Real `search.py:265-280`: `%`-forced, or auto-detected (a regex
+        // metacharacter present *and* the key compiles). Fuzzy is
+        // disabled for a regex search.
+        let looks_regex =
+            key.contains(['^', '$', '*', '[', ']', '{', '}', '|', '?']) || key.contains(".+");
+        let re: Option<regex::Regex> = if forced_regex || (regex_auto && looks_regex) {
+            regex::RegexBuilder::new(key)
+                .case_insensitive(true)
+                .build()
+                .ok()
+        } else {
+            None
+        };
+        let use_fuzzy = fuzzy && re.is_none();
+
+        // `re.search` (regex) or a plain case-insensitive substring
+        // (real: `re.compile(re.escape(key), re.IGNORECASE)`).
         let needle = key.to_lowercase();
+        let literal_or_re = |hay: &str| -> bool {
+            match &re {
+                Some(r) => r.is_match(hay),
+                None => hay.to_lowercase().contains(&needle),
+            }
+        };
+        // Real `fuzzy_search` / `fuzzy_search_part`: split key + candidate
+        // into `(cat, pkg)` when matching categories, score each half.
+        let fuzzy_hit = |match_string: &str| -> bool {
+            if !use_fuzzy {
+                return false;
+            }
+            let (kparts, mparts): (Vec<&str>, Vec<&str>) = if match_category {
+                (
+                    key.splitn(2, '/').collect(),
+                    match_string.splitn(2, '/').collect(),
+                )
+            } else {
+                (vec![key], vec![match_string])
+            };
+            kparts
+                .iter()
+                .zip(mparts.iter())
+                .all(|(k, m)| difflib::ratio(&m.to_lowercase(), &k.to_lowercase()) >= cutoff)
+        };
 
         let mut hits: Vec<(String, bool)> = Vec::new(); // (cp, masked)
         for cp in &all_cp {
             let hay = if match_category {
-                cp.to_lowercase()
+                cp.as_str()
             } else {
-                cp.rsplit('/').next().unwrap_or(cp).to_lowercase()
+                cp.rsplit('/').next().unwrap_or(cp)
             };
-            let name_match = hay.contains(&needle);
+            let name_match = literal_or_re(hay) || fuzzy_hit(hay);
             let (cat, pkg) = cp.split_once('/').unwrap_or((cp.as_str(), ""));
             let cands = portage_repo::list_candidates(repos, cat, pkg).unwrap_or_default();
             let best = search_best_candidate(&cands);
@@ -4384,16 +4443,26 @@ fn run_search(
                     )
                     .ok()
                     .and_then(|m| m.get("DESCRIPTION").cloned())
-                    .is_some_and(|d| d.to_lowercase().contains(&needle))
+                    .is_some_and(|d| literal_or_re(&d))
                 });
             if name_match || desc_match {
                 let masked = !best.as_ref().is_some_and(search_candidate_visible);
                 hits.push((cp.clone(), masked));
             }
         }
+        // Real `search.py:349-357`: set names matched with the same
+        // `searchre` (never fuzzy), against the last `/` component unless
+        // matching categories.
         let mut set_hits: Vec<String> = set_names
             .iter()
-            .filter(|s| s.to_lowercase().contains(&needle))
+            .filter(|s| {
+                let hay = if match_category {
+                    s.as_str()
+                } else {
+                    s.rsplit('/').next().unwrap_or(s)
+                };
+                literal_or_re(hay)
+            })
             .cloned()
             .collect();
         set_hits.sort();
@@ -5002,6 +5071,20 @@ pub fn run(args: &[String]) -> ExitCode {
     let mut list_sets = false;
     let mut search_action = false;
     let mut searchdesc = false;
+    // --fuzzy-search (real `true_y_or_n`): `emerge --search`'s own
+    // `difflib.SequenceMatcher` fuzzy matching. Real `action_search`:
+    // `fuzzy = myopts.get("--fuzzy-search") != "n"` -- ON by default,
+    // only `--fuzzy-search=n` disables it.
+    let mut fuzzy_search = true;
+    // --regex-search-auto (real `y_or_n`, `"default": "y"`): auto-detect
+    // a regular-expression search key. Real `action_search`: `regex_auto
+    // = myopts.get("--regex-search-auto") != "n"`.
+    let mut regex_search_auto = true;
+    // --search-similarity (real: a float 0..100, default 80): the minimum
+    // `SequenceMatcher.ratio()` percentage a fuzzy hit needs. Real
+    // `search.py`: `self.search_similarity = 80 if search_similarity is
+    // None else search_similarity`.
+    let mut search_similarity: f64 = 80.0;
     let mut check_news = false;
     // --clean / --rage-clean: standalone removal actions. --rage-clean
     // is a fast --unmerge (same selection, skips CLEAN_DELAY + prerm/
@@ -5111,6 +5194,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // --autounmask-keep-masks: real `y_or_n`. Real KEEPS masks by default
     // (`autounmask_keep_masks` defaults `True`); only `=n` unmasks.
     let mut autounmask_keep_masks: Option<bool> = None;
+    // --autounmask-only (real `true_y_or_n`, `main.py:813`): "only perform
+    // --autounmask" -- real `actions.py:456`: resolve the graph, then
+    // `mydepgraph.display_problems(); return 0`, skipping the whole merge
+    // list. Nothing is ever built (it forces the dry-run path). The
+    // pilot's `display_problems` equivalent = the slot-conflict notice +
+    // the autounmask suggestion blocks (+ the unsatisfied-dep stderr
+    // notes already printed during resolution).
+    let mut autounmask_only = false;
     // --usepkg/-k, --usepkgonly/-K, --binpkg-respect-use: all three real
     // "true_y_or_n" (bare flag, "=y", or "=n"), same shape --autounmask
     // already has. --binpkg-respect-use's own real default ("auto",
@@ -5827,6 +5918,62 @@ pub fn run(args: &[String]) -> ExitCode {
             search_action = true;
             searchdesc = true;
             i += 1;
+        } else if arg == "--fuzzy-search" || arg.starts_with("--fuzzy-search=") {
+            // Real `true_y_or_n` -- bare / `=y` / `=n` (`y`/`n`/`True`).
+            let val = if let Some(v) = arg.strip_prefix("--fuzzy-search=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(
+                args.get(i + 1).map(String::as_str),
+                Some("y" | "n" | "True")
+            ) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            fuzzy_search = !matches!(val.as_str(), "n" | "N");
+        } else if arg == "--regex-search-auto" || arg.starts_with("--regex-search-auto=") {
+            // Real `y_or_n` with `"default": "y"`.
+            let val = if let Some(v) = arg.strip_prefix("--regex-search-auto=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(args.get(i + 1).map(String::as_str), Some("y" | "n")) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            regex_search_auto = !matches!(val.as_str(), "n" | "N");
+        } else if arg == "--search-similarity" || arg.starts_with("--search-similarity=") {
+            let val = if let Some(v) = arg.strip_prefix("--search-similarity=") {
+                i += 1;
+                v.to_string()
+            } else if let Some(v) = args.get(i + 1) {
+                i += 2;
+                v.clone()
+            } else {
+                eprintln!("emerge: option '--search-similarity' requires a value");
+                return ExitCode::from(2);
+            };
+            // Real `main.py:1088-1099`: must parse as a float in [0, 100].
+            match val.parse::<f64>() {
+                Ok(n) if (0.0..=100.0).contains(&n) => search_similarity = n,
+                Ok(_) => {
+                    eprintln!(
+                        "emerge: Invalid --search-similarity parameter (not between 0 and 100): '{val}'"
+                    );
+                    return ExitCode::from(2);
+                }
+                Err(_) => {
+                    eprintln!(
+                        "emerge: Invalid --search-similarity parameter (not a number): '{val}'"
+                    );
+                    return ExitCode::from(2);
+                }
+            }
         } else if arg == "--check-news" {
             // Real `main.py`: `--check-news` is a standalone ACTION
             // (`actions.py:3844`) -- count unread relevant GLEP 42 news
@@ -5973,6 +6120,22 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--autounmask=n" {
             autounmask = Some(false);
             i += 1;
+        } else if arg == "--autounmask-only" || arg.starts_with("--autounmask-only=") {
+            // Real `true_y_or_n` -- bare / `=y` / `=True` -> on, `=n` -> off.
+            let val = if let Some(v) = arg.strip_prefix("--autounmask-only=") {
+                i += 1;
+                v.to_string()
+            } else if matches!(
+                args.get(i + 1).map(String::as_str),
+                Some("y" | "n" | "True")
+            ) {
+                i += 2;
+                args[i - 1].clone()
+            } else {
+                i += 1;
+                "y".to_string()
+            };
+            autounmask_only = matches!(val.as_str(), "y" | "True");
         } else if arg == "--autounmask-keep-keywords" {
             // Real "--autounmask-keep-keywords": plain y_or_n, a
             // REQUIRED value -- no bare/optional form real
@@ -6521,7 +6684,17 @@ pub fn run(args: &[String]) -> ExitCode {
     // `Description` block shows by default and `-q` makes it terse; `-v`
     // is irrelevant to search.
     if search_action {
-        return run_search(&atom_args, &repos, &root, searchdesc, !quiet, &color);
+        return run_search(
+            &atom_args,
+            &repos,
+            &root,
+            searchdesc,
+            !quiet,
+            fuzzy_search,
+            regex_search_auto,
+            search_similarity,
+            &color,
+        );
     }
 
     // `--check-news`: a standalone read-only query action (real
@@ -6908,6 +7081,12 @@ pub fn run(args: &[String]) -> ExitCode {
     };
     let entries = &result.entries;
 
+    // `--autounmask-only` (real `actions.py:456`): skip the whole merge
+    // list -- only the `display_problems()` equivalent (slot-conflict
+    // notice + autounmask blocks) is shown, then exit 0. Also forces the
+    // dry-run path: nothing is ever built.
+    let show_merge_list = !autounmask_only;
+
     // Real `depgraph.py:11192-11235`'s `display_problems()` block for a
     // directly-requested atom that matched `package.provided` -- printed
     // to stderr, before the merge list (matching real portage's own
@@ -6978,49 +7157,51 @@ pub fn run(args: &[String]) -> ExitCode {
     // the entries and printed as one group after every package line (see
     // `format_blocker_lines`).
     let mut blocker_lines: Vec<String> = Vec::new();
-    if tree {
-        print_tree(
-            entries,
-            &top_level_pkgs,
-            onlydeps,
-            oneshot,
-            unordered_display,
-            verbose,
-            quiet,
-            alphabetical,
-            root_deps_running_root.as_deref(),
-            &color,
-            system_atoms,
-            &world_atoms,
-            &mut blocker_lines,
-        );
-    } else {
-        for entry in entries {
-            print_entry_line(
-                entry,
-                "",
+    if show_merge_list {
+        if tree {
+            print_tree(
+                entries,
                 &top_level_pkgs,
                 onlydeps,
                 oneshot,
+                unordered_display,
                 verbose,
                 quiet,
                 alphabetical,
-                columns,
-                columnwidth,
                 root_deps_running_root.as_deref(),
                 &color,
                 system_atoms,
                 &world_atoms,
                 &mut blocker_lines,
             );
+        } else {
+            for entry in entries {
+                print_entry_line(
+                    entry,
+                    "",
+                    &top_level_pkgs,
+                    onlydeps,
+                    oneshot,
+                    verbose,
+                    quiet,
+                    alphabetical,
+                    columns,
+                    columnwidth,
+                    root_deps_running_root.as_deref(),
+                    &color,
+                    system_atoms,
+                    &world_atoms,
+                    &mut blocker_lines,
+                );
+            }
         }
-    }
 
-    // Real `Display.print_blockers()`: the collected `[blocks B ...]`
-    // lines, printed as one group after every package line and before
-    // the counters.
-    for line in &blocker_lines {
-        println!("{line}");
+        // Real `Display.print_blockers()`: the collected `[blocks B ...]`
+        // lines, printed as one group after every package line and before
+        // the counters.
+        for line in &blocker_lines {
+            println!("{line}");
+        }
     }
 
     // Real `output.py::display`: `if self.conf.verbosity == 3:
@@ -7029,7 +7210,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // tree/columns/flat layouts alike. Real emits `f"\n{self.counters}\n"`
     // (a leading blank line). `--quiet` forces verbosity to 1, so `-pvq`
     // suppresses the line that `-pv` would show.
-    if verbose && !quiet {
+    if show_merge_list && verbose && !quiet {
         println!();
         println!(
             "{}",
@@ -7149,6 +7330,13 @@ pub fn run(args: &[String]) -> ExitCode {
         "package.license",
         &result.autounmask_license_changes,
     );
+
+    // `--autounmask-only`: real `actions.py:456` returns 0 right after
+    // `display_problems()` -- nothing below (the abi-rebuild info, the
+    // changed-deps report, and any real merge) runs.
+    if autounmask_only {
+        return ExitCode::SUCCESS;
+    }
 
     // Real `_show_abi_rebuild_info` (`depgraph.py:1210`), gated on
     // `--verbose-slot-rebuilds != "n"` (default on, NOT `--verbose`) and

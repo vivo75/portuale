@@ -409,6 +409,26 @@ CASES = [
         0,
     ),
     (
+        "--autounmask-only: only the changes block, no merge list",
+        ["--pretend", "--autounmask", "--autounmask-only", "dev-libs/autounmaskkeywordpkg"],
+        0,
+    ),
+    (
+        "--autounmask-only=y: same, explicit value form",
+        ["--pretend", "--autounmask-only=y", "dev-libs/autounmaskdepconsumer"],
+        0,
+    ),
+    (
+        "--autounmask-only=n: back to the normal merge list",
+        ["--pretend", "--autounmask-only=n", "dev-libs/newpkg"],
+        0,
+    ),
+    (
+        "--autounmask-only: a plain package still prints nothing but exits 0",
+        ["--pretend", "--autounmask-only", "dev-libs/newpkg"],
+        0,
+    ),
+    (
         "--usepkg: a binary-only package is invisible without it",
         ["--pretend", "dev-libs/binaryonlypkg"],
         1,
@@ -2523,6 +2543,36 @@ def test_autounmask_suggests_a_keyword_once_explicitly_enabled(emerge_binary, fi
         "# required by dev-libs/autounmaskkeywordpkg (argument)\n"
         "=dev-libs/autounmaskkeywordpkg-1.0 ~amd64\n"
     )
+
+
+def test_autounmask_only_suppresses_the_merge_list(emerge_binary, emerge_pretend_python, fixture_env):
+    """--autounmask-only (real actions.py:456): resolve the graph, then
+    `mydepgraph.display_problems(); return 0` -- the `[ebuild ...]` merge
+    list is NOT printed, only the autounmask changes block (+ slot
+    conflicts), and the exit code stays 0. Byte-identical Rust/Python."""
+    args = ["--pretend", "--autounmask", "--autounmask-only", "dev-libs/autounmaskkeywordpkg"]
+    rust = _run([str(emerge_binary)], args, fixture_env)
+    py = _run(emerge_pretend_python, args, fixture_env)
+    assert rust.returncode == 0
+    assert rust.stdout == py.stdout
+    assert rust.stderr == py.stderr
+    # No merge list on stdout at all.
+    assert rust.stdout == ""
+    # The changes block still goes to stderr.
+    assert rust.stderr == (
+        "\nThe following keyword changes are necessary to proceed:\n"
+        ' (see "package.accept_keywords" in the portage(5) man page for more details)\n'
+        "# required by dev-libs/autounmaskkeywordpkg (argument)\n"
+        "=dev-libs/autounmaskkeywordpkg-1.0 ~amd64\n"
+    )
+
+    # Control: without --autounmask-only, the merge list IS printed.
+    full = _run(
+        [str(emerge_binary)],
+        ["--pretend", "--autounmask", "dev-libs/autounmaskkeywordpkg"],
+        fixture_env,
+    )
+    assert full.stdout == "[ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0 \n"
 
 
 def test_autounmask_dependency_gets_no_keyword_suggestion_by_default(emerge_binary, fixture_env):
@@ -9233,17 +9283,51 @@ def test_list_sets_prints_the_defined_set_names(emerge_binary, emerge_pretend_py
         ["--searchdesc", "fixture"],
         ["-S", "overlay"],
         ["-s", "dev-libs/newpkg"],
+        # --fuzzy-search (default on): a misspelling still resolves.
+        ["-s", "useflgpkg"],
+        ["-s", "newpgk"],
+        ["-s", "diamnod"],
+        ["-s", "dev-libz/newpkg"],  # category half scored independently
+        ["-s", "--fuzzy-search=n", "useflgpkg"],
+        ["-s", "--search-similarity=100", "useflgpkg"],
+        ["-s", "--search-similarity=40", "newpgk"],
+        # --regex-search-auto (default on) + explicit % force.
+        ["-s", "%^dev-libs/newpkg$"],
+        ["-s", "new.+pkg"],
+        ["-s", "--regex-search-auto=n", "a.+b"],
+        ["-sv", "useflgpkg"],
+        # usage errors on --search-similarity.
+        ["-s", "--search-similarity=xyz", "foo"],
+        ["-s", "--search-similarity=150", "foo"],
     ],
 )
 def test_search_matches_rust_and_python(emerge_binary, emerge_pretend_python, fixture_env, args):
-    """emerge --search/-s (--searchdesc/-S also matches DESCRIPTION):
-    real action_search / search.output() shape. Rust == Python."""
+    """emerge --search/-s (--searchdesc/-S also matches DESCRIPTION;
+    --fuzzy-search / --regex-search-auto / --search-similarity modifiers):
+    real action_search / search.output() shape. Rust == Python (stdout,
+    stderr, and exit code)."""
     rust = _run([str(emerge_binary)], args, fixture_env)
     py = _run(emerge_pretend_python, args, fixture_env)
-    assert rust.returncode == 0
+    assert rust.returncode == py.returncode
     assert rust.stdout == py.stdout
-    assert "[ Results for search key :" in rust.stdout
-    assert "[ Applications found :" in rust.stdout
+    assert rust.stderr == py.stderr
+
+
+def test_fuzzy_and_regex_search_change_the_result_set(
+    emerge_binary, fixture_env
+):
+    """--fuzzy-search (default on) and --regex-search-auto (default on)
+    are not no-ops: a misspelled key still finds the package, and turning
+    fuzzy off drops it; a %-forced regex key matches by pattern."""
+    def apps(args):
+        out = _run([str(emerge_binary)], args, fixture_env).stdout
+        # "[ Applications found : N ]"
+        return int(out.rsplit(":", 1)[1].split("]")[0].strip())
+
+    assert apps(["-s", "useflgpkg"]) >= 1  # fuzzy hit
+    assert apps(["-s", "--fuzzy-search=n", "useflgpkg"]) == 0  # exact only
+    assert apps(["-s", "--search-similarity=100", "useflgpkg"]) == 0
+    assert apps(["-s", "%^dev-libs/newpkg$"]) == 1  # regex, anchored
 
 
 def test_check_news_counts_unread_relevant_items(

@@ -301,12 +301,20 @@ dev/test context — see also the `chown` note below).
   `--read-news` stays a recognized-unimplemented option (it's a
   post-merge display toggle, not an action). `--sync` (repo network
   syncing) stays a non-goal.
-- Recognized-but-unimplemented modifier flags: `--complete-graph[-if-*]`,
+- Recognized-but-unimplemented modifier flags (user asked 2026-09-02 to
+  implement the batch; shipping one coherent slice per commit).
+  **Shipped 2026-09-02: `--fuzzy-search` / `--regex-search-auto` /
+  `--search-similarity`** (`--search` now fuzzy + regex-auto by default,
+  real `search.py`; new `difflib.rs` port); **`--autounmask-only`**
+  (real `actions.py:456` — resolve, show only `display_problems()`,
+  exit 0; new `show_merge_list` gate); **`--ask` table cleanup** (it was
+  already implemented, just still listed as recognized-unimplemented).
+  Remaining: `--complete-graph[-if-*]`,
   `--rebuild-if-new-{slot,rev,ver}` / `--rebuild-if-unbuilt`,
   `--reinstall-atoms` / `--useoldpkg-atoms` / `--rebuild-exclude` /
-  `--rebuild-ignore`, `--dynamic-deps`, `--fuzzy-search`, `--misspell-
-  suggestions`, `--package-moves` (`profiles/updates/`), `--quickpkg-direct`,
-  `--autounmask-continue` / `--autounmask-backtrack` / `--autounmask-only`.
+  `--rebuild-ignore`, `--dynamic-deps`, `--misspell-suggestions`,
+  `--package-moves` (`profiles/updates/`), `--quickpkg-direct`,
+  `--autounmask-continue` / `--autounmask-backtrack`.
 
 ### G. Shell backend
 

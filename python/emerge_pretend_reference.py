@@ -7565,11 +7565,12 @@ _BOOLEAN_OPTIONS = [
 
 _VALUE_OPTIONS = [
     ("--alert", "-A"),
-    ("--ask", "-a"),
+    # --ask/-a and --autounmask-only ARE implemented -- handled directly
+    # in the parse loop, not via this "not implemented" table (mirrors
+    # emerge_options.rs).
     ("--autounmask", None),
     ("--autounmask-backtrack", None),
     ("--autounmask-continue", None),
-    ("--autounmask-only", None),
     ("--autounmask-license", None),
     ("--autounmask-unrestricted-atoms", None),
     ("--autounmask-use", None),
@@ -7590,7 +7591,8 @@ _VALUE_OPTIONS = [
     ("--depclean-lib-check", None),
     ("--dynamic-deps", None),
     ("--fail-clean", None),
-    ("--fuzzy-search", None),
+    # --fuzzy-search / --regex-search-auto / --search-similarity ARE
+    # implemented (real --search difflib fuzzy + regex-auto).
     ("--ignore-built-slot-operator-deps", None),
     ("--ignore-soname-deps", None),
     ("--ignore-world", None),
@@ -7630,11 +7632,9 @@ _VALUE_OPTIONS = [
     ("--rebuild-if-unbuilt", None),
     ("--rebuilt-binaries", None),
     ("--rebuilt-binaries-timestamp", None),
-    ("--regex-search-auto", None),
     ("--root", None),
     ("--root-deps", None),
     ("--search-index", None),
-    ("--search-similarity", None),
     ("--select", "-w"),
     ("--sync-submodule", None),
     ("--sysroot", None),
@@ -8420,14 +8420,30 @@ def _search_candidate_visible(c):
     )
 
 
-def _run_search(terms, config_root, root, searchdesc, verbose, color):
+def _run_search(
+    terms,
+    config_root,
+    root,
+    searchdesc,
+    verbose,
+    fuzzy,
+    regex_auto,
+    search_similarity,
+    color,
+):
     """Real `emerge --search`/`-s` (action_search -> search.py): a
-    case-insensitive substring search of every category/package in the
-    configured repos (the package-name half only, unless the key
-    contains "/"), plus defined set names; `-S`/`--searchdesc` also
-    matches DESCRIPTION. Output shape is real search.output(). Mirrors
-    pretend.rs's run_search, including its v1 cuts (no fuzzy/regex/index
-    matching, no --usepkg results, no Size of files)."""
+    case-insensitive substring (or, with --regex-search-auto, regex)
+    search of every category/package in the configured repos (the
+    package-name half only, unless the key contains "/"), plus defined set
+    names; `-S`/`--searchdesc` also matches DESCRIPTION. --fuzzy-search
+    (default on) also lands a hit when difflib.SequenceMatcher.ratio()
+    reaches search_similarity%. Output shape is real search.output().
+    Mirrors pretend.rs's run_search (its difflib port, cutoff/part-split
+    logic, regex-auto detection). v1 cuts: no search index, no --usepkg
+    results, no Size of files."""
+    import difflib
+    import re as _re
+
     if not terms:
         print("emerge: no search terms provided.")
         return 0
@@ -8437,14 +8453,52 @@ def _run_search(terms, config_root, root, searchdesc, verbose, color):
     set_names = _defined_set_names(config_root)
 
     for term in terms:
+        forced_regex = term.startswith("%")
         key = term.lstrip("%")
         match_category = "/" in key
+        cutoff = search_similarity / 100.0
+
+        # Real search.py:265-280: %-forced, or auto-detected (a regex
+        # metacharacter present *and* the key compiles). Fuzzy is off for
+        # a regex search.
+        looks_regex = (
+            _re.search(r"[\^\$\*\[\]\{\}\|\?]|\.\+", key) is not None
+        )
+        searchre = None
+        if forced_regex or (regex_auto and looks_regex):
+            try:
+                searchre = _re.compile(key, _re.IGNORECASE)
+            except _re.error:
+                searchre = None
+        use_fuzzy = fuzzy and searchre is None
         needle = key.lower()
+
+        def literal_or_re(hay, _re_obj=searchre, _needle=needle):
+            if _re_obj is not None:
+                return _re_obj.search(hay) is not None
+            return _needle in hay.lower()
+
+        def fuzzy_hit(match_string, _cutoff=cutoff, _use=use_fuzzy):
+            if not _use:
+                return False
+            if match_category:
+                kparts = key.split("/", 1)
+                mparts = match_string.split("/", 1)
+            else:
+                kparts = [key]
+                mparts = [match_string]
+            return all(
+                difflib.SequenceMatcher(
+                    None, m.lower(), k.lower()
+                ).ratio()
+                >= _cutoff
+                for k, m in zip(kparts, mparts)
+            )
 
         hits = []
         for cp in all_cp:
-            hay = cp.lower() if match_category else cp.split("/")[-1].lower()
-            name_match = needle in hay
+            hay = cp if match_category else cp.split("/")[-1]
+            name_match = literal_or_re(hay) or fuzzy_hit(hay)
             cat, _, pkg = cp.partition("/")
             cands = list_candidates(repos, cat, pkg)
             best = _search_best_candidate(cands)
@@ -8454,14 +8508,18 @@ def _run_search(terms, config_root, root, searchdesc, verbose, color):
                     meta = read_md5_cache(
                         best["repo_location"], cat, f"{pkg}-{best['version']}"
                     )
-                    desc_match = needle in meta.get("DESCRIPTION", "").lower()
+                    desc_match = literal_or_re(meta.get("DESCRIPTION", ""))
                 except OSError:
                     pass
             if name_match or desc_match:
                 masked = best is None or not _search_candidate_visible(best)
                 hits.append((cp, masked))
 
-        set_hits = sorted(s for s in set_names if needle in s.lower())
+        set_hits = sorted(
+            s
+            for s in set_names
+            if literal_or_re(s if match_category else s.split("/")[-1])
+        )
 
         star = color.c("GOOD", "*")
         sys.stdout.write("Searching...\n\n")
@@ -11002,6 +11060,12 @@ def run(args):
     list_sets = False
     search_action = False
     searchdesc = False
+    # --fuzzy-search (true_y_or_n, ON unless =n); --regex-search-auto
+    # (y_or_n, default "y"); --search-similarity (float 0..100, default
+    # 80). Mirrors pretend.rs.
+    fuzzy_search = True
+    regex_search_auto = True
+    search_similarity = 80.0
     check_news = False
     clean_action = False
     rage_clean = False
@@ -11049,6 +11113,9 @@ def run(args):
     autounmask_use = None
     autounmask_license = None
     autounmask_keep_masks = None
+    # --autounmask-only (real actions.py:456): skip the merge list, show
+    # only the display_problems() equivalent, exit 0. Mirrors pretend.rs.
+    autounmask_only = False
     usepkg = False
     usepkgonly = False
     getbinpkg = False
@@ -11377,6 +11444,57 @@ def run(args):
             search_action = True
             searchdesc = True
             i += 1
+        elif arg == "--fuzzy-search" or arg.startswith("--fuzzy-search="):
+            # Real true_y_or_n -- bare / =y / =n.
+            if arg.startswith("--fuzzy-search="):
+                val = arg[len("--fuzzy-search=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n", "True"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            fuzzy_search = val not in ("n", "N")
+        elif arg == "--regex-search-auto" or arg.startswith("--regex-search-auto="):
+            if arg.startswith("--regex-search-auto="):
+                val = arg[len("--regex-search-auto=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            regex_search_auto = val not in ("n", "N")
+        elif arg == "--search-similarity" or arg.startswith("--search-similarity="):
+            if arg.startswith("--search-similarity="):
+                val = arg[len("--search-similarity=") :]
+                i += 1
+            elif i + 1 < len(args):
+                val = args[i + 1]
+                i += 2
+            else:
+                print(
+                    "emerge: option '--search-similarity' requires a value",
+                    file=sys.stderr,
+                )
+                return 2
+            try:
+                n = float(val)
+            except ValueError:
+                print(
+                    f"emerge: Invalid --search-similarity parameter (not a number): '{val}'",
+                    file=sys.stderr,
+                )
+                return 2
+            if not 0.0 <= n <= 100.0:
+                print(
+                    f"emerge: Invalid --search-similarity parameter (not between 0 and 100): '{val}'",
+                    file=sys.stderr,
+                )
+                return 2
+            search_similarity = n
         elif arg == "--check-news":
             check_news = True
             i += 1
@@ -11678,6 +11796,19 @@ def run(args):
         elif arg == "--autounmask=n":
             autounmask = False
             i += 1
+        elif arg == "--autounmask-only" or arg.startswith("--autounmask-only="):
+            # Real true_y_or_n -- bare / =y / =True -> on, =n -> off. Real
+            # actions.py:456: resolve, then display_problems() + return 0.
+            if arg.startswith("--autounmask-only="):
+                val = arg[len("--autounmask-only=") :]
+                i += 1
+            elif i + 1 < len(args) and args[i + 1] in ("y", "n", "True"):
+                val = args[i + 1]
+                i += 2
+            else:
+                val = "y"
+                i += 1
+            autounmask_only = val in ("y", "True")
         elif arg == "--autounmask-keep-keywords":
             # Real "--autounmask-keep-keywords": plain y_or_n, a
             # REQUIRED value -- no bare/optional form real "--autounmask"
@@ -12087,6 +12218,9 @@ def run(args):
             _root(),
             searchdesc,
             not quiet,
+            fuzzy_search,
+            regex_search_auto,
+            search_similarity,
             _Colorizer(_resolve_havecolor(color_opt)),
         )
     if check_news:
@@ -13019,17 +13153,23 @@ def run(args):
             if i not in rendered:
                 print_entry_line(entry, "")
 
-    if tree:
-        print_tree(entries)
-    else:
-        for entry in entries:
-            print_entry_line(entry, "")
+    # --autounmask-only (real actions.py:456): skip the whole merge list;
+    # only the display_problems() equivalent (slot-conflict notice +
+    # autounmask blocks) is shown, then exit 0. Mirrors pretend.rs.
+    show_merge_list = not autounmask_only
 
-    # Real Display.print_blockers(): the collected `[blocks B ...]` lines,
-    # printed as one group after every package line and before the
-    # counters. Mirrors pretend.rs.
-    for line in deferred_blocker_lines:
-        print(line)
+    if show_merge_list:
+        if tree:
+            print_tree(entries)
+        else:
+            for entry in entries:
+                print_entry_line(entry, "")
+
+        # Real Display.print_blockers(): the collected `[blocks B ...]`
+        # lines, printed as one group after every package line and before
+        # the counters. Mirrors pretend.rs.
+        for line in deferred_blocker_lines:
+            print(line)
 
     # Real output.py::display: `if self.conf.verbosity == 3:
     # self.print_verbose(...)` -- the `Total: ...` counters line, printed
@@ -13037,7 +13177,7 @@ def run(args):
     # tree/columns/flat layouts alike. Real emits f"\n{self.counters}\n"
     # (a leading blank line). --quiet forces verbosity to 1, so -pvq
     # suppresses the line that -pv would show. Mirrors pretend.rs.
-    if verbose and not quiet:
+    if show_merge_list and verbose and not quiet:
         print()
         print(_package_counters_summary(entries, top_level_pkgs, onlydeps, color))
 
@@ -13145,6 +13285,12 @@ def run(args):
     _print_autounmask_block(
         "license changes", "package.license", result["autounmask_license_changes"]
     )
+
+    # --autounmask-only (real actions.py:456): return 0 right after
+    # display_problems() -- the abi-rebuild info and changed-deps report
+    # below do not run. Mirrors pretend.rs.
+    if autounmask_only:
+        return 0
 
     # Real _show_abi_rebuild_info (depgraph.py:1210), gated on
     # --verbose-slot-rebuilds != "n" (default on, NOT --verbose), after

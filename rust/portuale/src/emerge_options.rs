@@ -261,11 +261,17 @@ pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
 /// (each key, with its `"shortopt"` if any).
 pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--alert", Some("-A")),
-    ("--ask", Some("-a")),
+    // `--ask`/`-a` (real `true_y_or_n`) IS implemented -- the interactive
+    // `Would you like to ...?` prompt before a real merge/removal (see
+    // pretend.rs's own parse loop + `ask_confirm`). Excluded here for the
+    // same reason `--verbose`/`-v` is.
     ("--autounmask", None),
     ("--autounmask-backtrack", None),
     ("--autounmask-continue", None),
-    ("--autounmask-only", None),
+    // `--autounmask-only` (real `true_y_or_n`, `actions.py:456`) IS
+    // implemented -- resolve, show only the `display_problems()`
+    // equivalent, exit 0 (see pretend.rs's `autounmask_only` /
+    // `show_merge_list`). Excluded here for the same reason.
     ("--autounmask-license", None),
     ("--autounmask-unrestricted-atoms", None),
     ("--autounmask-use", None),
@@ -286,7 +292,10 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--depclean-lib-check", None),
     ("--dynamic-deps", None),
     ("--fail-clean", None),
-    ("--fuzzy-search", None),
+    // `--fuzzy-search` / `--regex-search-auto` / `--search-similarity` IS
+    // implemented -- `emerge --search`'s real `difflib` fuzzy matching +
+    // regex-auto detection (see pretend.rs's `run_search` +
+    // `portuale/src/difflib.rs`). Excluded here for the same reason.
     ("--ignore-built-slot-operator-deps", None),
     ("--ignore-soname-deps", None),
     ("--ignore-world", None),
@@ -326,11 +335,11 @@ pub const VALUE_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--rebuild-if-unbuilt", None),
     ("--rebuilt-binaries", None),
     ("--rebuilt-binaries-timestamp", None),
-    ("--regex-search-auto", None),
+    // `--regex-search-auto` / `--search-similarity`: implemented, see the
+    // `--fuzzy-search` note above.
     ("--root", None),
     ("--root-deps", None),
     ("--search-index", None),
-    ("--search-similarity", None),
     ("--select", Some("-w")),
     ("--sync-submodule", None),
     ("--sysroot", None),
@@ -562,6 +571,26 @@ mod tests {
         // implemented), not through this "not implemented" table.
         assert!(lookup("--noreplace").is_none());
         assert!(lookup("--selective").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_the_2026_09_02_batch_flags() {
+        // --ask, --autounmask-only, and the --search fuzzy/regex
+        // modifiers are all handled directly by the caller now (all
+        // implemented), not through this "not implemented" table.
+        for flag in [
+            "--ask",
+            "-a",
+            "--autounmask-only",
+            "--fuzzy-search",
+            "--regex-search-auto",
+            "--search-similarity",
+        ] {
+            assert!(
+                lookup(flag).is_none(),
+                "{flag} should not be recognized here"
+            );
+        }
     }
 
     #[test]
