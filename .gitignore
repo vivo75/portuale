@@ -19,6 +19,10 @@ rust/target
 .pytest_cache/
 .claude/settings.local.json
 
+# ...but the vendored Portage helpers named `*.so` are shell scripts /
+# symlinks (dolib.so, newlib.so), not compiled objects.
+!bin/ebuild-helpers/*.so
+
 # Third-party working checkouts -- pinned in 3rdparty/repos.toml, cloned
 # by the bootstrap step, never committed. (repos.toml itself IS tracked.)
 /3rdparty/*/

@@ -18,13 +18,11 @@ description = "Upstream Gentoo Portage. portuale vendors the whole bash phase ru
 url = "https://github.com/gentoo/portage"
 kind = "reference-checkout"
 checkout_path = "3rdparty/portage"
-# CURRENT CHECKOUT: `master` (a rolling branch), at the commit below.
-# RECOMMENDED: pin a release tag instead for reproducibility --
-# `git -C 3rdparty/portage checkout portage-3.0.82.2` (commit
-# 1d95fc2c552a2c7d347e54093fa0e5b172a57004) and update `ref`/`commit`
-# here. The full test suite is green against both.
-ref = "master"
-commit = "b675df82993be903dd45c5f46db0e800856ba65c"
+# `commit` is the tag's underlying commit: `git rev-parse <ref>^{commit}`
+# (annotated tags -- plain `git rev-parse <ref>` gives the tag object).
+# Re-verify: `git -C 3rdparty/portage describe --tags` reads `<ref>`.
+ref = "portage-3.0.82.2"
+commit = "1d95fc2c552a2c7d347e54093fa0e5b172a57004"
 pinned_at = "2026-09-01"
 # Vendored into the tree (so `emerge` runs with no Portage installed):
 #   bin/  -- ebuild.sh + its whole source closure, every ebuild-helpers/
