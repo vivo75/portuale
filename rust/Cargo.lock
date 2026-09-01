@@ -1401,6 +1401,7 @@ dependencies = [
 name = "portuale"
 version = "0.1.0"
 dependencies = [
+ "blake2",
  "brush-builtins",
  "brush-core",
  "filetime",
@@ -1413,6 +1414,7 @@ dependencies = [
  "portage-use-reduce",
  "portage-versions",
  "regex",
+ "sha2",
  "tokio",
 ]
 

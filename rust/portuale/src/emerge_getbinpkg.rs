@@ -40,8 +40,10 @@
 //   - digest verification checks `SIZE` and the `Packages` record's
 //     `MD5` (the md5 of the whole `.tbz2`, real `bintree`'s own field).
 //     Real portage also checks `SHA1` -- the pilot has no sha1 crate, and
-//     `MD5` is always present in a real `Packages`. The gpkg-internal
-//     `Manifest`/`.sig` are still a cut (see `binpkg::read_gpkg_metadata`).
+//     `MD5` is always present in a real `Packages`. A downloaded gpkg
+//     additionally has its internal `Manifest` (`DATA` BLAKE2B/SHA512
+//     lines) verified at merge time (`binpkg::extract_binpkg` ->
+//     `verify_gpkg_manifest`); only the GPG `.sig` layer stays a cut.
 
 use crate::ebuild_merge::{self, MergeOptions};
 use portage_profile::{BinRepo, Config};

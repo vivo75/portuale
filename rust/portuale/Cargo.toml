@@ -68,3 +68,11 @@ filetime = "0.2"
 # relying on that, the same "don't depend on an undeclared transitive"
 # reasoning that applies to any direct API use of another crate.
 libc = "0.2"
+
+[dev-dependencies]
+# Test-only: assemble gpkg `Manifest` `DATA` lines with real BLAKE2B/
+# SHA512 digests so `binpkg::verify_gpkg_manifest`'s tests exercise the
+# real hashers rather than pre-baked constants. Both are already vendored
+# (portage-fetch depends on them at these versions) -- no new fetch.
+blake2 = "0.10"
+sha2 = "0.10"

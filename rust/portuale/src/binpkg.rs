@@ -107,15 +107,19 @@ impl Drop for ScratchDir {
 /// entry already has). A member whose bytes aren't valid UTF-8
 /// (`environment.bz2`) is skipped, not an error.
 ///
-/// **v1 cuts, documented** (matching this pilot's own `Packages`-index
-/// reader, which "trusts the index outright" -- real
-/// `FEATURES=pkgdir-index-trusted`): NO `Manifest` digest verification
-/// and NO GPG `.sig` signature check (real `gpkg._verify_binpkg`). Those
-/// are gpkg's whole reason to exist, but this pilot has no crypto
-/// anywhere and its `--pretend` binary path has never verified a
-/// binpkg's integrity -- a real, separately-scoped follow-up. The
-/// `gpkg-1` version marker's *presence* is still required (real
-/// `_get_inner_tarinfo`'s own `InvalidBinaryPackageFormat` guard).
+/// This reader is the "populate the pool" path (real
+/// `bintree._populate_local` / `get_metadata`); it trusts the container
+/// the same way the `Packages`-index reader "trusts the index outright"
+/// (real `FEATURES=pkgdir-index-trusted`). The *merge* path
+/// (`extract_binpkg`) runs the real `Manifest` digest check first --
+/// see [`verify_gpkg_manifest`]. Still required here: the `gpkg-1`
+/// version marker's *presence* (real `_get_inner_tarinfo`'s own
+/// `InvalidBinaryPackageFormat` guard).
+///
+/// **v1 cut, documented**: NO GPG `.sig` signature check anywhere -- this
+/// pilot has no crypto; a container that carries `.sig` members still
+/// has its cleartext `DATA` digests verified (real portage's own
+/// `binpkg-ignore-signature` behaviour).
 pub fn read_gpkg_metadata(gpkg_path: &Path) -> Result<HashMap<String, String>, String> {
     if !gpkg_path.is_file() {
         return Err(format!("{}: not a file", gpkg_path.display()));
@@ -344,6 +348,178 @@ fn be32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
 
+/// Real `portage.gpkg.gpkg._verify_binpkg` (`lib/portage/gpkg.py:1626`),
+/// narrowed to its checksum layer. A `.gpkg.tar` is a plain (outer) tar
+/// whose members are every one exactly one level deep under a single
+/// shared prefix directory (real "gpkg file structure" guard); the
+/// `<prefix>/Manifest` member records one
+/// `DATA <basename> <size> BLAKE2B <hex> SHA512 <hex>` line per other
+/// member (real `_record_checksum` / `_add_manifest`, and
+/// `MANIFEST2_HASH_DEFAULTS = {BLAKE2B, SHA512}`). This checks:
+///   - a `Manifest` member exists (real `MissingSignature` otherwise);
+///   - every non-`Manifest`, non-`.sig` member has a `DATA` record whose
+///     `size` and *every* recognised hash match -- reusing
+///     `portage_fetch::verify_digests` (size first, then BLAKE2B/SHA512),
+///     with real's "at least one supported checksum" floor;
+///   - the member set and the record set match exactly (real's
+///     `unverified_files` / `unverified_manifest` leftovers checks).
+///
+/// **v1 cut** (see [`read_gpkg_metadata`]): the GPG `.sig` / inline-PGP
+/// signature layer is not verified -- `.sig` members are accounted for
+/// (so the set check still passes) but not cryptographically checked,
+/// and an inline-signed `Manifest`'s cleartext `DATA` lines are read
+/// straight through.
+fn verify_gpkg_manifest(gpkg_path: &Path) -> Result<(), String> {
+    if !gpkg_path.is_file() {
+        return Err(format!("{}: not a file", gpkg_path.display()));
+    }
+    let scratch = ScratchDir::new("gpkg-verify")?;
+    let outer = scratch.path().join("outer");
+    fs::create_dir_all(&outer).map_err(|e| format!("{}: {e}", outer.display()))?;
+    run_tar(&["-xf", &lossy(gpkg_path), "-C", &lossy(&outer)])?;
+
+    // The single `<prefix>/` directory: real portage rejects a member
+    // that is not exactly one level deep, or a container whose members
+    // do not share one common prefix.
+    let mut prefix_dir: Option<PathBuf> = None;
+    for entry in read_dir_sorted(&outer)? {
+        if entry.is_dir() {
+            if prefix_dir.is_some() {
+                return Err(format!(
+                    "{}: gpkg container has more than one top-level directory",
+                    gpkg_path.display()
+                ));
+            }
+            prefix_dir = Some(entry);
+        } else {
+            return Err(format!(
+                "{}: gpkg container member {:?} is not inside a directory",
+                gpkg_path.display(),
+                entry.file_name().unwrap_or_default()
+            ));
+        }
+    }
+    let prefix_dir =
+        prefix_dir.ok_or_else(|| format!("{}: empty gpkg container", gpkg_path.display()))?;
+
+    let manifest_path = prefix_dir.join("Manifest");
+    if !manifest_path.is_file() {
+        return Err(format!(
+            "{}: Manifest not found in the gpkg container",
+            gpkg_path.display()
+        ));
+    }
+    let manifest_text = fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+
+    // Parse the `DATA` lines. PGP-armor lines (an inline-signed
+    // Manifest) are skipped -- the pilot has no crypto and reads the
+    // cleartext body straight through.
+    let mut records: HashMap<String, portage_fetch::DistfileDigests> = HashMap::new();
+    for line in manifest_text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("-----") || line.starts_with("Hash:") {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        match parts.next() {
+            Some("DATA") => {}
+            // A PGP-armored Manifest wraps `DATA` lines in a signed
+            // block; anything else on a non-blank line is malformed.
+            Some(_) if manifest_text.contains("BEGIN PGP") => continue,
+            _ => {
+                return Err(format!(
+                    "{}: invalid Manifest line {line:?}",
+                    gpkg_path.display()
+                ))
+            }
+        }
+        let name = parts
+            .next()
+            .ok_or_else(|| format!("{}: Manifest DATA line missing a name", gpkg_path.display()))?;
+        let size = parts
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .ok_or_else(|| {
+                format!(
+                    "{}: Manifest DATA line for {name:?} has no valid size",
+                    gpkg_path.display()
+                )
+            })?;
+        let rest: Vec<&str> = parts.collect();
+        let mut hashes = HashMap::new();
+        let mut i = 0;
+        while i + 1 < rest.len() {
+            hashes.insert(rest[i].to_string(), rest[i + 1].to_string());
+            i += 2;
+        }
+        if records
+            .insert(
+                name.to_string(),
+                portage_fetch::DistfileDigests { size, hashes },
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "{}: Manifest lists {name:?} more than once",
+                gpkg_path.display()
+            ));
+        }
+    }
+
+    let mut unmatched: std::collections::BTreeSet<String> = records.keys().cloned().collect();
+    for member in read_dir_sorted(&prefix_dir)? {
+        let Some(name) = member
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+        else {
+            continue;
+        };
+        if name == "Manifest" {
+            continue;
+        }
+        if name.ends_with(".sig") {
+            // Signature member: accounted for, not cryptographically
+            // checked (documented cut).
+            unmatched.remove(&name);
+            continue;
+        }
+        let record = records.get(&name).ok_or_else(|| {
+            format!(
+                "{}: container member {name:?} is not listed in the Manifest",
+                gpkg_path.display()
+            )
+        })?;
+        if !record
+            .hashes
+            .keys()
+            .any(|h| h == "BLAKE2B" || h == "SHA512")
+        {
+            return Err(format!(
+                "{}: Manifest record for {name:?} carries no supported checksum",
+                gpkg_path.display()
+            ));
+        }
+        portage_fetch::verify_digests(&member, record).map_err(|e| {
+            format!(
+                "{}: gpkg Manifest verification failed: {e}",
+                gpkg_path.display()
+            )
+        })?;
+        unmatched.remove(&name);
+    }
+
+    if !unmatched.is_empty() {
+        return Err(format!(
+            "{}: Manifest lists files not present in the container: {}",
+            gpkg_path.display(),
+            unmatched.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    Ok(())
+}
+
 /// Real binary-package unpack (`portage.xpak.tbz2.decompose` /
 /// `portage.gpkg.gpkg.decompress` + `_generate_metadata_from_dir` in
 /// reverse): write a binpkg's *image* -- the built filesystem tree --
@@ -378,6 +554,9 @@ pub fn extract_binpkg(
         .unwrap_or_default();
     let is_gpkg = name.ends_with(".gpkg.tar");
     let metadata = if is_gpkg {
+        // Real `_verify_binpkg`: the Manifest digest check runs before
+        // anything is unpacked for the merge.
+        verify_gpkg_manifest(binpkg_path)?;
         extract_gpkg_member(binpkg_path, "image", image_dest)?;
         read_gpkg_metadata(binpkg_path)?
     } else {
@@ -848,6 +1027,150 @@ mod tests {
         // the same scalar keys as any binpkg.
         assert!(image.is_dir());
         assert!(bi.join("SLOT").is_file());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Assemble a real (plain outer tar) gpkg container from a set of
+    /// `<prefix>/<name>` members plus a `Manifest` body, in real gpkg
+    /// member order.
+    fn build_gpkg(prefix: &str, members: &[(&str, &[u8])], manifest: Option<&str>) -> PathBuf {
+        let scratch = ScratchDir::new("gpkg-build").unwrap();
+        // leak the scratch dir for the caller's test lifetime
+        let root = scratch.path().to_path_buf();
+        std::mem::forget(scratch);
+        let pkgdir = root.join(prefix);
+        fs::create_dir_all(&pkgdir).unwrap();
+        let mut argv: Vec<String> = vec![
+            "-cf".into(),
+            lossy(&root.join("out.gpkg.tar")),
+            "-C".into(),
+            lossy(&root),
+        ];
+        for (name, bytes) in members {
+            fs::write(pkgdir.join(name), bytes).unwrap();
+            argv.push(format!("{prefix}/{name}"));
+        }
+        if let Some(body) = manifest {
+            fs::write(pkgdir.join("Manifest"), body).unwrap();
+            argv.push(format!("{prefix}/Manifest"));
+        }
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        run_tar(&refs).unwrap();
+        root.join("out.gpkg.tar")
+    }
+
+    fn blake2b_hex(bytes: &[u8]) -> String {
+        use blake2::Digest as _;
+        blake2::Blake2b512::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+    fn sha512_hex(bytes: &[u8]) -> String {
+        use sha2::Digest as _;
+        sha2::Sha512::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+    fn data_line(name: &str, bytes: &[u8]) -> String {
+        format!(
+            "DATA {name} {} BLAKE2B {} SHA512 {}\n",
+            bytes.len(),
+            blake2b_hex(bytes),
+            sha512_hex(bytes)
+        )
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_accepts_the_real_fixture() {
+        verify_gpkg_manifest(&fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"))
+            .expect("the committed fixture's Manifest verifies");
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_rejects_a_missing_manifest() {
+        let g = build_gpkg("foo-1.0", &[("gpkg-1", b""), ("image.tar", b"img")], None);
+        let err = verify_gpkg_manifest(&g).unwrap_err();
+        assert!(err.contains("Manifest not found"), "{err}");
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_rejects_a_size_mismatch_without_hashing() {
+        let img: &[u8] = b"the real image bytes";
+        let manifest = format!(
+            "{}{}",
+            data_line("gpkg-1", b""),
+            // deliberately wrong size -- caught before any hashing
+            "DATA image.tar 999999 BLAKE2B dead SHA512 beef\n",
+        );
+        let g = build_gpkg(
+            "foo-1.0",
+            &[("gpkg-1", b""), ("image.tar", img)],
+            Some(&manifest),
+        );
+        let err = verify_gpkg_manifest(&g).unwrap_err();
+        assert!(err.contains("size mismatch"), "{err}");
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_rejects_a_tampered_member() {
+        let img: &[u8] = b"the real image bytes";
+        // Manifest records the digests of *different* bytes.
+        let manifest = format!(
+            "{}{}",
+            data_line("gpkg-1", b""),
+            data_line("image.tar", b"some other bytes entirely"),
+        );
+        let g = build_gpkg(
+            "foo-1.0",
+            &[("gpkg-1", b""), ("image.tar", img)],
+            Some(&manifest),
+        );
+        let err = verify_gpkg_manifest(&g).unwrap_err();
+        assert!(err.contains("mismatch"), "{err}");
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_rejects_an_unlisted_member() {
+        let manifest = data_line("gpkg-1", b"");
+        let g = build_gpkg(
+            "foo-1.0",
+            &[("gpkg-1", b""), ("image.tar", b"img")],
+            Some(&manifest),
+        );
+        let err = verify_gpkg_manifest(&g).unwrap_err();
+        assert!(err.contains("not listed in the Manifest"), "{err}");
+    }
+
+    #[test]
+    fn verify_gpkg_manifest_rejects_a_manifest_only_file() {
+        let manifest = format!(
+            "{}{}",
+            data_line("gpkg-1", b""),
+            data_line("image.tar", b"img"),
+        );
+        let g = build_gpkg("foo-1.0", &[("gpkg-1", b"")], Some(&manifest));
+        let err = verify_gpkg_manifest(&g).unwrap_err();
+        assert!(err.contains("not present in the container"), "{err}");
+    }
+
+    #[test]
+    fn extract_binpkg_rejects_a_gpkg_with_a_bad_manifest() {
+        let img: &[u8] = b"pretend image tar bytes";
+        let manifest = format!(
+            "{}{}",
+            data_line("gpkg-1", b""),
+            "DATA image.tar 3 BLAKE2B x SHA512 y\n",
+        );
+        let g = build_gpkg(
+            "foo-1.0",
+            &[("gpkg-1", b""), ("image.tar", img)],
+            Some(&manifest),
+        );
+        let tmp = std::env::temp_dir().join(format!("binpkg-gpkg-bad-{}", std::process::id()));
+        let err = extract_binpkg(&g, &tmp.join("image"), &tmp.join("build-info")).unwrap_err();
+        assert!(err.contains("size mismatch"), "{err}");
         let _ = fs::remove_dir_all(&tmp);
     }
 

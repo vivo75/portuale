@@ -237,10 +237,14 @@ single-pass BFS can't grow into these incrementally:
   index; binpkg `MD5` verification; SRC_URI fetch **resume**
   (`RESUMECOMMAND` `-c`). SRC_URI `SHA512`/`BLAKE2B` verification was
   already real.)*
-- **gpkg**: `Manifest` / `.sig` verification + signing
-  (`FEATURES=binpkg-signing` — cut, the pilot has no crypto), bare `.xpak`
-  multi-instance, `binpkg-multi-instance`, mtime-staleness index
-  revalidation, `BUILD_ID` in the basename.
+- **gpkg**: `.sig` verification + signing (`FEATURES=binpkg-signing` —
+  cut, the pilot has no crypto), bare `.xpak` multi-instance,
+  `binpkg-multi-instance`, mtime-staleness index revalidation, `BUILD_ID`
+  in the basename. *(Shipped 2026-09-01: the internal `Manifest` `DATA`
+  digest check (size + BLAKE2B/SHA512, member↔record set match) at merge
+  time — `binpkg::verify_gpkg_manifest`, real `gpkg._verify_binpkg`'s
+  checksum layer, wired into `extract_binpkg`. `gpkgreadpkg-1.0.gpkg.tar`
+  rebuilt with a real Manifest.)*
 - **`BUILD_ID` / `splitdebug` / `packdebug` / RPM**, PKGDIR-index locking,
   `FEATURES=buildpkg-live`, real `EbuildBinpkg` failure semantics under
   `--keep-going`.

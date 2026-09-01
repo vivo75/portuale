@@ -10371,6 +10371,39 @@ it in DISTDIR"` instructions print above the error. Best-effort: an
 undefined `pkg_nofetch`, or its own failure, never masks the real fetch
 error. `dev-libs/fetchrestrictpkg` grew a `pkg_nofetch`.
 
+### gpkg: the internal `Manifest` digest check at merge time
+
+`binpkg::verify_gpkg_manifest` is real `portage.gpkg.gpkg._verify_binpkg`
+(`lib/portage/gpkg.py`), narrowed to its checksum layer. `extract_binpkg`
+now runs it *first* for any `.gpkg.tar` — before the merge unpacks
+anything — exactly where real `_emerge/Binpkg` verifies. It:
+
+- unpacks the outer (plain) tar and finds the single `<prefix>/`
+  directory, rejecting a container whose members aren't all exactly one
+  level deep under one shared prefix (real "gpkg file structure" guard);
+- requires the `<prefix>/Manifest` member (real `MissingSignature`
+  otherwise) and parses its
+  `DATA <name> <size> BLAKE2B <hex> SHA512 <hex>` lines (real
+  `_record_checksum` / `MANIFEST2_HASH_DEFAULTS = {BLAKE2B, SHA512}`);
+- verifies every non-`Manifest`, non-`.sig` member's size (checked
+  first, before hashing) and *every* recognised hash, reusing
+  `portage_fetch::verify_digests`, with real's "at least one supported
+  checksum" floor;
+- checks the member set and the record set match exactly (real's
+  `unverified_files` / `unverified_manifest` leftovers checks).
+
+This is the merge path only. The `$PKGDIR`-scan / pool-populate reader
+(`read_gpkg_metadata`, real `bintree._populate_local`) still trusts the
+container, the same way the `Packages`-index reader trusts the index
+(real `FEATURES=pkgdir-index-trusted`). Still a documented cut: the GPG
+`.sig` / inline-PGP signature layer is not cryptographically checked —
+`.sig` members are accounted for so the set check passes, and an
+inline-signed `Manifest`'s cleartext `DATA` lines are read straight
+through (real portage's own `binpkg-ignore-signature` behaviour). The
+committed `fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar` was rebuilt
+with a real `Manifest`; `blake2` / `sha2` are new **dev**-dependencies
+(already vendored via `portage-fetch`) so the tests hash real bytes.
+
 ## Running it
 
 Build both Rust binaries:
