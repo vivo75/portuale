@@ -415,6 +415,38 @@ pub fn resolve_info_binary_candidate(
     Ok(None)
 }
 
+/// The `mydesiredvars` the per-package block prints for an installed package:
+/// each `CHOST`/`CFLAGS`/`CXXFLAGS`/`FEATURES`/`LDFLAGS` whose recorded value
+/// differs from the current config, plus an `Unset:` line for unrecorded ones.
+// Portage: action_info, actions.py
+pub(crate) const INFO_INSTALLED_VARS: &[&str] =
+    &["CHOST", "CFLAGS", "CXXFLAGS", "FEATURES", "LDFLAGS"];
+
+/// An installed package's saved build-time environment from its vdb `environment.bz2`
+/// (a bzip2-compressed bash env dump), decompressed in-process. Returns the present
+/// `wanted` vars only; a missing, unreadable or corrupt archive yields an empty map.
+// Portage: vartree._aux_env_search
+pub fn read_vdb_env_vars(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    wanted: &[&str],
+) -> HashMap<String, String> {
+    use std::io::Read as _;
+    let key = resolve_vdb_entry(root, category, package, version);
+    let Ok(Some(compressed)) = portage_vdb::for_root(root).read_file(&key, "environment.bz2")
+    else {
+        return HashMap::new();
+    };
+    let mut decoder = bzip2::read::BzDecoder::new(&compressed[..]);
+    let mut text = String::new();
+    if decoder.read_to_string(&mut text).is_err() {
+        return HashMap::new();
+    }
+    parse_env_assignments(&text, wanted)
+}
+
 /// The `environment.bz2` assignment scanner: `declare`/`export`-prefixed or plain `KEY=value`
 /// lines, with `"`/`'` quoting and multi-line quoted values (later assignments win). Only
 /// `wanted` keys are returned, but continuation lines are consumed regardless.
@@ -496,6 +528,129 @@ pub(crate) fn parse_env_assignments(text: &str, wanted: &[&str]) -> HashMap<Stri
         if wanted.contains(&key) {
             out.insert(key.to_string(), value);
         }
+    }
+    out
+}
+
+/// Every installed vdb entry `atom_str` matches, with its `<cpv>::<repo> was built with`
+/// USE display plus the differing/`Unset:` `mydesiredvars`. The vdb is checked first: any
+/// installed match short-circuits the ebuild/binary lookup. The `mydesiredvars` values come
+/// from the package's vdb `environment.bz2` via [`read_vdb_env_vars`] *only*: an absent var
+/// is `Unset:` even if a same-named file exists; a present-but-empty value matching the
+/// (empty) current config prints nowhere.
+// Portage: action_info, actions.py, vartree._aux_env_search
+pub fn resolve_installed_info(
+    root: &Path,
+    atom_str: &str,
+    config: &portage_profile::Config,
+) -> Vec<InstalledInfo> {
+    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        return Vec::new();
+    };
+    let installed = installed_candidates(root, &atom.category, &atom.package);
+    let cpv_strs: Vec<String> = installed
+        .iter()
+        .map(|(v, s, ss)| {
+            format!(
+                "{}/{}-{v}:{s}/{ss}::{}",
+                atom.category,
+                atom.package,
+                installed_pkg_repo(root, &atom.category, &atom.package, v)
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = cpv_strs.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(atom_str, &refs) else {
+        return Vec::new();
+    };
+    let by_str: HashMap<&str, &(String, String, String)> =
+        refs.iter().copied().zip(installed.iter()).collect();
+
+    let mut out = Vec::new();
+    for m in matched {
+        let Some((version, _slot, _sub)) = by_str.get(m).copied() else {
+            continue;
+        };
+        let repo_name = installed_pkg_repo(root, &atom.category, &atom.package, version);
+        let vdb_use = read_vdb_flag_set(root, &atom.category, &atom.package, version, "USE");
+        let vdb_iuse_raw = read_vdb_string(root, &atom.category, &atom.package, version, "IUSE");
+        let mut disp: Vec<(String, bool)> = vdb_iuse_raw
+            .split_whitespace()
+            .map(|t| t.trim_start_matches(['+', '-']).to_string())
+            .map(|f| {
+                let on = vdb_use.contains(&f);
+                (f, on)
+            })
+            .collect();
+        disp.sort_by_key(|p| alnum_sort_key(&p.0));
+        disp.dedup();
+        // `( )` force/mask wrap from the vdb's own recorded `IUSE`/`KEYWORDS`.
+        let vdb_keywords: Vec<String> =
+            read_vdb_string(root, &atom.category, &atom.package, version, "KEYWORDS")
+                .split_whitespace()
+                .map(String::from)
+                .collect();
+        let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+            iuse: &vdb_iuse_raw,
+            keywords: &vdb_keywords,
+            candidate_str: m,
+            category: &atom.category,
+            package: &atom.package,
+            config,
+        });
+        let use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
+            use_flags_display: &disp,
+            config,
+            installed: None,
+            forced: &forced,
+            all_flags: true,
+            reinst_flags: &HashSet::new(),
+        });
+
+        // The printed value is the raw saved value, untrimmed.
+        let env_vars = read_vdb_env_vars(
+            root,
+            &atom.category,
+            &atom.package,
+            version,
+            INFO_INSTALLED_VARS,
+        );
+        let mut differing_vars = Vec::new();
+        let mut unset_vars = Vec::new();
+        for &var in INFO_INSTALLED_VARS {
+            let Some(stored) = env_vars.get(var) else {
+                unset_vars.push(var.to_string());
+                continue;
+            };
+            let current = config.other_vars.get(var).map(String::as_str).unwrap_or("");
+            if stored.split_whitespace().ne(current.split_whitespace()) {
+                differing_vars.push((var.to_string(), stored.clone()));
+            }
+        }
+
+        // Fires when `DEFINED_PHASES` names `info`, or is entirely empty.
+        let vdb_defined_phases = read_vdb_string(
+            root,
+            &atom.category,
+            &atom.package,
+            version,
+            "DEFINED_PHASES",
+        );
+        let vdb_defined_phases = vdb_defined_phases.trim();
+        let defines_pkg_info = vdb_defined_phases.is_empty()
+            || vdb_defined_phases.split_whitespace().any(|p| p == "info");
+
+        out.push(InstalledInfo {
+            cpv: format!("{}/{}-{version}", atom.category, atom.package),
+            repo_name,
+            use_expand_display,
+            differing_vars,
+            unset_vars,
+            defines_pkg_info,
+            category: atom.category.clone(),
+            package: atom.package.clone(),
+            version: version.clone(),
+        });
     }
     out
 }

@@ -300,3 +300,453 @@ pub(crate) fn info_profile_version(config_root: &Path, main_repo_loc: &Path) -> 
     }
     "unavailable".to_string()
 }
+/// Arguments of [`run_info`].
+pub(crate) struct RunInfoArgs<'a> {
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) repos: &'a [portage_repo::RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) atom_args: &'a [&'a str],
+    pub(crate) misspell_suggestions: bool,
+    pub(crate) usepkg: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) color: &'a Colorizer,
+}
+
+pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
+    let RunInfoArgs {
+        config,
+        repos,
+        root,
+        atom_args,
+        misspell_suggestions,
+        usepkg,
+        config_root,
+        shell,
+        debug,
+        color,
+    } = args;
+    // The local binary index, built once for the whole `--info` run and shared
+    // by the existence probe and the binary half below. Built lazily: without
+    // `--usepkg` neither consumer runs.
+    let local_binpkg = usepkg.then(|| portage_repo::build_local_binpkg_index(config));
+    // A target with no ebuild anywhere and nothing installed is fatal (exit 1),
+    // printed before the config block.
+    // Portage: _emerge/actions.py, action_info
+    for atom_str in atom_args {
+        let Some(atom) = parse_atom(atom_str) else {
+            continue;
+        };
+        let exists = portage_repo::list_candidates(repos, &atom.category, &atom.package)
+            .map(|c| !c.is_empty())
+            .unwrap_or(false)
+            || !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty()
+            // Under `--usepkg`, a package only ever available as a binary is
+            // not a "no ebuilds" error either.
+            // Portage: _emerge/actions.py, action_info
+            || local_binpkg.as_ref().is_some_and(|idx| {
+                portage_repo::has_local_binary_candidate(idx, atom_str)
+            });
+        if !exists {
+            let mut xinfo = format!("\"{atom_str}\"");
+            if root != Path::new("/") {
+                xinfo = format!("{xinfo} for {}", root.display());
+            }
+            eprintln!(
+                "\nemerge: there are no ebuilds to satisfy {}.",
+                color.c("INFORM", &xinfo)
+            );
+            let msg = format!("there are no ebuilds to satisfy \"{atom_str}\".");
+            if let Some(extra) = misspell_suggestion_block(&msg, repos, misspell_suggestions) {
+                eprintln!("{extra}");
+            }
+            return ExitCode::from(1);
+        }
+    }
+
+    // The host-state header, printed before `Repositories:`.
+    print_info_header(config, repos, root, config_root, !atom_args.is_empty());
+
+    // Repositories.
+    println!("Repositories:\n");
+    let name_of: std::collections::HashMap<&Path, &str> = repos
+        .iter()
+        .map(|r| (r.location.as_path(), r.name.as_str()))
+        .collect();
+    for repo in repos {
+        // Field order: name, location, sync-type, sync-uri, masters,
+        // priority, aliases, volatile, then module-specific opts.
+        // Portage: repositories.py, RepoConfig.info_string
+        println!("{}", repo.name);
+        println!("    location: {}", repo.location.display());
+        if let Some(t) = &repo.sync_type {
+            println!("    sync-type: {t}");
+        }
+        if let Some(u) = &repo.sync_uri {
+            println!("    sync-uri: {u}");
+        }
+        if !repo.masters.is_empty() {
+            let ms: Vec<&str> = repo
+                .masters
+                .iter()
+                .filter_map(|m| name_of.get(m.as_path()).copied())
+                .collect();
+            if !ms.is_empty() {
+                println!("    masters: {}", ms.join(" "));
+            }
+        }
+        println!("    priority: {}", repo.priority);
+        if !repo.aliases.is_empty() {
+            println!("    aliases: {}", repo.aliases.join(" "));
+        }
+        println!(
+            "    volatile: {}",
+            if repo.volatile { "True" } else { "False" }
+        );
+        for (k, v) in &repo.module_specific_options {
+            println!("    {k}: {v}");
+        }
+        println!();
+    }
+
+    // Binary Repositories.
+    if !config.binrepos.is_empty() {
+        println!("Binary Repositories:\n");
+        for br in config.binrepos.iter().rev() {
+            if br.name.is_empty() {
+                continue;
+            }
+            // Field order: name, location (if set), priority, sync-uri,
+            // verify-signature. Portage: repositories.py, BinRepoConfig.info_string
+            println!("{}", br.name);
+            if let Some(loc) = &br.location {
+                println!("    location: {loc}");
+            }
+            println!("    priority: {}", br.priority);
+            println!("    sync-uri: {}", br.sync_uri);
+            println!(
+                "    verify-signature: {}",
+                if br.verify_signature { "True" } else { "False" }
+            );
+            println!();
+        }
+    }
+
+    // Installed sets: the `@name` entries of `world_sets`.
+    let mut sets: Vec<String> = read_world_sets(root)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| format!("@{s}"))
+        .collect();
+    sets.sort();
+    if !sets.is_empty() {
+        println!("Installed sets: {}", sets.join(", "));
+    }
+
+    // The variable dump: the hardcoded `myvars` list plus the main repo's
+    // `profiles/info_vars`, minus deprecated/skipped ones, de-duplicated and
+    // sorted. Each prints as `VAR="value"`, or joins the trailing `Unset:` line.
+    // The incremental members print resolved, then space-joined and sorted.
+    // Portage: _emerge/actions.py, action_info
+    let use_expand: Vec<String> = {
+        let mut v: Vec<String> = config.use_expand.iter().cloned().collect();
+        v.sort();
+        v
+    };
+    let resolved_use = resolved_global_use(config);
+    let mut myvars: Vec<String> = [
+        "GENTOO_MIRRORS",
+        "CONFIG_PROTECT",
+        "CONFIG_PROTECT_MASK",
+        "DISTDIR",
+        "ENV_UNSET",
+        "PKGDIR",
+        "PORTAGE_TMPDIR",
+        "PORTAGE_BINHOST",
+        "PORTAGE_BUNZIP2_COMMAND",
+        "PORTAGE_BZIP2_COMMAND",
+        "USE",
+        "CHOST",
+        "CFLAGS",
+        "CXXFLAGS",
+        "ACCEPT_KEYWORDS",
+        "ACCEPT_LICENSE",
+        "FEATURES",
+        "EMERGE_DEFAULT_OPTS",
+    ]
+    .map(String::from)
+    .to_vec();
+    if let Some(main) = repos.iter().find(|r| r.is_main)
+        && let Ok(text) = std::fs::read_to_string(main.location.join("profiles/info_vars"))
+    {
+        for line in text.lines() {
+            let l = line.trim();
+            if !l.is_empty() && !l.starts_with('#') {
+                myvars.push(l.to_string());
+            }
+        }
+    }
+    let skipped = ["PORTAGE_REPOSITORIES", "PORTDIR", "PORTDIR_OVERLAY", "SYNC"];
+    myvars.retain(|v| !skipped.contains(&v.as_str()));
+    myvars.sort();
+    myvars.dedup();
+    let mut unset: Vec<String> = Vec::new();
+    for k in &myvars {
+        let k = k.as_str();
+        let value: Option<String> = match k {
+            "ACCEPT_KEYWORDS" => {
+                let mut kw: Vec<&String> = config.accept_keywords.iter().collect();
+                kw.sort();
+                (!kw.is_empty())
+                    .then(|| kw.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" "))
+            }
+            "ACCEPT_LICENSE" => {
+                (!config.accept_license.is_empty()).then(|| config.accept_license.join(" "))
+            }
+            "CONFIG_PROTECT" | "CONFIG_PROTECT_MASK" | "ENV_UNSET" | "FEATURES" => config
+                .resolved_incremental(k)
+                .filter(|v| !v.is_empty())
+                .map(|v| v.join(" "))
+                .or_else(|| config.other_vars.get(k).cloned()),
+            "USE" => {
+                // Global USE minus the `USE_EXPAND`-prefixed pseudo-flags
+                // (shown as their own `VAR="…"` tokens).
+                let flags: Vec<&str> = resolved_use
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|f| {
+                        !use_expand
+                            .iter()
+                            .any(|v| f.starts_with(&format!("{}_", v.to_lowercase())))
+                    })
+                    .collect();
+                Some(flags.join(" "))
+            }
+            // Every other key reads through the env-first chain (see
+            // `info_scalar_value`), so the calling environment wins.
+            _ => info_scalar_value(config, k),
+        };
+        match value {
+            Some(v) if k == "PORTAGE_BZIP2_COMMAND" && v == "bzip2" => {}
+            Some(v) if k == "USE" => {
+                let mut line = format!("USE=\"{v}\"");
+                for var in &use_expand {
+                    if let Some(val) = use_expand_display_value(var, &resolved_use, config) {
+                        line.push_str(&format!(" {var}=\"{val}\""));
+                    }
+                }
+                println!("{line}");
+            }
+            Some(v) => println!("{k}=\"{v}\""),
+            None => unset.push(k.to_string()),
+        }
+    }
+    if !unset.is_empty() {
+        println!("Unset:  {}", unset.join(", "));
+    }
+    // A single trailing blank line; the `Package Settings` block below, when
+    // present, starts with its own leading `\n`.
+    println!();
+
+    // The `Package Settings` section: per atom, every installed vdb match wins;
+    // otherwise the best visible ebuild candidate defining `pkg_info()`. The
+    // header prints once, only if at least one atom yielded something.
+    // Portage: _emerge/actions.py, action_info
+    enum InfoPkg {
+        Installed(portage_repo::InstalledInfo),
+        Ebuild(portage_repo::InfoCandidate),
+        // The `(bindb, "binary")` half: only under `--usepkg`/`--usepkgonly`
+        // when nothing is installed and no visible ebuild defines `pkg_info()`.
+        Binary(portage_repo::InfoBinaryCandidate),
+    }
+    // Each flag token is coloured; `--info` always shows every flag.
+    let use_line = |disp: &[(String, String)]| -> String {
+        disp.iter()
+            .map(|(name, body)| {
+                let colored = if body.is_empty() {
+                    String::new()
+                } else {
+                    body.split(' ')
+                        .map(|t| colorize_use_token(t, color))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
+                format!("{name}=\"{colored}\"")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut pkgs: Vec<InfoPkg> = Vec::new();
+    for a in atom_args {
+        let installed = portage_repo::resolve_installed_info(root, a, config);
+        if !installed.is_empty() {
+            pkgs.extend(installed.into_iter().map(InfoPkg::Installed));
+            continue;
+        }
+        if let Some(c) = portage_repo::resolve_info_candidate(repos, a, config)
+            .ok()
+            .flatten()
+            .filter(|c| c.defines_pkg_info)
+        {
+            pkgs.push(InfoPkg::Ebuild(c));
+            continue;
+        }
+        // Only when `--usepkg` and the ebuild half yielded nothing.
+        if let Some(idx) = local_binpkg.as_ref()
+            && let Some(b) = portage_repo::resolve_info_binary_candidate(config, a, idx)
+                .ok()
+                .flatten()
+        {
+            pkgs.push(InfoPkg::Binary(b));
+        }
+    }
+    if !pkgs.is_empty() {
+        let title = "Package Settings";
+        // Real `header_title.rjust(int(header_width / 2 + len(title) / 2))`.
+        let pad = 65 / 2 + title.len() / 2;
+        println!("{}", "=".repeat(65));
+        println!("{title:>pad$}");
+        println!("{}", "=".repeat(65));
+        println!();
+        let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(config));
+        for pkg in &pkgs {
+            // Header + USE line (+ the installed-only var diff), then two blank
+            // lines, then `>>> Attempting to run pkg_info() ...` and the phase.
+            // The ebuild/binary halves always run (selected for defining it);
+            // an installed match runs only when its vdb `DEFINED_PHASES` names
+            // `info` -- or is entirely empty (an old/hand-written entry quirk).
+            // Portage: _emerge/actions.py, action_info
+            let (cpv, run_phase): (&str, bool) = match pkg {
+                InfoPkg::Ebuild(c) => {
+                    println!(
+                        "\n{} would be built with the following:",
+                        color.c("INFORM", &format!("{}::{}", c.cpv, c.repo_name))
+                    );
+                    println!("{}", use_line(&c.use_expand_display));
+                    (&c.cpv, true)
+                }
+                InfoPkg::Binary(b) => {
+                    println!(
+                        "\n{} (non-installed binary) was built with the following:",
+                        color.c("INFORM", &format!("{}::{}", b.cpv, b.repo_name))
+                    );
+                    println!("{}", use_line(&b.use_expand_display));
+                    (&b.cpv, true)
+                }
+                InfoPkg::Installed(i) => {
+                    println!(
+                        "\n{} was built with the following:",
+                        color.c("INFORM", &format!("{}::{}", i.cpv, i.repo_name))
+                    );
+                    println!("{}", use_line(&i.use_expand_display));
+                    for (name, value) in &i.differing_vars {
+                        println!("{name}=\"{value}\"");
+                    }
+                    if !i.unset_vars.is_empty() {
+                        println!("Unset: {}", i.unset_vars.join(", "));
+                    }
+                    (&i.cpv, i.defines_pkg_info)
+                }
+            };
+            println!();
+            println!();
+            if !run_phase {
+                continue;
+            }
+            println!(">>> Attempting to run pkg_info() for '{cpv}'");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            let phase = match pkg {
+                InfoPkg::Ebuild(c) => {
+                    ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
+                        ebuild_path: &c.ebuild_path,
+                        phase: "info",
+                        root,
+                        portage_tmpdir: &portage_tmpdir,
+                        debug,
+                        config_root,
+                        shell,
+                        build_env: &[],
+                        log_file: None,
+                    })
+                }
+                InfoPkg::Installed(i) => {
+                    let opts = ebuild_merge::MergeOptions::from_env(shell, debug);
+                    let scratch = portage_tmpdir.join("portage").join("_info_src");
+                    ebuild_merge::run_vdb_saved_env_phase(ebuild_merge::RunVdbSavedEnvPhaseArgs {
+                        root,
+                        category: &i.category,
+                        package: &i.package,
+                        pf: &format!("{}-{}", i.package, i.version),
+                        phase: "info",
+                        scratch_dir: &scratch,
+                        portage_tmpdir: &portage_tmpdir,
+                        options: &opts,
+                    })
+                }
+                InfoPkg::Binary(b) => {
+                    // The extracted ebuild is laid out as `<cat>/<pn>/<pf>.ebuild`
+                    // so the phase driver derives `CATEGORY`/`PN` from the path.
+                    let dest = portage_tmpdir.join("portage").join("_info_binpkg");
+                    let _ = std::fs::remove_dir_all(&dest);
+                    let image = dest.join("image");
+                    let build_info = dest.join("build-info");
+                    let run = |ep: &Path| {
+                        ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
+                            ebuild_path: ep,
+                            phase: "info",
+                            root,
+                            portage_tmpdir: &portage_tmpdir,
+                            debug,
+                            config_root,
+                            shell,
+                            build_env: &[],
+                            log_file: None,
+                        })
+                    };
+                    match crate::binpkg::extract_binpkg(
+                        &b.archive_path,
+                        &image,
+                        &build_info,
+                        &crate::binpkg::GpgVerify::from_env(),
+                        // `pkg_info` installs nothing: no xattr handling.
+                        &crate::ebuild_merge::XattrPolicy::default(),
+                    ) {
+                        Ok(()) => {
+                            let extracted = portage_util::read_dir_entries(&build_info)
+                                .ok()
+                                .into_iter()
+                                .flatten()
+                                .map(|e| e.path())
+                                .find(|p| p.extension().is_some_and(|x| x == "ebuild"));
+                            match extracted {
+                                Some(src) => {
+                                    let pkg_dir = dest.join(&b.category).join(&b.package);
+                                    let laid_out = pkg_dir.join(format!("{}.ebuild", b.pf));
+                                    match std::fs::create_dir_all(&pkg_dir)
+                                        .and_then(|()| std::fs::copy(&src, &laid_out))
+                                    {
+                                        Ok(_) => run(&laid_out),
+                                        Err(e) => Err(format!("{}: {e}", laid_out.display())),
+                                    }
+                                }
+                                None => Err(format!(
+                                    "No ebuild found for '{cpv}' in {}",
+                                    b.archive_path.display()
+                                )),
+                            }
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+            };
+            if let Err(e) = phase {
+                eprintln!("emerge: {e}");
+            }
+        }
+    }
+
+    ExitCode::SUCCESS
+}
