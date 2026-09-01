@@ -43,10 +43,10 @@ ref = "main"
 commit = "a04b09dc4a3f5beaa78899c4100734cf0f8f4472"
 pinned_in = "rust/portuale/Cargo.toml"
 pinned_at = "2026-09-01"
-tracking_doc = "BRUSH_PIN.md"
+tracking_doc = "docs/brush-pin.md"
 # No fork: plain upstream `main`, exact-commit pinned (no released
 # crates.io version yet carries reubeno/brush#1274, which portuale's use
 # of bin/eapi.sh needs). Cargo.toml still fetches this via git; the
 # 3rdparty/brush checkout is for hacking/reference. Re-pin periodically --
-# see BRUSH_PIN.md's checklist.
+# see docs/brush-pin.md's checklist.
 notes = "Was vivo75/brush (a fork) until 2026-09-01; dropped once both fixes the fork carried were resolved (see tracking_doc)."

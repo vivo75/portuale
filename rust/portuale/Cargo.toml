@@ -14,7 +14,7 @@ portage-use-reduce = { path = "../portage-use-reduce" }
 # `_emerge/unmerge.py::_unmerge_display`) -- a pure version-parsing
 # crate, already a transitive dependency via portage-dep/portage-repo.
 portage-versions = { path = "../portage-versions" }
-# Real ebuild phase execution (task #54, PROMPT-next.md's own
+# Real ebuild phase execution (task #54, docs/agent-context.md's own
 # "Real ebuild phase execution" section): a deliberate, accepted dynamic
 # dependency (this pilot's own "near-zero dependencies" discipline is
 # explicitly waived here, see that doc's own "bash-execution-backend
@@ -32,7 +32,7 @@ portage-versions = { path = "../portage-versions" }
 #     `__filter_readonly_variables` stage through a temp file and are
 #     never a pipeline stage. `install_does_not_deadlock...` (portuale)
 #     is the guard.
-# See BRUSH_PIN.md for the tracking record and the periodic
+# See docs/brush-pin.md for the tracking record and the periodic
 # re-pin checklist (bump the rev to a newer `main`, re-run the suite).
 brush-core = { git = "https://github.com/reubeno/brush", rev = "a04b09dc4a3f5beaa78899c4100734cf0f8f4472" }
 brush-builtins = { git = "https://github.com/reubeno/brush", rev = "a04b09dc4a3f5beaa78899c4100734cf0f8f4472" }

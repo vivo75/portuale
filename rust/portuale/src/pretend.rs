@@ -206,7 +206,7 @@
 // this pilot doesn't implement -- reproducing it here would be actively
 // misleading) -- it's a short, honest, pilot-specific summary of what
 // this pilot actually supports, ending with a pointer to
-// README.md and PROMPT.md for the rest.
+// README.md and docs/agent-context.md for the rest.
 
 use crate::color::{self, Colorizer};
 use crate::ebuild_merge;
@@ -1800,7 +1800,7 @@ fn report_option(token: &str) -> ExitCode {
              --with-bdeps, --with-bdeps-auto, --changed-deps, \
              --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, \
              --noreplace/-n, --selective, and --help/-h are implemented \
-             so far; see PROMPT.md)",
+             so far; see README.md)",
             found.canonical
         );
     } else {
@@ -1886,7 +1886,7 @@ fn print_help() {
          lib/_emerge/main.py) but not implemented -- using one reports which \
          option or action it is, instead of a generic error."
     );
-    println!("See README.md and PROMPT.md for this pilot's current scope.");
+    println!("See README.md for this pilot's current scope.");
 }
 
 /// Reads `<root>/var/lib/portage/world` (real portage's own `WORLD_FILE`

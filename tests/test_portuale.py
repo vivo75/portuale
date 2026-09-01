@@ -1,5 +1,5 @@
 """Black-box test for the emerge/ebuild portuale skeleton (see
-PROMPT.md, "emerge/ebuild binary shape"). Tests the real compiled
+docs/agent-context.md, "emerge/ebuild binary shape"). Tests the real compiled
 CLI via symlinks in a PATH, exactly as it would be invoked in practice --
 not by importing anything from the binary.
 
@@ -1588,7 +1588,7 @@ def test_ebuild_install_does_not_deadlock_on_a_large_eclass_scope(
     ebuild_binary, tmp_path
 ):
     """Regression test for a real upstream `brush` bug, since fixed in
-    the pinned fork (see README.md's own eclass section for the full
+    the pinned fork (see docs/what-this-proves.md's eclass section for the full
     root-cause writeup): a shell function used as a non-last pipeline
     stage used to run inline rather than as a background task, so real
     `bin/phase-functions.sh`'s own post-phase `__save_ebuild_env |
@@ -1631,8 +1631,8 @@ def test_ebuild_shell_bash_produces_the_same_real_result_as_the_brush_default(
     backend executes every phase: the default embedded `brush_core::
     Shell`, or a genuine `bash <bin_dir>/ebuild.sh <phase>` subprocess
     (matching real portage's own `_doebuild_spawn()` invocation shape --
-    see `ebuild_phases::ShellBackend`'s own doc comment and README.md's
-    own eclass section for the full writeup). Both backends run the same
+    see `ebuild_phases::ShellBackend`'s own doc comment and
+    docs/what-this-proves.md's eclass section for the full writeup). Both backends run the same
     real `dev-libs/phasepkg` fixture's own `src_install`, so this
     asserts they produce an identical real file, not just a zero exit
     code each."""

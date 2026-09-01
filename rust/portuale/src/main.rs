@@ -1,5 +1,5 @@
 // Portuale: a multicall-style binary proving the emerge/ebuild dispatch
-// mechanism described in PROMPT.md ("emerge/ebuild binary
+// mechanism described in docs/agent-context.md ("emerge/ebuild binary
 // shape"): a single static binary that behaves differently depending on
 // how it is invoked, busybox-style. Real dispatch installs this binary
 // once and creates `emerge` / `ebuild` symlinks (or hardlinks) pointing
@@ -8,7 +8,7 @@
 // `emerge` implements one real slice: `--pretend <category/package>` (see
 // pretend.rs). Everything else -- real merges, phase execution via
 // `ebuild`, and anything about `emerge` beyond that one slice -- is still
-// a dry-run/read-only stub (see PROMPT.md, "Scope of the first port").
+// a dry-run/read-only stub (see docs/agent-context.md, "Scope of the first port").
 // Both applets recognize their real CLI surface by name (see
 // emerge_options.rs/ebuild_options.rs) even where the underlying
 // behavior isn't implemented.

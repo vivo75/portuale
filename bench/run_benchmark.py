@@ -3,13 +3,13 @@
 
 Drives each harness's `batch` subcommand -- a single process handling many
 operations read from stdin -- specifically to avoid fork/exec overhead
-dominating the measurement (see PROMPT.md, "Test/benchmark harness
+dominating the measurement (see docs/agent-context.md, "Test/benchmark harness
 architecture"). By default the workload is drawn from a real, vendored
 Gentoo tree snapshot (dataset.py / gentoo_snapshot.json, produced by
-extract_snapshot.py), per PROMPT.md's benchmark-data decision; pass
+extract_snapshot.py), per docs/agent-context.md's benchmark-data decision; pass
 `--dataset synthetic` to fall back to seeded-random version strings. This
 is the "regression gate" tool: it exits nonzero if Rust isn't measurably
-faster than Python (PROMPT.md hard goal 2), or if given --check-baseline,
+faster than Python (docs/agent-context.md hard goal 2), or if given --check-baseline,
 if speedup has regressed vs. a recorded baseline.
 
 Example:
@@ -95,7 +95,7 @@ def main() -> int:
         type=float,
         default=1.0,
         help="fail if rust isn't at least this many times faster than python "
-        "(PROMPT.md hard goal 2 requires >1.0)",
+        "(docs/agent-context.md hard goal 2 requires >1.0)",
     )
     parser.add_argument(
         "--check-baseline",

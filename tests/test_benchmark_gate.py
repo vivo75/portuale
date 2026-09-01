@@ -1,4 +1,4 @@
-"""CI performance-regression gate (see PROMPT.md: "benchmark suite must show
+"""CI performance-regression gate (see docs/agent-context.md: "benchmark suite must show
 Rust ahead of Python and must not regress over time"). Opt-in via
 PORTUALE_RUN_BENCHMARK=1 so the default `pytest tests` run (the
 correctness contract suite) stays fast; CI should set the env var to

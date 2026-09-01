@@ -1,7 +1,7 @@
 // Profile-chain + make.conf + package.mask/.unmask/.accept_keywords
 // resolution for real USE/ACCEPT_KEYWORDS/visibility (see
-// PROMPT.md's depgraph/config-resolution follow-up work, and
-// README.md for the full scope writeup). Replaces the base
+// docs/agent-context.md's depgraph/config-resolution follow-up work, and
+// docs/what-this-proves.md for the full scope writeup). Replaces the base
 // `emerge --pretend` slice's hardcoded `ACCEPT_KEYWORDS="amd64"`/`USE=""`
 // with the real mechanism: a profile inheritance chain (`make.profile` ->
 // `parent` files) plus `/etc/portage/make.conf`, each level's

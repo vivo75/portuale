@@ -1,50 +1,33 @@
-# Operation block diagrams
+# Documentation
 
-Block diagrams for four representative `emerge` invocations, as this
-pilot's `portuale` binary actually implements them. Each diagram traces
-the real call path through `rust/portuale/src/`; blocks are labelled with
-the function that does the work so the diagram doubles as a map into the
-source.
+Project documentation for `portuale`. The root
+[`README.md`](../README.md) is the concise human overview; this directory
+holds everything else.
 
-| Invocation | Diagram | Kind |
-|---|---|---|
-| `emerge --pretend @world` | [emerge-pretend-world.md](emerge-pretend-world.md) | read-only resolution + display |
-| `emerge -v --getbinpkg=n sys-apps/portage` | [emerge-source-merge.md](emerge-source-merge.md) | source build + merge |
-| `emerge -v --getbinpkgonly=y sys-apps/portage` | [emerge-getbinpkgonly.md](emerge-getbinpkgonly.md) | binary-only download + merge |
-| `emerge -Cv app-portage/eix` | [emerge-unmerge.md](emerge-unmerge.md) | unmerge (removal) |
+## For contributors / agents
 
-## Shared front end
+| Doc | What it is |
+|---|---|
+| [`agent-context.md`](agent-context.md) | **Read first for any development work.** Goals, hard constraints, architecture decisions, the bash-backend investigation, current state, and the open backlog. |
+| [`../AGENTS.md`](../AGENTS.md) | The "next slice" workflow and the verification / commit rules. |
+| [`scope-backlog.md`](scope-backlog.md) | Real portage behaviour not yet ported (either side), standing non-goals, and the honest distance to a drop-in replacement. |
 
-Every `emerge` invocation enters through the same multicall dispatch and
-argument/config pipeline before it branches to an action:
+## Reference
 
-```mermaid
-flowchart TD
-    argv["main() — basename of argv0"]:::entry
-    argv -->|"invoked as emerge"| run["emerge::run(args)<br/>(pretend::run, pretend.rs)"]
-    run --> help{"--help / -h ?"}
-    help -->|yes| printhelp["print_help() → exit 0"]:::done
-    help -->|no| parse["parse the full option surface<br/>(emerge_options.rs recognises every<br/>real flag/action by name)"]
-    parse --> early{"early standalone action?<br/>--deselect (alone), --list-sets"}
-    early -->|yes| earlyact["run_deselect() / run_list_sets()"]:::branch
-    early -->|no| cfg["resolve config<br/>find_repos() + resolve_config()<br/>(repos.conf, profile chain, make.conf,<br/>package.mask/.use/.accept_keywords)"]
-    cfg --> standalone{"standalone action?<br/>--unmerge/-C, --depclean/-c, --prune,<br/>--config, --search, --info, --resume,<br/>--clean, --rage-clean"}
-    standalone -->|yes| action["dispatch to that action's handler<br/>(see per-action diagrams)"]:::branch
-    standalone -->|no| expand["expand set tokens in place<br/>@world/@selected/@system/@installed/@&lt;name&gt;<br/>+ apply profiles/updates/ package moves"]
-    expand --> resolve["resolve_pretend_graph()<br/>(portage-repo): candidate selection per repo,<br/>recursive slot-aware DEPEND/RDEPEND/BDEPEND walk,<br/>outcome classification, blocker + slot-conflict<br/>reporting, topological merge order"]
-    resolve --> display["render the merge list<br/>print_entry_line() / print_tree() / print_json()<br/>+ counters, USE strings, blockers"]
-    display --> pretendq{"--pretend / -p ?"}
-    pretendq -->|yes| exit0["exit 0 — nothing touched"]:::done
-    pretendq -->|no| exec["execution branch<br/>(buildpkgonly / getbinpkg / source merge)"]:::branch
+| Doc | What it is |
+|---|---|
+| [`what-this-proves.md`](what-this-proves.md) | The living, append-only per-slice record — every shipped feature with its real-portage source grounding. |
+| [`running-it.md`](running-it.md) | Runnable, live-verified examples for every shipped slice. |
+| [`brush-pin.md`](brush-pin.md) | The `brush` (embedded bash) dependency pin, the two fixes it used to carry, and the re-pin checklist. |
+| [`operation-diagrams.md`](operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code, plus per-operation detail pages. |
 
-    classDef entry fill:#1f6f43,color:#fff
-    classDef done fill:#4a4a4a,color:#fff
-    classDef branch fill:#8a5a1a,color:#fff
-```
+## History
 
-The execution branch (`if !pretend`, `pretend.rs:7127`) picks exactly one
-of:
+| Doc | What it is |
+|---|---|
+| [`history/porting-strategy-prompt.md`](history/porting-strategy-prompt.md) | The original porting-strategy prompt, superseded by `agent-context.md`. Kept for the original derivation. |
 
-- `emerge_build::run_buildpkgonly` — `--buildpkgonly` / `-B`
-- `emerge_getbinpkg::run_merge_plan` — `--getbinpkg` / `--getbinpkgonly`
-- `emerge_build::run_source_merge` — plain `emerge <atom>`
+Co-located READMEs that stay next to their code:
+[`../bin/README.md`](../bin/README.md),
+[`../3rdparty/README.md`](../3rdparty/README.md),
+[`../TEST/README.md`](../TEST/README.md).

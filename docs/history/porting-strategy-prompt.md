@@ -1,5 +1,13 @@
 # Prompt: Plan a Python-to-Rust friendly fork of Portage
 
+> **HISTORIC — superseded by [`../agent-context.md`](../agent-context.md).**
+> This is the original porting-strategy prompt (formerly `PROMPT.md` at the
+> repo root). Its goals, constraints, and architecture decisions were
+> merged into `agent-context.md` along with everything learned since;
+> that file is the one to read and keep current. This copy is kept only
+> for the original end-to-end derivation and the first-execution-step
+> framing, which the pilot has long since completed.
+
 Use this prompt to (re)derive the porting strategy for Portage from scratch.
 It encodes the goals, hard constraints, and architectural decisions already
 reached, so the plan can be regenerated or handed to a fresh LLM session

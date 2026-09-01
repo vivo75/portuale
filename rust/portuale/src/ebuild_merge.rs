@@ -1,4 +1,4 @@
-// Real merge/filesystem mutation (task #55, `PROMPT-next.md`'s own
+// Real merge/filesystem mutation (task #55, `docs/agent-context.md`'s own
 // "Real merge/install/filesystem mutation" section): after running the
 // real `install` phase chain (task #54's own `ebuild_phases` module),
 // really run `pkg_preinst`, copy `${D}`'s own regular files, directories,
@@ -153,7 +153,7 @@
 //     `find_consumers`, `find_libs_to_preserve`) and the real control-
 //     flow wiring into both merge (`unregister_preserved_libs`, this
 //     module) and unmerge (`preserve_libs_on_unmerge`, this module) are
-//     real now -- see `README.md`'s own "`preserve-libs`" sections for
+//     real now -- see `docs/what-this-proves.md`'s own "`preserve-libs`" sections for
 //     the full grounding of each slice.
 //   - `merge_tree`'s regular-file copy now mirrors real `movefile()`'s
 //     explicit `os.chmod(dest, sstat.st_mode)` with a

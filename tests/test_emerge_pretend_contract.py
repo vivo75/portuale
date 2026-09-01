@@ -1,5 +1,5 @@
 """Black-box contract suite for the `emerge --pretend` pilot slice (see
-PROMPT.md and rust/portage-repo/src/lib.rs for the full
+docs/agent-context.md and rust/portage-repo/src/lib.rs for the full
 scope writeup, including the dependency-recursion follow-up in
 resolve_pretend_graph, the profile/make.conf -> real USE/ACCEPT_KEYWORDS
 follow-up in portage-profile, the package.mask/.unmask/.accept_keywords/
@@ -15,7 +15,7 @@ each one gets a specific "recognized, not implemented" message instead
 of a generic "unsupported option" one). Drives the real compiled
 `emerge` binary (portuale, dispatched via a real symlink
 -- not a neutral harness, since emerge is an actual product surface per
-PROMPT.md's testing decision) and the Python reference implementation
+docs/agent-context.md's testing decision) and the Python reference implementation
 identically, against the synthetic fixture tree at fixtures
 (whose repos.conf/make.profile/make.conf/package.mask/package.unmask/
 package.accept_keywords/package.use now drive real config resolution,
@@ -6015,7 +6015,7 @@ def test_short_flag_bundle_reports_the_first_out_of_scope_character(
         unimplemented.stderr.strip()
         == 'emerge (pilot v1): option "--debug" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see README.md)"
     )
 
     unrecognized = _run(
@@ -6086,7 +6086,7 @@ def test_help_prints_a_pilot_specific_summary_not_real_emerges_own(
         "Every other real emerge option/action is recognized by name (see "
         "lib/_emerge/main.py) but not implemented -- using one reports which "
         "option or action it is, instead of a generic error.\n"
-        "See README.md and PROMPT.md for this pilot's current scope.\n"
+        "See README.md for this pilot's current scope.\n"
     )
 
 
@@ -9112,7 +9112,7 @@ def test_real_option_not_implemented_message_names_the_option(emerge_binary, fix
         result.stderr.strip()
         == 'emerge (pilot v1): option "--accept-properties" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see README.md)"
     )
 
 
@@ -9128,7 +9128,7 @@ def test_real_option_inline_equals_form_is_still_recognized(emerge_binary, fixtu
         result.stderr.strip()
         == 'emerge (pilot v1): option "--accept-properties" is a real emerge option, but is not '
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, "
-        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, --noreplace/-n, --selective, and --help/-h are implemented so far; see README.md)"
     )
 
 
@@ -9144,7 +9144,7 @@ def test_real_action_not_implemented_message_says_action_not_option(emerge_binar
         "implemented in this pilot (only --pretend/-p, --verbose/-v, --quiet/-q, --newuse/-N, --changed-use/-U, --nodeps/-O, "
         "--onlydeps/-o, --update/-u, --deep/-D, --exclude/-X, --deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, "
         "--with-bdeps, --with-bdeps-auto, --changed-deps, --changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "
-        "--noreplace/-n, --selective, and --help/-h are implemented so far; see PROMPT.md)"
+        "--noreplace/-n, --selective, and --help/-h are implemented so far; see README.md)"
     )
     assert result.stderr.strip() == expected
 

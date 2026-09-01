@@ -1,6 +1,6 @@
 // Rust port of `portage.dep.use_reduce` (lib/portage/dep/__init__.py),
 // restricted to `flat=True` mode -- the depgraph/config-resolution slice
-// after atom matching (see PROMPT.md).
+// after atom matching (see docs/agent-context.md).
 //
 // Unlike atom.rs, this is NOT a narrowed grammar: flat mode's tokenizer
 // and bracket/use-conditional handling (the part of use_reduce this ports)
@@ -12,7 +12,7 @@
 // shape, which nothing in this pilot needs), and
 // `token_class`/`is_valid_flag` (tokens stay opaque strings here, matching
 // how config.py itself calls use_reduce for RESTRICT/PROPERTIES/IUSE-like
-// values -- see the grep in README.md).
+// values -- see the grep in docs/what-this-proves.md).
 //
 // `subset` (the `--with-test-deps` follow-up) IS now ported too --
 // `use_reduce_flat_subset`, grounded against real `select_subset`, which

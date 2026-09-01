@@ -7,7 +7,7 @@
 // `manifest`, `merge`, `qmerge`, `rpm`, `unmerge`, `depend`, `fetch`,
 // `fetchall`, `cleanrm`, and `help`). Nothing here is behaviorally
 // implemented -- real phase execution is explicitly deferred (see
-// PROMPT.md's "Deferred: ebuild phase execution") -- but recognizing
+// docs/agent-context.md's "Deferred: ebuild phase execution") -- but recognizing
 // real syntax lets `ebuild.rs` tell "a real ebuild option/command this
 // pilot doesn't implement yet" apart from "not valid ebuild syntax at
 // all", the same distinction `emerge_options.rs` draws for `emerge`.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Vendors a real Gentoo tree snapshot for the benchmark dataset, per
-PROMPT.md ("Benchmark data: a real, vendored Gentoo tree snapshot
+docs/agent-context.md ("Benchmark data: a real, vendored Gentoo tree snapshot
 (not purely synthetic stress data)").
 
 Walks a local ebuild repository (e.g. /.gentoo/repos/gentoo -- a full

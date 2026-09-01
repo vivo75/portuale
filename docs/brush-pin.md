@@ -2,8 +2,9 @@
 
 `portuale` embeds [`brush`](https://github.com/reubeno/brush) (`brush-core`
 + `brush-builtins`) as its Rust-native bash backend for real ebuild phase
-execution — see `PROMPT-next.md`'s "bash-execution-backend question" for
-why brush at all, and `README.md`'s "Bash-execution backend" /
+execution — see [`agent-context.md`](agent-context.md)'s "bash-execution-backend
+question" for why brush at all, and
+[`what-this-proves.md`](what-this-proves.md)'s "Bash-execution backend" /
 "`ebuild --shell bash|brush`" sections for how it is wired in.
 
 `portuale/Cargo.toml` pins `brush-core` / `brush-builtins` **by exact
@@ -66,8 +67,8 @@ through a `${T}` temp file and neither is ever a pipeline stage. The
 change lives in the **vendored** `bin/phase-functions.sh`
 (`ebuild_phases::bin_dir()` overlays `bin/` over the checkout's
 `bin/`; the upstream file stays pristine — see
-`3rdparty/repos.toml`'s `vendored_paths`). See `README.md`'s
-"brush strategy #2" section.
+`3rdparty/repos.toml`'s `vendored_paths`). See
+[`what-this-proves.md`](what-this-proves.md)'s "brush strategy #2" section.
 
 **Guard**: `ebuild_phases::tests::install_does_not_deadlock_on_an_eclass_
 scope_larger_than_the_pipe_buffer` (`portuale`), driven by the
@@ -107,3 +108,12 @@ compat sweep. Real ebuilds/eclasses almost certainly exercise brush
 incompatibilities not yet tried. New ones are their own slices — fix
 upstream first, or (for portage-tree `bin/*.sh`) rewrite the offending
 construct, `brush strategy #2` style — and get recorded here.
+
+## References
+
+- [`reubeno/brush`](https://github.com/reubeno/brush) — the embedded
+  bash interpreter.
+- [`shellgei/rusty_bash`](https://github.com/shellgei/rusty_bash) — an
+  alternative Rust bash implementation, evaluated as a backend candidate
+  (see [`agent-context.md`](agent-context.md), "bash-execution-backend
+  question").

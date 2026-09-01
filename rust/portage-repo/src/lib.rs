@@ -1,6 +1,6 @@
 // Repo/metadata/vdb access for the single-atom `emerge --pretend` pilot
-// slice (see PROMPT.md's depgraph/config-resolution follow-up
-// work, and README.md for the full scope writeup).
+// slice (see docs/agent-context.md's depgraph/config-resolution follow-up
+// work, and docs/what-this-proves.md for the full scope writeup).
 //
 // Overlays: every `[reponame]` section in `repos.conf` with a `location`
 // (not just `[DEFAULT] main-repo`) is now a candidate source -- see
@@ -26,7 +26,7 @@
 //     `KEY=value` text -- confirmed against a real vendored tree), never
 //     from executing the ebuild in bash. This is deliberate: it lets
 //     `--pretend` work without the bash dependency that real phase
-//     execution will eventually require (see PROMPT.md's "Deferred:
+//     execution will eventually require (see docs/agent-context.md's "Deferred:
 //     ebuild phase execution").
 //   - No virtuals, no backtracking.
 //
@@ -8319,7 +8319,7 @@ fn enqueue_flat_deps(
 ///     the build host before compiling; PDEPEND only after this package
 ///     itself merges; IDEPEND only at install time) -- meaningless
 ///     distinctions for a `--pretend`-only pilot with no real merge
-///     ordering or phase execution to begin with (see PROMPT.md's
+///     ordering or phase execution to begin with (see docs/agent-context.md's
 ///     "Deferred: ebuild phase execution"), so v1 treats all five as "a
 ///     dependency this package needs, resolve and report it" uniformly,
 ///     the same "report, don't enforce" simplification already applied to
@@ -9878,7 +9878,7 @@ pub fn resolve_pretend_graph(
             // atom came from (this pilot's own single-unified-graph
             // architecture merges them into one combined string before
             // flattening at all -- the same documented limitation
-            // `PROMPT-next.md`'s own `--root-deps` backlog entry
+            // `docs/agent-context.md`'s own `--root-deps` backlog entry
             // names for the bigger, still-unattempted "recursive second-root
             // graph" gap), so an `RDEPEND`/`PDEPEND`/`IDEPEND` `||` group
             // gets this same permissive check too -- harmless in practice

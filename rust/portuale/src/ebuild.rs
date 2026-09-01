@@ -90,7 +90,7 @@ fn print_help() {
     println!("   ebuild --help");
     println!();
     println!("Still a pure dry-run stub: real phase execution is deferred (see");
-    println!("PROMPT.md's \"Deferred: ebuild phase execution\"), so no command below");
+    println!("README.md), so no command below");
     println!("actually does anything yet beyond being recognized and accepted.");
     println!();
     println!("Options:");
@@ -111,7 +111,7 @@ fn print_help() {
          recognized and accepted, still as a no-op. --shell is this pilot's own \
          flag, not a real bin/ebuild option at all."
     );
-    println!("See README.md and PROMPT.md for this pilot's current scope.");
+    println!("See README.md for this pilot's current scope.");
 }
 
 pub fn run(args: &[String]) -> ExitCode {
@@ -361,7 +361,7 @@ pub fn run(args: &[String]) -> ExitCode {
 
     println!(
         "ebuild (pilot stub): dry-run only, no phase execution yet \
-         (see PROMPT.md's \"Deferred: ebuild phase execution\")"
+         (see README.md)"
     );
     println!("ebuild file: {ebuild_file:?}");
     println!("commands: {commands:?}");

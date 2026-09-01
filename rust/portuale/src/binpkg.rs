@@ -1,5 +1,5 @@
 // The `$PKGDIR` directory-scan fallback -- real `bintree._populate_local`
-// (see `PROMPT-next.md`). Every other binary-package path in this
+// (see `docs/agent-context.md`). Every other binary-package path in this
 // pilot is `<pkgdir>/Packages`-index driven and format-agnostic, so a
 // `gpkg`/`xpak` *listed in an index* already resolves for `--pretend`.
 // What the index reader can't do is the "no trusted index" branch: when

@@ -1,5 +1,5 @@
 """Black-box contract suite for the atom-matching pilot (see
-PROMPT.md and rust/portage-dep/src/lib.rs). Drives the
+docs/agent-context.md and rust/portage-dep/src/lib.rs). Drives the
 Python harness (a thin wrapper around the real portage.dep.Atom /
 match_from_list) and the Rust harness identically via subprocess, and
 asserts their outputs are byte-for-byte the same. Neither harness's

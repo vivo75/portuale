@@ -1,5 +1,5 @@
 # Two-stage build proving the musl static-build requirement from
-# PORTING/PROMPT.md hard goal 3 ("must run on even the most minimal Linux
+# docs/agent-context.md hard goal 3 ("must run on even the most minimal Linux
 # system... statically linked, zero dynamic runtime dependencies") and the
 # CI gate described under "Test/benchmark harness architecture" ("Rust CI
 # also gates on a musl static build smoke-tested inside a minimal

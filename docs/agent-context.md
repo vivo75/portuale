@@ -1,12 +1,14 @@
-# Prompt: Continue the Python-to-Rust Portage pilot
+# Agent context: the Python-to-Rust Portage pilot
 
-This is `PROMPT-next.md`, the single entry point for (re)deriving
-where this effort stands and what to do next, without repeating the
-discovery conversations that produced it. It merges: the original
-porting-strategy prompt (goals, hard constraints, architectural
-decisions), the phase-execution/bash-backend investigation, the current
-shipped state, the open backlog, and the operating rhythm this pilot has
-settled into session over session.
+This file (`docs/agent-context.md`, formerly `PROMPT-next.md`) is the
+single entry point for (re)deriving where this effort stands and what to
+do next, without repeating the discovery conversations that produced it.
+It merges: the original porting-strategy prompt (goals, hard constraints,
+architectural decisions — the standalone historic copy is
+[`history/porting-strategy-prompt.md`](history/porting-strategy-prompt.md)),
+the phase-execution/bash-backend investigation, the current shipped
+state, and the open backlog. The session-to-session operating rhythm
+lives in [`../AGENTS.md`](../AGENTS.md).
 
 As with any settled decision below: if you disagree, say so explicitly
 and re-open it — don't silently override it.
@@ -26,7 +28,7 @@ baseline — branches that only apply to EAPI 0/1/2/3/4/6 are dead code and
 can be ignored rather than faithfully ported. (This pilot's own `portage-*`
 crates go further, as a deliberate simplification confirmed with the user:
 no EAPI parametrization at all within the 5+ floor — every EAPI in that
-range is treated identically. See `README.md` for the many places
+range is treated identically. See `what-this-proves.md` for the many places
 this precedent is invoked.)
 
 ## Team structure
@@ -124,17 +126,17 @@ invokes `emerge`/`ebuild` by name directly. **Shipped**: `rust/portuale`.
   shared submodule) — neither team may unilaterally narrow it to make
   their side pass.
 
-## Current state (read `README.md` for the authoritative, living detail)
+## Current state (read `what-this-proves.md` for the authoritative, living detail)
 
-As of commit `f1ae9287d` (branch `rust`), both major phases of this pilot
-are live — re-verify against `git log`/`README.md` before trusting this
-paragraph for long, since it decays fast.
+Both major phases of this pilot are live — re-verify against `git
+log`/`what-this-proves.md` before trusting this paragraph for long, since
+it decays fast.
 
 **Dry-run (`emerge --pretend`)**: full recursive DEPEND/RDEPEND/BDEPEND/
 PDEPEND/IDEPEND resolution; profile/make.conf-derived USE/ACCEPT_KEYWORDS
 with the real `USE_ORDER` precedence for the `repo`/`pkginternal`/
 `defaults`/`conf`/`pkg` layers (`env`/`features`/`env.d` still cut — see
-SCOPE_BACKLOG Part 2.C); every `package.*` file
+scope-backlog.md Part 2.C); every `package.*` file
 (`.mask`/`.unmask`/`.accept_keywords`/`.use`/`.use.mask`/`.use.force`/
 `.use.stable.mask`/`.use.stable.force`), repo-scoped across main **and**
 overlay repos; `package.provided` (a listed CPV satisfies a dependency
@@ -293,13 +295,13 @@ a simplified transcription of real `_show_slot_collision_notice` →
 instances …` block (`SlotConflict.instances` = every conflicting version
 + its `(parent_cpv, atom)` pullers, via `build_slot_conflict`) + the
 advisory paragraph with the `--backtrack=30` hint gated the real way.
-Deferred (see `SCOPE_BACKLOG.md` Part 2.A): "backtracking
+Deferred (see `scope-backlog.md` Part 2.A): "backtracking
 exhausted" / "circular dependencies" diagnostics, autounmask levels tried
 in sequence inside the loop, the `resolve_graph_once` helper extraction
 (drop slice 1's `loop {}` reindent), and real `get_conflict()`'s
 `collision_reasons` grouping / `--verbose-conflicts` markers / stderr.
 
-`README.md`'s "What this proves" section is the incrementally-
+`what-this-proves.md` is the incrementally-
 updated record of every shipped slice, each grounded in cited real Python
 source — read that, not this list, for current detail, and `git log` for
 how work has actually been landing (one small, fully-shipped, documented-
@@ -317,11 +319,11 @@ device node `CONTENTS` support) has since shipped, and `--root-deps`'s
 own recursive-build-against-the-running-root gap has its first real
 increment shipped too (still not fully recursive — see the backlog
 entry below for exactly what's left). Re-verify against
-`README.md`/`git log` before trusting even *this* version — a "scope the
+`what-this-proves.md`/`git log` before trusting even *this* version — a "scope the
 next slice" round should always re-ground candidates in current code,
 not just read this list. What's actually left, grouped by area:
 
-> See also `SCOPE_BACKLOG.md` — a wider inventory of real portage
+> See also `scope-backlog.md` — a wider inventory of real portage
 > behavior not yet ported to *either* side (config-resolution `USE_ORDER`
 > `env`/`features`/`env.d` layers, `RESTRICT=primaryuri`, brush strategy
 > #2 (rewrite brush-hostile `bin/*.sh`), …).
@@ -540,7 +542,7 @@ not just read this list. What's actually left, grouped by area:
   `NEEDED`/soname introspection via `NEEDED.ELF.2` plus a graph-based
   reachability algorithm) shipped across five narrow, individually-
   confirmed slices (2026-08-25/26) in new `needed_elf.rs` — see
-  `README.md`'s own "`preserve-libs` registration: the full `LinkageMap`/
+  `what-this-proves.md`'s own "`preserve-libs` registration: the full `LinkageMap`/
   `findConsumers`/decision computation" for the full grounding of all
   five. In order: (1) real `NEEDED.ELF.2` generation via real,
   unmodified `bin/misc-functions.sh install_qa_check` (real `scanelf`,
@@ -573,7 +575,7 @@ not just read this list. What's actually left, grouped by area:
   `ebuild_unmerge::run_unmerge` calls it right before `remove_contents`,
   threading the preserved-path set into a new `remove_contents` parameter
   that filters them out of `CONTENTS` before the per-file removal loop —
-  see `README.md`'s own "`preserve-libs` registration: wired into a real
+  see `what-this-proves.md`'s own "`preserve-libs` registration: wired into a real
   unmerge's control flow" for the full grounding, including the real,
   `gcc`-compiled dual-package (`libpreservetest`/`consumepreservetest`)
   end-to-end fixture proof and live-CLI verification. `needed_elf.rs`
@@ -586,7 +588,7 @@ not just read this list. What's actually left, grouped by area:
   (`vartree.py:1244-1310`) now prunes a package's own `NEEDED.ELF.2` too
   whenever a `CONTENTS` line was actually removed, dropping any entry
   whose `filename` no longer appears among the surviving paths — see
-  `README.md`'s own "preserve-libs: real `NEEDED.ELF.2` pruning on
+  `what-this-proves.md`'s own "preserve-libs: real `NEEDED.ELF.2` pruning on
   `remove_from_contents`". New `NeededEntry::to_needed_line`
   (`needed_elf.rs`) ports real `NeededEntry.__str__`, the rewrite-side
   sibling of the existing `parse`/`parse_file` read side. This was the
@@ -599,7 +601,7 @@ not just read this list. What's actually left, grouped by area:
   Symlink protection, `--noconfmem`, `new_protect_filename`'s last-file
   reuse, the type-independent `dest_md5`/`dest_link` comparison, and now
   `_installed_instance`/`FEATURES=config-protect-if-modified` have all
-  shipped — see `README.md`'s own "CONFIG_PROTECT for symlinks,
+  shipped — see `what-this-proves.md`'s own "CONFIG_PROTECT for symlinks,
   `--noconfmem`, and `new_protect_filename`'s own file-reuse logic",
   "CONFIG_PROTECT: a type-changing update is real-protected too", and
   "CONFIG_PROTECT: `_installed_instance`/`FEATURES=config-protect-if-
@@ -619,7 +621,7 @@ not just read this list. What's actually left, grouped by area:
   matching real `mergeme()`'s own `if moveme:` gate around `movefile()`
   (`vartree.py:5547`/`5749`), traced against the real `move_me = protected
   = bool(cfgfiledict["IGNORE"])` gate in `_protect()`
-  (`vartree.py:5831-5901`) line by line. See `README.md`'s own "CONFIG_
+  (`vartree.py:5831-5901`) line by line. See `what-this-proves.md`'s own "CONFIG_
   PROTECT: \"confmem rejected this update\"" for the full grounding and a
   live-verified example. This closes the last documented CONFIG_PROTECT
   gap in this area.
@@ -635,10 +637,10 @@ not just read this list. What's actually left, grouped by area:
   `/etc/env.d/*` the same way `env_update::run_env_update` collates
   every other real `COLON_SEPARATED` key, and `run_unmerge` threads the
   resulting inode set down through `remove_contents`/`remove_dirs` into
-  `cleanup_info_dir` — see `README.md`'s own "`unmerge`: real `INFOPATH`
+  `cleanup_info_dir` — see `what-this-proves.md`'s own "`unmerge`: real `INFOPATH`
   cleanup". (Both `FEATURES=unmerge-orphans` and the "symlink orphan"
   refinement, bug #326685 + `_unmerge_dirs()`'s own bug #640058
-  recursive-parent-revisit, have also shipped — see `README.md`'s own
+  recursive-parent-revisit, have also shipped — see `what-this-proves.md`'s own
   "`unmerge`'s own \"symlink orphan\" refinement (bug #326685)"` and
   "`unmerge`: real `FEATURES=unmerge-orphans`", the latter including a
   real, confirmed finding that real `_unmerge_protected_symlinks()`'s
@@ -655,7 +657,7 @@ not just read this list. What's actually left, grouped by area:
   not per-file removal).
 - No remaining standalone-command gaps in this area (`qmerge`,
   standalone `config`/`info`, and standalone `prerm`/`postrm` all
-  shipped — see `README.md`'s own "Real `ebuild <file> qmerge`",
+  shipped — see `what-this-proves.md`'s own "Real `ebuild <file> qmerge`",
   "Standalone `ebuild <file> config`/`info`", and "Standalone `ebuild
   <file> prerm`/`postrm`"). `preinst`/`postinst` deliberately stay
   internal-only (real ordering constraint tying them to `merge`'s own
@@ -676,7 +678,7 @@ not just read this list. What's actually left, grouped by area:
   unmerge side needed no functional change — real `_unmerge_pkgfiles()`
   never unlinks either node type in the first place, and this pilot's
   own catch-all already happened to match by coincidence, doc comment
-  now corrected to cite the real reason. See `README.md`'s own
+  now corrected to cite the real reason. See `what-this-proves.md`'s own
   "`ebuild_merge.rs`/`ebuild_unmerge.rs`: real FIFO/device node
   `CONTENTS` support (`fif`/`dev`)". Real device-node creation is only
   unit-tested (genuinely requires root/`CAP_MKNOD`, not reproducible
@@ -791,7 +793,7 @@ not just read this list. What's actually left, grouped by area:
   (`FEATURES=binpkg-signing` — no crypto), `BUILD_ID` in the basename.
   Still open: `BUILD_ID`/packdebug/splitdebug/RPM;
   `PKGDIR`-index locking. (Real `PORTAGE_COMPRESSION_
-  COMMAND` resolution shipped — see `README.md`'s own "Real
+  COMMAND` resolution shipped — see `what-this-proves.md`'s own "Real
   `PORTAGE_COMPRESSION_COMMAND` resolution": all six real compressors,
   `BINPKG_COMPRESS` now defaults to real `"zstd"` — this pilot's own
   previous hardcoded `"bzip2 -c"` predated noticing real portage's own
@@ -810,10 +812,10 @@ not just read this list. What's actually left, grouped by area:
   shipped 2026-08-29 — `FetchOptions::restrict_mirror` gates the
   `GENTOO_MIRRORS` flat-layout fallback, new `dev-libs/restrictmirrorpkg`
   fixture. Real `custommirrors` shipped — see
-  `README.md`'s own "Real `custommirrors`: an admin-configured
+  `what-this-proves.md`'s own "Real `custommirrors`: an admin-configured
   `/etc/portage/mirrors` file"; `FetchOptions` gained a `config_root`
   field mirroring `ebuild_merge::MergeOptions`'s own. Real
-  `FEATURES=distlocks` shipped too — see `README.md`'s own
+  `FEATURES=distlocks` shipped too — see `what-this-proves.md`'s own
   "`FEATURES=distlocks`, and a real default-`FEATURES` correction to
   `protect-owned`/`unmerge-orphans`", which also fixed a real,
   previously-undiscovered mistake: `protect-owned` and `unmerge-orphans`
@@ -825,7 +827,7 @@ not just read this list. What's actually left, grouped by area:
   not `SRC_URI`/distfile-fetch at all — zero hits grepping `fetch.py`
   directly for either term.)
 - `--keep-going` is real for all three non-`--pretend` merge paths:
-  `--buildpkgonly` (see `README.md`'s own "`emerge --buildpkgonly
+  `--buildpkgonly` (see `what-this-proves.md`'s own "`emerge --buildpkgonly
   --keep-going`" — its depgraph gate guarantees no entry depends on
   another) and, as of 2026-08-31, `emerge <atom>` / `emerge --getbinpkg`
   (`emerge_build::run_merge_loop` — the general version: BFS-drop the
@@ -855,7 +857,7 @@ not just read this list. What's actually left, grouped by area:
   (the main New/Upgrade/Reinstall flatten and `enqueue_dependencies`'s
   own `--deep`/`AlreadyInstalled` recursion) now accept a `||` branch
   that's running-root-satisfied even when it's invisible in the tree —
-  see `README.md`'s own "`emerge --pretend --root-deps`" section, mirrored
+  see `what-this-proves.md`'s own "`emerge --pretend --root-deps`" section, mirrored
   in `emerge_pretend_reference.py` with a new pytest contract test
   (`test_root_deps_disjunctive_branch_selection_matches_between_
   implementations`).
@@ -874,7 +876,7 @@ not just read this list. What's actually left, grouped by area:
   against `ROOT` via the ordinary `flat_deps` queue — invisible until the
   new `dev-libs/rootdepsbuildpkg` fixture (deliberately tree-visible,
   unlike `rootdepsprovider`/`rootdepsnonexistent`) exposed it. See
-  `README.md`'s own "`emerge --pretend --root-deps`: recursively
+  `what-this-proves.md`'s own "`emerge --pretend --root-deps`: recursively
   building a new package against the running root" for the full
   grounding, the real `BDEPEND`-always-targets-running-root/`DEPEND`-
   EAPI-conditional finding that motivated confirming scope with the user
@@ -894,7 +896,7 @@ not just read this list. What's actually left, grouped by area:
   pre-existing Rust/Python `required_by` divergence the new `--json`/
   `--tree` parity assertions exposed (Python's post-pass unconditionally
   overwrote `required_by`, wiping the build entry's own `[owner]`; Rust
-  already guarded it). See `README.md`'s own "`emerge --pretend
+  already guarded it). See `what-this-proves.md`'s own "`emerge --pretend
   --root-deps`: the running-root build entry is marked in `--pretend`/
   `--json`/`--tree` output".
   ~~walking the new entry's *own* further dependencies (the recursion,
@@ -912,7 +914,7 @@ not just read this list. What's actually left, grouped by area:
   `!!! no visible ebuild` note) instead of being silently swallowed.
   New `dev-libs/rdr*` fixtures. `unsatisfied_root_deps_atoms` grew a
   `dep_keys` param; `root_deps_unsatisfied` is now a `Vec` not a
-  `HashSet` for deterministic entry order. See `README.md`'s own
+  `HashSet` for deterministic entry order. See `what-this-proves.md`'s own
   "`emerge --pretend --root-deps`: the running-root build walk is
   recursive".
   ~~`IDEPEND` of a running-root build entry~~ — **shipped 2026-08-27**:
@@ -927,7 +929,7 @@ not just read this list. What's actually left, grouped by area:
   both ordinary dep-walk sites now pass `["DEPEND", "BDEPEND", "IDEPEND"]`
   to *both* the satisfied and unsatisfied helpers (they must agree, or an
   atom in neither falls through to `ROOT`). New `dev-libs/topidepapp`
-  fixture, +1 Rust unit test, +1 contract test. See `README.md`'s own
+  fixture, +1 Rust unit test, +1 contract test. See `what-this-proves.md`'s own
   "`emerge --pretend --root-deps`: a top-level package's own `IDEPEND`
   vs the running root".
   **Scope note (2026-09-01, confirmed with the user)**: this fork's
@@ -957,7 +959,7 @@ not just read this list. What's actually left, grouped by area:
   now resolves the real masters chain (`RepoConfig::masters`, already
   resolved elsewhere for profile/USE config stacking) via `portage_repo::
   find_repos(config_root)`, exported in real declared order (own repo
-  first, masters after) — see `README.md`'s own "Real eclass
+  first, masters after) — see `what-this-proves.md`'s own "Real eclass
   `inherit()` support: `PORTAGE_ECLASS_LOCATIONS`". Required threading
   `config_root: &Path` through the whole phase-execution call chain
   (`run_commands`/`run_single_phase` down to `phase_env_vars`) and a new
@@ -969,7 +971,7 @@ not just read this list. What's actually left, grouped by area:
   couldn't reach.
 - brush strategy #3 (formalize the forked `brush` dependency, track
   fork-vs-upstream-merged fixes) — **done 2026-08-27**: see
-  `BRUSH_PIN.md` (#1274 merged upstream, #1276 open and the sole
+  `brush-pin.md` (#1274 merged upstream, #1276 open and the sole
   fork-only fix, ancestry of the pin, re-pin checklist). brush strategy
   #2 (rewrite this repo's own `bin/*.sh` to avoid brush-hostile
   constructs) still open.
@@ -1115,8 +1117,8 @@ ebuilds/eclasses from the actual `gentoo` tree — `app-arch/unzip`,
 `sys-fs/fuse`, `app-arch/xz-utils` have all been live-verified end to
 end.
 
-Each of these has its own dedicated, cited-source "What this proves"
-section in `README.md` — read that for the real Python source
+Each of these has its own dedicated, cited-source section in
+`what-this-proves.md` — read that for the real Python source
 grounding, the v1 scope cuts, and a runnable example per feature; this
 file only tracks what's still *missing* (see "Open backlog" above).
 
@@ -1198,7 +1200,7 @@ upstream `main`. Only these two constructs have been proven fixed — real
 ebuilds/eclasses in the wild almost certainly exercise other bash
 constructs not yet tried against brush; this was targeted spike-and-fix
 work, not an exhaustive compatibility sweep. **Full fork-tracking record:
-`BRUSH_PIN.md`.**
+`brush-pin.md`.**
 
 ### Candidate strategies (complementary, not mutually exclusive)
 
@@ -1212,7 +1214,7 @@ work, not an exhaustive compatibility sweep. **Full fork-tracking record:
    open (see "Open backlog" above). Low-risk, immediately effective for
    this repo's own tree, doesn't preempt real-world ebuilds/eclasses.
 3. **Maintain a local brush fork with our fixes until upstream merges** —
-   the tracking doc now exists: **`BRUSH_PIN.md`** (which fixes
+   the tracking doc now exists: **`brush-pin.md`** (which fixes
    are upstream-merged vs fork-only, the ancestry of the pinned rev, and
    a re-pin checklist). `vivo75/brush` is still pinned by exact commit in
    `portuale/Cargo.toml`; #1274 merged upstream, #1276 (the deadlock fix)
@@ -1222,93 +1224,10 @@ work, not an exhaustive compatibility sweep. **Full fork-tracking record:
 
 ## How this pilot actually runs, session to session
 
-This is operational knowledge, not written anywhere else in the repo —
-worth preserving explicitly since a fresh session has no way to
-rediscover it except by trial and error.
-
-The user drives this pilot by literally saying **"next slice"** (or
-"scope the next slice") and expects the same rhythm every time:
-
-1. **Ground candidates in real code, not guesses.** Grep for the actual
-   restriction/TODO/scope-cut comment (this repo's own doc comments are
-   meticulous about citing real portage source — file names, line
-   numbers — for wording/behavior instead of inventing it) or read the
-   corresponding real `lib/portage`/`lib/_emerge` source directly. A
-   surprising number of real slices have come from spotting a doc
-   comment's own "deliberately deferred"/"main repo only"/"still out of
-   scope" language and checking whether it's still accurate — and from
-   catching this file's own backlog claiming something is open when
-   README/`git log` shows it already shipped.
-2. **Present 2–4 concrete candidate slices via `AskUserQuestion`**, with
-   one clearly marked "Recommended" and a short, source-grounded
-   rationale for each. Let the user pick — don't just proceed on the
-   most obvious option.
-3. **Re-open judgment calls that surface during implementation**, rather
-   than silently picking a default. Mirrors this pilot's own repeatedly-
-   documented norm ("confirmed with the user directly" appears throughout
-   `README.md`) — e.g. whether a sub-feature should be included in v1 or
-   deferred, or being willing to *correct* an earlier claim once deeper
-   investigation shows it was wrong, rather than quietly shipping the
-   original framing. If a slice turns out to conflict with an existing
-   hard constraint (e.g. test-suite determinism), stop and surface the
-   conflict explicitly rather than picking a shortcut — see the
-   `--root-deps` slice for a worked example (real `ESYSROOT` defaults to
-   the host's own `/`, which would have made every fixture test
-   host-dependent; resolved by scoping the real behavior as new,
-   strictly opt-in machinery instead).
-4. **Implement in both language sides in lockstep**: `rust/...`
-   and `python/emerge_pretend_reference.py` must stay
-   behaviorally identical, verified *empirically* — run both directly
-   against `fixtures` and diff the output — not just by trusting
-   the pytest suite to catch a divergence. (Real-execution-only features
-   — `merge`/`unmerge`/`package`/`fetch`/real phase execution — have no
-   Python mirror at all, since they're real filesystem mutation, not
-   part of the dry-run/pretend contract; only their CLI-recognition
-   surface needs mirroring for the contract suite to still match.)
-5. **Add fixtures by hand** under `fixtures/repo/...` (or
-   `fixtures/overlay/...`, or `fixtures/var/db/pkg/...`
-   for vdb-only entries) plus matching `metadata/md5-cache/...` entries
-   when a slice needs new test data. No generator script for the
-   ebuild-tree fixtures. Before spending fixture-authoring effort on a
-   scenario, sanity-check that it actually *distinguishes* the new
-   behavior from any pre-existing mechanism that might produce the same
-   observable result for an unrelated reason — a fixture that "passes"
-   without truly isolating the change under test is worse than no
-   fixture at all. **Check for naming collisions with existing tracked
-   fixtures before creating new ones** (`git status`/`grep` the fixtures
-   tree first) — a silent overwrite of a pre-existing fixture has broken
-   an unrelated test before.
-6. **Add both a parametrized `CASES` entry** in
-   `tests/test_emerge_pretend_contract.py` **and at least one
-   dedicated pinned-output test function** (exact stdout/stderr/exit-code
-   assertions) for dry-run features, plus a matching Rust unit test in
-   the relevant crate's own `#[cfg(test)]` module. Real-execution
-   features get Rust unit tests (often fixture-driven, real end-to-end
-   merge/unmerge/etc.) instead, since they have no Python side to
-   contract-test against.
-7. **Update `README.md`**: append a new paragraph to the "What
-   this proves" narrative (never rewrite prior slices' own paragraphs —
-   they're a historical record) and add a runnable example to "Running
-   it", *live-verified* against the actual built binaries, not written
-   from memory. When a slice reveals that an *earlier* paragraph's own
-   claim has gone stale, fix that paragraph in place rather than leaving
-   two contradictory claims in the file. (This file, `PROMPT-next.md`,
-   gets the same treatment for its own "Current state"/"Open backlog"
-   sections, though it decays faster and is worth a full re-derivation
-   pass now and then rather than only incremental patching.)
-8. **Run the full verification pass** before considering a slice done:
-   `cargo fmt --check`, `cargo clippy --release --all-targets` (zero
-   warnings, not just zero errors), `cargo test --release` (whole
-   workspace), and `python3 -m pytest tests -q` (whole suite,
-   not just the new cases).
-9. **Only `git commit`/`git push` when explicitly asked** — these are
-   separate, later requests each time, never implied by finishing a
-   slice. Commit messages follow a `<what changed>: <short description>`
-   title, wrapped body explaining the *why* and the real-source grounding,
-   `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>` trailer.
-10. **Track slices as tasks** (`TaskCreate`/`TaskUpdate`) — one task per
-    shipped slice, marked `completed` only once the full verification
-    pass in step 8 is green and `README.md` is updated.
+The session-to-session operating rhythm — the "next slice" workflow, the
+lockstep/fixture/test rules, the full verification pass, and the
+commit/push rules — lives in **[`../AGENTS.md`](../AGENTS.md)**. Read it
+before scoping or implementing a slice.
 
 ## How to use this prompt
 
@@ -1316,12 +1235,12 @@ Treat "Context" through "Ownership" above, and the phase-execution
 investigation's "bash-execution-backend question"/"Candidate strategies"
 sections, as settled, citation-backed decisions/findings — not things to
 re-derive from scratch. "Current state" and "Open backlog" were freshly
-re-derived on 2026-08-25 (grounded directly against `README.md`, `git
+re-derived on 2026-08-25 (grounded directly against `what-this-proves.md`, `git
 log`, and the actual source, not copied from an earlier version of this
 file) but are still just a snapshot — re-verify against current
-`README.md`/`git log`/the task list before assuming any of it still
+`what-this-proves.md`/`git log`/the task list before assuming any of it still
 holds, and for the bash-backend investigation specifically, check the
-live `reubeno/brush` PR/crate state against `BRUSH_PIN.md` (as
+live `reubeno/brush` PR/crate state against `brush-pin.md` (as
 of 2026-08-27: #1274 merged, #1276 open; a new release may exist, new
 incompatibilities may have been found). If
 something here conflicts with current reality, or a genuinely open

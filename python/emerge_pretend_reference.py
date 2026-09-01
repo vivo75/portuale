@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Python reference implementation for the `emerge --pretend` pilot slice
-(see PROMPT.md and rust/portage-repo/src/lib.rs for the
+(see docs/agent-context.md and rust/portage-repo/src/lib.rs for the
 full scope writeup). Mirrors the exact same restricted v1 algorithm as the
 Rust side so the two can be contract-tested against each other,
 argv-for-argv and byte-for-byte on stdout, the same way every other pilot
@@ -8008,7 +8008,7 @@ def _report_option(token):
             "--deselect/-W, --unmerge/-C, --depclean/-c, --prune/-P, --config, --with-bdeps, --with-bdeps-auto, --changed-deps, "
             "--changed-deps-report, --changed-slot, --verbose-slot-rebuilds, --ignore-built-slot-operator-deps, --buildpkg/-b, --buildpkg-exclude, --with-test-deps, "
             "--noreplace/-n, --selective, and --help/-h are implemented so "
-            "far; see PROMPT.md)",
+            "far; see README.md)",
             file=sys.stderr,
         )
     else:
@@ -8097,7 +8097,7 @@ def _print_help():
         "lib/_emerge/main.py) but not implemented -- using one reports which "
         "option or action it is, instead of a generic error."
     )
-    print("See README.md and PROMPT.md for this pilot's current scope.")
+    print("See README.md for this pilot's current scope.")
 
 
 def _read_world_atoms(root):

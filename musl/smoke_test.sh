@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# musl static-build smoke test (see PROMPT.md: "Rust CI also gates
+# musl static-build smoke test (see docs/agent-context.md: "Rust CI also gates
 # on a musl static build smoke-tested inside a minimal (scratch/busybox-
 # level) container").
 #

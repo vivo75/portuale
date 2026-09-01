@@ -2,20 +2,20 @@
 
 **Not** a Python-vs-Rust parity backlog. Every slice ships on both sides in
 one commit, verified byte-identical via the shared contract suite before it
-counts as done (`PROMPT.md`'s "portability of change, not of source"). 690
+counts as done (`agent-context.md`'s "portability of change, not of source"). 690
 `emerge`-contract cases pass as of this writing (951 across all suites); an
 inventory scan (CLI flag tables, function-level architecture, `--json`
 fields, git history) still finds zero Rust-vs-Python behavioural gaps.
 
 This file inventories real portage behaviour not yet ported to **either**
-side — deliberate, documented scope cuts and `PROMPT.md` architecture
-boundaries. Re-verify against `README.md` / `git log` / the source before
-trusting any entry; **`README.md`'s "What this proves" section is the
+side — deliberate, documented scope cuts and `agent-context.md` architecture
+boundaries. Re-verify against `what-this-proves.md` / `git log` / the source before
+trusting any entry; **`what-this-proves.md` is the
 authoritative record of what has shipped.**
 
 > **Rewritten 2026-08-31** (compaction pass). The previous version had
 > accreted a shipped-item narrative for every slice — that history now
-> lives in `README.md` and `git log`. This version keeps only: a compact
+> lives in `what-this-proves.md` and `git log`. This version keeps only: a compact
 > "already done" summary (Part 1), the genuinely-remaining work (Part 2),
 > the standing non-goals (Part 3), and an honest distance-to-parity
 > assessment (Part 4).
@@ -85,7 +85,7 @@ built and merged end to end inside `TEST/`'s container):
   `-include`/`--rebuilt-binaries`, real `PORTAGE_COMPRESSION_COMMAND` (all
   six compressors), `build-info`-into-vdb metadata + `:=` binding.
 
-See `README.md` for the cited-source grounding of each, and `git log
+See `what-this-proves.md` for the cited-source grounding of each, and `git log
 --grep portuale` / `--grep portage-repo` for the slice-by-slice history.
 
 ---
@@ -126,7 +126,7 @@ single-pass BFS can't grow into these incrementally:
     extraction (drop slice 1's `loop {}` reindent); real
     `get_conflict()`'s `collision_reasons` grouping / best-atom
     selection / `--verbose-conflicts` USE markers / stderr stream.
-  `PROMPT.md` lists a backtracking resolver as out of scope for v1;
+  `agent-context.md` lists a backtracking resolver as out of scope for v1;
   slices 1–4 nonetheless take it from "detects and reports conflicts" to
   "reconciles solvable conflicts, masks unsolvable ones, and reports the
   rest with real portage's own notice". The deferred items above are
@@ -143,7 +143,7 @@ single-pass BFS can't grow into these incrementally:
   arrays. New `dev-libs/licensemasked{pkg,consumer}` +
   `dev-libs/maskmaskedconsumer` fixtures. **The whole `--autounmask*`
   family is shipped now** — only `--autounmask-write` (file-writing)
-  remains, a `PROMPT.md` non-goal.
+  remains, an `agent-context.md` non-goal.
 - **`--root-deps` / multi-root, remaining edges.** *Mostly a non-gap for
   this fork.* This fork's ebuilds are all EAPI 7+, and at EAPI 7+
   (`eapi_attrs.bdepend`, `depgraph.py:4218-4238`) **`--root-deps=rdeps`
@@ -319,13 +319,13 @@ dev/test context — see also the `chown` note below).
   to `879d963` (just the upstream-merged #1274), full `portuale` suite
   green — incl. the `install_does_not_deadlock…` regression, which hangs
   the deadline against `879d963` *without* the script rewrite. See
-  `BRUSH_PIN.md` and README's "brush strategy #2".
+  `brush-pin.md` and `what-this-proves.md`'s "brush strategy #2".
 - ~~The actual bump to upstream `brush`~~ **Done 2026-09-01** — pinned
   to real `reubeno/brush` `main` (`a04b09dc`, at/after the #1274 merge
   `18851e7`); the `vivo75/brush` fork is gone. Whole workspace + pytest
   green; `install_does_not_deadlock…` completes in ~1s (no #1276 patch
   needed at all now). Only remaining Section G item: periodic re-pin to
-  keep up with upstream `main` — see `BRUSH_PIN.md`'s checklist.
+  keep up with upstream `main` — see `brush-pin.md`'s checklist.
 
 ### H. Misc / cosmetic
 
@@ -378,7 +378,7 @@ Standing decisions, not oversights.
   write `world` / `world_sets` / the vdb now — those are user state the
   package manager owns, not `/etc/portage` config.
 - **A real backtracking resolver** (see Part 2.A — listed there because it
-  is the substantive gap, here because `PROMPT.md` scoped it out for v1).
+  is the substantive gap, here because `agent-context.md` scoped it out for v1).
 - **PyO3 / in-process FFI embedding** — would foreclose the
   two-sibling-implementations end state.
 - **EAPI 0/1/2/3/4/6** — dead in this repo; the `portage-*` crates have no

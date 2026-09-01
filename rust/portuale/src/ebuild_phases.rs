@@ -1,4 +1,4 @@
-// Real ebuild phase execution (task #54, PROMPT-next.md's own
+// Real ebuild phase execution (task #54, docs/agent-context.md's own
 // "Real ebuild phase execution" section) -- the first slice: proving real
 // phase functions run and real files land under a real `${D}`, without
 // touching the vdb/CONTENTS/merge machinery at all (task #55, a
@@ -2747,7 +2747,7 @@ mod tests {
     }
 
     /// Regression test for a real upstream brush bug (fixed in the pinned
-    /// fork, see README.md's own eclass section for the full writeup):
+    /// fork, see docs/what-this-proves.md's eclass section for the full writeup):
     /// `bigfixture.eclass` defines ~400 functions so that real
     /// `bin/phase-functions.sh`'s own post-phase `__save_ebuild_env |
     /// __filter_readonly_variables` pipe (both sides real shell

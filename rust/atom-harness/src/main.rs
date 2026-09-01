@@ -1,5 +1,5 @@
 // Neutral CLI test-harness binary for the atom-matching pilot (see
-// PROMPT.md and rust/portage-dep/src/lib.rs for the v1
+// docs/agent-context.md and rust/portage-dep/src/lib.rs for the v1
 // grammar this implements). Same argv/output contract as
 // python/atom_harness.py.
 //

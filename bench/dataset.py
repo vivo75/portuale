@@ -1,11 +1,11 @@
 """Benchmark datasets for the versions-comparison pilot.
 
 Two generators, both producing harness "batch" input lines (see
-PROMPT.md, "Test/benchmark harness architecture"):
+docs/agent-context.md, "Test/benchmark harness architecture"):
 
 - `generate_snapshot_lines`: the default. Draws from a real, vendored
   Gentoo tree snapshot (gentoo_snapshot.json, produced by
-  extract_snapshot.py) per PROMPT.md's "Benchmark data" decision -- real
+  extract_snapshot.py) per docs/agent-context.md's "Benchmark data" decision -- real
   package names and real version strings, mostly paired within the same
   package (the realistic usage pattern: comparing candidate versions of
   one package during dependency resolution).

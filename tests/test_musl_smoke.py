@@ -1,4 +1,4 @@
-"""musl static-build smoke test, wrapped as a CI gate (see PROMPT.md: "Rust
+"""musl static-build smoke test, wrapped as a CI gate (see docs/agent-context.md: "Rust
 CI also gates on a musl static build smoke-tested inside a minimal
 (scratch/busybox-level) container"). Opt-in via PORTUALE_RUN_MUSL_SMOKE=1,
 same pattern as test_benchmark_gate.py -- it needs podman or docker and

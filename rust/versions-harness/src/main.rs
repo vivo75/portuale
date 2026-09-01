@@ -1,5 +1,5 @@
 // Neutral CLI test-harness binary for the versions-comparison pilot (see
-// PROMPT.md, "Test/benchmark harness architecture"). Exposes the
+// docs/agent-context.md, "Test/benchmark harness architecture"). Exposes the
 // same argv/output contract as python/versions_harness.py so a
 // black-box test suite can drive both implementations identically.
 //
