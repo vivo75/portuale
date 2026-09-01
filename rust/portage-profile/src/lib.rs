@@ -1,7 +1,7 @@
 // Profile-chain + make.conf + package.mask/.unmask/.accept_keywords
 // resolution for real USE/ACCEPT_KEYWORDS/visibility (see
-// PORTING/PROMPT.md's depgraph/config-resolution follow-up work, and
-// PORTING/README.md for the full scope writeup). Replaces the base
+// PROMPT.md's depgraph/config-resolution follow-up work, and
+// README.md for the full scope writeup). Replaces the base
 // `emerge --pretend` slice's hardcoded `ACCEPT_KEYWORDS="amd64"`/`USE=""`
 // with the real mechanism: a profile inheritance chain (`make.profile` ->
 // `parent` files) plus `/etc/portage/make.conf`, each level's
@@ -699,12 +699,19 @@ fn var_ref_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap())
 }
 
-/// Substitutes `${VARNAME}` references against `scalars`, matching bash's
-/// default (unset-as-empty) behavior for unknown variables.
+/// Substitutes `${VARNAME}` references: a name already set earlier in the
+/// config wins, else the process environment (as bash sees it when it
+/// sources `make.conf`), else empty (bash's default for an unset var).
+/// The environment fallback is what lets a fixture write a relocatable
+/// `PKGDIR="${PORTAGE_CONFIGROOT}/pkgdir"` instead of an absolute path.
 fn substitute(value: &str, scalars: &HashMap<String, String>) -> String {
     var_ref_re()
         .replace_all(value, |caps: &regex::Captures| {
-            scalars.get(&caps[1]).cloned().unwrap_or_default()
+            scalars
+                .get(&caps[1])
+                .cloned()
+                .or_else(|| std::env::var(&caps[1]).ok())
+                .unwrap_or_default()
         })
         .into_owned()
 }
@@ -2165,7 +2172,11 @@ fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
         }
         if let Some((k, v)) = line.split_once('=') {
             match k.trim() {
-                "sync-uri" => sync_uri = Some(v.trim().to_string()),
+                // `${VAR}` in `sync-uri` expands from the environment
+                // (pilot convenience -- real configparser doesn't -- so a
+                // fixture can use `file://${PORTAGE_CONFIGROOT}/binhost`
+                // instead of an absolute, non-relocatable path).
+                "sync-uri" => sync_uri = Some(substitute(v.trim(), &HashMap::new())),
                 "priority" => priority = v.trim().parse().unwrap_or(0),
                 _ => {}
             }
@@ -2259,7 +2270,7 @@ sync-uri = file:///srv/pkgs
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures")
             .canonicalize()
-            .expect("PORTING/fixtures must exist")
+            .expect("fixtures must exist")
     }
 
     #[test]
@@ -2340,7 +2351,7 @@ sync-uri = file:///srv/pkgs
         assert_eq!(groups.get("EULA"), Some(&vec!["MyEula".to_string()]));
     }
 
-    /// End-to-end check against PORTING/fixtures/repo/profiles (base,
+    /// End-to-end check against fixtures/repo/profiles (base,
     /// arch/amd64 -> multi-parent -> default) + fixtures/etc/portage/make.conf
     /// (which sources fixtures/etc/make.local). Traced by hand:
     ///   base:            USE="foo"; USE="${USE} bar"      -> {foo, bar}

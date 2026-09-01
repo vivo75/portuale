@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Python reference implementation for the `emerge --pretend` pilot slice
-(see PORTING/PROMPT.md and PORTING/rust/portage-repo/src/lib.rs for the
+(see PROMPT.md and rust/portage-repo/src/lib.rs for the
 full scope writeup). Mirrors the exact same restricted v1 algorithm as the
 Rust side so the two can be contract-tested against each other,
 argv-for-argv and byte-for-byte on stdout, the same way every other pilot
@@ -19,7 +19,7 @@ for anything else.
 
 USE/ACCEPT_KEYWORDS/package.mask/.unmask/.accept_keywords/.use (see
 resolve_config) come from a real profile chain + make.conf + package.*,
-not a hardcoded stand-in -- mirroring PORTING/rust/portage-profile/src/lib.rs
+not a hardcoded stand-in -- mirroring rust/portage-profile/src/lib.rs
 exactly (own implementation, not a wrapper around real config.py; see that
 crate's doc comment for the full algorithm and its documented scope cuts:
 the `repo`/`pkginternal`/`defaults`/`conf`/`pkg` USE_ORDER layers are
@@ -3433,9 +3433,17 @@ _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _substitute(value, scalars):
-    """Substitutes ${VARNAME} references against `scalars`, matching
-    bash's default (unset-as-empty) behavior for unknown variables."""
-    return _VAR_REF_RE.sub(lambda m: scalars.get(m.group(1), ""), value)
+    """Substitutes ${VARNAME} references: a name set earlier in the config
+    wins, else the process environment (as bash sees it when it sources
+    make.conf), else empty. The env fallback lets a fixture write a
+    relocatable PKGDIR="${PORTAGE_CONFIGROOT}/pkgdir" instead of an
+    absolute path. Mirrors portage-profile/src/lib.rs's substitute."""
+    return _VAR_REF_RE.sub(
+        lambda m: scalars[m.group(1)]
+        if m.group(1) in scalars
+        else os.environ.get(m.group(1), ""),
+        value,
+    )
 
 
 def _parse_kv_line(line):
@@ -4373,7 +4381,11 @@ def _parse_binrepos(binrepos_conf, portage_binhost):
             k, _, v = line.partition("=")
             k, v = k.strip(), v.strip()
             if k == "sync-uri":
-                sync_uri = v
+                # ${VAR} in sync-uri expands from the env (pilot
+                # convenience, so a fixture can use
+                # file://${PORTAGE_CONFIGROOT}/binhost). Mirrors
+                # portage-profile's parse_binrepos.
+                sync_uri = _substitute(v, {})
             elif k == "priority":
                 try:
                     priority = int(v)
@@ -7512,7 +7524,7 @@ def _parse_atom(atom_str):
 # below); every table
 # here exists purely for recognition, not behavior.
 # Mirrors
-# PORTING/rust/portuale/src/emerge_options.rs's own copy of these same
+# rust/portuale/src/emerge_options.rs's own copy of these same
 # three tables exactly, so both sides report identical text for
 # identical input (verified by the shared contract suite).
 #
@@ -8085,7 +8097,7 @@ def _print_help():
         "lib/_emerge/main.py) but not implemented -- using one reports which "
         "option or action it is, instead of a generic error."
     )
-    print("See PORTING/README.md and PORTING/PROMPT.md for this pilot's current scope.")
+    print("See README.md and PROMPT.md for this pilot's current scope.")
 
 
 def _read_world_atoms(root):
