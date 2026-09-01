@@ -160,6 +160,18 @@ fn data_line(name: &str, bytes: &[u8]) -> String {
 
 const GPG_PASSPHRASE: &str = "GentooTest";
 
+/// Best-effort `gpg-agent` shutdown for a test homedir.
+/// Verify-only tests never start an agent and don't need this.
+fn kill_gpg_agent(home: &Path) {
+    let _ = Command::new("gpgconf")
+        .args(["--homedir"])
+        .arg(home)
+        .args(["--kill", "all"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
 /// Clear-sign `data` for the `Manifest`; detached-sign it for a member.
 // Portage: gpkg.py, checksum_helper
 fn gpg_sign(home: &Path, key: &str, data: &[u8], clearsign: bool) -> Vec<u8> {

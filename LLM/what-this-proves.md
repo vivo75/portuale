@@ -10309,4 +10309,94 @@ committed `fixtures/pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar` was rebuilt
 with a real `Manifest`; `blake2` / `sha2` are new **dev**-dependencies
 (already vendored via `portage-fetch`) so the tests hash real bytes.
 
+### `FEATURES=network-sandbox`: `src_*` phases lose network access
+
+Real portage's `FEATURES=network-sandbox` puts a build's `src_*` phases
+in a fresh network namespace (`unshare(CLONE_NEWNET)` in
+`portage.process._exec`) so an ebuild can't reach the internet during
+`src_compile` — the "misbehaving ebuild hits the network" case from
+scope-backlog.md Part 2.D. Portuale now models this: when `network-sandbox`
+is in `FEATURES`, the six real `src_*` phases
+(`unpack`/`prepare`/`configure`/`compile`/`test`/`install` — real
+`_doebuild_spawn`'s own network-unshared set) run as
+`unshare --net --map-root-user -- … bash <bin_dir>/ebuild.sh <phase>`,
+with `lo` brought up inside. This forces the `Bash` backend for those
+phases (an in-process `Brush` interpreter can't be put in its own
+namespace) and — unlike real portage, which only unshares as root — uses
+`--map-root-user` so it works from portuale's normal non-root context.
+If unprivileged user namespaces are unavailable, the wrapper is skipped
+with a one-shot warning, matching real portage's own non-fatal "Unable
+to unshare" degrade.
+
+Documented cuts in this first increment: `RESTRICT=network-sandbox` /
+`PROPERTIES=live` (unpack) / `PROPERTIES=test_network` (test) exemptions
+aren't honoured (the phase env here has no USE-reduced
+`RESTRICT`/`PROPERTIES`); the `10.0.0.1/8` + `fd::1/8` loopback
+addresses real `_configure_loopback_interface` adds for the glibc
+`AI_ADDRCONFIG` workaround (bug #690758) are skipped; the sibling
+`FEATURES=sandbox` (LD_PRELOAD `sys-apps/sandbox` filesystem
+confinement), `ipc-sandbox`, `mount-sandbox`, `pid-sandbox`, `userpriv`,
+and `fakeroot` are untouched.
+
+`dev-libs/netsandboxpkg`'s `src_compile` records its own
+`/proc/self/ns/net`, its visible interfaces, and an outbound-connect
+result; running `ebuild <file> install` twice (with and without the
+feature) shows a different netns, `lo` only, and "Network is
+unreachable" when the feature is on.
+
+### `FEATURES=sandbox`: `src_*` phases can't write outside the build tree
+
+Real portage's `FEATURES=sandbox` wraps a build's `src_*` phases in the
+`sys-apps/sandbox` binary (an `LD_PRELOAD` `libsandbox.so` that
+intercepts file syscalls) — the classic guard against an ebuild
+scribbling outside `${D}`. Portuale now models it: when `sandbox` (or
+`usersandbox`) is in `FEATURES` and `/usr/bin/sandbox` exists (real
+`sandbox_capable`), the six `src_*` phases run as
+`sandbox bash <bin_dir>/ebuild.sh <phase>` (real
+`portage.process.spawn_sandbox`). `phase_env_vars` sets
+`SANDBOX_LOG=${T}/sandbox.log` (real `doebuild.py:526`) and, for a
+wrapped phase, `SANDBOX_DISABLED=0` — so the real, unmodified
+`bin/ebuild.sh` does its own `SANDBOX_ON=1` + `addread /` +
+`addwrite "${PORTAGE_TMPDIR}/portage"` setup. The `sandbox` binary then
+logs any denied access and exits non-zero, which fails the phase (and
+the whole build). A missing `/usr/bin/sandbox` degrades to an
+unsandboxed run with a one-shot warning — real `_spawn`'s own silent
+`free = True` fallback. This too forces the `Bash` backend (`LD_PRELOAD`
+can't confine the in-process `Brush` interpreter); when both sandbox
+features are on the wrappers compose:
+`unshare --net … -- sandbox bash <bin_dir>/ebuild.sh <phase>`.
+
+The `bin/misc-functions.sh` calls (`install_qa_check` after `install`,
+`__dyn_package`) are `sandbox`-wrapped too, with a separate
+`${T}/sandbox-misc.log` — real `MiscFunctionsProcess._spawn`. Documented
+cuts: SELinux sandbox; `userpriv` / `fakeroot` (single-user dev/test
+context).
+
+`dev-libs/fssandboxpkg`'s `src_install` writes a legit file into `${D}`
+and also tries to write `/var/lib/portage-portuale-sandbox-probe`; with
+`FEATURES=sandbox` the stray write is denied, recorded in
+`${T}/sandbox.log`, and `ebuild <file> install` fails — without the
+feature the same run just installs the legit file and exits 0.
+
+### `FEATURES=ipc-sandbox` / `mount-sandbox` / `pid-sandbox`
+
+The remaining namespace-isolation features round out Part 2.D. Each puts
+the six `src_*` phases in the matching `unshare(1)` namespace (real
+`_doebuild_spawn`'s `unshare_ipc` / `unshare_mount` / `unshare_pid`,
+`CLONE_NEWIPC` / `CLONE_NEWNS` / `CLONE_NEWPID`):
+
+- `ipc-sandbox` → `unshare --ipc`
+- `mount-sandbox` → `unshare --mount`, plus `mount --make-rslave /`
+  inside the shim (real `_exec2`) so mounts can't leak
+- `pid-sandbox` → `unshare --pid --fork --mount-proc` — the phase becomes
+  PID 1 and every host process disappears from `/proc` (real
+  `CLONE_NEWPID` + `pid-ns-init`; `--fork` stands in for the full init)
+
+They compose freely with each other and with `sandbox` /
+`network-sandbox`; the `unshare` flag combination is validated once and
+cached, degrading with a single warning if unprivileged user namespaces
+are unavailable. `dev-libs/netsandboxpkg`'s `src_compile` records
+`readlink /proc/self/ns/{net,ipc,mnt,pid}` and the visible process count
+so a test can prove each namespace was actually unshared.
+
 # # required by dev-libs/useflagpkg[-foo] (argument)
