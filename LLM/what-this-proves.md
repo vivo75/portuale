@@ -8338,6 +8338,172 @@ fixture `_unresolved_root` (`ukept` RDEPENDs a missing package); 4
 contract tests + a `portage-repo` unit test; mirrored in
 `emerge_pretend_reference.py`.
 
+### `emerge -pv --getbinpkg`: remote binhost binary candidates + the `g` bracket column
+
+The `--pretend` half of `--getbinpkg`/`-g` and `--getbinpkgonly`/`-G`
+(real `main.py`, `y_or_n`). Real `emerge` adds every configured binhost's
+own `Packages` index to the candidate pool alongside `$PKGDIR`
+(`bintree._populate_remote`); portuale reads each binhost's *cached*
+index off disk (`<EROOT>/var/cache/edb/binhost/<host>/<path>/Packages`
+for an `http(s)`/`ssh` `sync-uri`, the URI path itself for `file://`) and
+resolves against it -- `--pretend` never downloads, so a binhost whose
+cache is absent simply contributes nothing.
+
+`portage-profile` gained `binrepos: Vec<BinRepo>` on `Config`, parsed by
+`parse_binrepos` -- real `BinRepoConfigLoader`
+(`lib/portage/binrepo/config.py:97-172`): every `[section]` in
+`<config_root>/etc/portage/binrepos.conf` (`sync-uri`, optional
+`priority`), then one implicit entry per whitespace-separated
+`PORTAGE_BINHOST` URI not already a section's `sync-uri` (real "Convert
+PORTAGE_BINHOST entries into implicit binrepos.conf ones", reversed with
+an incrementing priority), sorted `(priority, name)`. Real
+`BinRepoConfigLoader._parse` runs `_recursive_file_list` over the path,
+so `binrepos.conf` may be a **file or a directory** of `*.conf`
+fragments -- the standard portage pattern, and how the release profile
+ships it (`gentoobinhost.conf`). *(Read as a single file until
+2026-09-04; on a real desktop that left `config.binrepos` empty and
+every remote binary silently rendered `[ebuild]` -- found live with
+`emerge -pt gnome-base/gnome-control-center`. Now reuses
+`read_config_lines`, the file-or-dir reader; contract test
+`test_binrepos_conf_is_read_as_a_directory_of_fragments`.)* Documented
+narrowings: the implicit-entry name is `md5(uri)` in real portage (no md5
+here -- the URI's own `host/path`, only ever a sort key); `[DEFAULT]`
+interpolation, `getbinpkg-exclude`/`-include`, `fetchcommand`/
+`resumecommand`, signature config, and the `location =` fallback are all
+out (none affect a `--pretend` resolution).
+
+`portage-repo`: `list_remote_binary_candidates` scans each `BinRepo`'s
+`packages_dir()`, marking every candidate `remote: true` and dropping any
+cpv+version the local `$PKGDIR` already carries (real `bintree.isremote`
+-- once downloaded a package is no longer "remote"). `Candidate` gained
+`remote`; `GraphEntry` gained `remote_binary`, flowing to real
+`output.py:648`'s own `attr_display.remote_binary = pkg.remote` -- the
+`g` character in the `f`/`F` bracket slot (`[binary  N g  ]`). A
+remote-binary entry also gets its download `SIZE` from the index
+(`read_binary_metadata_any` -- local `$PKGDIR` first, then each binrepo),
+feeding both the verbosity-3 per-line ` N KiB` suffix (real
+`output.py::verbose_size`) and the `Size of downloads:` counter (real
+`bindbapi.getfetchsizes`). `REPO` from the index entry becomes the
+`::gentoo` decoration at `-pv` (falling back to `__unknown__`); `:slot`/
+`sub_slot` decoration applies to a `[binary ... g]` line like any other.
+The `--getbinpkg` family folds into `--usepkg`/`--usepkgonly` for pool
+eligibility (real depgraph treats a binhost package like a `$PKGDIR`
+one), with `getbinpkg` additionally switching on remote-index loading, so
+`--usepkg` alone still never reaches a binhost.
+
+**Binary-vs-ebuild selection (2026-09-04).** Real
+`_wrapped_select_pkg_highest_available_imp` builds `matched_packages` in
+`dbs` order -- `ebuild` before `binary` -- and returns
+`matched_packages[-1]`: *"ebuild type is the last resort"*
+(`depgraph.py:8492`). So at a version tie a `--usepkg`/`--getbinpkg`
+binary that passed `--binpkg-respect-use` **beats** the same-version
+ebuild. Portuale had given binary candidates `repo_priority = i32::MIN`
+so the ebuild always won -- a *misreading* of real (`dbs` order is
+iteration order, not preference). Found live: `emerge -p` on this
+system showed `[ebuild R]` for every installed package where real (with
+its `--getbinpkg=y` default) showed `[binary Rg]`. Fixed: a `src_rank`
+tie-break (`Binary` > `Ebuild`) at both the `resolve_pretend` `best`
+pick and the post-resolution source re-derivation. `--binpkg-respect-use`
+was hoisted from a matched-*string* filter to a *candidate* filter
+(shared `binpkg_respect_use_ok`) -- an ebuild and a binhost binary at
+the same `cpv:slot::repo` collapse to one `by_str` key, so rejecting a
+USE-mismatched binary as a matched string also dropped the ebuild
+("`there are no ebuilds to satisfy x11-misc/colord`" with
+`--getbinpkg`). The remote `Packages` index (~20 MB, ~18 000 entries)
+is now parsed once (`cached_binary_index`) and indexed by `cat/pkg`
+(`BinaryIndex::by_cp`), not re-scanned per atom.
+
+New fixtures: `dev-libs/binebuildtie` (ebuild + USE-matching `::testrepo`
+binhost binary -> binary wins), a `::testrepo` `dev-libs/
+binaryusemismatchpkg` binhost entry (the `by_str`-collision regression).
+Contract tests `test_binary_wins_a_version_tie_against_the_ebuild`,
+`test_use_mismatched_remote_binary_at_the_ebuilds_key_does_not_hide_the_ebuild`.
+*Still not ported:* the full acceptability web
+(`identical_binary` / BUILD_TIME-vs-installed / `useoldpkg` /
+`_equiv_ebuild_visible`).
+
+New fixtures: `fixtures/etc/portage/binrepos.conf` (one
+`file://` `[testbinhost]`) + `fixtures/binhost/Packages`
+(`dev-libs/remotebinpkg-1.0`, and `dev-libs/remotebinslotpkg-1.0` with
+`SLOT=2/1`) -- both binhost-only, no ebuild, no `$PKGDIR` entry. 12
+contract `CASES` + 2 dedicated pinned-output contract tests + 3
+`portage-{profile,repo}` unit tests; mirrored in
+`emerge_pretend_reference.py`. Still out of scope: an actual remote
+download / `layout.conf` negotiation / `gpkg`, and `--getbinpkg` for a
+real (non-`--pretend`) merge.
+
+**A binary's `BDEPEND`/`DEPEND` don't drive a merge (2026-09-04).** Real
+`_add_pkg_dep_string` (`depgraph.py:4195-4247`): for a *built* package
+(`pkg.built` -- true for a binary, not for a fresh ebuild) with
+`myparams["bdeps"]` not in `("y", "auto")`, both `DEPEND` and `BDEPEND`
+are emptied before the walk. `bdeps` is left unset whenever `--usepkg`
+is in `myopts` (`create_depgraph_params.py:100`) -- and
+`--getbinpkg`/`--usepkgonly`/`--getbinpkgonly` all imply `--usepkg`
+(`actions.py:3716-3723`). Portuale walked all five `*DEPEND` keys of the
+selected candidate's metadata unconditionally, so a binary package's
+recorded `BDEPEND` -- e.g. `dev-libs/libgweather`'s `|| ( (
+dev-lang/python:3.14 dev-python/pygobject[python_targets_python3_14(-)] )
+( dev-lang/python:3.13 … ) … )` -- pulled Python slots and a
+`dev-python/pygobject` USE change into `emerge -pt --getbinpkg
+gnome-base/gnome-control-center` that real portage never asks for. Fixed:
+`with_bdeps` (the resolver's "keep a built package's build-time deps"
+bit) is now `false` under the `--usepkg` family, and the main graph
+walk drops `DEPEND`/`BDEPEND` for a `CandidateSource::Binary` entry when
+it is `false` (the `AlreadyInstalled` deep-walk already respected it).
+
+**No spurious slot conflict from a built slot-operator atom
+(2026-09-04).** When two parents both depend on the same package, the
+second atom is checked against the already-resolved version via
+`match_from_list(current_atom, ["cat/pkg-VER:SLOT"])`. That string
+carried only the main slot -- so a *built* slot-operator atom
+`cat/pkg:0/2=` (an explicit sub-slot, as recorded in a binary package's
+`RDEPEND`) failed to match even when the sub-slots agreed, and portuale
+reported a slot conflict for a package two `--getbinpkg` binary parents
+shared (`gnome-settings-daemon` + `gnome-color-manager` both →
+`x11-misc/colord`). Fixed: the check string now includes the resolved
+version's own sub-slot (`_slot_conflict_meta`).
+
+**The `-N` `BUILD_ID` suffix on a `[binary]` cpv (2026-09-04).** Real
+`output.py::_append_build_id` (`output.py:430-440`): a `type_name ==
+"binary"` package whose `_pkg_str.build_id` is not `None`
+(binpkg-multi-instance / a modern binhost, where files are
+`pkg-ver-N.gpkg.tar` and `Packages` carries `BUILD_ID`) shows
+`<cpv>-<build_id>` -- appended *before* the `-pv` `:slot` / `::repo`
+decoration, so `app-editors/vim-9.1.1652-r2-4::gentoo`. Portuale
+rendered the bare version. Now `Candidate::build_id` (from the
+`Packages` entry's `BUILD_ID`) flows to `GraphEntry::build_id` (`Some`
+only for a merge-bound binary), and `pretend.rs`'s `disp_version`
+appends it ahead of `decorate_version`. Verified live against real
+portage 3.0.82.2 (`emerge -pv --getbinpkg app-editors/vim`). Every
+binary fixture line in the contract suite now carries its `BUILD_ID`
+(`-1`), including `remotebinslotpkg-1.0-1:2/1::gentoo` (suffix before
+slot).
+
+**Which binpkg-multi-instance build gets picked (2026-09-04).** A
+binhost lists several builds of one cpv (`BUILD_ID` 5…12), and real
+`dbapi._cmp_cpv` orders same-version instances by `BUILD_TIME` while
+`_iter_match_pkgs` reverses that + the selection loop `break`s on the
+first instance that passes every per-instance check
+(visibility, the atom's own `[use]` deps, `--binpkg-respect-use`).
+Portuale kept only *one* instance per cpv (`list_remote_binary_candidates`
+deduped by version, and the `by_str` map collapsed the rest), so it
+named whichever build happened to land first. Now every instance
+survives into the candidate pool, `--binpkg-respect-use` and the atom
+`[use]` filter run per-instance, and `dedup_binary_instances` keeps the
+`(satisfies-atom-use, BUILD_TIME, BUILD_ID)`-highest of each
+`cpv:slot::repo` group. Also fixed: `candidate_iuse_and_use` couldn't
+read a *binary* candidate's metadata at all (no `repo_location`
+md5-cache entry), so any atom `[use]` dep silently rejected every
+binary -- it now uses the binary's own recorded `IUSE` + baked `USE`
+(real `pkg.use.enabled` for a built package). Live result: `emerge -pt
+--getbinpkg gnome-base/gnome-control-center` on the reporter's system
+now selects the **exact same 26 packages as real portage** (`-11` for
+`libgweather`, `-13` for `libgusb`, …); only the merge-list *ordering*
+still differs. New fixture `dev-libs/multiinst` (3 builds, `BUILD_ID`
+1/3/2, `BUILD_TIME` 1000/3000/2000 -- selection lands on 3).
+
+**Binpkg acceptability-web reinstall cases (2026-09-04).**
+
 ### `emerge -p`: the blocker line follows real `ResolverOutput._blockers`
 
 Portuale's blocker report was portuale-shaped (`[blocks] cat/foo-1.0 hard
