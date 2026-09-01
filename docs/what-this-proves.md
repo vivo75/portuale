@@ -7233,13 +7233,12 @@ dep-walk sites (the main New/Upgrade/Reinstall flatten and
 pass `["DEPEND", "BDEPEND", "IDEPEND"]` to *both* functions -- the
 satisfied and unsatisfied subsets must stay in lockstep, since an atom
 in neither would fall through to the ordinary `flat_deps` queue and be
-wrongly resolved against `ROOT`. `DEPEND`/`BDEPEND` keep the pilot's
-established `--root-deps`-gated simplification (real portage's
-`ESYSROOT`-vs-`ROOT` split); `IDEPEND` rides the same gate here, so in
-the pilot a top-level `IDEPEND` still only reaches the running root when
-`--root-deps` is passed -- real portage does it unconditionally, a
-documented residual of this pilot's opt-in `root_deps_running_root`
-plumbing rather than a per-dependency `root`.
+wrongly resolved against `ROOT`. When this slice landed, `DEPEND`/
+`BDEPEND`/`IDEPEND` all rode the pilot's `--root-deps`-gated
+simplification (real portage's `ESYSROOT`-vs-`ROOT` split); the
+"only under `--root-deps`" part of that was lifted 2026-09-02 (a
+cross-root build now routes them unconditionally — see "`BDEPEND`/
+`IDEPEND` route to the running root unconditionally" below).
 
 New `dev-libs/topidepapp` fixture (`IDEPEND` on `dev-libs/topideplib`,
 no other deps). One Rust unit test asserting `topideplib` flips from an
@@ -7277,12 +7276,60 @@ a complete no-op** — its `ignore_depend_deps` branch sits inside
 `IDEPEND` always resolve against the running root (genuinely `/`),
 `DEPEND` against `ESYSROOT` (≈ target `ROOT`), and bare
 `--root-deps`/`=True` folds them into `RDEPEND` (a debugging flag). The
-one residual — the pilot routes `BDEPEND`/`IDEPEND` to `/` only under
-`--root-deps`, real portage does it unconditionally — is observable only
-when `ROOT != /` (a stage/chroot build, outside the pilot's practical
-scope), and the `--root-deps` gate is a deliberate testability choice
-(an unconditional running-root lookup would consult the real host's
-`/var/db/pkg` in every contract test).
+last residual — the pilot routed `BDEPEND`/`IDEPEND` to `/` only under
+`--root-deps` — was closed 2026-09-02, see "`BDEPEND`/`IDEPEND` route to
+the running root unconditionally" below.
+
+### `BDEPEND`/`IDEPEND` route to the running root unconditionally
+
+Real EAPI-7+ `depgraph.py` resolves `edepend["BDEPEND"]` / `["IDEPEND"]`
+(and, for a native build, `["DEPEND"]` — `ESYSROOT` collapses to `BROOT`
+with nothing cross-compiling) against `_running_root.root` = `/` for
+**every** package, flag or no flag. The pilot previously only did this
+under `--root-deps`, leaving one residual: a genuine cross-root build
+(`ROOT` != the running root, i.e. populating a stage3 / chroot) resolved
+build-time deps against the target `ROOT` instead of the build host.
+
+`pretend.rs` now computes its `root_deps_running_root` as
+`resolve_root_deps_running_root(root_deps, &target_root, running_root)` =
+`Some(running_root)` whenever `--root-deps` is set **or**
+`running_root != target_root`. When the two roots coincide — every
+ordinary `ROOT=/` invocation — it stays `None`: a strict no-op, so
+nothing about the common path changes. `--root-deps` remains the only
+trigger when `ROOT` *is* the running root (its real debugging purpose).
+Mirrored in `emerge_pretend_reference.py`.
+
+The determinism concern that kept it flag-gated — an unconditional
+running-root lookup consults the real host's `/var/db/pkg` — is handled
+at the test boundary: the shared `fixture_env` now pins
+`PORTAGE_RUNNING_ROOT` to the fixture `ROOT`, so the whole contract suite
+runs with the roots coinciding (feature inert) unless a test explicitly
+opts into a cross-root scenario. New contract test
+`test_bdepend_routes_to_the_running_root_for_a_cross_root_build_without_root_deps`
+(empty tmp `ROOT`, `PORTAGE_RUNNING_ROOT` at the fixture tree whose
+seeded vdb has `dev-libs/rootdepsprovider`: the unresolvable `BDEPEND` is
+silently dropped, no `--root-deps`); `test_root_deps_top_level_idepend_
+resolves_against_the_running_root` rewritten to cover cross-root with and
+without the flag plus the coinciding-roots no-op; one Rust unit test on
+`resolve_root_deps_running_root`.
+
+```sh
+cd rust && cargo build --release && cd ../..
+FX="$(realpath fixtures)"
+
+# Cross-root build, NO --root-deps: topideplib (an IDEPEND of topidepapp)
+# already resolves against the running root.
+PORTAGE_CONFIGROOT="$FX" ROOT="$(mktemp -d)" PORTAGE_RUNNING_ROOT="/" \
+    rust/target/release/portuale emerge --pretend dev-libs/topidepapp
+# [ebuild  N] dev-libs/topideplib-1.0 to /
+# [ebuild  N] dev-libs/topidepapp-1.0
+
+# Roots coincide: strict no-op, plain ROOT-targeted entry.
+PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" \
+    rust/target/release/portuale emerge --pretend dev-libs/topidepapp
+# [ebuild  N] dev-libs/topideplib-1.0
+# [ebuild  N] dev-libs/topidepapp-1.0
+```
 
 ### Real `ebuild <file> qmerge`
 

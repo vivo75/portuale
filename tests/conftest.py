@@ -127,9 +127,18 @@ def fixture_env() -> dict[str, str]:
     repo+vdb tree the emerge --pretend pilot slice is tested against.
     DISTDIR points at the committed fixtures/distfiles/ so the
     `f`/`F` fetch-restrict bracket column has a deterministic on-disk
-    state to check against."""
+    state to check against.
+
+    PORTAGE_RUNNING_ROOT is pinned to the same fixture ROOT: the pilot
+    now routes BDEPEND/IDEPEND against the running root whenever it
+    differs from the target ROOT (real EAPI-7+ portage does this
+    unconditionally -- see running_root_from_env's doc comment), so
+    without this pin every fixture-ROOT test would consult the real
+    host's /var/db/pkg and lose determinism. A test that specifically
+    exercises a cross-root build overrides PORTAGE_RUNNING_ROOT itself."""
     env = dict(os.environ)
     env["PORTAGE_CONFIGROOT"] = str(FIXTURES_ROOT)
     env["ROOT"] = str(FIXTURES_ROOT)
+    env["PORTAGE_RUNNING_ROOT"] = str(FIXTURES_ROOT)
     env["DISTDIR"] = str(FIXTURES_ROOT / "distfiles")
     return env

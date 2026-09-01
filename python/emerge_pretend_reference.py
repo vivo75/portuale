@@ -12411,10 +12411,15 @@ def run(args):
         else (usepkgonly and deep is True and update)
     )
 
-    # --root-deps: real running root (see _running_root's own doc comment
-    # for why real "/" is the correct default here, and
-    # PORTAGE_RUNNING_ROOT's own pilot-specific, test-only override).
-    root_deps_running_root = _running_root() if root_deps else None
+    # Real EAPI-7+ portage routes BDEPEND/IDEPEND (and, for a native
+    # build, DEPEND) against the running root "/" unconditionally, not
+    # only under --root-deps -- observable only for a genuine cross-root
+    # build (ROOT != running root, a stage/chroot populate), a strict
+    # no-op when they coincide. --root-deps forces the same resolution on
+    # top. See _running_root's own doc comment for the real "/" default
+    # and the PORTAGE_RUNNING_ROOT test-only override; mirrors pretend.rs.
+    _rr = _running_root()
+    root_deps_running_root = _rr if (root_deps or _rr != _root()) else None
 
     try:
         result = resolve_pretend_graph(

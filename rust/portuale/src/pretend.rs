@@ -574,6 +574,30 @@ fn use_suffix(
     format!(" {}", groups.join(" "))
 }
 
+/// Which running root, if any, this pilot resolves a package's `BDEPEND`/
+/// `IDEPEND` (and, for a native build, `DEPEND` -- `ESYSROOT` collapses
+/// to `BROOT` when nothing is cross-compiling) against instead of the
+/// target `ROOT`.
+///
+/// Real EAPI-7+ portage does this **unconditionally** (`depgraph.py`'s
+/// own `depend_root` selection): those keys always target the running
+/// root `/`. It is only *observable* for a genuine cross-root build --
+/// `target_root` != `running_root`, i.e. populating a stage3 / chroot --
+/// and a strict no-op when the two coincide, which is every ordinary
+/// `ROOT=/` invocation. `--root-deps` (bare / `=True`) forces the same
+/// running-root resolution on top; it stays the only trigger when `ROOT`
+/// *is* the running root (its real debugging purpose), and folds these
+/// keys into `RDEPEND` too (approximated here as the same running-root
+/// walk -- see `portage_repo::root_deps_satisfied_atoms`). `=rdeps` is a
+/// complete no-op at EAPI 7+ and needs nothing here.
+fn resolve_root_deps_running_root(
+    root_deps: bool,
+    target_root: &Path,
+    running_root: std::path::PathBuf,
+) -> Option<std::path::PathBuf> {
+    (root_deps || running_root != target_root).then_some(running_root)
+}
+
 /// Real `lib/_emerge/resolver/output.py:841-862`'s own `darkgreen("to " +
 /// pkg.root)` suffix: an entry that builds against the running root
 /// rather than the target `ROOT` (`GraphEntry::targets_running_root`,
@@ -6811,10 +6835,12 @@ pub fn run(args: &[String]) -> ExitCode {
     let rebuilt_binaries =
         rebuilt_binaries.unwrap_or(usepkgonly && deep == portage_repo::Deep::Unlimited && update);
 
-    // --root-deps: real running root (see `running_root_from_env`'s own
-    // doc comment for why real "/" is the correct default here, and
-    // `PORTAGE_RUNNING_ROOT`'s own pilot-specific, test-only override).
-    let root_deps_running_root = root_deps.then(portage_repo::running_root_from_env);
+    // See `resolve_root_deps_running_root`'s own doc comment: `BDEPEND`/
+    // `IDEPEND` route to the running root whenever it differs from the
+    // target `ROOT` (a cross-root/stage build), plus always under
+    // `--root-deps`.
+    let root_deps_running_root =
+        resolve_root_deps_running_root(root_deps, &root, portage_repo::running_root_from_env());
 
     // Real `make.globals`'s own `DISTDIR="/var/cache/distfiles"` --
     // env-var-sourced at this CLI boundary, the same "env var / hardcoded
@@ -7613,6 +7639,35 @@ mod tests {
         assert_eq!(
             still_listed_parents(&root, &sets, "dev-libs", "dualslotpkg", "2.0"),
             vec!["dualslotset"]
+        );
+    }
+
+    #[test]
+    fn root_deps_running_root_is_none_only_when_flag_off_and_roots_coincide() {
+        use std::path::{Path, PathBuf};
+        let slash = || PathBuf::from("/");
+        let stage = || PathBuf::from("/mnt/stage3");
+
+        // Ordinary ROOT=/ invocation, no flag: strict no-op.
+        assert_eq!(
+            resolve_root_deps_running_root(false, Path::new("/"), slash()),
+            None
+        );
+        // Cross-root build (ROOT != running root), no flag: routes to the
+        // running root -- real portage's unconditional BDEPEND/IDEPEND
+        // behavior, now reachable without --root-deps.
+        assert_eq!(
+            resolve_root_deps_running_root(false, Path::new("/mnt/stage3"), slash()),
+            Some(slash())
+        );
+        // --root-deps forces it even when the roots coincide.
+        assert_eq!(
+            resolve_root_deps_running_root(true, Path::new("/"), slash()),
+            Some(slash())
+        );
+        assert_eq!(
+            resolve_root_deps_running_root(true, Path::new("/"), stage()),
+            Some(stage())
         );
     }
 

@@ -151,16 +151,17 @@ single-pass BFS can't grow into these incrementally:
   `else: if eapi_attrs.bdepend`. What applies at EAPI 7+: `BDEPEND` +
   `IDEPEND` always resolve against the running root (`/`), `DEPEND`
   against `ESYSROOT` (≈ target `ROOT`), and bare `--root-deps`/`=True`
-  folds them into `RDEPEND` (a debugging flag). The one real residual:
+  folds them into `RDEPEND` (a debugging flag). ~~The one real residual:
   the pilot routes `BDEPEND`/`IDEPEND` to `/` only *under* `--root-deps`,
-  real portage does it unconditionally — observable only when `ROOT != /`
-  (a stage/chroot build), which is outside the pilot's practical scope,
-  and the `--root-deps` gate is a deliberate testability choice (an
-  unconditional running-root lookup would hit the real host's vdb in
-  every contract test). `PDEPEND` of a running-root entry stays a
-  target-`ROOT` concern (a permanent non-gap). The full multi-root graph
-  (a `root` per dependency edge) stays a deliberate edge-by-edge
-  approximation.
+  real portage does it unconditionally~~ **closed 2026-09-02** —
+  `pretend.rs::resolve_root_deps_running_root` now enables running-root
+  resolution whenever `--root-deps` is set **or** `running_root != target
+  ROOT` (a cross-root/stage build); a strict no-op when they coincide.
+  Determinism is preserved by pinning `PORTAGE_RUNNING_ROOT` to the
+  fixture `ROOT` in `fixture_env`. `PDEPEND` of a running-root entry
+  stays a target-`ROOT` concern (a permanent non-gap). The full
+  multi-root graph (a `root` per dependency edge) stays a deliberate
+  edge-by-edge approximation.
 - **Slot-operator rebuild v1 cuts**: single-pass (no backtracking for a
   rebuild that itself shifts another sub-slot), the rebuilt consumer's own
   `:=` deps not re-bound in the pretend graph, no `--changed-slot`

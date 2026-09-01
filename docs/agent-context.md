@@ -955,15 +955,18 @@ not just read this list. What's actually left, grouped by area:
   genuinely `/`), `DEPEND` against `ESYSROOT` (≈ target `ROOT` when not
   cross-compiling), and bare `--root-deps`/`=True` folds
   `DEPEND`/`BDEPEND`/`IDEPEND` into `RDEPEND` (a debugging flag).
-  **Remaining gap, narrowed**: real portage routes `BDEPEND`/`IDEPEND`
-  to `/` *unconditionally*, the pilot only under `--root-deps` — but
-  this is observable only when `ROOT != /` (building a stage/chroot),
-  itself outside the pilot's practical scope, and keeping the
-  running-root lookup `--root-deps`-gated is a deliberate testability
-  choice (an unconditional lookup would consult the real host's
-  `/var/db/pkg` in every contract test). The full multi-root graph
-  architecture (a `root` per dependency edge) stays a deliberate
-  edge-by-edge approximation.
+  ~~**Remaining gap**: real portage routes `BDEPEND`/`IDEPEND` to `/`
+  *unconditionally*, the pilot only under `--root-deps`~~ — **closed
+  2026-09-02**: `pretend.rs::resolve_root_deps_running_root` returns
+  `Some(running_root)` whenever `--root-deps` is set **or**
+  `running_root != target ROOT` (a cross-root/stage build), matching
+  real portage's unconditional behavior; a strict no-op when the roots
+  coincide (every `ROOT=/` run). Determinism is kept at the test
+  boundary — `fixture_env` pins `PORTAGE_RUNNING_ROOT` to the fixture
+  `ROOT`. See `what-this-proves.md`, "`BDEPEND`/`IDEPEND` route to the
+  running root unconditionally". The full multi-root graph architecture
+  (a `root` per dependency edge) stays a deliberate edge-by-edge
+  approximation.
 
 **Eclass/shell backend**:
 - ~~`eclass_locations_value` is single-repo only — no masters-chain

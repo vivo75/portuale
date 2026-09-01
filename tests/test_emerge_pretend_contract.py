@@ -1462,6 +1462,39 @@ def test_root_deps_matches_between_implementations(
     assert rust_with.stdout.strip() == "[ebuild  N     ] dev-libs/rootdepspkg-1.0"
 
 
+def test_bdepend_routes_to_the_running_root_for_a_cross_root_build_without_root_deps(
+    emerge_binary, emerge_pretend_python, fixture_env, tmp_path
+):
+    """Real EAPI-7+ portage resolves BDEPEND/IDEPEND against the running
+    root `/` unconditionally, not only under --root-deps -- observable for
+    a genuine cross-root build (ROOT != running root). Here ROOT is an
+    empty tmp tree and PORTAGE_RUNNING_ROOT points at the fixture tree
+    (whose hand-seeded vdb has dev-libs/rootdepsprovider). rootdepspkg's
+    own BDEPEND (dev-libs/rootdepsprovider, no ebuild anywhere) is
+    therefore satisfied by the running root and silently dropped -- no
+    --root-deps needed, no "no visible ebuild" note. Same command with
+    ROOT == running root falls back to the plain unresolved-dep report."""
+    cross = dict(fixture_env)
+    cross["ROOT"] = str(tmp_path)
+    cross["PORTAGE_RUNNING_ROOT"] = str(fixture_env["ROOT"])
+    args = ["--pretend", "dev-libs/rootdepspkg"]
+
+    rust = _run([str(emerge_binary)], args, cross)
+    python = _run(emerge_pretend_python, args, cross)
+    assert rust.returncode == 0
+    assert python.returncode == 0
+    assert rust.stdout == python.stdout
+    assert rust.stderr == python.stderr
+    assert rust.stderr == ""
+    assert rust.stdout.strip() == "[ebuild  N     ] dev-libs/rootdepspkg-1.0"
+
+    # Control: running root == target ROOT -> the feature is a no-op and
+    # the unresolved BDEPEND is reported as before.
+    same = dict(fixture_env)  # fixture_env pins RUNNING_ROOT == ROOT
+    rust_same = _run([str(emerge_binary)], args, same)
+    assert "no visible ebuild for dependency" in rust_same.stderr
+
+
 def test_root_deps_disjunctive_branch_selection_matches_between_implementations(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
@@ -1674,45 +1707,46 @@ def test_root_deps_recursion_walks_a_build_entrys_own_idepend(
 def test_root_deps_top_level_idepend_resolves_against_the_running_root(
     emerge_binary, emerge_pretend_python, fixture_env
 ):
-    """Real portage resolves IDEPEND against the running root for *every*
-    package, not just recursed running-root build entries
-    (depgraph.py:4247-4252). The two ordinary dep-walk sites now route a
-    top-level package's own IDEPEND to the running root under --root-deps,
-    exactly like DEPEND/BDEPEND: topidepapp IDEPENDs topideplib, so with
-    --root-deps topideplib carries the " to /" marker (and is walked
-    against the running root), whereas without --root-deps it is a plain
-    ROOT-targeted entry."""
-    env = dict(fixture_env)
-    env["PORTAGE_RUNNING_ROOT"] = "/"
-    without = ["--pretend", "dev-libs/topidepapp"]
-    with_ = ["--pretend", "--root-deps", "dev-libs/topidepapp"]
+    """Real portage resolves IDEPEND (and BDEPEND) against the running
+    root for *every* package, not just under --root-deps and not just for
+    recursed running-root build entries (depgraph.py:4247-4252). The two
+    ordinary dep-walk sites route a top-level package's own IDEPEND to the
+    running root whenever the running root differs from the target ROOT (a
+    cross-root/stage build); --root-deps forces the same routing even when
+    the two coincide. topidepapp IDEPENDs topideplib.
 
-    rust_without = _run([str(emerge_binary)], without, env)
-    python_without = _run(emerge_pretend_python, without, env)
-    assert rust_without.returncode == 0
-    assert python_without.returncode == 0
-    assert rust_without.stdout == python_without.stdout
-    assert rust_without.stderr == python_without.stderr
-    assert rust_without.stdout == (
-        (
-        '[ebuild  N     ] dev-libs/topideplib-1.0 \n'
-        '[ebuild  N     ] dev-libs/topidepapp-1.0 \n'
-        )
-    )
+    Case 1 -- cross-root (PORTAGE_RUNNING_ROOT=/ != ROOT=fixtures), no
+    --root-deps: topideplib already carries the " to /" marker.
+    Case 2 -- same, with --root-deps: identical (nothing more to add).
+    Case 3 -- running root == target ROOT, no --root-deps: a plain
+    ROOT-targeted entry -- the feature is a strict no-op, --root-deps is
+    the only trigger then (and it prints the non-deterministic ROOT path,
+    so that combination is left to the "/"-pinned tests above)."""
+    cross = dict(fixture_env)
+    cross["PORTAGE_RUNNING_ROOT"] = "/"
+    same = dict(fixture_env)  # fixture_env already pins RUNNING_ROOT == ROOT
 
-    rust_with = _run([str(emerge_binary)], with_, env)
-    python_with = _run(emerge_pretend_python, with_, env)
-    assert rust_with.returncode == 0
-    assert python_with.returncode == 0
-    assert rust_with.stdout == python_with.stdout
-    assert rust_with.stderr == python_with.stderr
-    assert rust_with.stdout == (
-        (
+    cross_out = (
         '[ebuild  N     ] dev-libs/topideplib-1.0 to /\n'
         '[ebuild  N     ] dev-libs/topidepapp-1.0 \n'
-        )
     )
-    assert rust_with.stdout != rust_without.stdout
+    plain_out = (
+        '[ebuild  N     ] dev-libs/topideplib-1.0 \n'
+        '[ebuild  N     ] dev-libs/topidepapp-1.0 \n'
+    )
+
+    for args, env, expected in [
+        (["--pretend", "dev-libs/topidepapp"], cross, cross_out),
+        (["--pretend", "--root-deps", "dev-libs/topidepapp"], cross, cross_out),
+        (["--pretend", "dev-libs/topidepapp"], same, plain_out),
+    ]:
+        rust = _run([str(emerge_binary)], args, env)
+        python = _run(emerge_pretend_python, args, env)
+        assert rust.returncode == 0
+        assert python.returncode == 0
+        assert rust.stdout == python.stdout
+        assert rust.stderr == python.stderr
+        assert rust.stdout == expected, (args, env["PORTAGE_RUNNING_ROOT"])
 
 
 def test_root_deps_recursion_terminates_on_a_bdepend_cycle(
