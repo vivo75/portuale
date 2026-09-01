@@ -10,6 +10,34 @@
 
 use std::collections::HashMap;
 
+/// `SequenceMatcher(None, a, b).ratio()`: `2.0 * M / (len(a) + len(b))`
+/// where `M` is the total non-overlapping matching-block size.
+/// Operates on `char`s (Python string elements).
+pub fn ratio(a: &str, b: &str) -> f64 {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let total = a.len() + b.len();
+    if total == 0 {
+        // Real `_calculate_ratio(0, 0)` -> `1.0`.
+        return 1.0;
+    }
+    // `__chain_b`: map each element of `b` to its ascending index list.
+    let mut b2j: HashMap<char, Vec<usize>> = HashMap::new();
+    for (j, &c) in b.iter().enumerate() {
+        b2j.entry(c).or_default().push(j);
+    }
+    let matches = matching_char_count(MatchingCharCountArgs {
+        a: &a,
+        b: &b,
+        b2j: &b2j,
+        alo: 0,
+        ahi: a.len(),
+        blo: 0,
+        bhi: b.len(),
+    });
+    2.0 * matches as f64 / total as f64
+}
+
 /// Arguments of [`matching_char_count`].
 struct MatchingCharCountArgs<'a> {
     a: &'a [char],
@@ -21,6 +49,56 @@ struct MatchingCharCountArgs<'a> {
     bhi: usize,
 }
 
+/// `get_matching_blocks()`'s recursion, summed. Block order doesn't
+/// matter for the sum, so the LIFO queue is just recursion here.
+fn matching_char_count(args: MatchingCharCountArgs<'_>) -> usize {
+    let MatchingCharCountArgs {
+        a,
+        b,
+        b2j,
+        alo,
+        ahi,
+        blo,
+        bhi,
+    } = args;
+    let (i, j, k) = find_longest_match(FindLongestMatchArgs {
+        a,
+        b,
+        b2j,
+        alo,
+        ahi,
+        blo,
+        bhi,
+    });
+    if k == 0 {
+        return 0;
+    }
+    let mut total = k;
+    if alo < i && blo < j {
+        total += matching_char_count(MatchingCharCountArgs {
+            a,
+            b,
+            b2j,
+            alo,
+            ahi: i,
+            blo,
+            bhi: j,
+        });
+    }
+    if i + k < ahi && j + k < bhi {
+        total += matching_char_count(MatchingCharCountArgs {
+            a,
+            b,
+            b2j,
+            alo: i + k,
+            ahi,
+            blo: j + k,
+            bhi,
+        });
+    }
+    total
+}
+
 /// Arguments of [`find_longest_match`].
 struct FindLongestMatchArgs<'a> {
     a: &'a [char],
@@ -30,4 +108,61 @@ struct FindLongestMatchArgs<'a> {
     ahi: usize,
     blo: usize,
     bhi: usize,
+}
+
+/// `find_longest_match(alo, ahi, blo, bhi)` with no junk: the `j2len`
+/// scan for the longest common run, ties toward the earliest `i`
+/// (then earliest `j`), then extended maximally on both ends.
+fn find_longest_match(args: FindLongestMatchArgs<'_>) -> (usize, usize, usize) {
+    let FindLongestMatchArgs {
+        a,
+        b,
+        b2j,
+        alo,
+        ahi,
+        blo,
+        bhi,
+    } = args;
+    let (mut besti, mut bestj, mut bestsize) = (alo, blo, 0usize);
+    let mut j2len: HashMap<usize, usize> = HashMap::new();
+    for (i, ai) in a.iter().enumerate().take(ahi).skip(alo) {
+        let mut newj2len: HashMap<usize, usize> = HashMap::new();
+        if let Some(js) = b2j.get(ai) {
+            for &j in js {
+                if j < blo {
+                    continue;
+                }
+                if j >= bhi {
+                    break;
+                }
+                let prev = if j > 0 {
+                    j2len.get(&(j - 1)).copied()
+                } else {
+                    None
+                };
+                let k = prev.unwrap_or(0) + 1;
+                newj2len.insert(j, k);
+                if k > bestsize {
+                    besti = i + 1 - k;
+                    bestj = j + 1 - k;
+                    bestsize = k;
+                }
+            }
+        }
+        j2len = newj2len;
+    }
+    // Extend the match while elements stay equal (the junk-aware loops
+    // never fire: there is no junk).
+    while besti > alo && bestj > blo && a[besti - 1] == b[bestj - 1] {
+        besti -= 1;
+        bestj -= 1;
+        bestsize += 1;
+    }
+    while besti + bestsize < ahi
+        && bestj + bestsize < bhi
+        && a[besti + bestsize] == b[bestj + bestsize]
+    {
+        bestsize += 1;
+    }
+    (besti, bestj, bestsize)
 }
