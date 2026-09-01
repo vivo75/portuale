@@ -919,6 +919,56 @@ def test_emerge_unmerge_without_pretend_really_removes_and_deselects(
     assert (root / "var/lib/portage/world").read_text() == "dev-libs/keepme\n"
 
 
+def test_emerge_resume_replays_the_saved_mergelist(emerge_binary, tmp_path):
+    """Real `_emerge/Scheduler.py::_save_resume_list` + `--resume`: a
+    failed `emerge <atoms>` writes the still-unmerged packages to
+    `mtimedb["resume"]`; `emerge --resume` replays them in order,
+    `emerge --resume --skipfirst` drops the first (the one that failed).
+    `dev-libs/schedbad`'s src_install dies; `dev-libs/schedok` is
+    independent."""
+    import json
+    import shutil
+
+    root = tmp_path / "root"
+    shutil.copytree(Path(FIXTURES_ROOT) / "var", root / "var")
+    env = dict(os.environ)
+    env["PORTAGE_CONFIGROOT"] = FIXTURES_ROOT
+    env["ROOT"] = str(root)
+    env["DISTDIR"] = str(Path(FIXTURES_ROOT) / "distfiles")
+    env["PORTAGE_TMPDIR"] = str(tmp_path / "pt")
+
+    r = subprocess.run(
+        [str(emerge_binary), "dev-libs/schedbad", "dev-libs/schedok"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 1
+    assert "emerge --resume" in r.stderr
+    mtimedb = root / "var/cache/edb/mtimedb"
+    saved = json.loads(mtimedb.read_text())
+    cpvs = [x[2] for x in saved["resume"]["mergelist"]]
+    assert cpvs == ["dev-libs/schedbad-1.0", "dev-libs/schedok-1.0"]
+    assert saved["resume"]["favorites"] == ["dev-libs/schedbad", "dev-libs/schedok"]
+
+    # --resume alone: retries schedbad, which fails again; list is re-saved.
+    r = subprocess.run(
+        [str(emerge_binary), "--resume"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 1
+    assert mtimedb.is_file()
+    assert not (root / "var/db/pkg/dev-libs/schedok-1.0").exists()
+
+    # --resume --skipfirst: drops schedbad, merges schedok, clears the list.
+    r = subprocess.run(
+        [str(emerge_binary), "--resume", "--skipfirst"],
+        capture_output=True, text=True, check=False, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    assert ">>> dev-libs/schedok-1.0 merged." in r.stdout
+    assert (root / "var/db/pkg/dev-libs/schedok-1.0/CONTENTS").is_file()
+    assert not mtimedb.exists()  # resume list cleared on success
+
+
 def test_emerge_elog_echo_prints_a_message_summary(emerge_binary, tmp_path):
     """Real `elog_process` / `mod_echo` (default-on via `make.globals`
     `PORTAGE_ELOG_SYSTEM`): after the merge, the `elog`/`ewarn` messages an

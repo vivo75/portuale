@@ -10309,6 +10309,31 @@ files or send mail — deferred); binpkg-merge and `-C`/unmerge `pkg_*`
 elog output isn't collected yet; `PORTAGE_ELOG_CLASSES` is env-only (no
 `make.conf`).
 
+### `emerge --resume` / `--skipfirst`
+
+Real `_emerge/Scheduler.py::_save_resume_list` + the `--resume` handling
+in `_emerge/actions.py`. When a source `emerge <atoms>` merge fails,
+`mtimedb::write_resume_list` writes `${ROOT}/var/cache/edb/mtimedb`'s
+`resume` key — `favorites` (the atom args) + `mergelist` (`["ebuild",
+<root>, "<cat/pkg-ver>", "merge"]` per package still without a `CONTENTS`
+under the vdb) — and prints the `Use \`emerge --resume\`` hint.
+
+`emerge --resume` (a standalone action, no atoms) reads that list back
+(`read_resume_list` — regex-extracted, not a full JSON parse) and
+rebuilds+merges each `cat/pkg-ver` in order via minimal
+`emerge_build::resume_entry` `GraphEntry`s; `--skipfirst` drops the first
+(the one that failed). On success the resume list is cleared and the
+saved `favorites` go into the world file; on another failure the still-
+unmerged tail is re-saved.
+
+The file is real portage's JSON `mtimedb`, written real-compatibly
+(tab-indented) — but the pilot does **not** preserve any other top-level
+keys an existing one had (`info` / `ldpath` / `updates` are `--sync` /
+`env-update` state it never manages). v1 cuts: no `resume_backup`
+rotation; `--resume --pretend` doesn't print the saved list; a saved
+binary entry is replayed as source; `myopts` is written empty (resume
+doesn't carry the original flags).
+
 ## Running it
 
 Build both Rust binaries:

@@ -422,6 +422,44 @@ fn scheduler_needs_build(entry: &GraphEntry) -> bool {
         )
 }
 
+/// A minimal source `GraphEntry` for `emerge --resume` (`pretend.rs`):
+/// the saved `mtimedb` resume list only records `cat/pkg-ver`, so the
+/// display/USE/blocker fields are all empty. `required_by` is empty too --
+/// the resume mergelist is already in dependency-first merge order, so
+/// `run_merge_loop`'s `--keep-going` dependent-drop has nothing to key on
+/// (and `--resume` doesn't pass `--keep-going` anyway).
+pub(crate) fn resume_entry(category: &str, package: &str, version: &str) -> GraphEntry {
+    GraphEntry {
+        category: category.to_string(),
+        package: package.to_string(),
+        outcome: PretendOutcome::New {
+            version: version.to_string(),
+        },
+        blockers: Vec::new(),
+        slot: None,
+        sub_slot: None,
+        repo_name: None,
+        oldbest: Vec::new(),
+        use_flags_display: Vec::new(),
+        use_expand_display: Vec::new(),
+        use_expand_display_p: Vec::new(),
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by: Vec::new(),
+        source: CandidateSource::Ebuild,
+        provenance: Default::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+    }
+}
+
 /// Real portage's `PORTAGE_LOG_FILE` (`PORTAGE_LOGDIR` unset →
 /// `${T}/build.log`, i.e. `${PORTAGE_BUILDDIR}/temp/build.log`).
 fn build_log_path(portage_tmpdir: &Path, category: &str, package: &str, version: &str) -> PathBuf {

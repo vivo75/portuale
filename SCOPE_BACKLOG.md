@@ -186,9 +186,11 @@ single-pass BFS can't grow into these incrementally:
   (capture is `-j >1`-only); one tokio runtime per `run_commands`;
   killing in-flight builds on a hard failure; `PORTAGE_LOGDIR` /
   `split-log`.
-- **`--resume` / `--skipfirst`.** No `/var/cache/edb/mtimedb` resume state.
-  `--keep-going` works within a single invocation but nothing persists a
-  partial mergelist for a later `emerge --resume`.
+- **`--resume` / `--skipfirst`.** *Shipped 2026-09-01:* a failed source
+  `emerge <atoms>` writes `mtimedb["resume"]` (`mtimedb.rs`);
+  `emerge --resume [--skipfirst]` replays the saved mergelist. Remaining:
+  `resume_backup` rotation; `--resume --pretend` list display; carrying
+  the original `myopts`; binary-entry replay.
 - **`--ask` / interactive prompts.** *Shipped 2026-09-01:* `--ask`/`-a`
   prompts before a real `emerge <atom>` merge and before `-C` /
   `--depclean` / `--prune` removal (`ask_confirm`, exit 130 on No), and
@@ -327,9 +329,10 @@ by a few large items rather than a long tail of small ones:
 2. **The Scheduler (Part 2.B).** *`emerge -jN` parallel builds +
    `--load-average` + build-log capture + the `>>> Jobs:` line + `--ask`
    / `CLEAN_DELAY` + `PORTAGE_NICENESS` / `PORTAGE_IONICE_COMMAND` shipped
-   + `elog` `echo` module shipped 2026-09-01.* Still missing:
-   `--resume`/`--skipfirst` (mtimedb state); the elog `save`/`mail`
-   modules.
+   + `elog` `echo` module + `--resume`/`--skipfirst` (mtimedb) shipped
+   2026-09-01.* **Part 2.B is now substantially complete** -- remaining:
+   `resume_backup` rotation, the elog `save`/`mail` modules,
+   `PORTAGE_SCHEDULING_POLICY`, killing in-flight builds on a hard fail.
 
 3. **Config-resolution depth (Part 2.C).** The `USE_ORDER` layering is
    partial. Most real profiles resolve identically, but a config that

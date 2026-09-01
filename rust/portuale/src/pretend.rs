@@ -3094,6 +3094,105 @@ fn clean_delay_countdown() {
     std::thread::sleep(std::time::Duration::from_secs(secs));
 }
 
+/// The `(category, package, version)` of every source entry in `entries`
+/// that was supposed to merge but has no `CONTENTS` under `root` yet --
+/// the resume list for `mtimedb::write_resume_list`.
+fn source_entries_not_merged(
+    root: &Path,
+    entries: &[portage_repo::GraphEntry],
+) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for e in entries {
+        if e.source != portage_repo::CandidateSource::Ebuild {
+            continue;
+        }
+        let version = match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => version,
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
+            _ => continue,
+        };
+        let contents = root
+            .join("var/db/pkg")
+            .join(&e.category)
+            .join(format!("{}-{version}", e.package))
+            .join("CONTENTS");
+        if !contents.is_file() {
+            out.push((e.category.clone(), e.package.clone(), version.clone()));
+        }
+    }
+    out
+}
+
+/// `emerge --resume [--skipfirst]`: replay `mtimedb["resume"]["mergelist"]`
+/// (real `_emerge/actions.py`'s resume handling). Each saved `cat/pkg-ver`
+/// is built + merged as a source entry, in the recorded order;
+/// `--skipfirst` drops the first (the one that failed). On success the
+/// resume list is cleared and the saved `favorites` are recorded in the
+/// world file; on another failure the still-unmerged tail is re-saved.
+fn run_resume(
+    root: &Path,
+    config_root: &Path,
+    portage_tmpdir: &Path,
+    skipfirst: bool,
+    jobs: usize,
+    load_average: Option<f64>,
+) -> ExitCode {
+    let Some((favorites, mut mergelist)) = crate::mtimedb::read_resume_list(root) else {
+        eprintln!("emerge: could not find a valid resume list");
+        return ExitCode::from(1);
+    };
+    if skipfirst && !mergelist.is_empty() {
+        mergelist.remove(0);
+    }
+    if mergelist.is_empty() {
+        crate::mtimedb::clear_resume_list(root);
+        println!("emerge: the resume list is empty; nothing to do.");
+        return ExitCode::SUCCESS;
+    }
+
+    let repos = match portage_repo::find_repos(config_root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let entries: Vec<portage_repo::GraphEntry> = mergelist
+        .iter()
+        .map(|(c, p, v)| emerge_build::resume_entry(c, p, v))
+        .collect();
+
+    println!(">>> Resuming merge of {} package(s)...", entries.len());
+    let merge_options =
+        ebuild_merge::MergeOptions::from_env(ebuild_phases::ShellBackend::default(), false);
+    if let Err(e) = emerge_build::run_source_merge(
+        &entries,
+        &repos,
+        root,
+        portage_tmpdir,
+        &merge_options,
+        false,
+        None,
+        &[],
+        jobs,
+        load_average,
+    ) {
+        let still = source_entries_not_merged(root, &entries);
+        let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
+        let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &still);
+        eprintln!("emerge: {e}");
+        return ExitCode::from(1);
+    }
+
+    crate::mtimedb::clear_resume_list(root);
+    let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
+    if let Err(e) = update_world_file(root, &fav_refs, &entries, &[], &repos, false, false) {
+        eprintln!("emerge: {e}");
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
+}
+
 /// Real `"unmerge-backup" in self.settings.features` -- not a
 /// `make.globals` default token, so absent unless `FEATURES` names it.
 fn feature_enabled(token: &str) -> bool {
@@ -4174,6 +4273,14 @@ pub fn run(args: &[String]) -> ExitCode {
     // (`128 + SIGINT`). Ignored under `--pretend` (nothing executes
     // anyway).
     let mut ask = false;
+    // --resume/-r + --skipfirst (real `_emerge/Scheduler.py` resume
+    // handling): `--resume` replays `mtimedb["resume"]["mergelist"]` --
+    // the packages a previous failed `emerge <atom>` left unmerged;
+    // `--skipfirst` drops the first (the one that failed) before
+    // continuing. When a source merge fails the pilot writes that list
+    // (see `mtimedb::write_resume_list`).
+    let mut resume = false;
+    let mut skipfirst = false;
     let mut verbose = false;
     let mut newuse = false;
     let mut changed_use = false;
@@ -4969,6 +5076,12 @@ pub fn run(args: &[String]) -> ExitCode {
         } else if arg == "--keep-going" {
             keep_going = true;
             i += 1;
+        } else if arg == "--resume" || arg == "-r" {
+            resume = true;
+            i += 1;
+        } else if arg == "--skipfirst" || arg == "--skip-first" {
+            skipfirst = true;
+            i += 1;
         } else if arg == "--jobs" || arg == "-j" {
             // Optional integer next token (real `valid_integers` /
             // `insert_optional_args`), exactly like `--deep`: a bare
@@ -5493,7 +5606,7 @@ pub fn run(args: &[String]) -> ExitCode {
         return run_deselect(&atom_args, &root_from_env(), pretend);
     }
 
-    if atom_args.is_empty() && !unmerge && !depclean && !prune && !config_action {
+    if atom_args.is_empty() && !unmerge && !depclean && !prune && !config_action && !resume {
         eprintln!("emerge (pilot v1): expected a package atom, e.g. `emerge --pretend cat/pkg`");
         return ExitCode::from(2);
     }
@@ -5579,6 +5692,24 @@ pub fn run(args: &[String]) -> ExitCode {
     // `run_action`, before any action): renice / ionice this process so
     // every build subprocess it spawns inherits the policy.
     apply_portage_scheduling_policy();
+
+    // `--resume` / `-r`: a standalone action -- replay the saved
+    // `mtimedb["resume"]` mergelist (real `_emerge/actions.py`). No atoms;
+    // `--pretend` is a documented no-op cut here (the pilot doesn't print
+    // the saved list).
+    if resume && !pretend {
+        let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/var/tmp/portage"));
+        return run_resume(
+            &root,
+            &config_root,
+            &portage_tmpdir,
+            skipfirst,
+            jobs,
+            load_average,
+        );
+    }
 
     // `--config <atom>`: a standalone action -- run `pkg_config` for one
     // installed package (real `action_config`). Needs nothing from the
@@ -6291,6 +6422,19 @@ pub fn run(args: &[String]) -> ExitCode {
                 jobs,
                 load_average,
             ) {
+                // Real `Scheduler._save_resume_list`: on a merge failure,
+                // record every still-unmerged package so `emerge --resume`
+                // can pick up where this left off.
+                let unmerged = source_entries_not_merged(&root, entries);
+                if let Err(w) = crate::mtimedb::write_resume_list(&root, &atom_args, &unmerged) {
+                    eprintln!("emerge: warning: could not save the resume list: {w}");
+                } else if !unmerged.is_empty() {
+                    eprintln!(
+                        "\n * The resume list contains packages that could not be \
+                         merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
+                         --skipfirst` to skip the first one."
+                    );
+                }
                 eprintln!("emerge: {e}");
                 return ExitCode::from(1);
             }

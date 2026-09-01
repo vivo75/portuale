@@ -27,6 +27,7 @@ mod emerge_getbinpkg;
 mod emerge_options;
 mod env_update;
 mod fetch;
+mod mtimedb;
 mod needed_elf;
 mod pretend;
 
